@@ -2014,7 +2014,6 @@ Add `draggable` and an `onDragStart` handler to the shelf-card `div` from Task 1
 - [ ] **Step 2: Write `RifffBlockRow.tsx`**
 
 ```tsx
-import { useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { clipGeometry } from '../state/selectors'
 import type { SoundType, Rifff } from '@shared/types'
@@ -2291,12 +2290,14 @@ export default function App(): React.JSX.Element {
 Run: `npm run dev`. Drag `fixtures/sample-rifff` onto the shelf drop target (as in
 Task 10), then drag the resulting shelf card down onto the timeline around bar 5.
 Expected: a block row appears with header "sample-rifff · 6 stems · 8 bars · 150 bpm",
-a clip positioned around bar 5 spanning roughly `8 * (80/150) ≈ 4.3` bars wide (project
-tempo defaults to 80, stretch defaults on, so width reflects the project bar count —
-this is expected per the design's stretch-on behavior, not a bug). Clicking the chevron
-expands 6 stem sub-rows, each showing its own repeated clip pattern (slot 6 "Freezer",
-2 bars native, should show 4 repetitions; slot 8 "Sunset", 1 bar native, should show 8;
-slots 1/3/5/7, each a full 8 bars, should show a single unrepeated clip).
+a clip starting at `left = 120px` (bar 5 × `PPB` 24) spanning `width = 192px` (8 bars ×
+24 — `PLACE_ON_TIMELINE` sets `stretch[groupId] = true`, so `clipGeometry` shows the
+rifff's own 8-bar length unscaled; the project tempo, 80 by default, only changes the
+clip's width once tempo diverges from the rifff's native 150 BPM in a later task's
+live-reschedule behavior — dropping doesn't itself trigger a stretch preview). Clicking
+the chevron expands 6 stem sub-rows, each showing its own repeated clip pattern (slot 6
+"Freezer", 2 bars native, should show 4 repetitions; slot 8 "Sunset", 1 bar native,
+should show 8; slots 1/3/5/7, each a full 8 bars, should show a single unrepeated clip).
 
 - [ ] **Step 6: Commit**
 
