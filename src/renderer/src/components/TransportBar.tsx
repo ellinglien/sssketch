@@ -20,6 +20,7 @@ export function TransportBar(): React.JSX.Element {
     >
       <button
         onClick={() => dispatch({ type: state.playing ? 'PAUSE' : 'PLAY' })}
+        aria-label={state.playing ? 'Pause' : 'Play'}
         style={{
           width: 36,
           height: 26,
@@ -33,6 +34,7 @@ export function TransportBar(): React.JSX.Element {
       </button>
       <button
         onClick={() => dispatch({ type: 'STOP' })}
+        aria-label="Stop"
         style={{
           width: 28,
           height: 26,
@@ -47,6 +49,7 @@ export function TransportBar(): React.JSX.Element {
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span style={{ fontSize: 16, fontWeight: 700 }}>{positionLabel(state.pos)}</span>
+        {/* TODO Task 15: wire to the real elapsed-time clock once playback exists */}
         <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>0:00.0</span>
       </div>
 
@@ -64,6 +67,7 @@ export function TransportBar(): React.JSX.Element {
         <span className="ra-eyebrow">tempo</span>
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm - 1 })}
+          aria-label="Decrease tempo"
           style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid var(--ra-border)' }}
         >
           −
@@ -73,6 +77,7 @@ export function TransportBar(): React.JSX.Element {
         </span>
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm + 1 })}
+          aria-label="Increase tempo"
           style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid var(--ra-border)' }}
         >
           +
@@ -81,6 +86,7 @@ export function TransportBar(): React.JSX.Element {
 
       <button
         onClick={() => dispatch({ type: 'CYCLE_SNAP' })}
+        aria-label="Cycle snap grid"
         style={{
           height: 22,
           borderRadius: 6,

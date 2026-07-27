@@ -18,7 +18,7 @@ export function Titlebar({
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>rifff arranger</span>
-        <span style={{ color: '#33333a' }}>|</span>
+        <span style={{ color: 'var(--ra-text-4)' }}>|</span>
         <span style={{ color: 'var(--ra-text-2)' }}>untitled sketch 04</span>
       </div>
       <div style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
