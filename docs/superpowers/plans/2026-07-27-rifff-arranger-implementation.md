@@ -1026,9 +1026,15 @@ describe('reducer', () => {
   })
 
   it('cycles snap index through 0..3 and wraps', () => {
-    let state = initialState
-    for (let i = 0; i < 4; i++) state = reducer(state, { type: 'CYCLE_SNAP' })
-    expect(state.snapIdx).toBe(0)
+    let state = initialState // snapIdx starts at 2
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(3)
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(0) // wraps past the end of the array
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(1)
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(2) // back to start, full cycle confirmed
   })
 
   it('clamps nudged offset to -8..8', () => {
