@@ -1,7 +1,7 @@
 export type SoundType =
   'drums' | 'notes' | 'bass' | 'extInst' | 'sampler' | 'fx' | 'extFx' | 'audioIn'
 
-export const TYPE_ORDER: SoundType[] = [
+export const TYPE_ORDER: readonly SoundType[] = [
   'drums',
   'notes',
   'bass',
