@@ -1988,6 +1988,7 @@ git commit -m "Add import IPC (folder or loose files) copying stems into a manag
 
 **Files:**
 - Modify: `src/renderer/src/components/Shelf.tsx`
+- Create: `src/renderer/src/theme/typeColor.ts`
 - Create: `src/renderer/src/components/RifffBlockRow.tsx`
 - Create: `src/renderer/src/components/StemSubRow.tsx`
 - Modify: `src/renderer/src/App.tsx`
@@ -2011,29 +2012,45 @@ Add `draggable` and an `onDragStart` handler to the shelf-card `div` from Task 1
 >
 ```
 
-- [ ] **Step 2: Write `RifffBlockRow.tsx`**
+- [ ] **Step 2: Write a shared `typeColorVar` helper, then `RifffBlockRow.tsx`**
+
+`RifffBlockRow` and `StemSubRow` both need a sound-type's color as a CSS value. Rather
+than a second, hand-maintained hex table duplicating the `--ra-type-*` custom properties
+already defined in `tokens.css` (Task 3) and already mapped by `TYPE_CSS_VAR` in
+`src/shared/types.ts` (Task 4) — which would drift silently if one copy were edited and
+not the other — both components pull from one shared helper. This also avoids a
+circular import between the two components (`StemSubRow` importing color data back out
+of `RifffBlockRow`, which imports `StemSubRow` to render it).
+
+Create `src/renderer/src/theme/typeColor.ts`:
+
+```ts
+import { TYPE_CSS_VAR, type SoundType } from '@shared/types'
+
+/**
+ * A CSS `var(...)` reference for a sound type's color, sourced from the single
+ * design-token definition in tokens.css (via TYPE_CSS_VAR) rather than a second,
+ * hand-maintained hex table — avoids two color sources drifting out of sync.
+ * Works anywhere a CSS color is valid, including inside color-mix().
+ */
+export function typeColorVar(type: SoundType): string {
+  return `var(${TYPE_CSS_VAR[type]})`
+}
+```
+
+Then `RifffBlockRow.tsx`:
 
 ```tsx
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { clipGeometry } from '../state/selectors'
-import type { SoundType, Rifff } from '@shared/types'
+import type { Rifff } from '@shared/types'
+import { typeColorVar } from '../theme/typeColor'
 import { StemSubRow } from './StemSubRow'
 
 const PPB = 24
 
-const TYPE_COLOR: Record<SoundType, string> = {
-  drums: '#c87c46',
-  notes: '#cbb85a',
-  bass: '#5b95c4',
-  extInst: '#c46389',
-  sampler: '#7f66c4',
-  fx: '#4fada0',
-  extFx: '#5fae62',
-  audioIn: '#c56164'
-}
-
 function identityColor(rifff: Rifff): string {
-  return TYPE_COLOR[rifff.stems[0]?.type ?? 'fx']
+  return typeColorVar(rifff.stems[0]?.type ?? 'fx')
 }
 
 export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Element {
@@ -2135,8 +2152,6 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
     </div>
   )
 }
-
-export { TYPE_COLOR }
 ```
 
 - [ ] **Step 3: Write `StemSubRow.tsx`**
@@ -2145,7 +2160,7 @@ export { TYPE_COLOR }
 import { useAppState } from '../state/StoreContext'
 import { stemKey } from '@shared/types'
 import { clipGeometry } from '../state/selectors'
-import { TYPE_COLOR } from './RifffBlockRow'
+import { typeColorVar } from '../theme/typeColor'
 
 const PPB = 24
 
@@ -2153,13 +2168,18 @@ export function StemSubRow({ groupId, slot }: { groupId: string; slot: number })
   const state = useAppState()
   const rifff = state.rifffs[groupId]
   const stem = rifff.stems.find((s) => s.slot === slot)!
-  const color = TYPE_COLOR[stem.type]
+  const color = typeColorVar(stem.type)
   const key = stemKey(groupId, slot)
   const muted = !!state.mute[key]
 
   const groupGeo = clipGeometry(state, groupId, PPB)
   const repetitions = Math.max(1, Math.round(rifff.barLength / stem.barLength))
-  const repWidthPx = (stem.barLength / rifff.barLength) * groupGeo.widthPx
+  // Divide the parent clip's actual width evenly across repetitions, rather than
+  // scaling each segment independently from the stem/rifff bar-length ratio — the
+  // latter only tiles exactly when barLength divides evenly (e.g. 8/2), and silently
+  // overshoots or leaves a gap otherwise (e.g. an 8-bar rifff with a 3-bar stem:
+  // round(8/3)=3 reps at (3/8)*width each overshoots by a full bar).
+  const repWidthPx = groupGeo.widthPx / repetitions
 
   return (
     <div
@@ -2395,7 +2415,7 @@ import { useEffect, useState } from 'react'
 import { polarGlyph } from '@shared/visuals'
 import { getPeaks } from '../audio/peakCache'
 import type { Stem } from '@shared/types'
-import { TYPE_COLOR } from './RifffBlockRow'
+import { typeColorVar } from '../theme/typeColor'
 
 export function PolarGlyph({
   stems,
@@ -2426,7 +2446,7 @@ export function PolarGlyph({
       if (!peaks) return null
       const r0 = 17 + i * 2.5
       const amp = 10 + 15 * Math.min(1, 1 + 0.1) // volume wiring lands in Task 14; assume unity for now
-      return { path: polarGlyph(peaks, r0, amp, 16), amp, color: TYPE_COLOR[stem.type] }
+      return { path: polarGlyph(peaks, r0, amp, 16), amp, color: typeColorVar(stem.type) }
     })
     .filter((r): r is { path: string; amp: number; color: string } => r !== null)
     .sort((a, b) => b.amp - a.amp)
@@ -2491,12 +2511,12 @@ export function Waveform({
 ```tsx
 <PolarGlyph
   stems={rifff.stems}
-  identityColor={TYPE_COLOR[rifff.stems[0]?.type ?? 'fx']}
+  identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
   size={40}
 />
 ```
 
-(add the import for `PolarGlyph` and `TYPE_COLOR` from `./RifffBlockRow`)
+(add the import for `PolarGlyph` from `./PolarGlyph` and `typeColorVar` from `../theme/typeColor`)
 
 - [ ] **Step 8: Use them in `RifffBlockRow.tsx`** — replace the 30px colored circle with
 `<PolarGlyph stems={rifff.stems} identityColor={color} size={30} />`, and inside the clip
@@ -2550,7 +2570,7 @@ import { dbLabel, offsetLabels } from '@shared/visuals'
 import { stemKey, TYPE_ORDER } from '@shared/types'
 import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
-import { TYPE_COLOR } from './RifffBlockRow'
+import { typeColorVar } from '../theme/typeColor'
 
 export function Inspector(): React.JSX.Element {
   const state = useAppState()
@@ -2571,7 +2591,7 @@ export function Inspector(): React.JSX.Element {
   }
 
   const rifff = state.rifffs[groupId]
-  const color = TYPE_COLOR[rifff.stems[0]?.type ?? 'fx']
+  const color = typeColorVar(rifff.stems[0]?.type ?? 'fx')
   const stretchOn = state.stretch[groupId] ?? true
   const ratio = stretchRatio(state, groupId)
   const groupOffsetKey = resolveOffsetKey(state, groupId, rifff.stems[0]?.slot ?? 0)
@@ -2703,7 +2723,7 @@ export function Inspector(): React.JSX.Element {
                   <button
                     onClick={() => dispatch({ type: 'CYCLE_TYPE', groupId, slot: stem.slot })}
                     title="click to change sound type"
-                    style={{ width: 6, height: 12, borderRadius: 2, background: TYPE_COLOR[stem.type], border: 'none', padding: 0 }}
+                    style={{ width: 6, height: 12, borderRadius: 2, background: typeColorVar(stem.type), border: 'none', padding: 0 }}
                   />
                   <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>{stem.slot}</span>
                   <span style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
