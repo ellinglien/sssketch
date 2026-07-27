@@ -6,6 +6,7 @@ import {
   closeSync,
   mkdirSync,
   copyFileSync,
+  rmSync,
   type Dirent
 } from 'fs'
 import { join, basename, dirname } from 'path'
@@ -52,6 +53,12 @@ function libraryRoot(): string {
 export function importRifff(droppedPaths: string[]): Rifff | null {
   if (droppedPaths.length === 0) return null
 
+  // Tracked outside the try block so a mid-copy failure (disk full, permission
+  // revoked partway through, etc.) can clean up whatever was already written —
+  // otherwise a fresh crypto.randomUUID() next attempt never points back at a
+  // partial copy, and it's orphaned in the library forever.
+  let destDir: string | undefined
+
   try {
     let candidateWavPaths: string[]
     let displayName: string
@@ -82,11 +89,12 @@ export function importRifff(droppedPaths: string[]): Rifff | null {
     const rifff = buildRifff(provenancePath, displayName, scanned)
     if (!rifff) return null
 
-    const destDir = join(libraryRoot(), rifff.groupId)
+    destDir = join(libraryRoot(), rifff.groupId)
     mkdirSync(destDir, { recursive: true })
+    const dir = destDir // narrow to a non-optional local for the closure below
 
     const copiedStems = rifff.stems.map((stem) => {
-      const destPath = join(destDir, basename(stem.path))
+      const destPath = join(dir, basename(stem.path))
       copyFileSync(stem.path, destPath)
       return { ...stem, path: destPath }
     })
@@ -99,6 +107,16 @@ export function importRifff(droppedPaths: string[]): Rifff | null {
     // the existing "can't build a rifff → return null" pattern used elsewhere here.
     const message = err instanceof Error ? err.message : String(err)
     console.error(`importRifff: failed to import from [${droppedPaths.join(', ')}]: ${message}`)
+    if (destDir) {
+      // A failure after mkdirSync (e.g. mid-copy) can leave a partial rifff folder
+      // behind. Since groupId is freshly randomized every call, nothing will ever
+      // reference that directory again — clean it up rather than orphaning it.
+      try {
+        rmSync(destDir, { recursive: true, force: true })
+      } catch (cleanupErr) {
+        console.error(`importRifff: failed to clean up partial import at ${destDir}:`, cleanupErr)
+      }
+    }
     return null
   }
 }
