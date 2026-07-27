@@ -60,7 +60,7 @@ app.whenReady().then(() => {
     return result.canceled ? null : result.filePaths[0]
   })
 
-  ipcMain.handle('read-audio-file', (_event, path: string) => readAudioFile(path))
+  ipcMain.handle('read-audio-file', async (_event, path: string) => readAudioFile(path))
 
   createWindow()
 

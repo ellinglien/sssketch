@@ -1,5 +1,5 @@
-import { readFileSync } from 'fs'
+import { readFile } from 'fs/promises'
 
-export function readAudioFile(path: string): Uint8Array {
-  return new Uint8Array(readFileSync(path))
+export async function readAudioFile(path: string): Promise<Uint8Array> {
+  return new Uint8Array(await readFile(path))
 }

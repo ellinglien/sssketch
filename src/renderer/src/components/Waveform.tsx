@@ -12,18 +12,25 @@ export function Waveform({
   opacity?: number
 }): React.JSX.Element | null {
   const [peaks, setPeaks] = useState<number[] | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    getPeaks(path).then((p) => {
-      if (!cancelled) setPeaks(p)
-    })
+    getPeaks(path)
+      .then((p) => {
+        if (!cancelled) setPeaks(p)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error(`Waveform: failed to decode peaks for ${path}`, err)
+        setFailed(true)
+      })
     return () => {
       cancelled = true
     }
   }, [path])
 
-  if (!peaks) return null
+  if (failed || !peaks) return null
 
   return (
     <svg
