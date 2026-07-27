@@ -2762,7 +2762,8 @@ export function Inspector(): React.JSX.Element {
           </div>
           <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
             source: {rifff.stems[0]?.author}
-            {new Set(rifff.stems.map((s) => s.author)).size > 1 ? ' and others' : ''}, left where they are.
+            {new Set(rifff.stems.map((s) => s.author)).size > 1 ? ' and others' : ''}, copied into
+            your rifff library.
           </div>
         </>
       )}
