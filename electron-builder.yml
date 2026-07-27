@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: com.ellinglien.bendlesss
 productName: rifff-arranger
 directories:
   buildResources: build

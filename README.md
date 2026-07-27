@@ -1,4 +1,4 @@
-# bendlesss-scaffold
+# Rifff Arranger
 
 An Electron application with React and TypeScript
 
