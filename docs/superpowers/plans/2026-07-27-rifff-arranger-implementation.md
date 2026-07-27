@@ -2157,7 +2157,6 @@ export function StemSubRow({ groupId, slot }: { groupId: string; slot: number })
   const color = TYPE_COLOR[stem.type]
   const key = stemKey(groupId, slot)
   const muted = !!state.mute[key]
-  const dbValue = state.vol[key] ?? 1
 
   const groupGeo = clipGeometry(state, groupId, PPB)
   const repetitions = Math.max(1, Math.round(rifff.barLength / stem.barLength))
