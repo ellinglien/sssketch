@@ -4,3 +4,4 @@ dist-electron/
 out/
 .DS_Store
 *.log
+.worktrees/
