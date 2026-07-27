@@ -40,6 +40,22 @@ it has the exact pixel/color/spacing values referenced throughout this plan.
 search rather than assuming a fixed location, so the app still works if Homebrew's
 prefix differs.
 
+**Post-Task-1 correction:** the electron-vite react-ts scaffolder installs React 19
+(this plan originally said "React 18" in the Tech Stack line above that header — treat
+React 19 as authoritative, confirmed via the actual installed `@types/react` version).
+React 19's types no longer expose a bare global `JSX` namespace — `: JSX.Element` return
+type annotations fail to compile (`TS2503: Cannot find namespace 'JSX'`). Every component
+in this plan is written with `React.JSX.Element` throughout (already corrected) — that
+form works without an explicit `import React from 'react'`, since `@types/react`
+declares it as an ambient global namespace. If you're implementing a task and see a
+stray bare `JSX.Element` anywhere, treat it as a typo and use `React.JSX.Element`.
+
+Task 1's code review also flagged that `eslint.config.mjs`'s default `ignores` list
+doesn't exclude `design/` (which contains `rifff-visuals.js`/`support.js` — reference
+files, not app source) — fixed as part of Task 1's follow-up. If a later task's
+`npm run lint` comes back with hundreds of errors from `design/design_handoff_rifff_arranger/*.js`,
+that ignore entry has regressed and should be restored.
+
 ---
 
 ## Task 1: Scaffold the Electron + React + TypeScript project
@@ -171,7 +187,7 @@ rm -rf src/renderer/src/assets src/renderer/src/components
 - [ ] **Step 4: Replace `src/renderer/src/App.tsx` with a placeholder**
 
 ```tsx
-export default function App(): JSX.Element {
+export default function App(): React.JSX.Element {
   return <div style={{ color: '#f2f2f4', padding: 20 }}>rifff arranger</div>
 }
 ```
@@ -1359,7 +1375,7 @@ import { initialState, reducer, type Action, type AppState } from './store'
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
 
-export function StoreProvider({ children }: { children: ReactNode }): JSX.Element {
+export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState)
   return (
     <StateCtx.Provider value={state}>
@@ -1386,7 +1402,7 @@ export function Titlebar({
 }: {
   rifffCount: number
   stemCount: number
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div
       style={{
@@ -1423,7 +1439,7 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { positionLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 
-export function TransportBar(): JSX.Element {
+export function TransportBar(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
 
@@ -1530,7 +1546,7 @@ const PPB = 24
 const BARS = 32
 const LANE_HEADER_WIDTH = 212
 
-export function Ruler(): JSX.Element {
+export function Ruler(): React.JSX.Element {
   const bars = Array.from({ length: BARS }, (_, i) => i + 1)
   return (
     <div
@@ -1570,7 +1586,7 @@ export { PPB, BARS, LANE_HEADER_WIDTH }
 - [ ] **Step 5: `Shelf.tsx`** (empty-state only for this task — drop handling comes in Task 10)
 
 ```tsx
-export function Shelf(): JSX.Element {
+export function Shelf(): React.JSX.Element {
   return (
     <div
       style={{
@@ -1614,7 +1630,7 @@ export function Shelf(): JSX.Element {
 - [ ] **Step 6: `Inspector.tsx`** (empty-state only for this task)
 
 ```tsx
-export function Inspector(): JSX.Element {
+export function Inspector(): React.JSX.Element {
   return (
     <div
       style={{
@@ -1645,7 +1661,7 @@ import { Ruler } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 
-function Frame(): JSX.Element {
+function Frame(): React.JSX.Element {
   const state = useAppState()
   return (
     <div className="ra-frame">
@@ -1666,7 +1682,7 @@ function Frame(): JSX.Element {
   )
 }
 
-export default function App(): JSX.Element {
+export default function App(): React.JSX.Element {
   return (
     <StoreProvider>
       <Frame />
@@ -1860,7 +1876,7 @@ grouped into one rifff rather than one-per-file.
 import { useState, type DragEvent } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 
-export function Shelf(): JSX.Element {
+export function Shelf(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const [dragOver, setDragOver] = useState(false)
@@ -2015,7 +2031,7 @@ function identityColor(rifff: Rifff): string {
   return TYPE_COLOR[rifff.stems[0]?.type ?? 'fx']
 }
 
-export function RifffBlockRow({ groupId }: { groupId: string }): JSX.Element {
+export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const rifff = state.rifffs[groupId]
@@ -2128,7 +2144,7 @@ import { TYPE_COLOR } from './RifffBlockRow'
 
 const PPB = 24
 
-export function StemSubRow({ groupId, slot }: { groupId: string; slot: number }): JSX.Element {
+export function StemSubRow({ groupId, slot }: { groupId: string; slot: number }): React.JSX.Element {
   const state = useAppState()
   const rifff = state.rifffs[groupId]
   const stem = rifff.stems.find((s) => s.slot === slot)!
@@ -2210,7 +2226,7 @@ import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
 
-function Timeline(): JSX.Element {
+function Timeline(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
 
@@ -2236,7 +2252,7 @@ function Timeline(): JSX.Element {
   )
 }
 
-function Frame(): JSX.Element {
+function Frame(): React.JSX.Element {
   const state = useAppState()
   return (
     <div className="ra-frame">
@@ -2256,7 +2272,7 @@ function Frame(): JSX.Element {
   )
 }
 
-export default function App(): JSX.Element {
+export default function App(): React.JSX.Element {
   return (
     <StoreProvider>
       <Frame />
@@ -2383,7 +2399,7 @@ export function PolarGlyph({
   stems: Stem[]
   identityColor: string
   size: number
-}): JSX.Element {
+}): React.JSX.Element {
   const [peaksByPath, setPeaksByPath] = useState<Record<string, number[]>>({})
 
   useEffect(() => {
@@ -2435,7 +2451,7 @@ export function Waveform({
   path: string
   color: string
   opacity?: number
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [peaks, setPeaks] = useState<number[] | null>(null)
 
   useEffect(() => {
@@ -2530,7 +2546,7 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { TYPE_COLOR } from './RifffBlockRow'
 
-export function Inspector(): JSX.Element {
+export function Inspector(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const groupId = state.sel
@@ -2558,7 +2574,7 @@ export function Inspector(): JSX.Element {
   const labels = offsetLabels(groupOffsetSteps, snapDiv, state.bpm)
   const unlinked = !!state.unlinked[groupId]
 
-  const section = (children: JSX.Element): JSX.Element => (
+  const section = (children: React.JSX.Element): React.JSX.Element => (
     <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ra-border)' }}>{children}</div>
   )
 
@@ -3049,7 +3065,7 @@ import { resolveOffsetKey } from './selectors'
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
 
-export function StoreProvider({ children }: { children: ReactNode }): JSX.Element {
+export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState)
   const stateRef = useRef(state)
   stateRef.current = state
@@ -3119,7 +3135,7 @@ export function useDispatch(): Dispatch<Action> {
 import { useAppState } from '../state/StoreContext'
 import { LANE_HEADER_WIDTH, PPB } from './Ruler'
 
-export function Playhead(): JSX.Element {
+export function Playhead(): React.JSX.Element {
   const state = useAppState()
   return (
     <div
@@ -3549,7 +3565,7 @@ Then in `App.tsx`:
 ```tsx
 import { serializeProject, deserializeProject } from './state/serialize'
 
-function ProjectMenu(): JSX.Element {
+function ProjectMenu(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
 
