@@ -79,4 +79,46 @@ describe('buildRifff', () => {
     const rifff = buildRifff('/z', 'Stems of Consciousness', files)
     expect(rifff?.name).toBe('Stems of Consciousness')
   })
+
+  it('skips a filename-valid but byte-corrupt WAV and keeps the rest', () => {
+    const files: ScannedFile[] = [
+      {
+        filename: '1 - elling - Highpass - 150BPM - 2020-11-11-13-53.wav',
+        path: '/x/1.wav',
+        bytes: wavBytes(3.2)
+      },
+      {
+        filename: '2 - elling - Corrupt - 150BPM - 2020-11-11-13-54.wav',
+        path: '/x/2.wav',
+        bytes: new Uint8Array(0) // parses as filename, but not a real WAV
+      }
+    ]
+
+    const rifff = buildRifff('/x', 'my jam 150 Stems', files)
+
+    expect(rifff).not.toBeNull()
+    expect(rifff?.stems).toHaveLength(1)
+    expect(rifff?.stems[0].slot).toBe(1)
+  })
+
+  it('keeps only the first file when two files claim the same slot', () => {
+    const files: ScannedFile[] = [
+      {
+        filename: '3 - elling - First - 150BPM - 2020-11-11-13-53.wav',
+        path: '/x/first.wav',
+        bytes: wavBytes(1.6)
+      },
+      {
+        filename: '3 - elling - Second - 150BPM - 2020-11-11-13-54.wav',
+        path: '/x/second.wav',
+        bytes: wavBytes(3.2)
+      }
+    ]
+
+    const rifff = buildRifff('/x', 'my jam 150 Stems', files)
+
+    expect(rifff).not.toBeNull()
+    expect(rifff?.stems).toHaveLength(1)
+    expect(rifff?.stems[0].path).toBe('/x/first.wav')
+  })
 })
