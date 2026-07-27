@@ -9,7 +9,11 @@ const api = {
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
   // only reachable from main/preload, so the renderer has to go through this bridge
   // function, passed the File object itself, to resolve a real filesystem path.
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  // Raw bytes for a stem file, read by the main process (Node fs) and handed to the
+  // renderer, which decodes them via Web Audio (decodeAudioData only exists in the
+  // renderer/browser context).
+  readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

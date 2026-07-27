@@ -3,6 +3,8 @@ import { clipGeometry } from '../state/selectors'
 import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemSubRow } from './StemSubRow'
+import { PolarGlyph } from './PolarGlyph'
+import { Waveform } from './Waveform'
 
 const PPB = 24
 
@@ -52,16 +54,7 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
           >
             {expanded ? '▾' : '▸'}
           </button>
-          <div
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: '50%',
-              background: color,
-              opacity: 0.55,
-              flexShrink: 0
-            }}
-          />
+          <PolarGlyph stems={rifff.stems} identityColor={color} size={30} />
           <div style={{ overflow: 'hidden' }}>
             <div
               style={{
@@ -90,7 +83,10 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
               width: geo.widthPx,
               borderRadius: 4,
               border: `1px solid color-mix(in srgb, ${color} 55%, transparent)`,
-              background: 'rgba(255,255,255,0.03)'
+              background: 'rgba(255,255,255,0.03)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
             }}
           >
             <div
@@ -105,6 +101,9 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
               }}
             >
               linked · {rifff.stems.length} stems
+            </div>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Waveform path={rifff.stems[0].path} color={color} opacity={0.75} />
             </div>
           </div>
         </div>

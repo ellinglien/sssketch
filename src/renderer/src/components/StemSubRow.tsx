@@ -2,6 +2,7 @@ import { useAppState } from '../state/StoreContext'
 import { stemKey } from '@shared/types'
 import { clipGeometry } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
+import { Waveform } from './Waveform'
 
 const PPB = 24
 
@@ -75,9 +76,12 @@ export function StemSubRow({
               borderRadius: 2,
               border: `1px solid color-mix(in srgb, ${color} 50%, transparent)`,
               background: `color-mix(in srgb, ${color} 7%, transparent)`,
-              opacity: muted ? 0.35 : 1
+              opacity: muted ? 0.35 : 1,
+              overflow: 'hidden'
             }}
-          />
+          >
+            <Waveform path={stem.path} color={color} opacity={1} />
+          </div>
         ))}
       </div>
     </div>

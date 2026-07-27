@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
+import { readAudioFile } from './readAudioFile'
 
 function createWindow(): void {
   // Create the browser window.
@@ -58,6 +59,8 @@ app.whenReady().then(() => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     return result.canceled ? null : result.filePaths[0]
   })
+
+  ipcMain.handle('read-audio-file', (_event, path: string) => readAudioFile(path))
 
   createWindow()
 

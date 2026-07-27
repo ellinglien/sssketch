@@ -1,5 +1,7 @@
 import { useState, type DragEvent } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
+import { PolarGlyph } from './PolarGlyph'
+import { typeColorVar } from '../theme/typeColor'
 
 export function Shelf(): React.JSX.Element {
   const state = useAppState()
@@ -53,12 +55,32 @@ export function Shelf(): React.JSX.Element {
               borderRadius: 8,
               padding: '9px 10px',
               background: 'var(--ra-bg-frame)',
-              border: '1px solid var(--ra-border)'
+              border: '1px solid var(--ra-border)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 700 }}>{rifff.name}</div>
-            <div style={{ fontSize: 9, color: 'var(--ra-text-2)' }}>
-              {rifff.bpm} BPM · {rifff.stems.length} stems · {rifff.barLength} bars
+            <PolarGlyph
+              stems={rifff.stems}
+              identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
+              size={40}
+            />
+            <div style={{ overflow: 'hidden' }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                {rifff.name}
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--ra-text-2)' }}>
+                {rifff.bpm} BPM · {rifff.stems.length} stems · {rifff.barLength} bars
+              </div>
             </div>
           </div>
         ))}
