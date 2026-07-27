@@ -6,8 +6,9 @@ A lightweight arranger for stitching Endlesss rifffs (multi-stem jam recordings)
 finished track. Not a DAW: no MIDI, no plugin instruments, no realtime FX chains, no
 session/arrangement duality. Scope is exactly five things:
 
-1. Drag-and-drop rifffs into the arranger as **linked, pre-aligned stem groups**
-   (reference-based, never copied)
+1. Drag-and-drop rifffs into the arranger as **linked, pre-aligned stem groups**,
+   imported into a managed local library (see "Data / Import Pipeline" — this revises
+   the original handoff spec's "reference only, nothing copied" framing; see note there)
 2. **Unlink** to break a group into independent stems
 3. **BPM-aware time-stretch** per rifff/stem, pitch preserved
 4. **Grid-snapped offset** per stem/group for fine sync correction
@@ -31,23 +32,46 @@ inspector)**, is being built; 1a/1b/1c remain reference-only.
 
 ## Data / Import Pipeline
 
-**Trigger:** user drags a folder from Finder onto the shelf's drop target (or the app's
-main drop zone). Electron main process receives the dropped path(s).
+> **Revision to the visual handoff spec:** the original design package specifies
+> reference-only import ("0 files copied", "reference only, nothing copied" in the
+> drop-zone copy). Elling asked to change this after seeing the design: Endlesss exports
+> often land somewhere transient (Downloads), and dragging stems directly out of the
+> Endlesss app itself — not a Finder folder — is a workflow he wants supported. Both
+> point at copy-on-import instead. **The titlebar/shelf copy text changes accordingly**
+> ("N rifffs referenced · 0 files copied" → "N rifffs imported"); everything else about
+> the visual spec (layout, colors, control behavior) is unaffected, since the UI never
+> displayed a file path anywhere except the inspector's source-path line, which now shows
+> the library copy's path instead of the original.
 
-**Scanning:** one level deep (non-recursive) for `.wav` files. Filenames are parsed
-against the convention confirmed by both the spec and a real sample rifff the user
-provided (`fixtures/sample-rifff/`):
+**Two drop sources, both produce one rifff group per drop event:**
+1. **A folder dropped from Finder** — scanned one level deep (non-recursive) for `.wav`
+   files, as before.
+2. **One or more loose `.wav` files dropped directly** (e.g. dragged out of the Endlesss
+   app's own UI, which hands the OS a flat file list rather than a folder) — every file
+   in that single drop event is treated as one rifff's stems.
+
+**Scanning:** filenames (from either source) are parsed against the convention confirmed
+by both the spec and a real sample rifff Elling provided (`fixtures/sample-rifff/`):
 
 ```
 {slot} - {author} - {stem name} - {bpm}BPM - {timestamp}.wav
 ```
 
-Non-matching files in the folder are ignored (not every folder dropped will be a rifff
-export — malformed folders just yield zero stems, see Error Handling).
+Non-matching files are ignored (not every drop will be a valid rifff export — a drop
+that yields zero matching stems is a no-op, see Error Handling).
+
+**Copy on import:** every matching stem file is copied into a managed library at
+`~/Music/Rifff Arranger Library/{rifff-id}/{original filename}`, where `{rifff-id}` is
+the same `groupId` used throughout app state. This is a real byte copy (not a symlink),
+so the app keeps working even if the original export folder/file is later moved or
+deleted. `Stem.path` in app state always points at the library copy, never the original
+location.
 
 **Derived metadata:**
-- Rifff name = the dropped folder's name, with a trailing `" Stems"` suffix stripped if
-  present.
+- Rifff name = the dropped folder's name (folder-drop case) with a trailing `" Stems"`
+  suffix stripped if present, or the common prefix/timestamp shared by the dropped files
+  (loose-file case) — falls back to `"untitled rifff"` if no reasonable name can be
+  derived from a loose-file drop.
 - Rifff BPM = the statistical mode of the per-stem BPMs parsed from filenames (they
   should all agree; mode is a defensive default if one file is mis-tagged).
 - Author = author field from filenames (used for the inspector's "source: X and N more"
@@ -56,7 +80,6 @@ export — malformed folders just yield zero stems, see Error Handling).
   header.
 - Rifff bar length = `max(stem bar lengths)` — shorter stems loop within the rifff's
   span, per the spec's "loop-length handling" (draw one clip per repetition).
-- Stem path is stored as an **absolute path reference**. Audio is never copied anywhere.
 
 **Sound-type assignment:** Endlesss doesn't encode sound-type (drums/notes/bass/ext
 inst/sampler/fx/ext fx/audio in) in the filename or in any sidecar file — confirmed by
@@ -117,8 +140,9 @@ rifffs         {
 
 **Project file:** JSON on disk, user-named and saved/loaded like any document (File >
 Save/Open, matches the "untitled sketch 04" title bar affordance). Contains the state
-above plus rifff folder references and per-stem type assignments. Does **not** contain
-audio or peak data.
+above — including each stem's library-copy path and per-stem type assignments — plus the
+original source folder path as provenance metadata only (not required for playback,
+since the library copy is authoritative). Does **not** contain audio or peak data.
 
 **Cache directory** (app support, not the project file): rendered stretched-audio
 buffers and extracted peak arrays, both keyed by absolute stem path so they're reusable
@@ -146,18 +170,20 @@ dB/offset/position formatting) are ported in directly rather than reimplemented.
 
 ## Error Handling
 
-- **Dropped folder has no matching WAVs:** shelf drop target shows an inline message
-  (reuses the existing hint-text styling) instead of adding a rifff; nothing enters state.
+- **Dropped folder/files have no matching WAVs:** shelf drop target shows an inline
+  message (reuses the existing hint-text styling) instead of adding a rifff; nothing
+  enters state, nothing is copied.
 - **Rubberband render fails** (bad binary, corrupt WAV): stem falls back to native-speed
   playback and the inspector's tempo note line shows the spec's existing "will drift
   against the grid" copy — no new UI needed, this is already a defined state for
   stretch-off.
-- **Project file references a folder that's moved/missing on load:** rifff loads with
-  its saved metadata but shows a "source not found" state in place of the waveform;
-  stems are silent. The inspector's source-path line (already spec'd, `word-break:
-  break-all`) becomes clickable and opens a folder picker to relink — same scan/parse
-  path as a fresh drop, matched back onto the existing rifff's saved state (offsets,
-  volumes, type assignments) rather than creating a new one.
+- **Library copy is missing on load** (rare — the user would have to manually delete a
+  file from `~/Music/Rifff Arranger Library`, since the app no longer depends on the
+  original source folder staying put): rifff loads with its saved metadata but shows a
+  "source not found" state in place of the waveform; stems are silent. The inspector's
+  source-path line (already spec'd, `word-break: break-all`) becomes clickable and opens
+  a file/folder picker to re-import, matched back onto the existing rifff's saved state
+  (offsets, volumes, type assignments) rather than creating a new one.
 
 ## Testing
 
