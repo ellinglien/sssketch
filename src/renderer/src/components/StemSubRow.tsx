@@ -1,7 +1,7 @@
 import { useAppState } from '../state/StoreContext'
 import { stemKey } from '@shared/types'
 import { clipGeometry } from '../state/selectors'
-import { TYPE_COLOR } from './RifffBlockRow'
+import { typeColorVar } from '../theme/typeColor'
 
 const PPB = 24
 
@@ -15,13 +15,18 @@ export function StemSubRow({
   const state = useAppState()
   const rifff = state.rifffs[groupId]
   const stem = rifff.stems.find((s) => s.slot === slot)!
-  const color = TYPE_COLOR[stem.type]
+  const color = typeColorVar(stem.type)
   const key = stemKey(groupId, slot)
   const muted = !!state.mute[key]
 
   const groupGeo = clipGeometry(state, groupId, PPB)
   const repetitions = Math.max(1, Math.round(rifff.barLength / stem.barLength))
-  const repWidthPx = (stem.barLength / rifff.barLength) * groupGeo.widthPx
+  // Divide the parent clip's actual width evenly across repetitions, rather than
+  // scaling each segment independently from the stem/rifff bar-length ratio —
+  // the latter only tiles exactly when barLength divides evenly (e.g. 8/2), and
+  // silently overshoots or leaves a gap otherwise (e.g. an 8-bar rifff with a
+  // 3-bar stem: round(8/3)=3 reps at (3/8)*width each overshoots by a full bar).
+  const repWidthPx = groupGeo.widthPx / repetitions
 
   return (
     <div

@@ -1,23 +1,13 @@
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { clipGeometry } from '../state/selectors'
-import type { SoundType, Rifff } from '@shared/types'
+import type { Rifff } from '@shared/types'
+import { typeColorVar } from '../theme/typeColor'
 import { StemSubRow } from './StemSubRow'
 
 const PPB = 24
 
-const TYPE_COLOR: Record<SoundType, string> = {
-  drums: '#c87c46',
-  notes: '#cbb85a',
-  bass: '#5b95c4',
-  extInst: '#c46389',
-  sampler: '#7f66c4',
-  fx: '#4fada0',
-  extFx: '#5fae62',
-  audioIn: '#c56164'
-}
-
 function identityColor(rifff: Rifff): string {
-  return TYPE_COLOR[rifff.stems[0]?.type ?? 'fx']
+  return typeColorVar(rifff.stems[0]?.type ?? 'fx')
 }
 
 export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Element {
@@ -127,5 +117,3 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
     </div>
   )
 }
-
-export { TYPE_COLOR }
