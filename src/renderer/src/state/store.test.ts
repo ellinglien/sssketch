@@ -49,6 +49,16 @@ describe('reducer', () => {
     expect(state.stretch.r1).toBe(true)
   })
 
+  it('selects a rifff', () => {
+    const state = reducer(initialState, { type: 'SELECT', groupId: 'r1' })
+    expect(state.sel).toBe('r1')
+  })
+
+  it('toggles expand', () => {
+    const state = reducer(initialState, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
+    expect(state.exp.r1).toBe(true)
+  })
+
   it('clamps tempo to 40..200', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 500 }).bpm).toBe(200)
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 1 }).bpm).toBe(40)
@@ -79,6 +89,31 @@ describe('reducer', () => {
     expect(state.off.r1).toBe(-8)
   })
 
+  it('zeroes an offset', () => {
+    let state = reducer(initialState, { type: 'NUDGE_OFFSET', key: 'r1', delta: 5 })
+    state = reducer(state, { type: 'ZERO_OFFSET', key: 'r1' })
+    expect(state.off.r1).toBe(0)
+  })
+
+  it('sets a stem volume', () => {
+    const state = reducer(initialState, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.5 })
+    expect(state.vol['r1:1']).toBe(0.5)
+  })
+
+  it('toggles mute', () => {
+    let state = reducer(initialState, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    expect(state.mute['r1:1']).toBe(true)
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    expect(state.mute['r1:1']).toBe(false)
+  })
+
+  it('toggles stretch', () => {
+    let state = reducer(initialState, { type: 'TOGGLE_STRETCH', groupId: 'r1' })
+    expect(state.stretch.r1).toBe(true)
+    state = reducer(state, { type: 'TOGGLE_STRETCH', groupId: 'r1' })
+    expect(state.stretch.r1).toBe(false)
+  })
+
   it('unlink copies the group offset onto each stem key and flags unlinked', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 3 })
@@ -101,6 +136,12 @@ describe('reducer', () => {
       state = reducer(state, { type: 'CYCLE_TYPE', groupId: 'r1', slot: 1 })
     }
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.type).toBe('fx')
+  })
+
+  it('pauses', () => {
+    let state = reducer(initialState, { type: 'PLAY' })
+    state = reducer(state, { type: 'PAUSE' })
+    expect(state.playing).toBe(false)
   })
 
   it('stop resets position and pauses', () => {

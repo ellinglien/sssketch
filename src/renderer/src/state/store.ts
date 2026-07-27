@@ -109,6 +109,9 @@ export function reducer(state: AppState, action: Action): AppState {
       for (const stem of rifff.stems) {
         off[stemKey(action.groupId, stem.slot)] = groupOffset
       }
+      // The group-level off[groupId] entry is intentionally left in place (unused while
+      // unlinked) rather than deleted — resolveOffsetKey always reads the per-stem key
+      // when unlinked, and RELINK makes the group key authoritative again.
       return { ...state, unlinked: { ...state.unlinked, [action.groupId]: true }, off }
     }
 
@@ -137,7 +140,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_POS':
       return { ...state, pos: action.pos }
 
-    default:
-      return state
+    default: {
+      const _exhaustive: never = action
+      return _exhaustive
+    }
   }
 }
