@@ -1,4 +1,13 @@
-import { readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, copyFileSync } from 'fs'
+import {
+  readdirSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  mkdirSync,
+  copyFileSync,
+  type Dirent
+} from 'fs'
 import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 import { buildRifff, type ScannedFile } from '@shared/buildRifff'
@@ -41,43 +50,73 @@ function libraryRoot(): string {
  * matching .wav is copied into the managed library, grouped into one rifff.
  */
 export function importRifff(droppedPaths: string[]): Rifff | null {
-  let candidateWavPaths: string[]
-  let displayName: string
-  let provenancePath: string
+  if (droppedPaths.length === 0) return null
 
-  if (droppedPaths.length === 1 && statSync(droppedPaths[0]).isDirectory()) {
-    const folderPath = droppedPaths[0]
-    const entries = readdirSync(folderPath, { withFileTypes: true })
-    candidateWavPaths = entries
-      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
-      .map((e) => join(folderPath, e.name))
-    displayName = basename(folderPath)
-    provenancePath = folderPath
-  } else {
-    candidateWavPaths = droppedPaths.filter((p) => p.toLowerCase().endsWith('.wav'))
-    displayName = 'untitled rifff'
-    provenancePath = dirname(droppedPaths[0])
+  try {
+    let candidateWavPaths: string[]
+    let displayName: string
+    let provenancePath: string
+
+    if (droppedPaths.length === 1 && statSync(droppedPaths[0]).isDirectory()) {
+      const folderPath = droppedPaths[0]
+      const entries = readdirSync(folderPath, { withFileTypes: true })
+      candidateWavPaths = entries
+        .filter((e) => isUsableFile(e, folderPath) && e.name.toLowerCase().endsWith('.wav'))
+        .map((e) => join(folderPath, e.name))
+      displayName = basename(folderPath)
+      provenancePath = folderPath
+    } else {
+      candidateWavPaths = droppedPaths.filter((p) => p.toLowerCase().endsWith('.wav'))
+      displayName = 'untitled rifff'
+      provenancePath = dirname(droppedPaths[0])
+    }
+
+    if (candidateWavPaths.length === 0) return null
+
+    const scanned: ScannedFile[] = candidateWavPaths.map((path) => ({
+      filename: basename(path),
+      path,
+      bytes: readWavHeaderBytes(path)
+    }))
+
+    const rifff = buildRifff(provenancePath, displayName, scanned)
+    if (!rifff) return null
+
+    const destDir = join(libraryRoot(), rifff.groupId)
+    mkdirSync(destDir, { recursive: true })
+
+    const copiedStems = rifff.stems.map((stem) => {
+      const destPath = join(destDir, basename(stem.path))
+      copyFileSync(stem.path, destPath)
+      return { ...stem, path: destPath }
+    })
+
+    return { ...rifff, stems: copiedStems }
+  } catch (err) {
+    // Permission-denied folder, a path vanishing between drop and processing, disk
+    // full mid-copy, etc. — none of these should take down the IPC handler and leave
+    // the renderer's `await` hanging on a rejected promise. Log and no-op, matching
+    // the existing "can't build a rifff → return null" pattern used elsewhere here.
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`importRifff: failed to import from [${droppedPaths.join(', ')}]: ${message}`)
+    return null
   }
+}
 
-  if (candidateWavPaths.length === 0) return null
-
-  const scanned: ScannedFile[] = candidateWavPaths.map((path) => ({
-    filename: basename(path),
-    path,
-    bytes: readWavHeaderBytes(path)
-  }))
-
-  const rifff = buildRifff(provenancePath, displayName, scanned)
-  if (!rifff) return null
-
-  const destDir = join(libraryRoot(), rifff.groupId)
-  mkdirSync(destDir, { recursive: true })
-
-  const copiedStems = rifff.stems.map((stem) => {
-    const destPath = join(destDir, basename(stem.path))
-    copyFileSync(stem.path, destPath)
-    return { ...stem, path: destPath }
-  })
-
-  return { ...rifff, stems: copiedStems }
+/**
+ * `Dirent.isFile()` reflects the raw directory-entry type and is `false` for a
+ * symlink entry even when it resolves to a regular file — a documented Node
+ * gotcha. Follow symlinks with `statSync` so a symlinked stem isn't silently
+ * dropped; a broken symlink (dangling target) is treated as not usable.
+ */
+function isUsableFile(entry: Dirent, folderPath: string): boolean {
+  if (entry.isFile()) return true
+  if (entry.isSymbolicLink()) {
+    try {
+      return statSync(join(folderPath, entry.name)).isFile()
+    } catch {
+      return false
+    }
+  }
+  return false
 }

@@ -13,8 +13,17 @@ export function Shelf(): React.JSX.Element {
     // as of Electron 32+); resolve each one's filesystem path via the preload bridge.
     const paths = Array.from(e.dataTransfer.files).map((f) => window.rifffApi.getPathForFile(f))
     if (paths.length === 0) return
-    const rifff = await window.rifffApi.importRifff(paths)
-    if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
+    try {
+      const rifff = await window.rifffApi.importRifff(paths)
+      if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
+    } catch (err) {
+      // importRifff normally swallows its own errors and resolves null; this only
+      // fires for something unexpected at the IPC layer itself (e.g. the main
+      // process handler throwing before returning). No notification UI exists yet
+      // (Task 10 doesn't add one) — surface it to the console so it's at least
+      // discoverable rather than a silent no-op.
+      console.error('importRifff failed:', err)
+    }
   }
 
   return (
