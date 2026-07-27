@@ -1,9 +1,37 @@
-import { StoreProvider, useAppState } from './state/StoreContext'
+import { type DragEvent } from 'react'
+import { StoreProvider, useAppState, useDispatch } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
-import { Ruler } from './components/Ruler'
+import { Ruler, PPB, LANE_HEADER_WIDTH } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
+import { RifffBlockRow } from './components/RifffBlockRow'
+
+function Timeline(): React.JSX.Element {
+  const state = useAppState()
+  const dispatch = useDispatch()
+
+  function handleDrop(e: DragEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    const groupId = e.dataTransfer.getData('text/rifff-group-id')
+    if (!groupId) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
+    const startBar = Math.max(0, Math.round(xInTimeline / PPB))
+    dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
+  }
+
+  return (
+    <div onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
+      <Ruler />
+      {Object.values(state.rifffs)
+        .filter((r) => r.startBar !== undefined)
+        .map((r) => (
+          <RifffBlockRow key={r.groupId} groupId={r.groupId} />
+        ))}
+    </div>
+  )
+}
 
 function Frame(): React.JSX.Element {
   const state = useAppState()
@@ -17,8 +45,7 @@ function Frame(): React.JSX.Element {
       <TransportBar />
       <div style={{ display: 'flex' }}>
         <div style={{ flex: 1 }}>
-          <Ruler />
-          {/* rifff block rows land here in Task 11 */}
+          <Timeline />
         </div>
         <Inspector />
       </div>

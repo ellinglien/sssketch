@@ -44,6 +44,10 @@ export function Shelf(): React.JSX.Element {
         {Object.values(state.rifffs).map((rifff) => (
           <div
             key={rifff.groupId}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
+            }}
             style={{
               width: 212,
               borderRadius: 8,
