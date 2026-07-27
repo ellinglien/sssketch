@@ -21,4 +21,14 @@ describe('parseStemFilename', () => {
     expect(parseStemFilename('recording 165 (Bass).wav')).toBeNull()
     expect(parseStemFilename('.DS_Store')).toBeNull()
   })
+  it('does not mis-split an author name that itself contains a hyphen', () => {
+    const parsed = parseStemFilename('5 - Jean-Luc - Highpass - 150BPM - 2020-11-11-13-53.wav')
+    expect(parsed).toEqual({
+      slot: 5,
+      author: 'Jean-Luc',
+      stemName: 'Highpass',
+      bpm: 150,
+      timestamp: '2020-11-11-13-53'
+    })
+  })
 })

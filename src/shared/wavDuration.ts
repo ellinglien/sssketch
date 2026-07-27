@@ -18,12 +18,28 @@ export function readWavDurationSeconds(bytes: Uint8Array): number {
     )
     const chunkSize = view.getUint32(offset + 4, true)
     const bodyOffset = offset + 8
-    if (chunkId === 'fmt ') {
-      numChannels = view.getUint16(bodyOffset + 2, true)
-      sampleRate = view.getUint32(bodyOffset + 4, true)
-      bitsPerSample = view.getUint16(bodyOffset + 14, true)
-    } else if (chunkId === 'data') {
-      dataBytes = chunkSize
+    const bytesAvailable = bytes.length - bodyOffset
+
+    if (chunkId === 'data') {
+      // A file that's truncated mid-write (or still being copied when scanned) can
+      // declare a data size larger than the bytes actually present. Clamp to what's
+      // really there so we return a correct (short) duration instead of a
+      // plausible-looking but fabricated one.
+      dataBytes = Math.min(chunkSize, Math.max(0, bytesAvailable))
+    } else {
+      // Every other chunk (fmt, JUNK/LIST padding chunks, etc.) is expected to be
+      // fully present. Check bounds *before* reading any of its body so a truncated
+      // file fails with our own descriptive error instead of a low-level DataView
+      // RangeError.
+      if (chunkSize > bytesAvailable) {
+        throw new Error(`WAV file is truncated inside the '${chunkId}' chunk`)
+      }
+      if (chunkId === 'fmt ') {
+        if (chunkSize < 16) throw new Error('WAV fmt chunk is smaller than expected')
+        numChannels = view.getUint16(bodyOffset + 2, true)
+        sampleRate = view.getUint32(bodyOffset + 4, true)
+        bitsPerSample = view.getUint16(bodyOffset + 14, true)
+      }
     }
     offset = bodyOffset + chunkSize + (chunkSize % 2)
   }
