@@ -1380,7 +1380,13 @@ export function useDispatch(): Dispatch<Action> {
 - [ ] **Step 2: `Titlebar.tsx`**
 
 ```tsx
-export function Titlebar({ rifffCount }: { rifffCount: number }): JSX.Element {
+export function Titlebar({
+  rifffCount,
+  stemCount
+}: {
+  rifffCount: number
+  stemCount: number
+}): JSX.Element {
   return (
     <div
       style={{
@@ -1398,12 +1404,17 @@ export function Titlebar({ rifffCount }: { rifffCount: number }): JSX.Element {
         <span style={{ color: 'var(--ra-text-2)' }}>untitled sketch 04</span>
       </div>
       <div style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-        {rifffCount} rifffs referenced · 0 files copied
+        {rifffCount} rifffs · {stemCount} stems imported
       </div>
     </div>
   )
 }
 ```
+
+Note: this deviates from the visual handoff's literal copy ("N rifffs referenced · 0
+files copied"), which described reference-only import. Per the design doc's revision
+note, import now copies files into a managed library, so that exact phrasing would be
+false — this is the smallest wording change that keeps the same layout/position/styling.
 
 - [ ] **Step 3: `TransportBar.tsx`**
 
@@ -1591,8 +1602,8 @@ export function Shelf(): JSX.Element {
             textAlign: 'center'
           }}
         >
-          <div>drop rifff folders from finder</div>
-          <div>reference only, nothing copied</div>
+          <div>drop rifff folders, or stems straight from endlesss</div>
+          <div>copied into your rifff library</div>
         </div>
       </div>
     </div>
@@ -1638,7 +1649,10 @@ function Frame(): JSX.Element {
   const state = useAppState()
   return (
     <div className="ra-frame">
-      <Titlebar rifffCount={Object.keys(state.rifffs).length} />
+      <Titlebar
+        rifffCount={Object.keys(state.rifffs).length}
+        stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
+      />
       <Shelf />
       <TransportBar />
       <div style={{ display: 'flex' }}>
@@ -1664,8 +1678,8 @@ export default function App(): JSX.Element {
 - [ ] **Step 8: Verify visually**
 
 Run: `npm run dev`
-Expected: window shows the titlebar ("rifff arranger | untitled sketch 04", "0 rifffs
-referenced · 0 files copied"), shelf with the dashed drop target, transport bar with
+Expected: window shows the titlebar ("rifff arranger | untitled sketch 04", "0 rifffs ·
+0 stems imported"), shelf with the dashed drop target, transport bar with
 play/stop/position/tempo/snap controls, a 32-bar ruler with tick marks every bar and
 numbers every 8, and an empty inspector on the right. Clicking play toggles the button
 to the teal "playing" state and back (no audio yet). Tempo ± changes the readout and
@@ -1683,21 +1697,37 @@ git commit -m "Add static UI shell: titlebar, transport, ruler, empty shelf/insp
 
 ---
 
-## Task 10: Main-process folder scanning + Finder → Shelf drop
+## Task 10: Main-process import (folder or loose files), copy into library, Shelf drop
 
 **Files:**
-- Create: `src/main/scanRifffFolder.ts`
+- Create: `src/main/importRifff.ts`
 - Create: `src/preload/index.ts` (modify scaffold-generated file)
 - Create: `src/preload/index.d.ts`
 - Modify: `src/main/index.ts`
 - Modify: `src/renderer/src/components/Shelf.tsx`
 
-- [ ] **Step 1: Write `src/main/scanRifffFolder.ts`**
+Per the design doc's revision note: import now **copies** matching WAVs into
+`~/Music/Rifff Arranger Library/{rifff-id}/` rather than referencing them in place. Two
+drop shapes are handled identically from here on: a single dropped **folder** (scanned
+one level deep), or **one-or-more loose files** dropped together (e.g. dragged directly
+out of the Endlesss app's own UI, which hands the OS a flat file list, not a folder) —
+both produce one rifff per drop event.
+
+- [ ] **Step 1: Write `src/main/importRifff.ts`**
 
 ```ts
-import { readdirSync, statSync, openSync, readSync, closeSync } from 'fs'
-import { join, basename } from 'path'
-import { buildRifff } from '@shared/buildRifff'
+import {
+  readdirSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  mkdirSync,
+  copyFileSync
+} from 'fs'
+import { join, basename, dirname } from 'path'
+import { homedir } from 'os'
+import { buildRifff, type ScannedFile } from '@shared/buildRifff'
 import type { Rifff } from '@shared/types'
 
 /**
@@ -1717,24 +1747,57 @@ function readWavHeaderBytes(path: string): Uint8Array {
   }
 }
 
-export function scanRifffFolder(folderPath: string): Rifff | null {
-  const entries = readdirSync(folderPath, { withFileTypes: true })
-  const wavFiles = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
+function libraryRoot(): string {
+  return join(homedir(), 'Music', 'Rifff Arranger Library')
+}
 
-  const files = wavFiles.map((entry) => ({
-    filename: entry.name,
-    path: join(folderPath, entry.name),
-    bytes: readWavHeaderBytes(join(folderPath, entry.name))
+/**
+ * Accepts the paths handed over by a single drop event: either one folder path
+ * (scanned one level deep for .wav files) or one-or-more loose file paths. Every
+ * matching .wav is copied into the managed library, grouped into one rifff.
+ */
+export function importRifff(droppedPaths: string[]): Rifff | null {
+  let candidateWavPaths: string[]
+  let displayName: string
+  let provenancePath: string
+
+  if (droppedPaths.length === 1 && statSync(droppedPaths[0]).isDirectory()) {
+    const folderPath = droppedPaths[0]
+    const entries = readdirSync(folderPath, { withFileTypes: true })
+    candidateWavPaths = entries
+      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
+      .map((e) => join(folderPath, e.name))
+    displayName = basename(folderPath)
+    provenancePath = folderPath
+  } else {
+    candidateWavPaths = droppedPaths.filter((p) => p.toLowerCase().endsWith('.wav'))
+    displayName = 'untitled rifff'
+    provenancePath = dirname(droppedPaths[0])
+  }
+
+  if (candidateWavPaths.length === 0) return null
+
+  const scanned: ScannedFile[] = candidateWavPaths.map((path) => ({
+    filename: basename(path),
+    path,
+    bytes: readWavHeaderBytes(path)
   }))
 
-  return buildRifff(folderPath, basename(folderPath), files)
+  const rifff = buildRifff(provenancePath, displayName, scanned)
+  if (!rifff) return null
+
+  const destDir = join(libraryRoot(), rifff.groupId)
+  mkdirSync(destDir, { recursive: true })
+
+  const copiedStems = rifff.stems.map((stem) => {
+    const destPath = join(destDir, basename(stem.path))
+    copyFileSync(stem.path, destPath)
+    return { ...stem, path: destPath }
+  })
+
+  return { ...rifff, stems: copiedStems }
 }
 ```
-
-Note: `readWavHeaderBytes` reads only the first 4KB of each file — `readWavDurationSeconds`
-(Task 6) only needs the `fmt ` and `data` chunk headers, both of which sit in a standard
-WAV's first few dozen bytes; reading the whole multi-megabyte file just for duration
-would be wasteful.
 
 - [ ] **Step 2: Expose it over IPC in `src/main/index.ts`**
 
@@ -1743,11 +1806,11 @@ existing `ipcMain.on('ping', ...)` handler (remove that demo handler):
 
 ```ts
 import { ipcMain, dialog } from 'electron'
-import { scanRifffFolder } from './scanRifffFolder'
+import { importRifff } from './importRifff'
 
 // inside app.whenReady().then(() => { ... }), before createWindow():
-ipcMain.handle('scan-rifff-folder', (_event, folderPath: string) => {
-  return scanRifffFolder(folderPath)
+ipcMain.handle('import-rifff', (_event, paths: string[]) => {
+  return importRifff(paths)
 })
 
 ipcMain.handle('pick-folder', async () => {
@@ -1763,8 +1826,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { Rifff } from '@shared/types'
 
 const api = {
-  scanRifffFolder: (folderPath: string): Promise<Rifff | null> =>
-    ipcRenderer.invoke('scan-rifff-folder', folderPath),
+  importRifff: (paths: string[]): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-rifff', paths),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder')
 }
 
@@ -1789,7 +1852,9 @@ declare global {
 
 Replace the file with a version that renders shelf cards from state and handles both
 drop sources: a Finder folder drop, and (stubbed for now, built out in Task 11) a
-drag-out to the timeline.
+drag-out to the timeline. All paths from one drop event are collected and sent in a
+single `importRifff` call, so a multi-file drag (e.g. straight out of Endlesss) is
+grouped into one rifff rather than one-per-file.
 
 ```tsx
 import { useState, type DragEvent } from 'react'
@@ -1803,12 +1868,11 @@ export function Shelf(): JSX.Element {
   async function handleDrop(e: DragEvent<HTMLDivElement>): Promise<void> {
     e.preventDefault()
     setDragOver(false)
-    for (const file of Array.from(e.dataTransfer.files)) {
-      // Electron's File objects carry a real filesystem path.
-      const path = (file as File & { path: string }).path
-      const rifff = await window.rifffApi.scanRifffFolder(path)
-      if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
-    }
+    // Electron's File objects carry a real filesystem path.
+    const paths = Array.from(e.dataTransfer.files).map((f) => (f as File & { path: string }).path)
+    if (paths.length === 0) return
+    const rifff = await window.rifffApi.importRifff(paths)
+    if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
   }
 
   return (
@@ -1865,8 +1929,8 @@ export function Shelf(): JSX.Element {
             textAlign: 'center'
           }}
         >
-          <div>drop rifff folders from finder</div>
-          <div>reference only, nothing copied</div>
+          <div>drop rifff folders, or stems straight from endlesss</div>
+          <div>copied into your rifff library</div>
         </div>
       </div>
     </div>
@@ -1876,17 +1940,24 @@ export function Shelf(): JSX.Element {
 
 - [ ] **Step 6: Verify with the real fixture**
 
-Run: `npm run dev`. In Finder, select the `fixtures/sample-rifff` folder itself (not the
-files inside it — Electron's drop event needs the folder), drag it onto the dashed drop
-target.
-Expected: a shelf card appears reading `sample-rifff` · `150 BPM · 6 stems · 8 bars`,
-and the titlebar's "N rifffs referenced" count updates to 1.
+Run: `npm run dev`. First, in Finder, select the `fixtures/sample-rifff` folder itself
+(not the files inside it) and drag it onto the dashed drop target.
+Expected: a shelf card appears reading `sample-rifff` · `150 BPM · 6 stems · 8 bars`, and
+the titlebar's count updates to `1 rifffs · 6 stems imported`. Then check
+`~/Music/Rifff Arranger Library/` in Finder — a new folder (named after the rifff's
+`groupId`) should contain copies of all 6 WAVs.
+
+Second, test the loose-file path: open `fixtures/sample-rifff` in Finder, select all 6
+`.wav` files individually (not the folder), drag that multi-file selection onto the drop
+target. Expected: a second shelf card appears (name `untitled rifff`, since there's no
+folder name to derive one from), also with 6 stems, and a second folder appears under
+`~/Music/Rifff Arranger Library/`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "Add folder scanning IPC and Finder-to-shelf drop"
+git commit -m "Add import IPC (folder or loose files) copying stems into a managed library"
 ```
 
 ---
@@ -2169,7 +2240,10 @@ function Frame(): JSX.Element {
   const state = useAppState()
   return (
     <div className="ra-frame">
-      <Titlebar rifffCount={Object.keys(state.rifffs).length} />
+      <Titlebar
+        rifffCount={Object.keys(state.rifffs).length}
+        stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
+      />
       <Shelf />
       <TransportBar />
       <div style={{ display: 'flex' }}>
@@ -2199,8 +2273,9 @@ Expected: a block row appears with header "sample-rifff · 6 stems · 8 bars · 
 a clip positioned around bar 5 spanning roughly `8 * (80/150) ≈ 4.3` bars wide (project
 tempo defaults to 80, stretch defaults on, so width reflects the project bar count —
 this is expected per the design's stretch-on behavior, not a bug). Clicking the chevron
-expands 6 stem sub-rows, each showing its own repeated clip pattern (the two 1-bar-native
-stems — 3 and 8 — should show more repetitions than the two 8-bar ones).
+expands 6 stem sub-rows, each showing its own repeated clip pattern (slot 6 "Freezer",
+2 bars native, should show 4 repetitions; slot 8 "Sunset", 1 bar native, should show 8;
+slots 1/3/5/7, each a full 8 bars, should show a single unrepeated clip).
 
 - [ ] **Step 6: Commit**
 
@@ -2248,8 +2323,8 @@ ipcMain.handle('read-audio-file', (_event, path: string) => readAudioFile(path))
 
 ```ts
 const api = {
-  scanRifffFolder: (folderPath: string): Promise<Rifff | null> =>
-    ipcRenderer.invoke('scan-rifff-folder', folderPath),
+  importRifff: (paths: string[]): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-rifff', paths),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path)
 }
@@ -3500,7 +3575,14 @@ function ProjectMenu(): JSX.Element {
 
 Render `<ProjectMenu />` inside `Frame`, e.g. next to the `Titlebar`.
 
-- [ ] **Step 9: Handle a missing folder on load — relink flow**
+- [ ] **Step 9: Handle a missing library copy — re-import flow**
+
+Since import now copies stems into `~/Music/Rifff Arranger Library`, the app no longer
+depends on the original source folder staying where it was — that's the whole point of
+copying. The remaining failure case is rarer: the user manually deletes a rifff's folder
+from inside the library itself. Handle it the same way regardless: make the inspector's
+source-path line clickable to re-import from a freshly picked folder, reusing the
+existing `groupId` so offsets/volumes/mutes survive.
 
 In `Inspector.tsx`'s header section, make the source-path line clickable:
 
@@ -3509,23 +3591,24 @@ In `Inspector.tsx`'s header section, make the source-path line clickable:
   onClick={async () => {
     const folder = await window.rifffApi.pickFolder()
     if (!folder) return
-    const relinked = await window.rifffApi.scanRifffFolder(folder)
-    if (!relinked) return
+    const reimported = await window.rifffApi.importRifff([folder])
+    if (!reimported) return
     dispatch({
       type: 'ADD_TO_SHELF',
-      rifff: { ...relinked, groupId, startBar: rifff.startBar }
+      rifff: { ...reimported, groupId, startBar: rifff.startBar }
     })
   }}
   style={{ marginTop: 6, fontSize: 10, color: 'var(--ra-text-3)', wordBreak: 'break-all', cursor: 'pointer' }}
-  title="click to locate this rifff's folder"
+  title="click to re-import this rifff from its source folder"
 >
   {rifff.folderPath}/
 </div>
 ```
 
 This reuses the existing `groupId` so offsets/volumes/mutes (all keyed by `groupId` or
-`stemKey(groupId, slot)`) survive the relink — only the `rifffs[groupId]` entry itself
-(name/bpm/stems/paths) is replaced.
+`stemKey(groupId, slot)`) survive the re-import — only the `rifffs[groupId]` entry itself
+(name/bpm/stems/paths) is replaced, and a fresh copy lands in the library under the same
+`groupId` folder (overwriting whatever was or wasn't there).
 
 - [ ] **Step 10: Verify with the fixture**
 
@@ -3533,17 +3616,18 @@ Run: `npm run dev`, build up a small arrangement (place `fixtures/sample-rifff`,
 tempo/offset/volume), click "save", choose a location. Quit and relaunch the app
 (`npm run dev` again), click "open", select the saved file. Expected: the arrangement,
 tempo, and offset restore exactly; playback position starts at bar 1 and the app isn't
-mid-playing. To test relink: temporarily rename `fixtures/sample-rifff` in Finder, reload
-the app's saved project — the block should still show with its old data (paths now
-stale); click the inspector's source path, pick the renamed folder in the dialog;
-expected: waveforms/playback work again with the same offset/volume settings preserved.
-Rename the folder back afterward.
+mid-playing. To test the re-import flow: in Finder, delete that rifff's folder from
+`~/Music/Rifff Arranger Library/{groupId}/`, reload the saved project — the block still
+shows with its old data but the waveform/playback should fail silently (stems point at
+now-missing files); click the inspector's source path, pick `fixtures/sample-rifff`
+again in the dialog; expected: a fresh copy lands in the library and
+waveforms/playback work again with the same offset/volume settings preserved.
 
 - [ ] **Step 11: Commit**
 
 ```bash
 git add -A
-git commit -m "Add project save/load and folder relink flow"
+git commit -m "Add project save/load and library re-import flow"
 ```
 
 ---
@@ -3623,9 +3707,11 @@ interaction in the design spec's "Interactions & Behavior" section and confirm:
 - [ ] Unlink turns the group into independent stems with neutral clip border; relink restores group control
 - [ ] Mute dims the row, drops the clip to 35% opacity, shows "mute" in the dB readout, and silences audio
 - [ ] Volume slider updates the dB readout correctly (`0.0` at unity, `−inf` at zero)
-- [ ] Loop-length handling draws one clip per repetition for the two 1-bar-native stems (3, 8) vs. the two 8-bar ones (1, 7 — check actual slot/type per your fixture's filenames)
+- [ ] Loop-length handling draws multiple repeated clips for slot 6 (Freezer, 2 bars →
+      4 repetitions across the 8-bar rifff) and slot 8 (Sunset, 1 bar → 8 repetitions),
+      while slots 1/3/5/7 (each a full 8 bars) draw a single clip with no repetition
 - [ ] Save then Open round-trips the full arrangement
-- [ ] Relinking a moved folder preserves prior offsets/volumes/mutes
+- [ ] Re-importing after deleting a rifff's library folder preserves prior offsets/volumes/mutes
 
 If any item fails, file it as a fast-follow rather than blocking — this checklist is the
 plan's definition of "v1 done," not a gate on every future refinement.
@@ -3636,8 +3722,9 @@ plan's definition of "v1 done," not a gate on every future refinement.
 
 - **Spec coverage:** all 5 core features (linked drop, unlink, time-stretch, offset,
   volume) have dedicated tasks (9–11, 17, 13/15, 13/14). Sound-type assignment, project
-  persistence, and the relink flow (this design's additions beyond the visual spec) are
-  covered in Tasks 4/13 and 19. Packaging is covered in Task 20.
+  persistence, copy-on-import to the managed library, and the re-import flow (this
+  design's additions beyond the visual spec) are covered in Tasks 4/10/13 and 19.
+  Packaging is covered in Task 20.
 - **Type consistency:** `stemKey(groupId, slot)` (Task 4) is used identically in the
   reducer (Task 8), selectors (Task 8), Inspector (Task 13), and AudioEngine (Task 15) —
   no divergent naming. `AppState`'s field names match the design doc's state table
