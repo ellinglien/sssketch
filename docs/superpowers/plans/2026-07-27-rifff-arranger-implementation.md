@@ -3666,16 +3666,51 @@ function ProjectMenu(): React.JSX.Element {
     dispatch({ type: 'LOAD_STATE', state: loaded })
   }
 
+  // Every other button in this app has explicit dark-theme styling — a bare <button>
+  // renders with the OS-default light chrome, which under this app's near-white text
+  // color is illegible (confirmed via screenshot: invisible text on a white box).
+  const buttonStyle = {
+    height: 22,
+    borderRadius: 6,
+    padding: '0 10px',
+    fontSize: 10,
+    border: '1px solid var(--ra-border)',
+    background: 'var(--ra-bg-row-active)',
+    color: 'var(--ra-text-2)'
+  } as const
+
   return (
     <div style={{ display: 'flex', gap: 6 }}>
-      <button onClick={handleSave}>save</button>
-      <button onClick={handleOpen}>open</button>
+      <button onClick={handleSave} style={buttonStyle}>
+        save
+      </button>
+      <button onClick={handleOpen} style={buttonStyle}>
+        open
+      </button>
     </div>
   )
 }
 ```
 
-Render `<ProjectMenu />` inside `Frame`, e.g. next to the `Titlebar`.
+Render `<ProjectMenu />` inside `Frame`, next to the `Titlebar`. Put the border between
+the titlebar row and the shelf on the wrapping flex row itself (not inside `Titlebar`),
+so it spans the full frame width under both `Titlebar` and `ProjectMenu` rather than
+stopping partway — e.g.:
+
+```tsx
+<div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--ra-border-soft)' }}>
+  <div style={{ flex: 1 }}>
+    <Titlebar rifffCount={...} stemCount={...} />
+  </div>
+  <div style={{ paddingRight: 14 }}>
+    <ProjectMenu />
+  </div>
+</div>
+```
+
+(and remove the `borderBottom` from `Titlebar.tsx`'s own root `div` — it's now owned by
+this wrapping row instead, since `Titlebar` no longer spans the frame's full width on
+its own once `ProjectMenu` sits beside it).
 
 - [ ] **Step 9: Handle a missing library copy — re-import flow**
 
