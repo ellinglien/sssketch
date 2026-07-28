@@ -14,7 +14,8 @@ export default defineConfig(
       '**/design',
       '**/docs',
       '**/fixtures',
-      'native-engine/build'
+      'native-engine/build',
+      '.worktrees'
     ]
   },
   tseslint.configs.recommended,
