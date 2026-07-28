@@ -1213,33 +1213,36 @@ Only after Task 6's parity test and Task 7's manual verification both hold up �
   still used by the native path via `window.rifffApi.exportMix`; only the *rendering* logic
   is being retired, not the file-save mechanics)
 
-- [ ] **Step 1: Confirm nothing else references `renderMixToWav` besides `App.tsx` (now removed in Task 7) and Task 6's own parity test**
+**Update (post-Task 6): `renderMixToWav` is no longer used as Task 6's reference at all.**
+Task 6 originally planned to compare native export against `renderMixToWav` directly, but
+that turned out to be impossible: this project's Vitest suite runs under
+`environment: 'node'` with no jsdom, and even jsdom doesn't implement Web Audio's
+`OfflineAudioContext` — there is no way to execute `renderMixToWav` under this test suite at
+all. Task 6 was corrected (before it was executed) to compute its reference output directly
+via plain JS math instead. This means, by the time this task runs, `renderMixToWav` has
+**no callers anywhere** — not production code (removed in Task 7), not any test. Steps 1-2
+below reflect that actual end state rather than the original assumption that Task 6's test
+would keep it alive as a reference.
+
+- [ ] **Step 1: Confirm `renderMixToWav` genuinely has zero remaining references**
 
 ```bash
 grep -rn "renderMixToWav" src/ native-engine/test/ --include="*.ts" --include="*.tsx"
 ```
-Expected: only `src/renderer/src/audio/exportMix.ts` (the definition) and
-`src/main/nativeExport.test.ts` (Task 6's reference comparison, which legitimately still
-needs to call it — don't remove that reference).
+Expected: only `src/renderer/src/audio/exportMix.ts` (the definition itself). If
+`src/main/nativeExport.test.ts` or anything else still references it, stop and figure out
+why before proceeding — that would mean either Task 6 wasn't executed as corrected, or
+something else started depending on it since.
 
-- [ ] **Step 2: Delete `src/renderer/src/audio/exportMix.ts`'s `renderMixToWav` and its
-now-unused helper `loadBufferForExport`, if nothing besides Task 6's test still imports them**
+- [ ] **Step 2: Delete `renderMixToWav` and its now-unused helper `loadBufferForExport` from
+`src/renderer/src/audio/exportMix.ts`**
 
-This is a judgment call given the codebase's actual state at execution time — if Task 6's
-test still needs `renderMixToWav` as its reference implementation (it does, per Task 6's
-own design), **do not delete the function** — keep it as a test-only reference. What
-*should* go away is any remaining production code path that calls it outside of that one
-test file (there shouldn't be any left after Task 7). If, on inspection, the function is
-now only reachable from `nativeExport.test.ts`, that's the intended end state for this
-phase — leave the file in place as a reference implementation rather than deleting it,
-and note this explicitly in the findings doc (Task 9) rather than silently under-delivering
-on the design doc's "retire" language. A full deletion of the Web Audio reference math
-would remove the only independent check this test suite has for future native-engine
-regressions — that's a real cost, worth surfacing to a human before doing, not deciding
-unilaterally mid-task. If you reach this step and believe full deletion (not just
-production-callsite removal) is still the right call, stop and flag it rather than
-proceeding — this is exactly the kind of judgment call this plan's "STOP and escalate"
-guidance exists for.
+Given Step 1 confirms zero remaining callers, this is a straightforward deletion, not the
+judgment call the original plan anticipated (when it expected Task 6's test to keep the
+function alive as a reference). If `exportMix.ts` is left with nothing else in it after
+removing both, delete the file entirely; if anything else in that file is still used
+(check before deleting the whole file), keep the file and remove only the two now-dead
+exports/helpers.
 
 - [ ] **Step 3: Typecheck, lint, full suite**
 
