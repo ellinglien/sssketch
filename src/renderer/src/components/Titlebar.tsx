@@ -1,3 +1,7 @@
+// No self-owned bottom border — App.tsx's Frame wraps this together with ProjectMenu
+// in one row and owns the border there instead, so it spans the full row width under
+// both rather than stopping partway. A standalone reuse of Titlebar elsewhere would
+// need to supply its own border.
 export function Titlebar({
   rifffCount,
   stemCount
