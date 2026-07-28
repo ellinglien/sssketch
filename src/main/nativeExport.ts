@@ -3,23 +3,32 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AppState } from '../renderer/src/state/store'
+import { stemStartBar } from '../renderer/src/state/selectors'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 
-// Mirrors src/renderer/src/state/selectors.ts's loopLengthBars but re-implemented
-// here rather than imported, since that module is renderer-only (imports React-side
-// selectors that assume renderer context) — this is the one piece of duplicated
-// logic this task introduces; see a later task's retirement step for the cleanup this
-// enables (once the renderer-side exportMix.ts is deleted, loopLengthBars itself
-// could move to src/shared if a future task wants to de-duplicate this further).
-function loopLengthBarsFor(state: AppState): number {
+// Mirrors src/renderer/src/state/selectors.ts's loopLengthBars (re-implemented here
+// rather than imported wholesale, since that module also exports React-adjacent
+// selectors that assume renderer context — but stemStartBar itself is plain
+// arithmetic over AppState with no React/DOM dependency, so it's imported directly
+// rather than duplicated a second time). An unlinked stem dragged out past its
+// group's own span must count too, or the native render's duration would be cut
+// short and truncate that stem's tail — see loopLengthBars's own comment for the
+// same reasoning.
+export function loopLengthBarsFor(state: AppState): number {
   const DEFAULT_LOOP_BARS = 32
   const ends: number[] = []
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
-    ends.push(rifff.startBar + rifff.barLength)
+    if (state.unlinked[rifff.groupId]) {
+      for (const stem of rifff.stems) {
+        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + rifff.barLength)
+      }
+    } else {
+      ends.push(rifff.startBar + rifff.barLength)
+    }
   }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
 }
