@@ -91,7 +91,7 @@ run 3: 0.0087 → 0.0145 → 0.0261 → 0.0348 → 0.0464 → 0.0580 → 0.0668
 30Hz timer isn't phase-locked — expected, not a bug.) The server process also exits with
 code 0 after the `quit` message in every run, confirmed via `wait $PID; echo $?`.
 
-## Real-time `AudioDeviceManager` path: NOT manually verified
+## Real-time `AudioDeviceManager` path: NOT manually verified, and has two known code-level hazards
 
 The `Transport`/`AudioDeviceManager` wrapper (`Source/Transport.cpp`, Task 6) compiles
 clean and `runServe` calls `transport.openDefaultDevice()` best-effort at startup
@@ -102,6 +102,31 @@ listening to actual audio output on this machine. **This was not done.** Be awar
 "plays audio for real" claim for the real-time path rests on `openDefaultDevice()`
 succeeding and the code compiling/type-checking, not on anyone having heard sound come out
 of the speakers. This is a real, not hypothetical, gap for whoever picks up the next phase.
+
+The final holistic review of the whole phase (looking at `PlaybackEngine`, `IpcServer`, and
+`Transport` together — something no single task's own review could see) surfaced two
+additional, concrete risks in this specific path, neither of which is exercised by anything
+in Phase 1 today but both of which need addressing before this path is actually driven by a
+real UI:
+
+- **Unsynchronized cross-thread access.** `IpcConnection::messageReceived` (message thread)
+  calls `engine.setProject(project)`, which mutates `PlaybackEngine`'s plain (non-atomic,
+  non-locked) `currentProject` member and `StemBufferCache`'s `std::unordered_map` via
+  `bufferCache.load()`. Meanwhile `Transport::audioDeviceIOCallbackWithContext` (the
+  real-time audio thread) reads both of those via `renderBlock()`. `StemBufferCache.h`'s doc
+  comment asserts "load-project happens on the message thread before playback starts," but
+  nothing in the IPC protocol actually enforces that ordering — a second `load-project`
+  message arriving while a device callback is mid-flight is a real, currently-possible data
+  race, not a hypothetical one.
+- **Unbounded per-callback heap allocation.** `PlaybackEngine.cpp`'s own `TODO(Task 6)`
+  comment (added during Task 5's fix) warned that a real-time callback built on `renderBlock`
+  should not inherit `computeStemSchedule`'s per-block vector allocation, sized proportional
+  to how many times a stem repeats across a project. Task 6 wired the real device callback
+  directly to `renderBlock` without addressing this — the TODO was not acted on.
+
+Both should be fixed (a lock or an enforced "load only while stopped" invariant; a bounded/
+cached schedule lookup) before a later phase connects this path to live playback, not left
+as an afterthought once it's already wired up and harder to unwind.
 
 ## Real bugs found and fixed during Phase 1
 
