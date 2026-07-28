@@ -31,4 +31,16 @@ describe('parseStemFilename', () => {
       timestamp: '2020-11-11-13-53'
     })
   })
+  it('parses a slot followed by a quality tag (real Endlesss HQ export format)', () => {
+    const parsed = parseStemFilename(
+      '1 HQ - elling - TR5 Sunset Sound Studio Reverb - 79BPM - 2023-12-11-20-25.wav'
+    )
+    expect(parsed).toEqual({
+      slot: 1,
+      author: 'elling',
+      stemName: 'TR5 Sunset Sound Studio Reverb',
+      bpm: 79,
+      timestamp: '2023-12-11-20-25'
+    })
+  })
 })

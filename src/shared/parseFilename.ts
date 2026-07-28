@@ -13,7 +13,14 @@ export interface ParsedStemFilename {
 // with single-space-hyphen-single-space, so requiring that literal resolves the
 // ambiguity: "Jean-Luc" has no spaces around its internal hyphen and so is never
 // mistaken for a separator, while genuine " - " separators still match.
-const STEM_FILENAME_RE = /^(\d+) - (.+?) - (.+) - (\d+)BPM - (.+?)\s*\.wav$/i
+//
+// The slot number is sometimes followed by a quality tag before the first separator
+// (observed in real exports: "1 HQ - elling - ..."), which the original fixtures
+// didn't have — `(?: \S+)?` optionally consumes and discards exactly one such token.
+// Regex backtracking makes this safe for the no-tag case too: `\S+` greedily grabs
+// the literal "-" of the real " - " separator first, fails to find the required
+// follow-up separator, and backs off to matching the group zero times instead.
+const STEM_FILENAME_RE = /^(\d+)(?: \S+)? - (.+?) - (.+) - (\d+)BPM - (.+?)\s*\.wav$/i
 
 export function parseStemFilename(filename: string): ParsedStemFilename | null {
   const match = STEM_FILENAME_RE.exec(filename)
