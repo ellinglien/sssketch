@@ -14,6 +14,16 @@ namespace ssstitch
         return (bool) v.getProperty(key, fallback);
     }
 
+    /** True if `v` was explicitly present in the parsed JSON as `null`/absent-of-value
+     * (as opposed to genuinely present with some concrete type). Used so that a key
+     * present but null degrades gracefully like an absent key, while a key present
+     * with the wrong concrete type (e.g. an object or string where an array was
+     * expected) is treated as a real parse error. */
+    static bool isNullish(const juce::var& v)
+    {
+        return v.isVoid() || v.isUndefined();
+    }
+
     bool parseEngineProject(const juce::String& json, EngineProject& projectOut, juce::String& errorOut)
     {
         auto parsed = juce::JSON::parse(json);
@@ -70,8 +80,18 @@ namespace ssstitch
                         rifff.stems.push_back(std::move(stem));
                     }
                 }
+                else if (rifffVar.hasProperty("stems") && !isNullish(stemsVar))
+                {
+                    errorOut = "stems is present but not an array (groupId: " + rifff.groupId + ")";
+                    return false;
+                }
                 project.rifffs.push_back(std::move(rifff));
             }
+        }
+        else if (parsed.hasProperty("rifffs") && !isNullish(rifffsVar))
+        {
+            errorOut = "rifffs is present but not an array";
+            return false;
         }
 
         projectOut = std::move(project);

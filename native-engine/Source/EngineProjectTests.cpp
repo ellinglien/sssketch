@@ -65,6 +65,38 @@ namespace ssstitch
                 expect(!parseEngineProject("[1,2,3]", project, error));
                 expect(error.isNotEmpty());
             }
+
+            beginTest("fails cleanly when rifffs is present but not an array");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(!parseEngineProject(R"({"bpm": 120.0, "snapDiv": 16.0, "rifffs": {}})", project, error));
+                expect(error.isNotEmpty());
+            }
+
+            beginTest("fails cleanly when stems is present but not an array");
+            {
+                const juce::String json = R"(
+                {
+                  "bpm": 120.0,
+                  "snapDiv": 16.0,
+                  "rifffs": [
+                    {
+                      "groupId": "r1",
+                      "startBar": 4.0,
+                      "barLength": 8,
+                      "fadeInBars": 0.0,
+                      "fadeOutBars": 0.0,
+                      "stems": "oops"
+                    }
+                  ]
+                }
+                )";
+                EngineProject project;
+                juce::String error;
+                expect(!parseEngineProject(json, project, error));
+                expect(error.isNotEmpty());
+            }
         }
     };
 

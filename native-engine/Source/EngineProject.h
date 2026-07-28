@@ -34,7 +34,7 @@ namespace ssstitch
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.
-     * Throws juce::Result-style failure via the returned bool; on failure,
-     * `errorOut` is set and `project` is left in an unspecified state. */
+     * Returns false on failure (never throws); on failure, `errorOut` is set
+     * and `projectOut` is left in an unspecified state. */
     bool parseEngineProject(const juce::String& json, EngineProject& projectOut, juce::String& errorOut);
 }
