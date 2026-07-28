@@ -2866,6 +2866,9 @@ describe('computeStemSchedule', () => {
       projectBpm: 150
     })
     // repetitions at bars 4,6,8,10 -> only the ones ending after pos 8 remain (6→8 boundary excluded, 8→10 and beyond)
+    expect(segments).toHaveLength(2)
+    expect(segments[0].startBarInTimeline).toBe(8)
+    expect(segments[1].startBarInTimeline).toBe(10)
     expect(segments.every((s) => s.startBarInTimeline + s.barLength > 8)).toBe(true)
   })
 })
