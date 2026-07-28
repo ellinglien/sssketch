@@ -21,12 +21,22 @@ function findRubberband(): string {
 }
 
 function cacheDir(): string {
+  // No eviction policy — like the imported-stem library, this grows unbounded across
+  // a session (every distinct tempo experiment x every stem = one more uncompressed
+  // WAV). Acceptable v1 simplification, consistent with the rest of the app, but
+  // worth revisiting before this ships broadly.
   const dir = join(app.getPath('userData'), 'stretch-cache')
   mkdirSync(dir, { recursive: true })
   return dir
 }
 
-function cacheKey(stemPath: string, ratio: number): string {
+// Exported for testing — pure, no fs/process access.
+export function cacheKey(stemPath: string, ratio: number): string {
+  // toFixed(4) deliberately quantizes more coarsely than the 6-decimal precision
+  // passed to the actual --tempo invocation below: two ratios differing only past
+  // the 4th decimal share a cache entry (and reuse whichever rendered first). The
+  // resulting pitch/tempo difference is inaudible; this keeps the cache from growing
+  // one entry per floating-point rounding artifact of a live tempo drag.
   const hash = createHash('sha1')
     .update(`${stemPath}::${ratio.toFixed(4)}`)
     .digest('hex')

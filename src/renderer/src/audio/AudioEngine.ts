@@ -24,8 +24,19 @@ async function loadBuffer(path: string, ratio: number): Promise<AudioBuffer> {
       if (Math.abs(ratio - 1) >= 0.001) {
         try {
           resolvedPath = await window.rifffApi.renderStretched(path, ratio)
-        } catch {
-          resolvedPath = path // fall back to native-speed playback on render failure
+        } catch (err) {
+          // Missing rubberband binary, a bad render, etc. Fall back to native-speed
+          // playback rather than failing the whole stem — but log it, since this is
+          // otherwise invisible: the Inspector still shows "stretch on" regardless of
+          // whether the render actually succeeded (no state currently tracks render
+          // failure separately from the user's stretch-toggle intent), so a silent
+          // catch here would leave no signal anywhere that playback drifted from what
+          // the UI claims.
+          console.error(
+            `AudioEngine: rubberband render failed for "${path}" at ratio ${ratio}, falling back to native tempo`,
+            err
+          )
+          resolvedPath = path
         }
       }
       const bytes = await window.rifffApi.readAudioFile(resolvedPath)
