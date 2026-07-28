@@ -66,8 +66,17 @@ export function BeatPicker({
   // second click on the same beat act as a stop, rather than every click always
   // (re)starting playback with no way to just silence it via the mouse.
   const [previewingBeat, setPreviewingBeat] = useState<number | null>(null)
+  // Sweeps across the waveform in real time while free-playing, and separately
+  // tracks the pick→baking→baked lifecycle so a beat that resets to 0 after baking
+  // (correct — the file itself now starts on the beat) doesn't look like an
+  // unexplained jump back to the start.
+  const [playheadPct, setPlayheadPct] = useState<number | null>(null)
+  const [pickStatus, setPickStatus] = useState<{ beat: number; status: 'baking' | 'baked' } | null>(
+    null
+  )
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const freeStartTimeRef = useRef(0)
+  const pickStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!stem) return
@@ -122,6 +131,33 @@ export function BeatPicker({
     previewSourcesRef.current = []
     setIsFreePlaying(false)
     setPreviewingBeat(null)
+    setPlayheadPct(null)
+  }, [])
+
+  // Sweeps a vertical marker across the waveform while free-playing, so where the
+  // loop currently is has a visual answer, not just an audible one.
+  useEffect(() => {
+    if (!isFreePlaying || !stem) return
+    let raf: number
+    const tick = (): void => {
+      const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
+      setPlayheadPct(((elapsed % stem.durationSec) / stem.durationSec) * 100)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    // Cleanup (not the setup body) is where the reset belongs — it only actually
+    // runs once a raf loop was really started, and the react-hooks/set-state-in-effect
+    // rule specifically targets synchronous setState in the setup path, not here.
+    return () => {
+      cancelAnimationFrame(raf)
+      setPlayheadPct(null)
+    }
+  }, [isFreePlaying, stem])
+
+  useEffect(() => {
+    return () => {
+      if (pickStatusTimeoutRef.current) clearTimeout(pickStatusTimeoutRef.current)
+    }
   }, [])
 
   // onClose is a fresh arrow function from the parent on every render (it closes
@@ -161,7 +197,11 @@ export function BeatPicker({
         key: resolveOffsetKey(state, groupId, stem.slot),
         steps
       })
-      bakeStems(dispatch, groupId, steps, snapDivNow, rifff.stems)
+      // announcePick is a hoisted function declaration (defined below, after the
+      // early-return guard) — safe to call here despite that, since function
+      // declarations (unlike the const bindings this same file already had to work
+      // around) aren't subject to the TDZ that bit onClose/markDownbeat earlier.
+      announcePick(beatIndex, bakeStems(dispatch, groupId, steps, snapDivNow, rifff.stems))
     }
   })
 
@@ -195,6 +235,27 @@ export function BeatPicker({
   const totalBeats = stem.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
 
+  // Playing several stems through the same destination sums their amplitudes —
+  // at unity gain each, more than one or two together clips. sqrt(N) is a standard
+  // approximation for keeping combined perceived loudness roughly constant as more
+  // sources join, without attenuating a single solo stem at all.
+  function previewGain(stemCount: number): number {
+    return stemCount > 1 ? 1 / Math.sqrt(stemCount) : 1
+  }
+
+  // Shows "picked beat X" immediately, then "baked" once the file's actually
+  // rewritten, fading out after a beat. Without this, a pick's offset silently
+  // resetting to 0 after baking (correct — the file itself now starts on the
+  // beat) just looked like an unexplained jump back to the start.
+  function announcePick(beatIndex: number, bakePromise: Promise<void>): void {
+    if (pickStatusTimeoutRef.current) clearTimeout(pickStatusTimeoutRef.current)
+    setPickStatus({ beat: beatIndex, status: 'baking' })
+    bakePromise.then(() => {
+      setPickStatus({ beat: beatIndex, status: 'baked' })
+      pickStatusTimeoutRef.current = setTimeout(() => setPickStatus(null), 1600)
+    })
+  }
+
   function toggleFreePlay(): void {
     if (isFreePlaying) {
       stopPreview()
@@ -204,13 +265,17 @@ export function BeatPicker({
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
     const stemsToPreview = previewAll ? rifff.stems : [stem]
+    const gain = previewGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
       const source = ctx.createBufferSource()
       source.buffer = buf
       source.loop = true // loops the whole buffer from its own start, repeatedly
-      source.connect(ctx.destination)
+      const gainNode = ctx.createGain()
+      gainNode.gain.value = gain
+      source.connect(gainNode)
+      gainNode.connect(ctx.destination)
       source.start(0)
       previewSourcesRef.current.push(source)
     }
@@ -233,14 +298,15 @@ export function BeatPicker({
     // rotationSecondsForStem gives each stem its own equivalent position, wrapped
     // by its own (possibly shorter, tiling) loop length.
     const stemsToPreview = previewAll ? rifff.stems : [stem]
+    const ctx = getAudioContext()
+    const gain = previewGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
       const offsetSec = rotationSecondsForStem(steps, snapDiv, s)
       if (offsetSec >= buf.duration) continue
-      const source = getAudioContext().createBufferSource()
+      const source = ctx.createBufferSource()
       source.buffer = buf
-      source.connect(getAudioContext().destination)
       // Loops the picked-beat-to-end segment continuously — stems are often short
       // (1-2 bar) loops, so a single play-through can be too brief to judge the
       // downbeat by ear. Looping mirrors how it actually sounds once placed in the
@@ -249,11 +315,15 @@ export function BeatPicker({
       source.loop = true
       source.loopStart = offsetSec
       source.loopEnd = buf.duration
+      const gainNode = ctx.createGain()
+      gainNode.gain.value = gain
+      source.connect(gainNode)
+      gainNode.connect(ctx.destination)
       source.start(0, offsetSec)
       previewSourcesRef.current.push(source)
     }
     setPreviewingBeat(beatIndex)
-    bakeStems(dispatch, rifff.groupId, steps, snapDiv, rifff.stems)
+    announcePick(beatIndex, bakeStems(dispatch, rifff.groupId, steps, snapDiv, rifff.stems))
   }
 
   return (
@@ -343,6 +413,21 @@ export function BeatPicker({
           </button>
         </div>
 
+        {pickStatus && (
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 11,
+              fontWeight: 700,
+              color: pickStatus.status === 'baking' ? 'var(--ra-text-2)' : 'var(--ra-play-on)'
+            }}
+          >
+            {pickStatus.status === 'baking'
+              ? `picked beat ${pickStatus.beat + 1} — baking into the audio…`
+              : `✓ beat ${pickStatus.beat + 1} baked — the audio itself now starts on the beat (so it shows as beat 1 above)`}
+          </div>
+        )}
+
         <div
           style={{
             position: 'relative',
@@ -382,13 +467,28 @@ export function BeatPicker({
                     ? '1px solid var(--ra-border-strong)'
                     : '1px solid var(--ra-grid-minor)',
                 background:
-                  beatIndex === currentBeat
-                    ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
-                    : 'transparent',
+                  pickStatus?.beat === beatIndex
+                    ? 'color-mix(in srgb, var(--ra-play-on) 35%, transparent)'
+                    : beatIndex === currentBeat
+                      ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
+                      : 'transparent',
                 cursor: 'pointer'
               }}
             />
           ))}
+          {playheadPct !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${playheadPct}%`,
+                width: 2,
+                background: 'var(--ra-playhead)',
+                pointerEvents: 'none'
+              }}
+            />
+          )}
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
