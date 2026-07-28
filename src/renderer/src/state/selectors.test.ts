@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { initialState, reducer } from './store'
-import { resolveOffsetKey, clipGeometry, stretchRatio } from './selectors'
+import {
+  resolveOffsetKey,
+  clipGeometry,
+  stretchRatio,
+  loopLengthBars,
+  offsetStepsForBeatIndex
+} from './selectors'
 import type { Rifff } from '@shared/types'
 
 const rifff: Rifff = {
@@ -59,5 +65,44 @@ describe('clipGeometry', () => {
     const geo = clipGeometry(state, 'r1', 24)
     // offsetPx = steps * ppb / snapDiv = 4 * 24 / 16 = 6
     expect(geo.leftPx).toBe(6)
+  })
+})
+
+describe('loopLengthBars', () => {
+  it('falls back to the default when nothing is placed on the timeline', () => {
+    expect(loopLengthBars(initialState)).toBe(32)
+  })
+
+  it('fits to the latest end bar among placed clips', () => {
+    const second: Rifff = { ...rifff, groupId: 'r2', barLength: 4 }
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: second })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 2 }) // ends at 10
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 20 }) // ends at 24
+    expect(loopLengthBars(state)).toBe(24)
+  })
+
+  it('ignores rifffs still sitting in the shelf, unplaced', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    const shelfOnly: Rifff = { ...rifff, groupId: 'r2', barLength: 200, startBar: undefined }
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: shelfOnly })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 }) // ends at 8
+    expect(loopLengthBars(state)).toBe(8)
+  })
+})
+
+describe('offsetStepsForBeatIndex', () => {
+  it('is zero for beat 0 — already on the downbeat', () => {
+    expect(offsetStepsForBeatIndex(0, 4)).toBe(0)
+  })
+
+  it('shifts earlier (negative) as the clicked beat moves later into the buffer', () => {
+    // snapDiv 4 == one step per beat, so beat 2 in should shift the clip 2 steps earlier
+    expect(offsetStepsForBeatIndex(2, 4)).toBe(-2)
+  })
+
+  it('scales with a finer snap grid', () => {
+    // snapDiv 16 == 4 steps per beat
+    expect(offsetStepsForBeatIndex(2, 16)).toBe(-8)
   })
 })

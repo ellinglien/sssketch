@@ -6,7 +6,11 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 
-export function Inspector(): React.JSX.Element {
+export function Inspector({
+  onOpenBeatPicker
+}: {
+  onOpenBeatPicker: (groupId: string) => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const groupId = state.sel
@@ -58,7 +62,24 @@ export function Inspector(): React.JSX.Element {
     >
       {section(
         <>
-          <span className="ra-eyebrow">inspector</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="ra-eyebrow">inspector</span>
+            <button
+              onClick={() => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })}
+              title="remove from timeline (Delete)"
+              style={{
+                height: 20,
+                borderRadius: 4,
+                padding: '0 6px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              remove from timeline
+            </button>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <PolarGlyph stems={rifff.stems} identityColor={color} size={34} />
             <span style={{ fontSize: 14, fontWeight: 700 }}>{rifff.name}</span>
@@ -194,20 +215,36 @@ export function Inspector(): React.JSX.Element {
                 {labels.ms}
               </span>
             </div>
-            <button
-              onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
-              style={{
-                height: 20,
-                borderRadius: 4,
-                padding: '0 6px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              zero
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => onOpenBeatPicker(groupId)}
+                style={{
+                  height: 20,
+                  borderRadius: 4,
+                  padding: '0 6px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                pick beat
+              </button>
+              <button
+                onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
+                style={{
+                  height: 20,
+                  borderRadius: 4,
+                  padding: '0 6px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                zero
+              </button>
+            </div>
           </div>
         </>
       )}

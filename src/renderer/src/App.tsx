@@ -1,4 +1,4 @@
-import { type DragEvent } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import { StoreProvider, useAppState, useDispatch } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
@@ -7,9 +7,15 @@ import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
 import { Playhead } from './components/Playhead'
+import { BeatPicker } from './components/BeatPicker'
 import { serializeProject, deserializeProject } from './state/serialize'
+import { loopLengthBars } from './state/selectors'
 
-function Timeline(): React.JSX.Element {
+function Timeline({
+  onFirstPlace
+}: {
+  onFirstPlace: (groupId: string) => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
 
@@ -17,10 +23,12 @@ function Timeline(): React.JSX.Element {
     e.preventDefault()
     const groupId = e.dataTransfer.getData('text/rifff-group-id')
     if (!groupId) return
+    const wasUnplaced = state.rifffs[groupId]?.startBar === undefined
     const rect = e.currentTarget.getBoundingClientRect()
     const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
     const startBar = Math.max(0, Math.round(xInTimeline / PPB))
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
+    if (wasUnplaced) onFirstPlace(groupId)
   }
 
   return (
@@ -29,7 +37,7 @@ function Timeline(): React.JSX.Element {
       onDrop={handleDrop}
       style={{ position: 'relative' }}
     >
-      <Ruler />
+      <Ruler bars={loopLengthBars(state)} />
       {Object.values(state.rifffs)
         .filter((r) => r.startBar !== undefined)
         .map((r) => (
@@ -87,6 +95,24 @@ function ProjectMenu(): React.JSX.Element {
 
 function Frame(): React.JSX.Element {
   const state = useAppState()
+  const dispatch = useDispatch()
+  const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
+
+  // Delete/Backspace removes the selected clip from the timeline. Skipped while
+  // focus is in a text input (tempo field, etc.) so deleting a digit doesn't also
+  // delete the clip.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (!state.sel) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: state.sel })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [state.sel, dispatch])
+
   return (
     <div className="ra-frame">
       <div
@@ -110,10 +136,13 @@ function Frame(): React.JSX.Element {
       <TransportBar />
       <div style={{ display: 'flex' }}>
         <div style={{ flex: 1 }}>
-          <Timeline />
+          <Timeline onFirstPlace={setPickerGroupId} />
         </div>
-        <Inspector />
+        <Inspector onOpenBeatPicker={setPickerGroupId} />
       </div>
+      {pickerGroupId && state.rifffs[pickerGroupId] && (
+        <BeatPicker groupId={pickerGroupId} onClose={() => setPickerGroupId(null)} />
+      )}
     </div>
   )
 }

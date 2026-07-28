@@ -95,6 +95,29 @@ describe('reducer', () => {
     expect(state.off.r1).toBe(0)
   })
 
+  it('sets an exact offset in steps, unclamped unlike NUDGE_OFFSET', () => {
+    const state = reducer(initialState, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -40 })
+    expect(state.off.r1).toBe(-40)
+  })
+
+  it('removing from timeline clears startBar but keeps the rifff (and its settings) around', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    expect(state.rifffs.r1.startBar).toBeUndefined()
+    expect(state.rifffs.r1).toBeDefined()
+    expect(state.vol['r1:1']).toBe(0.3)
+  })
+
+  it('removing the selected clip from the timeline also clears selection', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    expect(state.sel).toBe('r1')
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    expect(state.sel).toBeNull()
+  })
+
   it('sets a stem volume', () => {
     const state = reducer(initialState, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.5 })
     expect(state.vol['r1:1']).toBe(0.5)

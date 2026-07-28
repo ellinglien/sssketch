@@ -78,6 +78,10 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
 
         <div style={{ flex: 1, position: 'relative' }}>
           <div
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/rifff-group-id', groupId)
+            }}
             style={{
               position: 'absolute',
               top: 4,
@@ -89,7 +93,8 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
               background: 'rgba(255,255,255,0.03)',
               overflow: 'hidden',
               display: 'flex',
-              flexDirection: 'column'
+              flexDirection: 'column',
+              cursor: 'grab'
             }}
           >
             <div

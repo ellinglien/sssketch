@@ -9,7 +9,7 @@ import {
 } from 'react'
 import { initialState, reducer, SNAP_DIVS, type Action, type AppState } from './store'
 import { AudioEngine } from '../audio/AudioEngine'
-import { resolveOffsetKey } from './selectors'
+import { loopLengthBars, resolveOffsetKey } from './selectors'
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
@@ -69,7 +69,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       const tick = (t: number): void => {
         if (t - lastTick > 55) {
           lastTick = t
-          const newPos = engineRef.current!.currentPos(32)
+          const newPos = engineRef.current!.currentPos(loopLengthBars(stateRef.current))
           if (newPos < lastPos) {
             engineRef.current!.play(newPos)
           }
@@ -91,7 +91,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // playing, so the change takes effect immediately instead of only on the next play().
   useEffect(() => {
     if (state.playing) {
-      engineRef.current!.play(engineRef.current!.currentPos(32))
+      engineRef.current!.play(engineRef.current!.currentPos(loopLengthBars(state)))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing; the play/pause effect above already handles play/pause transitions, this effect should only re-run when scheduling-affecting values actually change
   }, [state.off, state.bpm, state.snapIdx, state.unlinked, state.stretch])

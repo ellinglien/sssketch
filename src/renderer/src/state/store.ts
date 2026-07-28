@@ -41,6 +41,8 @@ export type Action =
   | { type: 'CYCLE_SNAP' }
   | { type: 'NUDGE_OFFSET'; key: string; delta: number }
   | { type: 'ZERO_OFFSET'; key: string }
+  | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
+  | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
@@ -90,6 +92,22 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'ZERO_OFFSET':
       return { ...state, off: { ...state.off, [action.key]: 0 } }
+
+    // Unlike NUDGE_OFFSET's incremental ±8-step clamp (tuned for the small nudge
+    // buttons), this sets an exact value computed elsewhere (the beat-picker) and
+    // isn't clamped to that same small range — a stem's true downbeat can legitimately
+    // be many bars into its own audio.
+    case 'SET_OFFSET_STEPS':
+      return { ...state, off: { ...state.off, [action.key]: action.steps } }
+
+    case 'REMOVE_FROM_TIMELINE': {
+      const rifff = state.rifffs[action.groupId]
+      return {
+        ...state,
+        rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, startBar: undefined } },
+        sel: state.sel === action.groupId ? null : state.sel
+      }
+    }
 
     case 'SET_VOLUME':
       return { ...state, vol: { ...state.vol, [action.stemKey]: action.volume } }

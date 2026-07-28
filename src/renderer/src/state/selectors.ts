@@ -25,3 +25,28 @@ export function clipGeometry(state: AppState, groupId: string, ppb: number): Cli
   const shownBars = stretchOn ? rifff.barLength : rifff.barLength * (rifff.bpm / state.bpm)
   return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
 }
+
+const DEFAULT_LOOP_BARS = 32
+
+/** Loop length auto-fits to whichever placed clip ends latest, falling back to a
+ * sensible default when the timeline is empty rather than collapsing to 0. */
+export function loopLengthBars(state: AppState): number {
+  const ends = Object.values(state.rifffs)
+    .filter((r) => r.startBar !== undefined)
+    .map((r) => (r.startBar ?? 0) + r.barLength)
+  return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
+}
+
+/**
+ * Converts a beat index clicked on the beat-picker (0 = the very start of the
+ * stem's own audio, counting quarter-note beats forward from there) into the
+ * offsetSteps value that makes that beat land exactly on the clip's timeline
+ * start. offsetSteps shifts the clip's start time (see computeStemSchedule), so
+ * lining up a beat that occurs `k` beats into the buffer requires shifting the
+ * clip's start `k` beats *earlier* — hence the negation.
+ */
+export function offsetStepsForBeatIndex(beatIndex: number, snapDiv: number): number {
+  // `|| 0` normalizes -0 (beatIndex 0 negated) to 0 — an exact match matters here
+  // since this value is compared/displayed directly, not just used arithmetically.
+  return -Math.round((beatIndex * snapDiv) / 4) || 0
+}

@@ -80,9 +80,26 @@ export function TransportBar(): React.JSX.Element {
         >
           −
         </button>
-        <span style={{ fontSize: 14, fontWeight: 700, width: 26, textAlign: 'center' }}>
-          {state.bpm}
-        </span>
+        <input
+          type="number"
+          value={state.bpm}
+          onChange={(e) => {
+            const bpm = Number(e.target.value)
+            if (!Number.isNaN(bpm)) dispatch({ type: 'SET_TEMPO', bpm })
+          }}
+          aria-label="Tempo (BPM)"
+          style={{
+            fontSize: 14,
+            fontWeight: 700,
+            width: 44,
+            textAlign: 'center',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)',
+            border: '1px solid var(--ra-border)',
+            borderRadius: 4,
+            height: 20
+          }}
+        />
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm + 1 })}
           aria-label="Increase tempo"

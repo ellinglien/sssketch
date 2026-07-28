@@ -1,9 +1,8 @@
 const PPB = 24
-const BARS = 32
 const LANE_HEADER_WIDTH = 212
 
-export function Ruler(): React.JSX.Element {
-  const bars = Array.from({ length: BARS }, (_, i) => i + 1)
+export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
+  const bars = Array.from({ length: barCount }, (_, i) => i + 1)
   return (
     <div
       style={{
@@ -14,7 +13,7 @@ export function Ruler(): React.JSX.Element {
       }}
     >
       <div style={{ width: LANE_HEADER_WIDTH, flexShrink: 0 }} />
-      <div style={{ position: 'relative', width: BARS * PPB }}>
+      <div style={{ position: 'relative', width: barCount * PPB }}>
         {bars.map((bar) => (
           <div
             key={bar}
@@ -36,4 +35,4 @@ export function Ruler(): React.JSX.Element {
   )
 }
 
-export { PPB, BARS, LANE_HEADER_WIDTH }
+export { PPB, LANE_HEADER_WIDTH }
