@@ -1,0 +1,57 @@
+// native-engine/Source/StemBufferCacheTests.cpp
+#include "StemBufferCache.h"
+#include <juce_core/juce_core.h>
+
+namespace ssstitch
+{
+    class StemBufferCacheTests : public juce::UnitTest
+    {
+    public:
+        StemBufferCacheTests() : juce::UnitTest("StemBufferCache") {}
+
+        void runTest() override
+        {
+            auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                .getChildFile("ssstitch_test_fixture.wav");
+
+            beginTest("loads a real WAV file and reports its sample data");
+            {
+                // Write a 0.1s, 44100Hz, mono, known-value fixture.
+                juce::WavAudioFormat wavFormat;
+                std::unique_ptr<juce::FileOutputStream> out(tempFile.createOutputStream());
+                expect(out != nullptr);
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    wavFormat.createWriterFor(out.get(), 44100.0, 1, 16, {}, 0));
+                expect(writer != nullptr);
+                out.release(); // writer now owns the stream
+
+                const int numSamples = 4410;
+                juce::AudioBuffer<float> source(1, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                    source.setSample(0, i, 0.5f);
+                writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+                writer.reset(); // flush + close
+
+                StemBufferCache cache;
+                expect(cache.load(tempFile.getFullPathName()));
+                auto* buffer = cache.get(tempFile.getFullPathName());
+                expect(buffer != nullptr);
+                expectEquals(buffer->getNumChannels(), 1);
+                expectEquals(buffer->getNumSamples(), numSamples);
+                expectWithinAbsoluteError(buffer->getSample(0, 100), 0.5f, 0.01f);
+                expectWithinAbsoluteError(cache.sampleRateFor(tempFile.getFullPathName()), 44100.0, 1.0e-6);
+            }
+
+            beginTest("returns false for a nonexistent file, leaving the cache untouched");
+            {
+                StemBufferCache cache;
+                expect(!cache.load("/no/such/file.wav"));
+                expect(cache.get("/no/such/file.wav") == nullptr);
+            }
+
+            tempFile.deleteFile();
+        }
+    };
+
+    static StemBufferCacheTests stemBufferCacheTests;
+}

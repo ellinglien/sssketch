@@ -27,6 +27,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/FadeGainTests.cpp
   Source/EngineProject.cpp
   Source/EngineProjectTests.cpp
+  Source/StemBufferCache.cpp
+  Source/StemBufferCacheTests.cpp
 )
 
 target_compile_definitions(ssstitch_engine PRIVATE
