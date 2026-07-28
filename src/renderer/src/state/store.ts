@@ -1,4 +1,5 @@
 import { TYPE_ORDER, stemKey, type Rifff } from '@shared/types'
+import { sqrtGain } from '@shared/mixGain'
 
 export const SNAP_DIVS = [4, 8, 16, 32] as const
 
@@ -64,8 +65,25 @@ export type Action =
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case 'ADD_TO_SHELF':
-      return { ...state, rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff } }
+    case 'ADD_TO_SHELF': {
+      // Seeds each stem's initial volume so a rifff with several stems doesn't
+      // clip the moment it's placed and they all sum together at unity gain —
+      // sliders are still the ongoing control from here, this only sets where
+      // they start. Never overwrites an existing entry, so re-importing (the
+      // Inspector's re-import-from-folder flow reuses this same action) doesn't
+      // clobber volumes the user already adjusted.
+      const gain = sqrtGain(action.rifff.stems.length)
+      const vol = { ...state.vol }
+      for (const stem of action.rifff.stems) {
+        const key = stemKey(action.rifff.groupId, stem.slot)
+        if (vol[key] === undefined) vol[key] = gain
+      }
+      return {
+        ...state,
+        rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff },
+        vol
+      }
+    }
 
     case 'PLACE_ON_TIMELINE': {
       const rifff = state.rifffs[action.groupId]

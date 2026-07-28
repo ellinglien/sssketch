@@ -7,6 +7,7 @@ import {
 } from '../state/selectors'
 import type { Action } from '../state/store'
 import { linearWave } from '@shared/visuals'
+import { sqrtGain } from '@shared/mixGain'
 import { getPeaks, getAudioContext } from '../audio/peakCache'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
@@ -23,10 +24,9 @@ import type { Stem } from '@shared/types'
 
 // Module-level (not a closure over component state) so it can be called safely
 // from markDownbeatRef's effect, which is registered before the early-return guard
-// and so can't reference anything declared after it. Bakes every stem in the group
-// immediately on pick — this picker is opened right after import now, not after
-// placement, so "processed and usable right away" means the audio itself is
-// corrected here, not left as a still-pending offset.
+// and so can't reference anything declared after it. Called once, when the picker
+// closes — not on every pick, which would rewrite the file on every exploratory
+// click while auditioning candidates, making "the one" a moving target.
 async function bakeStems(
   dispatch: Dispatch<Action>,
   groupId: string,
@@ -66,17 +66,15 @@ export function BeatPicker({
   // second click on the same beat act as a stop, rather than every click always
   // (re)starting playback with no way to just silence it via the mouse.
   const [previewingBeat, setPreviewingBeat] = useState<number | null>(null)
-  // Sweeps across the waveform in real time while free-playing, and separately
-  // tracks the pick→baking→baked lifecycle so a beat that resets to 0 after baking
-  // (correct — the file itself now starts on the beat) doesn't look like an
-  // unexplained jump back to the start.
+  // Sweeps across the waveform in real time while free-playing.
   const [playheadPct, setPlayheadPct] = useState<number | null>(null)
-  const [pickStatus, setPickStatus] = useState<{ beat: number; status: 'baking' | 'baked' } | null>(
-    null
-  )
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const freeStartTimeRef = useRef(0)
-  const pickStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The latest un-baked pick (offset steps), or null once baked/if nothing's been
+  // picked this session. Only baking on close — not on every pick — means
+  // auditioning several candidate beats doesn't rewrite the file each time; only
+  // whichever one you actually leave it on when you close does.
+  const pendingBakeRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!stem) return
@@ -154,35 +152,33 @@ export function BeatPicker({
     }
   }, [isFreePlaying, stem])
 
-  useEffect(() => {
-    return () => {
-      if (pickStatusTimeoutRef.current) clearTimeout(pickStatusTimeoutRef.current)
-    }
-  }, [])
-
-  // onClose is a fresh arrow function from the parent on every render (it closes
-  // over setState), so depending on it directly would re-run this effect — and
-  // fire its stopPreview() cleanup — on every unrelated re-render, including the
-  // one pickBeat's own SET_OFFSET_STEPS dispatch causes. That was cutting the
-  // preview off within a render cycle of it starting, no matter what was picked.
-  // Reading the latest onClose (and markDownbeat, same issue) through a ref keeps
-  // the effect itself stable.
-  const onCloseRef = useRef(onClose)
-  useEffect(() => {
-    onCloseRef.current = onClose
-  })
-
-  // Captures the playhead's position within the current free-play loop and locks
-  // the offset to whichever beat that falls on — the tap-along alternative to
-  // clicking a specific gridline. Re-synced every render (cheap) so it always sees
-  // the latest isFreePlaying/stem/dispatch without making the keydown effect below
-  // depend on them directly.
-  // Self-contained (re-derives totalBeats/offsetKey/snapDiv from rifff/stem/state
-  // rather than closing over the consts declared below the early-return guard) —
-  // this effect is registered before that guard, same as every other hook here,
-  // so it can't depend on bindings that only exist when the guard doesn't fire.
+  // commitAndClose is a fresh function every render (it closes over onClose/rifff/
+  // state), so depending on it directly would re-run this effect — and fire its
+  // stopPreview() cleanup — on every unrelated re-render, including the one
+  // pickBeat's own SET_OFFSET_STEPS dispatch causes. That was cutting the preview
+  // off within a render cycle of it starting, no matter what was picked. Reading
+  // the latest version (and markDownbeat, same issue) through a ref keeps the
+  // effect itself stable.
+  const commitAndCloseRef = useRef<() => void>(() => {})
   const markDownbeatRef = useRef<() => void>(() => {})
   useEffect(() => {
+    commitAndCloseRef.current = () => {
+      if (pendingBakeRef.current !== null && rifff) {
+        const steps = pendingBakeRef.current
+        pendingBakeRef.current = null
+        bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
+      }
+      stopPreview()
+      onClose()
+    }
+
+    // Captures the playhead's position within the current free-play loop and marks
+    // (but doesn't yet bake) whichever beat that falls on — the tap-along
+    // alternative to clicking a specific gridline. Self-contained (re-derives
+    // totalBeats/offsetKey/snapDiv from rifff/stem/state rather than closing over
+    // the consts declared below the early-return guard) — this effect is
+    // registered before that guard, same as every other hook here, so it can't
+    // depend on bindings that only exist when the guard doesn't fire.
     markDownbeatRef.current = () => {
       if (!isFreePlaying || !rifff || !stem) return
       const beatsInLoop = stem.barLength * 4
@@ -190,25 +186,20 @@ export function BeatPicker({
       const elapsedInLoop = elapsed % stem.durationSec
       const secPerBeatNative = stem.durationSec / beatsInLoop
       const beatIndex = Math.round(elapsedInLoop / secPerBeatNative) % beatsInLoop
-      const snapDivNow = SNAP_DIVS[state.snapIdx]
-      const steps = offsetStepsForBeatIndex(beatIndex, snapDivNow)
+      const steps = offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
       dispatch({
         type: 'SET_OFFSET_STEPS',
         key: resolveOffsetKey(state, groupId, stem.slot),
         steps
       })
-      // announcePick is a hoisted function declaration (defined below, after the
-      // early-return guard) — safe to call here despite that, since function
-      // declarations (unlike the const bindings this same file already had to work
-      // around) aren't subject to the TDZ that bit onClose/markDownbeat earlier.
-      announcePick(beatIndex, bakeStems(dispatch, groupId, steps, snapDivNow, rifff.stems))
+      pendingBakeRef.current = steps
     }
   })
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
-        onCloseRef.current()
+        commitAndCloseRef.current()
         return
       }
       if (e.code === 'Space') {
@@ -235,27 +226,6 @@ export function BeatPicker({
   const totalBeats = stem.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
 
-  // Playing several stems through the same destination sums their amplitudes —
-  // at unity gain each, more than one or two together clips. sqrt(N) is a standard
-  // approximation for keeping combined perceived loudness roughly constant as more
-  // sources join, without attenuating a single solo stem at all.
-  function previewGain(stemCount: number): number {
-    return stemCount > 1 ? 1 / Math.sqrt(stemCount) : 1
-  }
-
-  // Shows "picked beat X" immediately, then "baked" once the file's actually
-  // rewritten, fading out after a beat. Without this, a pick's offset silently
-  // resetting to 0 after baking (correct — the file itself now starts on the
-  // beat) just looked like an unexplained jump back to the start.
-  function announcePick(beatIndex: number, bakePromise: Promise<void>): void {
-    if (pickStatusTimeoutRef.current) clearTimeout(pickStatusTimeoutRef.current)
-    setPickStatus({ beat: beatIndex, status: 'baking' })
-    bakePromise.then(() => {
-      setPickStatus({ beat: beatIndex, status: 'baked' })
-      pickStatusTimeoutRef.current = setTimeout(() => setPickStatus(null), 1600)
-    })
-  }
-
   function toggleFreePlay(): void {
     if (isFreePlaying) {
       stopPreview()
@@ -265,7 +235,7 @@ export function BeatPicker({
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
     const stemsToPreview = previewAll ? rifff.stems : [stem]
-    const gain = previewGain(stemsToPreview.length)
+    const gain = sqrtGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -299,7 +269,7 @@ export function BeatPicker({
     // by its own (possibly shorter, tiling) loop length.
     const stemsToPreview = previewAll ? rifff.stems : [stem]
     const ctx = getAudioContext()
-    const gain = previewGain(stemsToPreview.length)
+    const gain = sqrtGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -323,12 +293,12 @@ export function BeatPicker({
       previewSourcesRef.current.push(source)
     }
     setPreviewingBeat(beatIndex)
-    announcePick(beatIndex, bakeStems(dispatch, rifff.groupId, steps, snapDiv, rifff.stems))
+    pendingBakeRef.current = steps
   }
 
   return (
     <div
-      onClick={onClose}
+      onClick={() => commitAndCloseRef.current()}
       style={{
         position: 'fixed',
         inset: 0,
@@ -354,11 +324,12 @@ export function BeatPicker({
           <div>
             <span className="ra-eyebrow">pick the downbeat</span>
             <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginTop: 4 }}>
-              click a beat in {stem.name}, or play the loop and hit space on the downbeat
+              click a beat in {stem.name}, or play the loop and hit space on the downbeat — baked
+              into the audio when you close this
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => commitAndCloseRef.current()}
             style={{
               height: 22,
               borderRadius: 6,
@@ -413,21 +384,6 @@ export function BeatPicker({
           </button>
         </div>
 
-        {pickStatus && (
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 11,
-              fontWeight: 700,
-              color: pickStatus.status === 'baking' ? 'var(--ra-text-2)' : 'var(--ra-play-on)'
-            }}
-          >
-            {pickStatus.status === 'baking'
-              ? `picked beat ${pickStatus.beat + 1} — baking into the audio…`
-              : `✓ beat ${pickStatus.beat + 1} baked — the audio itself now starts on the beat (so it shows as beat 1 above)`}
-          </div>
-        )}
-
         <div
           style={{
             position: 'relative',
@@ -467,11 +423,9 @@ export function BeatPicker({
                     ? '1px solid var(--ra-border-strong)'
                     : '1px solid var(--ra-grid-minor)',
                 background:
-                  pickStatus?.beat === beatIndex
-                    ? 'color-mix(in srgb, var(--ra-play-on) 35%, transparent)'
-                    : beatIndex === currentBeat
-                      ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
-                      : 'transparent',
+                  beatIndex === currentBeat
+                    ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
+                    : 'transparent',
                 cursor: 'pointer'
               }}
             />
@@ -492,8 +446,8 @@ export function BeatPicker({
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          beat {currentBeat + 1} of {totalBeats} — baked into the audio automatically on pick. click
-          the playing beat again to stop it.
+          beat {currentBeat + 1} of {totalBeats} selected — click the playing beat again to stop it.
+          nothing is written to disk until you close this.
         </div>
       </div>
     </div>

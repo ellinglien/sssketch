@@ -40,6 +40,20 @@ describe('reducer', () => {
     expect(state.rifffs.r1.startBar).toBeUndefined()
   })
 
+  it('seeds each stem’s initial volume so the rifff’s stems don’t clip when they all play together', () => {
+    // makeRifff() has 2 stems (slots 1 and 6) -> sqrtGain(2) = 1/sqrt(2)
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    expect(state.vol['r1:1']).toBeCloseTo(1 / Math.sqrt(2), 10)
+    expect(state.vol['r1:6']).toBeCloseTo(1 / Math.sqrt(2), 10)
+  })
+
+  it('re-adding the same rifff (re-import) does not clobber a volume the user already adjusted', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    expect(state.vol['r1:1']).toBe(0.3)
+  })
+
   it('placing on the timeline sets startBar, selects, expands, and enables stretch', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
