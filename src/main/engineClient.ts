@@ -67,6 +67,12 @@ export class EngineClient {
       const len = this.recvBuf.readUInt32LE(4)
       if (magic !== MAGIC_NUMBER) {
         this.failAllWaiters(new Error('engine sent a malformed message (bad magic number)'))
+        // The stream is desynced from this point on — there's no way to know where
+        // the next real header starts, so keeping the socket open would just mean
+        // silently accumulating garbage onto recvBuf forever. Tear it down instead
+        // of leaving a corrupted connection lingering.
+        this.socket?.destroy()
+        this.socket = null
         return
       }
       if (this.recvBuf.length < 8 + len) return // wait for the rest of this message
@@ -77,12 +83,30 @@ export class EngineClient {
   }
 
   private handleMessage(payloadText: string): void {
-    let msg: IncomingMessage
+    let parsed: unknown
     try {
-      msg = JSON.parse(payloadText) as IncomingMessage
-    } catch {
-      return // malformed JSON from the engine — ignore rather than crash the client
+      parsed = JSON.parse(payloadText)
+    } catch (err) {
+      // Malformed JSON from the engine — ignore rather than crash the client.
+      console.error('EngineClient: received unparseable JSON from the engine', err, payloadText)
+      return
     }
+    // JSON.parse succeeds (with no exception) for non-object top-level values too —
+    // `null`, numbers, strings, arrays. The `as IncomingMessage` cast used to happen
+    // right after JSON.parse and gave no runtime protection: a literal `null`
+    // payload would sail through as `msg`, and the very next line's `msg.type`
+    // would throw a TypeError synchronously inside the 'data' handler, which is
+    // uncaught and can crash the whole Electron main process. Validate the actual
+    // shape before trusting it.
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      typeof (parsed as { type?: unknown }).type !== 'string'
+    ) {
+      console.error('EngineClient: received a message with an unexpected shape', payloadText)
+      return
+    }
+    const msg = parsed as IncomingMessage
     const waiterIdx = this.pendingWaiters.findIndex((w) => w.type === msg.type)
     if (waiterIdx === -1) return // not something anyone's waiting for (e.g. a stray position-update)
     const [waiter] = this.pendingWaiters.splice(waiterIdx, 1)
