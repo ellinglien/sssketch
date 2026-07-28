@@ -49,6 +49,40 @@ namespace ssstitch
                 expect(cache.get("/no/such/file.wav") == nullptr);
             }
 
+            beginTest("a second load() for an already-cached path succeeds from cache, without re-reading the file");
+            {
+                auto recacheFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("ssstitch_test_fixture_recache.wav");
+
+                juce::WavAudioFormat wavFormat;
+                std::unique_ptr<juce::FileOutputStream> out(recacheFile.createOutputStream());
+                expect(out != nullptr);
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    wavFormat.createWriterFor(out.get(), 44100.0, 1, 16, {}, 0));
+                expect(writer != nullptr);
+                out.release();
+
+                const int numSamples = 100;
+                juce::AudioBuffer<float> source(1, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                    source.setSample(0, i, 0.25f);
+                writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+                writer.reset();
+
+                StemBufferCache cache;
+                expect(cache.load(recacheFile.getFullPathName()));
+
+                // Delete the file out from under the cache: if a second load() actually
+                // re-read from disk instead of returning the cached entry, this would
+                // fail (createReaderFor would return nullptr for a missing file).
+                recacheFile.deleteFile();
+
+                expect(cache.load(recacheFile.getFullPathName()));
+                auto* buffer = cache.get(recacheFile.getFullPathName());
+                expect(buffer != nullptr);
+                expectEquals(buffer->getNumSamples(), numSamples);
+            }
+
             tempFile.deleteFile();
         }
     };

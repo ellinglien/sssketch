@@ -22,7 +22,8 @@ namespace ssstitch
         Entry entry;
         entry.sampleRate = reader->sampleRate;
         entry.buffer.setSize((int) reader->numChannels, (int) reader->lengthInSamples);
-        reader->read(&entry.buffer, 0, (int) reader->lengthInSamples, 0, true, true);
+        if (!reader->read(&entry.buffer, 0, (int) reader->lengthInSamples, 0, true, true))
+            return false;
 
         cache.emplace(key, std::move(entry));
         return true;
