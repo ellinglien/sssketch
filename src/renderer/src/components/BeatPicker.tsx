@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { resolveOffsetKey, offsetStepsForBeatIndex } from '../state/selectors'
 import { linearWave } from '@shared/visuals'
@@ -63,25 +63,36 @@ export function BeatPicker({
     }
   }, [stem])
 
-  function stopPreview(): void {
+  const stopPreview = useCallback(() => {
     try {
       previewSourceRef.current?.stop()
     } catch {
       // already stopped
     }
     previewSourceRef.current = null
-  }
+  }, [])
+
+  // onClose is a fresh arrow function from the parent on every render (it closes
+  // over setState), so depending on it directly would re-run this effect — and
+  // fire its stopPreview() cleanup — on every unrelated re-render, including the
+  // one pickBeat's own SET_OFFSET_STEPS dispatch causes. That was cutting the
+  // preview off within a render cycle of it starting, no matter what was picked.
+  // Reading the latest onClose through a ref keeps the effect itself stable.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onCloseRef.current()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       stopPreview()
     }
-  }, [onClose])
+  }, [stopPreview])
 
   if (!rifff || !stem) return null
 
