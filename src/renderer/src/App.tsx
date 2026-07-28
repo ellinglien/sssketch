@@ -6,6 +6,7 @@ import { Ruler, PPB, LANE_HEADER_WIDTH } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
+import { Playhead } from './components/Playhead'
 
 function Timeline(): React.JSX.Element {
   const state = useAppState()
@@ -22,13 +23,18 @@ function Timeline(): React.JSX.Element {
   }
 
   return (
-    <div onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
+      style={{ position: 'relative' }}
+    >
       <Ruler />
       {Object.values(state.rifffs)
         .filter((r) => r.startBar !== undefined)
         .map((r) => (
           <RifffBlockRow key={r.groupId} groupId={r.groupId} />
         ))}
+      <Playhead />
     </div>
   )
 }
