@@ -3,6 +3,8 @@ import { initialState, reducer } from './store'
 import {
   resolveOffsetKey,
   clipGeometry,
+  stemGeometry,
+  stemStartBar,
   stretchRatio,
   loopLengthBars,
   offsetStepsForBeatIndex,
@@ -69,6 +71,49 @@ describe('clipGeometry', () => {
   })
 })
 
+describe('stemStartBar / stemGeometry', () => {
+  it('follows the group startBar while linked', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    expect(stemStartBar(state, 'r1', 1)).toBe(4)
+  })
+
+  it('still follows the group startBar right after unlinking, before any drag', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    expect(stemStartBar(state, 'r1', 1)).toBe(4)
+  })
+
+  it('diverges from the group once unlinked and dragged', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: 12 })
+    expect(stemStartBar(state, 'r1', 1)).toBe(12)
+    // the group itself is untouched
+    expect(state.rifffs.r1.startBar).toBe(4)
+  })
+
+  it('a drag is ignored again after relinking', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: 12 })
+    state = reducer(state, { type: 'RELINK', groupId: 'r1' })
+    expect(stemStartBar(state, 'r1', 1)).toBe(4)
+  })
+
+  it('stemGeometry reflects the diverged position in leftPx', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: 5 })
+    const geo = stemGeometry(state, 'r1', 1, 24)
+    expect(geo.leftPx).toBe(120) // 5 * 24
+  })
+})
+
 describe('loopLengthBars', () => {
   it('falls back to the default when nothing is placed on the timeline', () => {
     expect(loopLengthBars(initialState)).toBe(32)
@@ -89,6 +134,14 @@ describe('loopLengthBars', () => {
     state = reducer(state, { type: 'ADD_TO_SHELF', rifff: shelfOnly })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 }) // ends at 8
     expect(loopLengthBars(state)).toBe(8)
+  })
+
+  it('extends to cover an unlinked stem dragged past the group’s own span', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff }) // barLength 8
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 }) // ends at 8
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: 20 }) // ends at 28
+    expect(loopLengthBars(state)).toBe(28)
   })
 })
 

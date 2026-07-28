@@ -21,12 +21,21 @@ function Timeline({
 
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    const groupId = e.dataTransfer.getData('text/rifff-group-id')
-    if (!groupId) return
-    const wasUnplaced = state.rifffs[groupId]?.startBar === undefined
     const rect = e.currentTarget.getBoundingClientRect()
     const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
     const startBar = Math.max(0, Math.round(xInTimeline / PPB))
+
+    // Checked first — more specific than a whole-group drag, and the two payloads
+    // are never both set on the same drop (StemSubRow only sets this one).
+    const stemDragKey = e.dataTransfer.getData('text/rifff-stem-key')
+    if (stemDragKey) {
+      dispatch({ type: 'SET_STEM_START', key: stemDragKey, startBar })
+      return
+    }
+
+    const groupId = e.dataTransfer.getData('text/rifff-group-id')
+    if (!groupId) return
+    const wasUnplaced = state.rifffs[groupId]?.startBar === undefined
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
     if (wasUnplaced) onFirstPlace(groupId)
   }

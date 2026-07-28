@@ -50,6 +50,18 @@ describe('computeStemSchedule', () => {
     expect(segments[3].startBarInTimeline).toBe(10)
   })
 
+  it('uses startBarOverride instead of the rifff’s own startBar when given', () => {
+    // Mirrors an unlinked stem dragged to its own independent position.
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150,
+      startBarOverride: 20
+    })
+    expect(segments[0].startBarInTimeline).toBe(20)
+  })
+
   it('shifts segments by the grid-step offset, in bars', () => {
     const segments = computeStemSchedule(rifff, rifff.stems[0], {
       offsetSteps: 4, // +4/16 = +0.25 bar

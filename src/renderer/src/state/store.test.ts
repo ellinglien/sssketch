@@ -201,11 +201,26 @@ describe('reducer', () => {
     expect(state.off['r1:6']).toBe(3)
   })
 
+  it('unlink seeds each stem’s independent start at the group’s current position', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    expect(state.stemStart['r1:1']).toBe(6)
+    expect(state.stemStart['r1:6']).toBe(6)
+  })
+
   it('relink clears the unlinked flag', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
     state = reducer(state, { type: 'RELINK', groupId: 'r1' })
     expect(state.unlinked.r1).toBe(false)
+  })
+
+  it('sets an independent stem start, clamped to 0', () => {
+    let state = reducer(initialState, { type: 'SET_STEM_START', key: 'r1:1', startBar: 9 })
+    expect(state.stemStart['r1:1']).toBe(9)
+    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: -3 })
+    expect(state.stemStart['r1:1']).toBe(0)
   })
 
   it('cycles a stem sound-type through all 8 types and back to the start', () => {

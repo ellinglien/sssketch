@@ -9,7 +9,7 @@ import {
 } from 'react'
 import { initialState, reducer, SNAP_DIVS, type Action, type AppState } from './store'
 import { AudioEngine } from '../audio/AudioEngine'
-import { loopLengthBars, resolveOffsetKey } from './selectors'
+import { loopLengthBars, resolveOffsetKey, stemStartBar } from './selectors'
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
@@ -45,7 +45,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       getVolume: (key) => stateRef.current.vol[key] ?? 1,
       isMuted: (key) => !!stateRef.current.mute[key],
       getProjectBpm: () => stateRef.current.bpm,
-      isStretchOn: (groupId) => stateRef.current.stretch[groupId] ?? true
+      isStretchOn: (groupId) => stateRef.current.stretch[groupId] ?? true,
+      getStemStartBar: (groupId, slot) => stemStartBar(stateRef.current, groupId, slot)
     })
   }, [])
 
@@ -99,7 +100,15 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       engineRef.current!.play(engineRef.current!.currentPos(loopLengthBars(state)))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing; the play/pause effect above already handles play/pause transitions, this effect should only re-run when scheduling-affecting values actually change
-  }, [state.off, state.bpm, state.snapIdx, state.unlinked, state.stretch, state.rifffs])
+  }, [
+    state.off,
+    state.bpm,
+    state.snapIdx,
+    state.unlinked,
+    state.stretch,
+    state.rifffs,
+    state.stemStart
+  ])
 
   return (
     <StateCtx.Provider value={state}>

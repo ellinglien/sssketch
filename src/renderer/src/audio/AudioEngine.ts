@@ -10,6 +10,7 @@ interface EngineDeps {
   isMuted: (stemKey: string) => boolean
   getProjectBpm: () => number
   isStretchOn: (groupId: string) => boolean
+  getStemStartBar: (groupId: string, slot: number) => number
 }
 
 const bufferCache = new Map<string, Promise<AudioBuffer>>()
@@ -126,7 +127,8 @@ export class AudioEngine {
             offsetSteps,
             snapDiv: this.deps.getSnapDiv(),
             projectPos: fromPos,
-            projectBpm: bpm
+            projectBpm: bpm,
+            startBarOverride: this.deps.getStemStartBar(rifff.groupId, stem.slot)
           })
           if (segments.length === 0) continue
 

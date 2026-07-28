@@ -12,6 +12,10 @@ export interface AppState {
   off: Record<string, number>
   stretch: Record<string, boolean>
   unlinked: Record<string, boolean>
+  /** Independent position for an unlinked stem, keyed by stemKey. Only consulted
+   * while that stem's group is unlinked — a linked stem always follows its
+   * group's own startBar, same as before unlinking existed. */
+  stemStart: Record<string, number>
   sel: string | null
   exp: Record<string, boolean>
   rifffs: Record<string, Rifff>
@@ -27,6 +31,7 @@ export const initialState: AppState = {
   off: {},
   stretch: {},
   unlinked: {},
+  stemStart: {},
   sel: null,
   exp: {},
   rifffs: {}
@@ -43,6 +48,7 @@ export type Action =
   | { type: 'ZERO_OFFSET'; key: string }
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
+  | { type: 'SET_STEM_START'; key: string; startBar: number }
   | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
@@ -113,6 +119,12 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_OFFSET_STEPS':
       return { ...state, off: { ...state.off, [action.key]: action.steps } }
 
+    case 'SET_STEM_START':
+      return {
+        ...state,
+        stemStart: { ...state.stemStart, [action.key]: Math.max(0, action.startBar) }
+      }
+
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
       return {
@@ -157,13 +169,19 @@ export function reducer(state: AppState, action: Action): AppState {
       const rifff = state.rifffs[action.groupId]
       const groupOffset = state.off[action.groupId] ?? 0
       const off = { ...state.off }
+      const stemStart = { ...state.stemStart }
       for (const stem of rifff.stems) {
-        off[stemKey(action.groupId, stem.slot)] = groupOffset
+        const key = stemKey(action.groupId, stem.slot)
+        off[key] = groupOffset
+        // Seeded to the group's current position so nothing visually jumps at the
+        // moment of unlinking — dragging a stem afterward is what actually makes
+        // it diverge.
+        stemStart[key] = rifff.startBar ?? 0
       }
       // The group-level off[groupId] entry is intentionally left in place (unused while
       // unlinked) rather than deleted — resolveOffsetKey always reads the per-stem key
       // when unlinked, and RELINK makes the group key authoritative again.
-      return { ...state, unlinked: { ...state.unlinked, [action.groupId]: true }, off }
+      return { ...state, unlinked: { ...state.unlinked, [action.groupId]: true }, off, stemStart }
     }
 
     case 'RELINK':

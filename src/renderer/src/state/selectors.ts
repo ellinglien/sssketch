@@ -26,14 +26,54 @@ export function clipGeometry(state: AppState, groupId: string, ppb: number): Cli
   return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
 }
 
+/** A stem's own position — independent of its group's once unlinked and dragged,
+ * falling back to the group's startBar otherwise (before any drag, or while still
+ * linked). */
+export function stemStartBar(state: AppState, groupId: string, slot: number): number {
+  const rifff = state.rifffs[groupId]
+  if (state.unlinked[groupId]) {
+    return state.stemStart[stemKey(groupId, slot)] ?? rifff.startBar ?? 0
+  }
+  return rifff.startBar ?? 0
+}
+
+/** Same shape as clipGeometry, anchored to the stem's own position instead of its
+ * group's — identical to clipGeometry while linked (or before a drag), diverging
+ * once unlinked and moved. */
+export function stemGeometry(
+  state: AppState,
+  groupId: string,
+  slot: number,
+  ppb: number
+): ClipGeometry {
+  const rifff = state.rifffs[groupId]
+  const start = stemStartBar(state, groupId, slot)
+  const offsetSteps = state.off[resolveOffsetKey(state, groupId, slot)] ?? 0
+  const snapDiv = SNAP_DIVS[state.snapIdx]
+  const offsetPx = (offsetSteps * ppb) / snapDiv
+  const stretchOn = state.stretch[groupId] ?? true
+  const shownBars = stretchOn ? rifff.barLength : rifff.barLength * (rifff.bpm / state.bpm)
+  return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
+}
+
 const DEFAULT_LOOP_BARS = 32
 
 /** Loop length auto-fits to whichever placed clip ends latest, falling back to a
- * sensible default when the timeline is empty rather than collapsing to 0. */
+ * sensible default when the timeline is empty rather than collapsing to 0. An
+ * unlinked stem dragged out past its group's own span must count too, or it would
+ * fall outside the loop and never be reached during playback. */
 export function loopLengthBars(state: AppState): number {
-  const ends = Object.values(state.rifffs)
-    .filter((r) => r.startBar !== undefined)
-    .map((r) => (r.startBar ?? 0) + r.barLength)
+  const ends: number[] = []
+  for (const rifff of Object.values(state.rifffs)) {
+    if (rifff.startBar === undefined) continue
+    if (state.unlinked[rifff.groupId]) {
+      for (const stem of rifff.stems) {
+        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + rifff.barLength)
+      }
+    } else {
+      ends.push(rifff.startBar + rifff.barLength)
+    }
+  }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
 }
 

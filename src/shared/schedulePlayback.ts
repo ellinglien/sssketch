@@ -6,6 +6,9 @@ export interface ScheduleOptions {
   /** current playhead position, in bars */
   projectPos: number
   projectBpm: number
+  /** Where this stem actually starts, in bars. Defaults to rifff.startBar — only
+   * diverges for an unlinked stem that's been dragged to its own position. */
+  startBarOverride?: number
 }
 
 export interface PlaybackSegment {
@@ -24,7 +27,7 @@ export function computeStemSchedule(
   stem: Stem,
   opts: ScheduleOptions
 ): PlaybackSegment[] {
-  const start = rifff.startBar ?? 0
+  const start = opts.startBarOverride ?? rifff.startBar ?? 0
   const offsetBars = opts.offsetSteps / opts.snapDiv
   const secPerBarNative = stem.durationSec / stem.barLength
 
