@@ -63,10 +63,24 @@ function ProjectMenu(): React.JSX.Element {
     }
   }
 
+  const buttonStyle = {
+    height: 22,
+    borderRadius: 6,
+    padding: '0 10px',
+    fontSize: 10,
+    border: '1px solid var(--ra-border)',
+    background: 'var(--ra-bg-row-active)',
+    color: 'var(--ra-text-2)'
+  } as const
+
   return (
     <div style={{ display: 'flex', gap: 6 }}>
-      <button onClick={handleSave}>save</button>
-      <button onClick={handleOpen}>open</button>
+      <button onClick={handleSave} style={buttonStyle}>
+        save
+      </button>
+      <button onClick={handleOpen} style={buttonStyle}>
+        open
+      </button>
     </div>
   )
 }
@@ -75,14 +89,22 @@ function Frame(): React.JSX.Element {
   const state = useAppState()
   return (
     <div className="ra-frame">
-      <div style={{ display: 'flex', alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          borderBottom: '1px solid var(--ra-border-soft)'
+        }}
+      >
         <div style={{ flex: 1 }}>
           <Titlebar
             rifffCount={Object.keys(state.rifffs).length}
             stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
           />
         </div>
-        <ProjectMenu />
+        <div style={{ paddingRight: 14 }}>
+          <ProjectMenu />
+        </div>
       </div>
       <Shelf />
       <TransportBar />

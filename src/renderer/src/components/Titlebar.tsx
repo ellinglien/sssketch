@@ -10,7 +10,6 @@ export function Titlebar({
       style={{
         height: 38,
         padding: '0 14px',
-        borderBottom: '1px solid var(--ra-border-soft)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between'
