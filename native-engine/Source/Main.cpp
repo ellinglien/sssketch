@@ -205,7 +205,8 @@ static int runServe(int port)
     }
     juce::Logger::writeToLog("ssstitch-engine serving on 127.0.0.1:" + juce::String(port));
 
-    juce::MessageManager::getInstance()->runDispatchLoop(); // blocks until "quit" message
+    while (!juce::MessageManager::getInstance()->hasStopMessageBeenSent())
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
     return 0;
 }
 
