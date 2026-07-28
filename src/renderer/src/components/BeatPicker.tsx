@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
-import { resolveOffsetKey, offsetStepsForBeatIndex } from '../state/selectors'
+import {
+  resolveOffsetKey,
+  offsetStepsForBeatIndex,
+  rotationSecondsForStem
+} from '../state/selectors'
 import { linearWave } from '@shared/visuals'
 import { getPeaks, getAudioContext } from '../audio/peakCache'
 import { SNAP_DIVS } from '../state/store'
@@ -26,8 +30,11 @@ export function BeatPicker({
   const rifff = state.rifffs[groupId]
   const stem = rifff?.stems[0]
   const [peaks, setPeaks] = useState<number[] | null>(null)
-  const [buffer, setBuffer] = useState<AudioBuffer | null>(null)
-  const previewSourceRef = useRef<AudioBufferSourceNode | null>(null)
+  // Every stem is decoded, not just the identity one — previewing the whole rifff
+  // together (the default) needs all of them. Keyed by slot.
+  const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
+  const [previewAll, setPreviewAll] = useState(true)
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
   useEffect(() => {
     if (!stem) return
@@ -43,33 +50,43 @@ export function BeatPicker({
   // Decoded separately from getPeaks (which only keeps a 128-bucket summary) since
   // previewing playback needs the actual samples, not just their downsampled peaks.
   useEffect(() => {
-    if (!stem) return
+    if (!rifff) return
     let cancelled = false
-    ;(async () => {
-      try {
-        const bytes = await window.rifffApi.readAudioFile(stem.path)
-        const arrayBuffer = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength
-        )
-        const decoded = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-        if (!cancelled) setBuffer(decoded)
-      } catch (err) {
-        console.error(`BeatPicker: failed to decode audio for preview playback: ${stem.path}`, err)
-      }
-    })()
+    Promise.all(
+      rifff.stems.map(async (s) => {
+        try {
+          const bytes = await window.rifffApi.readAudioFile(s.path)
+          const arrayBuffer = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength
+          )
+          const decoded = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+          return [s.slot, decoded] as const
+        } catch (err) {
+          console.error(`BeatPicker: failed to decode audio for preview playback: ${s.path}`, err)
+          return null
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return
+      const map: Record<number, AudioBuffer> = {}
+      for (const r of results) if (r) map[r[0]] = r[1]
+      setBuffers(map)
+    })
     return () => {
       cancelled = true
     }
-  }, [stem])
+  }, [rifff])
 
   const stopPreview = useCallback(() => {
-    try {
-      previewSourceRef.current?.stop()
-    } catch {
-      // already stopped
+    for (const source of previewSourcesRef.current) {
+      try {
+        source.stop()
+      } catch {
+        // already stopped
+      }
     }
-    previewSourceRef.current = null
+    previewSourcesRef.current = []
   }, [])
 
   // onClose is a fresh arrow function from the parent on every render (it closes
@@ -107,30 +124,35 @@ export function BeatPicker({
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
 
   function pickBeat(beatIndex: number): void {
-    dispatch({
-      type: 'SET_OFFSET_STEPS',
-      key: offsetKey,
-      steps: offsetStepsForBeatIndex(beatIndex, snapDiv)
-    })
+    const steps = offsetStepsForBeatIndex(beatIndex, snapDiv)
+    dispatch({ type: 'SET_OFFSET_STEPS', key: offsetKey, steps })
 
-    if (!buffer || !stem) return
     stopPreview()
-    const secPerBeatNative = stem.durationSec / totalBeats
-    const offsetSec = beatIndex * secPerBeatNative
-    if (offsetSec >= buffer.duration) return
-    const source = getAudioContext().createBufferSource()
-    source.buffer = buffer
-    source.connect(getAudioContext().destination)
-    // Loops the picked-beat-to-end segment continuously — the identity stem is
-    // often a short (1-2 bar) loop, so a single play-through can be too brief to
-    // judge the downbeat by ear. Looping mirrors how it actually sounds once
-    // placed in the arranger. stopPreview() (called above, and again on the next
-    // pick or on close) is what ends it, since a looped source never stops itself.
-    source.loop = true
-    source.loopStart = offsetSec
-    source.loopEnd = buffer.duration
-    source.start(0, offsetSec)
-    previewSourceRef.current = source
+    // Defaults to every stem together, not just the identity one: they're all
+    // beat-locked to the same clock within a rifff, so hearing the full mix
+    // land on the picked beat is what actually confirms the downbeat is right —
+    // rotationSecondsForStem gives each stem its own equivalent position, wrapped
+    // by its own (possibly shorter, tiling) loop length.
+    const stemsToPreview = previewAll ? rifff.stems : [stem]
+    for (const s of stemsToPreview) {
+      const buf = buffers[s.slot]
+      if (!buf) continue
+      const offsetSec = rotationSecondsForStem(steps, snapDiv, s)
+      if (offsetSec >= buf.duration) continue
+      const source = getAudioContext().createBufferSource()
+      source.buffer = buf
+      source.connect(getAudioContext().destination)
+      // Loops the picked-beat-to-end segment continuously — stems are often short
+      // (1-2 bar) loops, so a single play-through can be too brief to judge the
+      // downbeat by ear. Looping mirrors how it actually sounds once placed in the
+      // arranger. stopPreview() (called above, and again on the next pick or on
+      // close) is what ends it, since a looped source never stops itself.
+      source.loop = true
+      source.loopStart = offsetSec
+      source.loopEnd = buf.duration
+      source.start(0, offsetSec)
+      previewSourcesRef.current.push(source)
+    }
   }
 
   return (
@@ -179,6 +201,24 @@ export function BeatPicker({
             close
           </button>
         </div>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginTop: 10,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={previewAll}
+            onChange={(e) => setPreviewAll(e.target.checked)}
+          />
+          preview all stems together (they’re beat-locked to the same clock)
+        </label>
 
         <div
           style={{
