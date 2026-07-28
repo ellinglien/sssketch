@@ -68,7 +68,14 @@ export function TransportBar(): React.JSX.Element {
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm - 1 })}
           aria-label="Decrease tempo"
-          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid var(--ra-border)' }}
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 4,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)'
+          }}
         >
           −
         </button>
@@ -78,7 +85,14 @@ export function TransportBar(): React.JSX.Element {
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm + 1 })}
           aria-label="Increase tempo"
-          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid var(--ra-border)' }}
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 4,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)'
+          }}
         >
           +
         </button>

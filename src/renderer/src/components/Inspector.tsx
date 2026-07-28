@@ -144,7 +144,9 @@ export function Inspector(): React.JSX.Element {
                 width: 26,
                 height: 24,
                 borderRadius: 6,
-                border: '1px solid var(--ra-border-strong)'
+                border: '1px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
               }}
             >
               −
@@ -158,7 +160,9 @@ export function Inspector(): React.JSX.Element {
                 width: 26,
                 height: 24,
                 borderRadius: 6,
-                border: '1px solid var(--ra-border-strong)'
+                border: '1px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
               }}
             >
               +
@@ -188,7 +192,15 @@ export function Inspector(): React.JSX.Element {
             </div>
             <button
               onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
-              style={{ height: 20, borderRadius: 4, padding: '0 6px', fontSize: 10 }}
+              style={{
+                height: 20,
+                borderRadius: 4,
+                padding: '0 6px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
             >
               zero
             </button>
@@ -207,6 +219,7 @@ export function Inspector(): React.JSX.Element {
                 borderRadius: 4,
                 padding: '0 6px',
                 fontSize: 10,
+                background: 'var(--ra-bg-row-active)',
                 color: unlinked ? 'var(--ra-text-2)' : 'var(--ra-mute-on)',
                 border: `1px solid ${unlinked ? 'var(--ra-border)' : 'color-mix(in srgb, var(--ra-mute-on) 55%, transparent)'}`
               }}
