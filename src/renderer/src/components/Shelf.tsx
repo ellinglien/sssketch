@@ -3,7 +3,11 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 
-export function Shelf(): React.JSX.Element {
+export function Shelf({
+  onImported
+}: {
+  onImported: (groupId: string) => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const [dragOver, setDragOver] = useState(false)
@@ -29,7 +33,13 @@ export function Shelf(): React.JSX.Element {
     }
     try {
       const rifff = await window.rifffApi.importRifff(paths)
-      if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
+      if (rifff) {
+        dispatch({ type: 'ADD_TO_SHELF', rifff })
+        // Downbeat correction now happens right at import, not on first
+        // placement — by the time it's dragged onto the timeline it's already
+        // baked and usable, rather than needing a separate step afterward.
+        onImported(rifff.groupId)
+      }
     } catch (err) {
       // importRifff normally swallows its own errors and resolves null; this only
       // fires for something unexpected at the IPC layer itself (e.g. the main

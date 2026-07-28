@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type Dispatch } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import {
   resolveOffsetKey,
   offsetStepsForBeatIndex,
   rotationSecondsForStem
 } from '../state/selectors'
+import type { Action } from '../state/store'
 import { linearWave } from '@shared/visuals'
 import { getPeaks, getAudioContext } from '../audio/peakCache'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
+import type { Stem } from '@shared/types'
 
 /**
  * Endlesss stems are internally beat-locked, but a rifff's declared bar length can
@@ -18,6 +20,31 @@ import { typeColorVar } from '../theme/typeColor'
  * offsetStepsForBeatIndex converts that click into the shift needed to land it on
  * the clip's timeline start.
  */
+
+// Module-level (not a closure over component state) so it can be called safely
+// from markDownbeatRef's effect, which is registered before the early-return guard
+// and so can't reference anything declared after it. Bakes every stem in the group
+// immediately on pick — this picker is opened right after import now, not after
+// placement, so "processed and usable right away" means the audio itself is
+// corrected here, not left as a still-pending offset.
+async function bakeStems(
+  dispatch: Dispatch<Action>,
+  groupId: string,
+  steps: number,
+  snapDiv: number,
+  stems: Stem[]
+): Promise<void> {
+  try {
+    const jobs = stems.map((s) => ({
+      path: s.path,
+      rotationSec: rotationSecondsForStem(steps, snapDiv, s)
+    }))
+    const results = await window.rifffApi.bakeOffset(jobs)
+    dispatch({ type: 'APPLY_BAKE', groupId, results })
+  } catch (err) {
+    console.error('BeatPicker: failed to bake offset into audio files:', err)
+  }
+}
 export function BeatPicker({
   groupId,
   onClose
@@ -35,6 +62,10 @@ export function BeatPicker({
   const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
   const [previewAll, setPreviewAll] = useState(true)
   const [isFreePlaying, setIsFreePlaying] = useState(false)
+  // Which gridline (if any) is the source of the audio currently playing — lets a
+  // second click on the same beat act as a stop, rather than every click always
+  // (re)starting playback with no way to just silence it via the mouse.
+  const [previewingBeat, setPreviewingBeat] = useState<number | null>(null)
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const freeStartTimeRef = useRef(0)
 
@@ -90,6 +121,7 @@ export function BeatPicker({
     }
     previewSourcesRef.current = []
     setIsFreePlaying(false)
+    setPreviewingBeat(null)
   }, [])
 
   // onClose is a fresh arrow function from the parent on every render (it closes
@@ -122,11 +154,14 @@ export function BeatPicker({
       const elapsedInLoop = elapsed % stem.durationSec
       const secPerBeatNative = stem.durationSec / beatsInLoop
       const beatIndex = Math.round(elapsedInLoop / secPerBeatNative) % beatsInLoop
+      const snapDivNow = SNAP_DIVS[state.snapIdx]
+      const steps = offsetStepsForBeatIndex(beatIndex, snapDivNow)
       dispatch({
         type: 'SET_OFFSET_STEPS',
         key: resolveOffsetKey(state, groupId, stem.slot),
-        steps: offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
+        steps
       })
+      bakeStems(dispatch, groupId, steps, snapDivNow, rifff.stems)
     }
   })
 
@@ -183,10 +218,15 @@ export function BeatPicker({
   }
 
   function pickBeat(beatIndex: number): void {
+    // A second click on the currently-playing beat just stops it — commit/bake
+    // already happened on the first click, nothing new to do.
+    const wasPlayingThis = previewingBeat === beatIndex
+    stopPreview()
+    if (wasPlayingThis) return
+
     const steps = offsetStepsForBeatIndex(beatIndex, snapDiv)
     dispatch({ type: 'SET_OFFSET_STEPS', key: offsetKey, steps })
 
-    stopPreview()
     // Defaults to every stem together, not just the identity one: they're all
     // beat-locked to the same clock within a rifff, so hearing the full mix
     // land on the picked beat is what actually confirms the downbeat is right —
@@ -212,6 +252,8 @@ export function BeatPicker({
       source.start(0, offsetSec)
       previewSourcesRef.current.push(source)
     }
+    setPreviewingBeat(beatIndex)
+    bakeStems(dispatch, rifff.groupId, steps, snapDiv, rifff.stems)
   }
 
   return (
@@ -350,7 +392,8 @@ export function BeatPicker({
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          currently locked to beat {currentBeat + 1} of {totalBeats}
+          beat {currentBeat + 1} of {totalBeats} — baked into the audio automatically on pick. click
+          the playing beat again to stop it.
         </div>
       </div>
     </div>

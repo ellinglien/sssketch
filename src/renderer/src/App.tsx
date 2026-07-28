@@ -11,11 +11,7 @@ import { BeatPicker } from './components/BeatPicker'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars } from './state/selectors'
 
-function Timeline({
-  onFirstPlace
-}: {
-  onFirstPlace: (groupId: string) => void
-}): React.JSX.Element {
+function Timeline(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
 
@@ -35,9 +31,7 @@ function Timeline({
 
     const groupId = e.dataTransfer.getData('text/rifff-group-id')
     if (!groupId) return
-    const wasUnplaced = state.rifffs[groupId]?.startBar === undefined
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
-    if (wasUnplaced) onFirstPlace(groupId)
   }
 
   return (
@@ -141,11 +135,11 @@ function Frame(): React.JSX.Element {
           <ProjectMenu />
         </div>
       </div>
-      <Shelf />
+      <Shelf onImported={setPickerGroupId} />
       <TransportBar />
       <div style={{ display: 'flex' }}>
         <div style={{ flex: 1 }}>
-          <Timeline onFirstPlace={setPickerGroupId} />
+          <Timeline />
         </div>
         <Inspector onOpenBeatPicker={setPickerGroupId} />
       </div>

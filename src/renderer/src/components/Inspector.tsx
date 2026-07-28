@@ -1,6 +1,6 @@
-import { Fragment, useState } from 'react'
+import { Fragment } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
-import { resolveOffsetKey, rotationSecondsForStem, stretchRatio } from '../state/selectors'
+import { resolveOffsetKey, stretchRatio } from '../state/selectors'
 import { dbLabel, offsetLabels } from '@shared/visuals'
 import { stemKey } from '@shared/types'
 import { SNAP_DIVS } from '../state/store'
@@ -15,7 +15,6 @@ export function Inspector({
   const state = useAppState()
   const dispatch = useDispatch()
   const groupId = state.sel
-  const [baking, setBaking] = useState(false)
 
   if (!groupId || !state.rifffs[groupId]) {
     return (
@@ -46,22 +45,6 @@ export function Inspector({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const labels = offsetLabels(groupOffsetSteps, snapDiv, state.bpm)
   const unlinked = !!state.unlinked[groupId]
-
-  async function handleBake(): Promise<void> {
-    setBaking(true)
-    try {
-      const jobs = rifff.stems.map((stem) => {
-        const steps = state.off[resolveOffsetKey(state, rifff.groupId, stem.slot)] ?? 0
-        return { path: stem.path, rotationSec: rotationSecondsForStem(steps, snapDiv, stem) }
-      })
-      const results = await window.rifffApi.bakeOffset(jobs)
-      dispatch({ type: 'APPLY_BAKE', groupId: rifff.groupId, results })
-    } catch (err) {
-      console.error('Inspector: failed to bake offset into audio files:', err)
-    } finally {
-      setBaking(false)
-    }
-  }
 
   const section = (children: React.JSX.Element): React.JSX.Element => (
     <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ra-border)' }}>
@@ -236,6 +219,7 @@ export function Inspector({
             <div style={{ display: 'flex', gap: 6 }}>
               <button
                 onClick={() => onOpenBeatPicker(groupId)}
+                title="downbeat correction is normally handled once, right at import — reopen this only if it drifted or needs redoing"
                 style={{
                   height: 20,
                   borderRadius: 4,
@@ -246,7 +230,7 @@ export function Inspector({
                   color: 'var(--ra-text-2)'
                 }}
               >
-                pick beat
+                re-pick beat
               </button>
               <button
                 onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
@@ -263,24 +247,6 @@ export function Inspector({
                 zero
               </button>
             </div>
-          </div>
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              onClick={handleBake}
-              disabled={baking}
-              title="rotate the audio so the picked beat becomes the start of the file, and resave it"
-              style={{
-                height: 20,
-                borderRadius: 4,
-                padding: '0 8px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: baking ? 'var(--ra-text-3)' : 'var(--ra-text-2)'
-              }}
-            >
-              {baking ? 'baking…' : 'bake offset into audio'}
-            </button>
           </div>
         </>
       )}
