@@ -3,6 +3,7 @@
 #include "SchedulePlayback.h"
 #include "FadeGain.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace ssstitch
@@ -124,17 +125,33 @@ namespace ssstitch
                         if (sampleTimeSec < segStartSec || sampleTimeSec >= segEndSec)
                             continue;
                         const double posInSegSec = sampleTimeSec - segStartSec;
-                        // Kept as double until this final truncation so a source sample
+                        // Kept as double until this final conversion so a source sample
                         // rate that doesn't evenly match the output rate (e.g. 22050Hz
                         // source under a 44100Hz device) still maps time to a source
-                        // sample index correctly — this is nearest/floor sample lookup
-                        // (no interpolation), which is exact when rates match and merely
+                        // sample index correctly — this is nearest-sample lookup (no
+                        // interpolation), which is exact when rates match and merely
                         // lower quality (not wrong-speed/wrong-pitch) when they don't.
-                        // Truncation (not rounding) is fine here because the operand is
-                        // always >= 0: posInSegSec >= 0 is guaranteed by the sampleTimeSec
-                        // >= segStartSec check just above, and bufferOffsetSec is always
-                        // 0.0 (computeStemSchedule never sets it non-zero).
-                        const int srcSample = (int) ((seg.bufferOffsetSec + posInSegSec) * srcSampleRate);
+                        //
+                        // Rounded to the nearest sample, NOT truncated. An earlier version
+                        // truncated (plain `(int)` cast) on the reasoning that the operand
+                        // is always >= 0 so truncation == floor == "the sample at or before
+                        // this time", which is mathematically fine in real-number terms.
+                        // But native-engine/test/parity/render-parity.test.ts's parity
+                        // test (Task 10) caught this failing in practice: sampleTimeSec is
+                        // built from `blockStartSec + i2 / sampleRate`, and srcSampleRate
+                        // here is a *cached* double (StemBufferCache::sampleRateFor) that
+                        // is not bit-identical to `sampleRate` even when both represent
+                        // 44100.0, so `posInSegSec * srcSampleRate` does not exactly invert
+                        // the earlier division by `sampleRate` — occasionally landing a
+                        // hair below the intended whole number (e.g. 14.999999999999998
+                        // instead of 15.0). Truncating that silently re-reads the previous
+                        // sample instead of advancing, producing an audible repeated-sample
+                        // glitch roughly once every few dozen samples even when the source
+                        // and output rates match exactly. Rounding to nearest absorbs that
+                        // sub-ULP drift without changing behaviour for genuinely
+                        // mismatched rates (still nearest-sample, just correctly nearest
+                        // instead of always-floor).
+                        const int srcSample = (int) std::llround((seg.bufferOffsetSec + posInSegSec) * srcSampleRate);
                         if (srcSample < 0 || srcSample >= buffer->getNumSamples())
                             continue;
 
