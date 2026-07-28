@@ -110,8 +110,10 @@ export function BeatPicker({
     const source = getAudioContext().createBufferSource()
     source.buffer = buffer
     source.connect(getAudioContext().destination)
-    const previewDurationSec = Math.min(secPerBeatNative * 4, buffer.duration - offsetSec)
-    source.start(0, offsetSec, previewDurationSec)
+    // Plays through to the end of the file rather than a fixed short snippet —
+    // stopPreview() (called above, and again on the next pick or on close) is what
+    // actually cuts it off, so it always runs until the user picks another beat.
+    source.start(0, offsetSec, buffer.duration - offsetSec)
     previewSourceRef.current = source
   }
 

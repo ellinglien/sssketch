@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
@@ -5,6 +6,30 @@ import { SNAP_DIVS } from '../state/store'
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+
+  // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
+  // controlled input that snaps back to the clamped value on every keystroke makes
+  // multi-digit typing impossible (e.g. typing "1" of "120" clamps to 40 mid-type,
+  // then further digits compound against that clamped value instead of "120").
+  // Free-type locally, only committing (and clamping) on blur/Enter. Resynced
+  // during render rather than an effect (React's "adjust state while rendering"
+  // pattern) whenever state.bpm changes from elsewhere (±buttons, loading a
+  // project) while the field isn't being actively edited.
+  const [tempoText, setTempoText] = useState(String(state.bpm))
+  const [tempoFocused, setTempoFocused] = useState(false)
+  if (!tempoFocused && tempoText !== String(state.bpm)) {
+    setTempoText(String(state.bpm))
+  }
+
+  function commitTempo(): void {
+    setTempoFocused(false)
+    const bpm = Number(tempoText)
+    if (!Number.isNaN(bpm) && tempoText.trim() !== '') {
+      dispatch({ type: 'SET_TEMPO', bpm })
+    } else {
+      setTempoText(String(state.bpm))
+    }
+  }
 
   return (
     <div
@@ -82,10 +107,12 @@ export function TransportBar(): React.JSX.Element {
         </button>
         <input
           type="number"
-          value={state.bpm}
-          onChange={(e) => {
-            const bpm = Number(e.target.value)
-            if (!Number.isNaN(bpm)) dispatch({ type: 'SET_TEMPO', bpm })
+          value={tempoText}
+          onFocus={() => setTempoFocused(true)}
+          onChange={(e) => setTempoText(e.target.value)}
+          onBlur={commitTempo}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
           }}
           aria-label="Tempo (BPM)"
           style={{

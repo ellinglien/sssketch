@@ -49,6 +49,32 @@ describe('reducer', () => {
     expect(state.stretch.r1).toBe(true)
   })
 
+  it('the first clip placed on an empty timeline adopts its bpm as the project tempo', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ bpm: 150 }) })
+    expect(state.bpm).toBe(80) // untouched default until something is actually placed
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    expect(state.bpm).toBe(150)
+  })
+
+  it('a second clip placed alongside an already-placed one does not retrigger tempo adoption', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ bpm: 150 }) })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r2', bpm: 90 })
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 8 })
+    expect(state.bpm).toBe(150) // still the first clip's tempo, not the second's
+  })
+
+  it('repositioning an already-placed clip does not retrigger tempo adoption', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ bpm: 150 }) })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = { ...state, bpm: 120 } // user manually changed tempo afterward
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 }) // dragged to a new spot
+    expect(state.bpm).toBe(120)
+  })
+
   it('selects a rifff', () => {
     const state = reducer(initialState, { type: 'SELECT', groupId: 'r1' })
     expect(state.sel).toBe('r1')

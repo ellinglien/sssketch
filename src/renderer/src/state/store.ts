@@ -61,17 +61,29 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'ADD_TO_SHELF':
       return { ...state, rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff } }
 
-    case 'PLACE_ON_TIMELINE':
+    case 'PLACE_ON_TIMELINE': {
+      const rifff = state.rifffs[action.groupId]
+      // The very first clip placed on an otherwise-empty timeline sets the
+      // project's tempo, rather than leaving it at the app's arbitrary default —
+      // repositioning that same clip, or placing a second one alongside it,
+      // shouldn't retrigger this.
+      const isFirstPlacement =
+        rifff.startBar === undefined &&
+        !Object.values(state.rifffs).some(
+          (r) => r.groupId !== action.groupId && r.startBar !== undefined
+        )
       return {
         ...state,
         rifffs: {
           ...state.rifffs,
-          [action.groupId]: { ...state.rifffs[action.groupId], startBar: action.startBar }
+          [action.groupId]: { ...rifff, startBar: action.startBar }
         },
+        bpm: isFirstPlacement ? rifff.bpm : state.bpm,
         sel: action.groupId,
         exp: { ...state.exp, [action.groupId]: true },
         stretch: { ...state.stretch, [action.groupId]: true }
       }
+    }
 
     case 'SELECT':
       return { ...state, sel: action.groupId }
