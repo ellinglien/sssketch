@@ -237,6 +237,15 @@ describe('reducer', () => {
     expect(state.stemStart['r1:1']).toBe(0)
   })
 
+  it('sets fade in/out bars, clamped to 0', () => {
+    let state = reducer(initialState, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1.5 })
+    state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })
+    expect(state.fadeIn.r1).toBe(1.5)
+    expect(state.fadeOut.r1).toBe(2)
+    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: -1 })
+    expect(state.fadeIn.r1).toBe(0)
+  })
+
   it('cycles a stem sound-type through all 8 types and back to the start', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     for (let i = 0; i < 8; i++) {

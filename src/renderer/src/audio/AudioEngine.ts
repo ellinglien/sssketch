@@ -1,6 +1,7 @@
 import { computeStemSchedule } from '@shared/schedulePlayback'
 import type { Rifff } from '@shared/types'
 import { getAudioContext } from './peakCache'
+import { applyFade } from './fadeGain'
 
 interface EngineDeps {
   getRifffs: () => Rifff[]
@@ -11,6 +12,8 @@ interface EngineDeps {
   getProjectBpm: () => number
   isStretchOn: (groupId: string) => boolean
   getStemStartBar: (groupId: string, slot: number) => number
+  getFadeInBars: (groupId: string) => number
+  getFadeOutBars: (groupId: string) => number
 }
 
 const bufferCache = new Map<string, Promise<AudioBuffer>>()
@@ -138,19 +141,39 @@ export class AudioEngine {
           // rather than double-schedule or use our stale startContextTime/secPerBar.
           if (myGeneration !== this.generation) return
           const gain = this.gainFor(stemKeyStr)
+          const fadeConfig = {
+            fadeInBars: this.deps.getFadeInBars(rifff.groupId),
+            fadeOutBars: this.deps.getFadeOutBars(rifff.groupId),
+            secPerBar: this.secPerBar
+          }
 
-          for (const seg of segments) {
+          segments.forEach((seg, i) => {
             const source = ctx.createBufferSource()
             source.buffer = buffer
-            source.connect(gain)
             const barsFromNow = seg.startBarInTimeline - fromPos
             const when = this.startContextTime + Math.max(0, barsFromNow) * this.secPerBar
             const bufferOffset = barsFromNow < 0 ? -barsFromNow * this.secPerBar : 0
             const duration = seg.durationSec - bufferOffset
-            if (duration <= 0) continue
+            if (duration <= 0) return
+            // A dedicated per-segment gain node carries the fade envelope, kept
+            // separate from `gain` (the persistent per-stem volume/mute control) so
+            // the fade only ever affects this one segment's playthrough, not the
+            // user's ongoing volume setting for every future loop pass.
+            const segGain = ctx.createGain()
+            source.connect(segGain)
+            segGain.connect(gain)
+            applyFade(
+              segGain.gain,
+              when,
+              duration,
+              i === 0,
+              i === segments.length - 1,
+              bufferOffset === 0,
+              fadeConfig
+            )
             source.start(when, seg.bufferOffsetSec + bufferOffset, duration)
             this.activeSources.push(source)
-          }
+          })
         } catch (err) {
           console.error(`AudioEngine: failed to load/schedule stem "${stem.path}"`, err)
         }

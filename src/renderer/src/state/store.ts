@@ -17,6 +17,11 @@ export interface AppState {
    * while that stem's group is unlinked — a linked stem always follows its
    * group's own startBar, same as before unlinking existed. */
   stemStart: Record<string, number>
+  /** Fade in/out length, in bars, keyed by groupId. Applies at the clip's overall
+   * start/end (not at each internal tiling repetition) during both live playback
+   * and export. */
+  fadeIn: Record<string, number>
+  fadeOut: Record<string, number>
   sel: string | null
   exp: Record<string, boolean>
   rifffs: Record<string, Rifff>
@@ -33,6 +38,8 @@ export const initialState: AppState = {
   stretch: {},
   unlinked: {},
   stemStart: {},
+  fadeIn: {},
+  fadeOut: {},
   sel: null,
   exp: {},
   rifffs: {}
@@ -50,6 +57,8 @@ export type Action =
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'SET_STEM_START'; key: string; startBar: number }
+  | { type: 'SET_FADE_IN'; groupId: string; bars: number }
+  | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
   | {
       type: 'PASTE_RIFFF'
@@ -151,6 +160,16 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         stemStart: { ...state.stemStart, [action.key]: Math.max(0, action.startBar) }
       }
+
+    // Upper-bounded loosely here (a sane ceiling, not the real constraint) —
+    // the actual "can't exceed half the clip's own duration" clamp happens where
+    // the fade is applied (AudioEngine/exportMix), since that's the only place
+    // that knows the clip's actual length in seconds.
+    case 'SET_FADE_IN':
+      return { ...state, fadeIn: { ...state.fadeIn, [action.groupId]: Math.max(0, action.bars) } }
+
+    case 'SET_FADE_OUT':
+      return { ...state, fadeOut: { ...state.fadeOut, [action.groupId]: Math.max(0, action.bars) } }
 
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]

@@ -3,6 +3,7 @@ import { encodeWavPCM16 } from '@shared/encodeWav'
 import { stemKey } from '@shared/types'
 import { resolveOffsetKey, stemStartBar, loopLengthBars } from '../state/selectors'
 import { SNAP_DIVS, type AppState } from '../state/store'
+import { applyFade } from './fadeGain'
 
 const EXPORT_SAMPLE_RATE = 44100
 
@@ -78,15 +79,34 @@ export async function renderMixToWav(state: AppState): Promise<Uint8Array> {
         const gain = ctx.createGain()
         gain.gain.value = volume
         gain.connect(ctx.destination)
+        const fadeConfig = {
+          fadeInBars: state.fadeIn[rifff.groupId] ?? 0,
+          fadeOutBars: state.fadeOut[rifff.groupId] ?? 0,
+          secPerBar
+        }
 
-        for (const seg of segments) {
-          if (seg.durationSec <= 0) continue
+        segments.forEach((seg, i) => {
+          if (seg.durationSec <= 0) return
           const source = ctx.createBufferSource()
           source.buffer = buffer
-          source.connect(gain)
+          // A dedicated per-segment gain node carries the fade envelope, kept
+          // separate from `gain` (the stem's overall volume) — see AudioEngine.play()
+          // for the same split, which this export is meant to match.
+          const segGain = ctx.createGain()
+          source.connect(segGain)
+          segGain.connect(gain)
           const when = Math.max(0, seg.startBarInTimeline) * secPerBar
+          applyFade(
+            segGain.gain,
+            when,
+            seg.durationSec,
+            i === 0,
+            i === segments.length - 1,
+            true, // export always starts each segment fresh — there's no live resume case
+            fadeConfig
+          )
           source.start(when, seg.bufferOffsetSec, seg.durationSec)
-        }
+        })
       } catch (err) {
         // One stem failing to render (corrupt file, moved/deleted path) shouldn't
         // abort the whole export — same failure-isolation pattern AudioEngine.play()

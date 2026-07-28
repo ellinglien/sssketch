@@ -74,7 +74,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       isMuted: (key) => !!stateRef.current.mute[key],
       getProjectBpm: () => stateRef.current.bpm,
       isStretchOn: (groupId) => stateRef.current.stretch[groupId] ?? true,
-      getStemStartBar: (groupId, slot) => stemStartBar(stateRef.current, groupId, slot)
+      getStemStartBar: (groupId, slot) => stemStartBar(stateRef.current, groupId, slot),
+      getFadeInBars: (groupId) => stateRef.current.fadeIn[groupId] ?? 0,
+      getFadeOutBars: (groupId) => stateRef.current.fadeOut[groupId] ?? 0
     })
   }, [])
 
@@ -135,7 +137,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.unlinked,
     state.stretch,
     state.rifffs,
-    state.stemStart
+    state.stemStart,
+    state.fadeIn,
+    state.fadeOut
   ])
 
   return (

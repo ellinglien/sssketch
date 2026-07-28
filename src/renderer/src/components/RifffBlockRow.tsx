@@ -31,6 +31,11 @@ export function RifffBlockRow({
     : unlinked
       ? 'var(--ra-border-strong)'
       : `color-mix(in srgb, ${color} 55%, transparent)`
+  // Fade bars are timeline/project bars (matching how AudioEngine/exportMix apply
+  // them via secPerBar), so PPB converts directly regardless of this clip's own
+  // stretch display width.
+  const fadeInPx = Math.min(geo.widthPx / 2, (state.fadeIn[groupId] ?? 0) * PPB)
+  const fadeOutPx = Math.min(geo.widthPx / 2, (state.fadeOut[groupId] ?? 0) * PPB)
 
   return (
     <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
@@ -129,6 +134,32 @@ export function RifffBlockRow({
             </div>
             <div style={{ position: 'relative', flex: 1 }}>
               <Waveform path={rifff.stems[0].path} color={color} opacity={0.75} />
+              {fadeInPx > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    width: fadeInPx,
+                    background: 'linear-gradient(to right, rgba(0,0,0,0.6), transparent)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              )}
+              {fadeOutPx > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    width: fadeOutPx,
+                    background: 'linear-gradient(to left, rgba(0,0,0,0.6), transparent)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

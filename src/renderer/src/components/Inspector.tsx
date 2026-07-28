@@ -45,6 +45,10 @@ export function Inspector({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const labels = offsetLabels(groupOffsetSteps, snapDiv, state.bpm)
   const unlinked = !!state.unlinked[groupId]
+  const fadeIn = state.fadeIn[groupId] ?? 0
+  const fadeOut = state.fadeOut[groupId] ?? 0
+  const FADE_STEP = 0.25
+  const FADE_MAX = 4
 
   const section = (children: React.JSX.Element): React.JSX.Element => (
     <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ra-border)' }}>
@@ -246,6 +250,144 @@ export function Inspector({
               >
                 zero
               </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {section(
+        <>
+          <span className="ra-eyebrow">fade</span>
+          <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: 'var(--ra-text-3)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em'
+                }}
+              >
+                in
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <button
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_FADE_IN',
+                      groupId,
+                      bars: Math.max(0, fadeIn - FADE_STEP)
+                    })
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: '1px solid var(--ra-border)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    fontSize: 10
+                  }}
+                >
+                  −
+                </button>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    flex: 1,
+                    textAlign: 'center',
+                    color: fadeIn ? color : 'var(--ra-text-2)'
+                  }}
+                >
+                  {fadeIn} bar{fadeIn === 1 ? '' : 's'}
+                </span>
+                <button
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_FADE_IN',
+                      groupId,
+                      bars: Math.min(FADE_MAX, fadeIn + FADE_STEP)
+                    })
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: '1px solid var(--ra-border)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    fontSize: 10
+                  }}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: 'var(--ra-text-3)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em'
+                }}
+              >
+                out
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <button
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_FADE_OUT',
+                      groupId,
+                      bars: Math.max(0, fadeOut - FADE_STEP)
+                    })
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: '1px solid var(--ra-border)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    fontSize: 10
+                  }}
+                >
+                  −
+                </button>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    flex: 1,
+                    textAlign: 'center',
+                    color: fadeOut ? color : 'var(--ra-text-2)'
+                  }}
+                >
+                  {fadeOut} bar{fadeOut === 1 ? '' : 's'}
+                </span>
+                <button
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_FADE_OUT',
+                      groupId,
+                      bars: Math.min(FADE_MAX, fadeOut + FADE_STEP)
+                    })
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: '1px solid var(--ra-border)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    fontSize: 10
+                  }}
+                >
+                  +
+                </button>
+              </div>
             </div>
           </div>
         </>
