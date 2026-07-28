@@ -13,7 +13,9 @@ const api = {
   // Raw bytes for a stem file, read by the main process (Node fs) and handed to the
   // renderer, which decodes them via Web Audio (decodeAudioData only exists in the
   // renderer/browser context).
-  readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path)
+  readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path),
+  renderStretched: (stemPath: string, ratio: number): Promise<string> =>
+    ipcRenderer.invoke('render-stretched', stemPath, ratio)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

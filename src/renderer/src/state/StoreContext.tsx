@@ -44,7 +44,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       getSnapDiv: () => SNAP_DIVS[stateRef.current.snapIdx],
       getVolume: (key) => stateRef.current.vol[key] ?? 1,
       isMuted: (key) => !!stateRef.current.mute[key],
-      getProjectBpm: () => stateRef.current.bpm
+      getProjectBpm: () => stateRef.current.bpm,
+      isStretchOn: (groupId) => stateRef.current.stretch[groupId] ?? true
     })
   }, [])
 
@@ -93,7 +94,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       engineRef.current!.play(engineRef.current!.currentPos(32))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing; the play/pause effect above already handles play/pause transitions, this effect should only re-run when scheduling-affecting values actually change
-  }, [state.off, state.bpm, state.snapIdx, state.unlinked])
+  }, [state.off, state.bpm, state.snapIdx, state.unlinked, state.stretch])
 
   return (
     <StateCtx.Provider value={state}>

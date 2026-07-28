@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
+import { renderStretched } from './rubberband'
 
 function createWindow(): void {
   // Create the browser window.
@@ -61,6 +62,10 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('read-audio-file', async (_event, path: string) => readAudioFile(path))
+
+  ipcMain.handle('render-stretched', (_event, stemPath: string, ratio: number) =>
+    renderStretched(stemPath, ratio)
+  )
 
   createWindow()
 

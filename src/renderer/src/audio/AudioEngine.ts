@@ -9,27 +9,37 @@ interface EngineDeps {
   getVolume: (stemKey: string) => number
   isMuted: (stemKey: string) => boolean
   getProjectBpm: () => number
+  isStretchOn: (groupId: string) => boolean
 }
 
 const bufferCache = new Map<string, Promise<AudioBuffer>>()
 
-async function loadBuffer(path: string): Promise<AudioBuffer> {
-  const cached = bufferCache.get(path)
+async function loadBuffer(path: string, ratio: number): Promise<AudioBuffer> {
+  const cacheKeyStr = `${path}::${ratio.toFixed(4)}`
+  const cached = bufferCache.get(cacheKeyStr)
   if (cached) return cached
   const promise = (async () => {
     try {
-      const bytes = await window.rifffApi.readAudioFile(path)
+      let resolvedPath = path
+      if (Math.abs(ratio - 1) >= 0.001) {
+        try {
+          resolvedPath = await window.rifffApi.renderStretched(path, ratio)
+        } catch {
+          resolvedPath = path // fall back to native-speed playback on render failure
+        }
+      }
+      const bytes = await window.rifffApi.readAudioFile(resolvedPath)
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       return await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
     } catch (err) {
       // Don't let a transient failure (mid-copy read, permission hiccup, corrupt
       // file, moved/deleted file) permanently blacklist this path — evict so a
       // later play() call retries instead of reusing a forever-rejected promise.
-      bufferCache.delete(path)
+      bufferCache.delete(cacheKeyStr)
       throw err
     }
   })()
-  bufferCache.set(path, promise)
+  bufferCache.set(cacheKeyStr, promise)
   return promise
 }
 
@@ -91,6 +101,8 @@ export class AudioEngine {
 
     const rifffs = this.deps.getRifffs().filter((r) => r.startBar !== undefined)
     for (const rifff of rifffs) {
+      const stretchOn = this.deps.isStretchOn(rifff.groupId)
+      const ratio = stretchOn ? bpm / rifff.bpm : 1
       for (const stem of rifff.stems) {
         // Each stem is scheduled independently so a load/decode failure for one stem
         // (corrupt file, moved/deleted path, permission hiccup) doesn't abort
@@ -107,7 +119,7 @@ export class AudioEngine {
           })
           if (segments.length === 0) continue
 
-          const buffer = await loadBuffer(stem.path)
+          const buffer = await loadBuffer(stem.path, ratio)
           // Superseded mid-load: a newer call has already scheduled its own sources
           // (possibly for this very stem) using fresh timing — abandon this one
           // rather than double-schedule or use our stale startContextTime/secPerBar.
