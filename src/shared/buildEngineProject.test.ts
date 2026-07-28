@@ -84,4 +84,11 @@ describe('buildEngineProject', () => {
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs[0].stems[0].startBarOverride).toBe(-1)
   })
+
+  it('falls back to the original path when the resolver rejects, rather than throwing', async () => {
+    const resolveStretched = vi.fn().mockRejectedValue(new Error('rubberband binary missing'))
+    const state = stateWith({ bpm: 100, stretch: { r1: true } })
+    const project = await buildEngineProject(state, resolveStretched)
+    expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a.wav')
+  })
 })
