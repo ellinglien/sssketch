@@ -73,4 +73,35 @@ describe('computeStemSchedule', () => {
     expect(segments[1].startBarInTimeline).toBe(10)
     expect(segments.every((s) => s.startBarInTimeline + s.barLength > 8)).toBe(true)
   })
+
+  it('clips the final repetition when the stem length does not evenly divide the rifff length', () => {
+    const threeBarStem = {
+      slot: 9,
+      author: 'e',
+      name: 'c',
+      type: 'fx' as const,
+      path: '/c.wav',
+      durationSec: 4.8, // 3 bars at 150 bpm (1.6s/bar)
+      barLength: 3
+    }
+    const segments = computeStemSchedule(rifff, threeBarStem, {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150
+    })
+    // 8-bar rifff / 3-bar stem: reps at [0,3) [3,6) [6,9) would overrun by 1 bar —
+    // the last one must be clipped to [6,8), i.e. barLength 2, not 3.
+    expect(segments).toHaveLength(3)
+    expect(segments[0]).toMatchObject({ startBarInTimeline: 4, barLength: 3 })
+    expect(segments[1]).toMatchObject({ startBarInTimeline: 7, barLength: 3 })
+    expect(segments[2]).toMatchObject({ startBarInTimeline: 10, barLength: 2 })
+    // No segment may extend past the rifff's own span on the timeline.
+    const rifffEnd = (rifff.startBar ?? 0) + rifff.barLength
+    for (const s of segments) {
+      expect(s.startBarInTimeline + s.barLength).toBeLessThanOrEqual(rifffEnd)
+    }
+    // Duration scales down proportionally for the clipped final segment.
+    expect(segments[2].durationSec).toBeCloseTo((2 / 3) * 4.8, 5)
+  })
 })

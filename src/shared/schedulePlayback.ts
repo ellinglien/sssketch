@@ -26,19 +26,27 @@ export function computeStemSchedule(
 ): PlaybackSegment[] {
   const start = rifff.startBar ?? 0
   const offsetBars = opts.offsetSteps / opts.snapDiv
-  const repetitions = Math.max(1, Math.round(rifff.barLength / stem.barLength))
   const secPerBarNative = stem.durationSec / stem.barLength
 
   const segments: PlaybackSegment[] = []
-  for (let i = 0; i < repetitions; i++) {
-    const startBarInTimeline = start + offsetBars + i * stem.barLength
-    const endBarInTimeline = startBarInTimeline + stem.barLength
+  for (let barOffset = 0; barOffset < rifff.barLength; barOffset += stem.barLength) {
+    // Clip the final repetition so segments always tile exactly across the rifff's
+    // own span, even when stem.barLength doesn't evenly divide rifff.barLength (e.g.
+    // a 3-bar stem in an 8-bar rifff would otherwise produce a last repetition that
+    // overruns into whatever follows on the timeline, or for a >50%-length stem,
+    // leave the block's tail silent). Same failure mode already fixed for the visual
+    // layer in Task 11's StemSubRow tiling.
+    const segmentBarLength = Math.min(stem.barLength, rifff.barLength - barOffset)
+    const startBarInTimeline = start + offsetBars + barOffset
+    const endBarInTimeline = startBarInTimeline + segmentBarLength
     if (endBarInTimeline <= opts.projectPos) continue // fully in the past
     segments.push({
       startBarInTimeline,
-      barLength: stem.barLength,
+      barLength: segmentBarLength,
+      // Mid-segment resume offset (e.g. resuming playback partway through a
+      // segment) is computed by the audio engine (Task 15), not here.
       bufferOffsetSec: 0,
-      durationSec: stem.barLength * secPerBarNative
+      durationSec: segmentBarLength * secPerBarNative
     })
   }
   return segments
