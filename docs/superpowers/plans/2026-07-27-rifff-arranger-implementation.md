@@ -3163,10 +3163,23 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       engineRef.current!.play(state.pos)
       let raf: number
       let lastTick = 0
+      // engine.play() only schedules audio for one pass through the timeline —
+      // currentPos()'s modulo makes the *displayed* position loop, but nothing
+      // else re-triggers scheduling when it wraps, so audio would go silent
+      // after 32 bars while the playhead kept animating. Track the position
+      // locally (not via React state, which lags a render behind) and re-call
+      // play() the instant it wraps, reusing the same reschedule mechanism
+      // Task 16 uses for live offset/tempo changes.
+      let lastPos = state.pos
       const tick = (t: number): void => {
         if (t - lastTick > 55) {
           lastTick = t
-          dispatch({ type: 'SET_POS', pos: engineRef.current!.currentPos(32) })
+          const newPos = engineRef.current!.currentPos(32)
+          if (newPos < lastPos) {
+            engineRef.current!.play(newPos)
+          }
+          lastPos = newPos
+          dispatch({ type: 'SET_POS', pos: newPos })
         }
         raf = requestAnimationFrame(tick)
       }
@@ -3243,7 +3256,10 @@ export function Playhead(): React.JSX.Element {
 Run: `npm run dev`, place `fixtures/sample-rifff` on the timeline around bar 1, press
 play. Expected: audible playback of the 6 real stems, the playhead line advances left to
 right, the position readout (`001.1.1` etc.) counts up, and it loops back to bar 1 after
-32 bars. Stop resets the playhead to bar 1 and silences all stems immediately.
+32 bars — confirm the audio actually starts audibly playing again from the top on that
+second pass, not just the playhead visually resetting while everything's gone silent
+(this needs the wrap-triggered reschedule in Step 2's `tick`, not just `currentPos`'s
+modulo). Stop resets the playhead to bar 1 and silences all stems immediately.
 
 - [ ] **Step 6: Commit**
 
