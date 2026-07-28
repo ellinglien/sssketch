@@ -34,7 +34,9 @@ export function BeatPicker({
   // together (the default) needs all of them. Keyed by slot.
   const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
   const [previewAll, setPreviewAll] = useState(true)
+  const [isFreePlaying, setIsFreePlaying] = useState(false)
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const freeStartTimeRef = useRef(0)
 
   useEffect(() => {
     if (!stem) return
@@ -87,6 +89,7 @@ export function BeatPicker({
       }
     }
     previewSourcesRef.current = []
+    setIsFreePlaying(false)
   }, [])
 
   // onClose is a fresh arrow function from the parent on every render (it closes
@@ -94,15 +97,49 @@ export function BeatPicker({
   // fire its stopPreview() cleanup — on every unrelated re-render, including the
   // one pickBeat's own SET_OFFSET_STEPS dispatch causes. That was cutting the
   // preview off within a render cycle of it starting, no matter what was picked.
-  // Reading the latest onClose through a ref keeps the effect itself stable.
+  // Reading the latest onClose (and markDownbeat, same issue) through a ref keeps
+  // the effect itself stable.
   const onCloseRef = useRef(onClose)
   useEffect(() => {
     onCloseRef.current = onClose
   })
 
+  // Captures the playhead's position within the current free-play loop and locks
+  // the offset to whichever beat that falls on — the tap-along alternative to
+  // clicking a specific gridline. Re-synced every render (cheap) so it always sees
+  // the latest isFreePlaying/stem/dispatch without making the keydown effect below
+  // depend on them directly.
+  // Self-contained (re-derives totalBeats/offsetKey/snapDiv from rifff/stem/state
+  // rather than closing over the consts declared below the early-return guard) —
+  // this effect is registered before that guard, same as every other hook here,
+  // so it can't depend on bindings that only exist when the guard doesn't fire.
+  const markDownbeatRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    markDownbeatRef.current = () => {
+      if (!isFreePlaying || !rifff || !stem) return
+      const beatsInLoop = stem.barLength * 4
+      const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
+      const elapsedInLoop = elapsed % stem.durationSec
+      const secPerBeatNative = stem.durationSec / beatsInLoop
+      const beatIndex = Math.round(elapsedInLoop / secPerBeatNative) % beatsInLoop
+      dispatch({
+        type: 'SET_OFFSET_STEPS',
+        key: resolveOffsetKey(state, groupId, stem.slot),
+        steps: offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
+      })
+    }
+  })
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onCloseRef.current()
+      if (e.key === 'Escape') {
+        onCloseRef.current()
+        return
+      }
+      if (e.code === 'Space') {
+        e.preventDefault() // otherwise also "clicks" whatever button has focus
+        markDownbeatRef.current()
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
@@ -122,6 +159,28 @@ export function BeatPicker({
   // shorter than the rifff (e.g. a 2-bar stem tiled across an 8-bar rifff).
   const totalBeats = stem.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
+
+  function toggleFreePlay(): void {
+    if (isFreePlaying) {
+      stopPreview()
+      return
+    }
+    stopPreview()
+    const ctx = getAudioContext()
+    freeStartTimeRef.current = ctx.currentTime
+    const stemsToPreview = previewAll ? rifff.stems : [stem]
+    for (const s of stemsToPreview) {
+      const buf = buffers[s.slot]
+      if (!buf) continue
+      const source = ctx.createBufferSource()
+      source.buffer = buf
+      source.loop = true // loops the whole buffer from its own start, repeatedly
+      source.connect(ctx.destination)
+      source.start(0)
+      previewSourcesRef.current.push(source)
+    }
+    setIsFreePlaying(true)
+  }
 
   function pickBeat(beatIndex: number): void {
     const steps = offsetStepsForBeatIndex(beatIndex, snapDiv)
@@ -183,7 +242,7 @@ export function BeatPicker({
           <div>
             <span className="ra-eyebrow">pick the downbeat</span>
             <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginTop: 4 }}>
-              click the beat in {stem.name} that should land on bar 1 — offset locks to that beat
+              click a beat in {stem.name}, or play the loop and hit space on the downbeat
             </div>
           </div>
           <button
@@ -202,23 +261,45 @@ export function BeatPicker({
           </button>
         </div>
 
-        <label
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
-            marginTop: 10,
-            fontSize: 10,
-            color: 'var(--ra-text-2)'
+            justifyContent: 'space-between',
+            marginTop: 10
           }}
         >
-          <input
-            type="checkbox"
-            checked={previewAll}
-            onChange={(e) => setPreviewAll(e.target.checked)}
-          />
-          preview all stems together (they’re beat-locked to the same clock)
-        </label>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={previewAll}
+              onChange={(e) => setPreviewAll(e.target.checked)}
+            />
+            preview all stems together (they’re beat-locked to the same clock)
+          </label>
+          <button
+            onClick={toggleFreePlay}
+            style={{
+              height: 22,
+              borderRadius: 6,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border-strong)',
+              background: isFreePlaying ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
+              color: isFreePlaying ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+            }}
+          >
+            {isFreePlaying ? '■ stop · space to mark the beat' : '▶ play loop'}
+          </button>
+        </div>
 
         <div
           style={{
