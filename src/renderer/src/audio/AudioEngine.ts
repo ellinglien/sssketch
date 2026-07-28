@@ -131,6 +131,13 @@ export class AudioEngine {
   }
 
   currentPos(loopBars: number): number {
+    // secPerBar is 0 until play()'s ctx.resume() resolves (async gap on the very
+    // first play, before startContextTime/secPerBar are set) — dividing by it then
+    // would produce NaN. A poll landing in that narrow window just reports the
+    // position play() was called with; the next poll (after resume() settles)
+    // reports the real elapsed time.
+    if (this.secPerBar === 0) return this.startPos
+
     const ctx = getAudioContext()
     const elapsedBars = (ctx.currentTime - this.startContextTime) / this.secPerBar
     return (this.startPos + elapsedBars) % loopBars
