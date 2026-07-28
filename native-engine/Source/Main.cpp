@@ -1,3 +1,4 @@
+#include <cmath>
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -48,17 +49,17 @@ static void scanOneFileInto(
 // plugin-hosting product needs per-plugin timeout/sandboxing (as commercial
 // DAWs do); out of scope for a toolchain spike, which only needs to confirm
 // VST3 + AU loading works at all against known-good real-world plugins.
+static const juce::StringArray knownGoodPaths {
+    "/Library/Audio/Plug-Ins/VST3/Neutron 4.vst3",
+    "/Library/Audio/Plug-Ins/VST3/RX 10 De-click.vst3",
+    "/Library/Audio/Plug-Ins/Components/Vital.component",
+    "/Library/Audio/Plug-Ins/Components/Youlean Loudness Meter 2.component"
+};
+
 static int runScanReport()
 {
     juce::AudioPluginFormatManager formatManager;
     formatManager.addDefaultFormats(); // registers VST3 + AU given the build flags set
-
-    const juce::StringArray knownGoodPaths {
-        "/Library/Audio/Plug-Ins/VST3/Neutron 4.vst3",
-        "/Library/Audio/Plug-Ins/VST3/RX 10 De-click.vst3",
-        "/Library/Audio/Plug-Ins/Components/Vital.component",
-        "/Library/Audio/Plug-Ins/Components/Youlean Loudness Meter 2.component"
-    };
 
     juce::Array<juce::PluginDescription> found;
     for (const auto& path : knownGoodPaths)
@@ -94,6 +95,88 @@ static int runScanOne(const juce::String& path)
     return 0;
 }
 
+static bool loadAndProcessOne(
+    juce::AudioPluginFormatManager& formatManager,
+    const juce::PluginDescription& desc)
+{
+    juce::String errorMessage;
+    auto instance = formatManager.createPluginInstance(desc, 44100.0, 512, errorMessage);
+
+    if (instance == nullptr)
+    {
+        juce::Logger::writeToLog("  FAILED to load \"" + desc.name + "\": " + errorMessage);
+        return false;
+    }
+
+    instance->prepareToPlay(44100.0, 512);
+
+    juce::AudioBuffer<float> buffer(
+        juce::jmax(1, instance->getTotalNumInputChannels()), 512);
+    buffer.clear();
+    // A quiet test tone rather than silence, so a plugin that only reacts to
+    // non-zero input still has something to actually process.
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            buffer.setSample(ch, i, 0.1f * std::sin(i * 0.1f));
+
+    juce::MidiBuffer midi;
+    instance->processBlock(buffer, midi);
+
+    instance->releaseResources();
+
+    juce::Logger::writeToLog("  OK: \"" + desc.name + "\" processed "
+        + juce::String(buffer.getNumSamples()) + " samples, "
+        + juce::String(instance->getTotalNumOutputChannels()) + " output channel(s).");
+    return true;
+}
+
+static int runSpike()
+{
+    juce::AudioPluginFormatManager formatManager;
+    formatManager.addDefaultFormats();
+
+    juce::Array<juce::PluginDescription> found;
+    for (const auto& path : knownGoodPaths)
+        scanOneFileInto(formatManager, path, found);
+
+    const juce::PluginDescription* firstVst3 = nullptr;
+    const juce::PluginDescription* firstAu = nullptr;
+    for (const auto& desc : found)
+    {
+        if (firstVst3 == nullptr && desc.pluginFormatName == "VST3")
+            firstVst3 = &desc;
+        if (firstAu == nullptr && desc.pluginFormatName == "AudioUnit")
+            firstAu = &desc;
+    }
+
+    bool vst3Ok = false, auOk = false;
+
+    if (firstVst3 != nullptr)
+    {
+        juce::Logger::writeToLog("Loading VST3: " + firstVst3->name);
+        vst3Ok = loadAndProcessOne(formatManager, *firstVst3);
+    }
+    else
+    {
+        juce::Logger::writeToLog("No VST3 plugin found to test.");
+    }
+
+    if (firstAu != nullptr)
+    {
+        juce::Logger::writeToLog("Loading AU: " + firstAu->name);
+        auOk = loadAndProcessOne(formatManager, *firstAu);
+    }
+    else
+    {
+        juce::Logger::writeToLog("No AU plugin found to test.");
+    }
+
+    juce::Logger::writeToLog(juce::String("Phase 0 spike result: VST3=")
+        + (vst3Ok ? "PASS" : "FAIL") + ", AU=" + (auOk ? "PASS" : "FAIL"));
+
+    return (vst3Ok && auOk) ? 0 : 1;
+}
+
 int main(int argc, char* argv[])
 {
     // AudioUnit hosting (and some VST3s) rely on a running CFRunLoop / message
@@ -109,6 +192,9 @@ int main(int argc, char* argv[])
 
     if (argc > 2 && juce::String(argv[1]) == "--scan-one")
         return runScanOne(juce::String(argv[2]));
+
+    if (argc > 1 && juce::String(argv[1]) == "--spike")
+        return runSpike();
 
     juce::Logger::writeToLog("ssstitch-engine Phase 0 spike: JUCE core linked OK.");
     return 0;
