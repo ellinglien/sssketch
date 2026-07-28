@@ -7,6 +7,7 @@ import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import { saveProjectAs, openProject } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
+import { exportMixToWav } from './exportMix'
 
 function createWindow(): void {
   // Create the browser window.
@@ -79,6 +80,11 @@ app.whenReady().then(() => {
   ipcMain.handle('open-project', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     return openProject(win)
+  })
+
+  ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    return exportMixToWav(win, bytes)
   })
 
   createWindow()

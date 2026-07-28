@@ -21,7 +21,8 @@ const api = {
   ): Promise<{ path: string; bakedPath: string }[]> => ipcRenderer.invoke('bake-offset', jobs),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
-    ipcRenderer.invoke('open-project')
+    ipcRenderer.invoke('open-project'),
+  exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

@@ -11,6 +11,7 @@ import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars, pasteRifffAction } from './state/selectors'
+import { renderMixToWav } from './audio/exportMix'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
   const rect = container.getBoundingClientRect()
@@ -96,6 +97,7 @@ function Timeline({
 function ProjectMenu(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const [exporting, setExporting] = useState(false)
 
   async function handleSave(): Promise<void> {
     try {
@@ -116,6 +118,18 @@ function ProjectMenu(): React.JSX.Element {
     }
   }
 
+  async function handleExport(): Promise<void> {
+    setExporting(true)
+    try {
+      const wav = await renderMixToWav(state)
+      await window.rifffApi.exportMix(wav)
+    } catch (err) {
+      console.error('ProjectMenu: failed to export mix:', err)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const buttonStyle = {
     height: 22,
     borderRadius: 6,
@@ -133,6 +147,13 @@ function ProjectMenu(): React.JSX.Element {
       </button>
       <button onClick={handleOpen} style={buttonStyle}>
         open
+      </button>
+      <button
+        onClick={handleExport}
+        disabled={exporting}
+        style={{ ...buttonStyle, color: exporting ? 'var(--ra-text-4)' : buttonStyle.color }}
+      >
+        {exporting ? 'rendering…' : 'export mix'}
       </button>
     </div>
   )
