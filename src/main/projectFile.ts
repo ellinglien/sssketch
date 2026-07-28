@@ -12,7 +12,7 @@ import { dialog, BrowserWindow } from 'electron'
  */
 export async function saveProjectAs(win: BrowserWindow, json: string): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
-    filters: [{ name: 'Rifff Arranger Project', extensions: ['rifffproj'] }]
+    filters: [{ name: 'ssstitch Project', extensions: ['rifffproj'] }]
   })
   if (result.canceled || !result.filePath) return null
 
@@ -35,7 +35,7 @@ export async function openProject(
   win: BrowserWindow
 ): Promise<{ path: string; json: string } | null> {
   const result = await dialog.showOpenDialog(win, {
-    filters: [{ name: 'Rifff Arranger Project', extensions: ['rifffproj'] }],
+    filters: [{ name: 'ssstitch Project', extensions: ['rifffproj'] }],
     properties: ['openFile']
   })
   if (result.canceled || result.filePaths.length === 0) return null

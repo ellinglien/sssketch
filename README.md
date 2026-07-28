@@ -1,6 +1,6 @@
-# Rifff Arranger
+# ssstitch
 
-An Electron application with React and TypeScript
+An Electron application with React and TypeScript for stitching Endlesss rifff exports into a timeline.
 
 ## Recommended IDE Setup
 

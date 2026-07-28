@@ -1,4 +1,4 @@
-/* Rifff Arranger v1 — drawing helpers, ported from the prototype (rifff-visuals.js).
+/* ssstitch v1 — drawing helpers, ported from the prototype (rifff-visuals.js).
  * Framework-agnostic: both functions take a peak array (0..1) and return an SVG path string.
  *
  *   linearWave(peaks)                      -> path for a clip waveform
