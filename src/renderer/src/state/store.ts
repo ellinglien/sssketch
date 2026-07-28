@@ -1,4 +1,4 @@
-import { TYPE_ORDER, stemKey, type Rifff } from '@shared/types'
+import { TYPE_ORDER, stemKey, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 
 export const SNAP_DIVS = [4, 8, 16, 32] as const
@@ -57,6 +57,7 @@ export type Action =
   | { type: 'UNLINK'; groupId: string }
   | { type: 'RELINK'; groupId: string }
   | { type: 'CYCLE_TYPE'; groupId: string; slot: number }
+  | { type: 'SET_STEM_TYPE'; groupId: string; slot: number; soundType: SoundType }
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'STOP' }
@@ -211,6 +212,19 @@ export function reducer(state: AppState, action: Action): AppState {
         s.slot === action.slot
           ? { ...s, type: TYPE_ORDER[(TYPE_ORDER.indexOf(s.type) + 1) % TYPE_ORDER.length] }
           : s
+      )
+      return { ...state, rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } } }
+    }
+
+    // Set directly (as opposed to CYCLE_TYPE's click-to-advance), for the
+    // auto-guessed type from a quick heuristic analysis run once at import —
+    // only applied while the stem is still at the untouched default ('fx'), so a
+    // guess that resolves after the user's already corrected a stem by hand (or
+    // after an earlier guess already landed) never clobbers it.
+    case 'SET_STEM_TYPE': {
+      const rifff = state.rifffs[action.groupId]
+      const stems = rifff.stems.map((s) =>
+        s.slot === action.slot && s.type === 'fx' ? { ...s, type: action.soundType } : s
       )
       return { ...state, rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } } }
     }

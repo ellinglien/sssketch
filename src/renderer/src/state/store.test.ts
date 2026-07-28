@@ -245,6 +245,19 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.type).toBe('fx')
   })
 
+  it('applies an auto-guessed stem type while it is still the untouched default', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_STEM_TYPE', groupId: 'r1', slot: 1, soundType: 'bass' })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.type).toBe('bass')
+  })
+
+  it('does not let an auto-guess clobber a type already changed by hand', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'CYCLE_TYPE', groupId: 'r1', slot: 1 }) // fx -> extFx
+    state = reducer(state, { type: 'SET_STEM_TYPE', groupId: 'r1', slot: 1, soundType: 'bass' })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.type).toBe('extFx')
+  })
+
   it('pauses', () => {
     let state = reducer(initialState, { type: 'PLAY' })
     state = reducer(state, { type: 'PAUSE' })

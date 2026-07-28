@@ -2,6 +2,7 @@ import { useState, type DragEvent } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
+import { classifyStems } from '../audio/classifyStems'
 
 export function Shelf({
   onImported
@@ -39,6 +40,12 @@ export function Shelf({
         // placement — by the time it's dragged onto the timeline it's already
         // baked and usable, rather than needing a separate step afterward.
         onImported(rifff.groupId)
+        // Not awaited — a quick heuristic guess (bass/drums only; everything
+        // else stays 'fx') that fills in shortly after import without blocking
+        // it or the beat-picker opening.
+        classifyStems(rifff, dispatch).catch((err) => {
+          console.error('Shelf: failed to classify stem types:', err)
+        })
       }
     } catch (err) {
       // importRifff normally swallows its own errors and resolves null; this only
