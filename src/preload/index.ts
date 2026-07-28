@@ -16,6 +16,9 @@ const api = {
   readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path),
   renderStretched: (stemPath: string, ratio: number): Promise<string> =>
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
+  bakeOffset: (
+    jobs: { path: string; rotationSec: number }[]
+  ): Promise<{ path: string; bakedPath: string }[]> => ipcRenderer.invoke('bake-offset', jobs),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project')

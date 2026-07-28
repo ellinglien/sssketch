@@ -5,9 +5,10 @@ import {
   clipGeometry,
   stretchRatio,
   loopLengthBars,
-  offsetStepsForBeatIndex
+  offsetStepsForBeatIndex,
+  rotationSecondsForStem
 } from './selectors'
-import type { Rifff } from '@shared/types'
+import type { Rifff, Stem } from '@shared/types'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -104,5 +105,44 @@ describe('offsetStepsForBeatIndex', () => {
   it('scales with a finer snap grid', () => {
     // snapDiv 16 == 4 steps per beat
     expect(offsetStepsForBeatIndex(2, 16)).toBe(-8)
+  })
+})
+
+describe('rotationSecondsForStem', () => {
+  const stem: Stem = {
+    slot: 1,
+    author: 'e',
+    name: 'a',
+    type: 'fx',
+    path: '/a.wav',
+    durationSec: 16, // 8 bars @ 2 sec/bar
+    barLength: 8
+  }
+
+  it('is zero offset -> zero rotation', () => {
+    expect(rotationSecondsForStem(0, 4, stem)).toBe(0)
+  })
+
+  it('inverts offsetStepsForBeatIndex — picking beat 2 rotates by 2 beats of native time', () => {
+    const steps = offsetStepsForBeatIndex(2, 4) // -2
+    // 2 beats @ 4 beats/bar = 0.5 bar; 0.5 bar * 2 sec/bar = 1s
+    expect(rotationSecondsForStem(steps, 4, stem)).toBeCloseTo(1, 10)
+  })
+
+  it('wraps by the stem’s own (shorter, tiling) bar length, not the rifff’s', () => {
+    // A 2-bar stem tiling within a group whose offset implies 0.5 bar of shift —
+    // 0.5 bar is already within its own loop, so no wrapping needed here; but the
+    // conversion to seconds must use the 2-bar stem's own sec/bar, not the 8-bar one.
+    const shortStem: Stem = { ...stem, durationSec: 4, barLength: 2 } // 2 sec/bar, same as above
+    const steps = offsetStepsForBeatIndex(2, 4) // -2, implies 0.5 bar
+    expect(rotationSecondsForStem(steps, 4, shortStem)).toBeCloseTo(1, 10)
+  })
+
+  it('wraps a rotation larger than the stem’s own loop length', () => {
+    // offsetSteps implying 3 bars of shift, but this stem only loops every 2 bars —
+    // 3 % 2 = 1 bar's worth of rotation, at 2 sec/bar = 2s.
+    const shortStem: Stem = { ...stem, durationSec: 4, barLength: 2 }
+    const steps = offsetStepsForBeatIndex(12, 4) // 12 beats = 3 bars
+    expect(rotationSecondsForStem(steps, 4, shortStem)).toBeCloseTo(2, 10)
   })
 })

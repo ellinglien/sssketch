@@ -43,6 +43,7 @@ export type Action =
   | { type: 'ZERO_OFFSET'; key: string }
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
+  | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
@@ -106,6 +107,25 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, startBar: undefined } },
         sel: state.sel === action.groupId ? null : state.sel
+      }
+    }
+
+    // Repoints each stem at its freshly-rotated file (a new path, so Waveform/
+    // AudioEngine's path-keyed caches pick up the corrected audio automatically —
+    // no manual cache eviction needed) and resets offset to 0, since the
+    // correction that offset was compensating for is now baked into the audio
+    // itself. Resets both the group key and every per-stem key, covering linked
+    // and unlinked groups alike.
+    case 'APPLY_BAKE': {
+      const rifff = state.rifffs[action.groupId]
+      const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
+      const stems = rifff.stems.map((s) => ({ ...s, path: pathMap.get(s.path) ?? s.path }))
+      const off = { ...state.off, [action.groupId]: 0 }
+      for (const s of rifff.stems) off[stemKey(action.groupId, s.slot)] = 0
+      return {
+        ...state,
+        rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } },
+        off
       }
     }
 

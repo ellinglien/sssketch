@@ -118,6 +118,35 @@ describe('reducer', () => {
     expect(state.sel).toBeNull()
   })
 
+  it('applying a bake repoints every stem at its baked path and resets offsets to 0', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      groupId: 'r1',
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav' },
+        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav' }
+      ]
+    })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.baked.wav')
+    expect(state.off.r1).toBe(0)
+    expect(state.off['r1:1']).toBe(0)
+    expect(state.off['r1:6']).toBe(0)
+  })
+
+  it('applying a bake leaves a stem untouched if its path is missing from the results', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      groupId: 'r1',
+      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav' }] // slot 6's file failed to bake
+    })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
+  })
+
   it('sets a stem volume', () => {
     const state = reducer(initialState, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.5 })
     expect(state.vol['r1:1']).toBe(0.5)

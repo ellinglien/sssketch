@@ -1,4 +1,4 @@
-import { stemKey } from '@shared/types'
+import { stemKey, type Stem } from '@shared/types'
 import { SNAP_DIVS, type AppState } from './store'
 
 export function resolveOffsetKey(state: AppState, groupId: string, slot: number): string {
@@ -49,4 +49,20 @@ export function offsetStepsForBeatIndex(beatIndex: number, snapDiv: number): num
   // `|| 0` normalizes -0 (beatIndex 0 negated) to 0 — an exact match matters here
   // since this value is compared/displayed directly, not just used arithmetically.
   return -Math.round((beatIndex * snapDiv) / 4) || 0
+}
+
+/**
+ * Where a stem's true downbeat sits within its own audio, in seconds — the inverse
+ * of offsetStepsForBeatIndex, used to "bake" a beat-picker correction permanently
+ * into the audio file instead of only shifting playback timing.
+ *
+ * All stems in a linked group are beat-locked to the same clock, so the same
+ * bars-into-the-loop fraction (kBars) applies to every stem — just scaled by that
+ * stem's own duration/barLength, and wrapped by its own (possibly shorter, tiling)
+ * loop length rather than the rifff's.
+ */
+export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, stem: Stem): number {
+  const kBars = -offsetSteps / snapDiv
+  const wrapped = ((kBars % stem.barLength) + stem.barLength) % stem.barLength
+  return wrapped * (stem.durationSec / stem.barLength)
 }

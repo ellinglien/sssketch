@@ -6,6 +6,7 @@ import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import { saveProjectAs, openProject } from './projectFile'
+import { bakeOffset, type BakeJob } from './bakeOffset'
 
 function createWindow(): void {
   // Create the browser window.
@@ -67,6 +68,8 @@ app.whenReady().then(() => {
   ipcMain.handle('render-stretched', (_event, stemPath: string, ratio: number) =>
     renderStretched(stemPath, ratio)
   )
+
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs))
 
   ipcMain.handle('save-project', (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
