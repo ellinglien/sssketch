@@ -1,5 +1,5 @@
 appId: com.ellinglien.bendlesss
-productName: rifff-arranger
+productName: Rifff Arranger
 directories:
   buildResources: build
 files:
@@ -19,6 +19,11 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  category: public.app-category.music
+  target:
+    - target: dmg
+      arch:
+        - arm64
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
