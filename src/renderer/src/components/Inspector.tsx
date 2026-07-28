@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { resolveOffsetKey, rotationSecondsForStem, stretchRatio } from '../state/selectors'
 import { dbLabel, offsetLabels } from '@shared/visuals'
@@ -309,74 +309,146 @@ export function Inspector({
               const key = stemKey(groupId, stem.slot)
               const muted = !!state.mute[key]
               const volume = state.vol[key] ?? 1
+              const stemOffsetKey = resolveOffsetKey(state, groupId, stem.slot)
+              const stemOffsetSteps = state.off[stemOffsetKey] ?? 0
+              const stemLabels = offsetLabels(stemOffsetSteps, snapDiv, state.bpm)
               return (
-                <div
-                  key={stem.slot}
-                  style={{ display: 'flex', alignItems: 'center', gap: 7, height: 24 }}
-                >
-                  <button
-                    onClick={() => dispatch({ type: 'CYCLE_TYPE', groupId, slot: stem.slot })}
-                    title="click to change sound type"
-                    style={{
-                      width: 6,
-                      height: 12,
-                      borderRadius: 2,
-                      background: typeColorVar(stem.type),
-                      border: 'none',
-                      padding: 0
-                    }}
-                  />
-                  <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>{stem.slot}</span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {stem.name}
-                  </span>
-                  <button
-                    onClick={() => dispatch({ type: 'TOGGLE_MUTE', stemKey: key })}
-                    style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: 4,
-                      background: muted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-                      color: muted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
-                      fontSize: 9,
-                      border: 'none'
-                    }}
-                  >
-                    m
-                  </button>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={Math.round(volume * 100)}
-                    onChange={(e) =>
-                      dispatch({
-                        type: 'SET_VOLUME',
-                        stemKey: key,
-                        volume: Number(e.target.value) / 100
-                      })
-                    }
-                    style={{ width: 82 }}
-                  />
-                  <span
-                    style={{
-                      fontSize: 9,
-                      color: 'var(--ra-text-3)',
-                      width: 30,
-                      textAlign: 'right'
-                    }}
-                  >
-                    {muted ? 'mute' : dbLabel(volume)}
-                  </span>
-                </div>
+                <Fragment key={stem.slot}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 24 }}>
+                    <button
+                      onClick={() => dispatch({ type: 'CYCLE_TYPE', groupId, slot: stem.slot })}
+                      title="click to change sound type"
+                      style={{
+                        width: 6,
+                        height: 12,
+                        borderRadius: 2,
+                        background: typeColorVar(stem.type),
+                        border: 'none',
+                        padding: 0
+                      }}
+                    />
+                    <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>{stem.slot}</span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {stem.name}
+                    </span>
+                    <button
+                      onClick={() => dispatch({ type: 'TOGGLE_MUTE', stemKey: key })}
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 4,
+                        background: muted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
+                        color: muted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
+                        fontSize: 9,
+                        border: 'none'
+                      }}
+                    >
+                      m
+                    </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(volume * 100)}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'SET_VOLUME',
+                          stemKey: key,
+                          volume: Number(e.target.value) / 100
+                        })
+                      }
+                      style={{ width: 82 }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--ra-text-3)',
+                        width: 30,
+                        textAlign: 'right'
+                      }}
+                    >
+                      {muted ? 'mute' : dbLabel(volume)}
+                    </span>
+                  </div>
+                  {unlinked && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        marginLeft: 13,
+                        marginBottom: 2
+                      }}
+                    >
+                      <button
+                        onClick={() =>
+                          dispatch({ type: 'NUDGE_OFFSET', key: stemOffsetKey, delta: -1 })
+                        }
+                        style={{
+                          width: 18,
+                          height: 16,
+                          borderRadius: 3,
+                          border: '1px solid var(--ra-border)',
+                          background: 'var(--ra-bg-row-active)',
+                          color: 'var(--ra-text)',
+                          fontSize: 9
+                        }}
+                      >
+                        −
+                      </button>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          color: stemOffsetSteps ? typeColorVar(stem.type) : 'var(--ra-text-3)',
+                          minWidth: 24
+                        }}
+                      >
+                        {stemLabels.grid}
+                      </span>
+                      <button
+                        onClick={() =>
+                          dispatch({ type: 'NUDGE_OFFSET', key: stemOffsetKey, delta: 1 })
+                        }
+                        style={{
+                          width: 18,
+                          height: 16,
+                          borderRadius: 3,
+                          border: '1px solid var(--ra-border)',
+                          background: 'var(--ra-bg-row-active)',
+                          color: 'var(--ra-text)',
+                          fontSize: 9
+                        }}
+                      >
+                        +
+                      </button>
+                      <button
+                        onClick={() => dispatch({ type: 'ZERO_OFFSET', key: stemOffsetKey })}
+                        style={{
+                          height: 16,
+                          borderRadius: 3,
+                          padding: '0 5px',
+                          fontSize: 9,
+                          border: '1px solid var(--ra-border)',
+                          background: 'var(--ra-bg-row-active)',
+                          color: 'var(--ra-text-2)'
+                        }}
+                      >
+                        zero
+                      </button>
+                      <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+                        {stemLabels.ms}
+                      </span>
+                    </div>
+                  )}
+                </Fragment>
               )
             })}
           </div>

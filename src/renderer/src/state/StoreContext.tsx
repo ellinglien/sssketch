@@ -87,14 +87,19 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions; state.pos is read once at play-start via stateRef/closure, not tracked as a dependency
   }, [state.playing])
 
-  // Re-schedules playback in place when offset/tempo/snap/unlink change while already
-  // playing, so the change takes effect immediately instead of only on the next play().
+  // Re-schedules playback in place when offset/tempo/snap/unlink/placement change
+  // while already playing, so the change takes effect immediately instead of only on
+  // the next play(). state.rifffs is included so dragging a clip to a new position,
+  // dropping a new one in, removing one, or baking a new path all reschedule too —
+  // without it, a mid-playback change to *where* something plays only took effect on
+  // the next full loop wrap, leaving audio and the visible arrangement out of sync
+  // until then.
   useEffect(() => {
     if (state.playing) {
       engineRef.current!.play(engineRef.current!.currentPos(loopLengthBars(state)))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing; the play/pause effect above already handles play/pause transitions, this effect should only re-run when scheduling-affecting values actually change
-  }, [state.off, state.bpm, state.snapIdx, state.unlinked, state.stretch])
+  }, [state.off, state.bpm, state.snapIdx, state.unlinked, state.stretch, state.rifffs])
 
   return (
     <StateCtx.Provider value={state}>
