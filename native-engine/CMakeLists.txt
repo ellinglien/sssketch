@@ -25,6 +25,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp
   Source/FadeGainTests.cpp
+  Source/EngineProject.cpp
+  Source/EngineProjectTests.cpp
 )
 
 target_compile_definitions(ssstitch_engine PRIVATE
