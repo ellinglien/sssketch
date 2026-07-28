@@ -8,6 +8,7 @@ import { renderStretched } from './rubberband'
 import { saveProjectAs, openProject } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
+import { nativeExport } from './nativeExport'
 
 function createWindow(): void {
   // Create the browser window.
@@ -85,6 +86,11 @@ app.whenReady().then(() => {
   ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     return exportMixToWav(win, bytes)
+  })
+
+  ipcMain.handle('export-mix-native', async (_event, stateJson: string) => {
+    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+    return nativeExport(state)
   })
 
   createWindow()

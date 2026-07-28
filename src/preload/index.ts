@@ -22,7 +22,9 @@ const api = {
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
-  exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes)
+  exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
+  exportMixNative: (stateJson: string): Promise<Uint8Array> =>
+    ipcRenderer.invoke('export-mix-native', stateJson)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)
