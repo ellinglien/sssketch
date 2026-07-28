@@ -1,0 +1,114 @@
+/* Rifff Arranger v1 — design tokens
+ * Extracted from "Rifff Arranger.dc.html" (option 2a is the recommended build).
+ * The prototype itself is inline-styled; this file is the portable token set.
+ */
+
+:root {
+  /* ——— shell (near-black, Endlesss Studio-adjacent) ——— */
+  --ra-bg-page:        #08080a;  /* canvas behind the app */
+  --ra-bg-frame:       #131316;  /* app frame */
+  --ra-bg-bar:         #17171a;  /* transport bar, inspector */
+  --ra-bg-rail:        #101012;  /* shelf strip, ruler */
+  --ra-bg-row:         #16161a;  /* block row */
+  --ra-bg-row-active:  #1e1e22;  /* selected block row, control fill */
+  --ra-bg-row-sub:     #101013;  /* expanded stem sub-row */
+
+  --ra-border:         #2a2a2f;
+  --ra-border-soft:    #1e1e22;
+  --ra-border-strong:  #3a3a41;  /* primary buttons, dashed drop targets */
+  --ra-grid-minor:     #1c1c20;  /* bar lines between downbeats */
+
+  --ra-text:           #f2f2f4;
+  --ra-text-2:         #8a8a92;
+  --ra-text-3:         #5a5a62;
+  --ra-text-4:         #33333a;
+
+  /* ——— sound-type colors (muted; drive swatches, clips, waveforms, chips) ——— */
+  --ra-type-drums:     #c87c46;
+  --ra-type-notes:     #cbb85a;
+  --ra-type-bass:      #5b95c4;
+  --ra-type-ext-inst:  #c46389;
+  --ra-type-sampler:   #7f66c4;
+  --ra-type-fx:        #4fada0;
+  --ra-type-ext-fx:    #5fae62;
+  --ra-type-audio-in:  #c56164;
+
+  /* alpha recipe for any type color C:
+   *   clip background   C @ 7%
+   *   clip border       C @ 50%
+   *   chip background   C @ 14%
+   *   glyph petal       C, opacity .55
+   *   selected card     bg C @ 10%, border C @ 60%
+   */
+
+  /* ——— state colors ——— */
+  --ra-playhead:       #c87c46;
+  --ra-play-on:        #4fada0;
+  --ra-play-on-ink:    #05231d;
+  --ra-mute-on:        #c46389;
+  --ra-mute-on-ink:    #2a0713;
+  --ra-stretch-on:     #7f66c4;
+  --ra-stretch-on-bg:  rgba(139, 92, 246, 0.22);
+
+  /* ——— type ——— */
+  --ra-font: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ra-fs-9: 9px;    /* slot numbers, dB, meta */
+  --ra-fs-10: 10px;  /* labels, eyebrows, hints */
+  --ra-fs-11: 11px;  /* stem + rifff names */
+  --ra-fs-13: 13px;  /* app title, body */
+  --ra-fs-14: 14px;  /* inspector title, tempo value */
+  --ra-fs-16: 16px;  /* transport position, offset value */
+  --ra-fs-19: 19px;  /* tempo pair */
+  --ra-fw-regular: 400;
+  --ra-fw-semibold: 600;
+  --ra-fw-bold: 700;
+  --ra-lh-tight: 1.25;
+  --ra-lh-body: 1.6;
+  --ra-track-label: 0.06em;
+  --ra-track-eyebrow: 0.08em;
+  /* UI copy is lowercase; eyebrows uppercase; no emoji, no exclamation marks */
+
+  /* ——— geometry ——— */
+  --ra-r-1: 2px;   /* type swatches, sub-row clips */
+  --ra-r-2: 3px;   /* stem chips */
+  --ra-r-3: 4px;   /* small buttons, clips */
+  --ra-r-4: 6px;   /* buttons */
+  --ra-r-5: 8px;   /* shelf cards */
+  --ra-r-6: 10px;  /* popover */
+  --ra-r-7: 12px;  /* app frame */
+
+  --ra-s-1: 4px;
+  --ra-s-2: 7px;
+  --ra-s-3: 9px;
+  --ra-s-4: 10px;
+  --ra-s-5: 12px;
+  --ra-s-6: 14px;
+  --ra-s-7: 20px;
+  --ra-s-8: 32px;
+
+  --ra-h-transport: 46px;
+  --ra-h-ruler: 24px;
+  --ra-h-block: 52px;
+  --ra-h-stem-sub: 26px;
+  --ra-h-stem-lane: 34px;   /* option 1a */
+  --ra-h-titlebar: 38px;
+
+  --ra-w-lane-header: 212px;  /* 2a / 1b — 296px in 1a / 1c */
+  --ra-w-inspector: 308px;
+  --ra-w-shelf-card: 212px;
+  --ra-w-popover: 268px;
+
+  --ra-ppb: 24px;   /* px per bar, 2a / 1b — 30px in 1a / 1c */
+  --ra-bars: 32;
+
+  /* ——— elevation & motion ——— */
+  --ra-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.4);
+  --ra-dur-fast: 120ms;   /* hovers */
+  --ra-dur-med: 220ms;    /* state changes */
+  --ra-dur-slow: 380ms;   /* panel slides */
+  --ra-ease: cubic-bezier(0.22, 0.8, 0.32, 1);
+}
+
+/* no gradients on chrome, no glow, no blur, no scale-on-hover:
+   hover = background one step brighter, focus = 1px accent border (no ring),
+   disabled = 30% opacity + not-allowed. */

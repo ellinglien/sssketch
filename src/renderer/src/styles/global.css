@@ -1,0 +1,48 @@
+@font-face {
+  font-family: 'Atkinson Hyperlegible Mono';
+  src: url('../assets/fonts/AtkinsonHyperlegibleMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'Atkinson Hyperlegible Mono';
+  src: url('../assets/fonts/AtkinsonHyperlegibleMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ra-bg-page);
+  font-family: var(--ra-font);
+  font-size: var(--ra-fs-11);
+  color: var(--ra-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+
+.ra-frame {
+  width: 1300px;
+  margin: 32px auto;
+  background: var(--ra-bg-frame);
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-r-7);
+  overflow: hidden;
+}
+
+.ra-eyebrow {
+  font-size: var(--ra-fs-10);
+  font-weight: var(--ra-fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--ra-track-eyebrow);
+  color: var(--ra-text-3);
+}

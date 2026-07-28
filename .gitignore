@@ -3,5 +3,7 @@ dist/
 dist-electron/
 out/
 .DS_Store
-*.log
+.eslintcache
+*.log*
+*.tsbuildinfo
 .worktrees/
