@@ -2375,10 +2375,15 @@ afterEach(() => {
   serverProcess = undefined
 })
 
+// NOTE: JUCE's juce::Logger::writeToLog writes to stderr on macOS (confirmed
+// during Task 8's review, via juce_SystemStats_mac.mm), not stdout — every
+// "ssstitch-engine serving on...", "test-client: connected", "received ..."
+// line this test needs to observe comes through stderr. Both helpers below
+// listen on stderr accordingly.
 function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timed out waiting for "${substring}"`)), timeoutMs)
-    proc.stdout?.on('data', (chunk: Buffer) => {
+    proc.stderr?.on('data', (chunk: Buffer) => {
       if (chunk.toString().includes(substring)) {
         clearTimeout(timer)
         resolve()
@@ -2389,7 +2394,7 @@ function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number
 
 function collectOutput(proc: ChildProcess): { text: () => string } {
   let buf = ''
-  proc.stdout?.on('data', (chunk: Buffer) => {
+  proc.stderr?.on('data', (chunk: Buffer) => {
     buf += chunk.toString()
   })
   return { text: () => buf }
@@ -2440,7 +2445,7 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
     const clientOutput: string[] = []
     await new Promise<void>((resolve, reject) => {
       const client = spawn(ENGINE_BINARY, ['--test-client', String(TEST_PORT), projectPath])
-      client.stdout?.on('data', (chunk: Buffer) => clientOutput.push(chunk.toString()))
+      client.stderr?.on('data', (chunk: Buffer) => clientOutput.push(chunk.toString()))
       client.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`test-client exited ${code}`))))
       client.on('error', reject)
     })
