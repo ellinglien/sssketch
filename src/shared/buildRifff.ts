@@ -52,7 +52,13 @@ export function buildRifff(
 
   for (const file of files) {
     const parsed = parseStemFilename(file.filename)
-    if (!parsed) continue
+    if (!parsed) {
+      console.warn(
+        `buildRifff: skipping "${file.filename}" — doesn't match the expected ` +
+          `"<slot> - <author> - <name> - <bpm>BPM - <timestamp>.wav" naming pattern`
+      )
+      continue
+    }
 
     // A corrupt or truncated WAV shouldn't take down the whole batch — Task 6 made
     // readWavDurationSeconds throw by design for exactly this case. Skip just this

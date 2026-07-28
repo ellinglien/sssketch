@@ -14,7 +14,19 @@ export function Shelf(): React.JSX.Element {
     // Electron no longer augments dropped File objects with a real `.path` (removed
     // as of Electron 32+); resolve each one's filesystem path via the preload bridge.
     const paths = Array.from(e.dataTransfer.files).map((f) => window.rifffApi.getPathForFile(f))
-    if (paths.length === 0) return
+    if (paths.length === 0) {
+      // Diagnostic only, not a fix: some source apps (e.g. Endlesss) may not put
+      // real OS file entries on the drag at all, in which case dataTransfer.files
+      // is empty and there's nothing we can import. Logging what the drag actually
+      // carried makes that distinguishable from "we dropped it wrong" next time.
+      console.warn(
+        'Shelf: drop had no usable files. dataTransfer.types:',
+        e.dataTransfer.types,
+        'items:',
+        Array.from(e.dataTransfer.items).map((i) => ({ kind: i.kind, type: i.type }))
+      )
+      return
+    }
     try {
       const rifff = await window.rifffApi.importRifff(paths)
       if (rifff) dispatch({ type: 'ADD_TO_SHELF', rifff })
