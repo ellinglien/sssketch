@@ -236,6 +236,24 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [state.sel, dispatch])
 
+  // Space toggles play/pause, the standard DAW convention. Skipped whenever the
+  // beat-picker is open (it owns spacebar for tap-to-mark while it's up) or focus
+  // is on a naturally space-activated control (typing a space, or triggering a
+  // focused button/checkbox) — only intercepted when space wouldn't otherwise do
+  // anything useful.
+  useEffect(() => {
+    const interactiveTags = new Set(['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'])
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.code !== 'Space' || pickerGroupId) return
+      const target = e.target as HTMLElement | null
+      if (target && interactiveTags.has(target.tagName)) return
+      e.preventDefault()
+      dispatch({ type: state.playing ? 'PAUSE' : 'PLAY' })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [pickerGroupId, state.playing, dispatch])
+
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
   // mid-typing in the tempo field should edit the field's text, not the arrangement.
