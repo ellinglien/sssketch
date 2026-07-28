@@ -9,7 +9,7 @@ export interface EngineHandle {
   stop: () => void
 }
 
-interface SpawnEngineOptions {
+export interface SpawnEngineOptions {
   binaryPathOverride?: string
   portOverride?: number
 }
@@ -50,6 +50,13 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
   return new Promise((resolve, reject) => {
     const proc = spawn(binaryPath, ['--serve', String(port)])
     let settled = false
+    // The readiness line isn't guaranteed to arrive in a single 'data' event —
+    // OS pipe buffering can split one logical stderr write across multiple
+    // chunks, or interleave other output before it. Checking only the latest
+    // chunk in isolation would miss a split readiness line and spuriously
+    // time out even though the engine started fine. Accumulate everything
+    // seen so far and test the running buffer instead.
+    let stderrBuffer = ''
 
     const timer = setTimeout(() => {
       if (settled) return
@@ -60,7 +67,8 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       if (settled) return
-      if (chunk.toString().includes(`serving on 127.0.0.1:${port}`)) {
+      stderrBuffer += chunk.toString()
+      if (stderrBuffer.includes(`serving on 127.0.0.1:${port}`)) {
         settled = true
         clearTimeout(timer)
         resolve({
