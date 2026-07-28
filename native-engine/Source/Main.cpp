@@ -205,6 +205,14 @@ static int runServe(int port)
     }
     juce::Logger::writeToLog("ssstitch-engine serving on 127.0.0.1:" + juce::String(port));
 
+    // Deliberately not the more obvious `runDispatchLoop()`: on macOS that
+    // blocks on [NSApp run], which needs a full Aqua/WindowServer session and
+    // was observed returning immediately in a headless console process here —
+    // this process would exit right after the log line above instead of
+    // serving. Polling with runDispatchLoopUntil() doesn't depend on that
+    // integration. See the JUCE_MODAL_LOOPS_PERMITTED comment in
+    // CMakeLists.txt for the full explanation (that flag is required for
+    // runDispatchLoopUntil() to even be compiled in).
     while (!juce::MessageManager::getInstance()->hasStopMessageBeenSent())
         juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
     return 0;
@@ -273,6 +281,11 @@ namespace ssstitch
     class TestClient : public juce::InterprocessConnection
     {
     public:
+        // Same requirement as IpcConnection's destructor (see IpcServer.cpp):
+        // InterprocessConnection's own destructor asserts that a derived class
+        // has already called disconnect() before it runs.
+        ~TestClient() override { disconnect(); }
+
         void connectionMade() override
         {
             juce::Logger::writeToLog("test-client: connected");
