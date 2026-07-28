@@ -281,6 +281,26 @@ namespace ssstitch
     class TestClient : public juce::InterprocessConnection
     {
     public:
+        // `callbacksOnMessageThread = false`: InterprocessConnection defaults to
+        // true, which delivers connectionMade()/messageReceived()/connectionLost()
+        // by posting a juce::Message and requires something to keep calling
+        // MessageManager::runDispatchLoopUntil() to pump it (that's exactly what
+        // runServe's polling loop, above, does on the server side). runTestClient
+        // below never pumps a dispatch loop — it just calls juce::Thread::sleep()
+        // between sending messages — so with the default, every callback below
+        // silently never fires; the process still exits 0 (sendMessage() writes
+        // straight to the socket, unaffected), but none of "connected", "received
+        // ...", or "disconnected" is ever logged. Passing false here makes JUCE
+        // invoke these callbacks directly on InterprocessConnection's own
+        // background reader thread instead, matching this class's actual usage
+        // (a short-lived console process with no GUI message loop of its own).
+        // Confirmed via direct comparison during Task 11: sleep()-only + default
+        // true produces zero client-side log lines despite the server-side
+        // logging a successful connection; switching to false (or, equivalently,
+        // pumping the dispatch loop instead of sleeping) produces the expected
+        // "connected" / "received position-update" / "disconnected" lines.
+        TestClient() : juce::InterprocessConnection(false) {}
+
         // Same requirement as IpcConnection's destructor (see IpcServer.cpp):
         // InterprocessConnection's own destructor asserts that a derived class
         // has already called disconnect() before it runs.
