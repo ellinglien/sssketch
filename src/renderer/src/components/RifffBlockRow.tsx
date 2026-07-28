@@ -20,6 +20,10 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
   const expanded = !!state.exp[groupId]
   const color = identityColor(rifff)
   const geo = clipGeometry(state, groupId, PPB)
+  const unlinked = !!state.unlinked[groupId]
+  const clipBorderColor = unlinked
+    ? 'var(--ra-border-strong)'
+    : `color-mix(in srgb, ${color} 55%, transparent)`
 
   return (
     <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
@@ -82,7 +86,7 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
               left: geo.leftPx,
               width: geo.widthPx,
               borderRadius: 4,
-              border: `1px solid color-mix(in srgb, ${color} 55%, transparent)`,
+              border: `1px solid ${clipBorderColor}`,
               background: 'rgba(255,255,255,0.03)',
               overflow: 'hidden',
               display: 'flex',
