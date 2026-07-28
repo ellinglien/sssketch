@@ -110,10 +110,15 @@ export function BeatPicker({
     const source = getAudioContext().createBufferSource()
     source.buffer = buffer
     source.connect(getAudioContext().destination)
-    // Plays through to the end of the file rather than a fixed short snippet —
-    // stopPreview() (called above, and again on the next pick or on close) is what
-    // actually cuts it off, so it always runs until the user picks another beat.
-    source.start(0, offsetSec, buffer.duration - offsetSec)
+    // Loops the picked-beat-to-end segment continuously — the identity stem is
+    // often a short (1-2 bar) loop, so a single play-through can be too brief to
+    // judge the downbeat by ear. Looping mirrors how it actually sounds once
+    // placed in the arranger. stopPreview() (called above, and again on the next
+    // pick or on close) is what ends it, since a looped source never stops itself.
+    source.loop = true
+    source.loopStart = offsetSec
+    source.loopEnd = buffer.duration
+    source.start(0, offsetSec)
     previewSourceRef.current = source
   }
 
