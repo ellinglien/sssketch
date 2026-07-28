@@ -32,6 +32,7 @@ target_sources(ssstitch_engine PRIVATE
   Source/PlaybackEngine.cpp
   Source/PlaybackEngineTests.cpp
   Source/Transport.cpp
+  Source/IpcServer.cpp
 )
 
 target_compile_definitions(ssstitch_engine PRIVATE
