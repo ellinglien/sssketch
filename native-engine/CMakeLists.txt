@@ -29,6 +29,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/EngineProjectTests.cpp
   Source/StemBufferCache.cpp
   Source/StemBufferCacheTests.cpp
+  Source/PlaybackEngine.cpp
+  Source/PlaybackEngineTests.cpp
 )
 
 target_compile_definitions(ssstitch_engine PRIVATE
