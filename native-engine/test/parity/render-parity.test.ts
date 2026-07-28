@@ -192,4 +192,25 @@ describe('native engine vs Web Audio export — render parity', () => {
     console.log('render-parity: fade-in test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
   })
+
+  it('fails cleanly (nonzero exit, no crash) for a project with an invalid bpm', async () => {
+    // Covers the `secPerBar <= 0.0` guard added to renderProjectToWavFile
+    // (native-engine/Source/RenderExport.cpp) beyond Phase 1's original
+    // runRenderTest, which had no such check and would have produced
+    // NaN/Inf math or a degenerate buffer instead of a clear failure.
+    const project: EngineProject = {
+      bpm: 0,
+      snapDiv: 16,
+      rifffs: []
+    }
+    const projectPath = join(dir, 'project-invalid-bpm.json')
+    writeFileSync(projectPath, JSON.stringify(project))
+    const nativeOutPath = join(dir, 'native-out-invalid-bpm.wav')
+
+    expect(() =>
+      execFileSync(ENGINE_BINARY, ['--render-test', projectPath, nativeOutPath, '1'], {
+        stdio: 'pipe'
+      })
+    ).toThrow()
+  })
 })

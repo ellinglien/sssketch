@@ -46,14 +46,14 @@ namespace ssstitch
         std::unique_ptr<juce::FileOutputStream> out(outFile.createOutputStream());
         if (out == nullptr)
         {
-            errorOut = "failed to open output path for writing";
+            errorOut = "failed to open output path for writing: " + outputPath;
             return false;
         }
         std::unique_ptr<juce::AudioFormatWriter> writer(
             wavFormat.createWriterFor(out.get(), sampleRate, 2, 16, {}, 0));
         if (writer == nullptr)
         {
-            errorOut = "failed to create WAV writer";
+            errorOut = "failed to create WAV writer for: " + outputPath;
             return false;
         }
         out.release();
