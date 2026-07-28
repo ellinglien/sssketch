@@ -3491,7 +3491,8 @@ sounding unchanged (not simply sped up/down). Toggle the inspector's stretch chi
 "native"; expected: reverts to the original 150 BPM native speed and the tempo note
 switches to "playing at source tempo — will drift against the grid." Re-render the same
 tempo again (toggle stretch back on); expected: near-instant response (hits the on-disk
-cache from `~/Library/Application Support/bendlesss/stretch-cache/`, no re-render delay).
+cache from `~/Library/Application Support/rifff-arranger/stretch-cache/`, no re-render
+delay).
 
 - [ ] **Step 6: Commit**
 
