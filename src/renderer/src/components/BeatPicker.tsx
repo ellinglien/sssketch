@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import {
   resolveOffsetKey,
@@ -6,9 +6,9 @@ import {
   rotationSecondsForStem
 } from '../state/selectors'
 import type { Action } from '../state/store'
-import { linearWave } from '@shared/visuals'
+import { linearWave, peaksFromChannel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
-import { getPeaks, getAudioContext } from '../audio/peakCache'
+import { getAudioContext } from '../audio/peakCache'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
@@ -56,7 +56,6 @@ export function BeatPicker({
   const dispatch = useDispatch()
   const rifff = state.rifffs[groupId]
   const stem = rifff?.stems[0]
-  const [peaks, setPeaks] = useState<number[] | null>(null)
   // Every stem is decoded, not just the identity one — previewing the whole rifff
   // together (the default) needs all of them. Keyed by slot.
   const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
@@ -76,19 +75,34 @@ export function BeatPicker({
   // whichever one you actually leave it on when you close does.
   const pendingBakeRef = useRef<number | null>(null)
 
-  useEffect(() => {
-    if (!stem) return
-    let cancelled = false
-    getPeaks(stem.path).then((p) => {
-      if (!cancelled) setPeaks(p)
-    })
-    return () => {
-      cancelled = true
+  // The waveform shown is the whole rifff mixed together, not just the identity
+  // stem alone — the transient that actually marks the downbeat (a kick, say)
+  // might live in a different stem than stems[0]. Every other stem is tiled to
+  // match the identity stem's own duration by repeating its buffer from the
+  // start (`i % data.length`), the same way computeStemSchedule tiles a shorter
+  // stem across a longer rifff — so the mix stays aligned to the same beat grid
+  // the picker's gridlines are drawn against. A pure derivation of rifff/stem/
+  // buffers, so useMemo (not an effect writing to its own state) is the right tool.
+  const peaks = useMemo<number[] | null>(() => {
+    if (!rifff || !stem) return null
+    const identityBuf = buffers[stem.slot]
+    if (!identityBuf) return null
+    const mix = identityBuf.getChannelData(0).slice()
+    for (const s of rifff.stems) {
+      if (s.slot === stem.slot) continue
+      const buf = buffers[s.slot]
+      if (!buf) continue
+      const data = buf.getChannelData(0)
+      if (data.length === 0) continue
+      for (let i = 0; i < mix.length; i++) {
+        mix[i] += data[i % data.length]
+      }
     }
-  }, [stem])
+    return peaksFromChannel(mix, 128)
+  }, [rifff, stem, buffers])
 
-  // Decoded separately from getPeaks (which only keeps a 128-bucket summary) since
-  // previewing playback needs the actual samples, not just their downsampled peaks.
+  // Decoded here (not just getPeaks' 128-bucket summary) since previewing
+  // playback and the combined-waveform display above both need the actual samples.
   useEffect(() => {
     if (!rifff) return
     let cancelled = false
