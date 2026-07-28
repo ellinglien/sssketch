@@ -3,6 +3,7 @@
 #include "PlaybackEngine.h"
 #include "Transport.h"
 #include "EngineProject.h"
+#include "RenderExport.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 

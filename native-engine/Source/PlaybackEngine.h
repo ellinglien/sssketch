@@ -34,6 +34,11 @@ namespace ssstitch
 
         double secPerBar() const { return currentProject.bpm > 0.0 ? (60.0 / currentProject.bpm) * 4.0 : 0.0; }
 
+        /** Read-only access to the project most recently passed to setProject(),
+         * for the render-export IPC handler to render "whatever was last
+         * loaded" without inventing a second way to pass project data. */
+        const EngineProject& currentProjectForExport() const { return currentProject; }
+
     private:
         StemBufferCache& bufferCache;
         EngineProject currentProject;
