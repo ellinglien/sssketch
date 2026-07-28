@@ -137,20 +137,23 @@ namespace ssstitch
                         // is always >= 0 so truncation == floor == "the sample at or before
                         // this time", which is mathematically fine in real-number terms.
                         // But native-engine/test/parity/render-parity.test.ts's parity
-                        // test (Task 10) caught this failing in practice: sampleTimeSec is
-                        // built from `blockStartSec + i2 / sampleRate`, and srcSampleRate
-                        // here is a *cached* double (StemBufferCache::sampleRateFor) that
-                        // is not bit-identical to `sampleRate` even when both represent
-                        // 44100.0, so `posInSegSec * srcSampleRate` does not exactly invert
-                        // the earlier division by `sampleRate` — occasionally landing a
-                        // hair below the intended whole number (e.g. 14.999999999999998
-                        // instead of 15.0). Truncating that silently re-reads the previous
-                        // sample instead of advancing, producing an audible repeated-sample
-                        // glitch roughly once every few dozen samples even when the source
-                        // and output rates match exactly. Rounding to nearest absorbs that
-                        // sub-ULP drift without changing behaviour for genuinely
-                        // mismatched rates (still nearest-sample, just correctly nearest
-                        // instead of always-floor).
+                        // test (Task 10) caught this failing in practice, even when
+                        // srcSampleRate and sampleRate hold the exact same 44100.0 bit
+                        // pattern: sampleTimeSec is built by dividing i2 by sampleRate and
+                        // adding it to blockStartSec, then this line subtracts segStartSec
+                        // and multiplies by srcSampleRate again — a divide-then-add/subtract-
+                        // then-multiply round trip that is not guaranteed to exactly invert
+                        // in binary floating point, regardless of whether the two rate
+                        // values are the same double or different ones. That non-
+                        // associativity occasionally lands the product a hair below the
+                        // intended whole number (e.g. 14.999999999999998 instead of 15.0).
+                        // Truncating that silently re-reads the previous sample instead of
+                        // advancing, producing an audible repeated-sample glitch roughly
+                        // once every few dozen samples even when the source and output
+                        // rates match exactly. Rounding to nearest absorbs that sub-ULP
+                        // drift without changing behaviour for genuinely mismatched rates
+                        // (still nearest-sample, just correctly nearest instead of
+                        // always-floor).
                         const int srcSample = (int) std::llround((seg.bufferOffsetSec + posInSegSec) * srcSampleRate);
                         if (srcSample < 0 || srcSample >= buffer->getNumSamples())
                             continue;
