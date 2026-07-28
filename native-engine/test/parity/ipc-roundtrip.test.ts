@@ -4,10 +4,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const ENGINE_BINARY = join(
-  __dirname,
-  '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine'
-)
+const ENGINE_BINARY = join(__dirname, '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine')
 const TEST_PORT = 45322 // fixed dev port, matches the design doc's single-connection assumption
 
 let serverProcess: ChildProcess | undefined
@@ -24,7 +21,10 @@ afterEach(() => {
 // listen on stderr accordingly.
 function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for "${substring}"`)), timeoutMs)
+    const timer = setTimeout(
+      () => reject(new Error(`timed out waiting for "${substring}"`)),
+      timeoutMs
+    )
     proc.stderr?.on('data', (chunk: Buffer) => {
       if (chunk.toString().includes(substring)) {
         clearTimeout(timer)
@@ -88,7 +88,9 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
     await new Promise<void>((resolve, reject) => {
       const client = spawn(ENGINE_BINARY, ['--test-client', String(TEST_PORT), projectPath])
       client.stderr?.on('data', (chunk: Buffer) => clientOutput.push(chunk.toString()))
-      client.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`test-client exited ${code}`))))
+      client.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(`test-client exited ${code}`))
+      )
       client.on('error', reject)
     })
 
@@ -100,7 +102,9 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
     // assumed. Confirmed against real --test-client stderr output during
     // Task 11: the compact-form regex matched zero lines despite the log
     // genuinely containing position-update messages. \s* tolerates either form.
-    const positionUpdates = [...clientLog.matchAll(/received (\{.*"type":\s*"position-update".*\})/g)]
+    const positionUpdates = [
+      ...clientLog.matchAll(/received (\{.*"type":\s*"position-update".*\})/g)
+    ]
     expect(positionUpdates.length).toBeGreaterThan(0)
 
     const positions = positionUpdates.map((m) => JSON.parse(m[1]).payload.pos as number)

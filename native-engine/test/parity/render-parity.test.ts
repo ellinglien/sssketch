@@ -8,10 +8,7 @@ import type { EngineProject } from '../../../src/shared/buildEngineProject'
 // Assumes native-engine has already been built (Tasks 1-8) — same precondition
 // as every other manual verification step in this plan. Path matches the
 // Debug artefact location confirmed throughout Phase 0/1.
-const ENGINE_BINARY = join(
-  __dirname,
-  '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine'
-)
+const ENGINE_BINARY = join(__dirname, '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine')
 
 function writeToneWav(path: string, durationSec: number, sampleRate = 44100): void {
   // A simple 16-bit mono WAV containing a fixed low-frequency sine, generated
@@ -139,7 +136,7 @@ describe('native engine vs Web Audio export — render parity', () => {
       const diff = Math.abs(nativeSamples[i * 2] - expectedSamples[i])
       maxDiff = Math.max(maxDiff, diff)
     }
-    // eslint-disable-next-line no-console
+
     console.log('render-parity: volume-only test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
   })
@@ -191,7 +188,7 @@ describe('native engine vs Web Audio export — render parity', () => {
     for (let i = 0; i < expectedSamples.length; i++) {
       maxDiff = Math.max(maxDiff, Math.abs(nativeSamples[i * 2] - expectedSamples[i]))
     }
-    // eslint-disable-next-line no-console
+
     console.log('render-parity: fade-in test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
   })
