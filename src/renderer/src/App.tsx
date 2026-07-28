@@ -1,5 +1,5 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
-import { StoreProvider, useAppState, useDispatch } from './state/StoreContext'
+import { StoreProvider, useAppState, useDispatch, useHistory } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB, LANE_HEADER_WIDTH } from './components/Ruler'
@@ -141,6 +141,7 @@ function ProjectMenu(): React.JSX.Element {
 function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const history = useHistory()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -213,6 +214,26 @@ function Frame(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [state.sel, dispatch])
+
+  // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
+  // redo. Skipped while focus is in a text input, same as Delete above — undoing
+  // mid-typing in the tempo field should edit the field's text, not the arrangement.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      const key = e.key.toLowerCase()
+      const isUndo = (e.metaKey || e.ctrlKey) && key === 'z' && !e.shiftKey
+      const isRedo =
+        ((e.metaKey || e.ctrlKey) && key === 'z' && e.shiftKey) || (e.ctrlKey && key === 'y')
+      if (!isUndo && !isRedo) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      if (isRedo) history.redo()
+      else history.undo()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [history])
 
   return (
     <div className="ra-frame">

@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch, useHistory } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const history = useHistory()
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -158,6 +159,43 @@ export function TransportBar(): React.JSX.Element {
       >
         snap 1/{SNAP_DIVS[state.snapIdx]}
       </button>
+
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button
+          onClick={history.undo}
+          disabled={!history.canUndo}
+          aria-label="Undo"
+          title="Undo (Cmd+Z)"
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: history.canUndo ? 'var(--ra-text)' : 'var(--ra-text-4)',
+            fontSize: 11
+          }}
+        >
+          ↶
+        </button>
+        <button
+          onClick={history.redo}
+          disabled={!history.canRedo}
+          aria-label="Redo"
+          title="Redo (Cmd+Shift+Z)"
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: history.canRedo ? 'var(--ra-text)' : 'var(--ra-text-4)',
+            fontSize: 11
+          }}
+        >
+          ↷
+        </button>
+      </div>
 
       <div style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--ra-text-3)' }}>
         chevron opens stems · block selects

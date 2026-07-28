@@ -1,21 +1,49 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   type Dispatch,
   type ReactNode
 } from 'react'
-import { initialState, reducer, SNAP_DIVS, type Action, type AppState } from './store'
+import { initialState, SNAP_DIVS, type Action, type AppState } from './store'
+import { createHistoryState, historyReducer } from './history'
 import { AudioEngine } from '../audio/AudioEngine'
 import { loopLengthBars, resolveOffsetKey, stemStartBar } from './selectors'
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
 
+export interface HistoryControls {
+  undo: () => void
+  redo: () => void
+  canUndo: boolean
+  canRedo: boolean
+}
+
+const HistoryCtx = createContext<HistoryControls>({
+  undo: () => {},
+  redo: () => {},
+  canUndo: false,
+  canRedo: false
+})
+
 export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  const [history, rawDispatch] = useReducer(historyReducer, initialState, createHistoryState)
+  const state = history.present
+  // The rest of the app only ever sees Action, never UNDO/REDO — those are only
+  // reachable through useHistory()'s bound undo/redo below, keeping the two
+  // concerns (making an edit vs. navigating history) separately typed.
+  const dispatch = rawDispatch as Dispatch<Action>
+  const undo = useCallback(() => rawDispatch({ type: 'UNDO' }), [])
+  const redo = useCallback(() => rawDispatch({ type: 'REDO' }), [])
+  const historyControls = useMemo<HistoryControls>(
+    () => ({ undo, redo, canUndo: history.past.length > 0, canRedo: history.future.length > 0 }),
+    [undo, redo, history.past.length, history.future.length]
+  )
 
   // Mirrors the latest state for the engine's getter callbacks below. Both this and
   // the engine itself are only ever created/mutated inside effects (never directly
@@ -112,7 +140,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 
   return (
     <StateCtx.Provider value={state}>
-      <DispatchCtx.Provider value={dispatch}>{children}</DispatchCtx.Provider>
+      <DispatchCtx.Provider value={dispatch}>
+        <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+      </DispatchCtx.Provider>
     </StateCtx.Provider>
   )
 }
@@ -125,4 +155,9 @@ export function useAppState(): AppState {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useDispatch(): Dispatch<Action> {
   return useContext(DispatchCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useHistory(): HistoryControls {
+  return useContext(HistoryCtx)
 }
