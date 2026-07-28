@@ -8,7 +8,8 @@ import {
   stretchRatio,
   loopLengthBars,
   offsetStepsForBeatIndex,
-  rotationSecondsForStem
+  rotationSecondsForStem,
+  pasteRifffAction
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -197,5 +198,73 @@ describe('rotationSecondsForStem', () => {
     const shortStem: Stem = { ...stem, durationSec: 4, barLength: 2 }
     const steps = offsetStepsForBeatIndex(12, 4) // 12 beats = 3 bars
     expect(rotationSecondsForStem(steps, 4, shortStem)).toBeCloseTo(2, 10)
+  })
+})
+
+describe('pasteRifffAction', () => {
+  const twoStemRifff: Rifff = {
+    groupId: 'r1',
+    name: 'test',
+    bpm: 150,
+    barLength: 8,
+    folderPath: '/x',
+    startBar: 4,
+    stems: [
+      { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'b',
+        type: 'bass',
+        path: '/b.wav',
+        durationSec: 1,
+        barLength: 8
+      }
+    ]
+  }
+
+  it('returns null when the source no longer exists', () => {
+    expect(pasteRifffAction(initialState, 'missing', 0)).toBeNull()
+  })
+
+  it('builds a PASTE_RIFFF action with a fresh groupId at the requested startBar', () => {
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    const action = pasteRifffAction(state, 'r1', 20)
+    expect(action?.type).toBe('PASTE_RIFFF')
+    if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
+    expect(action.rifff.groupId).not.toBe('r1')
+    expect(action.rifff.startBar).toBe(20)
+    expect(action.rifff.stems.map((s) => s.path)).toEqual(['/a.wav', '/b.wav'])
+  })
+
+  it('carries over volume, mute, group offset, and stretch, keyed to the new groupId', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 }) // stretch -> true
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.4 })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:2' })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: 3 })
+    state = reducer(state, { type: 'TOGGLE_STRETCH', groupId: 'r1' }) // true -> false
+
+    const action = pasteRifffAction(state, 'r1', 0)
+    if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
+    const newGroupId = action.rifff.groupId
+    expect(action.vol[`${newGroupId}:1`]).toBe(0.4)
+    expect(action.mute[`${newGroupId}:2`]).toBe(true)
+    expect(action.off[newGroupId]).toBe(3)
+    expect(action.stretch).toBe(false)
+  })
+
+  it('applying the action creates an independent, selected, expanded copy', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    const action = pasteRifffAction(state, 'r1', 20)
+    if (!action) throw new Error('expected an action')
+    state = reducer(state, action)
+
+    const newGroupId = action.type === 'PASTE_RIFFF' ? action.rifff.groupId : ''
+    expect(state.rifffs[newGroupId]).toBeDefined()
+    expect(state.rifffs[newGroupId].startBar).toBe(20)
+    expect(state.rifffs.r1.startBar).toBe(4) // original untouched
+    expect(state.sel).toBe(newGroupId)
+    expect(state.exp[newGroupId]).toBe(true)
   })
 })

@@ -11,7 +11,13 @@ function identityColor(rifff: Rifff): string {
   return typeColorVar(rifff.stems[0]?.type ?? 'fx')
 }
 
-export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Element {
+export function RifffBlockRow({
+  groupId,
+  onOpenContextMenu
+}: {
+  groupId: string
+  onOpenContextMenu: (x: number, y: number, groupId: string) => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const rifff = state.rifffs[groupId]
@@ -20,9 +26,11 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
   const color = identityColor(rifff)
   const geo = clipGeometry(state, groupId, PPB)
   const unlinked = !!state.unlinked[groupId]
-  const clipBorderColor = unlinked
-    ? 'var(--ra-border-strong)'
-    : `color-mix(in srgb, ${color} 55%, transparent)`
+  const clipBorderColor = selected
+    ? color
+    : unlinked
+      ? 'var(--ra-border-strong)'
+      : `color-mix(in srgb, ${color} 55%, transparent)`
 
   return (
     <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
@@ -82,6 +90,13 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
             onDragStart={(e) => {
               e.dataTransfer.setData('text/rifff-group-id', groupId)
             }}
+            onClick={() => dispatch({ type: 'SELECT', groupId })}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              dispatch({ type: 'SELECT', groupId })
+              onOpenContextMenu(e.clientX, e.clientY, groupId)
+            }}
             style={{
               position: 'absolute',
               top: 4,
@@ -89,8 +104,10 @@ export function RifffBlockRow({ groupId }: { groupId: string }): React.JSX.Eleme
               left: geo.leftPx,
               width: geo.widthPx,
               borderRadius: 4,
-              border: `1px solid ${clipBorderColor}`,
-              background: 'rgba(255,255,255,0.03)',
+              border: `${selected ? 2 : 1}px solid ${clipBorderColor}`,
+              background: selected
+                ? `color-mix(in srgb, ${color} 12%, rgba(255,255,255,0.03))`
+                : 'rgba(255,255,255,0.03)',
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',

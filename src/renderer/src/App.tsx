@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent } from 'react'
+import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
 import { StoreProvider, useAppState, useDispatch } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
@@ -8,29 +8,36 @@ import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
 import { Playhead } from './components/Playhead'
 import { BeatPicker } from './components/BeatPicker'
+import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
-import { loopLengthBars } from './state/selectors'
+import { loopLengthBars, pasteRifffAction } from './state/selectors'
 
-function dropBarForEvent(e: DragEvent<HTMLDivElement>): number {
-  const rect = e.currentTarget.getBoundingClientRect()
-  const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
+function barForClientX(clientX: number, container: HTMLDivElement): number {
+  const rect = container.getBoundingClientRect()
+  const xInTimeline = clientX - rect.left - LANE_HEADER_WIDTH
   return Math.max(0, Math.round(xInTimeline / PPB))
 }
 
-function Timeline(): React.JSX.Element {
+function Timeline({
+  onOpenClipMenu,
+  onOpenPasteMenu
+}: {
+  onOpenClipMenu: (x: number, y: number, groupId: string) => void
+  onOpenPasteMenu: (x: number, y: number, bar: number) => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const [dropBar, setDropBar] = useState<number | null>(null)
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    setDropBar(dropBarForEvent(e))
+    setDropBar(barForClientX(e.clientX, e.currentTarget))
   }
 
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
     setDropBar(null)
-    const startBar = dropBarForEvent(e)
+    const startBar = barForClientX(e.clientX, e.currentTarget)
 
     // Checked first — more specific than a whole-group drag, and the two payloads
     // are never both set on the same drop (StemSubRow only sets this one).
@@ -45,18 +52,27 @@ function Timeline(): React.JSX.Element {
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
   }
 
+  function handleContextMenu(e: MouseEvent<HTMLDivElement>): void {
+    // Only reached for empty timeline space — RifffBlockRow's clip stops
+    // propagation before this bubbles up, so a right-click on an actual clip
+    // never also triggers the paste menu.
+    e.preventDefault()
+    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget))
+  }
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={() => setDropBar(null)}
       onDrop={handleDrop}
+      onContextMenu={handleContextMenu}
       style={{ position: 'relative' }}
     >
       <Ruler bars={loopLengthBars(state)} />
       {Object.values(state.rifffs)
         .filter((r) => r.startBar !== undefined)
         .map((r) => (
-          <RifffBlockRow key={r.groupId} groupId={r.groupId} />
+          <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
         ))}
       <Playhead />
       {dropBar !== null && (
@@ -126,6 +142,62 @@ function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    items: ContextMenuItem[]
+  } | null>(null)
+  // Remembers which groupId was copied, not a snapshot of it — paste always
+  // reads the source's live current state, so copying then tweaking a volume
+  // before pasting picks up that tweak (and pasting after the source was
+  // deleted is just silently ignored).
+  const [clipboard, setClipboard] = useState<string | null>(null)
+
+  function openClipMenu(x: number, y: number, groupId: string): void {
+    const rifff = state.rifffs[groupId]
+    if (!rifff) return
+    const unlinked = !!state.unlinked[groupId]
+    setContextMenu({
+      x,
+      y,
+      items: [
+        { label: 'copy', onClick: () => setClipboard(groupId) },
+        {
+          label: 'duplicate',
+          onClick: () => {
+            const action = pasteRifffAction(state, groupId, (rifff.startBar ?? 0) + rifff.barLength)
+            if (action) dispatch(action)
+          }
+        },
+        {
+          label: unlinked ? 'relink' : 'unlink',
+          onClick: () => dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
+        },
+        {
+          label: 'delete',
+          danger: true,
+          onClick: () => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
+        }
+      ]
+    })
+  }
+
+  function openPasteMenu(x: number, y: number, bar: number): void {
+    if (!clipboard || !state.rifffs[clipboard]) return
+    setContextMenu({
+      x,
+      y,
+      items: [
+        {
+          label: 'paste',
+          onClick: () => {
+            const action = pasteRifffAction(state, clipboard, bar)
+            if (action) dispatch(action)
+          }
+        }
+      ]
+    })
+  }
 
   // Delete/Backspace removes the selected clip from the timeline. Skipped while
   // focus is in a text input (tempo field, etc.) so deleting a digit doesn't also
@@ -165,12 +237,20 @@ function Frame(): React.JSX.Element {
       <TransportBar />
       <div style={{ display: 'flex' }}>
         <div style={{ flex: 1 }}>
-          <Timeline />
+          <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
         </div>
         <Inspector onOpenBeatPicker={setPickerGroupId} />
       </div>
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker groupId={pickerGroupId} onClose={() => setPickerGroupId(null)} />
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   )

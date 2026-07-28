@@ -51,6 +51,14 @@ export type Action =
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'SET_STEM_START'; key: string; startBar: number }
   | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
+  | {
+      type: 'PASTE_RIFFF'
+      rifff: Rifff
+      vol: Record<string, number>
+      mute: Record<string, boolean>
+      off: Record<string, number>
+      stretch: boolean
+    }
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
@@ -171,6 +179,24 @@ export function reducer(state: AppState, action: Action): AppState {
         off
       }
     }
+
+    // Adds a fresh, independent rifff instance (new groupId, same stem file paths
+    // — no audio is actually duplicated on disk) built by pasteRifffAction. Always
+    // lands linked, regardless of the source's unlinked state: replaying a
+    // hand-diverged per-stem arrangement onto a new position/groupId gets messy
+    // fast, so the paste starts clean and the user can re-unlink from there if
+    // they want that again.
+    case 'PASTE_RIFFF':
+      return {
+        ...state,
+        rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff },
+        vol: { ...state.vol, ...action.vol },
+        mute: { ...state.mute, ...action.mute },
+        off: { ...state.off, ...action.off },
+        stretch: { ...state.stretch, [action.rifff.groupId]: action.stretch },
+        sel: action.rifff.groupId,
+        exp: { ...state.exp, [action.rifff.groupId]: true }
+      }
 
     case 'SET_VOLUME':
       return { ...state, vol: { ...state.vol, [action.stemKey]: action.volume } }

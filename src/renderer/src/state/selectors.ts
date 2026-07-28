@@ -1,5 +1,5 @@
-import { stemKey, type Stem } from '@shared/types'
-import { SNAP_DIVS, type AppState } from './store'
+import { stemKey, type Rifff, type Stem } from '@shared/types'
+import { SNAP_DIVS, type Action, type AppState } from './store'
 
 export function resolveOffsetKey(state: AppState, groupId: string, slot: number): string {
   return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
@@ -105,4 +105,49 @@ export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, ste
   const kBars = -offsetSteps / snapDiv
   const wrapped = ((kBars % stem.barLength) + stem.barLength) % stem.barLength
   return wrapped * (stem.durationSec / stem.barLength)
+}
+
+/**
+ * Builds a PASTE_RIFFF action that places an independent copy of `sourceGroupId`
+ * at `startBar` — a fresh groupId, the same stem file paths (no audio is actually
+ * duplicated on disk; multiple rifff instances can safely share source files for
+ * playback/waveform purposes), with volume and mute carried over from the
+ * source. Returns null if the source no longer exists (e.g. copied, then
+ * deleted before pasting).
+ *
+ * Sharing file paths does have one real edge: if two pasted copies are each
+ * later independently re-baked (BeatPicker) with different downbeat picks,
+ * their bakes target the same derived `.baked.wav` sibling file and the second
+ * one wins on disk — a narrow, deliberate scope trade-off rather than adding a
+ * file-copy step to every paste.
+ */
+export function pasteRifffAction(
+  state: AppState,
+  sourceGroupId: string,
+  startBar: number
+): Action | null {
+  const source = state.rifffs[sourceGroupId]
+  if (!source) return null
+
+  const newGroupId = crypto.randomUUID()
+  const stems = source.stems.map((s) => ({ ...s }))
+  const rifff: Rifff = { ...source, groupId: newGroupId, stems, startBar }
+
+  const vol: Record<string, number> = {}
+  const mute: Record<string, boolean> = {}
+  for (const stem of source.stems) {
+    const oldKey = stemKey(sourceGroupId, stem.slot)
+    const newKey = stemKey(newGroupId, stem.slot)
+    if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
+    if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+  }
+
+  return {
+    type: 'PASTE_RIFFF',
+    rifff,
+    vol,
+    mute,
+    off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
+    stretch: state.stretch[sourceGroupId] ?? true
+  }
 }
