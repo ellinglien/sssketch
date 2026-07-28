@@ -40,6 +40,15 @@ export class AudioEngine {
   private startContextTime = 0
   private startPos = 0
   private secPerBar = 0
+  // play() has two await points (ctx.resume(), loadBuffer() per stem). Since play()
+  // can now be called again before an earlier call has finished (loop-wrap reschedule,
+  // live offset/tempo/snap/unlink reschedule, and a plain rapid play/pause/play both
+  // race a stale call resuming), a stale continuation must not call stopSources() or
+  // schedule sources using its own now-overwritten startContextTime/secPerBar — that
+  // would either kill the newer call's freshly-started sources or schedule audio at
+  // the wrong time. Each play()/stop() call claims a new generation; a continuation
+  // that finds it's no longer current abandons itself instead of touching shared state.
+  private generation = 0
 
   constructor(deps: EngineDeps) {
     this.deps = deps
@@ -66,8 +75,13 @@ export class AudioEngine {
   }
 
   async play(fromPos: number): Promise<void> {
+    const myGeneration = ++this.generation
     const ctx = getAudioContext()
     await ctx.resume()
+    // A newer play()/stop() call already claimed the engine while we were awaiting
+    // resume() — don't call stopSources() (it would kill that newer call's sources)
+    // and don't schedule anything using our now-stale fromPos/timing.
+    if (myGeneration !== this.generation) return
     this.stopSources()
 
     const bpm = this.deps.getProjectBpm()
@@ -94,6 +108,10 @@ export class AudioEngine {
           if (segments.length === 0) continue
 
           const buffer = await loadBuffer(stem.path)
+          // Superseded mid-load: a newer call has already scheduled its own sources
+          // (possibly for this very stem) using fresh timing — abandon this one
+          // rather than double-schedule or use our stale startContextTime/secPerBar.
+          if (myGeneration !== this.generation) return
           const gain = this.gainFor(stemKeyStr)
 
           for (const seg of segments) {
@@ -116,6 +134,10 @@ export class AudioEngine {
   }
 
   stop(): void {
+    // Claim a new generation so an in-flight play() continuation (paused at an
+    // await when stop() is called) finds itself stale and abandons rather than
+    // scheduling audio after the user asked for silence.
+    this.generation++
     this.stopSources()
   }
 
