@@ -3,6 +3,7 @@ import {
   dbLabel,
   offsetLabels,
   positionLabel,
+  elapsedLabel,
   linearWave,
   polarGlyph,
   downsample,
@@ -71,6 +72,20 @@ describe('offsetLabels', () => {
     const l = offsetLabels(-1, 16, 80)
     expect(l.grid).toBe('−1/16')
     expect(l.ms).toBe('−188 ms')
+  })
+})
+
+describe('elapsedLabel', () => {
+  it('reads bar 1 as 0:00.0', () => {
+    expect(elapsedLabel(0, 80)).toBe('0:00.0')
+  })
+  it('formats seconds under a minute, zero-padded', () => {
+    // secPerBar at 80bpm = (60/80)*4 = 3s; 2 bars in = 6.0s
+    expect(elapsedLabel(2, 80)).toBe('0:06.0')
+  })
+  it('rolls over into minutes', () => {
+    // 32 bars at 80bpm = 32*3 = 96s = 1:36.0
+    expect(elapsedLabel(32, 80)).toBe('1:36.0')
   })
 })
 

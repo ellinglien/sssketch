@@ -5,8 +5,7 @@ import { typeColorVar } from '../theme/typeColor'
 import { StemSubRow } from './StemSubRow'
 import { PolarGlyph } from './PolarGlyph'
 import { Waveform } from './Waveform'
-
-const PPB = 24
+import { PPB } from './Ruler'
 
 function identityColor(rifff: Rifff): string {
   return typeColorVar(rifff.stems[0]?.type ?? 'fx')

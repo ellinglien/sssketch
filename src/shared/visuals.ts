@@ -112,3 +112,17 @@ export function positionLabel(posInBars: number): string {
   const sixteenth = Math.floor((posInBars % 0.25) * 16) + 1
   return String(Math.floor(posInBars) + 1).padStart(3, '0') + '.' + beat + '.' + sixteenth
 }
+
+/**
+ * m:ss.d elapsed-time readout for the transport bar. Derived from the playhead's
+ * bar position and project tempo, not a separate running clock — it resets every
+ * loop pass along with posInBars, matching the bar.beat.16th readout's own cycle
+ * (both wrap at the same 32-bar loop boundary).
+ */
+export function elapsedLabel(posInBars: number, bpm: number): string {
+  const secPerBar = (60 / bpm) * 4
+  const totalSeconds = posInBars * secPerBar
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toFixed(1).padStart(4, '0')}`
+}

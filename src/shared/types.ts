@@ -42,8 +42,6 @@ export interface Rifff {
   stems: Stem[]
   /** undefined until dragged from the shelf onto the timeline */
   startBar?: number
-  /** true if folderPath couldn't be found on project load */
-  missing?: boolean
 }
 
 export function stemKey(groupId: string, slot: number): string {

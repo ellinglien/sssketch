@@ -65,14 +65,18 @@ export function Inspector(): React.JSX.Element {
           </div>
           <div
             onClick={async () => {
-              const folder = await window.rifffApi.pickFolder()
-              if (!folder) return
-              const reimported = await window.rifffApi.importRifff([folder])
-              if (!reimported) return
-              dispatch({
-                type: 'ADD_TO_SHELF',
-                rifff: { ...reimported, groupId, startBar: rifff.startBar }
-              })
+              try {
+                const folder = await window.rifffApi.pickFolder()
+                if (!folder) return
+                const reimported = await window.rifffApi.importRifff([folder])
+                if (!reimported) return
+                dispatch({
+                  type: 'ADD_TO_SHELF',
+                  rifff: { ...reimported, groupId, startBar: rifff.startBar }
+                })
+              } catch (err) {
+                console.error('Inspector: failed to re-import rifff from folder:', err)
+              }
             }}
             style={{
               marginTop: 6,

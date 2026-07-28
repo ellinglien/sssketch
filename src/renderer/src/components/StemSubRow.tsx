@@ -3,8 +3,7 @@ import { stemKey } from '@shared/types'
 import { clipGeometry } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-
-const PPB = 24
+import { PPB } from './Ruler'
 
 export function StemSubRow({
   groupId,

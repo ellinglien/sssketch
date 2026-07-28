@@ -1,5 +1,5 @@
 import { useAppState, useDispatch } from '../state/StoreContext'
-import { positionLabel } from '@shared/visuals'
+import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 
 export function TransportBar(): React.JSX.Element {
@@ -49,8 +49,9 @@ export function TransportBar(): React.JSX.Element {
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span style={{ fontSize: 16, fontWeight: 700 }}>{positionLabel(state.pos)}</span>
-        {/* TODO Task 15: wire to the real elapsed-time clock once playback exists */}
-        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>0:00.0</span>
+        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+          {elapsedLabel(state.pos, state.bpm)}
+        </span>
       </div>
 
       <div
