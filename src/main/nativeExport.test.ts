@@ -132,65 +132,72 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
     writeConstantWav(stemAPath, volA, numSamples, sampleRate)
     writeConstantWav(stemBPath, volB, numSamples, sampleRate)
 
-    // Two separate rifffs, each with a single stem, both starting at bar 0
-    // and both exactly 1 bar long — so their outputs fully overlap in time,
-    // giving multi-rifff *and* multi-stem summation in one render.
-    const rifffA: Rifff = {
-      groupId: 'r1',
-      name: 'a',
-      bpm: 60,
-      barLength: 1,
-      folderPath: '/x',
-      startBar: 0,
-      stems: [{ slot: 1, author: 'e', name: 'a', type: 'fx', path: stemAPath, durationSec: 4, barLength: 1 }]
+    // Everything below is wrapped in try/finally so the mkdtempSync'd
+    // fixture dir (containing both WAV fixtures) always gets cleaned up,
+    // even if an assertion throws — that's the exact failure mode this test
+    // exists to catch, and a failing run shouldn't leak temp files in
+    // addition to reporting the failure.
+    try {
+      // Two separate rifffs, each with a single stem, both starting at bar 0
+      // and both exactly 1 bar long — so their outputs fully overlap in
+      // time, giving multi-rifff *and* multi-stem summation in one render.
+      const rifffA: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [{ slot: 1, author: 'e', name: 'a', type: 'fx', path: stemAPath, durationSec: 4, barLength: 1 }]
+      }
+      const rifffB: Rifff = {
+        groupId: 'r2',
+        name: 'b',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [{ slot: 1, author: 'e', name: 'b', type: 'fx', path: stemBPath, durationSec: 4, barLength: 1 }]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60, // matches both rifffs' own bpm, so ratio === 1 and no stretch resolution kicks in
+        rifffs: { r1: rifffA, r2: rifffB }
+      }
+
+      const nativeBytes = await nativeExport(state)
+
+      // Reference: both stems are unstretched (project bpm === rifff bpm),
+      // unmuted, unfaded (state.fadeIn/fadeOut have no entries -> default 0),
+      // at volume 1 (state.vol has no entries -> default 1, per
+      // buildEngineProject.ts), both starting at bar 0 and both exactly 1
+      // bar long matching their rifff's own length. So the expected output
+      // is simply the sample-wise sum of the two constant-value fixtures,
+      // clamped to int16 range — exactly what exportMix.ts's real Web Audio
+      // graph would produce for this fixture (two gain nodes summed into
+      // one destination), computed directly instead of through an
+      // OfflineAudioContext (see this file's constraint note above for why).
+      const a16 = Math.round(volA * 32767)
+      const b16 = Math.round(volB * 32767)
+      const expected16 = Math.max(-32768, Math.min(32767, a16 + b16))
+
+      const nativeBuf = Buffer.from(nativeBytes.buffer, nativeBytes.byteOffset, nativeBytes.byteLength)
+      const nativeDataStart = findDataChunkOffset(nativeBuf)
+      // Native output is stereo (interleaved L/R, 4 bytes per frame);
+      // compare the left channel only against the mono reference.
+      const numFrames = (nativeBuf.length - nativeDataStart) / 4
+      expect(numFrames).toBeGreaterThanOrEqual(numSamples)
+
+      let maxDiff = 0
+      for (let i = 0; i < numSamples; i++) {
+        const left = nativeBuf.readInt16LE(nativeDataStart + i * 4)
+        maxDiff = Math.max(maxDiff, Math.abs(left - expected16))
+      }
+
+      console.log('nativeExport parity: two-stem/two-rifff maxDiff =', maxDiff)
+      expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching Phase 1's parity test
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
-    const rifffB: Rifff = {
-      groupId: 'r2',
-      name: 'b',
-      bpm: 60,
-      barLength: 1,
-      folderPath: '/x',
-      startBar: 0,
-      stems: [{ slot: 1, author: 'e', name: 'b', type: 'fx', path: stemBPath, durationSec: 4, barLength: 1 }]
-    }
-    const state: AppState = {
-      ...initialState,
-      bpm: 60, // matches both rifffs' own bpm, so ratio === 1 and no stretch resolution kicks in
-      rifffs: { r1: rifffA, r2: rifffB }
-    }
-
-    const nativeBytes = await nativeExport(state)
-
-    // Reference: both stems are unstretched (project bpm === rifff bpm),
-    // unmuted, unfaded (state.fadeIn/fadeOut have no entries -> default 0),
-    // at volume 1 (state.vol has no entries -> default 1, per
-    // buildEngineProject.ts), both starting at bar 0 and both exactly 1 bar
-    // long matching their rifff's own length. So the expected output is
-    // simply the sample-wise sum of the two constant-value fixtures, clamped
-    // to int16 range — exactly what exportMix.ts's real Web Audio graph
-    // would produce for this fixture (two gain nodes summed into one
-    // destination), computed directly instead of through an
-    // OfflineAudioContext (see this file's constraint note above for why).
-    const a16 = Math.round(volA * 32767)
-    const b16 = Math.round(volB * 32767)
-    const expected16 = Math.max(-32768, Math.min(32767, a16 + b16))
-
-    const nativeBuf = Buffer.from(nativeBytes.buffer, nativeBytes.byteOffset, nativeBytes.byteLength)
-    const nativeDataStart = findDataChunkOffset(nativeBuf)
-    // Native output is stereo (interleaved L/R, 4 bytes per frame); compare
-    // the left channel only against the mono reference.
-    const numFrames = (nativeBuf.length - nativeDataStart) / 4
-    expect(numFrames).toBeGreaterThanOrEqual(numSamples)
-
-    let maxDiff = 0
-    for (let i = 0; i < numSamples; i++) {
-      const left = nativeBuf.readInt16LE(nativeDataStart + i * 4)
-      maxDiff = Math.max(maxDiff, Math.abs(left - expected16))
-    }
-
-    console.log('nativeExport parity: two-stem/two-rifff maxDiff =', maxDiff)
-    expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching Phase 1's parity test
-
-    rmSync(dir, { recursive: true, force: true })
   }, 30000)
 })
