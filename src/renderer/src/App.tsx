@@ -11,15 +11,26 @@ import { BeatPicker } from './components/BeatPicker'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars } from './state/selectors'
 
+function dropBarForEvent(e: DragEvent<HTMLDivElement>): number {
+  const rect = e.currentTarget.getBoundingClientRect()
+  const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
+  return Math.max(0, Math.round(xInTimeline / PPB))
+}
+
 function Timeline(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const [dropBar, setDropBar] = useState<number | null>(null)
+
+  function handleDragOver(e: DragEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    setDropBar(dropBarForEvent(e))
+  }
 
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    const rect = e.currentTarget.getBoundingClientRect()
-    const xInTimeline = e.clientX - rect.left - LANE_HEADER_WIDTH
-    const startBar = Math.max(0, Math.round(xInTimeline / PPB))
+    setDropBar(null)
+    const startBar = dropBarForEvent(e)
 
     // Checked first — more specific than a whole-group drag, and the two payloads
     // are never both set on the same drop (StemSubRow only sets this one).
@@ -36,7 +47,8 @@ function Timeline(): React.JSX.Element {
 
   return (
     <div
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={handleDragOver}
+      onDragLeave={() => setDropBar(null)}
       onDrop={handleDrop}
       style={{ position: 'relative' }}
     >
@@ -47,6 +59,20 @@ function Timeline(): React.JSX.Element {
           <RifffBlockRow key={r.groupId} groupId={r.groupId} />
         ))}
       <Playhead />
+      {dropBar !== null && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: LANE_HEADER_WIDTH + dropBar * PPB,
+            width: 2,
+            background: 'var(--ra-play-on)',
+            pointerEvents: 'none',
+            zIndex: 5
+          }}
+        />
+      )}
     </div>
   )
 }
