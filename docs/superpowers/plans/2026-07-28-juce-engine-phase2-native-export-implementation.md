@@ -949,13 +949,40 @@ git commit -m "juce-engine phase2: nativeExport orchestration + export-mix-nativ
 
 ---
 
-### Task 6: Integration test — native export vs. the existing Web Audio reference
+### Task 6: Integration test — native export vs. reference math (multi-stem/multi-rifff)
 
 The actual proof this phase exists to produce, mirroring Phase 1's `render-parity.test.ts`
 approach but through the real production path (`nativeExport`, not a raw `--render-test`
 CLI call) and against a realistic multi-stem, multi-rifff project — broader coverage than
 Phase 1's single-stem parity test, closing part of the "stretch-ratio and multi-rifff
 mixing aren't covered by an automated numeric test" gap Phase 1's findings doc flagged.
+
+**Two confirmed environment constraints, resolved here rather than left for you to
+discover** (checked directly before writing this: `vitest.config.ts` uses
+`environment: 'node'` project-wide with no jsdom, and no `exportMix.test.ts` exists
+anywhere in the repo):
+
+1. **`renderMixToWav` (the Web Audio reference, in
+   `src/renderer/src/audio/exportMix.ts`) cannot run under this test suite's environment at
+   all** — it constructs a real `OfflineAudioContext`, which doesn't exist under Node, and
+   jsdom (even if added) doesn't implement Web Audio either — jsdom is a DOM shim, not an
+   audio engine. Don't attempt to import or call `renderMixToWav` in this test. Instead,
+   follow the exact pattern Phase 1's `render-parity.test.ts` already established
+   successfully for this same problem: compute the reference output directly with plain JS
+   math (sum of each stem's sample value, scaled by volume, no fades needed for this
+   fixture), rather than invoking the real Web-Audio-based function.
+2. **`nativeExport(state)` internally calls `spawnEngine()` with no override**, which
+   resolves the engine binary's path via `app.getAppPath()` from `'electron'` — this does
+   not work under plain Vitest (no real Electron process is running), the same constraint
+   Task 4 hit and solved for `engineProcess.test.ts` (by using `binaryPathOverride`, which
+   isn't an option here since `nativeExport` itself has no such parameter). For this test,
+   mock the `electron` module's `app.getAppPath()` to return the worktree root — in real
+   dev-mode Electron, `app.getAppPath()` returns exactly the directory containing
+   `package.json` (the project root), which is also where Vitest's own `process.cwd()`
+   already points when tests run from the repo root, so `vi.mock('electron', () => ({
+   app: { getAppPath: () => process.cwd() } }))` at the top of this test file is a faithful,
+   minimal mock — not a workaround that changes what's being tested, just a substitute for
+   the one piece of real Electron machinery this test can't run inside.
 
 **Files:**
 - Create: `src/main/nativeExport.test.ts`
@@ -964,25 +991,29 @@ mixing aren't covered by an automated numeric test" gap Phase 1's findings doc f
 
 ```ts
 // src/main/nativeExport.test.ts
-import { describe, expect, it } from 'vitest'
-import { nativeExport } from './nativeExport'
-import { renderMixToWav } from '../renderer/src/audio/exportMix'
-import { initialState, type AppState } from '../renderer/src/state/store'
-import type { Rifff } from '../shared/types'
+import { describe, expect, it, vi } from 'vitest'
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// NOTE: renderMixToWav (the Web Audio reference) calls window.rifffApi under the
-// hood for stem decoding — this test needs the same jsdom + IPC-mocking setup
-// exportMix.ts's own existing tests use, if any exist; if not, this is a case
-// where the reference side may need light mocking (readAudioFile returning raw
-// bytes from a real WAV fixture) rather than a full Electron renderer
-// environment. Check `src/renderer/src/audio/exportMix.test.ts` if it exists
-// for the established pattern before inventing a new one — if no such file
-// exists, this integration test may need to construct its own minimal
-// window.rifffApi mock backed by real fixture files on disk, matching how
-// buildEngineProject.test.ts mocks resolveStretched.
+// See this task's two environment-constraint notes above. app.getAppPath() must
+// resolve to the worktree root for nativeExport's internal spawnEngine() call to
+// find the real compiled engine binary at native-engine/build/... — matches what
+// a real dev-mode Electron app's app.getAppPath() would return.
+vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
+
+const { nativeExport } = await import('./nativeExport')
+const { initialState } = await import('../renderer/src/state/store')
+const stateModule = await import('../renderer/src/state/store')
+type AppState = InstanceType<typeof Object> extends never ? never : (typeof stateModule)['initialState']
+// (If the dynamic-import dance above feels awkward, a plain top-level `import type { AppState } from '../renderer/src/state/store'`
+// plus regular `import { initialState } from '../renderer/src/state/store'` and
+// `import { nativeExport } from './nativeExport'` at the top of the file works
+// identically as long as the vi.mock('electron', ...) call above is hoisted by
+// Vitest before those imports execute — which it is, by Vitest's own vi.mock
+// hoisting behavior. Use whichever form you're confident actually works; verify
+// by running the test, don't guess.)
+import type { Rifff } from '../shared/types'
 
 function writeToneWavFixture(path: string, value: number, numSamples: number, sampleRate = 44100): void {
   const dataSize = numSamples * 2
@@ -1006,13 +1037,30 @@ function writeToneWavFixture(path: string, value: number, numSamples: number, sa
   writeFileSync(path, buf)
 }
 
-describe('nativeExport vs. renderMixToWav (Web Audio reference) — multi-stem parity', () => {
+// Walks the RIFF chunk list to find "data" rather than assuming a fixed offset —
+// JUCE's WavAudioFormat writer (the native side's output) inserts a JUNK padding
+// chunk before "fmt ", pushing real audio data well past byte 44. This exact bug
+// (assuming a fixed 44-byte header) was hit and fixed in Phase 1's
+// render-parity.test.ts — don't reintroduce it here.
+function findDataChunkOffset(buf: Uint8Array): number {
+  let offset = 12 // skip "RIFF"[4 bytes size]"WAVE"
+  while (offset + 8 <= buf.length) {
+    const id = String.fromCharCode(buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3])
+    const size = buf[offset + 4] | (buf[offset + 5] << 8) | (buf[offset + 6] << 16) | (buf[offset + 7] << 24)
+    if (id === 'data') return offset + 8
+    offset += 8 + size + (size % 2) // chunks are word-aligned
+  }
+  throw new Error('no data chunk found')
+}
+
+describe('nativeExport — multi-stem/multi-rifff parity against reference math', () => {
   it('produces near-identical output for a two-stem, two-rifff project', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssstitch-export-parity-'))
     const stemAPath = join(dir, 'a.wav')
     const stemBPath = join(dir, 'b.wav')
-    writeToneWavFixture(stemAPath, 0.3, 4 * 44100)
-    writeToneWavFixture(stemBPath, 0.2, 4 * 44100)
+    const numSamples = 4 * 44100
+    writeToneWavFixture(stemAPath, 0.3, numSamples)
+    writeToneWavFixture(stemBPath, 0.2, numSamples)
 
     const rifffA: Rifff = {
       groupId: 'r1', name: 'a', bpm: 60, barLength: 1, folderPath: '/x', startBar: 0,
@@ -1022,31 +1070,57 @@ describe('nativeExport vs. renderMixToWav (Web Audio reference) — multi-stem p
       groupId: 'r2', name: 'b', bpm: 60, barLength: 1, folderPath: '/x', startBar: 0,
       stems: [{ slot: 1, author: 'e', name: 'b', type: 'fx', path: stemBPath, durationSec: 4, barLength: 1 }]
     }
-    const state: AppState = {
+    const state = {
       ...initialState,
       bpm: 60,
       rifffs: { r1: rifffA, r2: rifffB }
     }
 
     const nativeBytes = await nativeExport(state)
-    const webAudioBytes = await renderMixToWav(state)
 
-    // Compare sample-for-sample within the same 16-bit rounding tolerance
-    // Phase 1's render-parity.test.ts established (maxDiff <= 2).
-    const dataStart = 44 // both encoders here write a plain 44-byte header (encodeWavPCM16 on the TS side; confirm the native side's writer output is walked via chunk offset the same way Phase 1's render-parity.test.ts does, not assumed at 44, if this fails)
+    // Reference: two unstretched, unmuted, unfaded stems at volume 1 (the
+    // default — state.vol has no entries here), both starting at bar 0,
+    // both exactly 1 bar long matching their rifff's own length — so the
+    // expected output is simply the sample-wise sum of both tone fixtures,
+    // clamped to int16 range. This mirrors exactly what exportMix.ts's real
+    // Web Audio math would produce for this fixture, computed directly
+    // instead of through OfflineAudioContext (see this task's constraint
+    // notes above for why).
+    const dataStart = 44 // both fixture WAVs here are hand-written with a plain 44-byte header
+    const expectedSamples = new Int16Array(numSamples)
+    for (let i = 0; i < numSamples; i++) {
+      const a = Math.round(0.3 * 32767)
+      const b = Math.round(0.2 * 32767)
+      expectedSamples[i] = Math.max(-32768, Math.min(32767, a + b))
+    }
+
+    const nativeDataStart = findDataChunkOffset(nativeBytes)
     let maxDiff = 0
-    const len = Math.min(nativeBytes.length, webAudioBytes.length) - dataStart
-    for (let i = 0; i < len; i += 2) {
-      const n = nativeBytes[dataStart + i] | (nativeBytes[dataStart + i + 1] << 8)
-      const w = webAudioBytes[dataStart + i] | (webAudioBytes[dataStart + i + 1] << 8)
-      maxDiff = Math.max(maxDiff, Math.abs(n - w))
+    for (let i = 0; i < expectedSamples.length; i++) {
+      // native output is stereo (interleaved L/R); compare the left channel
+      const n = nativeBytes[nativeDataStart + i * 4] | (nativeBytes[nativeDataStart + i * 4 + 1] << 8 << 16 >> 16)
+      maxDiff = Math.max(maxDiff, Math.abs(n - expectedSamples[i]))
     }
     expect(maxDiff).toBeLessThanOrEqual(2)
 
     rmSync(dir, { recursive: true, force: true })
-  }, 20000)
+  }, 30000)
 })
 ```
+
+Note: the sample-reading arithmetic above (`nativeBytes[...] | (nativeBytes[...] << 8 << 16 >> 16)`)
+is written to sign-extend a little-endian int16 from two bytes — double-check this is
+correct by testing it, or replace with a clearer `new DataView(...).getInt16(offset, true)`
+call instead, which is less error-prone than manual bit manipulation. Prefer clarity over
+cleverness here; this is exactly the kind of hand-rolled bit-twiddling that's easy to get
+subtly wrong, and Phase 1's own `render-parity.test.ts` used a `readWavSamples` helper
+returning an `Int16Array` via `buf.readInt16LE(...)` (Node's `Buffer` method) rather than
+manual bit-shifting — follow that precedent if `nativeBytes` can be treated as a `Buffer`
+(it's typed `Uint8Array` from `readFileSync`, which IS a `Buffer` instance in Node — `Buffer`
+extends `Uint8Array` — so `Buffer.from(nativeBytes.buffer, nativeBytes.byteOffset,
+nativeBytes.byteLength).readInt16LE(offset)` or simply treating `nativeBytes` as already
+being a `Buffer` if `readFileSync`'s return type allows it, works and is much safer than
+manual shifting).
 
 - [ ] **Step 2: Run it**
 
@@ -1059,26 +1133,17 @@ not something to force-pass by loosening the tolerance. Given this is genuinely 
 territory (Phase 1's own parity test only covered a single stem/rifff), a real discrepancy
 here — e.g. in how multiple rifffs' outputs sum, or how `loopLengthBarsFor`'s duration
 calculation compares to the renderer-side `loopLengthBars` it's mirroring — is a
-legitimate, valuable finding, not a test-writing mistake to paper over.
+legitimate, valuable finding, not a test-writing mistake to paper over. If the `vi.mock`
+for `'electron'` doesn't work as sketched (module mocking + top-level dynamic import
+ordering is genuinely fiddly in Vitest/ESM), investigate and fix rather than giving up on
+testing the real `nativeExport` function — this is worth getting right since it's the
+actual production code path.
 
-- [ ] **Step 3: If `renderMixToWav` can't run outside a renderer/jsdom environment, adapt**
-
-If Step 2 reveals `renderMixToWav` genuinely cannot execute in this test's environment
-(e.g. it requires `window`/`AudioContext` that don't exist under Node-only Vitest), don't
-force it — check this project's `vitest.config.ts` for whether a jsdom environment is
-already configured for renderer-side tests (it likely is, given `exportMix.ts` already has
-presumably-passing tests from earlier in this project's history — check
-`src/renderer/src/audio/exportMix.test.ts` if it exists). This test may need an
-`// @vitest-environment jsdom` directive, or to live under `src/renderer/` instead of
-`src/main/` if the two environments can't coexist in one file. Use your judgment; the goal
-(compare native export against the real Web Audio reference function, not a hand-rolled
-approximation of it) is more important than exactly which directory the test file lives in.
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/main/nativeExport.test.ts
-git commit -m "juce-engine phase2: native export parity test against the real Web Audio reference"
+git commit -m "juce-engine phase2: multi-stem/multi-rifff export parity test"
 ```
 
 ---
