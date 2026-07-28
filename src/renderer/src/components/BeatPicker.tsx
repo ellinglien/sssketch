@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { resolveOffsetKey, offsetStepsForBeatIndex } from '../state/selectors'
 import { linearWave } from '@shared/visuals'
-import { getPeaks } from '../audio/peakCache'
+import { getPeaks, getAudioContext } from '../audio/peakCache'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 
@@ -26,6 +26,8 @@ export function BeatPicker({
   const rifff = state.rifffs[groupId]
   const stem = rifff?.stems[0]
   const [peaks, setPeaks] = useState<number[] | null>(null)
+  const [buffer, setBuffer] = useState<AudioBuffer | null>(null)
+  const previewSourceRef = useRef<AudioBufferSourceNode | null>(null)
 
   useEffect(() => {
     if (!stem) return
@@ -38,12 +40,47 @@ export function BeatPicker({
     }
   }, [stem])
 
+  // Decoded separately from getPeaks (which only keeps a 128-bucket summary) since
+  // previewing playback needs the actual samples, not just their downsampled peaks.
+  useEffect(() => {
+    if (!stem) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const bytes = await window.rifffApi.readAudioFile(stem.path)
+        const arrayBuffer = bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength
+        )
+        const decoded = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+        if (!cancelled) setBuffer(decoded)
+      } catch (err) {
+        console.error(`BeatPicker: failed to decode audio for preview playback: ${stem.path}`, err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [stem])
+
+  function stopPreview(): void {
+    try {
+      previewSourceRef.current?.stop()
+    } catch {
+      // already stopped
+    }
+    previewSourceRef.current = null
+  }
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      stopPreview()
+    }
   }, [onClose])
 
   if (!rifff || !stem) return null
@@ -52,7 +89,10 @@ export function BeatPicker({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetKey = resolveOffsetKey(state, groupId, stem.slot)
   const currentSteps = state.off[offsetKey] ?? 0
-  const totalBeats = rifff.barLength * 4
+  // The waveform/peaks span exactly this stem's own duration, not the rifff's — using
+  // rifff.barLength here would mis-space the gridlines whenever the identity stem is
+  // shorter than the rifff (e.g. a 2-bar stem tiled across an 8-bar rifff).
+  const totalBeats = stem.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
 
   function pickBeat(beatIndex: number): void {
@@ -61,6 +101,18 @@ export function BeatPicker({
       key: offsetKey,
       steps: offsetStepsForBeatIndex(beatIndex, snapDiv)
     })
+
+    if (!buffer || !stem) return
+    stopPreview()
+    const secPerBeatNative = stem.durationSec / totalBeats
+    const offsetSec = beatIndex * secPerBeatNative
+    if (offsetSec >= buffer.duration) return
+    const source = getAudioContext().createBufferSource()
+    source.buffer = buffer
+    source.connect(getAudioContext().destination)
+    const previewDurationSec = Math.min(secPerBeatNative * 4, buffer.duration - offsetSec)
+    source.start(0, offsetSec, previewDurationSec)
+    previewSourceRef.current = source
   }
 
   return (
