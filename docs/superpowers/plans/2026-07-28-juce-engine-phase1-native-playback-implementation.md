@@ -1881,11 +1881,14 @@ Expected: logs `ssstitch-engine serving on 127.0.0.1:45322` before being killed.
 `--render-test` needs a real project JSON + stem file to be meaningfully tested — that's
 exactly Task 10's fixture, so full verification of this mode happens there.
 
-- [ ] **Step 5: Commit**
+`--test-client` needs a running `--serve` process to connect to — full verification of
+this mode happens in Task 11.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add native-engine/Source/Main.cpp
-git commit -m "juce-engine phase1: --serve (IPC server) and --render-test (offline render) CLI modes"
+git commit -m "juce-engine phase1: --serve, --render-test, --test-client CLI modes"
 ```
 
 ---
