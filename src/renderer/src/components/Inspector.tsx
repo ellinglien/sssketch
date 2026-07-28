@@ -64,12 +64,24 @@ export function Inspector(): React.JSX.Element {
             <span style={{ fontSize: 14, fontWeight: 700 }}>{rifff.name}</span>
           </div>
           <div
+            onClick={async () => {
+              const folder = await window.rifffApi.pickFolder()
+              if (!folder) return
+              const reimported = await window.rifffApi.importRifff([folder])
+              if (!reimported) return
+              dispatch({
+                type: 'ADD_TO_SHELF',
+                rifff: { ...reimported, groupId, startBar: rifff.startBar }
+              })
+            }}
             style={{
               marginTop: 6,
               fontSize: 10,
               color: 'var(--ra-text-3)',
-              wordBreak: 'break-all'
+              wordBreak: 'break-all',
+              cursor: 'pointer'
             }}
+            title="click to re-import this rifff from its source folder"
           >
             {rifff.folderPath}/
           </div>

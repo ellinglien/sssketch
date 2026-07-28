@@ -15,7 +15,10 @@ const api = {
   // renderer/browser context).
   readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path),
   renderStretched: (stemPath: string, ratio: number): Promise<string> =>
-    ipcRenderer.invoke('render-stretched', stemPath, ratio)
+    ipcRenderer.invoke('render-stretched', stemPath, ratio),
+  saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
+  openProject: (): Promise<{ path: string; json: string } | null> =>
+    ipcRenderer.invoke('open-project')
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

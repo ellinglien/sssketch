@@ -51,6 +51,7 @@ export type Action =
   | { type: 'PAUSE' }
   | { type: 'STOP' }
   | { type: 'SET_POS'; pos: number }
+  | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -139,6 +140,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_POS':
       return { ...state, pos: action.pos }
+
+    case 'LOAD_STATE':
+      return action.state
 
     default: {
       const _exhaustive: never = action

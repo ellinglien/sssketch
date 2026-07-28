@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
+import { saveProjectAs, openProject } from './projectFile'
 
 function createWindow(): void {
   // Create the browser window.
@@ -66,6 +67,16 @@ app.whenReady().then(() => {
   ipcMain.handle('render-stretched', (_event, stemPath: string, ratio: number) =>
     renderStretched(stemPath, ratio)
   )
+
+  ipcMain.handle('save-project', (event, json: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    return saveProjectAs(win, json)
+  })
+
+  ipcMain.handle('open-project', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    return openProject(win)
+  })
 
   createWindow()
 
