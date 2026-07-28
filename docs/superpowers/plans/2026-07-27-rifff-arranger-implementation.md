@@ -2871,6 +2871,37 @@ describe('computeStemSchedule', () => {
     expect(segments[1].startBarInTimeline).toBe(10)
     expect(segments.every((s) => s.startBarInTimeline + s.barLength > 8)).toBe(true)
   })
+
+  it('clips the final repetition when the stem length does not evenly divide the rifff length', () => {
+    const threeBarStem = {
+      slot: 9,
+      author: 'e',
+      name: 'c',
+      type: 'fx' as const,
+      path: '/c.wav',
+      durationSec: 4.8, // 3 bars at 150 bpm (1.6s/bar)
+      barLength: 3
+    }
+    const segments = computeStemSchedule(rifff, threeBarStem, {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150
+    })
+    // 8-bar rifff / 3-bar stem: reps at [0,3) [3,6) [6,9) would overrun by 1 bar —
+    // the last one must be clipped to [6,8), i.e. barLength 2, not 3.
+    expect(segments).toHaveLength(3)
+    expect(segments[0]).toMatchObject({ startBarInTimeline: 4, barLength: 3 })
+    expect(segments[1]).toMatchObject({ startBarInTimeline: 7, barLength: 3 })
+    expect(segments[2]).toMatchObject({ startBarInTimeline: 10, barLength: 2 })
+    // No segment may extend past the rifff's own span on the timeline.
+    const rifffEnd = (rifff.startBar ?? 0) + rifff.barLength
+    for (const s of segments) {
+      expect(s.startBarInTimeline + s.barLength).toBeLessThanOrEqual(rifffEnd)
+    }
+    // Duration scales down proportionally for the clipped final segment.
+    expect(segments[2].durationSec).toBeCloseTo((2 / 3) * 4.8, 5)
+  })
 })
 ```
 
@@ -2910,19 +2941,27 @@ export function computeStemSchedule(
 ): PlaybackSegment[] {
   const start = rifff.startBar ?? 0
   const offsetBars = opts.offsetSteps / opts.snapDiv
-  const repetitions = Math.max(1, Math.round(rifff.barLength / stem.barLength))
   const secPerBarNative = stem.durationSec / stem.barLength
 
   const segments: PlaybackSegment[] = []
-  for (let i = 0; i < repetitions; i++) {
-    const startBarInTimeline = start + offsetBars + i * stem.barLength
-    const endBarInTimeline = startBarInTimeline + stem.barLength
+  for (let barOffset = 0; barOffset < rifff.barLength; barOffset += stem.barLength) {
+    // Clip the final repetition so segments always tile exactly across the rifff's
+    // own span, even when stem.barLength doesn't evenly divide rifff.barLength (e.g.
+    // a 3-bar stem in an 8-bar rifff would otherwise produce a last repetition that
+    // overruns into whatever follows on the timeline, or for a >50%-length stem,
+    // leave the block's tail silent). Same failure mode already fixed for the visual
+    // layer in Task 11's StemSubRow tiling.
+    const segmentBarLength = Math.min(stem.barLength, rifff.barLength - barOffset)
+    const startBarInTimeline = start + offsetBars + barOffset
+    const endBarInTimeline = startBarInTimeline + segmentBarLength
     if (endBarInTimeline <= opts.projectPos) continue // fully in the past
     segments.push({
       startBarInTimeline,
-      barLength: stem.barLength,
+      barLength: segmentBarLength,
+      // Mid-segment resume offset (e.g. resuming playback partway through a
+      // segment) is computed by the audio engine (Task 15), not here.
       bufferOffsetSec: 0,
-      durationSec: stem.barLength * secPerBarNative
+      durationSec: segmentBarLength * secPerBarNative
     })
   }
   return segments
