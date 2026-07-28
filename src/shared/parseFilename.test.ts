@@ -43,4 +43,16 @@ describe('parseStemFilename', () => {
       timestamp: '2023-12-11-20-25'
     })
   })
+  it('parses a non-integer bpm (real Endlesss jams aren’t always whole-number tempo)', () => {
+    const parsed = parseStemFilename(
+      '4 HQ - elling - Tape MELLO-FI - 62.7024BPM - 2023-11-12-17-35.wav'
+    )
+    expect(parsed).toEqual({
+      slot: 4,
+      author: 'elling',
+      stemName: 'Tape MELLO-FI',
+      bpm: 62.7024,
+      timestamp: '2023-11-12-17-35'
+    })
+  })
 })
