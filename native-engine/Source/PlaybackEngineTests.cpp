@@ -224,6 +224,57 @@ namespace ssstitch
                 expectWithinAbsoluteError(l[0], 0.5f, 0.01f);
             }
 
+            beginTest("two stems overlapping the same block sum their contributions rather than overwriting");
+            {
+                // renderBlock's core job is accumulating (+=) every stem's contribution
+                // into outL/outR. None of the tests above exercise more than one stem at
+                // once, so a bug that overwrote instead of accumulated (e.g. `outL[i2] =`
+                // instead of `outL[i2] +=`) would pass every one of them. Two stems, two
+                // different constant-value fixtures, both active for the whole block:
+                // the output must equal the sum of each stem's own contribution.
+                auto fixtureA = writeFixtureWav("ssstitch_pe_mix_a.wav", 0.3f, 44100);
+                auto fixtureB = writeFixtureWav("ssstitch_pe_mix_b.wav", 0.2f, 44100);
+
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+
+                EngineStem stemA;
+                stemA.stemKey = "r1:1";
+                stemA.resolvedPath = fixtureA.getFullPathName();
+                stemA.durationSec = 4.0;
+                stemA.barLength = 1;
+                stemA.volume = 1.0;
+                rifff.stems.push_back(stemA);
+
+                EngineStem stemB;
+                stemB.stemKey = "r1:2";
+                stemB.resolvedPath = fixtureB.getFullPathName();
+                stemB.durationSec = 4.0;
+                stemB.barLength = 1;
+                stemB.volume = 1.0;
+                rifff.stems.push_back(stemB);
+
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+
+                // 0.3 + 0.2 = 0.5, not either fixture's value alone — proves accumulation.
+                expectWithinAbsoluteError(l[100], 0.5f, 0.01f);
+                expectWithinAbsoluteError(r[100], 0.5f, 0.01f);
+
+                fixtureA.deleteFile();
+                fixtureB.deleteFile();
+            }
+
             beginTest("a stem whose native sample rate differs from the output rate is read at the correct time");
             {
                 // Ramp fixture at 22050Hz (half the 44100Hz output rate). If the lookup

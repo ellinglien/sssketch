@@ -74,6 +74,15 @@ namespace ssstitch
                 // below, directly from each segment's own absolute start/end time —
                 // computeStemSchedule's per-call cost doesn't change either way, since
                 // its loop always walks every bar-offset regardless of what it filters.
+                //
+                // TODO(Task 6): this does mean every block call heap-allocates a
+                // segments vector covering *every* tile of the stem across the whole
+                // rifff (e.g. a 1-bar tile in a 1000-bar rifff returns ~1000 entries,
+                // every block) — fine for this task's offline/non-realtime-wired
+                // mixer, but a real-time audio callback built on top of renderBlock
+                // should not inherit a per-callback heap allocation of unbounded size.
+                // Worth revisiting then (e.g. bound the search to tiles near
+                // positionBars, or cache/reuse the vector across calls).
                 const ScheduleOptions opts {
                     stem.offsetSteps, currentProject.snapDiv,
                     -std::numeric_limits<double>::infinity(),
@@ -121,6 +130,10 @@ namespace ssstitch
                         // sample index correctly — this is nearest/floor sample lookup
                         // (no interpolation), which is exact when rates match and merely
                         // lower quality (not wrong-speed/wrong-pitch) when they don't.
+                        // Truncation (not rounding) is fine here because the operand is
+                        // always >= 0: posInSegSec >= 0 is guaranteed by the sampleTimeSec
+                        // >= segStartSec check just above, and bufferOffsetSec is always
+                        // 0.0 (computeStemSchedule never sets it non-zero).
                         const int srcSample = (int) ((seg.bufferOffsetSec + posInSegSec) * srcSampleRate);
                         if (srcSample < 0 || srcSample >= buffer->getNumSamples())
                             continue;
