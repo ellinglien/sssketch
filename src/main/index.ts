@@ -16,9 +16,24 @@ import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngine
 // closure and can't otherwise reach it.
 let playbackEngine: PlaybackEngineHandle | undefined
 
+// Tracks whichever BrowserWindow is currently live, reassigned every time
+// createWindow() runs (both the initial whenReady() call and any later
+// 'activate' call after the user closed all windows and reopened via the
+// dock on macOS). The engine-event relay below reads this module-level
+// variable fresh on every push event instead of closing over a single
+// window captured at startup — a stale closure would keep sending to a
+// destroyed BrowserWindow after a close-all/reopen cycle, which throws
+// synchronously inside EngineClient's socket 'data' handler and can crash
+// the whole main process.
+let mainWindow: BrowserWindow | undefined
+
+// Guards before-quit's shutdown-then-requit sequence (see below) against
+// re-entering itself when it calls app.quit() a second time.
+let isQuitting = false
+
 function createWindow(): BrowserWindow {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
@@ -30,11 +45,13 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+  mainWindow = win
+
+  win.on('ready-to-show', () => {
+    win.show()
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
@@ -42,12 +59,12 @@ function createWindow(): BrowserWindow {
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  return mainWindow
+  return win
 }
 
 // This method will be called when Electron has finished
@@ -123,14 +140,18 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
-  const mainWindow = createWindow()
+  createWindow()
 
   playbackEngine.client.on('position-update', (payload) => {
-    mainWindow.webContents.send('engine-position-update', payload)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('engine-position-update', payload)
+    }
   })
 
   playbackEngine.onRestarted(() => {
-    mainWindow.webContents.send('engine-restarted')
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('engine-restarted')
+    }
   })
 
   app.on('activate', function () {
@@ -149,16 +170,32 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
-  // shutdown() is async (awaits any in-flight crash-respawn before tearing
-  // down) but this handler can't await it, so it's a fire-and-forget call —
-  // .catch() here guards against an unhandled rejection the same way
-  // playbackEngineLifecycle.ts itself guards its internal fire-and-forget
-  // respawn() call, even though shutdown() isn't expected to reject under
-  // normal conditions (its internal errors are already caught).
-  playbackEngine?.shutdown().catch((err: unknown) => {
-    console.error('index: playbackEngine shutdown failed', err)
-  })
+app.on('before-quit', (event) => {
+  // shutdown() is async — normally it resolves fast enough that this race
+  // never matters, but if a crash-triggered respawn happens to be in flight
+  // exactly when the user quits, shutdown() has to await that respawn
+  // unwinding before it kills the engine process, which can run past the
+  // point Electron's default quit sequence is blocked on. Deferring the
+  // actual quit until shutdown() has genuinely finished avoids leaving an
+  // orphaned native engine subprocess behind. isQuitting guards against
+  // infinite recursion from the app.quit() call below re-triggering this
+  // same handler.
+  if (isQuitting || !playbackEngine) return
+  isQuitting = true
+  event.preventDefault()
+  playbackEngine
+    .shutdown()
+    .catch((err: unknown) => {
+      // Not expected to reject under normal conditions (shutdown()'s
+      // internal errors are already caught), but guarded the same way
+      // playbackEngineLifecycle.ts guards its own internal fire-and-forget
+      // respawn() call, since this runs with nothing else downstream to
+      // catch a rejection.
+      console.error('index: playbackEngine shutdown failed', err)
+    })
+    .finally(() => {
+      app.quit()
+    })
 })
 
 // In this file you can include the rest of your app's specific main process
