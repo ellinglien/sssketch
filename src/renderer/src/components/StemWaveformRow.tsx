@@ -12,6 +12,12 @@ import { startPointerDrag } from './dragUtils'
 
 export const ROW_HEIGHT = 44
 const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
+// A quick flick at the old 1-bar-per-PPB(24px) rate could hit FADE_MAX almost
+// by accident, sounding much stronger than intended. 4x slows that down to
+// ~96px of drag per bar of fade — deliberately harder to overshoot, closer to
+// how gradual the original Inspector nudge-button stepper felt, while still
+// keeping the drag gesture itself (not going back to click-only steps).
+const FADE_DRAG_SLOWDOWN = 4
 const TOOLTIP_HEIGHT = 18 // volume tooltip's measured rendered height + small margin
 const TOOLTIP_GAP = 4 // gap between the tooltip and the plateau line it's anchored to
 
@@ -234,7 +240,10 @@ export function StemWaveformRow({
     startPointerDrag(
       e,
       (deltaX) => {
-        finalFadeIn = Math.max(0, Math.min(FADE_MAX, startFadeIn + deltaX / PPB))
+        finalFadeIn = Math.max(
+          0,
+          Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+        )
         setDragFadeIn(finalFadeIn)
       },
       (moved) => {
@@ -255,7 +264,10 @@ export function StemWaveformRow({
       // "drag left" translate to "fadeOutPx grows" — the mirror image of
       // fade-in's `startFadeIn + deltaX`, where dragging right grows fadeIn.
       (deltaX) => {
-        finalFadeOut = Math.max(0, Math.min(FADE_MAX, startFadeOut - deltaX / PPB))
+        finalFadeOut = Math.max(
+          0,
+          Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+        )
         setDragFadeOut(finalFadeOut)
       },
       (moved) => {
