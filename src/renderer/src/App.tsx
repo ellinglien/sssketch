@@ -124,6 +124,10 @@ function ProjectMenu(): React.JSX.Element {
       await window.rifffApi.exportMix(wav)
     } catch (err) {
       console.error('ProjectMenu: failed to export mix:', err)
+      // Export now has exactly one code path (the native engine, with no Web
+      // Audio fallback) — a spawn/render failure here would otherwise reset
+      // the button with zero visible indication anything went wrong.
+      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
