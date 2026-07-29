@@ -37,12 +37,13 @@ export function computeStemSchedule(
 
   const segments: PlaybackSegment[] = []
   for (let barOffset = 0; barOffset < bound; barOffset += stem.barLength) {
-    // Clip the final repetition so segments always tile exactly across the rifff's
-    // own span, even when stem.barLength doesn't evenly divide rifff.barLength (e.g.
-    // a 3-bar stem in an 8-bar rifff would otherwise produce a last repetition that
-    // overruns into whatever follows on the timeline, or for a >50%-length stem,
-    // leave the block's tail silent). Same failure mode already fixed for the visual
-    // layer in Task 11's StemSubRow tiling.
+    // Clip the final repetition so segments always tile exactly across `bound`
+    // (the resolved tiling length — rifff.barLength by default, or an explicit
+    // playedBars override), even when stem.barLength doesn't evenly divide it
+    // (e.g. a 3-bar stem tiling across an 8-bar bound would otherwise produce a
+    // last repetition that overruns into whatever follows on the timeline, or
+    // for a >50%-length stem, leave the block's tail silent). Same failure mode
+    // already fixed for the visual layer in Task 11's StemSubRow tiling.
     const segmentBarLength = Math.min(stem.barLength, bound - barOffset)
     const startBarInTimeline = start + offsetBars + barOffset
     const endBarInTimeline = startBarInTimeline + segmentBarLength
