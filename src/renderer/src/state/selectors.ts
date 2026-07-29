@@ -7,7 +7,10 @@ export function resolveOffsetKey(state: AppState, groupId: string, slot: number)
 
 /** A stem's own played length, in bars — the tiling loop's bound for this
  * specific stem. Falls back to rifff.barLength (today's implicit behavior)
- * when no override has been set. Same linked/unlinked resolution as off/vol/mute. */
+ * when no override has been set. Same linked/unlinked resolution as `off`
+ * (shared per-group while linked, independent per-stem once unlinked) —
+ * unlike `vol`/`mute`, which are always keyed per-stem regardless of link
+ * state. */
 export function resolvePlayedBars(state: AppState, groupId: string, slot: number): number {
   const rifff = state.rifffs[groupId]
   const key = resolveOffsetKey(state, groupId, slot)
@@ -47,8 +50,11 @@ export function stemStartBar(state: AppState, groupId: string, slot: number): nu
 }
 
 /** Same shape as clipGeometry, anchored to the stem's own position instead of its
- * group's — identical to clipGeometry while linked (or before a drag), diverging
- * once unlinked and moved. */
+ * group's — identical to clipGeometry's LEFT position while linked (or before a
+ * drag), diverging once unlinked and moved. WIDTH can now diverge from
+ * clipGeometry even while linked: clipGeometry always uses rifff.barLength,
+ * but this uses resolvePlayedBars, which reflects a playedBars resize
+ * override the moment one is set. */
 export function stemGeometry(
   state: AppState,
   groupId: string,
@@ -82,6 +88,12 @@ export function loopLengthBars(state: AppState): number {
         ends.push(stemStartBar(state, rifff.groupId, stem.slot) + playedBars)
       }
     } else {
+      // Deliberately inlined rather than calling resolvePlayedBars(state,
+      // rifff.groupId, <some stem's slot>) — while linked, the resolved value
+      // doesn't depend on which stem's slot is passed (resolveOffsetKey
+      // returns the same groupId key regardless), so picking one would be
+      // arbitrary, and would need extra handling if rifff.stems were ever
+      // empty. Don't "simplify" this back to the per-slot helper.
       const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
       ends.push(rifff.startBar + playedBars)
     }
