@@ -77,21 +77,23 @@ export function Inspector({
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="ra-eyebrow">inspector</span>
-            <button
-              onClick={() => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })}
-              title="remove from timeline (Delete)"
-              style={{
-                height: 20,
-                borderRadius: 0,
-                padding: '0 6px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              remove from timeline
-            </button>
+            {rifff.startBar !== undefined && (
+              <button
+                onClick={() => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })}
+                title="remove from timeline (Delete)"
+                style={{
+                  height: 20,
+                  borderRadius: 0,
+                  padding: '0 6px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                remove from timeline
+              </button>
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <PolarGlyph stems={rifff.stems} identityColor={color} size={34} />

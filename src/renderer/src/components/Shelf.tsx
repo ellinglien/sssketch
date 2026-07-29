@@ -5,6 +5,8 @@ import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { setGrabOffsetBars } from './dragGrabOffset'
 
+const TILE_SIZE = 42
+
 export function Shelf({
   onImported
 }: {
@@ -13,6 +15,10 @@ export function Shelf({
   const state = useAppState()
   const dispatch = useDispatch()
   const [dragOver, setDragOver] = useState(false)
+  // Hovering a tile previews its meta in the header line without changing
+  // selection — falls back to the current selection so the line isn't just
+  // blank whenever the mouse isn't over the tray at all.
+  const [hoverId, setHoverId] = useState<string | null>(null)
 
   async function handleDrop(e: DragEvent<HTMLDivElement>): Promise<void> {
     e.preventDefault()
@@ -58,65 +64,78 @@ export function Shelf({
     }
   }
 
+  const library = Object.values(state.rifffs)
+  const detailRifff = state.rifffs[hoverId ?? state.sel ?? ''] ?? null
+
   return (
     <div
       style={{
-        padding: '12px 14px',
+        padding: '11px 14px',
         background: 'var(--ra-bg-rail)',
-        borderBottom: '1px solid var(--ra-border)'
+        borderBottom: '1px solid var(--ra-border)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
       }}
     >
-      <div style={{ display: 'flex', gap: 10 }}>
-        {Object.values(state.rifffs).map((rifff) => (
-          <div
-            key={rifff.groupId}
-            draggable
-            onDragStart={(e) => {
-              // A distinct key from 'text/rifff-group-id' (used by in-arranger
-              // reposition drags) — dropping this one always either places this
-              // rifff for the first time or pastes an independent copy, never
-              // moves an existing clip. See Timeline's handleDrop in App.tsx.
-              e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
-              // Not yet placed — there's no existing on-timeline position to
-              // preserve an offset from, and without this the module could
-              // still be holding a stale value left behind by a previous
-              // in-arranger reposition drag.
-              setGrabOffsetBars(0)
-            }}
-            style={{
-              width: 212,
-              borderRadius: 0,
-              padding: '9px 10px',
-              background: 'var(--ra-bg-frame)',
-              border: '1px solid var(--ra-border)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8
-            }}
-          >
-            <PolarGlyph
-              stems={rifff.stems}
-              identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
-              size={40}
-            />
-            <div style={{ overflow: 'hidden' }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}
-              >
-                {rifff.name}
-              </div>
-              <div style={{ fontSize: 9, color: 'var(--ra-text-2)' }}>
-                {rifff.bpm} BPM · {rifff.stems.length} stems · {rifff.barLength} bars
-              </div>
-            </div>
-          </div>
-        ))}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, height: 14 }}>
+        <span className="ra-eyebrow">rifff library</span>
+        <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>{library.length}</span>
+        <span style={{ flex: 1 }} />
+        {detailRifff && (
+          <span style={{ fontSize: 9, color: 'var(--ra-text-2)', whiteSpace: 'nowrap' }}>
+            {detailRifff.name} — {detailRifff.bpm} BPM · {detailRifff.stems.length} stems ·{' '}
+            {detailRifff.barLength} bars
+          </span>
+        )}
+      </div>
+      <div
+        onMouseLeave={() => setHoverId(null)}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}
+      >
+        {library.map((rifff) => {
+          const selected = state.sel === rifff.groupId
+          const hovered = hoverId === rifff.groupId
+          // Already placed on the timeline reads as "in use" — full opacity,
+          // same as selected/hovered; everything else dims slightly so the
+          // tray doubles as an at-a-glance map of what's already in the
+          // arrangement, mirroring the imported/6b mockup's own convention.
+          const lit = selected || hovered || rifff.startBar !== undefined
+          return (
+            <button
+              key={rifff.groupId}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
+                // Not yet placed — there's no existing on-timeline position to
+                // preserve an offset from, and without this the module could
+                // still be holding a stale value left behind by a previous
+                // in-arranger reposition drag.
+                setGrabOffsetBars(0)
+              }}
+              onMouseEnter={() => setHoverId(rifff.groupId)}
+              onClick={() => dispatch({ type: 'SELECT', groupId: rifff.groupId })}
+              title={rifff.name}
+              style={{
+                width: TILE_SIZE,
+                height: TILE_SIZE,
+                flex: 'none',
+                padding: 2,
+                border: `1px solid ${selected ? 'var(--ra-text)' : hovered ? 'var(--ra-border-strong)' : 'transparent'}`,
+                borderRadius: 0,
+                cursor: 'grab',
+                background: 'transparent',
+                opacity: lit ? 1 : 0.72
+              }}
+            >
+              <PolarGlyph
+                stems={rifff.stems}
+                identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
+                size={TILE_SIZE - 4}
+              />
+            </button>
+          )
+        })}
         <div
           onDragOver={(e) => {
             e.preventDefault()
@@ -128,14 +147,13 @@ export function Shelf({
           style={{
             flex: 1,
             minWidth: 150,
-            height: 78,
-            border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border-strong)'}`,
-            borderRadius: 0,
+            height: TILE_SIZE,
+            border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border)'}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: 18,
-            color: 'var(--ra-text-3)'
+            fontSize: 15,
+            color: 'var(--ra-text-4)'
           }}
         >
           +
