@@ -11,6 +11,8 @@ import { startPointerDrag } from './dragUtils'
 
 const ROW_HEIGHT = 44
 const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
+const TOOLTIP_HEIGHT = 18 // volume tooltip's measured rendered height + small margin
+const TOOLTIP_GAP = 4 // gap between the tooltip and the plateau line it's anchored to
 
 /** Where the envelope curve's two knees (fade-in-ends-here, fade-out-starts-here)
  * sit in the row's own pixel coordinates, clamped so they can never cross past
@@ -97,6 +99,16 @@ export function StemWaveformRow({
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
+  // Volume tooltip's vertical position, clamped directly into the row's
+  // bounds — correct for every plateauY value by construction (top is always
+  // in [0, ROW_HEIGHT - TOOLTIP_HEIGHT]), rather than an above/below flip
+  // threshold, which turned out to have no valid single value: for this
+  // ROW_HEIGHT relative to the tooltip's own height, the "safe while above"
+  // and "safe while below" zones don't overlap.
+  const tooltipTop = Math.max(
+    0,
+    Math.min(ROW_HEIGHT - TOOLTIP_HEIGHT, plateauY - TOOLTIP_HEIGHT - TOOLTIP_GAP)
+  )
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
@@ -328,46 +340,27 @@ export function StemWaveformRow({
               zIndex: 3
             }}
           />
-          {dragVolume !== null &&
-            (() => {
-              // A single above/below flip threshold turned out to have no
-              // valid value: for a ROW_HEIGHT this small relative to the
-              // tooltip's own rendered height, the "safe while above" and
-              // "safe while below" zones don't overlap — any single threshold
-              // leaves ONE of the two branches clipping somewhere (confirmed
-              // by re-deriving the geometry during code review after the
-              // first attempt at this, at threshold 24, turned out to just
-              // move a real ~2-3px clip from one edge to the other rather
-              // than eliminate it). Clamping the tooltip's own top position
-              // directly into the row's bounds sidesteps the whole
-              // above/below framing — it's correct for every plateauY value,
-              // not just the ones a hand-picked threshold happens to cover.
-              const tooltipHeight = 18 // measured rendered height + small margin
-              const gap = 4
-              const idealTop = plateauY - tooltipHeight - gap
-              const top = Math.max(0, Math.min(ROW_HEIGHT - tooltipHeight, idealTop))
-              return (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '50%',
-                    top,
-                    transform: 'translateX(-50%)',
-                    padding: '2px 6px',
-                    background: 'var(--ra-mute-on)',
-                    color: 'var(--ra-mute-on-ink)',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    borderRadius: 4,
-                    zIndex: 5,
-                    whiteSpace: 'nowrap',
-                    pointerEvents: 'none'
-                  }}
-                >
-                  {muted ? 'mute' : dbLabel(displayedVolume)}
-                </div>
-              )
-            })()}
+          {dragVolume !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: tooltipTop,
+                transform: 'translateX(-50%)',
+                padding: '2px 6px',
+                background: 'var(--ra-mute-on)',
+                color: 'var(--ra-mute-on-ink)',
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 4,
+                zIndex: 5,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none'
+              }}
+            >
+              {muted ? 'mute' : dbLabel(displayedVolume)}
+            </div>
+          )}
         </div>
       </div>
     </div>
