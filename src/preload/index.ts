@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff } from '@shared/types'
+import type { StretchedStem } from '@shared/buildEngineProject'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -14,7 +15,7 @@ const api = {
   // renderer, which decodes them via Web Audio (decodeAudioData only exists in the
   // renderer/browser context).
   readAudioFile: (path: string): Promise<Uint8Array> => ipcRenderer.invoke('read-audio-file', path),
-  renderStretched: (stemPath: string, ratio: number): Promise<string> =>
+  renderStretched: (stemPath: string, ratio: number): Promise<StretchedStem> =>
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
   bakeOffset: (
     jobs: { path: string; rotationSec: number }[]

@@ -29,7 +29,18 @@ export interface EngineProject {
   rifffs: EngineRifff[]
 }
 
-export type StretchResolver = (path: string, ratio: number) => Promise<string>
+export interface StretchedStem {
+  path: string
+  /** The ACTUAL real-world duration of the audio at `path`, in seconds — not
+   * the original source stem's duration. When a stretch was applied, this
+   * must be the resolved (stretched) file's own measured duration, not the
+   * pre-stretch source's, or the native engine's per-bar timing math
+   * (durationSec / barLength) silently desyncs from the project's own tempo
+   * and produces trailing silence or overlap at the end of the loop. */
+  durationSec: number
+}
+
+export type StretchResolver = (path: string, ratio: number) => Promise<StretchedStem>
 
 /**
  * Projects AppState down to exactly what the native engine needs to schedule
@@ -53,10 +64,10 @@ export async function buildEngineProject(
 
     const stems: EngineStem[] = []
     for (const stem of rifff.stems) {
-      let resolvedPath = stem.path
+      let resolved: StretchedStem = { path: stem.path, durationSec: stem.durationSec }
       if (Math.abs(ratio - 1) >= 0.001) {
         try {
-          resolvedPath = await resolveStretched(stem.path, ratio)
+          resolved = await resolveStretched(stem.path, ratio)
         } catch (err) {
           // Missing rubberband or a bad render shouldn't fail the whole export
           // or playback session — fall back to native-tempo playback for just
@@ -65,7 +76,6 @@ export async function buildEngineProject(
             `buildEngineProject: rubberband render failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
             err
           )
-          resolvedPath = stem.path
         }
       }
 
@@ -77,8 +87,15 @@ export async function buildEngineProject(
 
       stems.push({
         stemKey: key,
-        resolvedPath,
-        durationSec: stem.durationSec,
+        resolvedPath: resolved.path,
+        // Must be the RESOLVED (possibly stretched) file's own real duration,
+        // not stem.durationSec — the native engine derives its per-bar timing
+        // as durationSec / barLength, and after a stretch that only stays
+        // correct (matching the project's own tempo) if durationSec reflects
+        // the stretched file's actual length. Using the pre-stretch duration
+        // here previously left a trailing silence gap whenever a rifff was
+        // slowed down relative to its own native bpm.
+        durationSec: resolved.durationSec,
         barLength: stem.barLength,
         offsetSteps,
         startBarOverride: override,

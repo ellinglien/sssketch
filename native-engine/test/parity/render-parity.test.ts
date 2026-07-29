@@ -232,7 +232,7 @@ describe('native engine vs Web Audio export — render parity', () => {
     // rubberband's --tempo semantics (see src/main/rubberband.ts comment)
     // produce a LONGER file than the 4s source tone.
     const ratio = 60 / 80
-    const stretchedPath = await renderStretched(tonePath, ratio)
+    const { path: stretchedPath } = await renderStretched(tonePath, ratio)
     expect(stretchedPath).not.toBe(tonePath) // confirms a real render happened, not the ratio~1 no-op passthrough
 
     // Measure the stretched file's actual duration directly from its own data

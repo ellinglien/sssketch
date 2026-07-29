@@ -7,3 +7,5 @@ out/
 *.log*
 *.tsbuildinfo
 .worktrees/
+
+.superpowers/

@@ -31,11 +31,34 @@ describe('buildEngineProject', () => {
   })
 
   it('resolves a stretched stem via the provided resolver when stretch is on and bpm differs', async () => {
-    const resolveStretched = vi.fn().mockResolvedValue('/a-stretched.wav')
+    const resolveStretched = vi
+      .fn()
+      .mockResolvedValue({ path: '/a-stretched.wav', durationSec: 19.2 })
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
     const project = await buildEngineProject(state, resolveStretched)
     expect(resolveStretched).toHaveBeenCalledWith('/a.wav', 100 / 150)
     expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a-stretched.wav')
+  })
+
+  it("uses the resolver-reported duration of the STRETCHED file, not the source stem's own durationSec — regression test for a real bug where a slowed-down rifff left trailing silence because the native engine's per-bar timing (durationSec / barLength) was computed from the pre-stretch duration instead of the stretched file's actual length", async () => {
+    // rifff.bpm=150, project bpm=100 -> ratio=100/150=0.6667 (<1, slowing down),
+    // which per rubberband's real, verified semantics (see rubberband.ts's
+    // comment) produces a LONGER file than the 12.8s source stem — the
+    // resolver here reports that real, measured, longer duration (19.2s,
+    // matching the exact fixture already verified end-to-end in rubberband.ts's
+    // own doc comment: 12.8/0.6667 = 19.2).
+    const resolveStretched = vi
+      .fn()
+      .mockResolvedValue({ path: '/a-stretched.wav', durationSec: 19.2 })
+    const state = stateWith({ bpm: 100, stretch: { r1: true } })
+    const project = await buildEngineProject(state, resolveStretched)
+    const stem = project.rifffs[0].stems[0]
+    // Must be the resolver's reported (stretched) duration, NOT the source
+    // stem's own unstretched 12.8s — sending the wrong one here is exactly
+    // the bug: it desyncs the native engine's per-bar timing from the
+    // project's own tempo and silently truncates the tail of the loop.
+    expect(stem.durationSec).toBe(19.2)
+    expect(stem.durationSec).not.toBe(rifff.stems[0].durationSec)
   })
 
   it('skips unstretched-path resolution when stretch is explicitly off, even if bpm differs', async () => {
@@ -48,13 +71,14 @@ describe('buildEngineProject', () => {
 
   it('excludes rifffs not yet placed on the timeline', async () => {
     const unplaced: Rifff = { ...rifff, groupId: 'r2', startBar: undefined }
-    const state = stateWith({ rifffs: { r1: rifff, r2: unplaced } })
+    const state = stateWith({ bpm: 150, rifffs: { r1: rifff, r2: unplaced } }) // matches rifff.bpm -> ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs.map((r) => r.groupId)).toEqual(['r1'])
   })
 
   it('carries volume/mute/offset/fade fields through', async () => {
     const state = stateWith({
+      bpm: 150, // matches rifff.bpm -> ratio 1, no stretch call needed
       vol: { 'r1:1': 0.7 },
       mute: { 'r1:1': true },
       off: { r1: 2 },
@@ -72,6 +96,7 @@ describe('buildEngineProject', () => {
 
   it('uses the unlinked stem start override when the group is unlinked', async () => {
     const state = stateWith({
+      bpm: 150, // matches rifff.bpm -> ratio 1, no stretch call needed
       unlinked: { r1: true },
       stemStart: { 'r1:1': 9 }
     })
@@ -80,15 +105,20 @@ describe('buildEngineProject', () => {
   })
 
   it('uses -1 as startBarOverride when the stem is not unlinked (matches the rifff default)', async () => {
-    const state = stateWith({})
+    const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs[0].stems[0].startBarOverride).toBe(-1)
   })
 
-  it('falls back to the original path when the resolver rejects, rather than throwing', async () => {
+  it('falls back to the original path AND the original durationSec when the resolver rejects, rather than throwing', async () => {
     const resolveStretched = vi.fn().mockRejectedValue(new Error('rubberband binary missing'))
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
     const project = await buildEngineProject(state, resolveStretched)
-    expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a.wav')
+    const stem = project.rifffs[0].stems[0]
+    expect(stem.resolvedPath).toBe('/a.wav')
+    // The fallback must be fully consistent: a stem that fell back to its
+    // original (unstretched) path must also report its original duration,
+    // not a stretched one from a resolution that never actually happened.
+    expect(stem.durationSec).toBe(rifff.stems[0].durationSec)
   })
 })
