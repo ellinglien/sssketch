@@ -1,6 +1,6 @@
 import type { AppState } from '../renderer/src/state/store'
 import { SNAP_DIVS } from '../renderer/src/state/store'
-import { resolveOffsetKey, stemStartBar } from '../renderer/src/state/selectors'
+import { resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../renderer/src/state/selectors'
 import { stemKey } from './types'
 
 export interface EngineStem {
@@ -8,6 +8,7 @@ export interface EngineStem {
   resolvedPath: string
   durationSec: number
   barLength: number
+  playedBars: number
   offsetSteps: number
   startBarOverride: number // -1 means "use the rifff's own startBar"
   volume: number
@@ -97,6 +98,7 @@ export async function buildEngineProject(
         // slowed down relative to its own native bpm.
         durationSec: resolved.durationSec,
         barLength: stem.barLength,
+        playedBars: resolvePlayedBars(state, rifff.groupId, stem.slot),
         offsetSteps,
         startBarOverride: override,
         volume: state.vol[key] ?? 1,

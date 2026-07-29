@@ -121,4 +121,16 @@ describe('buildEngineProject', () => {
     // not a stretched one from a resolution that never actually happened.
     expect(stem.durationSec).toBe(rifff.stems[0].durationSec)
   })
+
+  it('resolves playedBars via resolvePlayedBars, defaulting to rifff.barLength when unset', async () => {
+    const state = stateWith({ bpm: 150 }) // ratio 1, no stretch call needed
+    const project = await buildEngineProject(state, vi.fn())
+    expect(project.rifffs[0].stems[0].playedBars).toBe(rifff.barLength)
+  })
+
+  it('reflects a playedBars override', async () => {
+    const state = stateWith({ bpm: 150, playedBars: { r1: 16 } })
+    const project = await buildEngineProject(state, vi.fn())
+    expect(project.rifffs[0].stems[0].playedBars).toBe(16)
+  })
 })
