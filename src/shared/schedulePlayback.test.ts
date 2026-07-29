@@ -116,4 +116,49 @@ describe('computeStemSchedule', () => {
     // Duration scales down proportionally for the clipped final segment.
     expect(segments[2].durationSec).toBeCloseTo((2 / 3) * 4.8, 5)
   })
+
+  it('tiles the stem twice when playedBars exceeds rifff.barLength by one full stem length', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.stems[0].barLength * 2 // stem's own barLength doubled
+    })
+    expect(segments).toHaveLength(2)
+    expect(segments[0].bufferOffsetSec).toBe(0)
+    expect(segments[1].bufferOffsetSec).toBe(0) // second tile restarts from the stem's own beginning
+    expect(segments[1].startBarInTimeline).toBe(
+      segments[0].startBarInTimeline + rifff.stems[0].barLength
+    )
+  })
+
+  it('truncates to one shorter segment when playedBars is less than the stem barLength', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.stems[0].barLength / 2
+    })
+    expect(segments).toHaveLength(1)
+    expect(segments[0].barLength).toBe(rifff.stems[0].barLength / 2)
+  })
+
+  it('defaults to rifff.barLength when playedBars is omitted (unchanged existing behavior)', () => {
+    const withOverride = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.barLength
+    })
+    const withoutOverride = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm
+    })
+    expect(withoutOverride).toEqual(withOverride)
+  })
 })
