@@ -341,7 +341,7 @@ export function CollapsedRifffRow({
               width: 5,
               cursor: 'ew-resize',
               background: '#fff',
-              opacity: 0.55,
+              opacity: 0.12,
               zIndex: 3
             }}
           />
@@ -356,7 +356,7 @@ export function CollapsedRifffRow({
               width: 5,
               cursor: 'ew-resize',
               background: '#fff',
-              opacity: 0.55,
+              opacity: 0.12,
               zIndex: 3
             }}
           />

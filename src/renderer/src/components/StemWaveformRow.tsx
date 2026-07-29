@@ -359,7 +359,7 @@ export function StemWaveformRow({
               width: 5,
               cursor: 'ew-resize',
               background: '#fff',
-              opacity: 0.55,
+              opacity: 0.12,
               zIndex: 3
             }}
           />
@@ -374,7 +374,7 @@ export function StemWaveformRow({
               width: 5,
               cursor: 'ew-resize',
               background: '#fff',
-              opacity: 0.55,
+              opacity: 0.12,
               zIndex: 3
             }}
           />
