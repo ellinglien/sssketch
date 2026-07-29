@@ -8,6 +8,7 @@
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
 #include "EngineProject.h"
+#include "RenderExport.h"
 
 // PlaybackEngine, Transport, IpcServer, StemBufferCache, EngineProject, and
 // parseEngineProject all live in namespace ssstitch (see their headers) — the
@@ -231,44 +232,13 @@ static int runRenderTest(const juce::String& projectJsonPath, const juce::String
         return 1;
     }
 
-    StemBufferCache bufferCache;
-    PlaybackEngine engine(bufferCache);
-    engine.setProject(project);
-
-    const double sampleRate = 44100.0;
-    const double secPerBar = project.bpm > 0.0 ? (60.0 / project.bpm) * 4.0 : 0.0;
-    const int totalSamples = (int) std::ceil(durationBars * secPerBar * sampleRate);
-    const int blockSize = 512;
-
-    juce::AudioBuffer<float> output(2, juce::jmax(1, totalSamples));
-    output.clear();
-
-    for (int startSample = 0; startSample < totalSamples; startSample += blockSize)
+    if (!renderProjectToWavFile(project, outputWavPath, durationBars, error))
     {
-        const int numSamples = juce::jmin(blockSize, totalSamples - startSample);
-        const double positionBars = (startSample / sampleRate) / secPerBar;
-        engine.renderBlock(
-            positionBars, sampleRate, numSamples,
-            output.getWritePointer(0, startSample),
-            output.getWritePointer(1, startSample));
-    }
-
-    juce::WavAudioFormat wavFormat;
-    auto outFile = juce::File(outputWavPath);
-    outFile.deleteFile();
-    std::unique_ptr<juce::FileOutputStream> out(outFile.createOutputStream());
-    std::unique_ptr<juce::AudioFormatWriter> writer(
-        wavFormat.createWriterFor(out.get(), sampleRate, 2, 16, {}, 0));
-    if (writer == nullptr)
-    {
-        juce::Logger::writeToLog("runRenderTest: failed to open output WAV for writing");
+        juce::Logger::writeToLog("runRenderTest: " + error);
         return 1;
     }
-    out.release();
-    writer->writeFromAudioSampleBuffer(output, 0, totalSamples);
-    writer.reset();
 
-    juce::Logger::writeToLog("runRenderTest: wrote " + juce::String(totalSamples) + " samples to " + outputWavPath);
+    juce::Logger::writeToLog("runRenderTest: wrote " + outputWavPath);
     return 0;
 }
 

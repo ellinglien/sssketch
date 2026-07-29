@@ -11,7 +11,6 @@ import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars, pasteRifffAction } from './state/selectors'
-import { renderMixToWav } from './audio/exportMix'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
   const rect = container.getBoundingClientRect()
@@ -121,10 +120,14 @@ function ProjectMenu(): React.JSX.Element {
   async function handleExport(): Promise<void> {
     setExporting(true)
     try {
-      const wav = await renderMixToWav(state)
+      const wav = await window.rifffApi.exportMixNative(JSON.stringify(state))
       await window.rifffApi.exportMix(wav)
     } catch (err) {
       console.error('ProjectMenu: failed to export mix:', err)
+      // Export now has exactly one code path (the native engine, with no Web
+      // Audio fallback) — a spawn/render failure here would otherwise reset
+      // the button with zero visible indication anything went wrong.
+      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }

@@ -2,6 +2,21 @@
 
 namespace ssstitch
 {
+    // File-local helper for building the render-export-result reply — mirrors
+    // how position-update's payload is built inline in timerCallback() above,
+    // just factored out since it's needed both on the success and failure path.
+    static juce::var makeRenderExportResult(bool success, const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("success", success);
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "render-export-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        return juce::var(obj.get());
+    }
+
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c)
         : engine(e), transport(t), bufferCache(c)
     {
@@ -94,6 +109,24 @@ namespace ssstitch
         {
             const double pos = payload.isObject() ? (double) payload.getProperty("pos", 0.0) : 0.0;
             transport.setPosition(pos);
+        }
+        else if (type == "render-export")
+        {
+            if (!payload.isObject())
+            {
+                sendJson(makeRenderExportResult(false, "render-export payload must be an object"));
+                return;
+            }
+            const auto outputPath = payload.getProperty("outputPath", "").toString();
+            const auto durationBars = (double) payload.getProperty("durationBars", 0.0);
+
+            // Reuses whatever project was most recently set via load-project — the same
+            // "load-project, then act on it" sequencing IPC clients already use for
+            // play/pause/set-position, kept consistent rather than inventing a second
+            // way to pass project data just for this one message type.
+            juce::String error;
+            const bool ok = renderProjectToWavFile(engine.currentProjectForExport(), outputPath, durationBars, error);
+            sendJson(makeRenderExportResult(ok, ok ? juce::String() : error));
         }
         else if (type == "quit")
         {

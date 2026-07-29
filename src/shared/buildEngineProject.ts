@@ -54,7 +54,19 @@ export async function buildEngineProject(
     for (const stem of rifff.stems) {
       let resolvedPath = stem.path
       if (Math.abs(ratio - 1) >= 0.001) {
-        resolvedPath = await resolveStretched(stem.path, ratio)
+        try {
+          resolvedPath = await resolveStretched(stem.path, ratio)
+        } catch (err) {
+          // Same failure-isolation pattern AudioEngine.ts's loadBuffer and
+          // exportMix.ts's loadBufferForExport already use — a missing rubberband
+          // binary or a bad render shouldn't fail the whole export, it should
+          // fall back to native-tempo playback for just this stem.
+          console.error(
+            `buildEngineProject: rubberband render failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
+            err
+          )
+          resolvedPath = stem.path
+        }
       }
 
       const key = stemKey(rifff.groupId, stem.slot)
