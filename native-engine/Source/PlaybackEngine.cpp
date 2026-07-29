@@ -1,10 +1,8 @@
 // native-engine/Source/PlaybackEngine.cpp
 #include "PlaybackEngine.h"
-#include "SchedulePlayback.h"
 #include "FadeGain.h"
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace ssstitch
 {
@@ -32,9 +30,10 @@ namespace ssstitch
         const double blockStartSec = positionBars * spb;
         const double blockDurationSec = numSamples / sampleRate;
 
+        const double blockEndSec = blockStartSec + blockDurationSec;
+
         for (const auto& rifff : currentProject.rifffs)
         {
-            const RifffInfo rifffInfo { rifff.startBar, rifff.barLength };
             const FadeConfig fadeConfig { rifff.fadeInBars, rifff.fadeOutBars, spb };
 
             for (const auto& stem : rifff.stems)
@@ -44,65 +43,69 @@ namespace ssstitch
                 auto* buffer = bufferCache.get(stem.resolvedPath);
                 if (buffer == nullptr)
                     continue;
+                if (stem.barLength <= 0)
+                    continue;
 
-                const StemInfo stemInfo { stem.durationSec, stem.barLength };
+                // Which tile(s) of this stem's repeating pattern overlap this
+                // block's time window — bounded to just those, rather than
+                // (as a previous version of this function did, via
+                // computeStemSchedule with an unbounded search) walking every
+                // tile of the stem across the *whole* rifff on every single
+                // block. That was unbounded work — and a heap allocation —
+                // scaling with rifff length, not block size, and on a
+                // real-time audio callback (Transport.cpp) that's exactly
+                // the kind of per-block cost that shows up as coreaudiod CPU
+                // spikes on longer or tile-dense arrangements.
+                //
+                // isFirstSegment/isLastSegment are computed from each tile's
+                // own fixed index (0, and totalTiles - 1) rather than
+                // position within a filtered list — the same fix
+                // computeStemSchedule's own -infinity/projectPos trick was
+                // working around (a shrinking filtered list changing which
+                // "index" counts as first) can't reappear here, since we
+                // never build a list at all.
+                const double start = stem.startBarOverride >= 0.0 ? stem.startBarOverride : rifff.startBar;
+                const double offsetBars = stem.offsetSteps / currentProject.snapDiv;
+                const double bound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
+                if (bound <= 0.0)
+                    continue;
+                const double secPerBarNative = stem.durationSec / (double) stem.barLength;
 
-                // projectPos is deliberately NOT positionBars here — pass a value that
-                // never satisfies computeStemSchedule's "already fully in the past"
-                // filter (endBarInTimeline <= projectPos), so it always returns every
-                // tile of the stem's repeating pattern across the whole rifff, in
-                // stable order.
-                //
-                // Why: AudioEngine.ts calls computeStemSchedule ONCE per play(), with
-                // projectPos = the position at the moment play() was pressed. The
-                // returned (filtered) array is then fixed for the life of that
-                // playback session, so "index 0" stays pinned to whichever tile was
-                // current at that moment — exactly one tile per session ever gets
-                // isFirstSegment/fade-in treatment.
-                //
-                // renderBlock has no session — it calls computeStemSchedule fresh on
-                // *every* block with an ever-advancing positionBars. If positionBars
-                // were passed straight through as projectPos, then every time a tile
-                // finishes and gets filtered out, the *next* tile becomes the new
-                // "index 0" of that call's array and would be misidentified as
-                // isFirstSegment — applying a bogus fade-in to every repeat of a
-                // looping stem, not just the true first tile (fade-out is unaffected:
-                // computeStemSchedule never drops from the tail, so the last array
-                // entry is always the true final tile). Disabling the filter here
-                // keeps isFirstSegment/isLastSegment anchored to each tile's real,
-                // fixed position in the schedule regardless of which block asks.
-                // Skipping tiles that don't overlap *this* block is instead done
-                // below, directly from each segment's own absolute start/end time —
-                // computeStemSchedule's per-call cost doesn't change either way, since
-                // its loop always walks every bar-offset regardless of what it filters.
-                //
-                // TODO(Task 6): this does mean every block call heap-allocates a
-                // segments vector covering *every* tile of the stem across the whole
-                // rifff (e.g. a 1-bar tile in a 1000-bar rifff returns ~1000 entries,
-                // every block) — fine for this task's offline/non-realtime-wired
-                // mixer, but a real-time audio callback built on top of renderBlock
-                // should not inherit a per-callback heap allocation of unbounded size.
-                // Worth revisiting then (e.g. bound the search to tiles near
-                // positionBars, or cache/reuse the vector across calls).
-                const ScheduleOptions opts {
-                    stem.offsetSteps, currentProject.snapDiv,
-                    -std::numeric_limits<double>::infinity(),
-                    currentProject.bpm, stem.startBarOverride, stem.playedBars
-                };
-                auto segments = computeStemSchedule(rifffInfo, stemInfo, opts);
+                const int totalTiles = (int) std::ceil(bound / (double) stem.barLength);
+                const double tileDurationSec = (double) stem.barLength * spb;
+                const double firstTileStartSec = (start + offsetBars) * spb;
 
-                for (size_t i = 0; i < segments.size(); ++i)
+                // One tile of slack behind the naive floor absorbs floating-
+                // point drift at a tile boundary (positionBars accumulates by
+                // repeated addition in Transport.cpp) — worst case the extra
+                // tile checked here is immediately skipped by the per-tile
+                // overlap test below, at negligible cost.
+                int tileIdx = std::max(
+                    0,
+                    (int) std::floor((blockStartSec - firstTileStartSec) / tileDurationSec) - 1);
+
+                for (; tileIdx < totalTiles; ++tileIdx)
                 {
-                    const auto& seg = segments[i];
-                    const double segStartSec = seg.startBarInTimeline * spb;
-                    const double segEndSec = segStartSec + seg.durationSec;
-                    // Does this segment overlap the current block's time window at all?
-                    if (segEndSec <= blockStartSec || segStartSec >= blockStartSec + blockDurationSec)
+                    const double barOffset = (double) tileIdx * (double) stem.barLength;
+                    const double segmentBarLength = std::min((double) stem.barLength, bound - barOffset);
+                    const double segStartSec = (start + offsetBars + barOffset) * spb;
+                    const double segEndSec = segStartSec + segmentBarLength * secPerBarNative;
+
+                    // Tiles only get later from here on — nothing further in
+                    // this loop can overlap the block once one starts after it.
+                    if (segStartSec >= blockEndSec)
+                        break;
+                    // Reached via the one-tile slack margin above; this
+                    // particular tile turned out to end before the block starts.
+                    if (segEndSec <= blockStartSec)
                         continue;
 
+                    const bool isFirstSegment = tileIdx == 0;
+                    const bool isLastSegment = tileIdx == totalTiles - 1;
+
                     auto fadePoints = buildFadePoints(
-                        segStartSec, seg.durationSec,
-                        i == 0, i == segments.size() - 1,
+                        segStartSec, segEndSec - segStartSec,
+                        isFirstSegment, isLastSegment,
                         true, // renderBlock's fade points are anchored at each segment's
                               // own absolute start time (segStartSec), not at "now" the
                               // way AudioEngine.ts's Web Audio automation is (there,
@@ -154,7 +157,7 @@ namespace ssstitch
                         // drift without changing behaviour for genuinely mismatched rates
                         // (still nearest-sample, just correctly nearest instead of
                         // always-floor).
-                        const int srcSample = (int) std::llround((seg.bufferOffsetSec + posInSegSec) * srcSampleRate);
+                        const int srcSample = (int) std::llround(posInSegSec * srcSampleRate);
                         if (srcSample < 0 || srcSample >= buffer->getNumSamples())
                             continue;
 
