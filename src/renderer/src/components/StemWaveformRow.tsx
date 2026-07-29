@@ -338,6 +338,16 @@ export function StemWaveformRow({
         }}
         title={unlinked ? 'drag to move this stem independently' : undefined}
         style={{
+          // position:relative (not the default static) so this competes on
+          // z-order at all: RifffBlockRow's own header sits directly above
+          // this exact spot for the FIRST stem row (position:absolute,
+          // pointerEvents:auto, same 212px-wide/44px-tall footprint), and a
+          // positioned sibling always paints over a non-positioned one
+          // regardless of DOM order — without this, that first row's mute
+          // button and unlinked-drag would be permanently unreachable. Once
+          // positioned, this comes later in the DOM than that header, so it
+          // wins the tie at the same (default) stack level.
+          position: 'relative',
           width: 212,
           flexShrink: 0,
           padding: '0 10px',
