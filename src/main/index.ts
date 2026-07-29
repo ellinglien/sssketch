@@ -183,8 +183,15 @@ app.on('before-quit', (event) => {
   if (isQuitting || !playbackEngine) return
   isQuitting = true
   event.preventDefault()
-  playbackEngine
-    .shutdown()
+  // shutdown() has no internal timeout of its own — if a respawn's
+  // EngineClient.connect() were to hang (unlike spawnEngine()'s own 5s
+  // readiness timeout, a raw socket.connect() has no bound), awaiting it
+  // unconditionally could make the app un-quittable via Cmd+Q/dock/menu,
+  // which is worse than the orphaned-subprocess risk this handler exists to
+  // avoid. Race it against a fixed timeout so quitting is never held
+  // hostage by the engine layer.
+  const shutdownTimeout = new Promise<void>((resolve) => setTimeout(resolve, 5000))
+  Promise.race([playbackEngine.shutdown(), shutdownTimeout])
     .catch((err: unknown) => {
       // Not expected to reject under normal conditions (shutdown()'s
       // internal errors are already caught), but guarded the same way
