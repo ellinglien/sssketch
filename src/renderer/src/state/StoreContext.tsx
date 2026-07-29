@@ -9,10 +9,11 @@ import {
   type Dispatch,
   type ReactNode
 } from 'react'
-import { initialState, SNAP_DIVS, type Action, type AppState } from './store'
+import { initialState, type Action, type AppState } from './store'
 import { createHistoryState, historyReducer } from './history'
-import { AudioEngine } from '../audio/AudioEngine'
-import { loopLengthBars, resolveOffsetKey, stemStartBar } from './selectors'
+import { buildEngineProject } from '@shared/buildEngineProject'
+import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
+import { loopLengthBars } from './selectors'
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<Action>>(() => {})
@@ -58,78 +59,25 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     stateRef.current = state
   })
 
-  const engineRef = useRef<AudioEngine | null>(null)
-  // Declared first (and with an empty dep array) so it runs — and creates the
-  // engine — before any other effect in this component during the initial commit;
-  // later effects below can then safely assume engineRef.current is non-null.
+  // Keeps the native engine's picture of the project in sync with every
+  // scheduling-relevant state change — playing or not. Sending load-project
+  // to a paused engine is harmless and keeps it always current for whenever
+  // play is next pressed; there's no separate "reschedule while playing"
+  // code path the way AudioEngine.ts needed, because PlaybackEngine::renderBlock
+  // recomputes scheduling fresh from whatever project is currently loaded on
+  // every single audio block — see the Phase 3 design doc.
   useEffect(() => {
-    engineRef.current = new AudioEngine({
-      getRifffs: () => Object.values(stateRef.current.rifffs),
-      getOffsetSteps: (groupId, slot) => {
-        const key = resolveOffsetKey(stateRef.current, groupId, slot)
-        return stateRef.current.off[key] ?? 0
-      },
-      getSnapDiv: () => SNAP_DIVS[stateRef.current.snapIdx],
-      getVolume: (key) => stateRef.current.vol[key] ?? 1,
-      isMuted: (key) => !!stateRef.current.mute[key],
-      getProjectBpm: () => stateRef.current.bpm,
-      isStretchOn: (groupId) => stateRef.current.stretch[groupId] ?? true,
-      getStemStartBar: (groupId, slot) => stemStartBar(stateRef.current, groupId, slot),
-      getFadeInBars: (groupId) => stateRef.current.fadeIn[groupId] ?? 0,
-      getFadeOutBars: (groupId) => stateRef.current.fadeOut[groupId] ?? 0
-    })
-  }, [])
-
-  useEffect(() => {
-    engineRef.current!.updateLiveGains()
-  }, [state.vol, state.mute])
-
-  useEffect(() => {
-    if (state.playing) {
-      engineRef.current!.play(state.pos)
-      let raf: number
-      let lastTick = 0
-      // engine.play() only schedules audio for one pass through the timeline —
-      // currentPos()'s modulo makes the *displayed* position loop, but nothing
-      // else re-triggers scheduling when it wraps, so audio would go silent
-      // after 32 bars while the playhead kept animating. Track the position
-      // locally (not via React state, which lags a render behind) and re-call
-      // play() the instant it wraps, reusing the same reschedule mechanism
-      // Task 16 uses for live offset/tempo changes.
-      let lastPos = state.pos
-      const tick = (t: number): void => {
-        if (t - lastTick > 55) {
-          lastTick = t
-          const newPos = engineRef.current!.currentPos(loopLengthBars(stateRef.current))
-          if (newPos < lastPos) {
-            engineRef.current!.play(newPos)
-          }
-          lastPos = newPos
-          dispatch({ type: 'SET_POS', pos: newPos })
-        }
-        raf = requestAnimationFrame(tick)
+    let cancelled = false
+    void (async () => {
+      const project = await buildEngineProject(state, resolveStretchedForPlayback)
+      if (!cancelled) {
+        await window.rifffApi.engineLoadProject(project)
       }
-      raf = requestAnimationFrame(tick)
-      return () => cancelAnimationFrame(raf)
-    } else {
-      engineRef.current!.stop()
+    })()
+    return () => {
+      cancelled = true
     }
-    return undefined
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions; state.pos is read once at play-start via stateRef/closure, not tracked as a dependency
-  }, [state.playing])
-
-  // Re-schedules playback in place when offset/tempo/snap/unlink/placement change
-  // while already playing, so the change takes effect immediately instead of only on
-  // the next play(). state.rifffs is included so dragging a clip to a new position,
-  // dropping a new one in, removing one, or baking a new path all reschedule too —
-  // without it, a mid-playback change to *where* something plays only took effect on
-  // the next full loop wrap, leaving audio and the visible arrangement out of sync
-  // until then.
-  useEffect(() => {
-    if (state.playing) {
-      engineRef.current!.play(engineRef.current!.currentPos(loopLengthBars(state)))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing; the play/pause effect above already handles play/pause transitions, this effect should only re-run when scheduling-affecting values actually change
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing and state.pos; those are handled by the separate play/pause effect and the position-update subscription below, not by reloading the whole project
   }, [
     state.off,
     state.bpm,
@@ -139,8 +87,43 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.rifffs,
     state.stemStart,
     state.fadeIn,
-    state.fadeOut
+    state.fadeOut,
+    state.vol,
+    state.mute
   ])
+
+  useEffect(() => {
+    if (state.playing) {
+      void window.rifffApi.enginePlay(state.pos)
+    } else {
+      void window.rifffApi.engineStop()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions, matching the old effect's behavior; state.pos is read once at play-start via closure, not tracked as a dependency
+  }, [state.playing])
+
+  useEffect(() => {
+    return window.rifffApi.onEnginePositionUpdate((pos) => {
+      const loopBars = loopLengthBars(stateRef.current)
+      if (pos >= loopBars) {
+        // Loop wrap-around: the native transport counts up monotonically
+        // forever with no concept of loop length (that's a renderer-only
+        // concept, computed from rifffs) — mirror the old AudioEngine.ts-era
+        // wrap detection, just triggered by real engine events now instead
+        // of a locally-computed value.
+        const wrapped = pos % loopBars
+        void window.rifffApi.engineSetPosition(wrapped)
+        dispatch({ type: 'SET_POS', pos: wrapped })
+      } else {
+        dispatch({ type: 'SET_POS', pos })
+      }
+    })
+  }, [dispatch])
+
+  useEffect(() => {
+    return window.rifffApi.onEngineRestarted(() => {
+      dispatch({ type: 'STOP' })
+    })
+  }, [dispatch])
 
   return (
     <StateCtx.Provider value={state}>
