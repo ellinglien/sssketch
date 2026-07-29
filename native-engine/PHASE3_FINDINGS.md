@@ -18,10 +18,10 @@ Test Files  24 passed (24)
      Tests  177 passed (177)
 ```
 
-Up from Phase 2's 22 files / 168 tests — 2 new files (`liveReschedule.test.ts`, a fourth case
-added to `render-parity.test.ts` doesn't add a file), plus new cases in
-`playbackEngineLifecycle.test.ts` (new this phase) and `engineClient.test.ts` (extended for
-push-subscription).
+Up from Phase 2's 22 files / 168 tests — 2 new files this phase
+(`playbackEngineLifecycle.test.ts`, `liveReschedule.test.ts`), plus new cases added to
+existing files: `engineClient.test.ts` (extended for push-subscription) and
+`render-parity.test.ts` (a fourth, stretch-ratio case).
 
 C++ side, `native-engine/build/ssstitch_engine_artefacts/Debug/ssstitch_engine --test`:
 
