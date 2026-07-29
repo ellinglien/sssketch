@@ -7,8 +7,9 @@ import { sqrtGain } from '@shared/mixGain'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { PPB } from './Ruler'
+import { PPB, LANE_HEADER_WIDTH } from './Ruler'
 import { startPointerDrag } from './dragUtils'
+import { computeGrabOffsetBars, setGrabOffsetBars } from './dragGrabOffset'
 
 export const ROW_HEIGHT = 44
 const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
@@ -308,6 +309,11 @@ export function StemWaveformRow({
         onDragStart={(e) => {
           if (!unlinked) return
           e.dataTransfer.setData('text/rifff-stem-key', key)
+          const rect = e.currentTarget.closest('[data-timeline]')?.getBoundingClientRect()
+          if (rect) {
+            const mouseBar = Math.max(0, (e.clientX - rect.left - LANE_HEADER_WIDTH) / PPB)
+            setGrabOffsetBars(computeGrabOffsetBars(mouseBar, baseStartBar))
+          }
         }}
         title={unlinked ? 'drag to move this stem independently' : undefined}
         style={{

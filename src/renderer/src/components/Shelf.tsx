@@ -3,6 +3,7 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
+import { setGrabOffsetBars } from './dragGrabOffset'
 
 export function Shelf({
   onImported
@@ -78,6 +79,11 @@ export function Shelf({
             draggable
             onDragStart={(e) => {
               e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
+              // Not yet placed — there's no existing on-timeline position to
+              // preserve an offset from, and without this the module could
+              // still be holding a stale value left behind by a previous
+              // in-arranger reposition drag.
+              setGrabOffsetBars(0)
             }}
             style={{
               width: 212,

@@ -11,6 +11,7 @@ import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars, pasteRifffAction } from './state/selectors'
+import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
   const rect = container.getBoundingClientRect()
@@ -31,13 +32,13 @@ function Timeline({
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    setDropBar(barForClientX(e.clientX, e.currentTarget))
+    setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget), getGrabOffsetBars()))
   }
 
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
     setDropBar(null)
-    const startBar = barForClientX(e.clientX, e.currentTarget)
+    const startBar = applyGrabOffset(barForClientX(e.clientX, e.currentTarget), getGrabOffsetBars())
 
     // Checked first — more specific than a whole-group drag, and the two payloads
     // are never both set on the same drop (StemWaveformRow only sets this one,
@@ -63,6 +64,7 @@ function Timeline({
 
   return (
     <div
+      data-timeline
       onDragOver={handleDragOver}
       onDragLeave={() => setDropBar(null)}
       onDrop={handleDrop}
