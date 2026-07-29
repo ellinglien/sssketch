@@ -6,6 +6,19 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 
+// A finer, snap-division-independent nudge step: 1ms of real time at this
+// rifff's own bpm, computed with the same formula offsetLabels() itself uses
+// internally (msPerStep = (60/bpm)*4*1000/snapDiv) so the two can never
+// silently disagree. This makes each click's real-world effect deliberately
+// tiny and constant regardless of whatever the global snap-grid setting
+// happens to be — the whole point of separating "nudge precision" from
+// "clip-placement snap precision".
+const NUDGE_TARGET_MS = 1
+function fineNudgeDelta(bpm: number, snapDiv: number): number {
+  const msPerStep = ((60 / bpm) * 4 * 1000) / snapDiv
+  return NUDGE_TARGET_MS / msPerStep
+}
+
 export function Inspector({
   onOpenBeatPicker
 }: {
@@ -157,14 +170,20 @@ export function Inspector({
       {section(
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="ra-eyebrow">offset</span>
+            <span className="ra-eyebrow">nudge</span>
             <span style={{ fontSize: 9, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-              grid 1/{snapDiv} · {labels.msPerStep}
+              1ms/step
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <button
-              onClick={() => dispatch({ type: 'NUDGE_OFFSET', key: groupOffsetKey, delta: -1 })}
+              onClick={() =>
+                dispatch({
+                  type: 'NUDGE_OFFSET',
+                  key: groupOffsetKey,
+                  delta: -fineNudgeDelta(state.bpm, snapDiv)
+                })
+              }
               style={{
                 width: 26,
                 height: 24,
@@ -177,10 +196,16 @@ export function Inspector({
               −
             </button>
             <div style={{ flex: 1, textAlign: 'center', fontSize: 9, color: 'var(--ra-text-4)' }}>
-              −8 / 0 / +8
+              1ms steps
             </div>
             <button
-              onClick={() => dispatch({ type: 'NUDGE_OFFSET', key: groupOffsetKey, delta: 1 })}
+              onClick={() =>
+                dispatch({
+                  type: 'NUDGE_OFFSET',
+                  key: groupOffsetKey,
+                  delta: fineNudgeDelta(state.bpm, snapDiv)
+                })
+              }
               style={{
                 width: 26,
                 height: 24,
@@ -209,9 +234,6 @@ export function Inspector({
                   color: groupOffsetSteps ? color : 'var(--ra-text-2)'
                 }}
               >
-                {labels.grid}
-              </span>
-              <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--ra-text-3)' }}>
                 {labels.ms}
               </span>
             </div>
@@ -314,7 +336,11 @@ export function Inspector({
                     >
                       <button
                         onClick={() =>
-                          dispatch({ type: 'NUDGE_OFFSET', key: stemOffsetKey, delta: -1 })
+                          dispatch({
+                            type: 'NUDGE_OFFSET',
+                            key: stemOffsetKey,
+                            delta: -fineNudgeDelta(state.bpm, snapDiv)
+                          })
                         }
                         style={{
                           width: 18,
@@ -335,11 +361,15 @@ export function Inspector({
                           minWidth: 24
                         }}
                       >
-                        {stemLabels.grid}
+                        {stemLabels.ms}
                       </span>
                       <button
                         onClick={() =>
-                          dispatch({ type: 'NUDGE_OFFSET', key: stemOffsetKey, delta: 1 })
+                          dispatch({
+                            type: 'NUDGE_OFFSET',
+                            key: stemOffsetKey,
+                            delta: fineNudgeDelta(state.bpm, snapDiv)
+                          })
                         }
                         style={{
                           width: 18,
@@ -367,9 +397,6 @@ export function Inspector({
                       >
                         zero
                       </button>
-                      <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
-                        {stemLabels.ms}
-                      </span>
                     </div>
                   )}
                 </Fragment>
