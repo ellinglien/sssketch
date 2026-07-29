@@ -10,7 +10,8 @@ import {
   loopLengthBars,
   offsetStepsForBeatIndex,
   rotationSecondsForStem,
-  pasteRifffAction
+  pasteRifffAction,
+  placedRifffsInOrder
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -195,6 +196,40 @@ describe('loopLengthBars with a playedBars override', () => {
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
     const withOverride = { ...state, playedBars: { 'r1:1': 20 } }
     expect(loopLengthBars(withOverride)).toBe(rifff.startBar! + 20)
+  })
+})
+
+describe('placedRifffsInOrder', () => {
+  // The shared `rifff` fixture above has startBar: 4 baked in (used by other
+  // describe blocks that want an already-placed clip) — unsuitable here,
+  // since these tests need genuinely unplaced-then-placed transitions to
+  // exercise trackOrder. Each test below starts from its own startBar:
+  // undefined copy instead.
+  const unplaced: Rifff = { ...rifff, startBar: undefined }
+
+  it('orders placed rifffs by trackOrder, not object-insertion order', () => {
+    const second: Rifff = { ...unplaced, groupId: 'r2' }
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced }) // r1 added first
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: second })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 }) // r2 placed first
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 8 })
+    expect(placedRifffsInOrder(state).map((r) => r.groupId)).toEqual(['r2', 'r1'])
+  })
+
+  it('falls back to object order for a placed rifff missing from trackOrder (old save)', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    // Simulates a project saved before trackOrder existed — the field is empty
+    // even though a rifff is placed.
+    const legacyState = { ...state, trackOrder: [] }
+    expect(placedRifffsInOrder(legacyState).map((r) => r.groupId)).toEqual(['r1'])
+  })
+
+  it('excludes unplaced rifffs even if they linger in trackOrder', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    expect(placedRifffsInOrder(state)).toEqual([])
   })
 })
 

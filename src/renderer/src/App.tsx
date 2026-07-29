@@ -10,7 +10,7 @@ import { Playhead } from './components/Playhead'
 import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
-import { loopLengthBars, pasteRifffAction } from './state/selectors'
+import { loopLengthBars, pasteRifffAction, placedRifffsInOrder } from './state/selectors'
 import { initialState } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 
@@ -89,11 +89,9 @@ function Timeline({
       style={{ position: 'relative' }}
     >
       <Ruler bars={loopLengthBars(state)} />
-      {Object.values(state.rifffs)
-        .filter((r) => r.startBar !== undefined)
-        .map((r) => (
-          <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
-        ))}
+      {placedRifffsInOrder(state).map((r) => (
+        <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
+      ))}
       <Playhead />
       {dropBar !== null && (
         <div

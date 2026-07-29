@@ -95,6 +95,47 @@ describe('reducer', () => {
     expect(state.bpm).toBe(120)
   })
 
+  describe('trackOrder', () => {
+    it('a placed rifff joins the end of trackOrder, regardless of shelf-add order', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      // r2 was added to the shelf second, but placed on the timeline first —
+      // trackOrder should reflect placement order, not shelf-add order.
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+      expect(state.trackOrder).toEqual(['r2', 'r1'])
+    })
+
+    it('repositioning an already-placed clip does not reorder trackOrder', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 8 }) // dragged
+      expect(state.trackOrder).toEqual(['r1', 'r2'])
+    })
+
+    it('removing from the timeline drops it from trackOrder; re-placing rejoins at the bottom', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+      expect(state.trackOrder).toEqual(['r2'])
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      expect(state.trackOrder).toEqual(['r2', 'r1'])
+    })
+  })
+
   it('selects a rifff', () => {
     const state = reducer(initialState, { type: 'SELECT', groupId: 'r1' })
     expect(state.sel).toBe('r1')

@@ -34,6 +34,16 @@ export interface AppState {
    * behavior, unchanged for a project with no resize edits. */
   playedBars: Record<string, number>
   sel: string | null
+  /** Visual top-to-bottom row order for placed rifffs, as groupIds — a rifff
+   * joins the end of this list the moment it's placed (from the shelf, or
+   * pasted), and drops out again when removed. Without this, row order was
+   * just Object.values(state.rifffs)'s own iteration order, i.e. whatever
+   * order rifffs were originally imported into the shelf — meaning a rifff
+   * placed later could render ABOVE one placed earlier, regardless of drop
+   * position. Read via selectors.ts's placedRifffsInOrder, which falls back
+   * to object order for any placed rifff missing from this list (keeps old
+   * saves, made before this field existed, rendering exactly as before). */
+  trackOrder: string[]
   exp: Record<string, boolean>
   /** Global interaction mode for the expanded waveform's open body: false (default)
    * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
@@ -63,6 +73,7 @@ export const initialState: AppState = {
   fadeOut: {},
   playedBars: {},
   sel: null,
+  trackOrder: [],
   exp: {},
   volumeDragMode: false,
   compactMode: false,
@@ -135,12 +146,13 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'PLACE_ON_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
+      const wasUnplaced = rifff.startBar === undefined
       // The very first clip placed on an otherwise-empty timeline sets the
       // project's tempo, rather than leaving it at the app's arbitrary default —
       // repositioning that same clip, or placing a second one alongside it,
       // shouldn't retrigger this.
       const isFirstPlacement =
-        rifff.startBar === undefined &&
+        wasUnplaced &&
         !Object.values(state.rifffs).some(
           (r) => r.groupId !== action.groupId && r.startBar !== undefined
         )
@@ -152,7 +164,14 @@ export function reducer(state: AppState, action: Action): AppState {
         },
         bpm: isFirstPlacement ? rifff.bpm : state.bpm,
         sel: action.groupId,
-        stretch: { ...state.stretch, [action.groupId]: true }
+        stretch: { ...state.stretch, [action.groupId]: true },
+        // Joins the bottom of the visual stack the moment it's placed —
+        // repositioning an already-placed clip (wasUnplaced false) leaves
+        // its row order alone.
+        trackOrder:
+          wasUnplaced && !state.trackOrder.includes(action.groupId)
+            ? [...state.trackOrder, action.groupId]
+            : state.trackOrder
       }
     }
 
@@ -243,7 +262,10 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, startBar: undefined } },
-        sel: state.sel === action.groupId ? null : state.sel
+        sel: state.sel === action.groupId ? null : state.sel,
+        // Dropped from the row order too — if it's placed again later, it
+        // rejoins at the bottom rather than snapping back to its old spot.
+        trackOrder: state.trackOrder.filter((id) => id !== action.groupId)
       }
     }
 
@@ -280,7 +302,8 @@ export function reducer(state: AppState, action: Action): AppState {
         mute: { ...state.mute, ...action.mute },
         off: { ...state.off, ...action.off },
         stretch: { ...state.stretch, [action.rifff.groupId]: action.stretch },
-        sel: action.rifff.groupId
+        sel: action.rifff.groupId,
+        trackOrder: [...state.trackOrder, action.rifff.groupId]
       }
 
     case 'SET_VOLUME':

@@ -27,6 +27,29 @@ export interface ClipGeometry {
   widthPx: number
 }
 
+/** Placed rifffs in their visual top-to-bottom row order. Prefers
+ * state.trackOrder (populated as rifffs are placed/pasted/removed — see
+ * store.ts), falling back to object-insertion order for any placed rifff
+ * trackOrder doesn't (yet) know about — covers projects saved before
+ * trackOrder existed, so old saves keep rendering in the same order they
+ * always did rather than needing a migration step. */
+export function placedRifffsInOrder(state: AppState): Rifff[] {
+  const placed = new Set(
+    Object.values(state.rifffs)
+      .filter((r) => r.startBar !== undefined)
+      .map((r) => r.groupId)
+  )
+  const ordered = state.trackOrder.filter((id) => placed.has(id))
+  const seen = new Set(ordered)
+  for (const rifff of Object.values(state.rifffs)) {
+    if (placed.has(rifff.groupId) && !seen.has(rifff.groupId)) {
+      ordered.push(rifff.groupId)
+      seen.add(rifff.groupId)
+    }
+  }
+  return ordered.map((id) => state.rifffs[id])
+}
+
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
