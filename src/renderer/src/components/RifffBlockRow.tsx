@@ -2,6 +2,7 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemWaveformRow, ROW_HEIGHT } from './StemWaveformRow'
+import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { PolarGlyph } from './PolarGlyph'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
@@ -20,6 +21,7 @@ export function RifffBlockRow({
   const dispatch = useDispatch()
   const rifff = state.rifffs[groupId]
   const selected = state.sel === groupId
+  const expanded = !!state.exp[groupId]
   const color = identityColor(rifff)
 
   return (
@@ -86,6 +88,27 @@ export function RifffBlockRow({
             cursor: 'grab'
           }}
         >
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              dispatch({ type: 'TOGGLE_EXPAND', groupId })
+            }}
+            title={expanded ? 'collapse' : 'expand'}
+            style={{
+              width: 16,
+              height: 16,
+              flexShrink: 0,
+              borderRadius: 4,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)',
+              fontSize: 9,
+              padding: 0,
+              cursor: 'pointer'
+            }}
+          >
+            {expanded ? '▾' : '▸'}
+          </button>
           <PolarGlyph stems={rifff.stems} identityColor={color} size={30} />
           <div style={{ overflow: 'hidden' }}>
             <div
@@ -106,9 +129,13 @@ export function RifffBlockRow({
         </div>
       </div>
 
-      {rifff.stems.map((stem) => (
-        <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} />
-      ))}
+      {expanded ? (
+        rifff.stems.map((stem) => (
+          <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} />
+        ))
+      ) : (
+        <CollapsedRifffRow groupId={groupId} selected={selected} />
+      )}
     </div>
   )
 }
