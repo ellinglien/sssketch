@@ -3,6 +3,7 @@ import { useDispatch, useAppState } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
+import { sqrtGain } from '@shared/mixGain'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
@@ -340,6 +341,13 @@ export function StemWaveformRow({
       </div>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
+          onDoubleClick={() => {
+            dispatch({
+              type: 'SET_VOLUME',
+              stemKey: key,
+              volume: sqrtGain(rifff.stems.length)
+            })
+          }}
           style={{
             position: 'absolute',
             top: 0,
