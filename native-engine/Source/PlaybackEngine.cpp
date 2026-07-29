@@ -40,8 +40,13 @@ namespace ssstitch
             {
                 if (stem.muted || stem.volume <= 0.0)
                     continue;
-                auto* buffer = bufferCache.get(stem.resolvedPath);
-                if (buffer == nullptr)
+                // Single combined lookup — get() + sampleRateFor() separately
+                // would hash the same path twice (and allocate a std::string
+                // for it twice) every block; the sample rate doesn't vary
+                // per-tile, so it's fetched once here rather than inside the
+                // tile loop below.
+                const auto entry = bufferCache.getEntry(stem.resolvedPath);
+                if (entry.buffer == nullptr)
                     continue;
                 if (stem.barLength <= 0)
                     continue;
@@ -121,7 +126,6 @@ namespace ssstitch
                               // when we started asking for it.
                         fadeConfig);
 
-                    const double srcSampleRate = bufferCache.sampleRateFor(stem.resolvedPath);
                     for (int i2 = 0; i2 < numSamples; ++i2)
                     {
                         const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
@@ -157,14 +161,14 @@ namespace ssstitch
                         // drift without changing behaviour for genuinely mismatched rates
                         // (still nearest-sample, just correctly nearest instead of
                         // always-floor).
-                        const int srcSample = (int) std::llround(posInSegSec * srcSampleRate);
-                        if (srcSample < 0 || srcSample >= buffer->getNumSamples())
+                        const int srcSample = (int) std::llround(posInSegSec * entry.sampleRate);
+                        if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
 
                         const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * stem.volume;
-                        const int numCh = buffer->getNumChannels();
-                        const float l = buffer->getSample(0, srcSample);
-                        const float r = numCh > 1 ? buffer->getSample(1, srcSample) : l;
+                        const int numCh = entry.buffer->getNumChannels();
+                        const float l = entry.buffer->getSample(0, srcSample);
+                        const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
                         outL[i2] += (float) (l * gain);
                         outR[i2] += (float) (r * gain);
                     }

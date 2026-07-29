@@ -3,7 +3,7 @@
 
 namespace ssstitch
 {
-    std::vector<GainRampPoint> buildFadePoints(
+    GainRampPoints buildFadePoints(
         double when,
         double duration,
         bool isFirstSegment,
@@ -11,7 +11,7 @@ namespace ssstitch
         bool isFreshStart,
         const FadeConfig& config)
     {
-        std::vector<GainRampPoint> points;
+        GainRampPoints points;
 
         if (isFirstSegment && isFreshStart && config.fadeInBars > 0.0)
         {
@@ -29,7 +29,7 @@ namespace ssstitch
         return points;
     }
 
-    double evaluateGainAtTime(const std::vector<GainRampPoint>& points, double t)
+    double evaluateGainAtTime(const GainRampPoints& points, double t)
     {
         if (points.empty())
             return 1.0;
