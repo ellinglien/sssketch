@@ -50,7 +50,7 @@ export function TransportBar(): React.JSX.Element {
         style={{
           width: 36,
           height: 26,
-          borderRadius: 6,
+          borderRadius: 0,
           border: '1px solid var(--ra-border-strong)',
           background: state.playing ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
           color: state.playing ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
@@ -64,7 +64,7 @@ export function TransportBar(): React.JSX.Element {
         style={{
           width: 28,
           height: 26,
-          borderRadius: 6,
+          borderRadius: 0,
           border: '1px solid var(--ra-border)',
           background: 'var(--ra-bg-row-active)',
           color: 'var(--ra-text-2)'
@@ -97,7 +97,7 @@ export function TransportBar(): React.JSX.Element {
           style={{
             width: 20,
             height: 20,
-            borderRadius: 4,
+            borderRadius: 0,
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text)'
@@ -123,7 +123,7 @@ export function TransportBar(): React.JSX.Element {
             background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text)',
             border: '1px solid var(--ra-border)',
-            borderRadius: 4,
+            borderRadius: 0,
             height: 20
           }}
         />
@@ -133,7 +133,7 @@ export function TransportBar(): React.JSX.Element {
           style={{
             width: 20,
             height: 20,
-            borderRadius: 4,
+            borderRadius: 0,
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text)'
@@ -148,7 +148,7 @@ export function TransportBar(): React.JSX.Element {
         aria-label="Cycle snap grid"
         style={{
           height: 22,
-          borderRadius: 6,
+          borderRadius: 0,
           border: '1px solid var(--ra-border)',
           background: 'var(--ra-bg-row-active)',
           color: 'var(--ra-text-2)',
@@ -165,7 +165,7 @@ export function TransportBar(): React.JSX.Element {
         title={state.volumeDragMode ? 'envelope drag: on (V)' : 'envelope drag: off (V)'}
         style={{
           height: 22,
-          borderRadius: 6,
+          borderRadius: 0,
           padding: '0 8px',
           fontSize: 10,
           background: state.volumeDragMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
@@ -182,7 +182,7 @@ export function TransportBar(): React.JSX.Element {
         title={state.compactMode ? 'compact mode: on (Tab)' : 'compact mode: off (Tab)'}
         style={{
           height: 22,
-          borderRadius: 6,
+          borderRadius: 0,
           padding: '0 8px',
           fontSize: 10,
           background: state.compactMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
@@ -202,7 +202,7 @@ export function TransportBar(): React.JSX.Element {
           style={{
             width: 22,
             height: 22,
-            borderRadius: 4,
+            borderRadius: 0,
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: history.canUndo ? 'var(--ra-text)' : 'var(--ra-text-4)',
@@ -219,7 +219,7 @@ export function TransportBar(): React.JSX.Element {
           style={{
             width: 22,
             height: 22,
-            borderRadius: 4,
+            borderRadius: 0,
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: history.canRedo ? 'var(--ra-text)' : 'var(--ra-text-4)',

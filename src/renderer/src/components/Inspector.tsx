@@ -82,7 +82,7 @@ export function Inspector({
               title="remove from timeline (Delete)"
               style={{
                 height: 20,
-                borderRadius: 4,
+                borderRadius: 0,
                 padding: '0 6px',
                 fontSize: 10,
                 border: '1px solid var(--ra-border)',
@@ -145,7 +145,7 @@ export function Inspector({
               onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}
               style={{
                 height: 22,
-                borderRadius: 6,
+                borderRadius: 0,
                 padding: '0 8px',
                 fontSize: 10,
                 background: stretchOn && ratio !== 1 ? 'var(--ra-stretch-on-bg)' : 'transparent',
@@ -186,7 +186,7 @@ export function Inspector({
               style={{
                 width: 26,
                 height: 24,
-                borderRadius: 6,
+                borderRadius: 0,
                 border: '1px solid var(--ra-border-strong)',
                 background: 'var(--ra-bg-row-active)',
                 color: 'var(--ra-text)'
@@ -208,7 +208,7 @@ export function Inspector({
               style={{
                 width: 26,
                 height: 24,
-                borderRadius: 6,
+                borderRadius: 0,
                 border: '1px solid var(--ra-border-strong)',
                 background: 'var(--ra-bg-row-active)',
                 color: 'var(--ra-text)'
@@ -242,7 +242,7 @@ export function Inspector({
                 title="downbeat correction is normally handled once, right at import — reopen this only if it drifted or needs redoing"
                 style={{
                   height: 20,
-                  borderRadius: 4,
+                  borderRadius: 0,
                   padding: '0 6px',
                   fontSize: 10,
                   border: '1px solid var(--ra-border)',
@@ -256,7 +256,7 @@ export function Inspector({
                 onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
                 style={{
                   height: 20,
-                  borderRadius: 4,
+                  borderRadius: 0,
                   padding: '0 6px',
                   fontSize: 10,
                   border: '1px solid var(--ra-border)',
@@ -279,7 +279,7 @@ export function Inspector({
               onClick={() => dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })}
               style={{
                 height: 20,
-                borderRadius: 4,
+                borderRadius: 0,
                 padding: '0 6px',
                 fontSize: 10,
                 background: 'var(--ra-bg-row-active)',
@@ -304,7 +304,7 @@ export function Inspector({
                       style={{
                         width: 6,
                         height: 12,
-                        borderRadius: 2,
+                        borderRadius: 0,
                         background: typeColorVar(stem.type),
                         border: 'none',
                         padding: 0
@@ -344,7 +344,7 @@ export function Inspector({
                         style={{
                           width: 18,
                           height: 16,
-                          borderRadius: 3,
+                          borderRadius: 0,
                           border: '1px solid var(--ra-border)',
                           background: 'var(--ra-bg-row-active)',
                           color: 'var(--ra-text)',
@@ -373,7 +373,7 @@ export function Inspector({
                         style={{
                           width: 18,
                           height: 16,
-                          borderRadius: 3,
+                          borderRadius: 0,
                           border: '1px solid var(--ra-border)',
                           background: 'var(--ra-bg-row-active)',
                           color: 'var(--ra-text)',
@@ -386,7 +386,7 @@ export function Inspector({
                         onClick={() => dispatch({ type: 'ZERO_OFFSET', key: stemOffsetKey })}
                         style={{
                           height: 16,
-                          borderRadius: 3,
+                          borderRadius: 0,
                           padding: '0 5px',
                           fontSize: 9,
                           border: '1px solid var(--ra-border)',

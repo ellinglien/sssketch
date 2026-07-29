@@ -271,7 +271,7 @@ export function CollapsedRifffRow({
             bottom: 0,
             left: leftPx,
             width: widthPx,
-            borderRadius: 3,
+            borderRadius: 0,
             border: `1px solid color-mix(in srgb, ${color} ${selected ? 70 : 40}%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
             overflow: 'hidden',
@@ -320,7 +320,13 @@ export function CollapsedRifffRow({
             height={ROW_HEIGHT}
             style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
           >
-            <path d={envelopeCurve} fill="none" stroke="#fff" strokeWidth={1} opacity={0.5} />
+            <path
+              d={envelopeCurve}
+              fill="none"
+              stroke="var(--ra-text)"
+              strokeWidth={1}
+              opacity={0.5}
+            />
           </svg>
 
           {/* Resize handles, both edges — same behavior as StemWaveformRow's
@@ -340,7 +346,7 @@ export function CollapsedRifffRow({
               left: 0,
               width: 5,
               cursor: 'ew-resize',
-              background: '#fff',
+              background: 'var(--ra-text)',
               opacity: 0.12,
               zIndex: 3
             }}
@@ -355,7 +361,7 @@ export function CollapsedRifffRow({
               right: 0,
               width: 5,
               cursor: 'ew-resize',
-              background: '#fff',
+              background: 'var(--ra-text)',
               opacity: 0.12,
               zIndex: 3
             }}
@@ -376,7 +382,7 @@ export function CollapsedRifffRow({
               width: 7,
               height: 7,
               borderRadius: '50%',
-              background: '#fff',
+              background: 'var(--ra-text)',
               cursor: 'pointer',
               zIndex: 4
             }}
@@ -392,7 +398,7 @@ export function CollapsedRifffRow({
               width: 7,
               height: 7,
               borderRadius: '50%',
-              background: '#fff',
+              background: 'var(--ra-text)',
               cursor: 'pointer',
               zIndex: 4
             }}
@@ -459,7 +465,7 @@ export function CollapsedRifffRow({
                 color: 'var(--ra-mute-on-ink)',
                 fontSize: 10,
                 fontWeight: 700,
-                borderRadius: 4,
+                borderRadius: 0,
                 zIndex: 5,
                 whiteSpace: 'nowrap',
                 pointerEvents: 'none'

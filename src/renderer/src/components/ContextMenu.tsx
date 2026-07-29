@@ -51,7 +51,7 @@ export function ContextMenu({
         zIndex: 20,
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border-strong)',
-        borderRadius: 6,
+        borderRadius: 0,
         padding: 4,
         minWidth: 160,
         boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
@@ -74,7 +74,7 @@ export function ContextMenu({
             background: 'transparent',
             color: item.danger ? 'var(--ra-mute-on)' : 'var(--ra-text)',
             cursor: 'pointer',
-            borderRadius: 4
+            borderRadius: 0
           }}
         >
           {item.label}

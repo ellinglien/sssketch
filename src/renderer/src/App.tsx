@@ -177,7 +177,7 @@ function ProjectMenu(): React.JSX.Element {
 
   const buttonStyle = {
     height: 22,
-    borderRadius: 6,
+    borderRadius: 0,
     padding: '0 10px',
     fontSize: 10,
     border: '1px solid var(--ra-border)',

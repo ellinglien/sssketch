@@ -330,7 +330,7 @@ export function BeatPicker({
           maxWidth: '90vw',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
-          borderRadius: 8,
+          borderRadius: 0,
           padding: 16
         }}
       >
@@ -346,7 +346,7 @@ export function BeatPicker({
             onClick={() => commitAndCloseRef.current()}
             style={{
               height: 22,
-              borderRadius: 6,
+              borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
               border: '1px solid var(--ra-border)',
@@ -386,7 +386,7 @@ export function BeatPicker({
             onClick={toggleFreePlay}
             style={{
               height: 22,
-              borderRadius: 6,
+              borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
               border: '1px solid var(--ra-border-strong)',
@@ -404,7 +404,7 @@ export function BeatPicker({
             height: 140,
             marginTop: 14,
             border: '1px solid var(--ra-border)',
-            borderRadius: 6,
+            borderRadius: 0,
             overflow: 'hidden',
             background: 'var(--ra-bg-row)'
           }}

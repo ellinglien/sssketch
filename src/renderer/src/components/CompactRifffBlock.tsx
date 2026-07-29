@@ -61,7 +61,7 @@ export function CompactRifffBlock({
             width: TILE_SIZE,
             height: TILE_SIZE,
             cursor: 'grab',
-            borderRadius: 6,
+            borderRadius: 0,
             border: `1px solid ${selected ? 'var(--ra-text)' : 'var(--ra-border)'}`,
             background: 'var(--ra-bg-row)',
             display: 'flex',

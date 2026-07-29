@@ -85,7 +85,7 @@ export function Shelf({
             }}
             style={{
               width: 212,
-              borderRadius: 8,
+              borderRadius: 0,
               padding: '9px 10px',
               background: 'var(--ra-bg-frame)',
               border: '1px solid var(--ra-border)',
@@ -130,7 +130,7 @@ export function Shelf({
             minWidth: 150,
             height: 78,
             border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border-strong)'}`,
-            borderRadius: 8,
+            borderRadius: 0,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
