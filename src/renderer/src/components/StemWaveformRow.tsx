@@ -8,6 +8,10 @@ import { PPB } from './Ruler'
 import { startPointerDrag } from './dragUtils'
 
 const ROW_HEIGHT = 44
+// Matches the reducer's own SET_PLAYED_BARS clamp (store.ts) — kept as a
+// shared constant so the drag-time preview and the committed value can never
+// disagree about the floor.
+const MIN_PLAYED_BARS = 0.25
 
 /** Builds the SVG path `d` for the "below the envelope" region — a closed shape
  * bounded above by a curve that eases from silence at the very start, up to the
@@ -78,17 +82,16 @@ export function StemWaveformRow({
     // updater FUNCTIONS in dev to catch impure updaters, so a dispatch
     // placed inside a `setDragPlayedBars((current) => ...)` callback would
     // fire twice per drag-release. Dispatching directly in onEnd, from a
-    // value tracked outside React state, sidesteps that entirely.
+    // value tracked outside React state, sidesteps that entirely — see
+    // dragUtils.ts's own doc comment for the general rule this follows.
     let finalPlayedBars = startPlayedBars
-    let moved = false
     startPointerDrag(
       e,
       (deltaX) => {
-        moved = true
-        finalPlayedBars = Math.max(0.25, startPlayedBars + deltaX / PPB)
+        finalPlayedBars = Math.max(MIN_PLAYED_BARS, startPlayedBars + deltaX / PPB)
         setDragPlayedBars(finalPlayedBars)
       },
-      () => {
+      (moved) => {
         if (moved) {
           dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
         }
