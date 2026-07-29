@@ -34,7 +34,8 @@ export type StretchResolver = (path: string, ratio: number) => Promise<string>
 /**
  * Projects AppState down to exactly what the native engine needs to schedule
  * and mix playback — resolving stretch (via the caller-supplied resolver, the
- * same IPC round-trip AudioEngine.ts and exportMix.ts already use) and
+ * same IPC round-trip src/main/resolveStretchedForExport.ts and
+ * src/renderer/src/audio/resolveStretchedForPlayback.ts already use) and
  * unlinked-stem start positions (via the existing stemStartBar selector, so
  * there's exactly one place that logic lives) ahead of time, so the engine
  * itself never needs to know about stretch ratios or unlink state at all.
@@ -57,9 +58,7 @@ export async function buildEngineProject(
         try {
           resolvedPath = await resolveStretched(stem.path, ratio)
         } catch (err) {
-          // Same failure-isolation pattern AudioEngine.ts's loadBuffer and
-          // exportMix.ts's loadBufferForExport already use — a missing rubberband
-          // binary or a bad render shouldn't fail the whole export, it should
+          // Missing rubberband or a bad render shouldn't fail the whole export —
           // fall back to native-tempo playback for just this stem.
           console.error(
             `buildEngineProject: rubberband render failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,

@@ -31,7 +31,7 @@ export function RifffBlockRow({
     : unlinked
       ? 'var(--ra-border-strong)'
       : `color-mix(in srgb, ${color} 55%, transparent)`
-  // Fade bars are timeline/project bars (matching how AudioEngine/exportMix apply
+  // Fade bars are timeline/project bars (matching how the native engine applies
   // them via secPerBar), so PPB converts directly regardless of this clip's own
   // stretch display width.
   const fadeInPx = Math.min(geo.widthPx / 2, (state.fadeIn[groupId] ?? 0) * PPB)

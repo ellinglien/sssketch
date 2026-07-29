@@ -163,7 +163,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     // Upper-bounded loosely here (a sane ceiling, not the real constraint) —
     // the actual "can't exceed half the clip's own duration" clamp happens where
-    // the fade is applied (AudioEngine/exportMix), since that's the only place
+    // the fade is applied (the native engine), since that's the only place
     // that knows the clip's actual length in seconds.
     case 'SET_FADE_IN':
       return { ...state, fadeIn: { ...state.fadeIn, [action.groupId]: Math.max(0, action.bars) } }
@@ -180,8 +180,8 @@ export function reducer(state: AppState, action: Action): AppState {
       }
     }
 
-    // Repoints each stem at its freshly-rotated file (a new path, so Waveform/
-    // AudioEngine's path-keyed caches pick up the corrected audio automatically —
+    // Repoints each stem at its freshly-rotated file (a new path, so
+    // Waveform's path-keyed cache picks up the corrected audio automatically —
     // no manual cache eviction needed) and resets offset to 0, since the
     // correction that offset was compensating for is now baked into the audio
     // itself. Resets both the group key and every per-stem key, covering linked
