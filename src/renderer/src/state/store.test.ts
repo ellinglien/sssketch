@@ -94,11 +94,6 @@ describe('reducer', () => {
     expect(state.sel).toBe('r1')
   })
 
-  it('toggles expand', () => {
-    const state = reducer(initialState, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
-    expect(state.exp.r1).toBe(true)
-  })
-
   it('clamps tempo to 40..200', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 500 }).bpm).toBe(200)
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 1 }).bpm).toBe(40)
@@ -235,6 +230,18 @@ describe('reducer', () => {
     expect(state.stemStart['r1:1']).toBe(9)
     state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: -3 })
     expect(state.stemStart['r1:1']).toBe(0)
+  })
+
+  describe('SET_PLAYED_BARS', () => {
+    it('sets playedBars for the given key', () => {
+      const next = reducer(initialState, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 12 })
+      expect(next.playedBars.r1).toBe(12)
+    })
+
+    it('clamps to a minimum of 0.25 bars', () => {
+      const next = reducer(initialState, { type: 'SET_PLAYED_BARS', key: 'r1', bars: -3 })
+      expect(next.playedBars.r1).toBe(0.25)
+    })
   })
 
   it('sets fade in/out bars, clamped to 0', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { initialState, reducer } from './store'
 import {
   resolveOffsetKey,
+  resolvePlayedBars,
   clipGeometry,
   stemGeometry,
   stemStartBar,
@@ -34,6 +35,29 @@ describe('resolveOffsetKey', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
     expect(resolveOffsetKey(state, 'r1', 1)).toBe('r1:1')
+  })
+})
+
+describe('resolvePlayedBars', () => {
+  it('falls back to rifff.barLength when unset', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    expect(resolvePlayedBars(state, 'r1', 1)).toBe(8)
+  })
+
+  it('uses the group-shared value while linked', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    const withOverride = { ...state, playedBars: { r1: 16 } }
+    expect(resolvePlayedBars(withOverride, 'r1', 1)).toBe(16)
+  })
+
+  it('uses the per-stem value while unlinked', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    const withOverride = { ...state, playedBars: { 'r1:1': 20 } }
+    expect(resolvePlayedBars(withOverride, 'r1', 1)).toBe(20)
   })
 })
 
@@ -115,6 +139,17 @@ describe('stemStartBar / stemGeometry', () => {
   })
 })
 
+describe('stemGeometry width with a playedBars override', () => {
+  it('reflects the resolved playedBars, not rifff.barLength', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    const withOverride = { ...state, playedBars: { 'r1:1': 16 } }
+    const geo = stemGeometry(withOverride, 'r1', 1, 24)
+    expect(geo.widthPx).toBe(16 * 24) // 16 bars at ppb=24, stretch stays on
+  })
+})
+
 describe('loopLengthBars', () => {
   it('falls back to the default when nothing is placed on the timeline', () => {
     expect(loopLengthBars(initialState)).toBe(32)
@@ -143,6 +178,23 @@ describe('loopLengthBars', () => {
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
     state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: 20 }) // ends at 28
     expect(loopLengthBars(state)).toBe(28)
+  })
+})
+
+describe('loopLengthBars with a playedBars override', () => {
+  it('extends the loop for a linked group resized beyond rifff.barLength', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    const withOverride = { ...state, playedBars: { r1: 16 } } // rifff.barLength is 8
+    expect(loopLengthBars(withOverride)).toBe(rifff.startBar! + 16)
+  })
+
+  it('extends the loop for an unlinked stem resized beyond rifff.barLength', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    const withOverride = { ...state, playedBars: { 'r1:1': 20 } }
+    expect(loopLengthBars(withOverride)).toBe(rifff.startBar! + 20)
   })
 })
 

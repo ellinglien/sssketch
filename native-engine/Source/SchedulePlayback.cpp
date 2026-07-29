@@ -11,11 +11,12 @@ namespace ssstitch
         const double start = opts.startBarOverride >= 0.0 ? opts.startBarOverride : rifff.startBar;
         const double offsetBars = opts.offsetSteps / opts.snapDiv;
         const double secPerBarNative = stem.durationSec / (double) stem.barLength;
+        const double bound = opts.playedBars >= 0.0 ? opts.playedBars : (double) rifff.barLength;
 
         std::vector<PlaybackSegment> segments;
-        for (double barOffset = 0.0; barOffset < (double) rifff.barLength; barOffset += (double) stem.barLength)
+        for (double barOffset = 0.0; barOffset < bound; barOffset += (double) stem.barLength)
         {
-            const double segmentBarLength = std::min((double) stem.barLength, (double) rifff.barLength - barOffset);
+            const double segmentBarLength = std::min((double) stem.barLength, bound - barOffset);
             const double startBarInTimeline = start + offsetBars + barOffset;
             const double endBarInTimeline = startBarInTimeline + segmentBarLength;
             if (endBarInTimeline <= opts.projectPos)

@@ -10,6 +10,13 @@ namespace ssstitch
         juce::String resolvedPath;
         double durationSec = 0.0;
         int barLength = 0;
+        // -1.0 = unset (use the rifff's own barLength), matching startBarOverride's
+        // own sentinel convention below. In practice parseEngineProject() always
+        // assigns a concrete resolved value at parse time (falling back to the
+        // rifff's barLength itself if the wire payload omits it), so this default
+        // is only ever observed by code that constructs an EngineStem directly
+        // without going through JSON parsing (e.g. unit tests).
+        double playedBars = -1.0; // this stem's own tiling bound
         double offsetSteps = 0.0;
         double startBarOverride = -1.0; // -1.0 = use the rifff's own startBar
         double volume = 1.0;

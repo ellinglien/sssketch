@@ -89,7 +89,16 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.fadeIn,
     state.fadeOut,
     state.vol,
-    state.mute
+    state.mute,
+    // Missing here meant a resize-handle drag (SET_PLAYED_BARS) never
+    // reached the native engine during live playback -- the reducer state
+    // updated fine (so the row visibly resized and export/re-open picked it
+    // up), but this effect wouldn't re-run to actually re-send the project,
+    // so the engine kept scheduling the stem at its old length until some
+    // OTHER tracked field happened to change too. Found via Task 12 manual
+    // verification: after a resize-handle drag, the captured EngineProject
+    // sent over IPC still showed the pre-drag playedBars.
+    state.playedBars
   ])
 
   useEffect(() => {

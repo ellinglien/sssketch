@@ -5,6 +5,18 @@ export function resolveOffsetKey(state: AppState, groupId: string, slot: number)
   return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
 }
 
+/** A stem's own played length, in bars — the tiling loop's bound for this
+ * specific stem. Falls back to rifff.barLength (today's implicit behavior)
+ * when no override has been set. Same linked/unlinked resolution as `off`
+ * (shared per-group while linked, independent per-stem once unlinked) —
+ * unlike `vol`/`mute`, which are always keyed per-stem regardless of link
+ * state. */
+export function resolvePlayedBars(state: AppState, groupId: string, slot: number): number {
+  const rifff = state.rifffs[groupId]
+  const key = resolveOffsetKey(state, groupId, slot)
+  return state.playedBars[key] ?? rifff.barLength
+}
+
 export function stretchRatio(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
   return state.bpm / rifff.bpm
@@ -38,8 +50,11 @@ export function stemStartBar(state: AppState, groupId: string, slot: number): nu
 }
 
 /** Same shape as clipGeometry, anchored to the stem's own position instead of its
- * group's — identical to clipGeometry while linked (or before a drag), diverging
- * once unlinked and moved. */
+ * group's — identical to clipGeometry's LEFT position while linked (or before a
+ * drag), diverging once unlinked and moved. WIDTH can now diverge from
+ * clipGeometry even while linked: clipGeometry always uses rifff.barLength,
+ * but this uses resolvePlayedBars, which reflects a playedBars resize
+ * override the moment one is set. */
 export function stemGeometry(
   state: AppState,
   groupId: string,
@@ -51,8 +66,9 @@ export function stemGeometry(
   const offsetSteps = state.off[resolveOffsetKey(state, groupId, slot)] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetPx = (offsetSteps * ppb) / snapDiv
+  const playedBars = resolvePlayedBars(state, groupId, slot)
   const stretchOn = state.stretch[groupId] ?? true
-  const shownBars = stretchOn ? rifff.barLength : rifff.barLength * (rifff.bpm / state.bpm)
+  const shownBars = stretchOn ? playedBars : playedBars * (rifff.bpm / state.bpm)
   return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
 }
 
@@ -68,10 +84,18 @@ export function loopLengthBars(state: AppState): number {
     if (rifff.startBar === undefined) continue
     if (state.unlinked[rifff.groupId]) {
       for (const stem of rifff.stems) {
-        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + rifff.barLength)
+        const playedBars = resolvePlayedBars(state, rifff.groupId, stem.slot)
+        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + playedBars)
       }
     } else {
-      ends.push(rifff.startBar + rifff.barLength)
+      // Deliberately inlined rather than calling resolvePlayedBars(state,
+      // rifff.groupId, <some stem's slot>) — while linked, the resolved value
+      // doesn't depend on which stem's slot is passed (resolveOffsetKey
+      // returns the same groupId key regardless), so picking one would be
+      // arbitrary, and would need extra handling if rifff.stems were ever
+      // empty. Don't "simplify" this back to the per-slot helper.
+      const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
+      ends.push(rifff.startBar + playedBars)
     }
   }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)

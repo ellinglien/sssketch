@@ -116,4 +116,69 @@ describe('computeStemSchedule', () => {
     // Duration scales down proportionally for the clipped final segment.
     expect(segments[2].durationSec).toBeCloseTo((2 / 3) * 4.8, 5)
   })
+
+  it('tiles the stem twice when playedBars exceeds rifff.barLength by one full stem length', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.stems[0].barLength * 2 // stem's own barLength doubled
+    })
+    expect(segments).toHaveLength(2)
+    expect(segments[0].bufferOffsetSec).toBe(0)
+    expect(segments[1].bufferOffsetSec).toBe(0) // second tile restarts from the stem's own beginning
+    expect(segments[1].startBarInTimeline).toBe(
+      segments[0].startBarInTimeline + rifff.stems[0].barLength
+    )
+  })
+
+  it('truncates to one shorter segment when playedBars is less than the stem barLength', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.stems[0].barLength / 2
+    })
+    expect(segments).toHaveLength(1)
+    expect(segments[0].barLength).toBe(rifff.stems[0].barLength / 2)
+  })
+
+  it('defaults to rifff.barLength when playedBars is omitted (unchanged existing behavior)', () => {
+    const withOverride = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm,
+      playedBars: rifff.barLength
+    })
+    const withoutOverride = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: -Infinity,
+      projectBpm: rifff.bpm
+    })
+    expect(withoutOverride).toEqual(withOverride)
+  })
+
+  it('clips the final repetition against a playedBars bound, same as it does against rifff.barLength', () => {
+    // Mirrors the "clips the final repetition when the stem length does not
+    // evenly divide the rifff length" test above, but with the bound coming
+    // from playedBars instead of rifff.barLength — the more interesting case
+    // than the exact-multiple/exact-half cases the other playedBars tests
+    // cover, since it proves the truncation logic itself was actually
+    // repointed at `bound`, not just the loop's outer stopping condition.
+    const segments = computeStemSchedule(rifff, rifff.stems[1], {
+      offsetSteps: 0,
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150,
+      playedBars: 5 // 2-bar stem tiling across a 5-bar bound: [0,2) [2,4) [4,5)
+    })
+    expect(segments).toHaveLength(3)
+    expect(segments[0]).toMatchObject({ startBarInTimeline: 4, barLength: 2 })
+    expect(segments[1]).toMatchObject({ startBarInTimeline: 6, barLength: 2 })
+    expect(segments[2]).toMatchObject({ startBarInTimeline: 8, barLength: 1 })
+  })
 })

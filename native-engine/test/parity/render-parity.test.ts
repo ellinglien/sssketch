@@ -309,4 +309,62 @@ describe('native engine vs Web Audio export — render parity', () => {
     // no wider tolerance is expected or justified.
     expect(maxDiff).toBeLessThanOrEqual(2)
   })
+
+  it('re-loops a stem from its own beginning when playedBars exceeds its native barLength', async () => {
+    // 1-bar stem (4s tone at 60bpm), playedBars=2 -> should tile twice, restarting
+    // from the buffer's own start each time (not looping/wrapping mid-buffer).
+    const project: EngineProject = {
+      bpm: 60,
+      snapDiv: 16,
+      rifffs: [
+        {
+          groupId: 'r1',
+          startBar: 0,
+          barLength: 1, // rifff.barLength deliberately UNCHANGED/irrelevant here —
+          // playedBars is what the scheduler now actually reads
+          fadeInBars: 0,
+          fadeOutBars: 0,
+          stems: [
+            {
+              stemKey: 'r1:1',
+              resolvedPath: tonePath,
+              durationSec: 4.0,
+              barLength: 1,
+              playedBars: 2, // the actual point of this test
+              offsetSteps: 0,
+              startBarOverride: -1,
+              volume: 1.0,
+              muted: false
+            }
+          ]
+        }
+      ]
+    }
+    const projectPath = join(dir, 'project-playedbars.json')
+    writeFileSync(projectPath, JSON.stringify(project))
+    const nativeOutPath = join(dir, 'native-out-playedbars.wav')
+    // durationBars=2 to cover the full 8s (2 tiles x 4s) this project should now render.
+    execFileSync(ENGINE_BINARY, ['--render-test', projectPath, nativeOutPath, '2'])
+    const nativeSamples = readWavSamples(nativeOutPath)
+
+    // Reference: the 4s tone concatenated with itself (two full, unstretched,
+    // unfaded repeats back-to-back), each repeat starting from the buffer's own
+    // sample 0 — exactly what "re-loops from the beginning" means.
+    const toneBuf = readFileSync(tonePath)
+    const oneTileSamples = new Int16Array(Math.floor(4.0 * 44100))
+    for (let i = 0; i < oneTileSamples.length; i++) {
+      oneTileSamples[i] = toneBuf.readInt16LE(44 + i * 2)
+    }
+    const expectedSamples = new Int16Array(oneTileSamples.length * 2)
+    expectedSamples.set(oneTileSamples, 0)
+    expectedSamples.set(oneTileSamples, oneTileSamples.length)
+
+    expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
+    let maxDiff = 0
+    for (let i = 0; i < expectedSamples.length; i++) {
+      maxDiff = Math.max(maxDiff, Math.abs(nativeSamples[i * 2] - expectedSamples[i]))
+    }
+    console.log('render-parity: playedBars re-loop test maxDiff =', maxDiff)
+    expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching the other cases
+  })
 })

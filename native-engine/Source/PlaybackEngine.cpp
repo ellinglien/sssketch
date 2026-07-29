@@ -87,7 +87,7 @@ namespace ssstitch
                 const ScheduleOptions opts {
                     stem.offsetSteps, currentProject.snapDiv,
                     -std::numeric_limits<double>::infinity(),
-                    currentProject.bpm, stem.startBarOverride
+                    currentProject.bpm, stem.startBarOverride, stem.playedBars
                 };
                 auto segments = computeStemSchedule(rifffInfo, stemInfo, opts);
 
