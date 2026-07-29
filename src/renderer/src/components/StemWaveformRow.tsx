@@ -96,6 +96,7 @@ export function StemWaveformRow({
   const playedBarsKey = resolveOffsetKey(state, groupId, slot)
   const muted = !!state.mute[key]
   const unlinked = !!state.unlinked[groupId]
+  const volumeDragMode = state.volumeDragMode
   const volume = state.vol[key] ?? 1
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
@@ -299,6 +300,27 @@ export function StemWaveformRow({
     )
   }
 
+  // Default (volumeDragMode off): the waveform body is a native HTML5 drag
+  // target, moving the clip — same linked/unlinked branching as everywhere
+  // else in this app (whole rifff when linked, just this stem when
+  // unlinked), just exposed on a wider surface than the label column alone.
+  // When volumeDragMode is on, this never fires: the browser only initiates
+  // a native drag from a mousedown that wasn't already preventDefault'd, and
+  // handleVolumeStart (wired below) calls preventDefault via
+  // startPointerDrag whenever volumeDragMode is on.
+  function handleWaveformDragStart(e: React.DragEvent): void {
+    const mouseBar = mouseBarFromDragEvent(e)
+    if (unlinked) {
+      e.dataTransfer.setData('text/rifff-stem-key', key)
+      if (mouseBar !== null) setGrabOffsetBars(computeGrabOffsetBars(mouseBar, baseStartBar))
+    } else {
+      e.dataTransfer.setData('text/rifff-group-id', groupId)
+      if (mouseBar !== null) {
+        setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
+      }
+    }
+  }
+
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       {/* Name + mute, and (while unlinked) the drag handle for repositioning
@@ -358,6 +380,8 @@ export function StemWaveformRow({
       </div>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
+          draggable
+          onDragStart={handleWaveformDragStart}
           onDoubleClick={() => {
             // Mirrors the import-time default seeded in store.ts's
             // ADD_TO_SHELF case, so double-clicking resets volume back to
@@ -506,21 +530,27 @@ export function StemWaveformRow({
             }}
           />
 
-          {/* Volume-plateau drag strip: invisible horizontal band spanning the
-              flat top of the envelope between the two fade knees, positioned
-              via the same fiEnd/foStart used by the fade-knee dots and the
-              envelope path itself. Dragging it vertically adjusts volume. */}
+          {/* Volume drag surface: spans the whole waveform body while
+              volumeDragMode is on (see the V-key toggle in App.tsx/TransportBar),
+              repurposing the same open area that defaults to "drag to move
+              the clip" (handleWaveformDragStart above). While off, this does
+              nothing on mousedown — the event is left alone so the browser's
+              native drag (from the container's own `draggable`) proceeds
+              normally instead. Resize handles and fade-knee dots are
+              unaffected by this either way — they're separate elements with
+              their own onMouseDown, and their own stopPropagation (inside
+              startPointerDrag) already wins over this whenever the mouse
+              starts on one of them specifically. */}
           <div
-            onMouseDown={handleVolumeStart}
-            title="drag to adjust volume"
+            onMouseDown={(e) => {
+              if (volumeDragMode) handleVolumeStart(e)
+            }}
+            title={volumeDragMode ? 'drag to adjust volume' : undefined}
             style={{
               position: 'absolute',
-              left: fiEnd,
-              width: Math.max(0, foStart - fiEnd),
-              top: plateauY - 4,
-              height: 8,
-              cursor: 'ns-resize',
-              zIndex: 3
+              inset: 0,
+              cursor: volumeDragMode ? 'ns-resize' : 'grab',
+              zIndex: volumeDragMode ? 3 : 1
             }}
           />
           {dragVolume !== null && (
