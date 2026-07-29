@@ -932,29 +932,51 @@ mousemove/mouseup wiring four times:
  * (not a frame-to-frame incremental delta) — callers should compute
  * `newValue = valueAtDragStart + delta / scale` rather than accumulating
  * incrementally, to avoid rounding drift across a long drag. Cleans up its
- * own listeners on mouseup and calls `onEnd` once, if provided. */
+ * own listeners on mouseup and calls `onEnd(moved)` once, where `moved` is
+ * true only if `onMove` fired at least once (i.e. a real drag happened, not
+ * just a click) — callers use this to skip dispatching a no-op edit.
+ *
+ * IMPORTANT: never dispatch (or perform any other side effect) from inside a
+ * `setState` updater FUNCTION passed to a caller's own state setter — React's
+ * StrictMode double-invokes updater functions in development specifically to
+ * catch impure updaters, so a dispatch placed there fires twice per drag.
+ * Read/write plain closure variables from `onMove`/`onEnd` instead (as this
+ * function's own implementation does), and dispatch directly in `onEnd`'s
+ * body, never through a setState callback. */
 export function startPointerDrag(
   e: React.MouseEvent,
   onMove: (deltaX: number, deltaY: number) => void,
-  onEnd?: () => void
+  onEnd?: (moved: boolean) => void
 ): void {
   e.preventDefault()
   e.stopPropagation()
   const startX = e.clientX
   const startY = e.clientY
+  let moved = false
 
   function handleMove(ev: MouseEvent): void {
+    moved = true
     onMove(ev.clientX - startX, ev.clientY - startY)
   }
   function handleUp(): void {
     window.removeEventListener('mousemove', handleMove)
     window.removeEventListener('mouseup', handleUp)
-    onEnd?.()
+    onEnd?.(moved)
   }
   window.addEventListener('mousemove', handleMove)
   window.addEventListener('mouseup', handleUp)
 }
 ```
+
+(**Historical note, verified against what was actually built**: the first implementation of
+this task dispatched from inside a `setState` updater function in the resize handler below —
+a real bug, since StrictMode double-invokes updater functions in dev, firing the dispatch
+twice per completed drag. Found by code review, fixed by moving the dispatch to a plain
+closure variable read directly in `onEnd`, and by moving `moved`-tracking into
+`startPointerDrag` itself as shown above, so this same mistake doesn't get hand-rolled at each
+of the three remaining drag call sites in Tasks 8-9. The reference code below already reflects
+the corrected version — implement it as shown, not the naive dispatch-from-updater version a
+first read might suggest.)
 
 - [ ] **Step 3: Implement the resize handle**
 
@@ -1005,19 +1027,25 @@ export function StemWaveformRow({ groupId, slot }: { groupId: string; slot: numb
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
+    // Tracked in a plain closure variable, NOT read back out of
+    // dragPlayedBars state inside onEnd — see startPointerDrag's own doc
+    // comment above for why a dispatch can never live inside a setState
+    // updater function. A shared MIN_PLAYED_BARS = 0.25 module-level constant
+    // (matching the reducer's own SET_PLAYED_BARS clamp in store.ts) is worth
+    // extracting here rather than hardcoding 0.25 again, so the drag-time
+    // preview and the committed value can't drift apart.
+    let finalPlayedBars = startPlayedBars
     startPointerDrag(
       e,
       (deltaX) => {
-        const next = Math.max(0.25, startPlayedBars + deltaX / PPB)
-        setDragPlayedBars(next)
+        finalPlayedBars = Math.max(MIN_PLAYED_BARS, startPlayedBars + deltaX / PPB)
+        setDragPlayedBars(finalPlayedBars)
       },
-      () => {
-        setDragPlayedBars((current) => {
-          if (current !== null) {
-            dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: current })
-          }
-          return null
-        })
+      (moved) => {
+        if (moved) {
+          dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
+        }
+        setDragPlayedBars(null)
       }
     )
   }
@@ -1152,30 +1180,46 @@ const FADE_MAX = 4 // bars — matches Inspector's own fade clamp, now removed f
 
   function handleFadeInStart(e: React.MouseEvent): void {
     const startFadeIn = fadeIn
+    // Tracked in a plain closure variable, NOT read back out of dragFadeIn
+    // state inside onEnd — StrictMode double-invokes setState updater
+    // FUNCTIONS in dev specifically to catch impure updaters, so a dispatch
+    // placed inside a `setDragFadeIn((current) => ...)` callback fires twice
+    // per drag-release (a real bug already found and fixed the same way in
+    // Task 7's resize handler — see dragUtils.ts's own doc comment for the
+    // general rule). Dispatch directly in onEnd from a value tracked outside
+    // React state instead. onEnd's `moved` param (from startPointerDrag,
+    // itself hardened after that same bug) skips the dispatch entirely for a
+    // no-op click.
+    let finalFadeIn = startFadeIn
     startPointerDrag(
       e,
-      (deltaX) => setDragFadeIn(Math.max(0, Math.min(FADE_MAX, startFadeIn + deltaX / PPB))),
-      () => {
-        setDragFadeIn((current) => {
-          if (current !== null) dispatch({ type: 'SET_FADE_IN', groupId, bars: current })
-          return null
-        })
+      (deltaX) => {
+        finalFadeIn = Math.max(0, Math.min(FADE_MAX, startFadeIn + deltaX / PPB))
+        setDragFadeIn(finalFadeIn)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
+        setDragFadeIn(null)
       }
     )
   }
 
   function handleFadeOutStart(e: React.MouseEvent): void {
     const startFadeOut = fadeOut
+    // Same closure-variable pattern as handleFadeInStart above — see that
+    // function's comment for why.
+    let finalFadeOut = startFadeOut
     startPointerDrag(
       e,
       // Dragging the fade-OUT knee LEFT (negative deltaX) lengthens the fade —
       // it's the mirror of fade-in, so the sign is inverted here.
-      (deltaX) => setDragFadeOut(Math.max(0, Math.min(FADE_MAX, startFadeOut - deltaX / PPB))),
-      () => {
-        setDragFadeOut((current) => {
-          if (current !== null) dispatch({ type: 'SET_FADE_OUT', groupId, bars: current })
-          return null
-        })
+      (deltaX) => {
+        finalFadeOut = Math.max(0, Math.min(FADE_MAX, startFadeOut - deltaX / PPB))
+        setDragFadeOut(finalFadeOut)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
+        setDragFadeOut(null)
       }
     )
   }
@@ -1269,15 +1313,21 @@ import { dbLabel } from '@shared/visuals' // add to existing imports
 
   function handleVolumeStart(e: React.MouseEvent): void {
     const startVolume = volume
+    // Same closure-variable pattern as StemWaveformRow's resize/fade drag
+    // handlers (Tasks 7-8) — never dispatch from inside a setState updater
+    // function; StrictMode double-invokes those in dev. See dragUtils.ts's
+    // doc comment.
+    let finalVolume = startVolume
     startPointerDrag(
       e,
       // Up (negative deltaY) increases volume — hence the subtraction.
-      (_dx, deltaY) => setDragVolume(Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))),
-      () => {
-        setDragVolume((current) => {
-          if (current !== null) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: current })
-          return null
-        })
+      (_dx, deltaY) => {
+        finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
+        setDragVolume(finalVolume)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
+        setDragVolume(null)
       }
     )
   }
