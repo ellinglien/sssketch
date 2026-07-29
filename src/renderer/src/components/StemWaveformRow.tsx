@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useDispatch, useAppState } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
+import { dbLabel } from '@shared/visuals'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
@@ -79,10 +80,12 @@ export function StemWaveformRow({
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
+  const [dragVolume, setDragVolume] = useState<number | null>(null)
   const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
   const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
+  const displayedVolume = dragVolume ?? volume
 
   const stemGeo = stemGeometry(state, groupId, slot, PPB)
   // While actively dragging, use the in-progress width instead of the
@@ -91,7 +94,7 @@ export function StemWaveformRow({
 
   const fadeInPx = displayedFadeIn * PPB
   const fadeOutPx = displayedFadeOut * PPB
-  const plateauY = ROW_HEIGHT * (1 - volume)
+  const plateauY = ROW_HEIGHT * (1 - displayedVolume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
 
@@ -158,6 +161,27 @@ export function StemWaveformRow({
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
         setDragFadeOut(null)
+      }
+    )
+  }
+
+  function handleVolumeStart(e: React.MouseEvent): void {
+    const startVolume = volume
+    // Same closure-variable pattern as the handlers above: finalVolume is
+    // tracked outside React state and dispatched directly in onEnd's body,
+    // never from inside a setDragVolume updater function — see dragUtils.ts's
+    // doc comment for why.
+    let finalVolume = startVolume
+    startPointerDrag(
+      e,
+      // Up (negative deltaY) increases volume — hence the subtraction.
+      (_dx, deltaY) => {
+        finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
+        setDragVolume(finalVolume)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
+        setDragVolume(null)
       }
     )
   }
@@ -286,6 +310,45 @@ export function StemWaveformRow({
               zIndex: 4
             }}
           />
+
+          {/* Volume-plateau drag strip: invisible horizontal band spanning the
+              flat top of the envelope between the two fade knees, positioned
+              via the same fiEnd/foStart used by the fade-knee dots and the
+              envelope path itself. Dragging it vertically adjusts volume. */}
+          <div
+            onMouseDown={handleVolumeStart}
+            title="drag to adjust volume"
+            style={{
+              position: 'absolute',
+              left: fiEnd,
+              width: Math.max(0, foStart - fiEnd),
+              top: plateauY - 4,
+              height: 8,
+              cursor: 'ns-resize',
+              zIndex: 3
+            }}
+          />
+          {dragVolume !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: plateauY,
+                transform: 'translate(-50%, -130%)',
+                padding: '2px 6px',
+                background: 'var(--ra-mute-on)',
+                color: 'var(--ra-mute-on-ink)',
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 4,
+                zIndex: 5,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none'
+              }}
+            >
+              {muted ? 'mute' : dbLabel(displayedVolume)}
+            </div>
+          )}
         </div>
       </div>
     </div>
