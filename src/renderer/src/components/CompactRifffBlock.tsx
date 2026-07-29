@@ -61,9 +61,11 @@ export function CompactRifffBlock({
             width: TILE_SIZE,
             height: TILE_SIZE,
             cursor: 'grab',
-            borderRadius: 0,
-            border: `1px solid ${selected ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+            border: 'none',
             background: 'var(--ra-bg-row)',
+            // No border to mark selection anymore — opacity carries that
+            // instead (same convention as the shelf's own tiles).
+            opacity: selected ? 1 : 0.72,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'

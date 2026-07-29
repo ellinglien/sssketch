@@ -121,8 +121,7 @@ export function Shelf({
                 height: TILE_SIZE,
                 flex: 'none',
                 padding: 2,
-                border: `1px solid ${selected ? 'var(--ra-text)' : hovered ? 'var(--ra-border-strong)' : 'transparent'}`,
-                borderRadius: 0,
+                border: 'none',
                 cursor: 'grab',
                 background: 'transparent',
                 opacity: lit ? 1 : 0.72
