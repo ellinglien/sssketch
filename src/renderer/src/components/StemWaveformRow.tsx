@@ -9,7 +9,7 @@ import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
 import { startPointerDrag } from './dragUtils'
 
-const ROW_HEIGHT = 44
+export const ROW_HEIGHT = 44
 const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
 const TOOLTIP_HEIGHT = 18 // volume tooltip's measured rendered height + small margin
 const TOOLTIP_GAP = 4 // gap between the tooltip and the plateau line it's anchored to
