@@ -26,9 +26,11 @@ interface IncomingMessage {
  * A minimal client for the native engine's JSON-over-socket IPC protocol,
  * speaking InterprocessConnection's real wire framing directly (see
  * MAGIC_NUMBER above) — no JUCE involved on this side, just a Node TCP
- * socket. Used by the main process to drive one-shot export operations;
- * NOT used for live playback (out of scope for this phase, see the plan's
- * scope-boundary note).
+ * socket. Used by the main process to drive both one-shot export operations
+ * (via sendAndAwaitType) and the persistent live-playback connection (via
+ * send/on, see playbackEngineLifecycle.ts) — one EngineClient per engine
+ * process, and the two kinds of process are always separate (see the Phase 3
+ * design doc for why export and live playback never share one).
  */
 export class EngineClient {
   private socket: Socket | null = null

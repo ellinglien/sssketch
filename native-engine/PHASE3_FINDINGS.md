@@ -5,9 +5,12 @@ and reactive rescheduling while a project changes mid-playback — now runs enti
 native JUCE engine, driven over the same IPC wire protocol Phase 2 built for export. The old
 Web Audio live-playback path (`AudioEngine.ts`, ~215 lines) has been fully deleted from the
 codebase, not just stopped being called. Zero native C++ changes were needed — this phase's
-own design assumption turned out correct. Five real bugs were found and fixed along the way
+own design assumption turned out correct. Six real bugs were found and fixed along the way
 (detailed below), the most significant being a crash-recovery relay bug caught only by
-literally killing the running engine process during manual verification.
+literally killing the running engine process during manual verification, plus a final
+holistic review — looking at the whole phase's diff at once, after all 10 tasks were
+individually complete — that caught a startup-ordering regression no single task's review
+could have seen in isolation.
 
 ## Test counts (independently re-run for this doc)
 
@@ -300,7 +303,52 @@ Not a functional bug, but worth counting: three separate passes were needed to f
 comment accuracy after deleting `AudioEngine.ts`, two of which were found by code review
 rather than the original sweep. See the dedicated section above.
 
+### 6. `main/index.ts` (final holistic review) — a failed engine spawn could silently prevent the app window from ever appearing
+
+Found only by a final, whole-diff review looking across task boundaries, after all 10 tasks
+were individually complete — none of the per-task reviews caught this, since each only saw
+one task's diff in isolation. `app.whenReady().then(async () => {...})` had no `.catch()`,
+and this phase's `playbackEngine = await startPlaybackEngine()` (Task 4) now sits *before*
+`createWindow()` — a genuine ordering change from before this phase, when window creation had
+no dependency on any native process succeeding. If `spawnEngine()` ever failed (binary
+missing or not yet rebuilt, the 5s readiness timeout firing, a port bind failure), the async
+callback would throw, become an unhandled rejection, and skip `createWindow()` entirely — the
+app would launch with no window and no visible error, a real regression on a plausible
+dev-workflow failure. Fixed by wrapping the `startPlaybackEngine()` call in `try`/`catch`:
+on failure, log the error, show `dialog.showErrorBox` explaining live playback is unavailable
+for this session, and continue — the engine-\* `ipcMain` handlers already guard every call
+with `playbackEngine?.`, so leaving `playbackEngine` `undefined` and still calling
+`createWindow()` degrades gracefully rather than failing silently.
+
+The same review pass also found and removed two small pieces of leftover scaffolding that
+survived every per-task review because neither was ever wrong on its own, only inconsistent
+across the whole: the `engine-pause`/`enginePause` IPC channel and preload export (defined in
+Tasks 4, never called anywhere — the app's actual pause behavior, confirmed correct in Task
+8's manual verification, is "stop at the engine level, preserve `state.pos` in React," which
+never needed a native pause message), and `engineClient.ts`'s class doc comment, which still
+claimed the client was "NOT used for live playback" — untouched by any of the three
+stale-comment sweeps in Task 9 because those were scoped to literal `AudioEngine`/`exportMix`
+filename references, not broader scope-of-purpose claims like this one.
+
+A related, narrower race was also found and **deliberately left open, not fixed**: if a user
+quits (Cmd+Q, dock menu) in the brief window between `app.whenReady()` firing and
+`startPlaybackEngine()` resolving, `before-quit`'s guard (`if (isQuitting || !playbackEngine)
+return`) does nothing, since `playbackEngine` isn't assigned yet — and there is no handle
+anywhere yet that owns the in-flight spawn, so a process started during that window (roughly
+the duration of `spawnEngine`'s readiness wait) could outlive the quit. Narrow, low-probability,
+and closing it properly would mean threading a cancellable handle out of `startPlaybackEngine()`
+before it resolves — more machinery than this edge case currently justifies. Named explicitly
+below rather than left implicit.
+
 ## Known gaps — explicitly not covered by this phase
+
+- **A narrow quit-during-startup race can leak a native process.** Found during the final
+  holistic review (see bug #6 above), deliberately left unfixed. If the app is quit in the
+  brief window between `app.whenReady()` and `startPlaybackEngine()` resolving, the
+  in-flight spawn has no owner yet and `before-quit`'s guard does nothing (`playbackEngine`
+  is still `undefined`). Low-probability (a multi-second startup path, quit has to land in a
+  window of roughly tens of milliseconds) and distinct from the already-known ephemeral-port
+  collision gap below — this one is about process leakage, not port contention.
 
 - **Binary packaging/distribution remains completely out of scope.** Named as a gap in Phase
   2's findings doc, still unaddressed here. The engine binary's path is still resolved via a

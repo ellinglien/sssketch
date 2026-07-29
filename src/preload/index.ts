@@ -28,7 +28,6 @@ const api = {
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
-  enginePause: (): Promise<void> => ipcRenderer.invoke('engine-pause'),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {

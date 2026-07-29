@@ -118,7 +118,25 @@ app.whenReady().then(async () => {
     return nativeExport(state)
   })
 
-  playbackEngine = await startPlaybackEngine()
+  try {
+    playbackEngine = await startPlaybackEngine()
+  } catch (err) {
+    // Previously nothing could prevent createWindow() below from running —
+    // this await is new this phase, and without a catch, a failed spawn
+    // (binary missing/not yet rebuilt, a port bind failure, the readiness
+    // timeout in engineProcess.ts firing) would throw here, become an
+    // unhandled rejection, and skip createWindow() entirely: the app would
+    // launch with no window and no visible error. The engine-* ipcMain
+    // handlers below already guard every call with `playbackEngine?.`, so
+    // it's safe to just leave playbackEngine undefined and continue —
+    // export and every other feature are unaffected, only live playback is
+    // unavailable for this session.
+    console.error('index: failed to start the native playback engine', err)
+    dialog.showErrorBox(
+      'Playback engine failed to start',
+      `ssstitch could not start its native audio engine, so live playback will not work this session. Export and other features are unaffected.\n\n${String(err)}`
+    )
+  }
 
   ipcMain.handle('engine-load-project', (_event, project: unknown) => {
     playbackEngine?.sendLoadProject(project)
@@ -126,10 +144,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-play', (_event, fromPos: number) => {
     playbackEngine?.client.send('play', { fromPos })
-  })
-
-  ipcMain.handle('engine-pause', () => {
-    playbackEngine?.client.send('pause')
   })
 
   ipcMain.handle('engine-stop', () => {
@@ -159,21 +173,24 @@ app.whenReady().then(async () => {
   // EngineClient is actually live. Found and fixed during Task 8 manual
   // verification by reproducing it against the real spawned engine process
   // (see git history for the repro).
-  function subscribeToPositionUpdates(): void {
-    playbackEngine!.client.on('position-update', (payload) => {
+  if (playbackEngine) {
+    const engine = playbackEngine
+    function subscribeToPositionUpdates(): void {
+      engine.client.on('position-update', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-position-update', payload)
+        }
+      })
+    }
+    subscribeToPositionUpdates()
+
+    engine.onRestarted(() => {
+      subscribeToPositionUpdates()
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('engine-position-update', payload)
+        mainWindow.webContents.send('engine-restarted')
       }
     })
   }
-  subscribeToPositionUpdates()
-
-  playbackEngine.onRestarted(() => {
-    subscribeToPositionUpdates()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('engine-restarted')
-    }
-  })
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
