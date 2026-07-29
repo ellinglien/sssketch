@@ -113,6 +113,8 @@ export type Action =
   | { type: 'RELINK'; groupId: string }
   | { type: 'CYCLE_TYPE'; groupId: string; slot: number }
   | { type: 'SET_STEM_TYPE'; groupId: string; slot: number; soundType: SoundType }
+  | { type: 'RENAME_RIFFF'; groupId: string; name: string }
+  | { type: 'RENAME_STEM'; groupId: string; slot: number; name: string }
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'TOGGLE_COMPACT_MODE' }
@@ -389,6 +391,25 @@ export function reducer(state: AppState, action: Action): AppState {
       const rifff = state.rifffs[action.groupId]
       const stems = rifff.stems.map((s) =>
         s.slot === action.slot && s.type === 'fx' ? { ...s, type: action.soundType } : s
+      )
+      return { ...state, rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } } }
+    }
+
+    // Trimmed and rejected-if-blank at the call site (Inspector's EditableText),
+    // not here — mirrors SET_TEMPO's own "revert rather than commit garbage"
+    // handling, keeping the reducer itself a pure, unconditional write.
+    case 'RENAME_RIFFF': {
+      const rifff = state.rifffs[action.groupId]
+      return {
+        ...state,
+        rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, name: action.name } }
+      }
+    }
+
+    case 'RENAME_STEM': {
+      const rifff = state.rifffs[action.groupId]
+      const stems = rifff.stems.map((s) =>
+        s.slot === action.slot ? { ...s, name: action.name } : s
       )
       return { ...state, rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } } }
     }

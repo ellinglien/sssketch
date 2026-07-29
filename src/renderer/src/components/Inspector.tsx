@@ -5,6 +5,7 @@ import { offsetLabels } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
+import { EditableText } from './EditableText'
 
 // A finer, snap-division-independent nudge step: 1ms of real time at this
 // rifff's own bpm, computed with the same formula offsetLabels() itself uses
@@ -97,7 +98,12 @@ export function Inspector({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <PolarGlyph stems={rifff.stems} identityColor={color} size={34} />
-            <span style={{ fontSize: 14, fontWeight: 700 }}>{rifff.name}</span>
+            <EditableText
+              value={rifff.name}
+              onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
+              title="click to rename"
+              style={{ flex: 1, fontSize: 14, fontWeight: 700 }}
+            />
           </div>
           <div
             onClick={async () => {
@@ -313,17 +319,20 @@ export function Inspector({
                       }}
                     />
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>{stem.slot}</span>
-                    <span
+                    <EditableText
+                      value={stem.name}
+                      onCommit={(name) =>
+                        dispatch({ type: 'RENAME_STEM', groupId, slot: stem.slot, name })
+                      }
+                      title="click to rename"
                       style={{
-                        fontSize: 11,
                         flex: 1,
+                        fontSize: 11,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap'
                       }}
-                    >
-                      {stem.name}
-                    </span>
+                    />
                   </div>
                   {unlinked && (
                     <div

@@ -367,6 +367,19 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.type).toBe('extFx')
   })
 
+  it('renames a rifff', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'RENAME_RIFFF', groupId: 'r1', name: 'new name' })
+    expect(state.rifffs.r1.name).toBe('new name')
+  })
+
+  it('renames a single stem, leaving the others alone', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'RENAME_STEM', groupId: 'r1', slot: 1, name: 'new stem name' })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.name).toBe('new stem name')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.name).toBe('Freezer')
+  })
+
   it('pauses', () => {
     let state = reducer(initialState, { type: 'PLAY' })
     state = reducer(state, { type: 'PAUSE' })
