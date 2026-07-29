@@ -237,7 +237,10 @@ export function reducer(state: AppState, action: Action): AppState {
       }
 
     case 'SET_VOLUME':
-      return { ...state, vol: { ...state.vol, [action.stemKey]: action.volume } }
+      return {
+        ...state,
+        vol: { ...state.vol, [action.stemKey]: Math.max(0, Math.min(1, action.volume)) }
+      }
 
     case 'TOGGLE_MUTE':
       return { ...state, mute: { ...state.mute, [action.stemKey]: !state.mute[action.stemKey] } }

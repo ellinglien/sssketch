@@ -334,7 +334,13 @@ export function StemWaveformRow({
                 position: 'absolute',
                 left: '50%',
                 top: plateauY,
-                transform: 'translate(-50%, -130%)',
+                // Tooltip normally sits above the plateau line (-130% of its
+                // own height), but at high volume plateauY is near 0 (the row's
+                // own top, which also clips via overflow:hidden) — rendering
+                // above there would push the whole tooltip off-screen and
+                // invisible. Flip to below the line instead whenever there
+                // isn't enough headroom, rather than letting it clip silently.
+                transform: plateauY < 24 ? 'translate(-50%, 30%)' : 'translate(-50%, -130%)',
                 padding: '2px 6px',
                 background: 'var(--ra-mute-on)',
                 color: 'var(--ra-mute-on-ink)',
