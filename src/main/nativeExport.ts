@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { AppState } from '../renderer/src/state/store'
 import { stemStartBar } from '../renderer/src/state/selectors'
 import { buildEngineProject } from '@shared/buildEngineProject'
+import { stemKey, type ExportedStem } from '@shared/types'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
@@ -67,5 +68,83 @@ export async function nativeExport(state: AppState): Promise<Uint8Array> {
     client.disconnect()
     engineHandle.stop()
     rmSync(tempPath, { force: true })
+  }
+}
+
+// Anything outside this set is unsafe (or at least unwelcome) in a filename
+// across macOS/Windows/Linux — path separators, reserved Windows characters,
+// etc. Everything else (spaces, unicode names from Endlesss authors) is left
+// alone.
+function sanitizeFileNamePart(name: string): string {
+  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
+}
+
+/**
+ * Renders each stem across the whole arrangement to its own WAV, soloed —
+ * i.e. every OTHER stem muted for that render, regardless of its current
+ * mute state in `state` (the point is isolating each stem, not reproducing
+ * today's mix). Reuses the same engine process and render-export command as
+ * nativeExport, just called once per stem instead of once for the mixdown.
+ */
+export async function nativeExportStems(state: AppState): Promise<ExportedStem[]> {
+  const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+  const targets: { key: string; rifffName: string; stemName: string }[] = []
+  for (const rifff of placed) {
+    for (const stem of rifff.stems) {
+      targets.push({
+        key: stemKey(rifff.groupId, stem.slot),
+        rifffName: rifff.name,
+        stemName: stem.name
+      })
+    }
+  }
+
+  const usedNames = new Map<string, number>()
+  function uniqueFileName(rifffName: string, stemName: string): string {
+    const base = `${sanitizeFileNamePart(rifffName)}-${sanitizeFileNamePart(stemName)}`
+    const count = (usedNames.get(base) ?? 0) + 1
+    usedNames.set(base, count)
+    return count === 1 ? `${base}.wav` : `${base}-${count}.wav`
+  }
+
+  const durationBars = loopLengthBarsFor(state)
+  const engineHandle = await spawnEngine()
+  const client = new EngineClient()
+  const results: ExportedStem[] = []
+
+  try {
+    await client.connect(engineHandle.port)
+
+    for (const target of targets) {
+      const soloMute: Record<string, boolean> = {}
+      for (const other of targets) soloMute[other.key] = other.key !== target.key
+      const soloState: AppState = { ...state, mute: soloMute }
+
+      const project = await buildEngineProject(soloState, resolveStretchedForExport)
+      const tempPath = join(tmpdir(), `ssstitch-export-${randomUUID()}.wav`)
+
+      client.send('load-project', project)
+      const result = (await client.sendAndAwaitType(
+        'render-export',
+        { outputPath: tempPath, durationBars },
+        'render-export-result'
+      )) as { success: boolean; error?: string }
+
+      if (!result.success) {
+        rmSync(tempPath, { force: true })
+        throw new Error(
+          `native export failed for stem "${target.stemName}": ${result.error ?? 'unknown error'}`
+        )
+      }
+
+      const bytes = readFileSync(tempPath)
+      rmSync(tempPath, { force: true })
+      results.push({ fileName: uniqueFileName(target.rifffName, target.stemName), bytes })
+    }
+
+    return results
+  } finally {
+    client.disconnect()
+    engineHandle.stop()
   }
 }

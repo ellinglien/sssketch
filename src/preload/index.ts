@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Rifff } from '@shared/types'
+import type { Rifff, ExportedStem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
 
 const api = {
@@ -26,6 +26,10 @@ const api = {
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
+  exportStemsNative: (stateJson: string): Promise<ExportedStem[]> =>
+    ipcRenderer.invoke('export-stems-native', stateJson),
+  exportStems: (stems: ExportedStem[]): Promise<string | null> =>
+    ipcRenderer.invoke('export-stems', stems),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),

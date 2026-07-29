@@ -7,8 +7,9 @@ import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import { saveProjectAs, openProject } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
-import { exportMixToWav } from './exportMix'
-import { nativeExport } from './nativeExport'
+import { exportMixToWav, exportStemsToWavs } from './exportMix'
+import { nativeExport, nativeExportStems } from './nativeExport'
+import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -116,6 +117,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('export-mix-native', async (_event, stateJson: string) => {
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
     return nativeExport(state)
+  })
+
+  ipcMain.handle('export-stems-native', async (_event, stateJson: string) => {
+    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+    return nativeExportStems(state)
+  })
+
+  ipcMain.handle('export-stems', (event, stems: ExportedStem[]) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    return exportStemsToWavs(win, stems)
   })
 
   try {
