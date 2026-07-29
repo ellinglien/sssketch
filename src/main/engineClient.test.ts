@@ -46,6 +46,53 @@ function startEchoServer(): Promise<number> {
   })
 }
 
+// The shared startEchoServer() helper above only replies to "render-export" with a
+// single message, which isn't enough to exercise a repeated push subscription. This
+// helper is separate and local to the push-subscription tests below: on receiving a
+// "subscribe-me" message, it sends four position-update pushes with a short delay
+// between each, so tests can assert ordering and that unsubscribing stops delivery.
+function startPushServer(): Promise<number> {
+  return new Promise((resolve) => {
+    server = createServer((socket: Socket) => {
+      let buf = Buffer.alloc(0)
+      socket.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk])
+        while (buf.length >= 8) {
+          const magic = buf.readUInt32LE(0)
+          const len = buf.readUInt32LE(4)
+          if (magic !== MAGIC_NUMBER) return
+          if (buf.length < 8 + len) break
+          const payload = buf.subarray(8, 8 + len).toString('utf8')
+          buf = buf.subarray(8 + len)
+          const parsed = JSON.parse(payload)
+          if (parsed.type === 'subscribe-me') {
+            // Three pushes close together, then a fourth after a much longer gap —
+            // tests unsubscribe in that gap and assert the fourth is never delivered.
+            const pushes: { pos: number; delayMs: number }[] = [
+              { pos: 0.1, delayMs: 20 },
+              { pos: 0.2, delayMs: 40 },
+              { pos: 0.3, delayMs: 60 },
+              { pos: 0.4, delayMs: 150 }
+            ]
+            for (const { pos, delayMs } of pushes) {
+              setTimeout(() => {
+                socket.write(
+                  encodeMessage(JSON.stringify({ type: 'position-update', payload: { pos } }))
+                )
+              }, delayMs)
+            }
+          }
+        }
+      })
+    })
+    server!.listen(0, '127.0.0.1', () => {
+      const address = server!.address()
+      if (address === null || typeof address === 'string') throw new Error('unexpected address')
+      resolve(address.port)
+    })
+  })
+}
+
 describe('encodeMessage', () => {
   it('writes an 8-byte header (magic + length, both little-endian) followed by the UTF-8 payload', () => {
     const encoded = encodeMessage('{"type":"quit"}')
@@ -166,6 +213,78 @@ describe('EngineClient', () => {
     await client.connect(port)
     const response = await client.sendAndAwaitType('anything', {}, 'render-export-result')
     expect(response).toEqual({ success: true })
+    client.disconnect()
+  })
+
+  it('delivers pushed messages to a subscribed listener, repeatedly, without consuming a one-shot waiter', async () => {
+    const port = await startPushServer()
+    const client = new EngineClient()
+    await client.connect(port)
+
+    const received: unknown[] = []
+    const unsubscribe = client.on('position-update', (payload) => received.push(payload))
+
+    client.send('subscribe-me')
+
+    // The server sends pushes at 20/40/60ms, then a fourth at 150ms. Wait past the
+    // first three but well before the fourth, and confirm they arrived in order.
+    await new Promise((resolve) => setTimeout(resolve, 90))
+    expect(received).toEqual([{ pos: 0.1 }, { pos: 0.2 }, { pos: 0.3 }])
+
+    // Unsubscribe in the gap before the fourth push, then wait past when it would
+    // have arrived — the listener must not have been called again.
+    unsubscribe()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(received.length).toBe(3)
+
+    client.disconnect()
+  })
+
+  it("does not let a persistent subscription interfere with sendAndAwaitType's one-shot matching", async () => {
+    const port = await startEchoServer()
+    const client = new EngineClient()
+    await client.connect(port)
+
+    const received: unknown[] = []
+    const unsubscribe = client.on('position-update', (payload) => received.push(payload))
+
+    const response = await client.sendAndAwaitType(
+      'render-export',
+      { outputPath: '/tmp/x.wav', durationBars: 1 },
+      'render-export-result'
+    )
+
+    expect(response).toEqual({ success: true })
+    // The echo server never sends position-update, so the subscription should have
+    // received nothing — it must not have swallowed or redirected the response.
+    expect(received).toEqual([])
+
+    unsubscribe()
+    client.disconnect()
+  })
+
+  it('fires both a pending one-shot waiter and a persistent subscriber for the same message type', async () => {
+    // A message type could theoretically have both a pending sendAndAwaitType
+    // waiter AND a persistent client.on() subscriber at once; both must fire
+    // independently rather than the subscriber dispatch being an `else` branch
+    // of the waiter check (or vice versa).
+    const port = await startEchoServer()
+    const client = new EngineClient()
+    await client.connect(port)
+
+    const received: unknown[] = []
+    const unsubscribe = client.on('render-export-result', (payload) => received.push(payload))
+
+    const response = await client.sendAndAwaitType(
+      'render-export',
+      { outputPath: '/tmp/x.wav', durationBars: 1 },
+      'render-export-result'
+    )
+
+    expect(response).toEqual({ success: true })
+    expect(received).toEqual([{ success: true }])
+
+    unsubscribe()
     client.disconnect()
   })
 })

@@ -38,6 +38,7 @@ export class EngineClient {
     resolve: (payload: unknown) => void
     reject: (err: Error) => void
   }[] = []
+  private subscribers = new Map<string, Set<(payload: unknown) => void>>()
 
   connect(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -107,6 +108,15 @@ export class EngineClient {
       return
     }
     const msg = parsed as IncomingMessage
+
+    // Persistent subscribers (client.on) and one-shot waiters (sendAndAwaitType) are
+    // independent: a message type could theoretically have both at once, and both
+    // must fire. Deliberately not an if/else off the waiter check below.
+    const subs = this.subscribers.get(msg.type)
+    if (subs) {
+      for (const cb of subs) cb(msg.payload)
+    }
+
     const waiterIdx = this.pendingWaiters.findIndex((w) => w.type === msg.type)
     if (waiterIdx === -1) return // not something anyone's waiting for (e.g. a stray position-update)
     const [waiter] = this.pendingWaiters.splice(waiterIdx, 1)
@@ -116,6 +126,24 @@ export class EngineClient {
   private failAllWaiters(err: Error): void {
     for (const waiter of this.pendingWaiters) waiter.reject(err)
     this.pendingWaiters = []
+  }
+
+  /** Subscribes to every message of the given type, indefinitely, until
+   * unsubscribed — for the engine's own pushed events (position-update, and
+   * this phase's new engine-restarted signal), which arrive repeatedly and
+   * unprompted, unlike sendAndAwaitType's one-shot request/response messages.
+   * Returns an unsubscribe function. */
+  on(type: string, callback: (payload: unknown) => void): () => void {
+    let set = this.subscribers.get(type)
+    if (!set) {
+      set = new Set()
+      this.subscribers.set(type, set)
+    }
+    set.add(callback)
+    return () => {
+      set!.delete(callback)
+      if (set!.size === 0) this.subscribers.delete(type)
+    }
   }
 
   send(type: string, payload?: unknown): void {
