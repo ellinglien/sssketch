@@ -94,6 +94,18 @@ export function StemWaveformRow({
   // committed-state one, so the row visibly resizes in real time.
   const widthPx = dragPlayedBars !== null ? dragPlayedBars * PPB : stemGeo.widthPx
 
+  // The native engine always loops a stem from its own beginning every
+  // stem.barLength bars — playedBars beyond that adds more repeats (or
+  // truncates the last one), it never slows the audio down. One stretched
+  // Waveform image would visually read as "slowed down," which contradicts
+  // that — so the waveform is tiled instead, at stem.barLength's own width,
+  // repeated across widthPx. The container's overflow:hidden (below) clips
+  // both an oversized last tile and a single undersized tile for free, so no
+  // per-tile clipping is needed here.
+  const tileWidthPx = widthPx * (stem.barLength / displayedPlayedBars)
+  const tileCount = Math.max(1, Math.ceil(displayedPlayedBars / stem.barLength))
+  const tileOffsets = Array.from({ length: tileCount }, (_, i) => i * tileWidthPx)
+
   const fadeInPx = displayedFadeIn * PPB
   const fadeOutPx = displayedFadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
@@ -123,7 +135,12 @@ export function StemWaveformRow({
     startPointerDrag(
       e,
       (deltaX) => {
-        finalPlayedBars = Math.max(MIN_PLAYED_BARS, startPlayedBars + deltaX / PPB)
+        // Snapped to whole bars, matching App.tsx's barForClientX — the same
+        // grid other timeline drags (placing/moving a clip) already snap to.
+        // Extending a loop makes sense in whole-bar increments (you're adding
+        // another repeat, not fine sub-bar precision), and it keeps the tiled
+        // waveform below landing on clean tile boundaries most of the time.
+        finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / PPB))
         setDragPlayedBars(finalPlayedBars)
       },
       (moved) => {
@@ -222,11 +239,21 @@ export function StemWaveformRow({
             overflow: 'hidden'
           }}
         >
-          {/* Always-visible gray layer underneath */}
-          <Waveform path={stem.path} color="var(--ra-text-3)" opacity={1} />
+          {/* Always-visible gray layer underneath, tiled to show the loop
+              repeating rather than one image stretched across the width. */}
+          {tileOffsets.map((left) => (
+            <div
+              key={left}
+              style={{ position: 'absolute', top: 0, bottom: 0, left, width: tileWidthPx }}
+            >
+              <Waveform path={stem.path} color="var(--ra-text-3)" opacity={1} />
+            </div>
+          ))}
 
           {/* Full-color layer on top, clipped to the envelope — suppressed
-              entirely while muted, since mute always wins over the envelope. */}
+              entirely while muted, since mute always wins over the envelope.
+              Same tiling as the gray layer underneath, so the two stay in
+              visual sync at every tile boundary. */}
           {!muted && (
             <div
               style={{
@@ -235,7 +262,14 @@ export function StemWaveformRow({
                 clipPath: `path("${envelopePath}")`
               }}
             >
-              <Waveform path={stem.path} color={color} opacity={1} />
+              {tileOffsets.map((left) => (
+                <div
+                  key={left}
+                  style={{ position: 'absolute', top: 0, bottom: 0, left, width: tileWidthPx }}
+                >
+                  <Waveform path={stem.path} color={color} opacity={1} />
+                </div>
+              ))}
             </div>
           )}
 
@@ -271,7 +305,7 @@ export function StemWaveformRow({
               history. */}
           <div
             onMouseDown={handleResizeStart}
-            title={`${displayedPlayedBars.toFixed(2)} bars`}
+            title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
               top: 0,
