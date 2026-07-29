@@ -11,7 +11,8 @@ import {
   offsetStepsForBeatIndex,
   rotationSecondsForStem,
   pasteRifffAction,
-  placedRifffsInOrder
+  placedRifffsInOrder,
+  muteShortcutLetters
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -36,6 +37,33 @@ describe('resolveOffsetKey', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
     expect(resolveOffsetKey(state, 'r1', 1)).toBe('r1:1')
+  })
+})
+
+describe('muteShortcutLetters', () => {
+  it('assigns top-row qwerty letters in ascending slot order, not stem array order', () => {
+    const stems: Stem[] = [
+      { slot: 6, author: 'e', name: 'b', type: 'fx', path: '/b.wav', durationSec: 1, barLength: 8 },
+      { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
+    ]
+    const letters = muteShortcutLetters({ ...rifff, stems })
+    expect(letters).toEqual({ 1: 'q', 6: 'w' })
+  })
+
+  it('leaves stems beyond the 10-key row without a shortcut', () => {
+    const stems: Stem[] = Array.from({ length: 12 }, (_, i) => ({
+      slot: i + 1,
+      author: 'e',
+      name: `s${i}`,
+      type: 'fx',
+      path: `/${i}.wav`,
+      durationSec: 1,
+      barLength: 8
+    }))
+    const letters = muteShortcutLetters({ ...rifff, stems })
+    expect(Object.keys(letters)).toHaveLength(10)
+    expect(letters[11]).toBeUndefined()
+    expect(letters[12]).toBeUndefined()
   })
 })
 

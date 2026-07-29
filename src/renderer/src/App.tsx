@@ -10,9 +10,15 @@ import { Playhead } from './components/Playhead'
 import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
-import { loopLengthBars, pasteRifffAction, placedRifffsInOrder } from './state/selectors'
+import {
+  loopLengthBars,
+  pasteRifffAction,
+  placedRifffsInOrder,
+  muteShortcutLetters
+} from './state/selectors'
 import { initialState } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
+import { stemKey } from '@shared/types'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
   const rect = container.getBoundingClientRect()
@@ -346,6 +352,29 @@ function Frame(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
+
+  // Shift+<qwerty letter> mutes/unmutes one of the selected rifff's stems —
+  // see useShiftHeld/muteShortcutLetters for the matching on-screen letter
+  // shown on each stem's mute dot while Shift is held (StemWaveformRow).
+  // Scoped to the selected rifff only: letting every placed rifff's stems
+  // fight over the same q/w/e/... keys would make presses ambiguous.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (!e.shiftKey || !state.sel) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      const rifff = state.rifffs[state.sel]
+      if (!rifff) return
+      const letters = muteShortcutLetters(rifff)
+      const key = e.key.toLowerCase()
+      const stem = rifff.stems.find((s) => letters[s.slot] === key)
+      if (!stem) return
+      e.preventDefault()
+      dispatch({ type: 'TOGGLE_MUTE', stemKey: stemKey(state.sel, stem.slot) })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [state.sel, state.rifffs, dispatch])
 
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing

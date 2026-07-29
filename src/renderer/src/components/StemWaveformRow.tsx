@@ -4,12 +4,19 @@ import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
-import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
+import {
+  stemGeometry,
+  resolveOffsetKey,
+  resolvePlayedBars,
+  stemStartBar,
+  muteShortcutLetters
+} from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
 import { startPointerDrag } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import { useShiftHeld } from './useShiftHeld'
 import {
   FADE_MAX,
   FADE_DRAG_SLOWDOWN,
@@ -42,6 +49,11 @@ export function StemWaveformRow({
   const volume = state.vol[key] ?? 1
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
+  // Only the selected rifff's stems get a shortcut shown/active — see the
+  // Shift+letter handler in App.tsx's Frame for why this is scoped that way.
+  const shiftHeld = useShiftHeld()
+  const muteLetter = groupId === state.sel ? muteShortcutLetters(rifff)[slot] : undefined
+  const showMuteShortcut = shiftHeld && !!muteLetter
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragLeftResize, setDragLeftResize] = useState<{
@@ -457,29 +469,45 @@ export function StemWaveformRow({
               CollapsedRifffRow's own mute-dot styling/position): filled =
               unmuted (active), hollow = muted (off). stopPropagation on both
               handlers so a click/drag here never also moves the clip or
-              starts a volume-mode drag. */}
+              starts a volume-mode drag. While Shift is held (and this stem's
+              rifff is selected, so its shortcut is actually live — see the
+              Shift+letter handler in App.tsx's Frame), it grows into a
+              square showing the assigned letter instead of the plain dot. */}
           <button
             onClick={(e) => {
               e.stopPropagation()
               dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
             }}
             onMouseDown={(e) => e.stopPropagation()}
-            title={`${stem.name}: ${muted ? 'unmute' : 'mute'}`}
+            title={
+              showMuteShortcut
+                ? `${stem.name}: ${muted ? 'unmute' : 'mute'} (Shift+${muteLetter!.toUpperCase()})`
+                : `${stem.name}: ${muted ? 'unmute' : 'mute'}`
+            }
             style={{
               position: 'absolute',
               left: 6,
               top: '50%',
               transform: 'translateY(-50%)',
-              width: 9,
-              height: 9,
-              borderRadius: '50%',
+              width: showMuteShortcut ? 14 : 9,
+              height: showMuteShortcut ? 14 : 9,
+              borderRadius: showMuteShortcut ? 0 : '50%',
               border: '1px solid rgba(201,191,232,0.6)',
               background: muted ? 'transparent' : 'var(--ra-text-2)',
+              color: muted ? 'var(--ra-text-2)' : 'var(--ra-bg-row-sub)',
+              display: showMuteShortcut ? 'flex' : undefined,
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 8,
+              fontWeight: 700,
+              lineHeight: 1,
               padding: 0,
               cursor: 'pointer',
               zIndex: 3
             }}
-          />
+          >
+            {showMuteShortcut ? muteLetter!.toUpperCase() : null}
+          </button>
 
           {dragVolume !== null && (
             <div

@@ -5,6 +5,26 @@ export function resolveOffsetKey(state: AppState, groupId: string, slot: number)
   return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
 }
 
+/** Top-row QWERTY keys, in order — the Shift+letter mute shortcuts assign
+ * one to each of the selected rifff's stems, by ascending slot number.
+ * Comfortably covers more stems than any rifff realistically has (the
+ * app's own slot pool tops out at 8); a stem beyond this length just
+ * doesn't get a shortcut, rather than wrapping/reusing a key. */
+export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'] as const
+
+/** Maps each of a rifff's stems (by slot) to its assigned mute-shortcut
+ * letter — the single source of truth for both the keyboard handler
+ * (App.tsx's Frame) and the on-screen letter shown on each mute dot while
+ * Shift is held (StemWaveformRow), so the two can never drift apart. */
+export function muteShortcutLetters(rifff: Rifff): Record<number, string> {
+  const sorted = [...rifff.stems].sort((a, b) => a.slot - b.slot)
+  const out: Record<number, string> = {}
+  sorted.forEach((stem, i) => {
+    if (i < MUTE_SHORTCUT_KEYS.length) out[stem.slot] = MUTE_SHORTCUT_KEYS[i]
+  })
+  return out
+}
+
 /** A stem's own played length, in bars — the tiling loop's bound for this
  * specific stem. Falls back to rifff.barLength (today's implicit behavior)
  * when no override has been set. Same linked/unlinked resolution as `off`
