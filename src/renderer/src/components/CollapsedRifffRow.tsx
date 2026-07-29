@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
+import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
-import { stemGeometry, resolvePlayedBars } from '../state/selectors'
+import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PolarGlyph } from './PolarGlyph'
 import { PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
+import { startPointerDrag } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
 /** Tiles one representative stem's waveform across the collapsed block's
@@ -60,19 +63,95 @@ export function CollapsedRifffRow({
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
 
+  const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
+  const [dragLeftResize, setDragLeftResize] = useState<{
+    playedBars: number
+    startBar: number
+  } | null>(null)
+
   // stemGeometry (not clipGeometry) so an active playedBars resize is
   // reflected here too — clipGeometry predates the resize feature and always
   // uses rifff.barLength, silently ignoring one. For a stem in a linked
   // group this resolves to the same group-level position/width clipGeometry
   // was trying to compute (resolveOffsetKey/resolvePlayedBars both key on
   // groupId while linked) — correct for the common case, and a reasonable
-  // "represents the first stem" fallback if collapsed while unlinked.
+  // "represents the first stem" fallback if collapsed while unlinked. The
+  // same applies to the resize handles below: resizing here dispatches
+  // through resolveOffsetKey/RESIZE_LEFT exactly like StemWaveformRow's own
+  // handles, so it resizes the whole group while linked (the common case).
+  const playedBarsKey = resolveOffsetKey(state, groupId, firstStem.slot)
+  const resolvedPlayedBars = resolvePlayedBars(state, groupId, firstStem.slot)
+  const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
+  const baseStartBar = stemStartBar(state, groupId, firstStem.slot)
+
   const geo = stemGeometry(state, groupId, firstStem.slot, PPB)
-  const playedBars = resolvePlayedBars(state, groupId, firstStem.slot)
+  // Sub-bar nudge offset (off[]) baked into geo.leftPx, isolated so a
+  // left-resize preview can recompute leftPx from a new start bar while
+  // preserving it — see StemWaveformRow's identical pattern.
+  const nudgeOffsetPx = geo.leftPx - baseStartBar * PPB
+  const displayedStartBar = dragLeftResize?.startBar ?? baseStartBar
+  const leftPx = displayedStartBar * PPB + nudgeOffsetPx
+  const widthPx =
+    dragPlayedBars !== null
+      ? dragPlayedBars * PPB
+      : dragLeftResize !== null
+        ? dragLeftResize.playedBars * PPB
+        : geo.widthPx
+
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
-  const fadeInPx = Math.min(geo.widthPx / 2, fadeIn * PPB)
-  const fadeOutPx = Math.min(geo.widthPx / 2, fadeOut * PPB)
+  const fadeInPx = Math.min(widthPx / 2, fadeIn * PPB)
+  const fadeOutPx = Math.min(widthPx / 2, fadeOut * PPB)
+
+  function handleResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    let finalPlayedBars = startPlayedBars
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / PPB))
+        setDragPlayedBars(finalPlayedBars)
+      },
+      (moved) => {
+        if (moved) {
+          dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
+        }
+        setDragPlayedBars(null)
+      }
+    )
+  }
+
+  function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    const startPosBar = baseStartBar
+    let finalPlayedBars = startPlayedBars
+    let finalStartBar = startPosBar
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const requestedGrow = -Math.round(deltaX / PPB)
+        const grow = Math.max(
+          MIN_PLAYED_BARS - startPlayedBars,
+          Math.min(startPosBar, requestedGrow)
+        )
+        finalPlayedBars = startPlayedBars + grow
+        finalStartBar = startPosBar - grow
+        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          dispatch({
+            type: 'RESIZE_LEFT',
+            groupId,
+            slot: firstStem.slot,
+            bars: finalPlayedBars,
+            startBar: finalStartBar
+          })
+        }
+        setDragLeftResize(null)
+      }
+    )
+  }
 
   return (
     <div
@@ -130,8 +209,8 @@ export function CollapsedRifffRow({
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: geo.leftPx,
-            width: geo.widthPx,
+            left: leftPx,
+            width: widthPx,
             borderRadius: 3,
             border: `1px solid color-mix(in srgb, ${color} ${selected ? 70 : 40}%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
@@ -141,9 +220,9 @@ export function CollapsedRifffRow({
           <CollapsedTiles
             path={firstStem.path}
             color={color}
-            widthPx={geo.widthPx}
+            widthPx={widthPx}
             stemBarLength={firstStem.barLength}
-            playedBars={playedBars}
+            playedBars={displayedPlayedBars}
           />
           {fadeInPx > 0 && (
             <div
@@ -171,6 +250,43 @@ export function CollapsedRifffRow({
               }}
             />
           )}
+          {/* Resize handles, both edges — same behavior as StemWaveformRow's
+              own (right grows the loop forward from a fixed start, left
+              grows it backward from a fixed end), just scoped to the
+              representative first stem/group here instead of a specific
+              slot. stopPropagation isn't needed: startPointerDrag already
+              calls preventDefault/stopPropagation, which blocks this block's
+              own native drag from initiating on the same mousedown. */}
+          <div
+            onMouseDown={handleLeftResizeStart}
+            title={`${displayedPlayedBars} bars`}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: 5,
+              cursor: 'ew-resize',
+              background: '#fff',
+              opacity: 0.55,
+              zIndex: 3
+            }}
+          />
+          <div
+            onMouseDown={handleResizeStart}
+            title={`${displayedPlayedBars} bars`}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: 5,
+              cursor: 'ew-resize',
+              background: '#fff',
+              opacity: 0.55,
+              zIndex: 3
+            }}
+          />
           {/* Mini mute-dot row: one per stem, same filled/hollow convention as
               the expanded view's mute button. stopPropagation so clicking a dot
               doesn't also start a drag on this block. */}
