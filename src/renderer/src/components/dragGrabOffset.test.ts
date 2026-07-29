@@ -29,6 +29,21 @@ describe('applyGrabOffset', () => {
     // should be 17, i.e. still 3 bars behind the mouse, same as at grab time.
     expect(applyGrabOffset(20, offset)).toBe(17)
   })
+
+  it('rounds a fractional grab offset to the nearest whole bar', () => {
+    // A fractional offset, as computeGrabOffsetBars naturally produces from
+    // a precise mouse position — e.g. grabbed 2.37 bars into a clip.
+    // Without rounding here, dragging to a target whole-bar mouse position
+    // could never land exactly on a whole bar itself no matter how
+    // carefully it's aimed.
+    expect(applyGrabOffset(10, 2.37)).toBe(8)
+    expect(applyGrabOffset(4, 1.6)).toBe(2)
+  })
+
+  it('clamps the result to a minimum of 0', () => {
+    expect(applyGrabOffset(1, 5)).toBe(0)
+    expect(applyGrabOffset(0, 0.4)).toBe(0)
+  })
 })
 
 describe('dragGrabOffset storage', () => {

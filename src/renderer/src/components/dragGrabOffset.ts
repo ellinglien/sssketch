@@ -8,9 +8,17 @@ export function computeGrabOffsetBars(mouseBar: number, clipStartBar: number): n
 
 // Pure inverse of computeGrabOffsetBars: given the mouse's bar position at
 // drop (or during a dragover preview) and a previously captured grab offset,
-// the clip's resulting start bar.
+// the clip's resulting start bar. Rounded to the nearest whole bar — every
+// other placement path in this app (barForClientX, resize-handle drags) snaps
+// to whole bars, and mouseBar here is already a whole number (it comes from
+// barForClientX's own rounding); subtracting a precise, non-rounded
+// offsetBars from it would otherwise produce a fractional result that can
+// never land exactly on bar 1 (or anywhere else on the grid) no matter how
+// carefully the drag is aimed. Clamped to >= 0 for the same reason
+// SET_STEM_START clamps its own startBar — a clip can't start before the
+// timeline's own beginning.
 export function applyGrabOffset(mouseBar: number, offsetBars: number): number {
-  return mouseBar - offsetBars
+  return Math.max(0, Math.round(mouseBar - offsetBars))
 }
 
 // Carries the offset itself from a drag's onDragStart to Timeline's

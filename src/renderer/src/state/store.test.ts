@@ -63,6 +63,12 @@ describe('reducer', () => {
     expect(state.stretch.r1).toBe(true)
   })
 
+  it('placing on the timeline clamps a negative startBar to 0', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: -3 })
+    expect(state.rifffs.r1.startBar).toBe(0)
+  })
+
   it('the first clip placed on an empty timeline adopts its bpm as the project tempo', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ bpm: 150 }) })
     expect(state.bpm).toBe(80) // untouched default until something is actually placed

@@ -138,7 +138,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         rifffs: {
           ...state.rifffs,
-          [action.groupId]: { ...rifff, startBar: action.startBar }
+          [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
         },
         bpm: isFirstPlacement ? rifff.bpm : state.bpm,
         sel: action.groupId,
