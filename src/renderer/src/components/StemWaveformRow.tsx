@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useDispatch, useAppState } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
@@ -63,6 +63,39 @@ export function StemWaveformRow({
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
+
+  // Click (not drag) anywhere on the waveform toggles mute — see
+  // handleWaveformClick below. suppressNextClickRef guards against the
+  // volume-adjust drag's own trailing click (a manual mousedown/mousemove
+  // drag, unlike the native HTML5 reposition drag, doesn't suppress the
+  // click DOM fires afterward — see handleVolumeStart's onEnd). clickTimerRef
+  // delays a genuine single click just long enough to cancel it if a second
+  // click arrives (a double-click, which resets volume via onDoubleClick
+  // instead — without this, double-clicking would also toggle mute once).
+  const suppressNextClickRef = useRef(false)
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current !== null) clearTimeout(clickTimerRef.current)
+    }
+  }, [])
+
+  function handleWaveformClick(): void {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      return
+    }
+    if (clickTimerRef.current !== null) {
+      clearTimeout(clickTimerRef.current)
+      clickTimerRef.current = null
+      return
+    }
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null
+      dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
+    }, 250)
+  }
+
   const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
@@ -250,6 +283,9 @@ export function StemWaveformRow({
       (moved) => {
         if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
         setDragVolume(null)
+        // A real volume drag shouldn't also toggle mute via the click DOM
+        // fires right after mouseup — see handleWaveformClick.
+        suppressNextClickRef.current = moved
       }
     )
   }
@@ -281,6 +317,7 @@ export function StemWaveformRow({
         <div
           draggable
           onDragStart={handleWaveformDragStart}
+          onClick={handleWaveformClick}
           onDoubleClick={() => {
             // Mirrors the import-time default seeded in store.ts's
             // ADD_TO_SHELF case, so double-clicking resets volume back to
@@ -292,7 +329,7 @@ export function StemWaveformRow({
             const target = sqrtGain(rifff.stems.length)
             if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
-          title="double-click to reset volume"
+          title="click to mute · double-click to reset volume"
           style={{
             position: 'absolute',
             top: 0,
@@ -370,9 +407,11 @@ export function StemWaveformRow({
               it backward from a fixed end (see handleLeftResizeStart). Drags
               update local state only, and dispatch exactly once on mouseup
               (see dragUtils.startPointerDrag) so a long drag can't flood undo
-              history. */}
+              history. onClick stopPropagation so a plain click here (no
+              drag) doesn't also bubble up and toggle mute. */}
           <div
             onMouseDown={handleLeftResizeStart}
+            onClick={(e) => e.stopPropagation()}
             title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
@@ -388,6 +427,7 @@ export function StemWaveformRow({
           />
           <div
             onMouseDown={handleResizeStart}
+            onClick={(e) => e.stopPropagation()}
             title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
@@ -406,9 +446,11 @@ export function StemWaveformRow({
               plateau corners, draggable to adjust fadeIn/fadeOut. Positioned
               via the same envelopeKnees() helper buildEnvelopePath itself
               uses, so the dots can never visually drift off the curve they
-              sit on. */}
+              sit on. onClick stopPropagation, same reason as the resize
+              handles above. */}
           <div
             onMouseDown={handleFadeInStart}
+            onClick={(e) => e.stopPropagation()}
             title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
             style={{
               position: 'absolute',
@@ -425,6 +467,7 @@ export function StemWaveformRow({
           />
           <div
             onMouseDown={handleFadeOutStart}
+            onClick={(e) => e.stopPropagation()}
             title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
             style={{
               position: 'absolute',
@@ -442,21 +485,21 @@ export function StemWaveformRow({
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on (see the V-key toggle in App.tsx/TransportBar),
-              repurposing the same open area that defaults to "drag to move
-              the clip" (handleWaveformDragStart above). While off, this does
-              nothing on mousedown — the event is left alone so the browser's
-              native drag (from the container's own `draggable`) proceeds
-              normally instead. zIndex stays below the resize handles (3) and
-              fade dots (4) in BOTH modes — this covers the entire row, so at
-              equal z-index its own later DOM position would otherwise let it
-              physically sit on top of those small edge targets and swallow
-              their mousedown before it ever reaches them, not just visually
+              repurposing the same open area that otherwise clicks to mute or
+              drags to move the clip. While off, this does nothing on
+              mousedown — the event is left alone so the outer container's
+              own click/native drag handling proceeds normally instead.
+              zIndex stays below the resize handles (3) and fade dots (4) in
+              BOTH modes — this covers the entire row, so at equal z-index
+              its own later DOM position would otherwise let it physically
+              sit on top of those small edge targets and swallow their
+              mousedown before it ever reaches them, not just visually
               overlap them. */}
           <div
             onMouseDown={(e) => {
               if (volumeDragMode) handleVolumeStart(e)
             }}
-            title={volumeDragMode ? 'drag to adjust volume' : undefined}
+            title={volumeDragMode ? 'drag to adjust volume · click to mute' : undefined}
             style={{
               position: 'absolute',
               inset: 0,
@@ -465,49 +508,40 @@ export function StemWaveformRow({
             }}
           />
 
-          {/* Mute dot, overlaid directly on the waveform (matching
-              CollapsedRifffRow's own mute-dot styling/position): filled =
-              unmuted (active), hollow = muted (off). stopPropagation on both
-              handlers so a click/drag here never also moves the clip or
-              starts a volume-mode drag. While Shift is held (and this stem's
-              rifff is selected, so its shortcut is actually live — see the
-              Shift+letter handler in App.tsx's Frame), it grows into a
-              square showing the assigned letter instead of the plain dot. */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            title={
-              showMuteShortcut
-                ? `${stem.name}: ${muted ? 'unmute' : 'mute'} (Shift+${muteLetter!.toUpperCase()})`
-                : `${stem.name}: ${muted ? 'unmute' : 'mute'}`
-            }
-            style={{
-              position: 'absolute',
-              left: 6,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: showMuteShortcut ? 14 : 9,
-              height: showMuteShortcut ? 14 : 9,
-              borderRadius: showMuteShortcut ? 0 : '50%',
-              border: '1px solid rgba(201,191,232,0.6)',
-              background: muted ? 'transparent' : 'var(--ra-text-2)',
-              color: muted ? 'var(--ra-text-2)' : 'var(--ra-bg-row-sub)',
-              display: showMuteShortcut ? 'flex' : undefined,
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 8,
-              fontWeight: 700,
-              lineHeight: 1,
-              padding: 0,
-              cursor: 'pointer',
-              zIndex: 3
-            }}
-          >
-            {showMuteShortcut ? muteLetter!.toUpperCase() : null}
-          </button>
+          {/* Mute-shortcut letter hint, overlaid on the waveform — shown only
+              while Shift is held (and this stem's rifff is selected, so its
+              shortcut is actually live; see the Shift+letter handler in
+              App.tsx's Frame). Purely a visual hint (pointerEvents: none) —
+              muting itself now happens by clicking anywhere on the waveform
+              (handleWaveformClick above), there's no separate button to
+              click. Max-contrast black/white rather than the app's usual
+              off-black/off-white tokens, and inverted between mute states,
+              so the letter stays legible and doubles as a mute-state cue on
+              its own. */}
+          {showMuteShortcut && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 6,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: 18,
+                height: 18,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: muted ? '#fff' : '#000',
+                color: muted ? '#000' : '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                lineHeight: 1,
+                pointerEvents: 'none',
+                zIndex: 3
+              }}
+            >
+              {muteLetter!.toUpperCase()}
+            </div>
+          )}
 
           {dragVolume !== null && (
             <div

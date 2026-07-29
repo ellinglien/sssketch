@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
@@ -97,6 +97,22 @@ export function CollapsedRifffRow({
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
+
+  // Click (not drag) anywhere on the block toggles the whole group's mute —
+  // guards against the volume-adjust drag's own trailing click, same as
+  // StemWaveformRow's identical guard (a manual mousedown/mousemove drag,
+  // unlike the native HTML5 reposition drag, doesn't suppress the click DOM
+  // fires afterward — see handleVolumeStart's onEnd below). No double-click
+  // feature exists at this level, so unlike StemWaveformRow this can toggle
+  // immediately rather than needing a double-click-disambiguation delay.
+  const suppressNextClickRef = useRef(false)
+  function handleBlockClick(): void {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      return
+    }
+    dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })
+  }
 
   // stemGeometry (not clipGeometry) so an active playedBars resize is
   // reflected here too — clipGeometry predates the resize feature and always
@@ -244,6 +260,9 @@ export function CollapsedRifffRow({
       (moved) => {
         if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
         setDragVolume(null)
+        // A real volume drag shouldn't also toggle mute via the click DOM
+        // fires right after mouseup — see handleBlockClick.
+        suppressNextClickRef.current = moved
       }
     )
   }
@@ -265,6 +284,8 @@ export function CollapsedRifffRow({
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
+          onClick={handleBlockClick}
+          title="click to mute group"
           style={{
             position: 'absolute',
             top: 0,
@@ -341,6 +362,7 @@ export function CollapsedRifffRow({
               from initiating on the same mousedown. */}
           <div
             onMouseDown={handleLeftResizeStart}
+            onClick={(e) => e.stopPropagation()}
             title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
@@ -356,6 +378,7 @@ export function CollapsedRifffRow({
           />
           <div
             onMouseDown={handleResizeStart}
+            onClick={(e) => e.stopPropagation()}
             title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
@@ -373,9 +396,12 @@ export function CollapsedRifffRow({
           {/* Fade-in/fade-out knee handles — always active regardless of
               envelope/volumeDragMode, same as StemWaveformRow's own (fade is
               a separate, dedicated small target, not gated by the mode
-              switch the way the broad volume drag surface below is). */}
+              switch the way the broad volume drag surface below is).
+              onClick stopPropagation so a plain click here (no drag) doesn't
+              also bubble up and toggle the group mute. */}
           <div
             onMouseDown={handleFadeInStart}
+            onClick={(e) => e.stopPropagation()}
             title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
             style={{
               position: 'absolute',
@@ -392,6 +418,7 @@ export function CollapsedRifffRow({
           />
           <div
             onMouseDown={handleFadeOutStart}
+            onClick={(e) => e.stopPropagation()}
             title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
             style={{
               position: 'absolute',
@@ -409,50 +436,25 @@ export function CollapsedRifffRow({
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on, repurposing the same open area that
-              defaults to "drag to move the clip." While off, this does
-              nothing on mousedown — the event is left alone so the native
-              drag (from the container's own `draggable`) proceeds normally
-              instead. zIndex stays below the resize handles (3) and fade
-              dots (4) in both modes — see StemWaveformRow's identical fix
-              (a full-coverage div at the same z-index as those small edge
-              targets would otherwise physically sit on top of them and
-              swallow their mousedown before it ever reaches them). */}
+              otherwise clicks to mute the group or drags to move the clip.
+              While off, this does nothing on mousedown — the event is left
+              alone so the outer container's own click/native drag handling
+              proceeds normally instead. zIndex stays below the resize
+              handles (3) and fade dots (4) in both modes — see
+              StemWaveformRow's identical fix (a full-coverage div at the
+              same z-index as those small edge targets would otherwise
+              physically sit on top of them and swallow their mousedown
+              before it ever reaches them). */}
           <div
             onMouseDown={(e) => {
               if (volumeDragMode) handleVolumeStart(e)
             }}
-            title={volumeDragMode ? 'drag to adjust group volume' : undefined}
+            title={volumeDragMode ? 'drag to adjust group volume · click to mute' : undefined}
             style={{
               position: 'absolute',
               inset: 0,
               cursor: volumeDragMode ? 'ns-resize' : 'grab',
               zIndex: 2
-            }}
-          />
-
-          {/* Single group-mute button, overlaid on the waveform, top-left
-              corner — same filled/hollow convention and position as each
-              stem's own mute dot in the expanded view. */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            title={allMuted ? 'unmute group' : 'mute group'}
-            style={{
-              position: 'absolute',
-              left: 6,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: 9,
-              height: 9,
-              borderRadius: '50%',
-              border: '1px solid rgba(201,191,232,0.6)',
-              background: allMuted ? 'transparent' : 'var(--ra-text-2)',
-              padding: 0,
-              cursor: 'pointer',
-              zIndex: 3
             }}
           />
 
