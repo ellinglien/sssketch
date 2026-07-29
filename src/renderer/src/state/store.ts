@@ -3,6 +3,12 @@ import { sqrtGain } from '@shared/mixGain'
 
 export const SNAP_DIVS = [4, 8, 16, 32] as const
 
+// A played length of 0 would never schedule any audio (and risks a divide-
+// by-zero downstream) — unlike a stem position of 0, which is meaningful.
+// Exported so the arranger row's drag-time preview clamp can share this
+// exact value instead of duplicating the literal.
+export const MIN_PLAYED_BARS = 0.25
+
 export interface AppState {
   playing: boolean
   pos: number
@@ -171,7 +177,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_PLAYED_BARS':
       return {
         ...state,
-        playedBars: { ...state.playedBars, [action.key]: Math.max(0.25, action.bars) }
+        playedBars: { ...state.playedBars, [action.key]: Math.max(MIN_PLAYED_BARS, action.bars) }
       }
 
     // Upper-bounded loosely here (a sane ceiling, not the real constraint) —

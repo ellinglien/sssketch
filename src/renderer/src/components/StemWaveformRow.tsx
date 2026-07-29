@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useDispatch, useAppState } from '../state/StoreContext'
+import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
@@ -8,10 +9,6 @@ import { PPB } from './Ruler'
 import { startPointerDrag } from './dragUtils'
 
 const ROW_HEIGHT = 44
-// Matches the reducer's own SET_PLAYED_BARS clamp (store.ts) — kept as a
-// shared constant so the drag-time preview and the committed value can never
-// disagree about the floor.
-const MIN_PLAYED_BARS = 0.25
 
 /** Builds the SVG path `d` for the "below the envelope" region — a closed shape
  * bounded above by a curve that eases from silence at the very start, up to the
