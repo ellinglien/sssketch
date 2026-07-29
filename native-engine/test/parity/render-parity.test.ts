@@ -1,9 +1,19 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { writeFileSync, mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { EngineProject } from '../../../src/shared/buildEngineProject'
+
+// renderStretched (src/main/rubberband.ts) reaches into Electron's `app` object
+// (via its private cacheDir() helper) purely to find a writable cache directory —
+// there's no real Electron process under Vitest, so `app` is mocked to point the
+// cache at a plain OS temp dir. Same pattern already established in
+// src/main/playbackEngineLifecycle.test.ts for app.getAppPath.
+const rubberbandCacheDir = mkdtempSync(join(tmpdir(), 'ssstitch-rb-cache-'))
+vi.mock('electron', () => ({ app: { getPath: () => rubberbandCacheDir } }))
+
+const { renderStretched } = await import('../../../src/main/rubberband')
 
 // Assumes native-engine has already been built (Tasks 1-8) — same precondition
 // as every other manual verification step in this plan. Path matches the
@@ -81,6 +91,7 @@ describe('native engine vs Web Audio export — render parity', () => {
 
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true })
+    rmSync(rubberbandCacheDir, { recursive: true, force: true })
   })
 
   it('produces near-identical output to the native engine for a simple one-stem project', async () => {
@@ -212,5 +223,90 @@ describe('native engine vs Web Audio export — render parity', () => {
         stdio: 'pipe'
       })
     ).toThrow()
+  })
+
+  it('matches a tempo-stretched stem (rifff recorded at 80bpm, project at 60bpm)', async () => {
+    // ratio = projectBpm / rifffBpm, same formula buildEngineProject.ts uses.
+    // 60/80 = 0.75, well past the >= 0.001 "is this a real stretch" threshold
+    // at src/shared/buildEngineProject.ts:56. ratio < 1 means "slow down" ->
+    // rubberband's --tempo semantics (see src/main/rubberband.ts comment)
+    // produce a LONGER file than the 4s source tone.
+    const ratio = 60 / 80
+    const stretchedPath = await renderStretched(tonePath, ratio)
+    expect(stretchedPath).not.toBe(tonePath) // confirms a real render happened, not the ratio~1 no-op passthrough
+
+    // Measure the stretched file's actual duration directly from its own data
+    // rather than assuming an arithmetic value — rubberband's exact output
+    // length isn't a simple ratio of the input length.
+    const stretchedSamples = readWavSamples(stretchedPath)
+    const stretchedDurationSec = stretchedSamples.length / 44100
+    // Sanity check: slowing down (ratio<1) must produce something longer than
+    // the 4s source, not shorter or equal.
+    expect(stretchedDurationSec).toBeGreaterThan(4.0)
+
+    const project: EngineProject = {
+      bpm: 60,
+      snapDiv: 16,
+      rifffs: [
+        {
+          groupId: 'r1',
+          startBar: 0,
+          barLength: 1,
+          fadeInBars: 0,
+          fadeOutBars: 0,
+          stems: [
+            {
+              stemKey: 'r1:1',
+              resolvedPath: stretchedPath,
+              durationSec: stretchedDurationSec,
+              barLength: 1,
+              offsetSteps: 0,
+              startBarOverride: -1,
+              volume: 0.8,
+              muted: false
+            }
+          ]
+        }
+      ]
+    }
+    const projectPath = join(dir, 'project-stretch.json')
+    writeFileSync(projectPath, JSON.stringify(project))
+    const nativeOutPath = join(dir, 'native-out-stretch.wav')
+    // Unlike the other 3 cases (whose 4-second tone exactly fills the 1-bar,
+    // 4-second-per-bar render window at 60bpm), the stretched stem is longer
+    // than 1 bar's worth of wall-clock time. --render-test's 4th argument is
+    // durationBars, which sizes the output buffer as durationBars * secPerBar
+    // — it must cover the stretched stem's full length or the tail gets
+    // silently truncated (independently of rifff/stem barLength, which only
+    // affect scheduling, not the render buffer's total size). secPerBar at
+    // bpm=60 is 4s/bar; add a full extra bar of headroom beyond the minimum
+    // needed so no edge-of-buffer rounding clips the last few samples.
+    const secPerBar = 4.0 // (60 / bpm) * 4, bpm=60
+    const renderDurationBars = (stretchedDurationSec / secPerBar + 1).toFixed(6)
+    execFileSync(ENGINE_BINARY, ['--render-test', projectPath, nativeOutPath, renderDurationBars])
+    const nativeSamples = readWavSamples(nativeOutPath)
+
+    // Reference: the stretch itself already happened above (rubberband CLI,
+    // outside the native engine) — this reference reads the STRETCHED file's
+    // own samples and applies the same plain volume scaling the other cases
+    // use. It does not reimplement any stretch/resampling math.
+    const expectedSamples = new Int16Array(stretchedSamples.length)
+    for (let i = 0; i < expectedSamples.length; i++) {
+      expectedSamples[i] = Math.round(stretchedSamples[i] * 0.8)
+    }
+
+    expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
+    let maxDiff = 0
+    for (let i = 0; i < expectedSamples.length; i++) {
+      const diff = Math.abs(nativeSamples[i * 2] - expectedSamples[i])
+      maxDiff = Math.max(maxDiff, diff)
+    }
+
+    console.log('render-parity: stretch-ratio test maxDiff =', maxDiff)
+    // Same 16-bit rounding tolerance as the other 3 cases — the engine reads
+    // the already-stretched file verbatim and applies only a gain multiply
+    // here (no additional resampling on the native side for this path), so
+    // no wider tolerance is expected or justified.
+    expect(maxDiff).toBeLessThanOrEqual(2)
   })
 })
