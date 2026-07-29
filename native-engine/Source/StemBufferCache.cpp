@@ -40,4 +40,12 @@ namespace ssstitch
         auto it = cache.find(path.toStdString());
         return it == cache.end() ? 44100.0 : it->second.sampleRate;
     }
+
+    StemBufferEntry StemBufferCache::getEntry(const juce::String& path) const
+    {
+        auto it = cache.find(path.toStdString());
+        if (it == cache.end())
+            return {};
+        return { &it->second.buffer, it->second.sampleRate };
+    }
 }

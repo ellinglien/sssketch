@@ -6,6 +6,14 @@
 
 namespace ssstitch
 {
+    /** buffer is nullptr (sampleRate the unused default) if the path was never
+     * successfully loaded. */
+    struct StemBufferEntry
+    {
+        const juce::AudioBuffer<float>* buffer = nullptr;
+        double sampleRate = 44100.0;
+    };
+
     /** Decodes whole audio files into memory and caches them by absolute path,
      * so the real-time mixer never blocks on file I/O. Not thread-safe for
      * concurrent load() calls from multiple threads — load-project happens on
@@ -27,6 +35,12 @@ namespace ssstitch
         const juce::AudioBuffer<float>* get(const juce::String& path) const;
 
         double sampleRateFor(const juce::String& path) const;
+
+        /** Combined form of get() + sampleRateFor() for callers (renderBlock's
+         * hot path) that need both — a single hash lookup and a single
+         * juce::String::toStdString() allocation instead of two of each for
+         * the same path. */
+        StemBufferEntry getEntry(const juce::String& path) const;
 
     private:
         juce::AudioFormatManager formatManager;
