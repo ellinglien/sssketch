@@ -11,6 +11,7 @@ import { BeatPicker } from './components/BeatPicker'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { loopLengthBars, pasteRifffAction } from './state/selectors'
+import { initialState } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
@@ -46,6 +47,22 @@ function Timeline({
     const stemDragKey = e.dataTransfer.getData('text/rifff-stem-key')
     if (stemDragKey) {
       dispatch({ type: 'SET_STEM_START', key: stemDragKey, startBar })
+      return
+    }
+
+    // From the shelf — either the rifff's first-ever placement, or (if it's
+    // already placed elsewhere) an independent copy, never a reposition of an
+    // existing clip (that's 'text/rifff-group-id', below).
+    const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
+    if (shelfSourceId) {
+      const source = state.rifffs[shelfSourceId]
+      if (!source) return
+      if (source.startBar === undefined) {
+        dispatch({ type: 'PLACE_ON_TIMELINE', groupId: shelfSourceId, startBar })
+      } else {
+        const action = pasteRifffAction(state, shelfSourceId, startBar)
+        if (action) dispatch(action)
+      }
       return
     }
 
@@ -100,6 +117,17 @@ function ProjectMenu(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const [exporting, setExporting] = useState(false)
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
+
+  function handleNew(): void {
+    if (
+      Object.keys(state.rifffs).length > 0 &&
+      !window.confirm('Discard the current project and start a new one?')
+    ) {
+      return
+    }
+    dispatch({ type: 'LOAD_STATE', state: initialState })
+  }
 
   async function handleSave(): Promise<void> {
     try {
@@ -120,7 +148,7 @@ function ProjectMenu(): React.JSX.Element {
     }
   }
 
-  async function handleExport(): Promise<void> {
+  async function handleExportMix(): Promise<void> {
     setExporting(true)
     try {
       const wav = await window.rifffApi.exportMixNative(JSON.stringify(state))
@@ -130,6 +158,19 @@ function ProjectMenu(): React.JSX.Element {
       // Export now has exactly one code path (the native engine, with no Web
       // Audio fallback) — a spawn/render failure here would otherwise reset
       // the button with zero visible indication anything went wrong.
+      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function handleExportStems(): Promise<void> {
+    setExporting(true)
+    try {
+      const stems = await window.rifffApi.exportStemsNative(JSON.stringify(state))
+      await window.rifffApi.exportStems(stems)
+    } catch (err) {
+      console.error('ProjectMenu: failed to export stems:', err)
       window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
@@ -148,6 +189,9 @@ function ProjectMenu(): React.JSX.Element {
 
   return (
     <div style={{ display: 'flex', gap: 6 }}>
+      <button onClick={handleNew} style={buttonStyle}>
+        new
+      </button>
       <button onClick={handleSave} style={buttonStyle}>
         save
       </button>
@@ -155,12 +199,26 @@ function ProjectMenu(): React.JSX.Element {
         open
       </button>
       <button
-        onClick={handleExport}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setExportMenu({ x: rect.left, y: rect.bottom + 4 })
+        }}
         disabled={exporting}
         style={{ ...buttonStyle, color: exporting ? 'var(--ra-text-4)' : buttonStyle.color }}
       >
-        {exporting ? 'rendering…' : 'export mix'}
+        {exporting ? 'rendering…' : 'export'}
       </button>
+      {exportMenu && (
+        <ContextMenu
+          x={exportMenu.x}
+          y={exportMenu.y}
+          items={[
+            { label: 'export mix', onClick: handleExportMix },
+            { label: 'export stems', onClick: handleExportStems }
+          ]}
+          onClose={() => setExportMenu(null)}
+        />
+      )}
     </div>
   )
 }
@@ -317,7 +375,10 @@ function Frame(): React.JSX.Element {
       <Shelf onImported={setPickerGroupId} />
       <TransportBar />
       <div style={{ display: 'flex' }}>
-        <div style={{ flex: 1 }}>
+        {/* minWidth:0 lets this flex item shrink below its content's intrinsic
+            width, which is what allows overflow-x:auto to actually kick in
+            instead of the row silently stretching .ra-frame's fixed width. */}
+        <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
           <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
         </div>
         <Inspector onOpenBeatPicker={setPickerGroupId} />

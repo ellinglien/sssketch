@@ -72,7 +72,11 @@ export function Shelf({
             key={rifff.groupId}
             draggable
             onDragStart={(e) => {
-              e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
+              // A distinct key from 'text/rifff-group-id' (used by in-arranger
+              // reposition drags) — dropping this one always either places this
+              // rifff for the first time or pastes an independent copy, never
+              // moves an existing clip. See Timeline's handleDrop in App.tsx.
+              e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
               // Not yet placed — there's no existing on-timeline position to
               // preserve an offset from, and without this the module could
               // still be holding a stale value left behind by a previous
