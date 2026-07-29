@@ -34,11 +34,10 @@ export function loopLengthBarsFor(state: AppState): number {
 }
 
 /**
- * Renders the full arrangement via the native engine and returns the WAV bytes
- * — the native-engine equivalent of the now-retired Web Audio export path
- * (formerly src/renderer/src/audio/exportMix.ts's renderMixToWav, removed in
- * Phase 2 Task 8), but running entirely in the main process (spawn engine,
- * load-project, render-export to a temp file, read it back, tear down).
+ * Renders the full arrangement to a WAV via the native engine — the app's only
+ * mixdown/export path, running entirely in the main process (spawn engine,
+ * load-project, render-export to a temp file, read it back, tear down). Live
+ * playback (AudioEngine.ts) is still Web Audio-based, separately.
  */
 export async function nativeExport(state: AppState): Promise<Uint8Array> {
   const project = await buildEngineProject(state, resolveStretchedForExport)
