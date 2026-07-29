@@ -246,6 +246,12 @@ export function BeatPicker({
       return
     }
     stopPreview()
+    // Hearing the main arrangement's own mix at the same time as this
+    // preview loop would be an unpleasant, confusing overlap — pause it
+    // (not stop: this is an interruption to go audition a beat, not a
+    // reason to lose the playhead position) rather than let both play at
+    // once.
+    if (state.playing) dispatch({ type: 'PAUSE' })
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
     const stemsToPreview = previewAll ? rifff.stems : [stem]
@@ -275,6 +281,9 @@ export function BeatPicker({
 
     const steps = offsetStepsForBeatIndex(beatIndex, snapDiv)
     dispatch({ type: 'SET_OFFSET_STEPS', key: offsetKey, steps })
+    // Same reasoning as toggleFreePlay: this also starts a looped preview,
+    // so pause the main arrangement rather than let both play at once.
+    if (state.playing) dispatch({ type: 'PAUSE' })
 
     // Defaults to every stem together, not just the identity one: they're all
     // beat-locked to the same clock within a rifff, so hearing the full mix
@@ -417,7 +426,7 @@ export function BeatPicker({
               preserveAspectRatio="none"
               style={{ position: 'absolute', inset: 0 }}
             >
-              <path d={linearWave(peaks)} fill={color} opacity={0.75} />
+              <path d={linearWave(peaks)} fill={color} opacity={0.75} shapeRendering="crispEdges" />
             </svg>
           )}
           {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
