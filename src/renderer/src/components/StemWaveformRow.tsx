@@ -328,44 +328,46 @@ export function StemWaveformRow({
               zIndex: 3
             }}
           />
-          {dragVolume !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: '50%',
-                top: plateauY,
-                // Tooltip normally sits above the plateau line (-130% of its
-                // own height), but at high volume plateauY is near 0 (the row's
-                // own top, which also clips via overflow:hidden) — rendering
-                // above there would push the whole tooltip off-screen and
-                // invisible. Flip to below the line instead whenever there
-                // isn't enough headroom, rather than letting it clip silently.
-                //
-                // The flipped-below case still needs its OWN clearance check
-                // against the row's *bottom* edge: with a ~17px-tall tooltip
-                // and a 30%-of-own-height translate, its bottom edge lands at
-                // roughly plateauY + 1.3*17 ≈ plateauY + 22, so anything above
-                // ~ROW_HEIGHT-22 would itself clip against the bottom. A
-                // threshold of 24 (< ROW_HEIGHT-22 ≈ 22) left a real ~2-3px
-                // unsafe band (plateauY in [22,24)) that clipped the tooltip's
-                // bottom edge — confirmed by measuring actual rendered rects
-                // during Task 12 manual verification (volume dragged through
-                // ~0.45-0.50). 20 leaves real margin on both sides.
-                transform: plateauY < 20 ? 'translate(-50%, 30%)' : 'translate(-50%, -130%)',
-                padding: '2px 6px',
-                background: 'var(--ra-mute-on)',
-                color: 'var(--ra-mute-on-ink)',
-                fontSize: 10,
-                fontWeight: 700,
-                borderRadius: 4,
-                zIndex: 5,
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none'
-              }}
-            >
-              {muted ? 'mute' : dbLabel(displayedVolume)}
-            </div>
-          )}
+          {dragVolume !== null &&
+            (() => {
+              // A single above/below flip threshold turned out to have no
+              // valid value: for a ROW_HEIGHT this small relative to the
+              // tooltip's own rendered height, the "safe while above" and
+              // "safe while below" zones don't overlap — any single threshold
+              // leaves ONE of the two branches clipping somewhere (confirmed
+              // by re-deriving the geometry during code review after the
+              // first attempt at this, at threshold 24, turned out to just
+              // move a real ~2-3px clip from one edge to the other rather
+              // than eliminate it). Clamping the tooltip's own top position
+              // directly into the row's bounds sidesteps the whole
+              // above/below framing — it's correct for every plateauY value,
+              // not just the ones a hand-picked threshold happens to cover.
+              const tooltipHeight = 18 // measured rendered height + small margin
+              const gap = 4
+              const idealTop = plateauY - tooltipHeight - gap
+              const top = Math.max(0, Math.min(ROW_HEIGHT - tooltipHeight, idealTop))
+              return (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top,
+                    transform: 'translateX(-50%)',
+                    padding: '2px 6px',
+                    background: 'var(--ra-mute-on)',
+                    color: 'var(--ra-mute-on-ink)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    borderRadius: 4,
+                    zIndex: 5,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  {muted ? 'mute' : dbLabel(displayedVolume)}
+                </div>
+              )
+            })()}
         </div>
       </div>
     </div>
