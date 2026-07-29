@@ -159,6 +159,23 @@ export function TransportBar(): React.JSX.Element {
         snap 1/{SNAP_DIVS[state.snapIdx]}
       </button>
 
+      <button
+        onClick={() => dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })}
+        aria-label="Toggle volume drag mode"
+        title="V"
+        style={{
+          height: 22,
+          borderRadius: 6,
+          padding: '0 8px',
+          fontSize: 10,
+          background: state.volumeDragMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        volume drag: {state.volumeDragMode ? 'on' : 'off'}
+      </button>
+
       <div style={{ display: 'flex', gap: 4 }}>
         <button
           onClick={history.undo}

@@ -260,6 +260,21 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [pickerGroupId, state.playing, dispatch])
 
+  // V toggles volumeDragMode — see StemWaveformRow.tsx's waveform-body drag
+  // handling and TransportBar's indicator button. Skipped while focus is in a
+  // text input, matching Delete/undo above (typing "v" in the tempo field
+  // shouldn't also flip the drag mode).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key.toLowerCase() !== 'v') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [dispatch])
+
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
   // mid-typing in the tempo field should edit the field's text, not the arrangement.
