@@ -105,13 +105,16 @@ responds by: silently respawning the engine process, reconnecting `EngineClient`
 re-sending the current `load-project` state once reconnected (so the freshly-restarted
 engine isn't left in an empty state). Playback stops (the audio was already interrupted —
 nothing to preserve mid-stream), but no error is surfaced to the user and no action is
-required from them; a console log records what happened for debugging. If the user was
-mid-`play`, the renderer's own `playing` state naturally reflects "not playing" once
-position-updates stop arriving and/or the reconnect completes with a fresh, paused engine —
-exact mechanism (does the renderer need an explicit "engine-disconnected" signal to flip
-`state.playing` to false, or does it just stop receiving position-updates and the user
-notices playback silently stopped) is a decision for the implementation plan, not resolved
-here.
+required from them; a console log records what happened for debugging.
+
+**"Silent" means no visible error UI, not an inconsistent app state.** Leaving
+`state.playing: true` with a frozen position after a respawn would look like a real bug (a
+stuck playhead, a pause button that no longer does anything) — that's not what "silent" is
+meant to buy. Main process pushes a lightweight event to the renderer as part of the
+reconnect sequence (the same subscription mechanism `position-update` uses), and the
+renderer's handler is simply `dispatch({ type: 'STOP' })` — reusing the existing `STOP`
+action already in the reducer, no new action type needed, no banner, no user-facing
+indication anything happened, but internal state stays honest.
 
 ## What moves to native vs. stays in TS
 
@@ -139,6 +142,14 @@ Reusing Phase 1's proven pattern, adapted for live (not offline) behavior:
   playback state change (start playing, mutate state, confirm the very next rendered block
   reflects the change without an explicit reschedule call, proving the "just send
   load-project again" architecture actually works as designed).
+- **This phase's parity test also closes Phase 2's still-open stretch-ratio gap.** Phase 1
+  and Phase 2's findings docs both named stretch-ratio correctness as having no automated
+  numeric parity check anywhere in the codebase — deferred twice already. Both the
+  parity-test pattern and the `rubberband`/`resolveStretchedForExport`-equivalent wiring
+  already exist by this point, so closing it here is a small incremental addition (one more
+  scenario: two rifffs at different native bpms than the project bpm, stretch on, comparing
+  native vs. `AudioEngine.ts` output), not new infrastructure — and live playback is exactly
+  where the stretch toggle matters most to get right. Not deferred again.
 - Mandatory manual verification, matching Phase 2's bar: start the dev app, actually press
   play, actually listen, actually change a control (volume, mute, offset) mid-playback and
   confirm it takes effect immediately and correctly, and actually let a loop wrap around and
@@ -150,8 +161,3 @@ Reusing Phase 1's proven pattern, adapted for live (not offline) behavior:
 - Any change to `BeatPicker`'s own preview audio.
 - Packaging/distribution of the compiled engine binary for a shipped app (still an open gap
   from Phase 2, unaddressed here too).
-- Stretch-ratio live playback parity is inherited as an open question from Phase 2's own
-  findings (stretch-ratio correctness has no automated parity check anywhere yet) — this
-  phase's parity test should ideally close that gap for the live-playback path even though
-  Phase 2 didn't for export, but this is a call for whoever writes the implementation plan,
-  not decided here.
