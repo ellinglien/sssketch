@@ -1,6 +1,6 @@
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { stemKey } from '@shared/types'
-import { stemGeometry } from '../state/selectors'
+import { stemGeometry, resolvePlayedBars } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PolarGlyph } from './PolarGlyph'
@@ -9,24 +9,28 @@ import { ROW_HEIGHT } from './StemWaveformRow'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
 /** Tiles one representative stem's waveform across the collapsed block's
- * width, repeating every rifff.barLength — same non-stretching-loop rationale
- * as StemWaveformRow's own tiling (see that file's comment), simplified here
- * since a collapsed block isn't individually resizable: one tile is
- * barLength bars wide in pixels, repeated across widthPx (the rifff's
- * current played length, from stemGeometry — see this file's own comment
- * below for why that's the right geometry source here). */
+ * width, repeating every stemBarLength bars — the STEM's own native loop
+ * length, which can be (and often is) shorter than the rifff's overall
+ * barLength (e.g. an 8-bar stem tiled 4x within a 32-bar rifff). Mirrors
+ * StemWaveformRow's own tiling formula exactly (`widthPx * (stem.barLength /
+ * playedBars)`) rather than a simplified `barLength * PPB`, which was wrong
+ * on two counts: it used the rifff's overall barLength instead of the
+ * stem's own, and it silently assumed stretch is always on (ignoring the
+ * rifff.bpm/state.bpm scaling baked into widthPx when it's off). */
 function CollapsedTiles({
   path,
   color,
   widthPx,
-  barLength
+  stemBarLength,
+  playedBars
 }: {
   path: string
   color: string
   widthPx: number
-  barLength: number
+  stemBarLength: number
+  playedBars: number
 }): React.JSX.Element {
-  const tileWidthPx = barLength * PPB
+  const tileWidthPx = widthPx * (stemBarLength / playedBars)
   const tileCount = Math.max(1, Math.ceil(widthPx / tileWidthPx))
   const tileOffsets = Array.from({ length: tileCount }, (_, i) => i * tileWidthPx)
   return (
@@ -64,6 +68,7 @@ export function CollapsedRifffRow({
   // groupId while linked) — correct for the common case, and a reasonable
   // "represents the first stem" fallback if collapsed while unlinked.
   const geo = stemGeometry(state, groupId, firstStem.slot, PPB)
+  const playedBars = resolvePlayedBars(state, groupId, firstStem.slot)
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
   const fadeInPx = Math.min(geo.widthPx / 2, fadeIn * PPB)
@@ -137,7 +142,8 @@ export function CollapsedRifffRow({
             path={firstStem.path}
             color={color}
             widthPx={geo.widthPx}
-            barLength={rifff.barLength}
+            stemBarLength={firstStem.barLength}
+            playedBars={playedBars}
           />
           {fadeInPx > 0 && (
             <div
