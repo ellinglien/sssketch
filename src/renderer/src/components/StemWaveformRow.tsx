@@ -340,7 +340,18 @@ export function StemWaveformRow({
                 // above there would push the whole tooltip off-screen and
                 // invisible. Flip to below the line instead whenever there
                 // isn't enough headroom, rather than letting it clip silently.
-                transform: plateauY < 24 ? 'translate(-50%, 30%)' : 'translate(-50%, -130%)',
+                //
+                // The flipped-below case still needs its OWN clearance check
+                // against the row's *bottom* edge: with a ~17px-tall tooltip
+                // and a 30%-of-own-height translate, its bottom edge lands at
+                // roughly plateauY + 1.3*17 ≈ plateauY + 22, so anything above
+                // ~ROW_HEIGHT-22 would itself clip against the bottom. A
+                // threshold of 24 (< ROW_HEIGHT-22 ≈ 22) left a real ~2-3px
+                // unsafe band (plateauY in [22,24)) that clipped the tooltip's
+                // bottom edge — confirmed by measuring actual rendered rects
+                // during Task 12 manual verification (volume dragged through
+                // ~0.45-0.50). 20 leaves real margin on both sides.
+                transform: plateauY < 20 ? 'translate(-50%, 30%)' : 'translate(-50%, -130%)',
                 padding: '2px 6px',
                 background: 'var(--ra-mute-on)',
                 color: 'var(--ra-mute-on-ink)',
