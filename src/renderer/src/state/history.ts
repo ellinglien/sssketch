@@ -13,14 +13,14 @@ export interface HistoryState {
 // meaningfully-felt limit.
 const MAX_HISTORY = 100
 
-// Transport/playback state, not the arrangement itself — excluded from history so
-// playback (which dispatches SET_POS ~18x/sec while playing) doesn't flood the
-// undo stack with meaningless checkpoints between real edits.
+// PLAY/PAUSE/STOP/SET_POS used to need an entry here (transport state, not
+// the arrangement — dispatched ~18x/sec while playing, which would've
+// flooded the undo stack with meaningless checkpoints) but no longer reach
+// this reducer at all now that they live in StoreContext.tsx's own
+// TransportAction, entirely outside history. What's left are UI-mode
+// toggles that still go through this reducer (so useAppState() consumers
+// see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
-  'SET_POS',
-  'PLAY',
-  'PAUSE',
-  'STOP',
   'TOGGLE_VOLUME_DRAG_MODE',
   'TOGGLE_COMPACT_MODE'
 ])

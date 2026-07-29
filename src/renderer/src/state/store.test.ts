@@ -380,19 +380,10 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.name).toBe('Freezer')
   })
 
-  it('pauses', () => {
-    let state = reducer(initialState, { type: 'PLAY' })
-    state = reducer(state, { type: 'PAUSE' })
-    expect(state.playing).toBe(false)
-  })
-
-  it('stop resets position and pauses', () => {
-    let state = reducer(initialState, { type: 'PLAY' })
-    state = reducer(state, { type: 'SET_POS', pos: 12.5 })
-    state = reducer(state, { type: 'STOP' })
-    expect(state.playing).toBe(false)
-    expect(state.pos).toBe(0)
-  })
+  // PLAY/PAUSE/STOP/SET_POS used to be tested here via reducer() directly —
+  // they're no longer part of Action at all (see store.ts's own comment on
+  // Action), having moved to StoreContext.tsx's own transport state
+  // entirely outside this reducer.
 
   describe('TOGGLE_EXPAND', () => {
     it('starts undefined (collapsed) and toggles true/false', () => {

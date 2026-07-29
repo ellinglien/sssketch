@@ -6,6 +6,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type Dispatch,
   type ReactNode
 } from 'react'
@@ -15,8 +16,29 @@ import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
 
+// Playback position/state now live entirely outside the undo-tracked main
+// reducer — see StoreProvider's dispatch below. Previously they were fields
+// on AppState, updated via SET_POS/PLAY/PAUSE/STOP dispatched through the
+// same reducer as every other edit; since the native engine pushes a
+// position update ~30 times/sec while playing, that meant every one of
+// StateCtx's consumers (every stem row, shelf tile, the inspector — anywhere
+// useAppState() is called, which is most of the app) re-rendered 30x/sec
+// during simple playback, whether or not it read state.pos at all. Splitting
+// pos and playing into their own contexts (further split from each other,
+// not just from AppState — a component that only cares whether playback is
+// running, like Ruler or BeatPicker, shouldn't re-render on every position
+// tick either) means only components that actually call usePos()/usePlaying()
+// re-render on those changes; everything else only re-renders on a real
+// arrangement edit.
+export type TransportAction =
+  { type: 'PLAY' } | { type: 'PAUSE' } | { type: 'STOP' } | { type: 'SET_POS'; pos: number }
+
+export type DispatchableAction = Action | TransportAction
+
 const StateCtx = createContext<AppState>(initialState)
-const DispatchCtx = createContext<Dispatch<Action>>(() => {})
+const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
+const PosCtx = createContext<number>(0)
+const PlayingCtx = createContext<boolean>(false)
 
 export interface HistoryControls {
   undo: () => void
@@ -35,10 +57,43 @@ const HistoryCtx = createContext<HistoryControls>({
 export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [history, rawDispatch] = useReducer(historyReducer, initialState, createHistoryState)
   const state = history.present
-  // The rest of the app only ever sees Action, never UNDO/REDO — those are only
-  // reachable through useHistory()'s bound undo/redo below, keeping the two
-  // concerns (making an edit vs. navigating history) separately typed.
-  const dispatch = rawDispatch as Dispatch<Action>
+  const [pos, setPos] = useState(0)
+  const [playing, setPlaying] = useState(false)
+
+  // Intercepts the four transport actions before they ever reach the
+  // undo-tracked main reducer, routing them to the separate pos/playing
+  // state above instead — see the module doc comment above for why. Every
+  // other action (including LOAD_STATE, which also resets transport state:
+  // opening a different project should never resume mid-playback at whatever
+  // position the previous one left off at) still flows through rawDispatch
+  // exactly as before. Stable across renders (rawDispatch from useReducer and
+  // the setState setters are both React-guaranteed stable), so this never
+  // forces the position-update subscription effect below to resubscribe.
+  const dispatch = useCallback((action: DispatchableAction): void => {
+    switch (action.type) {
+      case 'PLAY':
+        setPlaying(true)
+        return
+      case 'PAUSE':
+        setPlaying(false)
+        return
+      case 'STOP':
+        setPlaying(false)
+        setPos(0)
+        return
+      case 'SET_POS':
+        setPos(action.pos)
+        return
+      case 'LOAD_STATE':
+        setPlaying(false)
+        setPos(0)
+        rawDispatch(action)
+        return
+      default:
+        rawDispatch(action)
+    }
+  }, [])
+
   const undo = useCallback(() => rawDispatch({ type: 'UNDO' }), [])
   const redo = useCallback(() => rawDispatch({ type: 'REDO' }), [])
   const historyControls = useMemo<HistoryControls>(
@@ -57,6 +112,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const stateRef = useRef(state)
   useEffect(() => {
     stateRef.current = state
+  })
+  // Same pattern, for the position-update subscription's own playing check —
+  // separate from stateRef since playing no longer lives on state at all.
+  const playingRef = useRef(playing)
+  useEffect(() => {
+    playingRef.current = playing
   })
 
   // Keeps the native engine's picture of the project in sync with every
@@ -77,7 +138,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes state.playing and state.pos; those are handled by the separate play/pause effect and the position-update subscription below, not by reloading the whole project
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes playing/pos (no longer part of state at all); those are handled by the separate play/pause effect and the position-update subscription below, not by reloading the whole project
   }, [
     state.off,
     state.bpm,
@@ -102,13 +163,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   ])
 
   useEffect(() => {
-    if (state.playing) {
-      void window.rifffApi.enginePlay(state.pos)
+    if (playing) {
+      void window.rifffApi.enginePlay(pos)
     } else {
       void window.rifffApi.engineStop()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions, matching the old effect's behavior; state.pos is read once at play-start via closure, not tracked as a dependency
-  }, [state.playing])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions, matching the old effect's behavior; pos is read once at play-start via closure, not tracked as a dependency
+  }, [playing])
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
@@ -117,7 +178,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // anyway. Without this guard, such a straggler can dispatch a stale
       // nonzero SET_POS right after STOP just reset pos to 0, and a quick
       // Stop-then-Play could then resume from that stale position instead.
-      if (!stateRef.current.playing) return
+      if (!playingRef.current) return
       const loopBars = loopLengthBars(stateRef.current)
       if (pos >= loopBars) {
         // Loop wrap-around: the native transport counts up monotonically
@@ -143,7 +204,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   return (
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={dispatch}>
-        <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+        <PosCtx.Provider value={pos}>
+          <PlayingCtx.Provider value={playing}>
+            <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+          </PlayingCtx.Provider>
+        </PosCtx.Provider>
       </DispatchCtx.Provider>
     </StateCtx.Provider>
   )
@@ -155,8 +220,18 @@ export function useAppState(): AppState {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
-export function useDispatch(): Dispatch<Action> {
+export function useDispatch(): Dispatch<DispatchableAction> {
   return useContext(DispatchCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function usePos(): number {
+  return useContext(PosCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function usePlaying(): boolean {
+  return useContext(PlayingCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component

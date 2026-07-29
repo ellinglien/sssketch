@@ -1,5 +1,11 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
-import { StoreProvider, useAppState, useDispatch, useHistory } from './state/StoreContext'
+import {
+  StoreProvider,
+  useAppState,
+  useDispatch,
+  useHistory,
+  usePlaying
+} from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -231,6 +237,7 @@ function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const history = useHistory()
+  const playing = usePlaying()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -316,11 +323,11 @@ function Frame(): React.JSX.Element {
       const target = e.target as HTMLElement | null
       if (target && interactiveTags.has(target.tagName)) return
       e.preventDefault()
-      dispatch({ type: state.playing ? 'PAUSE' : 'PLAY' })
+      dispatch({ type: playing ? 'PAUSE' : 'PLAY' })
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [pickerGroupId, state.playing, dispatch])
+  }, [pickerGroupId, playing, dispatch])
 
   // V toggles volumeDragMode — see StemWaveformRow.tsx's waveform-body drag
   // handling and TransportBar's indicator button. Skipped while focus is in a

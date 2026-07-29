@@ -10,8 +10,6 @@ export const SNAP_DIVS = [4, 8, 16, 32] as const
 export const MIN_PLAYED_BARS = 0.25
 
 export interface AppState {
-  playing: boolean
-  pos: number
   bpm: number
   snapIdx: 0 | 1 | 2 | 3
   vol: Record<string, number>
@@ -59,8 +57,6 @@ export interface AppState {
 }
 
 export const initialState: AppState = {
-  playing: false,
-  pos: 0,
   bpm: 80,
   snapIdx: 2,
   vol: {},
@@ -80,6 +76,12 @@ export const initialState: AppState = {
   rifffs: {}
 }
 
+// PLAY/PAUSE/STOP/SET_POS deliberately aren't part of this union — they live
+// as StoreContext.tsx's own TransportAction/usePos()/usePlaying() instead,
+// entirely outside this undo-tracked reducer. Position updates at ~30Hz
+// while playing; keeping it here meant every useAppState() consumer across
+// the app (most components) re-rendered on every tick, whether or not it
+// read state.pos at all. See StoreContext.tsx's module doc comment.
 export type Action =
   | { type: 'ADD_TO_SHELF'; rifff: Rifff }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
@@ -118,10 +120,6 @@ export type Action =
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'TOGGLE_COMPACT_MODE' }
-  | { type: 'PLAY' }
-  | { type: 'PAUSE' }
-  | { type: 'STOP' }
-  | { type: 'SET_POS'; pos: number }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -422,18 +420,6 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_COMPACT_MODE':
       return { ...state, compactMode: !state.compactMode }
-
-    case 'PLAY':
-      return { ...state, playing: true }
-
-    case 'PAUSE':
-      return { ...state, playing: false }
-
-    case 'STOP':
-      return { ...state, playing: false, pos: 0 }
-
-    case 'SET_POS':
-      return { ...state, pos: action.pos }
 
     case 'LOAD_STATE':
       return action.state

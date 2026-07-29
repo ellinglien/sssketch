@@ -1,24 +1,24 @@
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useDispatch, usePlaying } from '../state/StoreContext'
 import { startPointerDrag } from './dragUtils'
 
 const PPB = 24
 
 export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
-  const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const bars = Array.from({ length: barCount }, (_, i) => i + 1)
 
   // Click or drag along the ruler to scrub the playhead — free (unsnapped)
-  // positioning, matching how state.pos already moves as a continuous float
+  // positioning, matching how pos already moves as a continuous float
   // during playback rather than being bar-quantized. While playing, also
   // seeks the live engine transport immediately rather than waiting for the
-  // next 30Hz position tick to catch up; while stopped, updating state.pos
-  // alone is enough since enginePlay(state.pos) reads it fresh at play-start
-  // (see StoreContext.tsx).
+  // next 30Hz position tick to catch up; while stopped, updating pos alone
+  // is enough since enginePlay(pos) reads it fresh at play-start (see
+  // StoreContext.tsx).
   function seekTo(pos: number): void {
     const clamped = Math.max(0, Math.min(barCount, pos))
     dispatch({ type: 'SET_POS', pos: clamped })
-    if (state.playing) void window.rifffApi.engineSetPosition(clamped)
+    if (playing) void window.rifffApi.engineSetPosition(clamped)
   }
 
   function handleScrubStart(e: React.MouseEvent<HTMLDivElement>): void {

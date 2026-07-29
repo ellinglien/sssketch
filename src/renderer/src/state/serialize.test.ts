@@ -27,8 +27,9 @@ describe('project serialization', () => {
     expect(restored.bpm).toBe(96)
     expect(restored.off.r1).toBe(2)
     expect(restored.rifffs.r1.name).toBe('test')
-    expect(restored.playing).toBe(false) // never restore a playing state
-    expect(restored.pos).toBe(0) // always reopen at the top
+    // playing/pos aren't part of AppState at all anymore (they're
+    // StoreContext.tsx's own transport state, never touched by serialization)
+    // — nothing to assert here now the way there used to be.
   })
 
   it('does not persist volumeDragMode — always reopens with it off', () => {

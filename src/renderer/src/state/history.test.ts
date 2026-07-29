@@ -52,24 +52,28 @@ describe('historyReducer', () => {
     expect(afterRedo).toBe(h)
   })
 
-  it('does not push history for transient transport actions', () => {
+  // PLAY/PAUSE/STOP/SET_POS used to be tested here too — they're no longer
+  // part of Action at all (see store.ts's own comment on Action), having
+  // moved to StoreContext.tsx's own transport state entirely outside this
+  // reducer, so there's nothing for historyReducer to filter for them
+  // anymore. TOGGLE_VOLUME_DRAG_MODE/TOGGLE_COMPACT_MODE are what's left in
+  // TRANSIENT_ACTION_TYPES, covered below.
+  it('does not push history for transient UI-mode actions', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
     const pastLengthAfterRealEdit = h.past.length
-    h = historyReducer(h, { type: 'PLAY' })
-    h = historyReducer(h, { type: 'SET_POS', pos: 1.5 })
-    h = historyReducer(h, { type: 'PAUSE' })
-    h = historyReducer(h, { type: 'STOP' })
+    h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
+    h = historyReducer(h, { type: 'TOGGLE_COMPACT_MODE' })
     expect(h.past).toHaveLength(pastLengthAfterRealEdit)
-    expect(h.present.playing).toBe(false)
-    expect(h.present.pos).toBe(0) // STOP resets pos
+    expect(h.present.volumeDragMode).toBe(true)
+    expect(h.present.compactMode).toBe(true)
   })
 
-  it('undoing past a transient action lands on the last real edit, not a stale playhead state', () => {
+  it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
-    h = historyReducer(h, { type: 'PLAY' }) // transient, no new checkpoint
-    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the playing=true state
+    h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' }) // transient, no new checkpoint
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the volumeDragMode=true state
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.bpm).toBe(80) // back before the tempo change
     expect(h.present.rifffs.r1).toBeDefined() // the shelf add is still there

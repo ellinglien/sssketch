@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAppState, useDispatch, useHistory } from '../state/StoreContext'
+import { useAppState, useDispatch, useHistory, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 
@@ -7,6 +7,8 @@ export function TransportBar(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const history = useHistory()
+  const pos = usePos()
+  const playing = usePlaying()
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -45,18 +47,18 @@ export function TransportBar(): React.JSX.Element {
       }}
     >
       <button
-        onClick={() => dispatch({ type: state.playing ? 'PAUSE' : 'PLAY' })}
-        aria-label={state.playing ? 'Pause' : 'Play'}
+        onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+        aria-label={playing ? 'Pause' : 'Play'}
         style={{
           width: 36,
           height: 26,
           borderRadius: 0,
           border: '1px solid var(--ra-border-strong)',
-          background: state.playing ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
-          color: state.playing ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+          background: playing ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
+          color: playing ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
         }}
       >
-        {state.playing ? '❙❙' : '▶'}
+        {playing ? '❙❙' : '▶'}
       </button>
       <button
         onClick={() => dispatch({ type: 'STOP' })}
@@ -74,9 +76,9 @@ export function TransportBar(): React.JSX.Element {
       </button>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 16, fontWeight: 700 }}>{positionLabel(state.pos)}</span>
+        <span style={{ fontSize: 16, fontWeight: 700 }}>{positionLabel(pos)}</span>
         <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-          {elapsedLabel(state.pos, state.bpm)}
+          {elapsedLabel(pos, state.bpm)}
         </span>
       </div>
 

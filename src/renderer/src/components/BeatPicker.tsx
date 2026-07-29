@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import {
   resolveOffsetKey,
   offsetStepsForBeatIndex,
@@ -54,6 +54,7 @@ export function BeatPicker({
 }): React.JSX.Element | null {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const rifff = state.rifffs[groupId]
   const stem = rifff?.stems[0]
   // Every stem is decoded, not just the identity one — previewing the whole rifff
@@ -251,7 +252,7 @@ export function BeatPicker({
     // (not stop: this is an interruption to go audition a beat, not a
     // reason to lose the playhead position) rather than let both play at
     // once.
-    if (state.playing) dispatch({ type: 'PAUSE' })
+    if (playing) dispatch({ type: 'PAUSE' })
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
     const stemsToPreview = previewAll ? rifff.stems : [stem]
@@ -283,7 +284,7 @@ export function BeatPicker({
     dispatch({ type: 'SET_OFFSET_STEPS', key: offsetKey, steps })
     // Same reasoning as toggleFreePlay: this also starts a looped preview,
     // so pause the main arrangement rather than let both play at once.
-    if (state.playing) dispatch({ type: 'PAUSE' })
+    if (playing) dispatch({ type: 'PAUSE' })
 
     // Defaults to every stem together, not just the identity one: they're all
     // beat-locked to the same clock within a rifff, so hearing the full mix
