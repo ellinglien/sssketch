@@ -22,6 +22,11 @@ export interface AppState {
    * and export. */
   fadeIn: Record<string, number>
   fadeOut: Record<string, number>
+  /** This stem's own played length, in bars — the tiling loop's bound for this
+   * specific stem, resolved via resolveOffsetKey (shared while linked, per-stem
+   * once unlinked). Unset means "use rifff.barLength" — today's implicit
+   * behavior, unchanged for a project with no resize edits. */
+  playedBars: Record<string, number>
   sel: string | null
   exp: Record<string, boolean>
   rifffs: Record<string, Rifff>
@@ -40,6 +45,7 @@ export const initialState: AppState = {
   stemStart: {},
   fadeIn: {},
   fadeOut: {},
+  playedBars: {},
   sel: null,
   exp: {},
   rifffs: {}
@@ -57,6 +63,7 @@ export type Action =
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'SET_STEM_START'; key: string; startBar: number }
+  | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'SET_FADE_IN'; groupId: string; bars: number }
   | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
@@ -159,6 +166,12 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         stemStart: { ...state.stemStart, [action.key]: Math.max(0, action.startBar) }
+      }
+
+    case 'SET_PLAYED_BARS':
+      return {
+        ...state,
+        playedBars: { ...state.playedBars, [action.key]: Math.max(0.25, action.bars) }
       }
 
     // Upper-bounded loosely here (a sane ceiling, not the real constraint) —

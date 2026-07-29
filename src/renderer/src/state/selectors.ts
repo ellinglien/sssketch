@@ -5,6 +5,15 @@ export function resolveOffsetKey(state: AppState, groupId: string, slot: number)
   return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
 }
 
+/** A stem's own played length, in bars — the tiling loop's bound for this
+ * specific stem. Falls back to rifff.barLength (today's implicit behavior)
+ * when no override has been set. Same linked/unlinked resolution as off/vol/mute. */
+export function resolvePlayedBars(state: AppState, groupId: string, slot: number): number {
+  const rifff = state.rifffs[groupId]
+  const key = resolveOffsetKey(state, groupId, slot)
+  return state.playedBars[key] ?? rifff.barLength
+}
+
 export function stretchRatio(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
   return state.bpm / rifff.bpm
@@ -51,8 +60,9 @@ export function stemGeometry(
   const offsetSteps = state.off[resolveOffsetKey(state, groupId, slot)] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetPx = (offsetSteps * ppb) / snapDiv
+  const playedBars = resolvePlayedBars(state, groupId, slot)
   const stretchOn = state.stretch[groupId] ?? true
-  const shownBars = stretchOn ? rifff.barLength : rifff.barLength * (rifff.bpm / state.bpm)
+  const shownBars = stretchOn ? playedBars : playedBars * (rifff.bpm / state.bpm)
   return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
 }
 
@@ -68,10 +78,12 @@ export function loopLengthBars(state: AppState): number {
     if (rifff.startBar === undefined) continue
     if (state.unlinked[rifff.groupId]) {
       for (const stem of rifff.stems) {
-        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + rifff.barLength)
+        const playedBars = resolvePlayedBars(state, rifff.groupId, stem.slot)
+        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + playedBars)
       }
     } else {
-      ends.push(rifff.startBar + rifff.barLength)
+      const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
+      ends.push(rifff.startBar + playedBars)
     }
   }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)

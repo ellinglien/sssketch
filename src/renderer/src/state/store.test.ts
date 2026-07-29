@@ -237,6 +237,18 @@ describe('reducer', () => {
     expect(state.stemStart['r1:1']).toBe(0)
   })
 
+  describe('SET_PLAYED_BARS', () => {
+    it('sets playedBars for the given key', () => {
+      const next = reducer(initialState, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 12 })
+      expect(next.playedBars.r1).toBe(12)
+    })
+
+    it('clamps to a minimum of 0.25 bars', () => {
+      const next = reducer(initialState, { type: 'SET_PLAYED_BARS', key: 'r1', bars: -3 })
+      expect(next.playedBars.r1).toBe(0.25)
+    })
+  })
+
   it('sets fade in/out bars, clamped to 0', () => {
     let state = reducer(initialState, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1.5 })
     state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })
