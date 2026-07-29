@@ -9,8 +9,14 @@ import { saveProjectAs, openProject } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
 import { nativeExport } from './nativeExport'
+import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 
-function createWindow(): void {
+// Assigned inside app.whenReady().then(...) once the engine has started;
+// read from the before-quit handler below, which runs in a different
+// closure and can't otherwise reach it.
+let playbackEngine: PlaybackEngineHandle | undefined
+
+function createWindow(): BrowserWindow {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
@@ -40,12 +46,14 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.ssstitch')
 
@@ -93,7 +101,37 @@ app.whenReady().then(() => {
     return nativeExport(state)
   })
 
-  createWindow()
+  playbackEngine = await startPlaybackEngine()
+
+  ipcMain.handle('engine-load-project', (_event, project: unknown) => {
+    playbackEngine?.sendLoadProject(project)
+  })
+
+  ipcMain.handle('engine-play', (_event, fromPos: number) => {
+    playbackEngine?.client.send('play', { fromPos })
+  })
+
+  ipcMain.handle('engine-pause', () => {
+    playbackEngine?.client.send('pause')
+  })
+
+  ipcMain.handle('engine-stop', () => {
+    playbackEngine?.client.send('stop')
+  })
+
+  ipcMain.handle('engine-set-position', (_event, pos: number) => {
+    playbackEngine?.client.send('set-position', { pos })
+  })
+
+  const mainWindow = createWindow()
+
+  playbackEngine.client.on('position-update', (payload) => {
+    mainWindow.webContents.send('engine-position-update', payload)
+  })
+
+  playbackEngine.onRestarted(() => {
+    mainWindow.webContents.send('engine-restarted')
+  })
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -109,6 +147,18 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  // shutdown() is async (awaits any in-flight crash-respawn before tearing
+  // down) but this handler can't await it, so it's a fire-and-forget call —
+  // .catch() here guards against an unhandled rejection the same way
+  // playbackEngineLifecycle.ts itself guards its internal fire-and-forget
+  // respawn() call, even though shutdown() isn't expected to reject under
+  // normal conditions (its internal errors are already caught).
+  playbackEngine?.shutdown().catch((err: unknown) => {
+    console.error('index: playbackEngine shutdown failed', err)
+  })
 })
 
 // In this file you can include the rest of your app's specific main process

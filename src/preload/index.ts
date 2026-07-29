@@ -24,7 +24,23 @@ const api = {
     ipcRenderer.invoke('open-project'),
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
-    ipcRenderer.invoke('export-mix-native', stateJson)
+    ipcRenderer.invoke('export-mix-native', stateJson),
+  engineLoadProject: (project: unknown): Promise<void> =>
+    ipcRenderer.invoke('engine-load-project', project),
+  enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
+  enginePause: (): Promise<void> => ipcRenderer.invoke('engine-pause'),
+  engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
+  engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
+  onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { pos: number }): void => callback(payload.pos)
+    ipcRenderer.on('engine-position-update', listener)
+    return () => ipcRenderer.removeListener('engine-position-update', listener)
+  },
+  onEngineRestarted: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('engine-restarted', listener)
+    return () => ipcRenderer.removeListener('engine-restarted', listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)
