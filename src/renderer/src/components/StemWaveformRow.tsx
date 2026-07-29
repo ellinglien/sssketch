@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { useDispatch, useAppState } from '../state/StoreContext'
 import { stemKey } from '@shared/types'
-import { stemGeometry } from '../state/selectors'
+import { stemGeometry, resolveOffsetKey, resolvePlayedBars } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
+import { startPointerDrag } from './dragUtils'
 
 const ROW_HEIGHT = 44
 
@@ -48,17 +50,45 @@ export function StemWaveformRow({
   const stem = rifff.stems.find((s) => s.slot === slot)!
   const color = typeColorVar(stem.type)
   const key = stemKey(groupId, slot)
+  const playedBarsKey = resolveOffsetKey(state, groupId, slot)
   const muted = !!state.mute[key]
   const unlinked = !!state.unlinked[groupId]
   const volume = state.vol[key] ?? 1
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
 
+  const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
+  const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
+  const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
+
   const stemGeo = stemGeometry(state, groupId, slot, PPB)
+  // While actively dragging, use the in-progress width instead of the
+  // committed-state one, so the row visibly resizes in real time.
+  const widthPx = dragPlayedBars !== null ? dragPlayedBars * PPB : stemGeo.widthPx
+
   const fadeInPx = fadeIn * PPB
   const fadeOutPx = fadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - volume)
-  const envelopePath = buildEnvelopePath(stemGeo.widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+
+  function handleResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const next = Math.max(0.25, startPlayedBars + deltaX / PPB)
+        setDragPlayedBars(next)
+      },
+      () => {
+        setDragPlayedBars((current) => {
+          if (current !== null) {
+            dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: current })
+          }
+          return null
+        })
+      }
+    )
+  }
 
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
@@ -76,7 +106,7 @@ export function StemWaveformRow({
             top: 0,
             bottom: 0,
             left: stemGeo.leftPx,
-            width: stemGeo.widthPx,
+            width: widthPx,
             cursor: unlinked ? 'grab' : 'default',
             borderRadius: 3,
             border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
@@ -121,6 +151,28 @@ export function StemWaveformRow({
               background: muted ? 'transparent' : 'var(--ra-text-2)',
               padding: 0,
               cursor: 'pointer',
+              zIndex: 3
+            }}
+          />
+
+          {/* Resize handle: right edge only (see architecture note — left-edge
+              trim would require also moving the stem's start, a separate
+              mechanism, so it's deliberately out of scope). Drags update local
+              state only, and dispatch SET_PLAYED_BARS exactly once on mouseup
+              (see dragUtils.startPointerDrag) so a long drag can't flood undo
+              history. */}
+          <div
+            onMouseDown={handleResizeStart}
+            title={`${displayedPlayedBars.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: 5,
+              cursor: 'ew-resize',
+              background: '#fff',
+              opacity: 0.55,
               zIndex: 3
             }}
           />
