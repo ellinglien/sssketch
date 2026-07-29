@@ -536,11 +536,12 @@ export function StemWaveformRow({
               the clip" (handleWaveformDragStart above). While off, this does
               nothing on mousedown — the event is left alone so the browser's
               native drag (from the container's own `draggable`) proceeds
-              normally instead. Resize handles and fade-knee dots are
-              unaffected by this either way — they're separate elements with
-              their own onMouseDown, and their own stopPropagation (inside
-              startPointerDrag) already wins over this whenever the mouse
-              starts on one of them specifically. */}
+              normally instead. zIndex stays below the resize handles (3) and
+              fade dots (4) in BOTH modes — this covers the entire row, so at
+              equal z-index its own later DOM position would otherwise let it
+              physically sit on top of those small edge targets and swallow
+              their mousedown before it ever reaches them, not just visually
+              overlap them. */}
           <div
             onMouseDown={(e) => {
               if (volumeDragMode) handleVolumeStart(e)
@@ -550,7 +551,7 @@ export function StemWaveformRow({
               position: 'absolute',
               inset: 0,
               cursor: volumeDragMode ? 'ns-resize' : 'grab',
-              zIndex: volumeDragMode ? 3 : 1
+              zIndex: 2
             }}
           />
           {dragVolume !== null && (
