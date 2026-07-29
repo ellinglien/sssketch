@@ -321,7 +321,7 @@ describe('native engine vs Web Audio export — render parity', () => {
           groupId: 'r1',
           startBar: 0,
           barLength: 1, // rifff.barLength deliberately UNCHANGED/irrelevant here —
-                        // playedBars is what the scheduler now actually reads
+          // playedBars is what the scheduler now actually reads
           fadeInBars: 0,
           fadeOutBars: 0,
           stems: [
