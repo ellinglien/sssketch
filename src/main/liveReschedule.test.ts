@@ -12,15 +12,21 @@ const ENGINE_BINARY = join(
 const TEST_PORT = 45323 // distinct from Phase 1's ipc-roundtrip.test.ts's 45322
 
 let serverProcess: ChildProcess | undefined
+let client: EngineClient | undefined
 
 afterEach(() => {
+  client?.disconnect()
+  client = undefined
   serverProcess?.kill('SIGKILL')
   serverProcess = undefined
 })
 
 function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for "${substring}"`)), timeoutMs)
+    const timer = setTimeout(
+      () => reject(new Error(`timed out waiting for "${substring}"`)),
+      timeoutMs
+    )
     proc.stderr?.on('data', (chunk: Buffer) => {
       if (chunk.toString().includes(substring)) {
         clearTimeout(timer)
@@ -38,66 +44,84 @@ describe('live reschedule: load-project while already playing', () => {
       snapDiv: 16,
       rifffs: [
         {
-          groupId: 'r1', startBar: 0, barLength: 4, fadeInBars: 0, fadeOutBars: 0,
-          stems: [{
-            // No real stem file needed — PlaybackEngine.setProject skips stems
-            // whose buffer fails to load and keeps scheduling/position-tracking
-            // working regardless (same precedent Phase 1's ipc-roundtrip.test.ts
-            // established). This test only proves the IPC/reschedule sequence,
-            // not audio content.
-            stemKey: 'r1:1', resolvedPath: join(dir, 'missing-a.wav'), durationSec: 16,
-            barLength: 4, offsetSteps: 0, startBarOverride: -1, volume: 1, muted: false
-          }]
+          groupId: 'r1',
+          startBar: 0,
+          barLength: 4,
+          fadeInBars: 0,
+          fadeOutBars: 0,
+          stems: [
+            {
+              // No real stem file needed — PlaybackEngine.setProject skips stems
+              // whose buffer fails to load and keeps scheduling/position-tracking
+              // working regardless (same precedent Phase 1's ipc-roundtrip.test.ts
+              // established). This test only proves the IPC/reschedule sequence,
+              // not audio content.
+              stemKey: 'r1:1',
+              resolvedPath: join(dir, 'missing-a.wav'),
+              durationSec: 16,
+              barLength: 4,
+              offsetSteps: 0,
+              startBarOverride: -1,
+              volume: 1,
+              muted: false
+            }
+          ]
         }
       ]
     }
     const projectB = {
       ...projectA,
-      rifffs: [{ ...projectA.rifffs[0], groupId: 'r2' }] // a genuinely different project, not just a tweak
+      // Different bpm (changes scheduling math, not just a metadata rename)
+      // and a renamed rifff group — a real reschedule, not a no-op swap.
+      bpm: 120,
+      rifffs: [{ ...projectA.rifffs[0], groupId: 'r2' }]
     }
 
-    serverProcess = spawn(ENGINE_BINARY, ['--serve', String(TEST_PORT)])
-    await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 5000)
+    try {
+      serverProcess = spawn(ENGINE_BINARY, ['--serve', String(TEST_PORT)])
+      await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 5000)
 
-    const client = new EngineClient()
-    await client.connect(TEST_PORT)
+      client = new EngineClient()
+      await client.connect(TEST_PORT)
 
-    const positionsBeforeReschedule: number[] = []
-    const unsubscribeBefore = client.on('position-update', (payload) => {
-      positionsBeforeReschedule.push((payload as { pos: number }).pos)
-    })
+      const positionsBeforeReschedule: number[] = []
+      const unsubscribeBefore = client.on('position-update', (payload) => {
+        positionsBeforeReschedule.push((payload as { pos: number }).pos)
+      })
 
-    client.send('load-project', projectA)
-    client.send('play', { fromPos: 0 })
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    unsubscribeBefore()
-    expect(positionsBeforeReschedule.length).toBeGreaterThan(0)
+      client.send('load-project', projectA)
+      client.send('play', { fromPos: 0 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      unsubscribeBefore()
+      expect(positionsBeforeReschedule.length).toBeGreaterThan(0)
 
-    // The actual thing this test exists to prove: sending a second
-    // load-project WHILE the engine is still playing (no stop/pause in
-    // between) must not error, hang, or drop the connection.
-    const positionsAfterReschedule: number[] = []
-    const unsubscribeAfter = client.on('position-update', (payload) => {
-      positionsAfterReschedule.push((payload as { pos: number }).pos)
-    })
-    client.send('load-project', projectB)
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    unsubscribeAfter()
+      // The actual thing this test exists to prove: sending a second
+      // load-project WHILE the engine is still playing (no stop/pause in
+      // between) must not error, hang, or drop the connection.
+      const positionsAfterReschedule: number[] = []
+      const unsubscribeAfter = client.on('position-update', (payload) => {
+        positionsAfterReschedule.push((payload as { pos: number }).pos)
+      })
+      client.send('load-project', projectB)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      unsubscribeAfter()
 
-    // Position-update pushes kept arriving after the reschedule — proves the
-    // connection survived and the timer/transport kept running uninterrupted.
-    expect(positionsAfterReschedule.length).toBeGreaterThan(0)
+      // Position-update pushes kept arriving after the reschedule — proves the
+      // connection survived and the timer/transport kept running uninterrupted.
+      expect(positionsAfterReschedule.length).toBeGreaterThan(0)
 
-    client.send('stop')
-    client.send('quit')
-    client.disconnect()
+      client.send('stop')
+      client.send('quit')
+      client.disconnect()
+      client = undefined
 
-    await new Promise((resolve) => {
-      if (serverProcess?.exitCode !== null) return resolve(undefined)
-      serverProcess?.once('exit', () => resolve(undefined))
-    })
-    expect(serverProcess?.exitCode).toBe(0)
-
-    rmSync(dir, { recursive: true, force: true })
+      await new Promise((resolve) => {
+        if (serverProcess?.exitCode !== null) return resolve(undefined)
+        serverProcess?.once('exit', () => resolve(undefined))
+      })
+      expect(serverProcess?.exitCode).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }, 15000)
 })
