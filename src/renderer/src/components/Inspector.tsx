@@ -1,8 +1,7 @@
 import { Fragment } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { resolveOffsetKey, stretchRatio } from '../state/selectors'
-import { dbLabel, offsetLabels } from '@shared/visuals'
-import { stemKey } from '@shared/types'
+import { offsetLabels } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
@@ -45,10 +44,6 @@ export function Inspector({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const labels = offsetLabels(groupOffsetSteps, snapDiv, state.bpm)
   const unlinked = !!state.unlinked[groupId]
-  const fadeIn = state.fadeIn[groupId] ?? 0
-  const fadeOut = state.fadeOut[groupId] ?? 0
-  const FADE_STEP = 0.25
-  const FADE_MAX = 4
 
   const section = (children: React.JSX.Element): React.JSX.Element => (
     <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ra-border)' }}>
@@ -257,144 +252,6 @@ export function Inspector({
 
       {section(
         <>
-          <span className="ra-eyebrow">fade</span>
-          <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-            <div style={{ flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 9,
-                  color: 'var(--ra-text-3)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em'
-                }}
-              >
-                in
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <button
-                  onClick={() =>
-                    dispatch({
-                      type: 'SET_FADE_IN',
-                      groupId,
-                      bars: Math.max(0, fadeIn - FADE_STEP)
-                    })
-                  }
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 4,
-                    border: '1px solid var(--ra-border)',
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)',
-                    fontSize: 10
-                  }}
-                >
-                  −
-                </button>
-                <span
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    flex: 1,
-                    textAlign: 'center',
-                    color: fadeIn ? color : 'var(--ra-text-2)'
-                  }}
-                >
-                  {fadeIn} bar{fadeIn === 1 ? '' : 's'}
-                </span>
-                <button
-                  onClick={() =>
-                    dispatch({
-                      type: 'SET_FADE_IN',
-                      groupId,
-                      bars: Math.min(FADE_MAX, fadeIn + FADE_STEP)
-                    })
-                  }
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 4,
-                    border: '1px solid var(--ra-border)',
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)',
-                    fontSize: 10
-                  }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 9,
-                  color: 'var(--ra-text-3)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em'
-                }}
-              >
-                out
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <button
-                  onClick={() =>
-                    dispatch({
-                      type: 'SET_FADE_OUT',
-                      groupId,
-                      bars: Math.max(0, fadeOut - FADE_STEP)
-                    })
-                  }
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 4,
-                    border: '1px solid var(--ra-border)',
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)',
-                    fontSize: 10
-                  }}
-                >
-                  −
-                </button>
-                <span
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    flex: 1,
-                    textAlign: 'center',
-                    color: fadeOut ? color : 'var(--ra-text-2)'
-                  }}
-                >
-                  {fadeOut} bar{fadeOut === 1 ? '' : 's'}
-                </span>
-                <button
-                  onClick={() =>
-                    dispatch({
-                      type: 'SET_FADE_OUT',
-                      groupId,
-                      bars: Math.min(FADE_MAX, fadeOut + FADE_STEP)
-                    })
-                  }
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 4,
-                    border: '1px solid var(--ra-border)',
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)',
-                    fontSize: 10
-                  }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {section(
-        <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="ra-eyebrow">stems</span>
             <button
@@ -414,9 +271,6 @@ export function Inspector({
           </div>
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
             {rifff.stems.map((stem) => {
-              const key = stemKey(groupId, stem.slot)
-              const muted = !!state.mute[key]
-              const volume = state.vol[key] ?? 1
               const stemOffsetKey = resolveOffsetKey(state, groupId, stem.slot)
               const stemOffsetSteps = state.off[stemOffsetKey] ?? 0
               const stemLabels = offsetLabels(stemOffsetSteps, snapDiv, state.bpm)
@@ -446,44 +300,6 @@ export function Inspector({
                       }}
                     >
                       {stem.name}
-                    </span>
-                    <button
-                      onClick={() => dispatch({ type: 'TOGGLE_MUTE', stemKey: key })}
-                      style={{
-                        width: 18,
-                        height: 18,
-                        borderRadius: 4,
-                        background: muted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-                        color: muted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
-                        fontSize: 9,
-                        border: 'none'
-                      }}
-                    >
-                      m
-                    </button>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={Math.round(volume * 100)}
-                      onChange={(e) =>
-                        dispatch({
-                          type: 'SET_VOLUME',
-                          stemKey: key,
-                          volume: Number(e.target.value) / 100
-                        })
-                      }
-                      style={{ width: 82 }}
-                    />
-                    <span
-                      style={{
-                        fontSize: 9,
-                        color: 'var(--ra-text-3)',
-                        width: 30,
-                        textAlign: 'right'
-                      }}
-                    >
-                      {muted ? 'mute' : dbLabel(volume)}
                     </span>
                   </div>
                   {unlinked && (
