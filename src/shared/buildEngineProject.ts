@@ -58,8 +58,9 @@ export async function buildEngineProject(
         try {
           resolvedPath = await resolveStretched(stem.path, ratio)
         } catch (err) {
-          // Missing rubberband or a bad render shouldn't fail the whole export —
-          // fall back to native-tempo playback for just this stem.
+          // Missing rubberband or a bad render shouldn't fail the whole export
+          // or playback session — fall back to native-tempo playback for just
+          // this stem.
           console.error(
             `buildEngineProject: rubberband render failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
             err
