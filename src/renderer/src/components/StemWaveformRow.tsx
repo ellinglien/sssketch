@@ -11,6 +11,24 @@ import { startPointerDrag } from './dragUtils'
 const ROW_HEIGHT = 44
 const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
 
+/** Where the envelope curve's two knees (fade-in-ends-here, fade-out-starts-here)
+ * sit in the row's own pixel coordinates, clamped so they can never cross past
+ * the midpoint even under oversized fade values. The single source of truth
+ * for this position — used by `buildEnvelopePath` (the curve itself) AND by
+ * the fade-knee drag handles' own on-screen position, so the two can never
+ * drift apart the way two independently-maintained copies of this formula
+ * could. */
+function envelopeKnees(
+  width: number,
+  fadeInPx: number,
+  fadeOutPx: number
+): { fiEnd: number; foStart: number } {
+  return {
+    fiEnd: Math.min(fadeInPx, width / 2),
+    foStart: Math.max(width - fadeOutPx, width / 2)
+  }
+}
+
 /** Builds the SVG path `d` for the "below the envelope" region — a closed shape
  * bounded above by a curve that eases from silence at the very start, up to the
  * volume plateau by fadeInPx, holds flat until foStart, then eases back down to
@@ -24,8 +42,7 @@ function buildEnvelopePath(
   fadeOutPx: number,
   plateauY: number
 ): string {
-  const fiEnd = Math.min(fadeInPx, width / 2)
-  const foStart = Math.max(width - fadeOutPx, width / 2)
+  const { fiEnd, foStart } = envelopeKnees(width, fadeInPx, fadeOutPx)
   const c1x = fiEnd * 0.35
   const c2x = fiEnd * 0.65
   const c3x = foStart + (width - foStart) * 0.35
@@ -76,6 +93,7 @@ export function StemWaveformRow({
   const fadeOutPx = displayedFadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - volume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
@@ -128,8 +146,11 @@ export function StemWaveformRow({
     let finalFadeOut = startFadeOut
     startPointerDrag(
       e,
-      // Dragging the fade-OUT knee LEFT (negative deltaX) lengthens the fade —
-      // it's the mirror of fade-in, so the sign is inverted here.
+      // foStart = width - fadeOutPx, so a LONGER fade-out means a SMALLER
+      // foStart, which means the knee needs to move LEFT. deltaX moving left
+      // is negative, so subtracting it (startFadeOut - deltaX) is what makes
+      // "drag left" translate to "fadeOutPx grows" — the mirror image of
+      // fade-in's `startFadeIn + deltaX`, where dragging right grows fadeIn.
       (deltaX) => {
         finalFadeOut = Math.max(0, Math.min(FADE_MAX, startFadeOut - deltaX / PPB))
         setDragFadeOut(finalFadeOut)
@@ -229,49 +250,42 @@ export function StemWaveformRow({
           />
 
           {/* Fade-in/fade-out knee handles: small dots at the envelope curve's
-              plateau corners, draggable to adjust fadeIn/fadeOut. Reuses the
-              identical fiEnd/foStart formula buildEnvelopePath computes
-              internally, recomputed inline here rather than exported. */}
-          {(() => {
-            const fiEnd = Math.min(fadeInPx, widthPx / 2)
-            const foStart = Math.max(widthPx - fadeOutPx, widthPx / 2)
-            return (
-              <>
-                <div
-                  onMouseDown={handleFadeInStart}
-                  title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
-                  style={{
-                    position: 'absolute',
-                    left: fiEnd,
-                    top: plateauY,
-                    transform: 'translate(-50%, -50%)',
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: '#fff',
-                    cursor: 'pointer',
-                    zIndex: 4
-                  }}
-                />
-                <div
-                  onMouseDown={handleFadeOutStart}
-                  title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
-                  style={{
-                    position: 'absolute',
-                    left: foStart,
-                    top: plateauY,
-                    transform: 'translate(-50%, -50%)',
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: '#fff',
-                    cursor: 'pointer',
-                    zIndex: 4
-                  }}
-                />
-              </>
-            )
-          })()}
+              plateau corners, draggable to adjust fadeIn/fadeOut. Positioned
+              via the same envelopeKnees() helper buildEnvelopePath itself
+              uses, so the dots can never visually drift off the curve they
+              sit on. */}
+          <div
+            onMouseDown={handleFadeInStart}
+            title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: fiEnd,
+              top: plateauY,
+              transform: 'translate(-50%, -50%)',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#fff',
+              cursor: 'pointer',
+              zIndex: 4
+            }}
+          />
+          <div
+            onMouseDown={handleFadeOutStart}
+            title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: foStart,
+              top: plateauY,
+              transform: 'translate(-50%, -50%)',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#fff',
+              cursor: 'pointer',
+              zIndex: 4
+            }}
+          />
         </div>
       </div>
     </div>
