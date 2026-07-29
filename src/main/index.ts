@@ -142,13 +142,34 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  playbackEngine.client.on('position-update', (payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('engine-position-update', payload)
-    }
-  })
+  // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc
+  // comment) that re-reads the live EngineClient on every *property access*
+  // — but EngineClient.on() itself subscribes onto whichever specific
+  // instance it was called on, so a single one-time
+  // `playbackEngine.client.on(...)` call still binds the listener to that
+  // one snapshot object forever. After a crash-triggered respawn swaps in a
+  // brand-new EngineClient, the old instance's subscriber map is orphaned
+  // (still "subscribed", but its socket is dead and nothing ever pushes
+  // into it again) and the new instance starts with no listeners — so
+  // position-update pushes would silently stop reaching the renderer after
+  // the very first crash-recovery cycle, even though play/pause/stop still
+  // work fine (those IPC handlers read `playbackEngine?.client` fresh on
+  // every call, not once). Re-subscribing inside onRestarted, in addition to
+  // the initial subscription, keeps the relay attached to whichever
+  // EngineClient is actually live. Found and fixed during Task 8 manual
+  // verification by reproducing it against the real spawned engine process
+  // (see git history for the repro).
+  function subscribeToPositionUpdates(): void {
+    playbackEngine!.client.on('position-update', (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('engine-position-update', payload)
+      }
+    })
+  }
+  subscribeToPositionUpdates()
 
   playbackEngine.onRestarted(() => {
+    subscribeToPositionUpdates()
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('engine-restarted')
     }

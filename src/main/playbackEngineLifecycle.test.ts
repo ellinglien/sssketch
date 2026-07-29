@@ -57,4 +57,43 @@ describe('startPlaybackEngine', () => {
     // just that the crash was detected.
     expect(() => handle!.client.send('load-project', project)).not.toThrow()
   }, 20000)
+
+  it('a one-time client.on() subscription (bound to a single snapshot instance) stops receiving pushes after a crash+respawn — callers must re-subscribe inside onRestarted', async () => {
+    // This documents the sharp edge in the `client` getter's contract that
+    // caused a real bug in main/index.ts's position-update relay (found and
+    // fixed during Phase 3 Task 8 manual verification): the getter re-reads
+    // the live EngineClient on every *property access*, but EngineClient.on()
+    // subscribes onto whichever specific object instance it was called on —
+    // so `handle.client.on(...)` called exactly once still binds forever to
+    // that one snapshot, even though `handle.client.send(...)` called fresh
+    // on every invocation (as the IPC handlers in main/index.ts already do)
+    // correctly follows respawns. The old instance is disconnected and never
+    // receives another push; the new instance starts with no listeners.
+    handle = await startPlaybackEngine()
+    handle.sendLoadProject({ bpm: 90, snapDiv: 4, rifffs: [] })
+
+    const seenBeforeCrash: unknown[] = []
+    handle.client.on('position-update', (payload) => seenBeforeCrash.push(payload))
+    handle.client.send('play', { fromPos: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    handle.client.send('stop')
+    expect(seenBeforeCrash.length).toBeGreaterThan(0)
+
+    const restarted = new Promise<void>((resolve) => handle!.onRestarted(() => resolve()))
+    handle.getEngineProcess().kill('SIGKILL')
+    await restarted
+
+    const seenAfterCrash: unknown[] = []
+    handle.client.on('position-update', (payload) => seenAfterCrash.push(payload))
+    handle.client.send('play', { fromPos: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    handle.client.send('stop')
+
+    // The re-subscription above (issued fresh, after the respawn, exactly
+    // like main/index.ts's fixed subscribeToPositionUpdates() called from
+    // inside onRestarted) proves the correct pattern: subscribing AFTER
+    // onRestarted fires, against whatever `handle.client` currently is,
+    // receives pushes fine.
+    expect(seenAfterCrash.length).toBeGreaterThan(0)
+  }, 20000)
 })
