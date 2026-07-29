@@ -54,12 +54,12 @@ describe('reducer', () => {
     expect(state.vol['r1:1']).toBe(0.3)
   })
 
-  it('placing on the timeline sets startBar, selects, expands, and enables stretch', () => {
+  it('placing on the timeline sets startBar, selects, and enables stretch, without forcing it expanded', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
     expect(state.rifffs.r1.startBar).toBe(4)
     expect(state.sel).toBe('r1')
-    expect(state.exp.r1).toBe(true)
+    expect(state.exp.r1).toBeUndefined()
     expect(state.stretch.r1).toBe(true)
   })
 
@@ -332,5 +332,26 @@ describe('reducer', () => {
     state = reducer(state, { type: 'STOP' })
     expect(state.playing).toBe(false)
     expect(state.pos).toBe(0)
+  })
+
+  describe('TOGGLE_EXPAND', () => {
+    it('starts undefined (collapsed) and toggles true/false', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      expect(state.exp.r1).toBeUndefined()
+      state = reducer(state, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
+      expect(state.exp.r1).toBe(true)
+      state = reducer(state, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
+      expect(state.exp.r1).toBe(false)
+    })
+  })
+
+  describe('TOGGLE_VOLUME_DRAG_MODE', () => {
+    it('starts false and toggles true/false', () => {
+      expect(initialState.volumeDragMode).toBe(false)
+      let state = reducer(initialState, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
+      expect(state.volumeDragMode).toBe(true)
+      state = reducer(state, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
+      expect(state.volumeDragMode).toBe(false)
+    })
   })
 })

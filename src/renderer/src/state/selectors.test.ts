@@ -306,7 +306,7 @@ describe('pasteRifffAction', () => {
     expect(action.stretch).toBe(false)
   })
 
-  it('applying the action creates an independent, selected, expanded copy', () => {
+  it('applying the action creates an independent, selected copy, not forced expanded', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
     const action = pasteRifffAction(state, 'r1', 20)
     if (!action) throw new Error('expected an action')
@@ -317,6 +317,6 @@ describe('pasteRifffAction', () => {
     expect(state.rifffs[newGroupId].startBar).toBe(20)
     expect(state.rifffs.r1.startBar).toBe(4) // original untouched
     expect(state.sel).toBe(newGroupId)
-    expect(state.exp[newGroupId]).toBe(true)
+    expect(state.exp[newGroupId]).toBeUndefined()
   })
 })

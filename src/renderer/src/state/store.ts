@@ -35,6 +35,10 @@ export interface AppState {
   playedBars: Record<string, number>
   sel: string | null
   exp: Record<string, boolean>
+  /** Global interaction mode for the expanded waveform's open body: false (default)
+   * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
+   * by the V key — see App.tsx's Frame component. Not persisted (see serialize.ts). */
+  volumeDragMode: boolean
   rifffs: Record<string, Rifff>
 }
 
@@ -54,6 +58,7 @@ export const initialState: AppState = {
   playedBars: {},
   sel: null,
   exp: {},
+  volumeDragMode: false,
   rifffs: {}
 }
 
@@ -88,6 +93,8 @@ export type Action =
   | { type: 'RELINK'; groupId: string }
   | { type: 'CYCLE_TYPE'; groupId: string; slot: number }
   | { type: 'SET_STEM_TYPE'; groupId: string; slot: number; soundType: SoundType }
+  | { type: 'TOGGLE_EXPAND'; groupId: string }
+  | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'STOP' }
@@ -135,7 +142,6 @@ export function reducer(state: AppState, action: Action): AppState {
         },
         bpm: isFirstPlacement ? rifff.bpm : state.bpm,
         sel: action.groupId,
-        exp: { ...state.exp, [action.groupId]: true },
         stretch: { ...state.stretch, [action.groupId]: true }
       }
     }
@@ -264,8 +270,7 @@ export function reducer(state: AppState, action: Action): AppState {
         mute: { ...state.mute, ...action.mute },
         off: { ...state.off, ...action.off },
         stretch: { ...state.stretch, [action.rifff.groupId]: action.stretch },
-        sel: action.rifff.groupId,
-        exp: { ...state.exp, [action.rifff.groupId]: true }
+        sel: action.rifff.groupId
       }
 
     case 'SET_VOLUME':
@@ -327,6 +332,12 @@ export function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } } }
     }
+
+    case 'TOGGLE_EXPAND':
+      return { ...state, exp: { ...state.exp, [action.groupId]: !state.exp[action.groupId] } }
+
+    case 'TOGGLE_VOLUME_DRAG_MODE':
+      return { ...state, volumeDragMode: !state.volumeDragMode }
 
     case 'PLAY':
       return { ...state, playing: true }

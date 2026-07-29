@@ -30,4 +30,16 @@ describe('project serialization', () => {
     expect(restored.playing).toBe(false) // never restore a playing state
     expect(restored.pos).toBe(0) // always reopen at the top
   })
+
+  it('does not persist volumeDragMode — always reopens with it off', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
+    expect(state.volumeDragMode).toBe(true)
+
+    const json = serializeProject(state)
+    expect(JSON.parse(json).volumeDragMode).toBeUndefined()
+
+    const restored = deserializeProject(JSON.parse(json))
+    expect(restored.volumeDragMode).toBe(false)
+  })
 })

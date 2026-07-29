@@ -16,7 +16,13 @@ const MAX_HISTORY = 100
 // Transport/playback state, not the arrangement itself — excluded from history so
 // playback (which dispatches SET_POS ~18x/sec while playing) doesn't flood the
 // undo stack with meaningless checkpoints between real edits.
-const TRANSIENT_ACTION_TYPES = new Set<Action['type']>(['SET_POS', 'PLAY', 'PAUSE', 'STOP'])
+const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
+  'SET_POS',
+  'PLAY',
+  'PAUSE',
+  'STOP',
+  'TOGGLE_VOLUME_DRAG_MODE'
+])
 
 export function createHistoryState(present: AppState): HistoryState {
   return { past: [], present, future: [] }
