@@ -244,6 +244,52 @@ describe('reducer', () => {
     })
   })
 
+  describe('RESIZE_LEFT', () => {
+    it('while linked, sets playedBars on the group key and moves the rifff’s own startBar', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+      state = reducer(state, {
+        type: 'RESIZE_LEFT',
+        groupId: 'r1',
+        slot: 1,
+        bars: 10,
+        startBar: 4
+      })
+      expect(state.playedBars.r1).toBe(10)
+      expect(state.rifffs.r1.startBar).toBe(4)
+    })
+
+    it('while unlinked, sets playedBars and stemStart on the stem’s own keys, leaving the rifff’s startBar untouched', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+      state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+      state = reducer(state, {
+        type: 'RESIZE_LEFT',
+        groupId: 'r1',
+        slot: 1,
+        bars: 10,
+        startBar: 4
+      })
+      expect(state.playedBars['r1:1']).toBe(10)
+      expect(state.stemStart['r1:1']).toBe(4)
+      expect(state.rifffs.r1.startBar).toBe(6)
+    })
+
+    it('clamps playedBars to a minimum of 0.25 and startBar to a minimum of 0', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+      state = reducer(state, {
+        type: 'RESIZE_LEFT',
+        groupId: 'r1',
+        slot: 1,
+        bars: -3,
+        startBar: -2
+      })
+      expect(state.playedBars.r1).toBe(0.25)
+      expect(state.rifffs.r1.startBar).toBe(0)
+    })
+  })
+
   it('sets fade in/out bars, clamped to 0', () => {
     let state = reducer(initialState, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1.5 })
     state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })

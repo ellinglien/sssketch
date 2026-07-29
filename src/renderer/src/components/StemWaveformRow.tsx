@@ -3,7 +3,7 @@ import { useDispatch, useAppState } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
-import { stemGeometry, resolveOffsetKey, resolvePlayedBars } from '../state/selectors'
+import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
@@ -32,13 +32,13 @@ function envelopeKnees(
   }
 }
 
-/** Builds the SVG path `d` for the "below the envelope" region — a closed shape
- * bounded above by a curve that eases from silence at the very start, up to the
- * volume plateau by fadeInPx, holds flat until foStart, then eases back down to
- * silence by the very end. Used as a CSS clip-path on the full-color waveform
- * layer; everything outside this region (above the curve) shows only the
- * always-visible gray layer underneath. */
-function buildEnvelopePath(
+/** Builds the SVG path `d` for the envelope curve itself — an OPEN path from
+ * (0,height) through the fade-in ease, the flat plateau, and the fade-out
+ * ease, to (width,height). Shared by buildEnvelopePath (which closes it into
+ * a fillable region for the clip-path mask below) and the thin stroke line
+ * drawn directly on top of the waveform, so the mask and the visible line can
+ * never drift apart the way two independently-maintained curves could. */
+function envelopeCurveD(
   width: number,
   height: number,
   fadeInPx: number,
@@ -54,9 +54,22 @@ function buildEnvelopePath(
     `M0,${height} ` +
     `C${c1x},${height} ${c2x},${plateauY} ${fiEnd},${plateauY} ` +
     `L${foStart},${plateauY} ` +
-    `C${c3x},${plateauY} ${c4x},${height} ${width},${height} ` +
-    `Z`
+    `C${c3x},${plateauY} ${c4x},${height} ${width},${height}`
   )
+}
+
+/** Builds the SVG path `d` for the "below the envelope" region — the curve
+ * above, closed off along the bottom edge. Used as a CSS clip-path on the
+ * full-color waveform layer; everything outside this region (above the
+ * curve) shows only the always-visible gray layer underneath. */
+function buildEnvelopePath(
+  width: number,
+  height: number,
+  fadeInPx: number,
+  fadeOutPx: number,
+  plateauY: number
+): string {
+  return `${envelopeCurveD(width, height, fadeInPx, fadeOutPx, plateauY)} Z`
 }
 
 export function StemWaveformRow({
@@ -80,19 +93,35 @@ export function StemWaveformRow({
   const fadeOut = state.fadeOut[groupId] ?? 0
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
+  const [dragLeftResize, setDragLeftResize] = useState<{
+    playedBars: number
+    startBar: number
+  } | null>(null)
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
   const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
-  const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
+  const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
   const stemGeo = stemGeometry(state, groupId, slot, PPB)
+  const baseStartBar = stemStartBar(state, groupId, slot)
+  // The sub-bar nudge offset (off[]) baked into stemGeo.leftPx, isolated so a
+  // left-resize preview can recompute leftPx from a new start bar while
+  // preserving it — it doesn't change during a resize.
+  const nudgeOffsetPx = stemGeo.leftPx - baseStartBar * PPB
+  const displayedStartBar = dragLeftResize?.startBar ?? baseStartBar
+  const leftPx = displayedStartBar * PPB + nudgeOffsetPx
   // While actively dragging, use the in-progress width instead of the
   // committed-state one, so the row visibly resizes in real time.
-  const widthPx = dragPlayedBars !== null ? dragPlayedBars * PPB : stemGeo.widthPx
+  const widthPx =
+    dragPlayedBars !== null
+      ? dragPlayedBars * PPB
+      : dragLeftResize !== null
+        ? dragLeftResize.playedBars * PPB
+        : stemGeo.widthPx
 
   // The native engine always loops a stem from its own beginning every
   // stem.barLength bars — playedBars beyond that adds more repeats (or
@@ -110,6 +139,7 @@ export function StemWaveformRow({
   const fadeOutPx = displayedFadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
   // Volume tooltip's vertical position, clamped directly into the row's
   // bounds — correct for every plateauY value by construction (top is always
@@ -148,6 +178,46 @@ export function StemWaveformRow({
           dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
         }
         setDragPlayedBars(null)
+      }
+    )
+  }
+
+  function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    const startPosBar = baseStartBar
+    let finalPlayedBars = startPlayedBars
+    let finalStartBar = startPosBar
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        // Dragging left (negative deltaX) extends the loop backward:
+        // playedBars grows and the start moves earlier by the same amount,
+        // so the RIGHT edge — where the loop currently ends — stays exactly
+        // in place. Snapped to whole bars, same as the right handle. The two
+        // clamps below can never conflict: the floor is always <= 0
+        // (MIN_PLAYED_BARS is always <= startPlayedBars already, since every
+        // committed playedBars value is already clamped to that floor) and
+        // startPosBar is always >= 0.
+        const requestedGrow = -Math.round(deltaX / PPB)
+        const grow = Math.max(
+          MIN_PLAYED_BARS - startPlayedBars,
+          Math.min(startPosBar, requestedGrow)
+        )
+        finalPlayedBars = startPlayedBars + grow
+        finalStartBar = startPosBar - grow
+        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          dispatch({
+            type: 'RESIZE_LEFT',
+            groupId,
+            slot,
+            bars: finalPlayedBars,
+            startBar: finalStartBar
+          })
+        }
+        setDragLeftResize(null)
       }
     )
   }
@@ -217,22 +287,65 @@ export function StemWaveformRow({
 
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
-      <div style={{ width: 212, flexShrink: 0 }} />
+      {/* Name + mute, and (while unlinked) the drag handle for repositioning
+          this stem — moved off the waveform entirely so the fade/volume/resize
+          controls layered on top of it don't compete with it for mousedown. */}
+      <div
+        draggable={unlinked}
+        onDragStart={(e) => {
+          if (!unlinked) return
+          e.dataTransfer.setData('text/rifff-stem-key', key)
+        }}
+        title={unlinked ? 'drag to move this stem independently' : undefined}
+        style={{
+          width: 212,
+          flexShrink: 0,
+          padding: '0 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          cursor: unlinked ? 'grab' : 'default',
+          opacity: muted ? 0.5 : 1
+        }}
+      >
+        {/* Mute dot: filled = unmuted (active), hollow = muted (off). */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
+          }}
+          title={muted ? 'unmute' : 'mute'}
+          style={{
+            flexShrink: 0,
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            border: '1.5px solid rgba(201,191,232,0.6)',
+            background: muted ? 'transparent' : 'var(--ra-text-2)',
+            padding: 0,
+            cursor: 'pointer'
+          }}
+        />
+        <span
+          style={{
+            fontSize: 10,
+            color: 'var(--ra-text-2)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+        >
+          {stem.name}
+        </span>
+      </div>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
-          draggable={unlinked}
-          onDragStart={(e) => {
-            if (!unlinked) return
-            e.dataTransfer.setData('text/rifff-stem-key', key)
-          }}
-          title={unlinked ? 'drag to move this stem independently' : undefined}
           style={{
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: stemGeo.leftPx,
+            left: leftPx,
             width: widthPx,
-            cursor: unlinked ? 'grab' : 'default',
             borderRadius: 3,
             border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
@@ -273,36 +386,42 @@ export function StemWaveformRow({
             </div>
           )}
 
-          {/* Mute dot: filled = unmuted (active), hollow = muted (off). Bigger
-              than a typical small control, vertically centered on the row. */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
-            }}
-            title={muted ? 'unmute' : 'mute'}
+          {/* Thin white line tracing the envelope curve itself — the
+              saturation split (full color below, gray above) already shows
+              volume, but reads as invisible wherever the underlying audio is
+              quiet, so this gives a visible reference regardless of what's
+              playing underneath. */}
+          <svg
+            width={widthPx}
+            height={ROW_HEIGHT}
+            style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+          >
+            <path d={envelopeCurve} fill="none" stroke="#fff" strokeWidth={1} opacity={0.5} />
+          </svg>
+
+          {/* Resize handles, both edges: dragging either extends/shrinks the
+              loop (always tiled from the stem's own beginning — see the
+              tiling note above), snapped to whole bars. The right handle
+              grows the loop forward from a fixed start; the left handle grows
+              it backward from a fixed end (see handleLeftResizeStart). Drags
+              update local state only, and dispatch exactly once on mouseup
+              (see dragUtils.startPointerDrag) so a long drag can't flood undo
+              history. */}
+          <div
+            onMouseDown={handleLeftResizeStart}
+            title={`${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
-              top: '50%',
-              left: 7,
-              transform: 'translateY(-50%)',
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              border: '1.5px solid rgba(201,191,232,0.6)',
-              background: muted ? 'transparent' : 'var(--ra-text-2)',
-              padding: 0,
-              cursor: 'pointer',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: 5,
+              cursor: 'ew-resize',
+              background: '#fff',
+              opacity: 0.55,
               zIndex: 3
             }}
           />
-
-          {/* Resize handle: right edge only (see architecture note — left-edge
-              trim would require also moving the stem's start, a separate
-              mechanism, so it's deliberately out of scope). Drags update local
-              state only, and dispatch SET_PLAYED_BARS exactly once on mouseup
-              (see dragUtils.startPointerDrag) so a long drag can't flood undo
-              history. */}
           <div
             onMouseDown={handleResizeStart}
             title={`${displayedPlayedBars} bars`}

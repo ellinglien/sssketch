@@ -69,6 +69,7 @@ export type Action =
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'SET_STEM_START'; key: string; startBar: number }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
+  | { type: 'RESIZE_LEFT'; groupId: string; slot: number; bars: number; startBar: number }
   | { type: 'SET_FADE_IN'; groupId: string; bars: number }
   | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
@@ -175,6 +176,41 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         playedBars: { ...state.playedBars, [action.key]: Math.max(MIN_PLAYED_BARS, action.bars) }
       }
+
+    // Dragging the LEFT resize handle: playedBars and the stem's start move
+    // together in one atomic edit (one undo step, not two) so the clip's
+    // right edge — where the loop currently ends — stays exactly in place
+    // while the loop extends backward. Same linked/unlinked resolution as
+    // SET_PLAYED_BARS/SET_STEM_START individually: shared across the group's
+    // own startBar while linked, independent per-stem once unlinked.
+    case 'RESIZE_LEFT': {
+      const playedBarsKey = state.unlinked[action.groupId]
+        ? stemKey(action.groupId, action.slot)
+        : action.groupId
+      const playedBars = {
+        ...state.playedBars,
+        [playedBarsKey]: Math.max(MIN_PLAYED_BARS, action.bars)
+      }
+      if (state.unlinked[action.groupId]) {
+        return {
+          ...state,
+          playedBars,
+          stemStart: {
+            ...state.stemStart,
+            [stemKey(action.groupId, action.slot)]: Math.max(0, action.startBar)
+          }
+        }
+      }
+      const rifff = state.rifffs[action.groupId]
+      return {
+        ...state,
+        playedBars,
+        rifffs: {
+          ...state.rifffs,
+          [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
+        }
+      }
+    }
 
     // Upper-bounded loosely here (a sane ceiling, not the real constraint) —
     // the actual "can't exceed half the clip's own duration" clamp happens where
