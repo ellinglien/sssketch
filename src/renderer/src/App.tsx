@@ -32,6 +32,17 @@ function barForClientX(clientX: number, container: HTMLDivElement): number {
   return Math.max(0, Math.round(xInTimeline / PPB))
 }
 
+// Reserved empty rows always trailing the last placed rifff, so there's a
+// real, hoverable drop target below the arrangement (not just empty page
+// background) and it's visually obvious that dragging a rifff there — not
+// just onto an existing row — adds it to the arrangement. Purely a visual/
+// hit-target affordance: dropping on any one of them is identical to
+// dropping on the timeline background anywhere else (handleDrop below
+// doesn't know or care which row, ghost or real, the cursor happened to be
+// over — only the horizontal drop position matters).
+const GHOST_ROW_COUNT = 3
+const GHOST_ROW_HEIGHT = 44
+
 function Timeline({
   onOpenClipMenu,
   onOpenPasteMenu
@@ -103,6 +114,15 @@ function Timeline({
       <Ruler bars={loopLengthBars(state)} />
       {placedRifffsInOrder(state).map((r) => (
         <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
+      ))}
+      {Array.from({ length: GHOST_ROW_COUNT }, (_, i) => (
+        <div
+          key={`ghost-${i}`}
+          style={{
+            height: GHOST_ROW_HEIGHT,
+            borderBottom: '1px dashed var(--ra-border)'
+          }}
+        />
       ))}
       <Playhead />
       {dropBar !== null && (
