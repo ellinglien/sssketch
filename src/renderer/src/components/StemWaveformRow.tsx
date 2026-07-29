@@ -73,19 +73,26 @@ export function StemWaveformRow({
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
+    // Captured in a plain closure variable rather than read back out of
+    // dragPlayedBars state in onEnd: StrictMode double-invokes setState
+    // updater FUNCTIONS in dev to catch impure updaters, so a dispatch
+    // placed inside a `setDragPlayedBars((current) => ...)` callback would
+    // fire twice per drag-release. Dispatching directly in onEnd, from a
+    // value tracked outside React state, sidesteps that entirely.
+    let finalPlayedBars = startPlayedBars
+    let moved = false
     startPointerDrag(
       e,
       (deltaX) => {
-        const next = Math.max(0.25, startPlayedBars + deltaX / PPB)
-        setDragPlayedBars(next)
+        moved = true
+        finalPlayedBars = Math.max(0.25, startPlayedBars + deltaX / PPB)
+        setDragPlayedBars(finalPlayedBars)
       },
       () => {
-        setDragPlayedBars((current) => {
-          if (current !== null) {
-            dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: current })
-          }
-          return null
-        })
+        if (moved) {
+          dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
+        }
+        setDragPlayedBars(null)
       }
     )
   }
