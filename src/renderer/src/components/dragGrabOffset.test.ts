@@ -74,13 +74,13 @@ describe('mouseBarFromDragEvent', () => {
   })
 
   it('computes the bar position relative to the timeline origin', () => {
-    // PPB=24, LANE_HEADER_WIDTH=212 (Ruler.tsx) — timeline's own left edge at
-    // 0, so a click at clientX=452 is (452-0-212)/24 = 10 bars in.
+    // PPB=24 (Ruler.tsx) — timeline's own left edge at 0, so a click at
+    // clientX=240 is (240-0)/24 = 10 bars in.
     const timeline = { getBoundingClientRect: () => ({ left: 0 }) }
     const target = { closest: () => timeline }
     const result = mouseBarFromDragEvent({
       currentTarget: target as unknown as EventTarget,
-      clientX: 452
+      clientX: 240
     })
     expect(result).toBe(10)
   })

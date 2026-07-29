@@ -1,4 +1,4 @@
-import { PPB, LANE_HEADER_WIDTH } from './Ruler'
+import { PPB } from './Ruler'
 
 // Pure: where within the clip (in bars) it was grabbed, given the mouse's own
 // bar position and the clip's start bar, both at drag-start.
@@ -56,5 +56,5 @@ export function mouseBarFromDragEvent(e: {
   const target = e.currentTarget as HTMLElement
   const rect = target.closest('[data-timeline]')?.getBoundingClientRect()
   if (!rect) return null
-  return Math.max(0, (e.clientX - rect.left - LANE_HEADER_WIDTH) / PPB)
+  return Math.max(0, (e.clientX - rect.left) / PPB)
 }

@@ -1,5 +1,5 @@
 import { useAppState } from '../state/StoreContext'
-import { LANE_HEADER_WIDTH, PPB } from './Ruler'
+import { PPB } from './Ruler'
 
 export function Playhead(): React.JSX.Element {
   const state = useAppState()
@@ -9,7 +9,7 @@ export function Playhead(): React.JSX.Element {
         position: 'absolute',
         top: 0,
         bottom: 0,
-        left: LANE_HEADER_WIDTH + state.pos * PPB,
+        left: state.pos * PPB,
         width: 1,
         background: 'var(--ra-playhead)',
         pointerEvents: 'none'

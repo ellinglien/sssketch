@@ -2,7 +2,7 @@ import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
 import { StoreProvider, useAppState, useDispatch, useHistory } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
-import { Ruler, PPB, LANE_HEADER_WIDTH } from './components/Ruler'
+import { Ruler, PPB } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
@@ -15,7 +15,7 @@ import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
   const rect = container.getBoundingClientRect()
-  const xInTimeline = clientX - rect.left - LANE_HEADER_WIDTH
+  const xInTimeline = clientX - rect.left
   return Math.max(0, Math.round(xInTimeline / PPB))
 }
 
@@ -84,7 +84,7 @@ function Timeline({
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: LANE_HEADER_WIDTH + dropBar * PPB,
+            left: dropBar * PPB,
             width: 2,
             background: 'var(--ra-play-on)',
             pointerEvents: 'none',
