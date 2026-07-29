@@ -82,6 +82,7 @@ describe('startPlaybackEngine', () => {
     const restarted = new Promise<void>((resolve) => handle!.onRestarted(() => resolve()))
     handle.getEngineProcess().kill('SIGKILL')
     await restarted
+    const seenBeforeCrashCount = seenBeforeCrash.length
 
     const seenAfterCrash: unknown[] = []
     handle.client.on('position-update', (payload) => seenAfterCrash.push(payload))
@@ -89,11 +90,12 @@ describe('startPlaybackEngine', () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     handle.client.send('stop')
 
-    // The re-subscription above (issued fresh, after the respawn, exactly
-    // like main/index.ts's fixed subscribeToPositionUpdates() called from
-    // inside onRestarted) proves the correct pattern: subscribing AFTER
-    // onRestarted fires, against whatever `handle.client` currently is,
-    // receives pushes fine.
+    // Pins the actual bug this test is named for: the stale subscription
+    // never fires again post-respawn (its underlying EngineClient instance
+    // is disconnected), while a fresh subscription created after onRestarted
+    // — exactly like main/index.ts's fixed subscribeToPositionUpdates()
+    // called from inside onRestarted — receives pushes fine on the new one.
+    expect(seenBeforeCrash.length).toBe(seenBeforeCrashCount)
     expect(seenAfterCrash.length).toBeGreaterThan(0)
   }, 20000)
 })
