@@ -388,4 +388,32 @@ describe('reducer', () => {
       expect(state.mute['r2:1']).toBeUndefined()
     })
   })
+
+  describe('SET_GROUP_VOLUME', () => {
+    it('sets every stem in the rifff to the same volume at once', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GROUP_VOLUME', groupId: 'r1', volume: 0.3 })
+      expect(state.vol['r1:1']).toBe(0.3)
+      expect(state.vol['r1:6']).toBe(0.3)
+    })
+
+    it('clamps to [0, 1]', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GROUP_VOLUME', groupId: 'r1', volume: 1.5 })
+      expect(state.vol['r1:1']).toBe(1)
+      state = reducer(state, { type: 'SET_GROUP_VOLUME', groupId: 'r1', volume: -1 })
+      expect(state.vol['r1:1']).toBe(0)
+    })
+
+    it('does not affect other rifffs', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'SET_GROUP_VOLUME', groupId: 'r1', volume: 0.3 })
+      expect(state.vol['r1:1']).toBe(0.3)
+      expect(state.vol['r2:1']).not.toBe(0.3)
+    })
+  })
 })

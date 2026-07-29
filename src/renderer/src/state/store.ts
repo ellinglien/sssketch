@@ -89,6 +89,7 @@ export type Action =
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'SET_GROUP_MUTE'; groupId: string; muted: boolean }
+  | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNLINK'; groupId: string }
   | { type: 'RELINK'; groupId: string }
@@ -294,6 +295,20 @@ export function reducer(state: AppState, action: Action): AppState {
         mute[stemKey(action.groupId, stem.slot)] = action.muted
       }
       return { ...state, mute }
+    }
+
+    // Sets every stem in the rifff to the same volume in one atomic edit —
+    // the collapsed view's own envelope drag, which (like SET_GROUP_MUTE)
+    // controls the whole rifff together rather than exposing each stem's own
+    // volume individually.
+    case 'SET_GROUP_VOLUME': {
+      const rifff = state.rifffs[action.groupId]
+      const vol = { ...state.vol }
+      const volume = Math.max(0, Math.min(1, action.volume))
+      for (const stem of rifff.stems) {
+        vol[stemKey(action.groupId, stem.slot)] = volume
+      }
+      return { ...state, vol }
     }
 
     case 'TOGGLE_STRETCH':

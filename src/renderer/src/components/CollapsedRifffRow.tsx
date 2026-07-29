@@ -2,11 +2,21 @@ import { useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
+import { dbLabel } from '@shared/visuals'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
+import {
+  FADE_MAX,
+  FADE_DRAG_SLOWDOWN,
+  TOOLTIP_HEIGHT,
+  TOOLTIP_GAP,
+  envelopeKnees,
+  envelopeCurveD,
+  buildEnvelopePath
+} from './envelope'
 import { startPointerDrag } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
@@ -63,6 +73,7 @@ export function CollapsedRifffRow({
   const rifff = state.rifffs[groupId]
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
+  const volumeDragMode = state.volumeDragMode
   // One button for the whole group rather than exposing each stem's own mute
   // individually (unlike the expanded view) — collapsing already hides
   // per-stem detail, so "all muted" / "not all muted" is the only distinction
@@ -71,12 +82,21 @@ export function CollapsedRifffRow({
   // already muted (clicking unmutes everything) — same filled-means-active
   // convention as every other mute dot in this app.
   const allMuted = rifff.stems.every((stem) => state.mute[stemKey(groupId, stem.slot)])
+  // Representative volume for the envelope's own drag-start/display value —
+  // same "first stem stands in for the group" convention as the geometry
+  // below. Actually adjusting the envelope dispatches SET_GROUP_VOLUME,
+  // which sets every stem to the same value in one atomic edit, so this
+  // representative value becomes exactly correct the moment it's touched.
+  const volume = state.vol[stemKey(groupId, firstStem.slot)] ?? 1
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragLeftResize, setDragLeftResize] = useState<{
     playedBars: number
     startBar: number
   } | null>(null)
+  const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
+  const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
+  const [dragVolume, setDragVolume] = useState<number | null>(null)
 
   // stemGeometry (not clipGeometry) so an active playedBars resize is
   // reflected here too — clipGeometry predates the resize feature and always
@@ -109,8 +129,20 @@ export function CollapsedRifffRow({
 
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
-  const fadeInPx = Math.min(widthPx / 2, fadeIn * PPB)
-  const fadeOutPx = Math.min(widthPx / 2, fadeOut * PPB)
+  const displayedFadeIn = dragFadeIn ?? fadeIn
+  const displayedFadeOut = dragFadeOut ?? fadeOut
+  const displayedVolume = dragVolume ?? volume
+
+  const fadeInPx = displayedFadeIn * PPB
+  const fadeOutPx = displayedFadeOut * PPB
+  const plateauY = ROW_HEIGHT * (1 - displayedVolume)
+  const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
+  const tooltipTop = Math.max(
+    0,
+    Math.min(ROW_HEIGHT - TOOLTIP_HEIGHT, plateauY - TOOLTIP_HEIGHT - TOOLTIP_GAP)
+  )
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
@@ -162,6 +194,60 @@ export function CollapsedRifffRow({
     )
   }
 
+  function handleFadeInStart(e: React.MouseEvent): void {
+    const startFadeIn = fadeIn
+    let finalFadeIn = startFadeIn
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        finalFadeIn = Math.max(
+          0,
+          Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+        )
+        setDragFadeIn(finalFadeIn)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
+        setDragFadeIn(null)
+      }
+    )
+  }
+
+  function handleFadeOutStart(e: React.MouseEvent): void {
+    const startFadeOut = fadeOut
+    let finalFadeOut = startFadeOut
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        finalFadeOut = Math.max(
+          0,
+          Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+        )
+        setDragFadeOut(finalFadeOut)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
+        setDragFadeOut(null)
+      }
+    )
+  }
+
+  function handleVolumeStart(e: React.MouseEvent): void {
+    const startVolume = volume
+    let finalVolume = startVolume
+    startPointerDrag(
+      e,
+      (_dx, deltaY) => {
+        finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
+        setDragVolume(finalVolume)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
+        setDragVolume(null)
+      }
+    )
+  }
+
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
@@ -196,44 +282,47 @@ export function CollapsedRifffRow({
               and opacity convention as PolarGlyph's own rings (fill =
               typeColorVar(stem.type), opacity 0.55, no blend mode), so the
               collapsed block's waveform reads as a mix of all its stems
-              rather than just one representative one. */}
-          {rifff.stems.map((stem) => (
-            <CollapsedTiles
-              key={stem.slot}
-              path={stem.path}
-              color={typeColorVar(stem.type)}
-              opacity={0.55}
-              widthPx={widthPx}
-              stemBarLength={stem.barLength}
-              playedBars={displayedPlayedBars}
-            />
-          ))}
-          {fadeInPx > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: 0,
-                width: fadeInPx,
-                background: 'linear-gradient(to right, rgba(0,0,0,0.6), transparent)',
-                pointerEvents: 'none'
-              }}
-            />
-          )}
-          {fadeOutPx > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                right: 0,
-                width: fadeOutPx,
-                background: 'linear-gradient(to left, rgba(0,0,0,0.6), transparent)',
-                pointerEvents: 'none'
-              }}
-            />
-          )}
+              rather than just one representative one. Each stem's own mute
+              state (independent of the single group-mute button, which just
+              sets all of them at once) still suppresses that one stem's own
+              layer. The whole stack is clipped by the shared group envelope
+              below, same "full color under the curve" idea as
+              StemWaveformRow's own color layer. */}
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              clipPath: `path("${envelopePath}")`
+            }}
+          >
+            {rifff.stems
+              .filter((stem) => !state.mute[stemKey(groupId, stem.slot)])
+              .map((stem) => (
+                <CollapsedTiles
+                  key={stem.slot}
+                  path={stem.path}
+                  color={typeColorVar(stem.type)}
+                  opacity={0.55}
+                  widthPx={widthPx}
+                  stemBarLength={stem.barLength}
+                  playedBars={displayedPlayedBars}
+                />
+              ))}
+          </div>
+
+          {/* Thin white line tracing the envelope curve itself — same
+              rationale as StemWaveformRow's own: the saturation-based volume
+              cue can read as invisible wherever the underlying audio is
+              quiet, so this gives a visible reference regardless of what's
+              playing underneath. */}
+          <svg
+            width={widthPx}
+            height={ROW_HEIGHT}
+            style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+          >
+            <path d={envelopeCurve} fill="none" stroke="#fff" strokeWidth={1} opacity={0.5} />
+          </svg>
+
           {/* Resize handles, both edges — same behavior as StemWaveformRow's
               own (right grows the loop forward from a fixed start, left
               grows it backward from a fixed end), just scoped to the
@@ -271,6 +360,67 @@ export function CollapsedRifffRow({
               zIndex: 3
             }}
           />
+
+          {/* Fade-in/fade-out knee handles — always active regardless of
+              envelope/volumeDragMode, same as StemWaveformRow's own (fade is
+              a separate, dedicated small target, not gated by the mode
+              switch the way the broad volume drag surface below is). */}
+          <div
+            onMouseDown={handleFadeInStart}
+            title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: fiEnd,
+              top: plateauY,
+              transform: 'translate(-50%, -50%)',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#fff',
+              cursor: 'pointer',
+              zIndex: 4
+            }}
+          />
+          <div
+            onMouseDown={handleFadeOutStart}
+            title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: foStart,
+              top: plateauY,
+              transform: 'translate(-50%, -50%)',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#fff',
+              cursor: 'pointer',
+              zIndex: 4
+            }}
+          />
+
+          {/* Volume drag surface: spans the whole waveform body while
+              volumeDragMode is on, repurposing the same open area that
+              defaults to "drag to move the clip." While off, this does
+              nothing on mousedown — the event is left alone so the native
+              drag (from the container's own `draggable`) proceeds normally
+              instead. zIndex stays below the resize handles (3) and fade
+              dots (4) in both modes — see StemWaveformRow's identical fix
+              (a full-coverage div at the same z-index as those small edge
+              targets would otherwise physically sit on top of them and
+              swallow their mousedown before it ever reaches them). */}
+          <div
+            onMouseDown={(e) => {
+              if (volumeDragMode) handleVolumeStart(e)
+            }}
+            title={volumeDragMode ? 'drag to adjust group volume' : undefined}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              cursor: volumeDragMode ? 'ns-resize' : 'grab',
+              zIndex: 2
+            }}
+          />
+
           {/* Single group-mute button, overlaid on the waveform, top-left
               corner — same filled/hollow convention and position as each
               stem's own mute dot in the expanded view. */}
@@ -296,6 +446,28 @@ export function CollapsedRifffRow({
               zIndex: 3
             }}
           />
+
+          {dragVolume !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: tooltipTop,
+                transform: 'translateX(-50%)',
+                padding: '2px 6px',
+                background: 'var(--ra-mute-on)',
+                color: 'var(--ra-mute-on-ink)',
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 4,
+                zIndex: 5,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none'
+              }}
+            >
+              {dbLabel(displayedVolume)}
+            </div>
+          )}
         </div>
       </div>
     </div>
