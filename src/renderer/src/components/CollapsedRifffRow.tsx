@@ -285,14 +285,16 @@ export function CollapsedRifffRow({
               rather than just one representative one. Each stem's own mute
               state (independent of the single group-mute button, which just
               sets all of them at once) still suppresses that one stem's own
-              layer. The whole stack is clipped by the shared group envelope
-              below, same "full color under the curve" idea as
-              StemWaveformRow's own color layer. */}
+              layer. Clipped by the shared group envelope, same "full color
+              under the curve" idea as StemWaveformRow's own color layer —
+              but only while envelope drag mode is engaged; otherwise
+              unclipped, so the waveform reads normally instead of looking
+              dimmed whenever volume is below unity. */}
           <div
             style={{
               position: 'absolute',
               inset: 0,
-              clipPath: `path("${envelopePath}")`
+              clipPath: volumeDragMode ? `path("${envelopePath}")` : undefined
             }}
           >
             {rifff.stems
@@ -310,24 +312,25 @@ export function CollapsedRifffRow({
               ))}
           </div>
 
-          {/* Thin white line tracing the envelope curve itself — same
-              rationale as StemWaveformRow's own: the saturation-based volume
-              cue can read as invisible wherever the underlying audio is
-              quiet, so this gives a visible reference regardless of what's
-              playing underneath. */}
-          <svg
-            width={widthPx}
-            height={ROW_HEIGHT}
-            style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-          >
-            <path
-              d={envelopeCurve}
-              fill="none"
-              stroke="var(--ra-text)"
-              strokeWidth={1}
-              opacity={0.5}
-            />
-          </svg>
+          {/* Thin white line tracing the envelope curve itself — only shown
+              alongside the clipping above, while envelope drag mode is
+              engaged (the saturation split it traces isn't happening
+              otherwise). */}
+          {volumeDragMode && (
+            <svg
+              width={widthPx}
+              height={ROW_HEIGHT}
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+            >
+              <path
+                d={envelopeCurve}
+                fill="none"
+                stroke="var(--ra-text)"
+                strokeWidth={1}
+                opacity={0.5}
+              />
+            </svg>
+          )}
 
           {/* Resize handles, both edges — same behavior as StemWaveformRow's
               own (right grows the loop forward from a fixed start, left

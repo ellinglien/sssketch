@@ -304,16 +304,20 @@ export function StemWaveformRow({
             </div>
           ))}
 
-          {/* Full-color layer on top, clipped to the envelope — suppressed
-              entirely while muted, since mute always wins over the envelope.
-              Same tiling as the gray layer underneath, so the two stay in
-              visual sync at every tile boundary. */}
+          {/* Full-color layer on top — suppressed entirely while muted, since
+              mute always wins over the envelope. Clipped to the envelope
+              (showing the gray layer above the volume line) only while
+              envelope drag mode is engaged; otherwise unclipped/full height,
+              so the waveform reads normally instead of looking dimmed
+              whenever volume is below unity. Same tiling as the gray layer
+              underneath, so the two stay in visual sync at every tile
+              boundary. */}
           {!muted && (
             <div
               style={{
                 position: 'absolute',
                 inset: 0,
-                clipPath: `path("${envelopePath}")`
+                clipPath: volumeDragMode ? `path("${envelopePath}")` : undefined
               }}
             >
               {tileOffsets.map((left) => (
@@ -327,24 +331,25 @@ export function StemWaveformRow({
             </div>
           )}
 
-          {/* Thin white line tracing the envelope curve itself — the
-              saturation split (full color below, gray above) already shows
-              volume, but reads as invisible wherever the underlying audio is
-              quiet, so this gives a visible reference regardless of what's
-              playing underneath. */}
-          <svg
-            width={widthPx}
-            height={ROW_HEIGHT}
-            style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-          >
-            <path
-              d={envelopeCurve}
-              fill="none"
-              stroke="var(--ra-text)"
-              strokeWidth={1}
-              opacity={0.5}
-            />
-          </svg>
+          {/* Thin white line tracing the envelope curve itself — only shown
+              alongside the clipping above, while envelope drag mode is
+              engaged (the saturation split it traces isn't happening
+              otherwise). */}
+          {volumeDragMode && (
+            <svg
+              width={widthPx}
+              height={ROW_HEIGHT}
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+            >
+              <path
+                d={envelopeCurve}
+                fill="none"
+                stroke="var(--ra-text)"
+                strokeWidth={1}
+                opacity={0.5}
+              />
+            </svg>
+          )}
 
           {/* Resize handles, both edges: dragging either extends/shrinks the
               loop (always tiled from the stem's own beginning — see the
