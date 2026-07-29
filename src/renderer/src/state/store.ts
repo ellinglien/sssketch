@@ -88,6 +88,7 @@ export type Action =
     }
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
+  | { type: 'SET_GROUP_MUTE'; groupId: string; muted: boolean }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNLINK'; groupId: string }
   | { type: 'RELINK'; groupId: string }
@@ -281,6 +282,19 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_MUTE':
       return { ...state, mute: { ...state.mute, [action.stemKey]: !state.mute[action.stemKey] } }
+
+    // Sets every stem in the rifff to the same mute state in one atomic edit
+    // (one undo step, not one per stem) — the collapsed view's single
+    // group-mute button, which mutes/unmutes the whole rifff together rather
+    // than exposing each stem's own mute individually.
+    case 'SET_GROUP_MUTE': {
+      const rifff = state.rifffs[action.groupId]
+      const mute = { ...state.mute }
+      for (const stem of rifff.stems) {
+        mute[stemKey(action.groupId, stem.slot)] = action.muted
+      }
+      return { ...state, mute }
+    }
 
     case 'TOGGLE_STRETCH':
       return {

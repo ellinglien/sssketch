@@ -1,10 +1,11 @@
 import { useAppState, useDispatch } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
-import { StemWaveformRow, ROW_HEIGHT } from './StemWaveformRow'
+import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
-import { PolarGlyph } from './PolarGlyph'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+
+const NAME_BAR_HEIGHT = 18
 
 function identityColor(rifff: Rifff): string {
   return typeColorVar(rifff.stems[0]?.type ?? 'fx')
@@ -25,108 +26,75 @@ export function RifffBlockRow({
   const color = identityColor(rifff)
 
   return (
-    <div style={{ borderBottom: '1px solid var(--ra-border-soft)', position: 'relative' }}>
-      {/* Absolutely positioned (rather than a normal-flow row of its own) so it
-          spans the FULL height of every stem row stacked below, not just the
-          first one's 44px — a plain in-flow div here would only ever be as
-          tall as its own content, leaving rows 2+ with a blank left gutter
-          and no visible tie back to this rifff's identity. The wrapper above
-          has no explicit height, so it's sized purely by the in-flow stem
-          rows below; this being taken out of flow (position: absolute) is
-          exactly what lets it stretch to match that height via top/bottom:0
-          rather than fighting over who determines it.
-
-          pointerEvents:none on this outer layer is load-bearing: it only
-          paints the background/border, it never intercepts a click. Without
-          it, this div — being positioned, and so painted after StemWaveformRow's
-          own in-flow content per normal stacking order — would sit on top of
-          every stem row's own left column underneath it (name, mute button,
-          drag handle), swallowing clicks meant for them on every row but the
-          first. The actual clickable/draggable surface is the nested inner
-          div below, deliberately re-enabling pointer events but sized to just
-          one row's height, so it only ever covers the first row. */}
+    <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
+      {/* Thin name bar, full width — replaces the old 212px-wide left column
+          (name/glyph header + each stem's own label column), which fought
+          over the exact same screen real estate across StemWaveformRow rows
+          (a positioned sibling always painting over a non-positioned one,
+          regardless of DOM order, made the first stem row's own controls
+          unreachable — patched once, but removing the contested column
+          entirely is the actual fix). Selecting here is enough to show this
+          rifff's fuller detail (glyph, stem list, tempo, etc.) in the
+          always-visible Inspector — nothing here needs to duplicate that. */}
       <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/rifff-group-id', groupId)
+          const mouseBar = mouseBarFromDragEvent(e)
+          if (mouseBar !== null) {
+            setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
+          }
+        }}
+        onClick={() => dispatch({ type: 'SELECT', groupId })}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          dispatch({ type: 'SELECT', groupId })
+          onOpenContextMenu(e.clientX, e.clientY, groupId)
+        }}
         style={{
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          left: 0,
-          width: 212,
-          flexShrink: 0,
-          borderRight: '1px solid var(--ra-border)',
-          background: selected ? 'var(--ra-bg-row-active)' : 'var(--ra-bg-row)',
-          pointerEvents: 'none'
+          height: NAME_BAR_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '0 8px',
+          cursor: 'grab',
+          background: selected ? 'var(--ra-bg-row-active)' : 'var(--ra-bg-row)'
         }}
       >
-        <div
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData('text/rifff-group-id', groupId)
-            // Grab point in bars, relative to this rifff's own current start —
-            // read back in Timeline's handleDragOver/handleDrop (App.tsx) so
-            // the clip moves as if picked up at this exact point rather than
-            // snapping its start under wherever the mouse ends up.
-            const mouseBar = mouseBarFromDragEvent(e)
-            if (mouseBar !== null) {
-              setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
-            }
-          }}
-          onClick={() => dispatch({ type: 'SELECT', groupId })}
-          onContextMenu={(e) => {
-            e.preventDefault()
+        <button
+          onClick={(e) => {
             e.stopPropagation()
-            dispatch({ type: 'SELECT', groupId })
-            onOpenContextMenu(e.clientX, e.clientY, groupId)
+            dispatch({ type: 'TOGGLE_EXPAND', groupId })
           }}
+          title={expanded ? 'collapse' : 'expand'}
           style={{
-            pointerEvents: 'auto',
-            height: ROW_HEIGHT,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 7,
-            padding: '0 10px',
-            cursor: 'grab'
+            width: 14,
+            height: 14,
+            flexShrink: 0,
+            borderRadius: 3,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text-2)',
+            fontSize: 8,
+            padding: 0,
+            cursor: 'pointer'
           }}
         >
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              dispatch({ type: 'TOGGLE_EXPAND', groupId })
-            }}
-            title={expanded ? 'collapse' : 'expand'}
-            style={{
-              width: 16,
-              height: 16,
-              flexShrink: 0,
-              borderRadius: 4,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)',
-              fontSize: 9,
-              padding: 0,
-              cursor: 'pointer'
-            }}
-          >
-            {expanded ? '▾' : '▸'}
-          </button>
-          <PolarGlyph stems={rifff.stems} identityColor={color} size={30} />
-          <div style={{ overflow: 'hidden' }}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                whiteSpace: 'nowrap',
-                textOverflow: 'ellipsis',
-                overflow: 'hidden'
-              }}
-            >
-              {rifff.name}
-            </div>
-            <div style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-              {rifff.stems.length} stems · {rifff.barLength} bars · {rifff.bpm} bpm
-            </div>
-          </div>
-        </div>
+          {expanded ? '▾' : '▸'}
+        </button>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+        >
+          {rifff.name}
+        </span>
       </div>
 
       {expanded ? (

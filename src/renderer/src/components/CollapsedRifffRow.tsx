@@ -5,7 +5,6 @@ import { stemKey } from '@shared/types'
 import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { PolarGlyph } from './PolarGlyph'
 import { PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { startPointerDrag } from './dragUtils'
@@ -62,6 +61,14 @@ export function CollapsedRifffRow({
   const rifff = state.rifffs[groupId]
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
+  // One button for the whole group rather than exposing each stem's own mute
+  // individually (unlike the expanded view) — collapsing already hides
+  // per-stem detail, so "all muted" / "not all muted" is the only distinction
+  // that makes sense at this level. Filled = at least one stem still
+  // unmuted (clicking mutes everything); hollow = the whole group is
+  // already muted (clicking unmutes everything) — same filled-means-active
+  // convention as every other mute dot in this app.
+  const allMuted = rifff.stems.every((stem) => state.mute[stemKey(groupId, stem.slot)])
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragLeftResize, setDragLeftResize] = useState<{
@@ -154,57 +161,22 @@ export function CollapsedRifffRow({
   }
 
   return (
-    <div
-      draggable
-      onDragStart={(e) => {
-        // Always moves the whole group, regardless of link state — unlike
-        // the expanded view's per-stem grab targets. Collapsing hides
-        // per-stem detail; a summary block dragging "part of itself"
-        // independently would be confusing with nothing on screen to show
-        // which stem moved.
-        e.dataTransfer.setData('text/rifff-group-id', groupId)
-        const mouseBar = mouseBarFromDragEvent(e)
-        if (mouseBar !== null) {
-          setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
-        }
-      }}
-      style={{
-        display: 'flex',
-        height: ROW_HEIGHT,
-        borderTop: '1px solid var(--ra-bg-row)',
-        cursor: 'grab'
-      }}
-    >
-      <div
-        style={{
-          width: 212,
-          flexShrink: 0,
-          padding: '0 10px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8
-        }}
-      >
-        <PolarGlyph stems={rifff.stems} identityColor={color} size={26} />
-        <div style={{ overflow: 'hidden' }}>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}
-          >
-            {rifff.name}
-          </div>
-          <div style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-            {rifff.stems.length} stems · {rifff.barLength} bars · {rifff.bpm} bpm
-          </div>
-        </div>
-      </div>
+    <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
+          draggable
+          onDragStart={(e) => {
+            // Always moves the whole group, regardless of link state —
+            // unlike the expanded view's per-stem grab targets. Collapsing
+            // hides per-stem detail; a summary block dragging "part of
+            // itself" independently would be confusing with nothing on
+            // screen to show which stem moved.
+            e.dataTransfer.setData('text/rifff-group-id', groupId)
+            const mouseBar = mouseBarFromDragEvent(e)
+            if (mouseBar !== null) {
+              setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
+            }
+          }}
           style={{
             position: 'absolute',
             top: 0,
@@ -214,7 +186,8 @@ export function CollapsedRifffRow({
             borderRadius: 3,
             border: `1px solid color-mix(in srgb, ${color} ${selected ? 70 : 40}%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            cursor: 'grab'
           }}
         >
           <CollapsedTiles
@@ -254,9 +227,9 @@ export function CollapsedRifffRow({
               own (right grows the loop forward from a fixed start, left
               grows it backward from a fixed end), just scoped to the
               representative first stem/group here instead of a specific
-              slot. stopPropagation isn't needed: startPointerDrag already
-              calls preventDefault/stopPropagation, which blocks this block's
-              own native drag from initiating on the same mousedown. */}
+              slot. startPointerDrag already calls preventDefault/
+              stopPropagation, which blocks this block's own native drag
+              from initiating on the same mousedown. */}
           <div
             onMouseDown={handleLeftResizeStart}
             title={`${displayedPlayedBars} bars`}
@@ -287,37 +260,30 @@ export function CollapsedRifffRow({
               zIndex: 3
             }}
           />
-          {/* Mini mute-dot row: one per stem, same filled/hollow convention as
-              the expanded view's mute button. stopPropagation so clicking a dot
-              doesn't also start a drag on this block. */}
-          <div
-            style={{ position: 'absolute', left: 6, top: 6, display: 'flex', gap: 4, zIndex: 2 }}
-          >
-            {rifff.stems.map((stem) => {
-              const key = stemKey(groupId, stem.slot)
-              const muted = !!state.mute[key]
-              return (
-                <button
-                  key={stem.slot}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
-                  }}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  title={`${stem.name}: ${muted ? 'unmute' : 'mute'}`}
-                  style={{
-                    width: 9,
-                    height: 9,
-                    borderRadius: '50%',
-                    border: '1px solid rgba(201,191,232,0.6)',
-                    background: muted ? 'transparent' : 'var(--ra-text-2)',
-                    padding: 0,
-                    cursor: 'pointer'
-                  }}
-                />
-              )
-            })}
-          </div>
+          {/* Single group-mute button, overlaid on the waveform, top-left
+              corner — same filled/hollow convention and position as each
+              stem's own mute dot in the expanded view. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={allMuted ? 'unmute group' : 'mute group'}
+            style={{
+              position: 'absolute',
+              left: 6,
+              top: 6,
+              width: 9,
+              height: 9,
+              borderRadius: '50%',
+              border: '1px solid rgba(201,191,232,0.6)',
+              background: allMuted ? 'transparent' : 'var(--ra-text-2)',
+              padding: 0,
+              cursor: 'pointer',
+              zIndex: 3
+            }}
+          />
         </div>
       </div>
     </div>

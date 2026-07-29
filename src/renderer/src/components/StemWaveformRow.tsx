@@ -323,71 +323,6 @@ export function StemWaveformRow({
 
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
-      {/* Name + mute, and (while unlinked) the drag handle for repositioning
-          this stem — moved off the waveform entirely so the fade/volume/resize
-          controls layered on top of it don't compete with it for mousedown. */}
-      <div
-        draggable={unlinked}
-        onDragStart={(e) => {
-          if (!unlinked) return
-          e.dataTransfer.setData('text/rifff-stem-key', key)
-          const mouseBar = mouseBarFromDragEvent(e)
-          if (mouseBar !== null) {
-            setGrabOffsetBars(computeGrabOffsetBars(mouseBar, baseStartBar))
-          }
-        }}
-        title={unlinked ? 'drag to move this stem independently' : undefined}
-        style={{
-          // position:relative (not the default static) so this competes on
-          // z-order at all: RifffBlockRow's own header sits directly above
-          // this exact spot for the FIRST stem row (position:absolute,
-          // pointerEvents:auto, same 212px-wide/44px-tall footprint), and a
-          // positioned sibling always paints over a non-positioned one
-          // regardless of DOM order — without this, that first row's mute
-          // button and unlinked-drag would be permanently unreachable. Once
-          // positioned, this comes later in the DOM than that header, so it
-          // wins the tie at the same (default) stack level.
-          position: 'relative',
-          width: 212,
-          flexShrink: 0,
-          padding: '0 10px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: unlinked ? 'grab' : 'default',
-          opacity: muted ? 0.5 : 1
-        }}
-      >
-        {/* Mute dot: filled = unmuted (active), hollow = muted (off). */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
-          }}
-          title={muted ? 'unmute' : 'mute'}
-          style={{
-            flexShrink: 0,
-            width: 12,
-            height: 12,
-            borderRadius: '50%',
-            border: '1.5px solid rgba(201,191,232,0.6)',
-            background: muted ? 'transparent' : 'var(--ra-text-2)',
-            padding: 0,
-            cursor: 'pointer'
-          }}
-        />
-        <span
-          style={{
-            fontSize: 10,
-            color: 'var(--ra-text-2)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-          }}
-        >
-          {stem.name}
-        </span>
-      </div>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
           draggable
@@ -564,6 +499,34 @@ export function StemWaveformRow({
               zIndex: 2
             }}
           />
+
+          {/* Mute dot, overlaid directly on the waveform (matching
+              CollapsedRifffRow's own mute-dot styling/position): filled =
+              unmuted (active), hollow = muted (off). stopPropagation on both
+              handlers so a click/drag here never also moves the clip or
+              starts a volume-mode drag. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={`${stem.name}: ${muted ? 'unmute' : 'mute'}`}
+            style={{
+              position: 'absolute',
+              left: 6,
+              top: 6,
+              width: 9,
+              height: 9,
+              borderRadius: '50%',
+              border: '1px solid rgba(201,191,232,0.6)',
+              background: muted ? 'transparent' : 'var(--ra-text-2)',
+              padding: 0,
+              cursor: 'pointer',
+              zIndex: 3
+            }}
+          />
+
           {dragVolume !== null && (
             <div
               style={{

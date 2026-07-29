@@ -360,4 +360,32 @@ describe('reducer', () => {
       expect(state.volumeDragMode).toBe(false)
     })
   })
+
+  describe('SET_GROUP_MUTE', () => {
+    it('mutes every stem in the rifff at once', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GROUP_MUTE', groupId: 'r1', muted: true })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r1:6']).toBe(true)
+    })
+
+    it('unmutes every stem in the rifff at once', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GROUP_MUTE', groupId: 'r1', muted: true })
+      state = reducer(state, { type: 'SET_GROUP_MUTE', groupId: 'r1', muted: false })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:6']).toBe(false)
+    })
+
+    it('does not affect other rifffs', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'SET_GROUP_MUTE', groupId: 'r1', muted: true })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r2:1']).toBeUndefined()
+    })
+  })
 })
