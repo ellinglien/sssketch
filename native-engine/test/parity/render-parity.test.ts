@@ -129,8 +129,8 @@ describe('native engine vs Web Audio export — render parity', () => {
 
     // --- Reference side: the exact same math, computed directly in JS to avoid
     // needing a full jsdom + Web Audio + Electron renderer environment just for
-    // this test. This mirrors exactly what exportMix.ts does for one unstretched,
-    // unmuted, unfaded stem: sample[i] = sourceSample[i] * volume. ---
+    // this test. This mirrors exactly what the native engine's mixing does for
+    // one unstretched, unmuted, unfaded stem: sample[i] = sourceSample[i] * volume. ---
     const toneBuf = readFileSync(tonePath)
     const expectedSamples = new Int16Array(Math.floor(4.0 * 44100))
     for (let i = 0; i < expectedSamples.length; i++) {

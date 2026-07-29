@@ -173,10 +173,11 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
       // buildEngineProject.ts), both starting at bar 0 and both exactly 1
       // bar long matching their rifff's own length. So the expected output
       // is simply the sample-wise sum of the two constant-value fixtures,
-      // clamped to int16 range — exactly what exportMix.ts's real Web Audio
-      // graph would produce for this fixture (two gain nodes summed into
-      // one destination), computed directly instead of through an
-      // OfflineAudioContext (see this file's constraint note above for why).
+      // clamped to int16 range — exactly what the native engine's mixing
+      // would produce for this fixture, computed here as independent
+      // reference math rather than by calling nativeExport() a second time
+      // (which is the function under test, so it can't also serve as its
+      // own reference).
       const a16 = Math.round(volA * 32767)
       const b16 = Math.round(volB * 32767)
       const expected16 = Math.max(-32768, Math.min(32767, a16 + b16))
