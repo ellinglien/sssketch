@@ -361,6 +361,16 @@ describe('reducer', () => {
     })
   })
 
+  describe('TOGGLE_COMPACT_MODE', () => {
+    it('starts false and toggles true/false', () => {
+      expect(initialState.compactMode).toBe(false)
+      let state = reducer(initialState, { type: 'TOGGLE_COMPACT_MODE' })
+      expect(state.compactMode).toBe(true)
+      state = reducer(state, { type: 'TOGGLE_COMPACT_MODE' })
+      expect(state.compactMode).toBe(false)
+    })
+  })
+
   describe('SET_GROUP_MUTE', () => {
     it('mutes every stem in the rifff at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

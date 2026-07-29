@@ -39,6 +39,12 @@ export interface AppState {
    * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
    * by the V key — see App.tsx's Frame component. Not persisted (see serialize.ts). */
   volumeDragMode: boolean
+  /** Global arrangement-wide view mode: false (default) is today's per-rifff
+   * collapsed/expanded rendering, true replaces every rifff's row with a
+   * small fixed-size tile at its real timeline position (CompactRifffBlock).
+   * Toggled by the Tab key, Ableton-style — see App.tsx's Frame component.
+   * Not persisted (see serialize.ts). */
+  compactMode: boolean
   rifffs: Record<string, Rifff>
 }
 
@@ -59,6 +65,7 @@ export const initialState: AppState = {
   sel: null,
   exp: {},
   volumeDragMode: false,
+  compactMode: false,
   rifffs: {}
 }
 
@@ -97,6 +104,7 @@ export type Action =
   | { type: 'SET_STEM_TYPE'; groupId: string; slot: number; soundType: SoundType }
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
+  | { type: 'TOGGLE_COMPACT_MODE' }
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'STOP' }
@@ -367,6 +375,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_VOLUME_DRAG_MODE':
       return { ...state, volumeDragMode: !state.volumeDragMode }
+
+    case 'TOGGLE_COMPACT_MODE':
+      return { ...state, compactMode: !state.compactMode }
 
     case 'PLAY':
       return { ...state, playing: true }

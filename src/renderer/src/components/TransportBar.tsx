@@ -176,6 +176,23 @@ export function TransportBar(): React.JSX.Element {
         envelope
       </button>
 
+      <button
+        onClick={() => dispatch({ type: 'TOGGLE_COMPACT_MODE' })}
+        aria-label="Toggle compact mode"
+        title={state.compactMode ? 'compact mode: on (Tab)' : 'compact mode: off (Tab)'}
+        style={{
+          height: 22,
+          borderRadius: 6,
+          padding: '0 8px',
+          fontSize: 10,
+          background: state.compactMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.compactMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.compactMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        compact
+      </button>
+
       <div style={{ display: 'flex', gap: 4 }}>
         <button
           onClick={history.undo}

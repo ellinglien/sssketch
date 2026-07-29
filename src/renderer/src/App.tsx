@@ -333,6 +333,22 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
+  // Tab toggles compact mode, Ableton-style ("this could switch between
+  // compact mode"). Skipped while focus is in a text input — Tab's native
+  // move-to-next-field behavior is more useful there than the arrangement's
+  // own view-mode toggle (matches Delete/V/undo's same input-skip pattern).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Tab') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      dispatch({ type: 'TOGGLE_COMPACT_MODE' })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [dispatch])
+
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
   // mid-typing in the tempo field should edit the field's text, not the arrangement.

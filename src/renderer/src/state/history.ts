@@ -21,7 +21,8 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'PLAY',
   'PAUSE',
   'STOP',
-  'TOGGLE_VOLUME_DRAG_MODE'
+  'TOGGLE_VOLUME_DRAG_MODE',
+  'TOGGLE_COMPACT_MODE'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

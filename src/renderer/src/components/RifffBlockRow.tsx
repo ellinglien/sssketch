@@ -3,6 +3,7 @@ import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
+import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
 const NAME_BAR_HEIGHT = 18
@@ -24,6 +25,10 @@ export function RifffBlockRow({
   const selected = state.sel === groupId
   const expanded = !!state.exp[groupId]
   const color = identityColor(rifff)
+
+  if (state.compactMode) {
+    return <CompactRifffBlock groupId={groupId} onOpenContextMenu={onOpenContextMenu} />
+  }
 
   return (
     <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
