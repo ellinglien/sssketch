@@ -61,9 +61,16 @@ export function PolarGlyph({
   return (
     <svg width={size} height={size} viewBox="0 0 100 100">
       {rings.map((r, i) => (
-        <path key={i} d={r.path} fill={r.color} opacity={0.55} />
+        <path key={i} d={r.path} fill={r.color} opacity={0.55} shapeRendering="crispEdges" />
       ))}
-      <circle cx={50} cy={50} r={9} fill={identityColor} opacity={0.85} />
+      <circle
+        cx={50}
+        cy={50}
+        r={9}
+        fill={identityColor}
+        opacity={0.85}
+        shapeRendering="crispEdges"
+      />
     </svg>
   )
 }

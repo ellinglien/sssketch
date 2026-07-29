@@ -40,7 +40,7 @@ export function Waveform({
       preserveAspectRatio="none"
       style={{ position: 'absolute', inset: 0 }}
     >
-      <path d={linearWave(peaks)} fill={color} opacity={opacity} />
+      <path d={linearWave(peaks)} fill={color} opacity={opacity} shapeRendering="crispEdges" />
     </svg>
   )
 }

@@ -50,33 +50,44 @@ export function downsample(arr: number[], n: number): number[] {
   return out
 }
 
-/** mirrored, normalised waveform filling a 128x100 box */
+/** mirrored, normalised waveform filling a 128x100 box — stepped/blocky
+ * (flat top per bucket, square corners between buckets) rather than smooth
+ * diagonal interpolation between peak centers, for a slightly pixelated
+ * look closer to the imported 6b mockup's own crisp-edged waveforms.
+ * Combine with shape-rendering="crispEdges" on the consuming <path> to
+ * finish the effect (disables anti-aliasing on top of this path shape). */
 export function linearWave(peaks: number[]): string {
   const n = peaks.length
   const mx = Math.max.apply(null, peaks) || 1
+  const stepWidth = 128 / n
   let up = ''
   let down = ''
   for (let i = 0; i < n; i++) {
     const h = (peaks[i] / mx) * 45
-    const x = ((i * 128) / (n - 1)).toFixed(1)
-    up += (i ? 'L' : 'M') + x + ',' + (50 - h).toFixed(1)
-    down = 'L' + x + ',' + (50 + h).toFixed(1) + down
+    const x0 = (i * stepWidth).toFixed(1)
+    const x1 = ((i + 1) * stepWidth).toFixed(1)
+    up += (i ? 'L' : 'M') + x0 + ',' + (50 - h).toFixed(1) + 'L' + x1 + ',' + (50 - h).toFixed(1)
+    down = 'L' + x1 + ',' + (50 + h).toFixed(1) + 'L' + x0 + ',' + (50 + h).toFixed(1) + down
   }
   return up + down + 'Z'
 }
 
-/** one petal ring in a 100x100 box, centred on 50,50 */
+/** one petal ring in a 100x100 box, centred on 50,50 — flat-topped, faceted
+ * segments (straight chord across each bucket's angular span, at that
+ * bucket's own radius) rather than smooth quadratic-bezier bulges, for the
+ * same slightly-pixelated effect as linearWave above. */
 export function polarGlyph(peaks: number[], r0 = 17, amp = 20, points = 16): string {
   const arr = downsample(peaks, points)
   const n = arr.length
   const mx = Math.max.apply(null, arr) || 1
   const pt = (a: number, r: number): string =>
     (50 + Math.cos(a) * r).toFixed(1) + ',' + (50 + Math.sin(a) * r).toFixed(1)
-  let d = 'M' + pt(0, r0)
+  let d = ''
   for (let i = 0; i < n; i++) {
-    const aMid = ((i + 0.5) / n) * TAU
-    const aNext = ((i + 1) / n) * TAU
-    d += 'Q' + pt(aMid, r0 + (arr[i] / mx) * amp) + ' ' + pt(aNext, r0)
+    const aStart = (i / n) * TAU
+    const aEnd = ((i + 1) / n) * TAU
+    const r = r0 + (arr[i] / mx) * amp
+    d += (i ? 'L' : 'M') + pt(aStart, r) + 'L' + pt(aEnd, r)
   }
   return d + 'Z'
 }
