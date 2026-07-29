@@ -22,7 +22,16 @@ export function RifffBlockRow({
   const color = identityColor(rifff)
 
   return (
-    <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
+    <div style={{ borderBottom: '1px solid var(--ra-border-soft)', position: 'relative' }}>
+      {/* Absolutely positioned (rather than a normal-flow row of its own) so it
+          spans the FULL height of every stem row stacked below, not just the
+          first one's 44px — a plain in-flow div here would only ever be as
+          tall as its own content, leaving rows 2+ with a blank left gutter
+          and no visible tie back to this rifff's identity. The wrapper above
+          has no explicit height, so it's sized purely by the in-flow stem
+          rows below; this being taken out of flow (position: absolute) is
+          exactly what lets it stretch to match that height via top/bottom:0
+          rather than fighting over who determines it. */}
       <div
         draggable
         onDragStart={(e) => {
@@ -36,6 +45,10 @@ export function RifffBlockRow({
           onOpenContextMenu(e.clientX, e.clientY, groupId)
         }}
         style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: 0,
           width: 212,
           flexShrink: 0,
           borderRight: '1px solid var(--ra-border)',
@@ -43,7 +56,7 @@ export function RifffBlockRow({
           alignItems: 'center',
           gap: 7,
           padding: '0 10px',
-          height: 44,
+          minHeight: 44,
           background: selected ? 'var(--ra-bg-row-active)' : 'var(--ra-bg-row)',
           cursor: 'grab'
         }}
