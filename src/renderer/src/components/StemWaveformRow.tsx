@@ -342,12 +342,17 @@ export function StemWaveformRow({
       <div style={{ flex: 1, position: 'relative' }}>
         <div
           onDoubleClick={() => {
-            dispatch({
-              type: 'SET_VOLUME',
-              stemKey: key,
-              volume: sqrtGain(rifff.stems.length)
-            })
+            // Mirrors the import-time default seeded in store.ts's
+            // ADD_TO_SHELF case, so double-clicking resets volume back to
+            // where it started when this stem's rifff was first added to the
+            // shelf. Guarded against a no-op dispatch: SET_VOLUME isn't in
+            // history.ts's TRANSIENT_ACTION_TYPES, so every dispatch pushes an
+            // undo-stack entry — without this check, double-clicking a stem
+            // already at its default would flood undo history for nothing.
+            const target = sqrtGain(rifff.stems.length)
+            if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
+          title="double-click to reset volume"
           style={{
             position: 'absolute',
             top: 0,
