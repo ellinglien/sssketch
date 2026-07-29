@@ -61,7 +61,6 @@ export type Action =
   | { type: 'ADD_TO_SHELF'; rifff: Rifff }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'SELECT'; groupId: string }
-  | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
   | { type: 'CYCLE_SNAP' }
   | { type: 'NUDGE_OFFSET'; key: string; delta: number }
@@ -142,9 +141,6 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SELECT':
       return { ...state, sel: action.groupId }
-
-    case 'TOGGLE_EXPAND':
-      return { ...state, exp: { ...state.exp, [action.groupId]: !state.exp[action.groupId] } }
 
     case 'SET_TEMPO':
       return { ...state, bpm: Math.min(200, Math.max(40, action.bpm)) }

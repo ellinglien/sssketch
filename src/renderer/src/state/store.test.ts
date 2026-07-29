@@ -94,11 +94,6 @@ describe('reducer', () => {
     expect(state.sel).toBe('r1')
   })
 
-  it('toggles expand', () => {
-    const state = reducer(initialState, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
-    expect(state.exp.r1).toBe(true)
-  })
-
   it('clamps tempo to 40..200', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 500 }).bpm).toBe(200)
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 1 }).bpm).toBe(40)
