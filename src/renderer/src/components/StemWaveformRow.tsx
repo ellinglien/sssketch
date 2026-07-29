@@ -9,6 +9,7 @@ import { PPB } from './Ruler'
 import { startPointerDrag } from './dragUtils'
 
 const ROW_HEIGHT = 44
+const FADE_MAX = 4 // bars — matches the value the (now-removed) Inspector panel used to clamp fades
 
 /** Builds the SVG path `d` for the "below the envelope" region — a closed shape
  * bounded above by a curve that eases from silence at the very start, up to the
@@ -59,16 +60,20 @@ export function StemWaveformRow({
   const fadeOut = state.fadeOut[groupId] ?? 0
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
+  const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
+  const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
   const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
+  const displayedFadeIn = dragFadeIn ?? fadeIn
+  const displayedFadeOut = dragFadeOut ?? fadeOut
 
   const stemGeo = stemGeometry(state, groupId, slot, PPB)
   // While actively dragging, use the in-progress width instead of the
   // committed-state one, so the row visibly resizes in real time.
   const widthPx = dragPlayedBars !== null ? dragPlayedBars * PPB : stemGeo.widthPx
 
-  const fadeInPx = fadeIn * PPB
-  const fadeOutPx = fadeOut * PPB
+  const fadeInPx = displayedFadeIn * PPB
+  const fadeOutPx = displayedFadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - volume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
 
@@ -93,6 +98,45 @@ export function StemWaveformRow({
           dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
         }
         setDragPlayedBars(null)
+      }
+    )
+  }
+
+  function handleFadeInStart(e: React.MouseEvent): void {
+    const startFadeIn = fadeIn
+    // Tracked in a plain closure variable, NOT read back out of dragFadeIn
+    // state inside onEnd — see dragUtils.ts's doc comment for why a dispatch
+    // can never live inside a setState updater function (StrictMode
+    // double-invokes those in dev, already caused a real bug in the resize
+    // handler above — don't reintroduce it here).
+    let finalFadeIn = startFadeIn
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        finalFadeIn = Math.max(0, Math.min(FADE_MAX, startFadeIn + deltaX / PPB))
+        setDragFadeIn(finalFadeIn)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
+        setDragFadeIn(null)
+      }
+    )
+  }
+
+  function handleFadeOutStart(e: React.MouseEvent): void {
+    const startFadeOut = fadeOut
+    let finalFadeOut = startFadeOut
+    startPointerDrag(
+      e,
+      // Dragging the fade-OUT knee LEFT (negative deltaX) lengthens the fade —
+      // it's the mirror of fade-in, so the sign is inverted here.
+      (deltaX) => {
+        finalFadeOut = Math.max(0, Math.min(FADE_MAX, startFadeOut - deltaX / PPB))
+        setDragFadeOut(finalFadeOut)
+      },
+      (moved) => {
+        if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
+        setDragFadeOut(null)
       }
     )
   }
@@ -183,6 +227,51 @@ export function StemWaveformRow({
               zIndex: 3
             }}
           />
+
+          {/* Fade-in/fade-out knee handles: small dots at the envelope curve's
+              plateau corners, draggable to adjust fadeIn/fadeOut. Reuses the
+              identical fiEnd/foStart formula buildEnvelopePath computes
+              internally, recomputed inline here rather than exported. */}
+          {(() => {
+            const fiEnd = Math.min(fadeInPx, widthPx / 2)
+            const foStart = Math.max(widthPx - fadeOutPx, widthPx / 2)
+            return (
+              <>
+                <div
+                  onMouseDown={handleFadeInStart}
+                  title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
+                  style={{
+                    position: 'absolute',
+                    left: fiEnd,
+                    top: plateauY,
+                    transform: 'translate(-50%, -50%)',
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#fff',
+                    cursor: 'pointer',
+                    zIndex: 4
+                  }}
+                />
+                <div
+                  onMouseDown={handleFadeOutStart}
+                  title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
+                  style={{
+                    position: 'absolute',
+                    left: foStart,
+                    top: plateauY,
+                    transform: 'translate(-50%, -50%)',
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#fff',
+                    cursor: 'pointer',
+                    zIndex: 4
+                  }}
+                />
+              </>
+            )
+          })()}
         </div>
       </div>
     </div>
