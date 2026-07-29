@@ -45,13 +45,17 @@ export function RifffBlockRow({
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }
         }}
-        onClick={() => dispatch({ type: 'SELECT', groupId })}
+        onClick={() => {
+          dispatch({ type: 'SELECT', groupId })
+          dispatch({ type: 'TOGGLE_EXPAND', groupId })
+        }}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
           dispatch({ type: 'SELECT', groupId })
           onOpenContextMenu(e.clientX, e.clientY, groupId)
         }}
+        title={expanded ? 'click to collapse' : 'click to expand'}
         style={{
           height: NAME_BAR_HEIGHT,
           display: 'flex',
@@ -62,27 +66,6 @@ export function RifffBlockRow({
           background: selected ? 'var(--ra-bg-row-active)' : 'var(--ra-bg-row)'
         }}
       >
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            dispatch({ type: 'TOGGLE_EXPAND', groupId })
-          }}
-          title={expanded ? 'collapse' : 'expand'}
-          style={{
-            width: 14,
-            height: 14,
-            flexShrink: 0,
-            borderRadius: 3,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text-2)',
-            fontSize: 8,
-            padding: 0,
-            cursor: 'pointer'
-          }}
-        >
-          {expanded ? '▾' : '▸'}
-        </button>
         <span
           style={{
             fontSize: 10,

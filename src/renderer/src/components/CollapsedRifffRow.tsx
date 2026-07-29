@@ -10,24 +10,26 @@ import { ROW_HEIGHT } from './StemWaveformRow'
 import { startPointerDrag } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
-/** Tiles one representative stem's waveform across the collapsed block's
- * width, repeating every stemBarLength bars — the STEM's own native loop
- * length, which can be (and often is) shorter than the rifff's overall
- * barLength (e.g. an 8-bar stem tiled 4x within a 32-bar rifff). Mirrors
- * StemWaveformRow's own tiling formula exactly (`widthPx * (stem.barLength /
- * playedBars)`) rather than a simplified `barLength * PPB`, which was wrong
- * on two counts: it used the rifff's overall barLength instead of the
- * stem's own, and it silently assumed stretch is always on (ignoring the
- * rifff.bpm/state.bpm scaling baked into widthPx when it's off). */
+/** Tiles one stem's waveform across the collapsed block's width, repeating
+ * every stemBarLength bars — that STEM's own native loop length, which can
+ * be (and often is) shorter than the rifff's overall barLength (e.g. an
+ * 8-bar stem tiled 4x within a 32-bar rifff). Mirrors StemWaveformRow's own
+ * tiling formula exactly (`widthPx * (stem.barLength / playedBars)`) rather
+ * than a simplified `barLength * PPB`, which was wrong on two counts: it
+ * used the rifff's overall barLength instead of the stem's own, and it
+ * silently assumed stretch is always on (ignoring the rifff.bpm/state.bpm
+ * scaling baked into widthPx when it's off). */
 function CollapsedTiles({
   path,
   color,
+  opacity,
   widthPx,
   stemBarLength,
   playedBars
 }: {
   path: string
   color: string
+  opacity: number
   widthPx: number
   stemBarLength: number
   playedBars: number
@@ -42,7 +44,7 @@ function CollapsedTiles({
           key={left}
           style={{ position: 'absolute', top: 0, bottom: 0, left, width: tileWidthPx }}
         >
-          <Waveform path={path} color={color} opacity={1} />
+          <Waveform path={path} color={color} opacity={opacity} />
         </div>
       ))}
     </>
@@ -190,13 +192,22 @@ export function CollapsedRifffRow({
             cursor: 'grab'
           }}
         >
-          <CollapsedTiles
-            path={firstStem.path}
-            color={color}
-            widthPx={widthPx}
-            stemBarLength={firstStem.barLength}
-            playedBars={displayedPlayedBars}
-          />
+          {/* One tiled layer per stem, overlaid — same color-per-sound-type
+              and opacity convention as PolarGlyph's own rings (fill =
+              typeColorVar(stem.type), opacity 0.55, no blend mode), so the
+              collapsed block's waveform reads as a mix of all its stems
+              rather than just one representative one. */}
+          {rifff.stems.map((stem) => (
+            <CollapsedTiles
+              key={stem.slot}
+              path={stem.path}
+              color={typeColorVar(stem.type)}
+              opacity={0.55}
+              widthPx={widthPx}
+              stemBarLength={stem.barLength}
+              playedBars={displayedPlayedBars}
+            />
+          ))}
           {fadeInPx > 0 && (
             <div
               style={{
@@ -273,7 +284,8 @@ export function CollapsedRifffRow({
             style={{
               position: 'absolute',
               left: 6,
-              top: 6,
+              top: '50%',
+              transform: 'translateY(-50%)',
               width: 9,
               height: 9,
               borderRadius: '50%',

@@ -162,7 +162,7 @@ export function TransportBar(): React.JSX.Element {
       <button
         onClick={() => dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })}
         aria-label="Toggle volume drag mode"
-        title="V"
+        title={state.volumeDragMode ? 'envelope drag: on (V)' : 'envelope drag: off (V)'}
         style={{
           height: 22,
           borderRadius: 6,
@@ -173,7 +173,7 @@ export function TransportBar(): React.JSX.Element {
           color: state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        volume drag: {state.volumeDragMode ? 'on' : 'off'}
+        envelope
       </button>
 
       <div style={{ display: 'flex', gap: 4 }}>
