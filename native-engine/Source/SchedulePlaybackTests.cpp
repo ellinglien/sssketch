@@ -70,6 +70,54 @@ namespace ssstitch
                     expect(s.startBarInTimeline + s.barLength <= rifffEnd + 1.0e-9);
                 expectWithinAbsoluteError(segments[2].durationSec, (2.0 / 3.0) * 4.8, 1.0e-5);
             }
+
+            beginTest("tiles the stem twice when playedBars exceeds rifff.barLength by one full stem length");
+            {
+                auto segments = computeStemSchedule(rifff, stemB, { 0.0, 16.0, 0.0, 150.0, -1.0, (double) stemB.barLength * 2.0 });
+                expectEquals((int) segments.size(), 2);
+                expectEquals(segments[0].bufferOffsetSec, 0.0);
+                expectEquals(segments[1].bufferOffsetSec, 0.0); // second tile restarts from the stem's own beginning
+                expectEquals(segments[1].startBarInTimeline, segments[0].startBarInTimeline + (double) stemB.barLength);
+            }
+
+            beginTest("truncates to one shorter segment when playedBars is less than the stem barLength");
+            {
+                auto segments = computeStemSchedule(rifff, stemA, { 0.0, 16.0, 0.0, 150.0, -1.0, (double) stemA.barLength / 2.0 });
+                expectEquals((int) segments.size(), 1);
+                expectEquals(segments[0].barLength, (double) stemA.barLength / 2.0);
+            }
+
+            beginTest("defaults to rifff.barLength when playedBars is omitted (unchanged existing behavior)");
+            {
+                auto withOverride = computeStemSchedule(rifff, stemA, { 0.0, 16.0, 0.0, 150.0, -1.0, (double) rifff.barLength });
+                auto withoutOverride = computeStemSchedule(rifff, stemA, { 0.0, 16.0, 0.0, 150.0, -1.0 });
+                expectEquals((int) withOverride.size(), (int) withoutOverride.size());
+                for (size_t i = 0; i < withOverride.size(); ++i)
+                {
+                    expectEquals(withOverride[i].startBarInTimeline, withoutOverride[i].startBarInTimeline);
+                    expectEquals(withOverride[i].barLength, withoutOverride[i].barLength);
+                    expectEquals(withOverride[i].bufferOffsetSec, withoutOverride[i].bufferOffsetSec);
+                    expectEquals(withOverride[i].durationSec, withoutOverride[i].durationSec);
+                }
+            }
+
+            beginTest("clips the final repetition against a playedBars bound, same as it does against rifff.barLength");
+            {
+                // Mirrors the "clips the final repetition when the stem length does not
+                // evenly divide the rifff length" test above, but with the bound coming
+                // from playedBars instead of rifff.barLength — the more interesting case
+                // than the exact-multiple/exact-half cases the other playedBars tests
+                // cover, since it proves the truncation logic itself was actually
+                // repointed at `bound`, not just the loop's outer stopping condition.
+                auto segments = computeStemSchedule(rifff, stemB, { 0.0, 16.0, 0.0, 150.0, -1.0, 5.0 }); // 2-bar stem tiling across a 5-bar bound: [0,2) [2,4) [4,5)
+                expectEquals((int) segments.size(), 3);
+                expectEquals(segments[0].startBarInTimeline, 4.0);
+                expectEquals(segments[0].barLength, 2.0);
+                expectEquals(segments[1].startBarInTimeline, 6.0);
+                expectEquals(segments[1].barLength, 2.0);
+                expectEquals(segments[2].startBarInTimeline, 8.0);
+                expectEquals(segments[2].barLength, 1.0);
+            }
         }
     };
 

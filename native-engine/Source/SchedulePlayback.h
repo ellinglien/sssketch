@@ -26,6 +26,10 @@ namespace ssstitch
         /** -1.0 means "no override — use rifff.startBar", matching TS's
          * `startBarOverride?: number` optional field. */
         double startBarOverride = -1.0;
+        /** Overrides rifff.barLength as this stem's own tiling bound. -1.0 means
+         * "no override — use rifff.barLength", matching startBarOverride's own
+         * sentinel convention above. */
+        double playedBars = -1.0;
     };
 
     struct PlaybackSegment

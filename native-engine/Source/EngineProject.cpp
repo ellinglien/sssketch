@@ -73,6 +73,7 @@ namespace ssstitch
                         stem.resolvedPath = stemVar.getProperty("resolvedPath", "").toString();
                         stem.durationSec = getDouble(stemVar, "durationSec", 0.0);
                         stem.barLength = (int) getDouble(stemVar, "barLength", 0.0);
+                        stem.playedBars = getDouble(stemVar, "playedBars", (double) rifff.barLength);
                         stem.offsetSteps = getDouble(stemVar, "offsetSteps", 0.0);
                         stem.startBarOverride = getDouble(stemVar, "startBarOverride", -1.0);
                         stem.volume = getDouble(stemVar, "volume", 1.0);
