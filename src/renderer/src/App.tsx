@@ -40,7 +40,8 @@ function Timeline({
     const startBar = barForClientX(e.clientX, e.currentTarget)
 
     // Checked first — more specific than a whole-group drag, and the two payloads
-    // are never both set on the same drop (StemSubRow only sets this one).
+    // are never both set on the same drop (StemWaveformRow only sets this one,
+    // and only while its stem's group is unlinked).
     const stemDragKey = e.dataTransfer.getData('text/rifff-stem-key')
     if (stemDragKey) {
       dispatch({ type: 'SET_STEM_START', key: stemDragKey, startBar })
