@@ -1,3 +1,5 @@
+import { PPB, LANE_HEADER_WIDTH } from './Ruler'
+
 // Pure: where within the clip (in bars) it was grabbed, given the mouse's own
 // bar position and the clip's start bar, both at drag-start.
 export function computeGrabOffsetBars(mouseBar: number, clipStartBar: number): number {
@@ -30,4 +32,21 @@ export function setGrabOffsetBars(bars: number): void {
 
 export function getGrabOffsetBars(): number {
   return grabOffsetBars
+}
+
+/** The bar position under the mouse, relative to the timeline's own left
+ * edge — shared by every onDragStart handler that needs to compute a grab
+ * offset (RifffBlockRow's header, StemWaveformRow's label column, and its
+ * waveform body), so this "find the [data-timeline] ancestor and convert
+ * clientX to a bar position" math exists in exactly one place. Returns null
+ * if there's no [data-timeline] ancestor to measure against — shouldn't
+ * happen in practice, every drag source here is rendered inside Timeline. */
+export function mouseBarFromDragEvent(e: {
+  currentTarget: EventTarget
+  clientX: number
+}): number | null {
+  const target = e.currentTarget as HTMLElement
+  const rect = target.closest('[data-timeline]')?.getBoundingClientRect()
+  if (!rect) return null
+  return Math.max(0, (e.clientX - rect.left - LANE_HEADER_WIDTH) / PPB)
 }

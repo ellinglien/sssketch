@@ -3,8 +3,7 @@ import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemWaveformRow, ROW_HEIGHT } from './StemWaveformRow'
 import { PolarGlyph } from './PolarGlyph'
-import { PPB, LANE_HEADER_WIDTH } from './Ruler'
-import { computeGrabOffsetBars, setGrabOffsetBars } from './dragGrabOffset'
+import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
 function identityColor(rifff: Rifff): string {
   return typeColorVar(rifff.stems[0]?.type ?? 'fx')
@@ -65,9 +64,8 @@ export function RifffBlockRow({
             // read back in Timeline's handleDragOver/handleDrop (App.tsx) so
             // the clip moves as if picked up at this exact point rather than
             // snapping its start under wherever the mouse ends up.
-            const rect = e.currentTarget.closest('[data-timeline]')?.getBoundingClientRect()
-            if (rect) {
-              const mouseBar = Math.max(0, (e.clientX - rect.left - LANE_HEADER_WIDTH) / PPB)
+            const mouseBar = mouseBarFromDragEvent(e)
+            if (mouseBar !== null) {
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
