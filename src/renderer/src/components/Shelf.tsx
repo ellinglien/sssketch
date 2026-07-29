@@ -66,12 +66,6 @@ export function Shelf({
         borderBottom: '1px solid var(--ra-border)'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-        <span className="ra-eyebrow">shelf</span>
-        <span style={{ fontSize: 10, color: 'var(--ra-text-4)' }}>
-          drag one down into the arrangement · stems land linked and pre-aligned
-        </span>
-      </div>
       <div style={{ display: 'flex', gap: 10 }}>
         {Object.values(state.rifffs).map((rifff) => (
           <div
@@ -126,6 +120,7 @@ export function Shelf({
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
+          title="drop rifff folders, or stems straight from endlesss"
           style={{
             flex: 1,
             minWidth: 150,
@@ -133,16 +128,13 @@ export function Shelf({
             border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border-strong)'}`,
             borderRadius: 8,
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: 10,
-            color: 'var(--ra-text-3)',
-            textAlign: 'center'
+            fontSize: 18,
+            color: 'var(--ra-text-3)'
           }}
         >
-          <div>drop rifff folders, or stems straight from endlesss</div>
-          <div>copied into your rifff library</div>
+          +
         </div>
       </div>
     </div>

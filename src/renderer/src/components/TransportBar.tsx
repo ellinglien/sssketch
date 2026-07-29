@@ -91,7 +91,6 @@ export function TransportBar(): React.JSX.Element {
           padding: '0 10px'
         }}
       >
-        <span className="ra-eyebrow">tempo</span>
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm - 1 })}
           aria-label="Decrease tempo"
@@ -195,10 +194,6 @@ export function TransportBar(): React.JSX.Element {
         >
           ↷
         </button>
-      </div>
-
-      <div style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--ra-text-3)' }}>
-        chevron opens stems · block selects
       </div>
     </div>
   )

@@ -128,7 +128,6 @@ export function Inspector({
 
       {section(
         <>
-          <span className="ra-eyebrow">tempo</span>
           <div
             style={{
               display: 'flex',
