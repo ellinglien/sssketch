@@ -46,14 +46,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     [undo, redo, history.past.length, history.future.length]
   )
 
-  // Mirrors the latest state for the engine's getter callbacks below. Both this and
-  // the engine itself are only ever created/mutated inside effects (never directly
-  // during render) — the project's react-hooks/refs lint rule disallows touching a
-  // ref's `.current` (read or write) synchronously during render, even for the
-  // classic "lazy singleton" pattern, since React Compiler can't prove such access
-  // is render-safe. The engine's own callbacks only dereference `stateRef.current`
-  // when actually invoked later (rAF ticks, dispatch-triggered effects), never
-  // during render, so mirroring it a tick late (post-commit) is never observed.
+  // Mirrors the latest state for the position-update subscription below, which
+  // needs to read the current loop length without itself re-subscribing on every
+  // state change. Only ever written inside an effect (never during render) — the
+  // project's react-hooks/refs lint rule disallows touching a ref's `.current`
+  // (read or write) synchronously during render, since React Compiler can't prove
+  // such access is render-safe. The subscription callback only dereferences
+  // `stateRef.current` when actually invoked later (an engine push arriving),
+  // never during render, so mirroring it a tick late (post-commit) is never observed.
   const stateRef = useRef(state)
   useEffect(() => {
     stateRef.current = state
@@ -103,6 +103,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
+      // The native engine's 30Hz position timer only stops once it processes
+      // an in-flight 'stop' message — a tick already queued before that lands
+      // anyway. Without this guard, such a straggler can dispatch a stale
+      // nonzero SET_POS right after STOP just reset pos to 0, and a quick
+      // Stop-then-Play could then resume from that stale position instead.
+      if (!stateRef.current.playing) return
       const loopBars = loopLengthBars(stateRef.current)
       if (pos >= loopBars) {
         // Loop wrap-around: the native transport counts up monotonically
