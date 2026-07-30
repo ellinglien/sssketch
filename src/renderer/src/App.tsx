@@ -1,10 +1,11 @@
-import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import {
   StoreProvider,
   useAppState,
   useDispatch,
   useHistory,
-  usePlaying
+  usePlaying,
+  usePos
 } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
@@ -23,7 +24,8 @@ import {
   pasteRifffAction,
   placedRifffsInOrder,
   channelMuteLetters,
-  nextArrangerMode
+  nextArrangerMode,
+  groupIdAtPosition
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -288,6 +290,7 @@ function Frame(): React.JSX.Element {
   const dispatch = useDispatch()
   const history = useHistory()
   const playing = usePlaying()
+  const pos = usePos()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   // Riffs imported together as a LORE library batch, sharing the same jam's
@@ -489,6 +492,29 @@ function Frame(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [history])
+
+  // Sketch mode only: while playing, the Inspector automatically shows
+  // whichever rifff currently contains the playhead — no manual click
+  // needed to follow along. Scoped to sketch mode specifically because it's
+  // the only mode where "the currently playing rifff" is unambiguous
+  // (Normal/Compact can have several playing across different rows at
+  // once). Only dispatches SELECT when the playing rifff actually
+  // CHANGES (a transition into a new one) — not on every ~30Hz position
+  // tick — so a manual click on a different tile mid-playback sticks in
+  // the Inspector until the next real transition, instead of snapping back
+  // within the next tick.
+  const autoFollowedGroupIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (state.mode !== 'sketch' || !playing) {
+      autoFollowedGroupIdRef.current = null
+      return
+    }
+    const current = groupIdAtPosition(state, pos)
+    if (current && current !== autoFollowedGroupIdRef.current) {
+      autoFollowedGroupIdRef.current = current
+      dispatch({ type: 'SELECT', groupId: current })
+    }
+  }, [state, playing, pos, dispatch])
 
   return (
     <div className="ra-frame">
