@@ -115,9 +115,24 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
 
   useEffect(() => {
     let cancelled = false
-    void window.rifffApi.loreWarehouseAvailable().then((v) => {
-      if (!cancelled) setAvailable(v)
-    })
+    void window.rifffApi
+      .loreWarehouseAvailable()
+      .then((v) => {
+        if (!cancelled) setAvailable(v)
+      })
+      .catch((err) => {
+        // A rejected invoke (e.g. the main process hasn't registered this
+        // channel yet, which happens if it was running before this IPC
+        // handler was added — electron-vite's dev server hot-reloads the
+        // renderer but doesn't restart main for new ipcMain.handle calls)
+        // previously left `available` stuck at its initial `null` forever,
+        // rendering neither the "unavailable" message nor the browser
+        // itself — just a blank panel with no explanation. Treat any
+        // failure the same as "unavailable" so there's always a visible
+        // outcome.
+        console.error('LoreLibraryBrowser: loreWarehouseAvailable() failed:', err)
+        if (!cancelled) setAvailable(false)
+      })
     return () => {
       cancelled = true
     }
@@ -126,9 +141,14 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   useEffect(() => {
     if (!available) return
     let cancelled = false
-    void window.rifffApi.loreListJams(jamFilter).then((result) => {
-      if (!cancelled) setJams(result)
-    })
+    window.rifffApi
+      .loreListJams(jamFilter)
+      .then((result) => {
+        if (!cancelled) setJams(result)
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreListJams() failed:', err)
+      })
     return () => {
       cancelled = true
     }
@@ -159,9 +179,14 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     if (userNameFilter.trim() !== '') filters.userName = userNameFilter.trim()
     if (onlyFullyCached) filters.onlyFullyCached = true
 
-    void window.rifffApi.loreListRiffs(selectedJamCID, filters).then((result) => {
-      if (!cancelled) setRiffs(result)
-    })
+    window.rifffApi
+      .loreListRiffs(selectedJamCID, filters)
+      .then((result) => {
+        if (!cancelled) setRiffs(result)
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreListRiffs() failed:', err)
+      })
     return () => {
       cancelled = true
     }
@@ -175,40 +200,48 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     // only rendered when resolvedRiff is truthy).
     if (!selectedRiffCID) return
     let cancelled = false
-    void window.rifffApi.loreResolveRiff(selectedRiffCID).then(async (resolved) => {
-      if (cancelled || !resolved) return
-      setResolvedRiff(resolved)
+    window.rifffApi
+      .loreResolveRiff(selectedRiffCID)
+      .then(async (resolved) => {
+        if (cancelled || !resolved) return
+        setResolvedRiff(resolved)
 
-      // Auto-preview on selection, full mix only — same reasoning as
-      // BeatPicker's own preview: pause the main arrangement first so the
-      // two don't play over each other.
-      if (playing) dispatch({ type: 'PAUSE' })
-      const cachedStems = resolved.stems.filter((s) => s.path !== null)
-      const ctx = getAudioContext()
-      const gain = sqrtGain(cachedStems.length)
-      for (const stem of cachedStems) {
-        try {
-          const bytes = await window.rifffApi.readAudioFile(stem.path!)
-          const arrayBuffer = bytes.buffer.slice(
-            bytes.byteOffset,
-            bytes.byteOffset + bytes.byteLength
-          )
-          const decoded = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
-          if (cancelled) return
-          const source = ctx.createBufferSource()
-          source.buffer = decoded
-          source.loop = true
-          const gainNode = ctx.createGain()
-          gainNode.gain.value = gain * stem.gain
-          source.connect(gainNode)
-          gainNode.connect(ctx.destination)
-          source.start(0)
-          previewSourcesRef.current.push(source)
-        } catch (err) {
-          console.error(`LoreLibraryBrowser: failed to decode preview audio for ${stem.path}:`, err)
+        // Auto-preview on selection, full mix only — same reasoning as
+        // BeatPicker's own preview: pause the main arrangement first so the
+        // two don't play over each other.
+        if (playing) dispatch({ type: 'PAUSE' })
+        const cachedStems = resolved.stems.filter((s) => s.path !== null)
+        const ctx = getAudioContext()
+        const gain = sqrtGain(cachedStems.length)
+        for (const stem of cachedStems) {
+          try {
+            const bytes = await window.rifffApi.readAudioFile(stem.path!)
+            const arrayBuffer = bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength
+            )
+            const decoded = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
+            if (cancelled) return
+            const source = ctx.createBufferSource()
+            source.buffer = decoded
+            source.loop = true
+            const gainNode = ctx.createGain()
+            gainNode.gain.value = gain * stem.gain
+            source.connect(gainNode)
+            gainNode.connect(ctx.destination)
+            source.start(0)
+            previewSourcesRef.current.push(source)
+          } catch (err) {
+            console.error(
+              `LoreLibraryBrowser: failed to decode preview audio for ${stem.path}:`,
+              err
+            )
+          }
         }
-      }
-    })
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreResolveRiff() failed:', err)
+      })
     return () => {
       cancelled = true
     }
