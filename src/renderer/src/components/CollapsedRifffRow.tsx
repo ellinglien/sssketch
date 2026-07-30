@@ -113,9 +113,14 @@ export function CollapsedRifffRow({
   // Right-click anywhere on the block toggles the whole group's mute —
   // moved off plain click, same as StemWaveformRow's identical change, since
   // an accidental click meant for something else used to silently mute the
-  // whole group.
+  // whole group. Cmd/Ctrl+right-click solos this rifff instead (see
+  // SOLO_GROUP).
   function handleBlockContextMenu(e: React.MouseEvent): void {
     e.preventDefault()
+    if (e.metaKey || e.ctrlKey) {
+      dispatch({ type: 'SOLO_GROUP', groupId })
+      return
+    }
     dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })
   }
 
@@ -301,7 +306,7 @@ export function CollapsedRifffRow({
             }
           }}
           onContextMenu={handleBlockContextMenu}
-          title="right-click to mute group"
+          title="right-click to mute group · cmd/ctrl+right-click to solo"
           style={{
             position: 'absolute',
             top: 0,

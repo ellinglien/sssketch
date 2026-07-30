@@ -3,6 +3,7 @@ import { useAppState, useDispatch, usePlaying, usePos } from '../state/StoreCont
 import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
+import { startPointerDrag } from './dragUtils'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -124,6 +125,47 @@ export function SketchStrip(): React.JSX.Element {
     }
   }
 
+  // Dragging the orbiting dot scrubs the playhead within its own rifff's
+  // play window — angle around the tile's center maps to fraction-through,
+  // the inverse of how dotX/dotY are computed below (12 o'clock = start,
+  // clockwise = forward). Absolute mouse position is reconstructed each move
+  // from startClientX/Y + the cumulative delta startPointerDrag reports,
+  // since the angle needs the mouse's live position relative to a center
+  // point fixed at drag start, not an incremental step. ownerSVGElement's
+  // own rect is used for that center (not the tiny circle's own bounding
+  // box) — it's sized/positioned to exactly match the tile underneath.
+  function handleScrubDotMouseDown(
+    e: React.MouseEvent<SVGCircleElement>,
+    rifff: Rifff,
+    start: number
+  ): void {
+    const svg = e.currentTarget.ownerSVGElement
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const centerX = rect.left + rect.width / 2
+    const centerY = rect.top + rect.height / 2
+    const startClientX = e.clientX
+    const startClientY = e.clientY
+
+    function seekToClientPoint(clientX: number, clientY: number): void {
+      const angleRad = Math.atan2(clientY - centerY, clientX - centerX)
+      // Same inverse as dotX/dotY's own `angleRad = fraction * 2*PI - PI/2`,
+      // wrapped into [0, 1) since atan2 returns [-PI, PI] — a raw fraction
+      // here can land slightly negative depending on which side of 12
+      // o'clock the angle falls on.
+      const rawFraction = (angleRad + Math.PI / 2) / (2 * Math.PI)
+      const fraction = ((rawFraction % 1) + 1) % 1
+      const bar = start + fraction * rifff.barLength
+      dispatch({ type: 'SET_POS', pos: bar })
+      if (playing) void window.rifffApi.engineSetPosition(bar)
+    }
+
+    seekToClientPoint(startClientX, startClientY)
+    startPointerDrag(e, (deltaX, deltaY) => {
+      seekToClientPoint(startClientX + deltaX, startClientY + deltaY)
+    })
+  }
+
   return (
     <div
       ref={containerRef}
@@ -231,10 +273,14 @@ export function SketchStrip(): React.JSX.Element {
             onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => {
               e.preventDefault()
+              if (e.metaKey || e.ctrlKey) {
+                dispatch({ type: 'SOLO_GROUP', groupId: rifff.groupId })
+                return
+              }
               removeTiles(batchSelected ? multiSelected : new Set([rifff.groupId]))
               setMultiSelected(new Set())
             }}
-            title={`${rifff.name} — shift/cmd-click to multi-select`}
+            title={`${rifff.name} — shift/cmd-click to multi-select · cmd/ctrl+right-click to solo`}
             style={{
               order: index * 10,
               position: 'relative',
@@ -258,6 +304,20 @@ export function SketchStrip(): React.JSX.Element {
                 viewBox="0 0 100 100"
                 style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
               >
+                {/* Larger invisible hit target sharing the dot's own center —
+                    the visible dot (r=5, ~3px on screen at TILE_SIZE=64) is
+                    too small to reliably grab on its own. Drawn first so the
+                    visible dot stays on top and unaffected visually. */}
+                <circle
+                  cx={dotX}
+                  cy={dotY}
+                  r={14}
+                  fill="transparent"
+                  style={{ pointerEvents: 'auto', cursor: 'grab' }}
+                  onMouseDown={(e) => handleScrubDotMouseDown(e, rifff, start)}
+                >
+                  <title>drag to scrub within this rifff</title>
+                </circle>
                 <circle
                   cx={dotX}
                   cy={dotY}
@@ -265,6 +325,7 @@ export function SketchStrip(): React.JSX.Element {
                   fill="var(--ra-text)"
                   stroke="#000"
                   strokeWidth={1.5}
+                  style={{ pointerEvents: 'none' }}
                 />
               </svg>
             )}

@@ -120,6 +120,7 @@ export type Action =
   | { type: 'SET_VOLUME'; stemKey: string; volume: number }
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'SET_GROUP_MUTE'; groupId: string; muted: boolean }
+  | { type: 'SOLO_GROUP'; groupId: string }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNLINK'; groupId: string }
@@ -428,6 +429,34 @@ export function reducer(state: AppState, action: Action): AppState {
       const mute = { ...state.mute }
       for (const stem of rifff.stems) {
         mute[stemKey(action.groupId, stem.slot)] = action.muted
+      }
+      return { ...state, mute }
+    }
+
+    // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
+    // compact, sketch) — mutes every stem in every OTHER rifff and unmutes
+    // every stem in this one. A second SOLO_GROUP for the SAME groupId while
+    // it's already the only unmuted one toggles back to fully unmuted,
+    // rather than needing a separate "un-solo" action or having to snapshot
+    // the exact prior per-stem mute state (which stem was individually
+    // muted before soloing is usually not what you want restored anyway —
+    // "solo" is normally a temporary A/B listen, not a state worth
+    // preserving precisely).
+    case 'SOLO_GROUP': {
+      const rifffList = Object.values(state.rifffs)
+      const alreadySoloed = rifffList.every((rifff) =>
+        rifff.stems.every((stem) => {
+          const expectedMuted = rifff.groupId !== action.groupId
+          return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
+        })
+      )
+      const mute = { ...state.mute }
+      for (const rifff of rifffList) {
+        for (const stem of rifff.stems) {
+          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
+            ? false
+            : rifff.groupId !== action.groupId
+        }
       }
       return { ...state, mute }
     }

@@ -591,6 +591,55 @@ describe('reducer', () => {
     })
   })
 
+  describe('SOLO_GROUP', () => {
+    it('mutes every stem in every other rifff and unmutes every stem in this one', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:6']).toBe(false)
+      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mute['r2:6']).toBe(true)
+    })
+
+    it('force-unmutes the soloed rifff even if one of its stems was already individually muted', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      expect(state.mute['r1:1']).toBe(false)
+    })
+
+    it('toggles back to fully unmuted when SOLO_GROUP is dispatched again for the already-soloed rifff', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r2:1']).toBe(false)
+    })
+
+    it('re-solos (does not toggle off) when dispatched for a DIFFERENT rifff than the one currently soloed', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r2' })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r2:1']).toBe(false)
+    })
+  })
+
   describe('SET_GROUP_VOLUME', () => {
     it('sets every stem in the rifff to the same volume at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

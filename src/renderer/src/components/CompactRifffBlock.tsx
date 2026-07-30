@@ -10,10 +10,11 @@ import { stemKey } from '@shared/types'
 // alongside Normal mode's PPB) — Timeline in App.tsx picks whichever one
 // applies and threads it through its own drag-position math (barForClientX)
 // and the Ruler/Playhead it renders, so this block only ever needs to agree
-// with itself. Vertically compact too: 8px vs. the expanded view's 44px per
-// stem or the collapsed view's 40px per rifff, so many rifffs fit on screen
-// at once in both dimensions.
-export const COMPACT_ROW_HEIGHT = 8
+// with itself. Still shorter than the expanded view's 44px per stem or the
+// collapsed view's 40px per rifff, but tall enough that the waveform itself
+// reads as something rather than a hairline — 8px (this component's first
+// pass) turned out to be too thin to see or click precisely.
+export const COMPACT_ROW_HEIGHT = 24
 
 /** Tiles one stem's waveform across the compact block's width, repeating
  * every stemBarLength bars — same tiling idea as CollapsedRifffRow's own
@@ -111,10 +112,14 @@ export function CompactRifffBlock({
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
+            if (e.metaKey || e.ctrlKey) {
+              dispatch({ type: 'SOLO_GROUP', groupId })
+              return
+            }
             dispatch({ type: 'SELECT', groupId })
             onOpenContextMenu(e.clientX, e.clientY, groupId)
           }}
-          title={rifff.name}
+          title={`${rifff.name} — cmd/ctrl+right-click to solo`}
           style={{
             position: 'absolute',
             top: 0,

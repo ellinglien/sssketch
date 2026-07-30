@@ -72,8 +72,15 @@ export function StemWaveformRow({
   // register — used to silently mute a stem. Right-click has no other use
   // here, so it can dispatch immediately with no debounce/disambiguation
   // needed against the separate onDoubleClick (reset volume) handler below.
+  // Cmd/Ctrl+right-click solos this stem's whole rifff instead (see
+  // SOLO_GROUP) — same modifier convention as cmd-drag-to-duplicate
+  // elsewhere in the app.
   function handleWaveformContextMenu(e: React.MouseEvent): void {
     e.preventDefault()
+    if (e.metaKey || e.ctrlKey) {
+      dispatch({ type: 'SOLO_GROUP', groupId })
+      return
+    }
     dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
   }
 
