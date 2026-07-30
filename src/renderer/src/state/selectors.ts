@@ -6,22 +6,58 @@ export function resolveOffsetKey(state: AppState, groupId: string, slot: number)
 }
 
 /** Top-row QWERTY keys, in order — the Shift+letter mute shortcuts assign
- * one to each of the selected rifff's stems, by ascending slot number.
- * Comfortably covers more stems than any rifff realistically has (the
- * app's own slot pool tops out at 8); a stem beyond this length just
- * doesn't get a shortcut, rather than wrapping/reusing a key. */
+ * one to each currently-visible mute channel, top-to-bottom. Comfortably
+ * covers more channels than typically fit on screen at once; a channel
+ * beyond this length just doesn't get a shortcut, rather than
+ * wrapping/reusing a key. */
 export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'] as const
 
-/** Maps each of a rifff's stems (by slot) to its assigned mute-shortcut
- * letter — the single source of truth for both the keyboard handler
- * (App.tsx's Frame) and the on-screen letter shown on each mute dot while
- * Shift is held (StemWaveformRow), so the two can never drift apart. */
-export function muteShortcutLetters(rifff: Rifff): Record<number, string> {
-  const sorted = [...rifff.stems].sort((a, b) => a.slot - b.slot)
-  const out: Record<number, string> = {}
-  sorted.forEach((stem, i) => {
-    if (i < MUTE_SHORTCUT_KEYS.length) out[stem.slot] = MUTE_SHORTCUT_KEYS[i]
-  })
+/**
+ * Assigns each currently-visible mute "channel" a Shift+letter shortcut,
+ * walking placed rifffs top-to-bottom in the same order they render (see
+ * placedRifffsInOrder) — the single source of truth for both the keyboard
+ * handler (App.tsx's Frame) and the on-screen letter shown on each channel's
+ * mute badge while Shift is held, so the two can never drift apart.
+ *
+ * Global across every visible row now, not reset per rifff — letting every
+ * placed rifff's stems reuse the same q/w/e/... keys made Shift+letter only
+ * usable for the SELECTED rifff (any other rifff's "q" would be ambiguous
+ * with the selected one's). A shared, per-row numbering means every visible
+ * channel gets its own unique key instead, and Shift+letter works
+ * regardless of what's selected.
+ *
+ * One channel per STEM while a rifff is expanded (matches each stem's own
+ * TOGGLE_MUTE), or one channel for the WHOLE GROUP while collapsed (matches
+ * CollapsedRifffRow's own SET_GROUP_MUTE) — mirroring exactly which mute
+ * control that row actually exposes. Compact mode has no mixing affordances
+ * at all (CompactRifffBlock is a pure positional overview), so it
+ * contributes no channels here either.
+ *
+ * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
+ * a collapsed group's single row — callers distinguish the two the same way
+ * resolveOffsetKey's callers do (state.exp[groupId] tells you which one
+ * applies to a given rifff). Walks rifff.stems in its own array order, NOT
+ * sorted by slot — RifffBlockRow renders StemWaveformRow in that same array
+ * order, and matching it is the whole point (each badge should read
+ * top-to-bottom exactly as the rows do on screen).
+ */
+export function channelMuteLetters(state: AppState): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (state.compactMode) return out
+  let i = 0
+  for (const rifff of placedRifffsInOrder(state)) {
+    if (i >= MUTE_SHORTCUT_KEYS.length) break
+    if (state.exp[rifff.groupId]) {
+      for (const stem of rifff.stems) {
+        if (i >= MUTE_SHORTCUT_KEYS.length) break
+        out[stemKey(rifff.groupId, stem.slot)] = MUTE_SHORTCUT_KEYS[i]
+        i++
+      }
+    } else {
+      out[rifff.groupId] = MUTE_SHORTCUT_KEYS[i]
+      i++
+    }
+  }
   return out
 }
 

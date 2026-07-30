@@ -3,11 +3,18 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
-import { stemGeometry, resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../state/selectors'
+import {
+  stemGeometry,
+  resolveOffsetKey,
+  resolvePlayedBars,
+  stemStartBar,
+  channelMuteLetters
+} from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
+import { useShiftHeld } from './useShiftHeld'
 import {
   FADE_MAX,
   FADE_DRAG_SLOWDOWN,
@@ -82,6 +89,10 @@ export function CollapsedRifffRow({
   // already muted (clicking unmutes everything) — same filled-means-active
   // convention as every other mute dot in this app.
   const allMuted = rifff.stems.every((stem) => state.mute[stemKey(groupId, stem.slot)])
+  // Whole-group channel — see channelMuteLetters' doc comment.
+  const shiftHeld = useShiftHeld()
+  const muteLetter = channelMuteLetters(state)[groupId]
+  const showMuteShortcut = shiftHeld && !!muteLetter
   // Representative volume for the envelope's own drag-start/display value —
   // same "first stem stands in for the group" convention as the geometry
   // below. Actually adjusting the envelope dispatches SET_GROUP_VOLUME,
@@ -469,6 +480,40 @@ export function CollapsedRifffRow({
             </div>
           )}
         </div>
+
+        {/* Mute-shortcut channel badge — sticky to the left edge of the
+            visible timeline viewport, same as StemWaveformRow's identical
+            badge (see its doc comment for why sticky, not leftPx-relative).
+            One badge for the whole group, matching this row's own single
+            mute control (SET_GROUP_MUTE, not a per-stem TOGGLE_MUTE). */}
+        {showMuteShortcut && (
+          <button
+            onClick={() => dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })}
+            title={`shift+${muteLetter} to mute group`}
+            style={{
+              position: 'sticky',
+              left: 6,
+              top: 0,
+              marginTop: (ROW_HEIGHT - 18) / 2,
+              width: 18,
+              height: 18,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              padding: 0,
+              background: allMuted ? '#fff' : '#000',
+              color: allMuted ? '#000' : '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1,
+              cursor: 'pointer',
+              zIndex: 6
+            }}
+          >
+            {muteLetter!.toUpperCase()}
+          </button>
+        )}
       </div>
     </div>
   )

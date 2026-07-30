@@ -9,7 +9,7 @@ import {
   resolveOffsetKey,
   resolvePlayedBars,
   stemStartBar,
-  muteShortcutLetters
+  channelMuteLetters
 } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
@@ -49,10 +49,11 @@ export function StemWaveformRow({
   const volume = state.vol[key] ?? 1
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
-  // Only the selected rifff's stems get a shortcut shown/active — see the
-  // Shift+letter handler in App.tsx's Frame for why this is scoped that way.
+  // Every visible channel gets a shortcut now, not just the selected
+  // rifff's own stems — see channelMuteLetters' doc comment and the
+  // Shift+letter handler in App.tsx's Frame.
   const shiftHeld = useShiftHeld()
-  const muteLetter = groupId === state.sel ? muteShortcutLetters(rifff)[slot] : undefined
+  const muteLetter = channelMuteLetters(state)[key]
   const showMuteShortcut = shiftHeld && !!muteLetter
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
@@ -485,41 +486,6 @@ export function StemWaveformRow({
             }}
           />
 
-          {/* Mute-shortcut letter hint, overlaid on the waveform — shown only
-              while Shift is held (and this stem's rifff is selected, so its
-              shortcut is actually live; see the Shift+letter handler in
-              App.tsx's Frame). Purely a visual hint (pointerEvents: none) —
-              muting itself now happens by right-clicking anywhere on the
-              waveform (handleWaveformContextMenu above), there's no separate
-              button to click. Max-contrast black/white rather than the app's usual
-              off-black/off-white tokens, and inverted between mute states,
-              so the letter stays legible and doubles as a mute-state cue on
-              its own. */}
-          {showMuteShortcut && (
-            <div
-              style={{
-                position: 'absolute',
-                left: 6,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                width: 18,
-                height: 18,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: muted ? '#fff' : '#000',
-                color: muted ? '#000' : '#fff',
-                fontSize: 12,
-                fontWeight: 700,
-                lineHeight: 1,
-                pointerEvents: 'none',
-                zIndex: 3
-              }}
-            >
-              {muteLetter!.toUpperCase()}
-            </div>
-          )}
-
           {dragVolume !== null && (
             <div
               style={{
@@ -542,6 +508,45 @@ export function StemWaveformRow({
             </div>
           )}
         </div>
+
+        {/* Mute-shortcut channel badge — sticky (not positioned against the
+            clip's own leftPx, which can easily be scrolled off-screen) so it
+            stays pinned to the left edge of the visible timeline viewport
+            regardless of horizontal scroll or where this stem's clip
+            actually starts. Shown only while Shift is held. Clickable
+            itself now (not just a visual hint) — right-click-anywhere on the
+            waveform (handleWaveformContextMenu above) still works too.
+            Max-contrast black/white rather than the app's usual off-black/
+            off-white tokens, and inverted between mute states, so the
+            letter stays legible and doubles as a mute-state cue on its own. */}
+        {showMuteShortcut && (
+          <button
+            onClick={() => dispatch({ type: 'TOGGLE_MUTE', stemKey: key })}
+            title={`shift+${muteLetter} to mute`}
+            style={{
+              position: 'sticky',
+              left: 6,
+              top: 0,
+              marginTop: (ROW_HEIGHT - 18) / 2,
+              width: 18,
+              height: 18,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              padding: 0,
+              background: muted ? '#fff' : '#000',
+              color: muted ? '#000' : '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1,
+              cursor: 'pointer',
+              zIndex: 6
+            }}
+          >
+            {muteLetter!.toUpperCase()}
+          </button>
+        )}
       </div>
     </div>
   )

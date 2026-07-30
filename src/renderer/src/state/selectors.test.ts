@@ -12,7 +12,7 @@ import {
   rotationSecondsForStem,
   pasteRifffAction,
   placedRifffsInOrder,
-  muteShortcutLetters
+  channelMuteLetters
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -40,30 +40,50 @@ describe('resolveOffsetKey', () => {
   })
 })
 
-describe('muteShortcutLetters', () => {
-  it('assigns top-row qwerty letters in ascending slot order, not stem array order', () => {
+describe('channelMuteLetters', () => {
+  it("assigns one channel per stem, in stems-array order (matching RifffBlockRow's own render order), while a rifff is expanded", () => {
     const stems: Stem[] = [
       { slot: 6, author: 'e', name: 'b', type: 'fx', path: '/b.wav', durationSec: 1, barLength: 8 },
       { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
     ]
-    const letters = muteShortcutLetters({ ...rifff, stems })
-    expect(letters).toEqual({ 1: 'q', 6: 'w' })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: { ...rifff, stems } })
+    state = { ...state, exp: { r1: true } }
+    expect(channelMuteLetters(state)).toEqual({ 'r1:6': 'q', 'r1:1': 'w' })
   })
 
-  it('leaves stems beyond the 10-key row without a shortcut', () => {
-    const stems: Stem[] = Array.from({ length: 12 }, (_, i) => ({
-      slot: i + 1,
-      author: 'e',
-      name: `s${i}`,
-      type: 'fx',
-      path: `/${i}.wav`,
-      durationSec: 1,
-      barLength: 8
-    }))
-    const letters = muteShortcutLetters({ ...rifff, stems })
+  it('assigns a single whole-group channel while a rifff is collapsed', () => {
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    expect(channelMuteLetters(state)).toEqual({ r1: 'q' })
+  })
+
+  it('numbers channels globally across every placed rifff, not reset per rifff', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: 'r2' } })
+    // Both collapsed (default): r1 gets one channel, r2 gets the next.
+    expect(channelMuteLetters(state)).toEqual({ r1: 'q', r2: 'w' })
+  })
+
+  it('excludes rifffs still sitting in the shelf, unplaced', () => {
+    const unplaced: Rifff = { ...rifff, startBar: undefined }
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    expect(channelMuteLetters(state)).toEqual({})
+  })
+
+  it('leaves channels beyond the 10-key row without a shortcut', () => {
+    let state = initialState
+    for (let i = 0; i < 12; i++) {
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: `r${i}` } })
+    }
+    const letters = channelMuteLetters(state)
     expect(Object.keys(letters)).toHaveLength(10)
-    expect(letters[11]).toBeUndefined()
-    expect(letters[12]).toBeUndefined()
+    expect(letters.r10).toBeUndefined()
+    expect(letters.r11).toBeUndefined()
+  })
+
+  it('returns no channels at all in compact mode, which has no mixing controls', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = { ...state, compactMode: true }
+    expect(channelMuteLetters(state)).toEqual({})
   })
 })
 

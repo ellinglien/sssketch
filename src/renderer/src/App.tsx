@@ -21,7 +21,7 @@ import {
   loopLengthBars,
   pasteRifffAction,
   placedRifffsInOrder,
-  muteShortcutLetters
+  channelMuteLetters
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -66,6 +66,12 @@ function Timeline({
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
     setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget), getGrabOffsetBars()))
+    // Cmd/Ctrl-drag duplicates a placed clip instead of moving it (see
+    // handleDrop's text/rifff-group-id branch) — this just gives the OS its
+    // own native "copy" cursor treatment (a green + badge on macOS) while
+    // the modifier is held, matching how Finder/most other drag-and-drop
+    // apps signal the same thing.
+    e.dataTransfer.dropEffect = e.metaKey || e.ctrlKey ? 'copy' : 'move'
   }
 
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
@@ -100,6 +106,15 @@ function Timeline({
 
     const groupId = e.dataTransfer.getData('text/rifff-group-id')
     if (!groupId) return
+    // Cmd/Ctrl held at drop = duplicate rather than move: same
+    // pasteRifffAction already used for "drag an already-placed shelf item
+    // to a new spot" above, leaving the original exactly where it was and
+    // dropping an independent copy at the new position instead.
+    if (e.metaKey || e.ctrlKey) {
+      const action = pasteRifffAction(state, groupId, startBar)
+      if (action) dispatch(action)
+      return
+    }
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
   }
 
@@ -411,28 +426,38 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
-  // Shift+<qwerty letter> mutes/unmutes one of the selected rifff's stems —
-  // see useShiftHeld/muteShortcutLetters for the matching on-screen letter
-  // shown on each stem's mute dot while Shift is held (StemWaveformRow).
-  // Scoped to the selected rifff only: letting every placed rifff's stems
-  // fight over the same q/w/e/... keys would make presses ambiguous.
+  // Shift+<qwerty letter> mutes/unmutes any currently-visible channel — see
+  // channelMuteLetters' doc comment for the matching on-screen letter shown
+  // on each channel's mute badge while Shift is held (StemWaveformRow,
+  // CollapsedRifffRow). Global across every visible row now, not scoped to
+  // the selected rifff — channelMuteLetters already guarantees unique
+  // letters across all of them, so there's no more ambiguity to avoid.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (!e.shiftKey || !state.sel) return
+      if (!e.shiftKey) return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      const rifff = state.rifffs[state.sel]
-      if (!rifff) return
-      const letters = muteShortcutLetters(rifff)
-      const key = e.key.toLowerCase()
-      const stem = rifff.stems.find((s) => letters[s.slot] === key)
-      if (!stem) return
+      const letters = channelMuteLetters(state)
+      const pressedKey = e.key.toLowerCase()
+      const channelKey = Object.keys(letters).find((k) => letters[k] === pressedKey)
+      if (!channelKey) return
       e.preventDefault()
-      dispatch({ type: 'TOGGLE_MUTE', stemKey: stemKey(state.sel, stem.slot) })
+      // A bare groupId (no ':') is a collapsed row's whole-group channel;
+      // otherwise it's stemKey(groupId, slot) for one expanded stem — see
+      // channelMuteLetters' doc comment on how the two are told apart.
+      const sepIndex = channelKey.lastIndexOf(':')
+      if (sepIndex === -1) {
+        const rifff = state.rifffs[channelKey]
+        if (!rifff) return
+        const allMuted = rifff.stems.every((s) => state.mute[stemKey(channelKey, s.slot)])
+        dispatch({ type: 'SET_GROUP_MUTE', groupId: channelKey, muted: !allMuted })
+      } else {
+        dispatch({ type: 'TOGGLE_MUTE', stemKey: channelKey })
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, state.rifffs, dispatch])
+  }, [state, dispatch])
 
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
