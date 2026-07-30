@@ -29,9 +29,10 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  * One channel per STEM while a rifff is expanded (matches each stem's own
  * TOGGLE_MUTE), or one channel for the WHOLE GROUP while collapsed (matches
  * CollapsedRifffRow's own SET_GROUP_MUTE) — mirroring exactly which mute
- * control that row actually exposes. Compact mode has no mixing affordances
- * at all (CompactRifffBlock is a pure positional overview), so it
- * contributes no channels here either.
+ * control that row actually exposes. Neither Compact nor Sketch mode has
+ * mixing affordances (CompactRifffBlock is a pure positional overview;
+ * sketch tiles deliberately expose no mute/volume/fade at all — see the
+ * sketch mode spec), so only 'normal' contributes channels here.
  *
  * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
  * a collapsed group's single row — callers distinguish the two the same way
@@ -43,7 +44,7 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  */
 export function channelMuteLetters(state: AppState): Record<string, string> {
   const out: Record<string, string> = {}
-  if (state.compactMode) return out
+  if (state.mode !== 'normal') return out
   let i = 0
   for (const rifff of placedRifffsInOrder(state)) {
     if (i >= MUTE_SHORTCUT_KEYS.length) break

@@ -50,30 +50,33 @@ describe('channelMuteLetters', () => {
       { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
     ]
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: { ...rifff, stems } })
-    state = { ...state, exp: { r1: true } }
+    state = { ...state, mode: 'normal', exp: { r1: true } }
     expect(channelMuteLetters(state)).toEqual({ 'r1:6': 'q', 'r1:1': 'w' })
   })
 
   it('assigns a single whole-group channel while a rifff is collapsed', () => {
-    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = { ...state, mode: 'normal' }
     expect(channelMuteLetters(state)).toEqual({ r1: 'q' })
   })
 
   it('numbers channels globally across every placed rifff, not reset per rifff', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: 'r2' } })
+    state = { ...state, mode: 'normal' }
     // Both collapsed (default): r1 gets one channel, r2 gets the next.
     expect(channelMuteLetters(state)).toEqual({ r1: 'q', r2: 'w' })
   })
 
   it('excludes rifffs still sitting in the shelf, unplaced', () => {
     const unplaced: Rifff = { ...rifff, startBar: undefined }
-    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = { ...state, mode: 'normal' }
     expect(channelMuteLetters(state)).toEqual({})
   })
 
   it('leaves channels beyond the 10-key row without a shortcut', () => {
-    let state = initialState
+    let state = { ...initialState, mode: 'normal' as const }
     for (let i = 0; i < 12; i++) {
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: `r${i}` } })
     }
@@ -85,7 +88,13 @@ describe('channelMuteLetters', () => {
 
   it('returns no channels at all in compact mode, which has no mixing controls', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = { ...state, compactMode: true }
+    state = { ...state, mode: 'compact' }
+    expect(channelMuteLetters(state)).toEqual({})
+  })
+
+  it('returns no channels at all in sketch mode either', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = { ...state, mode: 'sketch' }
     expect(channelMuteLetters(state)).toEqual({})
   })
 })
