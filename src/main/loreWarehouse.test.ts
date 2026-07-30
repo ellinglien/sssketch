@@ -8,7 +8,8 @@ import {
   resolveStemPath,
   setWarehouseRootForTests,
   listJams,
-  listRiffs
+  listRiffs,
+  resolveRiff
 } from './loreWarehouse'
 
 function createFixtureWarehouse(root: string): void {
@@ -225,5 +226,68 @@ describe('listRiffs', () => {
   it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
     setWarehouseRootForTests('/no/such/path')
     expect(listRiffs('jam-techno', {})).toEqual([])
+  })
+})
+
+describe('resolveRiff', () => {
+  let root: string
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+  })
+
+  it('resolves every populated stem slot with its path, gain, and metadata', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    const resolved = resolveRiff('riff-1')
+    expect(resolved).not.toBeNull()
+    expect(resolved!.bpm).toBe(130)
+    expect(resolved!.barLength).toBe(8)
+    expect(resolved!.stems).toHaveLength(2)
+
+    const stemA = resolved!.stems.find((s) => s.stemCID === 'stem-a')!
+    expect(stemA.slot).toBe(1)
+    expect(stemA.gain).toBeCloseTo(0.8)
+    expect(stemA.creatorUserName).toBe('elling')
+    expect(stemA.presetName).toBe('Microphone')
+    expect(stemA.instrumentMask).toBe(16)
+    expect(stemA.path).not.toBeNull() // it's the one seeded as "on disk"
+    // BPMrnd=130, BarLength=8 -> 8 * (60/130) * 4 = 14.7692...s
+    expect(stemA.barLength).toBe(8)
+    expect(stemA.durationSec).toBeCloseTo(14.7692, 3)
+
+    const stemB = resolved!.stems.find((s) => s.stemCID === 'stem-b')!
+    expect(stemB.slot).toBe(2)
+    expect(stemB.gain).toBeCloseTo(0.5)
+    expect(stemB.path).toBeNull() // not on disk
+    // Deliberately seeded with a SHORTER BarLength (4) than stem-a's (8) and
+    // than the riff's own BarLength (8, from createSeededFixtureWarehouse) —
+    // proves this stem's own barLength/durationSec are used, not the riff's.
+    expect(stemB.barLength).toBe(4)
+    expect(stemB.durationSec).toBeCloseTo(7.3846, 3)
+  })
+
+  it('defaults a stem missing from GainsJSON to gain 1.0', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    const resolved = resolveRiff('riff-2') // riff-2 has no GainsJSON at all
+    expect(resolved!.stems[0].gain).toBe(1.0)
+  })
+
+  it('returns null for a nonexistent RiffCID', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setWarehouseRootForTests(root)
+    expect(resolveRiff('no-such-riff')).toBeNull()
+  })
+
+  it('returns null when the warehouse is unavailable, rather than throwing', () => {
+    setWarehouseRootForTests('/no/such/path')
+    expect(resolveRiff('riff-1')).toBeNull()
   })
 })

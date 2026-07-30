@@ -1,7 +1,12 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
-import type { LoreJam, LoreRiffSummary } from '@shared/loreLibrary'
+import type {
+  LoreJam,
+  LoreRiffSummary,
+  LoreResolvedRiff,
+  LoreResolvedStem
+} from '@shared/loreLibrary'
 import { computeOwnerFraction } from '@shared/loreLibrary'
 
 // Single-user, single-machine app — this is the actual synced folder on
@@ -190,6 +195,87 @@ export function listRiffs(jamCID: string, filters: RiffFilters): LoreRiffSummary
   return filters.onlyFullyCached
     ? summaries.filter((s) => s.cachedStemCount === s.stemCount)
     : summaries
+}
+
+interface FullRiffRow extends RiffRow {
+  OwnerJamCID: string
+  GainsJSON: string | null
+}
+
+interface FullStemRow {
+  StemCID: string
+  CreatorUserName: string
+  PresetName: string
+  Instrument: number
+  BPMrnd: number | null
+  BarLength: number | null
+}
+
+export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
+  const db = getWarehouseDb()
+  if (!db) return null
+
+  const riffRow = db
+    .prepare(
+      `SELECT RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, GainsJSON,
+              StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8
+       FROM Riffs WHERE RiffCID = ?`
+    )
+    .get(riffCID) as FullRiffRow | undefined
+  if (!riffRow) return null
+
+  // GainsJSON keys are slot numbers as strings (e.g. {"1": 0.8}) — malformed
+  // or absent JSON just means every stem falls back to the default gain,
+  // not a thrown error.
+  let gains: Record<string, number> = {}
+  if (riffRow.GainsJSON) {
+    try {
+      gains = JSON.parse(riffRow.GainsJSON) as Record<string, number>
+    } catch (err) {
+      console.error(`loreWarehouse: malformed GainsJSON for riff ${riffCID}:`, err)
+    }
+  }
+
+  const slots: { slot: number; stemCID: string }[] = []
+  for (let slot = 1; slot <= 8; slot++) {
+    const cid = riffRow[`StemCID_${slot}` as keyof FullRiffRow] as string | null
+    if (cid) slots.push({ slot, stemCID: cid })
+  }
+
+  const stems: LoreResolvedStem[] = slots.map(({ slot, stemCID }) => {
+    const stemRow = db
+      .prepare(
+        'SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength FROM Stems WHERE StemCID = ?'
+      )
+      .get(stemCID) as FullStemRow | undefined
+    const path = resolveStemPath(riffRow.OwnerJamCID, stemCID)
+    // This stem's OWN bpm/bar-length, not the riff's — a stem can be a
+    // shorter loop tiled across a longer riff (the same distinction
+    // ssstitch's own Stem.barLength vs Rifff.barLength already makes for
+    // drag-and-drop imports). Falls back to the riff's own bpm/1-bar length
+    // only if this stem's row is somehow missing that data.
+    const stemBpm = stemRow?.BPMrnd ?? riffRow.BPMrnd
+    const stemBarLength = stemRow?.BarLength ?? 1
+    const durationSec = stemBarLength * (60 / stemBpm) * 4
+    return {
+      stemCID,
+      slot,
+      path: existsSync(path) ? path : null,
+      gain: gains[String(slot)] ?? 1.0,
+      creatorUserName: stemRow?.CreatorUserName ?? '',
+      presetName: stemRow?.PresetName ?? '',
+      instrumentMask: stemRow?.Instrument ?? 0,
+      durationSec,
+      barLength: stemBarLength
+    }
+  })
+
+  return {
+    riffCID: riffRow.RiffCID,
+    bpm: riffRow.BPMrnd,
+    barLength: riffRow.BarLength,
+    stems
+  }
 }
 
 export { getWarehouseDb }
