@@ -165,6 +165,10 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
+  ipcMain.handle('engine-load-send-plugin', (_event, bus: number, pluginId: string | null) => {
+    playbackEngine?.client.send('load-send-plugin', { bus, pluginId })
+  })
+
   createWindow()
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc
@@ -193,10 +197,19 @@ app.whenReady().then(async () => {
         }
       })
     }
+    function subscribeToSendPluginLoaded(): void {
+      engine.client.on('send-plugin-loaded', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('send-plugin-loaded', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
+    subscribeToSendPluginLoaded()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
+      subscribeToSendPluginLoaded()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }

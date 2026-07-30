@@ -44,6 +44,18 @@ const api = {
     const listener = (): void => callback()
     ipcRenderer.on('engine-restarted', listener)
     return () => ipcRenderer.removeListener('engine-restarted', listener)
+  },
+  loadSendPlugin: (bus: number, pluginId: string | null): Promise<void> =>
+    ipcRenderer.invoke('engine-load-send-plugin', bus, pluginId),
+  onSendPluginLoaded: (
+    callback: (result: { bus: number; pluginId: string; success: boolean; error?: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: { bus: number; pluginId: string; success: boolean; error?: string }
+    ): void => callback(payload)
+    ipcRenderer.on('send-plugin-loaded', listener)
+    return () => ipcRenderer.removeListener('send-plugin-loaded', listener)
   }
 }
 
