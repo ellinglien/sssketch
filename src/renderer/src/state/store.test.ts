@@ -446,6 +446,27 @@ describe('reducer', () => {
     expect(state.stemStart['r1:6']).toBe(6)
   })
 
+  it('unlink copies a group-level resize (playedBars) onto each stem key, so it does not revert to full length', () => {
+    // Real bug this covers: resolveOffsetKey (and so resolvePlayedBars)
+    // switches from the bare groupId key to each stem's own key the moment
+    // unlinked flips true — a resize made while still linked lives at
+    // playedBars[groupId], which becomes unreachable once unlinked, so
+    // every stem silently reverted to rifff.barLength (full length) right
+    // at the moment of unlinking.
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    expect(state.playedBars['r1:1']).toBe(4)
+    expect(state.playedBars['r1:6']).toBe(4)
+  })
+
+  it('unlink does not invent a playedBars override for a stem that was never resized', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    expect(state.playedBars['r1:1']).toBeUndefined()
+    expect(state.playedBars['r1:6']).toBeUndefined()
+  })
+
   it('relink clears the unlinked flag', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'UNLINK', groupId: 'r1' })

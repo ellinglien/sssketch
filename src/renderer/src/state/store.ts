@@ -499,8 +499,14 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'UNLINK': {
       const rifff = state.rifffs[action.groupId]
       const groupOffset = state.off[action.groupId] ?? 0
+      // undefined (not defaulted to rifff.barLength) means "no resize
+      // happened" — left that way below too, so an un-resized stem still
+      // correctly falls through to resolvePlayedBars' own rifff.barLength
+      // fallback post-unlink, same as it did while linked.
+      const groupPlayedBars = state.playedBars[action.groupId]
       const off = { ...state.off }
       const stemStart = { ...state.stemStart }
+      const playedBars = { ...state.playedBars }
       for (const stem of rifff.stems) {
         const key = stemKey(action.groupId, stem.slot)
         off[key] = groupOffset
@@ -508,11 +514,27 @@ export function reducer(state: AppState, action: Action): AppState {
         // moment of unlinking — dragging a stem afterward is what actually makes
         // it diverge.
         stemStart[key] = rifff.startBar ?? 0
+        // Real bug this fixed: resolveOffsetKey (and so resolvePlayedBars)
+        // switches from the bare groupId key to each stem's own key the
+        // moment unlinked flips true — a resize made while still linked
+        // lives at playedBars[groupId], which is now unreachable, so every
+        // stem silently fell back to rifff.barLength (full length) right
+        // when unlinking, discarding the resize with no other place it was
+        // captured. Same "copy forward across the key switch" fix off[]
+        // already got above.
+        if (groupPlayedBars !== undefined) playedBars[key] = groupPlayedBars
       }
-      // The group-level off[groupId] entry is intentionally left in place (unused while
-      // unlinked) rather than deleted — resolveOffsetKey always reads the per-stem key
-      // when unlinked, and RELINK makes the group key authoritative again.
-      return { ...state, unlinked: { ...state.unlinked, [action.groupId]: true }, off, stemStart }
+      // The group-level off[groupId]/playedBars[groupId] entries are intentionally
+      // left in place (unused while unlinked) rather than deleted — resolveOffsetKey
+      // always reads the per-stem key when unlinked, and RELINK makes the group key
+      // authoritative again.
+      return {
+        ...state,
+        unlinked: { ...state.unlinked, [action.groupId]: true },
+        off,
+        stemStart,
+        playedBars
+      }
     }
 
     case 'RELINK':
