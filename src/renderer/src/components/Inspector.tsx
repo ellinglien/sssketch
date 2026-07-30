@@ -6,9 +6,6 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
-import { SEND_PLUGIN_ALLOWLIST } from '@shared/sendPlugins'
-import { stemKey } from '@shared/types'
-import { SendKnob } from './SendKnob'
 
 // A finer, snap-division-independent nudge step: 1ms of real time at this
 // rifff's own bpm, computed with the same formula offsetLabels() itself uses
@@ -336,41 +333,6 @@ export function Inspector({
                         whiteSpace: 'nowrap'
                       }}
                     />
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      marginLeft: 13,
-                      marginBottom: 4
-                    }}
-                  >
-                    {([0, 1, 2, 3] as const).map((bus) => {
-                      const key = stemKey(groupId, stem.slot)
-                      const level = state.sendLevels[key]?.[bus] ?? 0
-                      const hasPlugin = state.sendBusPlugins[bus] !== null
-                      return (
-                        <SendKnob
-                          key={bus}
-                          value={level}
-                          disabled={!hasPlugin}
-                          title={
-                            hasPlugin
-                              ? `send to bus ${bus + 1} (${SEND_PLUGIN_ALLOWLIST.find((p) => p.id === state.sendBusPlugins[bus])?.displayName ?? state.sendBusPlugins[bus]})`
-                              : `bus ${bus + 1}: no plugin loaded`
-                          }
-                          onChange={(newLevel) =>
-                            dispatch({
-                              type: 'SET_SEND_LEVEL',
-                              stemKey: key,
-                              bus,
-                              level: newLevel
-                            })
-                          }
-                        />
-                      )
-                    })}
                   </div>
                   {unlinked && (
                     <div

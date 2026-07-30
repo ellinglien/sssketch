@@ -64,7 +64,6 @@ namespace ssstitch
     void Transport::audioDeviceAboutToStart(juce::AudioIODevice* device)
     {
         deviceSampleRate = device->getCurrentSampleRate();
-        deviceBlockSize = device->getCurrentBufferSizeSamples();
     }
 
     void Transport::audioDeviceStopped() {}

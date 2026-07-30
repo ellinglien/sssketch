@@ -2,7 +2,6 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_audio_formats/juce_audio_formats.h>
 #include "PluginScanner.h"
 #include "IpcServer.h"
 #include "Transport.h"
@@ -190,157 +189,16 @@ static int runSpike()
     return (vst3Ok && auOk) ? 0 : 1;
 }
 
-// Proof-of-concept for offline (non-real-time) plugin hosting: load a real
-// VST3/AU effect by exact file path and run a real WAV file through it,
-// writing the processed result back out — so the effect can actually be
-// listened to and compared against the dry input, rather than just
-// asserting "processBlock() didn't crash" the way runSpike's synthetic-tone
-// version does. Deliberately offline-only for now (not wired into
-// Transport.cpp's real-time callback, or the arranger's own project
-// format/UI) — see the conversation this was built from for why: proving
-// correct end-to-end processing on the easier, non-real-time-constrained
-// path first.
-static int runPluginProcess(
-    const juce::String& pluginPath,
-    const juce::String& inputWavPath,
-    const juce::String& outputWavPath)
-{
-    juce::AudioPluginFormatManager formatManager;
-    formatManager.addDefaultFormats();
-
-    juce::Array<juce::PluginDescription> found;
-    scanOneFileInto(formatManager, pluginPath, found);
-    if (found.isEmpty())
-    {
-        juce::Logger::writeToLog("runPluginProcess: no plugin found at " + pluginPath
-            + " (wrong path, or an architecture this host can't load — see PHASE0_FINDINGS.md #3)");
-        return 1;
-    }
-    const auto& desc = found.getReference(0);
-    juce::Logger::writeToLog("Loading [" + desc.pluginFormatName + "] " + desc.name
-        + " (" + desc.manufacturerName + ")");
-
-    // A separate AudioFormatManager from the plugin one above — same class,
-    // different job (decoding WAV files, not scanning plugin binaries).
-    juce::AudioFormatManager audioFormatManager;
-    audioFormatManager.registerBasicFormats();
-    juce::File inFile(inputWavPath);
-    std::unique_ptr<juce::AudioFormatReader> reader(audioFormatManager.createReaderFor(inFile));
-    if (reader == nullptr)
-    {
-        juce::Logger::writeToLog("runPluginProcess: failed to open input WAV: " + inputWavPath);
-        return 1;
-    }
-    // Processing at the file's own rate, not a hardcoded 44100 — running a
-    // plugin at the wrong sample rate silently mistunes any time-based
-    // behavior (a compressor's release time, a delay/reverb's tail length).
-    const double sampleRate = reader->sampleRate;
-    const int numSamples = (int) reader->lengthInSamples;
-
-    juce::AudioBuffer<float> buffer((int) reader->numChannels, numSamples);
-    if (!reader->read(&buffer, 0, numSamples, 0, true, true))
-    {
-        juce::Logger::writeToLog("runPluginProcess: failed to read input WAV samples");
-        return 1;
-    }
-
-    juce::String errorMessage;
-    constexpr int blockSize = 512; // matches this engine's block size elsewhere (Transport.cpp, RenderExport.cpp)
-    auto instance = formatManager.createPluginInstance(desc, sampleRate, blockSize, errorMessage);
-    if (instance == nullptr)
-    {
-        juce::Logger::writeToLog("runPluginProcess: FAILED to load \"" + desc.name + "\": " + errorMessage);
-        return 1;
-    }
-    instance->prepareToPlay(sampleRate, blockSize);
-
-    // getTotalNumInputChannels()/getTotalNumOutputChannels() are the SUM
-    // across every bus the plugin exposes — many mix-bus effects (this one
-    // included) have a second stereo bus beyond the main in/out pair, for a
-    // sidechain input. processBlock needs the buffer sized to that full
-    // total or it'll silently misinterpret which samples belong to which
-    // bus; the final file only wants the *main* bus's own channels (bus
-    // index 0) — genuinely processed audio, not an unprocessed sidechain
-    // pass-through sharing the buffer.
-    const int totalInputChannels = juce::jmax(1, instance->getTotalNumInputChannels());
-    const int totalOutputChannels = juce::jmax(1, instance->getTotalNumOutputChannels());
-    auto* mainOutputBus = instance->getBus(false, 0);
-    const int mainOutputChannels =
-        mainOutputBus != nullptr ? mainOutputBus->getNumberOfChannels() : totalOutputChannels;
-    juce::Logger::writeToLog("  bus layout: " + juce::String(totalInputChannels) + " total in, "
-        + juce::String(totalOutputChannels) + " total out, " + juce::String(mainOutputChannels)
-        + " on the main output bus");
-
-    // Reshape to the plugin's full input channel count (most compressors/
-    // effects are stereo-in/stereo-out on the main bus, possibly plus a
-    // sidechain bus beyond that) rather than failing on a mismatch —
-    // duplicates a mono/stereo source's channels across whatever the plugin
-    // wants, tiling if there are more plugin channels than source channels.
-    const int processChannels = juce::jmax(totalInputChannels, totalOutputChannels);
-    if (processChannels != buffer.getNumChannels())
-    {
-        juce::AudioBuffer<float> reshaped(processChannels, numSamples);
-        for (int ch = 0; ch < processChannels; ++ch)
-            reshaped.copyFrom(ch, 0, buffer, juce::jmin(ch, buffer.getNumChannels() - 1), 0, numSamples);
-        buffer = std::move(reshaped);
-    }
-
-    juce::MidiBuffer midi;
-    for (int start = 0; start < numSamples; start += blockSize)
-    {
-        const int thisBlock = juce::jmin(blockSize, numSamples - start);
-        // A view into buffer's own data at this offset, not a copy — the
-        // plugin processes (and this writes back) in place, block by block.
-        juce::AudioBuffer<float> blockView(
-            buffer.getArrayOfWritePointers(), buffer.getNumChannels(), start, thisBlock);
-        instance->processBlock(blockView, midi);
-        midi.clear(); // no MIDI input for this proof of concept — an audio effect, not an instrument
-    }
-    instance->releaseResources();
-
-    // Only the main output bus's channels go to the file — see the bus-layout
-    // comment above for why the processed buffer can have more than this.
-    juce::AudioBuffer<float> mainOutput(mainOutputChannels, numSamples);
-    for (int ch = 0; ch < mainOutputChannels; ++ch)
-        mainOutput.copyFrom(ch, 0, buffer, juce::jmin(ch, buffer.getNumChannels() - 1), 0, numSamples);
-
-    juce::WavAudioFormat wavFormat;
-    auto outFile = juce::File(outputWavPath);
-    outFile.deleteFile();
-    std::unique_ptr<juce::FileOutputStream> out(outFile.createOutputStream());
-    if (out == nullptr)
-    {
-        juce::Logger::writeToLog("runPluginProcess: failed to open output path for writing: " + outputWavPath);
-        return 1;
-    }
-    std::unique_ptr<juce::AudioFormatWriter> writer(wavFormat.createWriterFor(
-        out.get(), sampleRate, (unsigned int) mainOutputChannels, 16, {}, 0));
-    if (writer == nullptr)
-    {
-        juce::Logger::writeToLog("runPluginProcess: failed to create WAV writer for: " + outputWavPath);
-        return 1;
-    }
-    out.release();
-    writer->writeFromAudioSampleBuffer(mainOutput, 0, numSamples);
-    writer.reset();
-
-    juce::Logger::writeToLog("runPluginProcess: wrote " + outputWavPath + " ("
-        + juce::String(numSamples) + " samples, " + juce::String(mainOutputChannels) + " ch, "
-        + juce::String(sampleRate) + "Hz)");
-    return 0;
-}
-
 static int runServe(int port)
 {
     StemBufferCache bufferCache;
-    SendBus sendBus;
-    PlaybackEngine engine(bufferCache, sendBus);
+    PlaybackEngine engine(bufferCache);
     Transport transport(engine);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud
 
-    IpcServer server(engine, transport, bufferCache, sendBus);
+    IpcServer server(engine, transport, bufferCache);
     if (!server.beginWaitingForSocket(port, "127.0.0.1"))
     {
         juce::Logger::writeToLog("runServe: failed to bind to port " + juce::String(port));
@@ -512,9 +370,6 @@ int main(int argc, char* argv[])
 
     if (argc > 3 && juce::String(argv[1]) == "--test-client")
         return runTestClient(juce::String(argv[2]).getIntValue(), juce::String(argv[3]));
-
-    if (argc > 4 && juce::String(argv[1]) == "--plugin-process")
-        return runPluginProcess(juce::String(argv[2]), juce::String(argv[3]), juce::String(argv[4]));
 
     juce::Logger::writeToLog("ssstitch-engine Phase 0 spike: JUCE core linked OK.");
     return 0;

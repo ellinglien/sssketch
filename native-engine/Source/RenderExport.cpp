@@ -2,7 +2,6 @@
 #include "RenderExport.h"
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
-#include "SendBus.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 
@@ -15,20 +14,7 @@ namespace ssstitch
         juce::String& errorOut)
     {
         StemBufferCache bufferCache;
-        SendBus sendBus;
-        for (size_t i = 0; i < project.sendBuses.size(); ++i)
-        {
-            if (project.sendBuses[i].pluginId.isEmpty())
-                continue;
-            juce::String loadError;
-            if (!sendBus.loadPluginSync(
-                    (int) i, project.sendBuses[i].pluginId, 44100.0, 512, loadError))
-            {
-                errorOut = "send bus " + juce::String(i) + " failed to load: " + loadError;
-                return false;
-            }
-        }
-        PlaybackEngine engine(bufferCache, sendBus);
+        PlaybackEngine engine(bufferCache);
         engine.setProject(project);
 
         const double sampleRate = 44100.0;

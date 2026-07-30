@@ -53,13 +53,6 @@ export interface AppState {
    * Toggled by the Tab key, Ableton-style — see App.tsx's Frame component.
    * Not persisted (see serialize.ts). */
   compactMode: boolean
-  /** Each stem's send level per bus, [0,1] each, defaulting to all-zero
-   * (a stem sends nothing anywhere until explicitly raised) — keyed by
-   * stemKey, same convention as vol/mute. */
-  sendLevels: Record<string, [number, number, number, number]>
-  /** Which allowlist plugin id (or null, "off") is loaded on each of the 4
-   * fixed send buses. See src/shared/sendPlugins.ts for the allowlist. */
-  sendBusPlugins: [string | null, string | null, string | null, string | null]
   rifffs: Record<string, Rifff>
 }
 
@@ -80,8 +73,6 @@ export const initialState: AppState = {
   exp: {},
   volumeDragMode: false,
   compactMode: false,
-  sendLevels: {},
-  sendBusPlugins: [null, null, null, null],
   rifffs: {}
 }
 
@@ -129,8 +120,6 @@ export type Action =
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'TOGGLE_COMPACT_MODE' }
-  | { type: 'SET_SEND_LEVEL'; stemKey: string; bus: 0 | 1 | 2 | 3; level: number }
-  | { type: 'SET_SEND_BUS_PLUGIN'; bus: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -431,19 +420,6 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_COMPACT_MODE':
       return { ...state, compactMode: !state.compactMode }
-
-    case 'SET_SEND_LEVEL': {
-      const current = state.sendLevels[action.stemKey] ?? [0, 0, 0, 0]
-      const next = [...current] as [number, number, number, number]
-      next[action.bus] = Math.max(0, Math.min(1, action.level))
-      return { ...state, sendLevels: { ...state.sendLevels, [action.stemKey]: next } }
-    }
-
-    case 'SET_SEND_BUS_PLUGIN': {
-      const next = [...state.sendBusPlugins] as typeof state.sendBusPlugins
-      next[action.bus] = action.pluginId
-      return { ...state, sendBusPlugins: next }
-    }
 
     case 'LOAD_STATE':
       return action.state

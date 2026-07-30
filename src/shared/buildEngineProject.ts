@@ -13,7 +13,6 @@ export interface EngineStem {
   startBarOverride: number // -1 means "use the rifff's own startBar"
   volume: number
   muted: boolean
-  sendLevels: [number, number, number, number]
 }
 
 export interface EngineRifff {
@@ -29,12 +28,6 @@ export interface EngineProject {
   bpm: number
   snapDiv: number
   rifffs: EngineRifff[]
-  sendBuses: [
-    { pluginId: string | null },
-    { pluginId: string | null },
-    { pluginId: string | null },
-    { pluginId: string | null }
-  ]
 }
 
 export interface StretchedStem {
@@ -109,8 +102,7 @@ export async function buildEngineProject(
         offsetSteps,
         startBarOverride: override,
         volume: state.vol[key] ?? 1,
-        muted: state.mute[key] ?? false,
-        sendLevels: state.sendLevels[key] ?? [0, 0, 0, 0]
+        muted: state.mute[key] ?? false
       })
     }
 
@@ -124,10 +116,5 @@ export async function buildEngineProject(
     })
   }
 
-  return {
-    bpm: state.bpm,
-    snapDiv: SNAP_DIVS[state.snapIdx],
-    rifffs,
-    sendBuses: state.sendBusPlugins.map((pluginId) => ({ pluginId })) as EngineProject['sendBuses']
-  }
+  return { bpm: state.bpm, snapDiv: SNAP_DIVS[state.snapIdx], rifffs }
 }

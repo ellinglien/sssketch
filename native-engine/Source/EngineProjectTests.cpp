@@ -16,7 +16,6 @@ namespace ssstitch
                 {
                   "bpm": 120.0,
                   "snapDiv": 16.0,
-                  "sendBuses": [{"pluginId": "solid-bus-comp"}, {"pluginId": ""}, {"pluginId": ""}, {"pluginId": ""}],
                   "rifffs": [
                     {
                       "groupId": "r1",
@@ -33,8 +32,7 @@ namespace ssstitch
                           "offsetSteps": 0.0,
                           "startBarOverride": -1.0,
                           "volume": 0.9,
-                          "muted": false,
-                          "sendLevels": [0.5, 0.0, 0.0, 0.0]
+                          "muted": false
                         }
                       ]
                     }
@@ -50,31 +48,6 @@ namespace ssstitch
                 expectEquals((int) project.rifffs[0].stems.size(), 1);
                 expectEquals(project.rifffs[0].stems[0].resolvedPath, juce::String("/tmp/a.wav"));
                 expectWithinAbsoluteError(project.rifffs[0].stems[0].volume, 0.9, 1.0e-9);
-                expectEquals(project.sendBuses[0].pluginId, juce::String("solid-bus-comp"));
-                expectEquals(project.sendBuses[1].pluginId, juce::String(""));
-                expectEquals(project.rifffs[0].stems[0].sendLevels[0], 0.5);
-                expectEquals(project.rifffs[0].stems[0].sendLevels[1], 0.0);
-            }
-
-            beginTest("defaults sendBuses to 4 empty slots and sendLevels to all-zero when omitted");
-            {
-                const juce::String json = R"({
-                    "bpm": 120,
-                    "snapDiv": 16,
-                    "rifffs": [{
-                        "groupId": "r1",
-                        "startBar": 0,
-                        "barLength": 4,
-                        "stems": [{"stemKey": "r1:1", "resolvedPath": "/x.wav", "durationSec": 1, "barLength": 4}]
-                    }]
-                })";
-                EngineProject project;
-                juce::String error;
-                expect(parseEngineProject(json, project, error));
-                for (const auto& bus : project.sendBuses)
-                    expect(bus.pluginId.isEmpty());
-                for (double level : project.rifffs[0].stems[0].sendLevels)
-                    expectEquals(level, 0.0);
             }
 
             beginTest("parses an empty project (no rifffs placed yet)");

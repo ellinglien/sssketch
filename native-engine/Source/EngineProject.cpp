@@ -41,22 +41,6 @@ namespace ssstitch
         project.bpm = getDouble(parsed, "bpm", 120.0);
         project.snapDiv = getDouble(parsed, "snapDiv", 16.0);
 
-        // Lenient on both counts (missing/short arrays leave the rest at
-        // their defaults — empty plugin id, zero send level) rather than
-        // treating a shorter-than-4 array as a parse error: this keeps old
-        // saved projects (made before this feature existed) loading
-        // exactly as before, matching how every other optional field in
-        // this parser already degrades.
-        auto sendBusesVar = parsed.getProperty("sendBuses", juce::var());
-        if (auto* sendBusesArray = sendBusesVar.getArray())
-        {
-            for (int i = 0; i < 4 && i < sendBusesArray->size(); ++i)
-            {
-                const auto& busVar = sendBusesArray->getReference(i);
-                project.sendBuses[(size_t) i].pluginId = busVar.getProperty("pluginId", "").toString();
-            }
-        }
-
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())
         {
@@ -94,12 +78,6 @@ namespace ssstitch
                         stem.startBarOverride = getDouble(stemVar, "startBarOverride", -1.0);
                         stem.volume = getDouble(stemVar, "volume", 1.0);
                         stem.muted = getBool(stemVar, "muted", false);
-                        auto sendLevelsVar = stemVar.getProperty("sendLevels", juce::var());
-                        if (auto* sendLevelsArray = sendLevelsVar.getArray())
-                        {
-                            for (int i = 0; i < 4 && i < sendLevelsArray->size(); ++i)
-                                stem.sendLevels[(size_t) i] = (double) sendLevelsArray->getReference(i);
-                        }
                         rifff.stems.push_back(std::move(stem));
                     }
                 }

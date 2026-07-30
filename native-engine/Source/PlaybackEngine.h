@@ -2,7 +2,6 @@
 #pragma once
 #include "EngineProject.h"
 #include "StemBufferCache.h"
-#include "SendBus.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 
 namespace ssstitch
@@ -10,7 +9,7 @@ namespace ssstitch
     class PlaybackEngine
     {
     public:
-        explicit PlaybackEngine(StemBufferCache& bufferCache, SendBus& sendBus);
+        explicit PlaybackEngine(StemBufferCache& bufferCache);
 
         /** Replaces the current project. Loads every stem's audio into
          * bufferCache up front (mirrors AudioEngine.ts loading buffers before
@@ -42,7 +41,6 @@ namespace ssstitch
 
     private:
         StemBufferCache& bufferCache;
-        SendBus& sendBus;
         EngineProject currentProject;
     };
 }

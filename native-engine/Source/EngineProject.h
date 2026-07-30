@@ -1,6 +1,5 @@
 #pragma once
 #include <juce_core/juce_core.h>
-#include <array>
 #include <vector>
 
 namespace ssstitch
@@ -22,7 +21,6 @@ namespace ssstitch
         double startBarOverride = -1.0; // -1.0 = use the rifff's own startBar
         double volume = 1.0;
         bool muted = false;
-        std::array<double, 4> sendLevels { 0.0, 0.0, 0.0, 0.0 };
     };
 
     struct EngineRifff
@@ -35,17 +33,11 @@ namespace ssstitch
         std::vector<EngineStem> stems;
     };
 
-    struct EngineSendBus
-    {
-        juce::String pluginId; // empty = no plugin loaded on this bus
-    };
-
     struct EngineProject
     {
         double bpm = 120.0;
         double snapDiv = 16.0;
         std::vector<EngineRifff> rifffs;
-        std::array<EngineSendBus, 4> sendBuses;
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.

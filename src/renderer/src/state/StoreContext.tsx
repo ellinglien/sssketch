@@ -40,19 +40,6 @@ const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 
-export type SendBusStatus = 'idle' | 'loading' | 'loaded' | 'error'
-
-const SendBusStatusCtx = createContext<
-  [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
->(['idle', 'idle', 'idle', 'idle'])
-
-// Separate from SendBusStatusCtx (rather than folded into it) so a bus's
-// status enum stays a plain, cheap-to-compare 4-tuple — only the sends
-// panel's error tooltip needs the message text itself.
-const SendBusErrorCtx = createContext<[string | null, string | null, string | null, string | null]>(
-  [null, null, null, null]
-)
-
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -72,12 +59,6 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const state = history.present
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
-  const [sendBusStatus, setSendBusStatus] = useState<
-    [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
-  >(['idle', 'idle', 'idle', 'idle'])
-  const [sendBusError, setSendBusError] = useState<
-    [string | null, string | null, string | null, string | null]
-  >([null, null, null, null])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -107,20 +88,6 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         setPlaying(false)
         setPos(0)
         rawDispatch(action)
-        return
-      case 'SET_SEND_BUS_PLUGIN':
-        rawDispatch(action)
-        setSendBusStatus((s) => {
-          const next = [...s] as typeof s
-          next[action.bus] = action.pluginId ? 'loading' : 'idle'
-          return next
-        })
-        setSendBusError((s) => {
-          const next = [...s] as typeof s
-          next[action.bus] = null
-          return next
-        })
-        void window.rifffApi.loadSendPlugin(action.bus, action.pluginId)
         return
       default:
         rawDispatch(action)
@@ -192,16 +159,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // OTHER tracked field happened to change too. Found via Task 12 manual
     // verification: after a resize-handle drag, the captured EngineProject
     // sent over IPC still showed the pre-drag playedBars.
-    state.playedBars,
-    // Same bug, same fix, for send levels: per the design spec, sendLevels
-    // flows through this general load-project sync (unlike sendBusPlugins,
-    // which is deliberately sent via its own explicit load-send-plugin
-    // message instead — see the SET_SEND_BUS_PLUGIN dispatch case above).
-    // Without this, dragging a stem's send-level control updated the
-    // renderer's own state and the Inspector's UI just fine, but the engine
-    // never learned about it — the send would silently stay at whatever
-    // level (usually 0) it had at the last unrelated resend.
-    state.sendLevels
+    state.playedBars
   ])
 
   useEffect(() => {
@@ -240,59 +198,15 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     return window.rifffApi.onEngineRestarted(() => {
       dispatch({ type: 'STOP' })
-      // The respawned engine process starts with every send bus empty — the
-      // main process only resends the last-known *project* on crash-recovery
-      // (playbackEngineLifecycle.ts's own lastProject cache), not send-bus
-      // plugin assignments. Re-issue load-send-plugin for whichever buses
-      // currently have a plugin assigned, from this renderer's own live
-      // state, mirroring how the project itself gets kept in sync.
-      for (const [bus, pluginId] of stateRef.current.sendBusPlugins.entries()) {
-        if (pluginId !== null) {
-          void window.rifffApi.loadSendPlugin(bus, pluginId)
-        }
-      }
     })
   }, [dispatch])
-
-  useEffect(() => {
-    return window.rifffApi.onSendPluginLoaded(({ bus, success, error }) => {
-      if (!success) console.error(`StoreContext: send bus ${bus} failed to load plugin: ${error}`)
-      setSendBusStatus((s) => {
-        const next = [...s] as typeof s
-        next[bus] = success ? 'loaded' : 'error'
-        return next
-      })
-      setSendBusError((s) => {
-        const next = [...s] as typeof s
-        next[bus] = success ? null : (error ?? 'unknown error')
-        return next
-      })
-      // A failed load must not leave sendBusPlugins[bus] pointing at the
-      // plugin that just failed — otherwise a LATER, unrelated engine
-      // crash-recovery restart would resend load-send-plugin for that same
-      // known-bad id (see the onEngineRestarted effect below) and fail
-      // again forever. Uses rawDispatch, not dispatch: dispatch's own
-      // SET_SEND_BUS_PLUGIN case would also reset sendBusStatus/sendBusError
-      // back to 'idle'/null and fire another (pointless) loadSendPlugin IPC
-      // call, wiping out the 'error' + message this same handler just set
-      // above before the user ever sees it. This only needs to correct the
-      // stale project-data field, nothing else.
-      if (!success) {
-        rawDispatch({ type: 'SET_SEND_BUS_PLUGIN', bus: bus as 0 | 1 | 2 | 3, pluginId: null })
-      }
-    })
-  }, [])
 
   return (
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={dispatch}>
         <PosCtx.Provider value={pos}>
           <PlayingCtx.Provider value={playing}>
-            <SendBusStatusCtx.Provider value={sendBusStatus}>
-              <SendBusErrorCtx.Provider value={sendBusError}>
-                <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
-              </SendBusErrorCtx.Provider>
-            </SendBusStatusCtx.Provider>
+            <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
           </PlayingCtx.Provider>
         </PosCtx.Provider>
       </DispatchCtx.Provider>
@@ -318,16 +232,6 @@ export function usePos(): number {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function usePlaying(): boolean {
   return useContext(PlayingCtx)
-}
-
-// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
-export function useSendBusStatus(): [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus] {
-  return useContext(SendBusStatusCtx)
-}
-
-// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
-export function useSendBusError(): [string | null, string | null, string | null, string | null] {
-  return useContext(SendBusErrorCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
