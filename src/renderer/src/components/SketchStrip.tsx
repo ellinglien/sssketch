@@ -67,6 +67,27 @@ export function SketchStrip(): React.JSX.Element {
     return () => stopTilePreview()
   }, [stopTilePreview])
 
+  const removeTile = useCallback(
+    (groupId: string) => {
+      const remaining = sequence.map((r) => r.groupId).filter((id) => id !== groupId)
+      dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
+      dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: remaining })
+    },
+    [sequence, dispatch]
+  )
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (!state.sel || !sequence.some((r) => r.groupId === state.sel)) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      removeTile(state.sel)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [state.sel, sequence, removeTile])
+
   function handleTileClick(rifff: Rifff): void {
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     previewGenerationRef.current += 1
@@ -170,6 +191,10 @@ export function SketchStrip(): React.JSX.Element {
             draggable
             onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
             onClick={() => handleTileClick(rifff)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              removeTile(rifff.groupId)
+            }}
             title={rifff.name}
             style={{
               order: index * 10,

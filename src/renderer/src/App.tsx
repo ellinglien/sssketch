@@ -374,14 +374,18 @@ function Frame(): React.JSX.Element {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (!state.sel) return
+      // Sketch mode has its own Delete/Backspace handling (SketchStrip),
+      // which also re-packs the remaining sequence via SEQUENCE_RIFFFS —
+      // this handler firing too would remove the same rifff a second time
+      // (a no-op) but skip that repack step, racing with SketchStrip's own.
+      if (!state.sel || state.mode === 'sketch') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: state.sel })
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, dispatch])
+  }, [state.sel, state.mode, dispatch])
 
   // Space toggles play/pause, the standard DAW convention. Skipped whenever the
   // beat-picker is open (it owns spacebar for tap-to-mark while it's up) or focus
