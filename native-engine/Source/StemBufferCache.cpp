@@ -5,7 +5,11 @@ namespace ssstitch
 {
     StemBufferCache::StemBufferCache()
     {
-        formatManager.registerBasicFormats(); // WAV, AIFF, etc. — Endlesss stems are WAV
+        // WAV, AIFF, Ogg Vorbis (default JUCE_USE_OGGVORBIS=1), etc. Endlesss's own
+        // native export is WAV; LORE-cached stems (see the LORE library browser
+        // feature) are Ogg Vorbis — both load through this same reader, no
+        // format-specific code needed anywhere downstream.
+        formatManager.registerBasicFormats();
     }
 
     bool StemBufferCache::load(const juce::String& path)

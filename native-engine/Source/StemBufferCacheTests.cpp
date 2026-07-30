@@ -1,6 +1,7 @@
 // native-engine/Source/StemBufferCacheTests.cpp
 #include "StemBufferCache.h"
 #include <juce_core/juce_core.h>
+#include <cmath>
 
 namespace ssstitch
 {
@@ -81,6 +82,40 @@ namespace ssstitch
                 auto* buffer = cache.get(recacheFile.getFullPathName());
                 expect(buffer != nullptr);
                 expectEquals(buffer->getNumSamples(), numSamples);
+            }
+
+            beginTest("loads a real Ogg Vorbis file and reports its sample data");
+            {
+                auto oggFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("ssstitch_test_fixture.ogg");
+
+                juce::OggVorbisAudioFormat oggFormat;
+                std::unique_ptr<juce::FileOutputStream> out(oggFile.createOutputStream());
+                expect(out != nullptr);
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    oggFormat.createWriterFor(out.get(), 44100.0, 1, 0, {}, 6));
+                expect(writer != nullptr);
+                out.release(); // writer now owns the stream
+
+                const int numSamples = 4410;
+                juce::AudioBuffer<float> source(1, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                    source.setSample(0, i, 0.5f);
+                writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+                writer.reset(); // flush + close
+
+                StemBufferCache cache;
+                expect(cache.load(oggFile.getFullPathName()));
+                auto* buffer = cache.get(oggFile.getFullPathName());
+                expect(buffer != nullptr);
+                expectEquals(buffer->getNumChannels(), 1);
+                // Lossy compression means the sample count and exact values won't be
+                // bit-identical to the source — assert it's in the right ballpark and
+                // the known-constant value survived recognizably, not an exact match.
+                expect(std::abs(buffer->getNumSamples() - numSamples) < 100);
+                expectWithinAbsoluteError(buffer->getSample(0, 100), 0.5f, 0.05f);
+
+                oggFile.deleteFile();
             }
 
             tempFile.deleteFile();
