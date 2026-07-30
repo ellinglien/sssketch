@@ -323,3 +323,61 @@ export function pasteRifffAction(
     stretch: state.stretch[sourceGroupId] ?? true
   }
 }
+
+/**
+ * Builds a PASTE_RIFFF action for duplicating a SINGLE stem — cmd/ctrl-drag on
+ * an unlinked stem's own waveform, the per-stem equivalent of pasteRifffAction's
+ * whole-clip duplicate. There's no way to represent "the same stem slot twice,
+ * at two different times" within one rifff (linked or not — a stem's slot is
+ * unique per rifff), so this always creates a fresh, independent single-stem
+ * rifff rather than adding a second instance to the source's own stems array.
+ * It lands as its own new row (same as any other paste), not literally
+ * "inside" the source's row.
+ *
+ * barLength is set to resolvePlayedBars' current resolved length, not
+ * rifff.barLength — that's what makes this "duplicate it, OR a portion of
+ * it": if the source stem is currently resized/trimmed, the copy's own full
+ * extent IS that trimmed length, not the untrimmed original. Shares the
+ * source's own audio file path — see pasteRifffAction's doc comment for the
+ * same "no audio is actually duplicated on disk" tradeoff and its one edge
+ * (independent re-bakes of two copies sharing a path race on the same
+ * `.baked.wav` sibling).
+ */
+export function pasteStemAction(
+  state: AppState,
+  sourceGroupId: string,
+  slot: number,
+  startBar: number
+): Action | null {
+  const source = state.rifffs[sourceGroupId]
+  if (!source) return null
+  const stem = source.stems.find((s) => s.slot === slot)
+  if (!stem) return null
+
+  const newGroupId = crypto.randomUUID()
+  const rifff: Rifff = {
+    groupId: newGroupId,
+    name: stem.name,
+    bpm: source.bpm,
+    barLength: resolvePlayedBars(state, sourceGroupId, slot),
+    folderPath: source.folderPath,
+    startBar,
+    stems: [{ ...stem }]
+  }
+
+  const oldKey = stemKey(sourceGroupId, slot)
+  const newKey = stemKey(newGroupId, slot)
+  const vol: Record<string, number> = {}
+  const mute: Record<string, boolean> = {}
+  if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
+  if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+
+  return {
+    type: 'PASTE_RIFFF',
+    rifff,
+    vol,
+    mute,
+    off: { [newGroupId]: state.off[resolveOffsetKey(state, sourceGroupId, slot)] ?? 0 },
+    stretch: state.stretch[sourceGroupId] ?? true
+  }
+}

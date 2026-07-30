@@ -11,6 +11,7 @@ import {
   offsetStepsForBeatIndex,
   rotationSecondsForStem,
   pasteRifffAction,
+  pasteStemAction,
   placedRifffsInOrder,
   channelMuteLetters,
   isSketchEligible,
@@ -580,5 +581,93 @@ describe('pasteRifffAction', () => {
     expect(state.rifffs.r1.startBar).toBe(4) // original untouched
     expect(state.sel).toBe(newGroupId)
     expect(state.exp[newGroupId]).toBeUndefined()
+  })
+})
+
+describe('pasteStemAction', () => {
+  const twoStemRifff: Rifff = {
+    groupId: 'r1',
+    name: 'test',
+    bpm: 150,
+    barLength: 8,
+    folderPath: '/x',
+    startBar: 4,
+    stems: [
+      { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'b',
+        type: 'bass',
+        path: '/b.wav',
+        durationSec: 1,
+        barLength: 8
+      }
+    ]
+  }
+
+  it('returns null when the source rifff no longer exists', () => {
+    expect(pasteStemAction(initialState, 'missing', 1, 0)).toBeNull()
+  })
+
+  it('returns null for a slot that does not exist on the source', () => {
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    expect(pasteStemAction(state, 'r1', 99, 0)).toBeNull()
+  })
+
+  it('builds a PASTE_RIFFF action for a single-stem rifff at the requested startBar', () => {
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    const action = pasteStemAction(state, 'r1', 2, 20)
+    if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
+    expect(action.rifff.groupId).not.toBe('r1')
+    expect(action.rifff.startBar).toBe(20)
+    expect(action.rifff.stems).toHaveLength(1)
+    expect(action.rifff.stems[0].slot).toBe(2)
+    expect(action.rifff.stems[0].path).toBe('/b.wav')
+    expect(action.rifff.name).toBe('b') // the stem's own name, not the rifff's
+    expect(action.rifff.bpm).toBe(150) // carried from the source rifff
+  })
+
+  it('sets barLength to the CURRENT resolved (possibly resized) length, not the source rifff’s own barLength', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1:1', bars: 3 })
+
+    const action = pasteStemAction(state, 'r1', 1, 20)
+    if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
+    expect(action.rifff.barLength).toBe(3) // the resized/trimmed length, not 8
+  })
+
+  it('carries over this stem’s own volume, mute, and offset — resolved correctly while unlinked', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.4 })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1:1', steps: 3 })
+
+    const action = pasteStemAction(state, 'r1', 1, 0)
+    if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
+    const newGroupId = action.rifff.groupId
+    expect(action.vol[`${newGroupId}:1`]).toBe(0.4)
+    expect(action.mute[`${newGroupId}:1`]).toBe(true)
+    expect(action.off[newGroupId]).toBe(3)
+  })
+
+  it('applying the action creates an independent, single-stem rifff', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    const action = pasteStemAction(state, 'r1', 1, 20)
+    if (!action) throw new Error('expected an action')
+    state = reducer(state, action)
+
+    const newGroupId = action.type === 'PASTE_RIFFF' ? action.rifff.groupId : ''
+    expect(state.rifffs[newGroupId]).toBeDefined()
+    expect(state.rifffs[newGroupId].stems).toHaveLength(1)
+    expect(state.rifffs[newGroupId].startBar).toBe(20)
+    // Original untouched — still has both its stems.
+    expect(state.rifffs.r1.stems).toHaveLength(2)
   })
 })

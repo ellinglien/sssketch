@@ -23,6 +23,7 @@ import { serializeProject, deserializeProject } from './state/serialize'
 import {
   loopLengthBars,
   pasteRifffAction,
+  pasteStemAction,
   placedRifffsInOrder,
   channelMuteLetters,
   nextArrangerMode,
@@ -119,6 +120,20 @@ function Timeline({
     // and only while its stem's group is unlinked).
     const stemDragKey = e.dataTransfer.getData('text/rifff-stem-key')
     if (stemDragKey) {
+      // Cmd/Ctrl held at drop = duplicate just this one stem rather than move
+      // it — the per-stem equivalent of the whole-rifff duplicate below.
+      // stemKey's own format is `${groupId}:${slot}` — split on the LAST ':'
+      // since groupId is always a crypto.randomUUID() (never contains one),
+      // matching the same split App.tsx's Shift+letter mute handler already
+      // uses for the same reason.
+      if (e.metaKey || e.ctrlKey) {
+        const sepIndex = stemDragKey.lastIndexOf(':')
+        const sourceGroupId = stemDragKey.slice(0, sepIndex)
+        const slot = Number(stemDragKey.slice(sepIndex + 1))
+        const action = pasteStemAction(state, sourceGroupId, slot, startBar)
+        if (action) dispatch(action)
+        return
+      }
       dispatch({ type: 'SET_STEM_START', key: stemDragKey, startBar })
       return
     }

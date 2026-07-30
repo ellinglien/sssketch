@@ -336,7 +336,11 @@ export function StemWaveformRow({
             const target = sqrtGain(rifff.stems.length)
             if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
-          title="right-click to mute · double-click to reset volume"
+          title={
+            unlinked
+              ? 'right-click to mute · double-click to reset volume · cmd/ctrl-drag to duplicate this stem'
+              : 'right-click to mute · double-click to reset volume'
+          }
           style={{
             position: 'absolute',
             top: 0,
