@@ -72,6 +72,44 @@ describe('computeStemSchedule', () => {
     expect(segments[0].startBarInTimeline).toBe(4.25)
   })
 
+  it('wraps an offset larger than the stem’s own loop length, rather than shifting the clip’s start by that much real time', () => {
+    // Real bug this fixed: BeatPicker's downbeat pick can land many bars
+    // into a stem's own loop (offsetStepsForBeatIndex scales with the
+    // clicked beat across the WHOLE loop, not just one bar) — for a
+    // LORE-sourced stem, which is never baked/rewritten, that large offset
+    // stuck around permanently and showed up as a real silence gap before
+    // the clip ever played. stems[0].barLength is 8 here; 160/16 = 10 bars
+    // of raw offset wraps to 10 % 8 = 2.
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 160, // 160/16 = 10 bars, more than stems[0]'s own 8-bar loop
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150
+    })
+    expect(segments[0].startBarInTimeline).toBe(6) // 4 (rifff start) + (10 % 8)
+  })
+
+  it('wraps a negative offset into the positive [0, barLength) range, not left negative', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: -16, // -16/16 = -1 bar
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150
+    })
+    // -1 wrapped into [0, 8) is 7, not -1 — landing at 4 + 7 = 11, not 4 - 1 = 3.
+    expect(segments[0].startBarInTimeline).toBe(11)
+  })
+
+  it('is a no-op for an offset that is an exact multiple of the loop length', () => {
+    const segments = computeStemSchedule(rifff, rifff.stems[0], {
+      offsetSteps: 128, // 128/16 = 8 bars, exactly one full loop of stems[0]
+      snapDiv: 16,
+      projectPos: 0,
+      projectBpm: 150
+    })
+    expect(segments[0].startBarInTimeline).toBe(4) // wraps to exactly 0
+  })
+
   it('drops segments that have already fully played before the current position', () => {
     const segments = computeStemSchedule(rifff, rifff.stems[1], {
       offsetSteps: 0,

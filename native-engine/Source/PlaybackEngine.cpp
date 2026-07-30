@@ -70,7 +70,15 @@ namespace ssstitch
                 // "index" counts as first) can't reappear here, since we
                 // never build a list at all.
                 const double start = stem.startBarOverride >= 0.0 ? stem.startBarOverride : rifff.startBar;
-                const double offsetBars = stem.offsetSteps / currentProject.snapDiv;
+                // Wrapped into [0, stem.barLength) — kept in sync by hand with
+                // SchedulePlayback.cpp's identical fix/reasoning (this function
+                // is a hand-optimized reimplementation of the same algorithm
+                // for the real-time callback, not a caller of
+                // computeStemSchedule — see the comment above this loop).
+                const double rawOffsetBars = stem.offsetSteps / currentProject.snapDiv;
+                double offsetBars = std::fmod(rawOffsetBars, (double) stem.barLength);
+                if (offsetBars < 0.0)
+                    offsetBars += (double) stem.barLength;
                 const double bound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
                 if (bound <= 0.0)
                     continue;

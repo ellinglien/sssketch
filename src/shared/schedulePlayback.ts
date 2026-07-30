@@ -31,7 +31,25 @@ export function computeStemSchedule(
   opts: ScheduleOptions
 ): PlaybackSegment[] {
   const start = opts.startBarOverride ?? rifff.startBar ?? 0
-  const offsetBars = opts.offsetSteps / opts.snapDiv
+  // Wrapped into [0, stem.barLength) rather than used as a raw additive
+  // shift: offsetSteps carries two very different magnitudes depending on
+  // its source. A manual NUDGE_OFFSET is always small (a few grid steps,
+  // well under a bar) and either interpretation gives the same result. But
+  // BeatPicker's downbeat pick (offsetStepsForBeatIndex) scales with WHICH
+  // BEAT was clicked across the stem's ENTIRE loop, which can be many bars.
+  // For a normal (bake-able) import that's harmless — baking physically
+  // rotates the audio and resets the offset to 0 — but a LORE-sourced stem
+  // is deliberately never rewritten (see bakeOffset.ts), so that large
+  // offset stays forever. Used as a raw additive shift, that meant a real,
+  // permanent silence gap before the clip's audio ever starts (the bug
+  // reported as clips landing with unexplained multi-bar gaps between
+  // them). Wrapping it is mathematically equivalent for a tiling/repeating
+  // stem — shifting every tile's position by an exact multiple of the
+  // stem's own loop length doesn't change the audible pattern at all, since
+  // every tile plays identical content — so this loses nothing for the
+  // small-nudge case and fixes the large-pick case outright.
+  const rawOffsetBars = opts.offsetSteps / opts.snapDiv
+  const offsetBars = ((rawOffsetBars % stem.barLength) + stem.barLength) % stem.barLength
   const secPerBarNative = stem.durationSec / stem.barLength
   const bound = opts.playedBars ?? rifff.barLength
 

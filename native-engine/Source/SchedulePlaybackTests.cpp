@@ -44,6 +44,31 @@ namespace ssstitch
                 expectEquals(segments[0].startBarInTimeline, 4.25);
             }
 
+            beginTest("wraps an offset larger than the stem's own loop length, rather than shifting the clip's start by that much real time");
+            {
+                // Real bug this fixed: BeatPicker's downbeat pick can land many
+                // bars into a stem's own loop — for a LORE-sourced stem, which
+                // is never baked/rewritten, that large offset stuck around
+                // permanently and showed up as a real silence gap before the
+                // clip ever played. stemA's barLength is 8; 160/16 = 10 bars of
+                // raw offset wraps to 10 % 8 = 2.
+                auto segments = computeStemSchedule(rifff, stemA, { 160.0, 16.0, 0.0, 150.0, -1.0 });
+                expectEquals(segments[0].startBarInTimeline, 6.0); // 4 (rifff start) + (10 % 8)
+            }
+
+            beginTest("wraps a negative offset into the positive [0, barLength) range, not left negative");
+            {
+                auto segments = computeStemSchedule(rifff, stemA, { -16.0, 16.0, 0.0, 150.0, -1.0 }); // -16/16 = -1 bar
+                // -1 wrapped into [0, 8) is 7, landing at 4 + 7 = 11, not 4 - 1 = 3.
+                expectEquals(segments[0].startBarInTimeline, 11.0);
+            }
+
+            beginTest("is a no-op for an offset that is an exact multiple of the loop length");
+            {
+                auto segments = computeStemSchedule(rifff, stemA, { 128.0, 16.0, 0.0, 150.0, -1.0 }); // 128/16 = 8 bars, exactly one full loop
+                expectEquals(segments[0].startBarInTimeline, 4.0); // wraps to exactly 0
+            }
+
             beginTest("drops segments that have already fully played before the current position");
             {
                 auto segments = computeStemSchedule(rifff, stemB, { 0.0, 16.0, 8.0, 150.0, -1.0 });
