@@ -14,6 +14,7 @@ import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
 import { Playhead } from './components/Playhead'
 import { BeatPicker } from './components/BeatPicker'
+import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
 import {
@@ -259,6 +260,7 @@ function Frame(): React.JSX.Element {
   const history = useHistory()
   const playing = usePlaying()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
+  const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -442,7 +444,7 @@ function Frame(): React.JSX.Element {
           <ProjectMenu />
         </div>
       </div>
-      <Shelf onImported={setPickerGroupId} />
+      <Shelf onImported={setPickerGroupId} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
       <TransportBar />
       <div style={{ display: 'flex' }}>
         {/* minWidth:0 lets this flex item shrink below its content's intrinsic
@@ -456,6 +458,7 @@ function Frame(): React.JSX.Element {
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker groupId={pickerGroupId} onClose={() => setPickerGroupId(null)} />
       )}
+      {loreLibraryOpen && <LoreLibraryBrowser onClose={() => setLoreLibraryOpen(false)} />}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

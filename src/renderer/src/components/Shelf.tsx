@@ -8,9 +8,11 @@ import { setGrabOffsetBars } from './dragGrabOffset'
 const TILE_SIZE = 42
 
 export function Shelf({
-  onImported
+  onImported,
+  onOpenLoreLibrary
 }: {
   onImported: (groupId: string) => void
+  onOpenLoreLibrary: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -88,6 +90,20 @@ export function Shelf({
             {detailRifff.barLength} bars
           </span>
         )}
+        <button
+          onClick={onOpenLoreLibrary}
+          style={{
+            height: 18,
+            borderRadius: 0,
+            padding: '0 6px',
+            fontSize: 9,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          browse lore library
+        </button>
       </div>
       <div
         onMouseLeave={() => setHoverId(null)}
