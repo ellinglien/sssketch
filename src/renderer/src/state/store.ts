@@ -278,14 +278,27 @@ export function reducer(state: AppState, action: Action): AppState {
     // Waveform's path-keyed cache picks up the corrected audio automatically —
     // no manual cache eviction needed) and resets offset to 0, since the
     // correction that offset was compensating for is now baked into the audio
-    // itself. Resets both the group key and every per-stem key, covering linked
-    // and unlinked groups alike.
+    // itself. Only for stems that actually got a bakedPath back: bakeOffset
+    // silently skips any source it can't rotate in place (e.g. a LORE-sourced
+    // stem — an Ogg Vorbis file it has no way to rewrite, and shouldn't
+    // anyway, since those are read-only references into Elling's warehouse,
+    // never copies). Resetting a stem's offset when it was never actually
+    // baked would silently throw away the correction — the runtime offset is
+    // the ONLY place it's captured for a stem baking can't reach, so it has
+    // to survive this action untouched. The group-level key only resets if
+    // every stem in the riff baked successfully — a linked group reads that
+    // single key for every stem (see resolveOffsetKey), so zeroing it while
+    // even one stem is still relying on the runtime shift would un-correct
+    // that stem too.
     case 'APPLY_BAKE': {
       const rifff = state.rifffs[action.groupId]
       const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
       const stems = rifff.stems.map((s) => ({ ...s, path: pathMap.get(s.path) ?? s.path }))
-      const off = { ...state.off, [action.groupId]: 0 }
-      for (const s of rifff.stems) off[stemKey(action.groupId, s.slot)] = 0
+      const off = { ...state.off }
+      if (rifff.stems.every((s) => pathMap.has(s.path))) off[action.groupId] = 0
+      for (const s of rifff.stems) {
+        if (pathMap.has(s.path)) off[stemKey(action.groupId, s.slot)] = 0
+      }
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } },

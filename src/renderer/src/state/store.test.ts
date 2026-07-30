@@ -229,6 +229,37 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
   })
 
+  it('preserves the runtime offset when a bake fails for every stem (e.g. LORE-sourced, not WAV)', () => {
+    // bakeOffset silently skips any file it can't rewrite in place (Ogg
+    // Vorbis LORE stems) rather than throwing — real bug this covers: the
+    // reducer used to unconditionally zero every offset regardless, silently
+    // discarding the picked downbeat correction for a riff that could never
+    // actually be baked, with no other place that correction was captured.
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
+    state = reducer(state, { type: 'APPLY_BAKE', groupId: 'r1', results: [] })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
+    expect(state.off.r1).toBe(-6)
+  })
+
+  it("preserves the group offset when only some of a linked group's stems bake successfully", () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      groupId: 'r1',
+      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav' }] // slot 6 failed
+    })
+    // The group key is what a linked group actually reads at playback time
+    // (see resolveOffsetKey) — zeroing it while slot 6 is still relying on
+    // the runtime shift would silently un-correct that stem, even though
+    // slot 1 really did get baked.
+    expect(state.off.r1).toBe(-6)
+    expect(state.off['r1:1']).toBe(0)
+    expect(state.off['r1:6']).toBeUndefined()
+  })
+
   it('sets a stem volume', () => {
     const state = reducer(initialState, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.5 })
     expect(state.vol['r1:1']).toBe(0.5)
