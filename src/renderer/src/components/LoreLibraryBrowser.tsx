@@ -33,6 +33,11 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   const [bpmFilter, setBpmFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
+  // <input type="date"> values (YYYY-MM-DD strings, or '' for unset) —
+  // converted to unix-seconds boundaries (start/end of day) when building
+  // the query filters below, since CreationTime is stored as unix seconds.
+  const [dateFromFilter, setDateFromFilter] = useState('')
+  const [dateToFilter, setDateToFilter] = useState('')
   // Tracks the last jamCID a riff selection was reset for — compared during
   // render (not in an effect) so switching jams clears the stale riff
   // selection in the same render pass, matching the "adjust state while
@@ -138,10 +143,18 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     if (!selectedJamCID) return
     let cancelled = false
     const filters: {
+      dateFrom?: number
+      dateTo?: number
       bpm?: number
       userName?: string
       onlyFullyCached?: boolean
     } = {}
+    if (dateFromFilter !== '') {
+      filters.dateFrom = Math.floor(new Date(`${dateFromFilter}T00:00:00`).getTime() / 1000)
+    }
+    if (dateToFilter !== '') {
+      filters.dateTo = Math.floor(new Date(`${dateToFilter}T23:59:59`).getTime() / 1000)
+    }
     if (bpmFilter.trim() !== '' && !Number.isNaN(Number(bpmFilter))) filters.bpm = Number(bpmFilter)
     if (userNameFilter.trim() !== '') filters.userName = userNameFilter.trim()
     if (onlyFullyCached) filters.onlyFullyCached = true
@@ -152,7 +165,7 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     return () => {
       cancelled = true
     }
-  }, [selectedJamCID, bpmFilter, userNameFilter, onlyFullyCached])
+  }, [selectedJamCID, dateFromFilter, dateToFilter, bpmFilter, userNameFilter, onlyFullyCached])
 
   useEffect(() => {
     stopPreview()
@@ -325,6 +338,36 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
               {selectedJamCID !== null && (
                 <>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      title="from date"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <input
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
+                      title="to date"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
                     <input
                       type="number"
                       value={bpmFilter}
