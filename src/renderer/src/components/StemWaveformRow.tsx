@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useDispatch, useAppState } from '../state/StoreContext'
+import { useDispatch, useAppState, usePlaying } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
@@ -38,6 +38,7 @@ export function StemWaveformRow({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const rifff = state.rifffs[groupId]
   const stem = rifff.stems.find((s) => s.slot === slot)!
   const color = typeColorVar(stem.type)
@@ -244,6 +245,21 @@ export function StemWaveformRow({
         setDragFadeOut(null)
       }
     )
+  }
+
+  // Click anywhere on the waveform (that isn't a resize handle, fade dot, or
+  // a real drag) moves the transport playhead to that exact point — the
+  // same free/unsnapped scrub Ruler already offers, just reachable directly
+  // from the clip itself instead of needing to find the matching spot on
+  // the ruler above. Skipped while volumeDragMode is on, since that mode
+  // repurposes this same surface for volume dragging instead.
+  function handleScrubClick(e: React.MouseEvent): void {
+    if (volumeDragMode) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const bar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
+    dispatch({ type: 'SELECT', groupId })
+    dispatch({ type: 'SET_POS', pos: bar })
+    if (playing) void window.rifffApi.engineSetPosition(bar)
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -477,7 +493,12 @@ export function StemWaveformRow({
             onMouseDown={(e) => {
               if (volumeDragMode) handleVolumeStart(e)
             }}
-            title={volumeDragMode ? 'drag to adjust volume · right-click to mute' : undefined}
+            onClick={handleScrubClick}
+            title={
+              volumeDragMode
+                ? 'drag to adjust volume · right-click to mute'
+                : 'click to scrub playhead · drag to move clip · right-click to mute'
+            }
             style={{
               position: 'absolute',
               inset: 0,

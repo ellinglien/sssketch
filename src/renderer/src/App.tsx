@@ -9,10 +9,11 @@ import {
 } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
-import { Ruler, PPB } from './components/Ruler'
+import { Ruler, PPB, COMPACT_PPB } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
+import { COMPACT_ROW_HEIGHT } from './components/CompactRifffBlock'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems } from './components/BeatPicker'
@@ -33,10 +34,10 @@ import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import { stemKey } from '@shared/types'
 
-function barForClientX(clientX: number, container: HTMLDivElement): number {
+function barForClientX(clientX: number, container: HTMLDivElement, ppb: number): number {
   const rect = container.getBoundingClientRect()
   const xInTimeline = clientX - rect.left
-  return Math.max(0, Math.round(xInTimeline / PPB))
+  return Math.max(0, Math.round(xInTimeline / ppb))
 }
 
 // Reserved empty rows always trailing the last placed rifff, so there's a
@@ -68,10 +69,16 @@ function Timeline({
   const state = useAppState()
   const dispatch = useDispatch()
   const [dropBar, setDropBar] = useState<number | null>(null)
+  // Compact mode uses its own, much denser horizontal scale (see Ruler.tsx)
+  // — every bar<->pixel conversion below has to agree on which one is
+  // active, so this is threaded through drag/drop math and into the Ruler/
+  // Playhead/drop-indicator this component renders, rather than assuming
+  // the shared PPB everywhere.
+  const ppb = state.mode === 'compact' ? COMPACT_PPB : PPB
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget), getGrabOffsetBars()))
+    setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget, ppb), getGrabOffsetBars()))
     // Cmd/Ctrl-drag duplicates a placed clip instead of moving it (see
     // handleDrop's text/rifff-group-id branch) — this just gives the OS its
     // own native "copy" cursor treatment (a green + badge on macOS) while
@@ -83,7 +90,10 @@ function Timeline({
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
     setDropBar(null)
-    const startBar = applyGrabOffset(barForClientX(e.clientX, e.currentTarget), getGrabOffsetBars())
+    const startBar = applyGrabOffset(
+      barForClientX(e.clientX, e.currentTarget, ppb),
+      getGrabOffsetBars()
+    )
 
     // Checked first — more specific than a whole-group drag, and the two payloads
     // are never both set on the same drop (StemWaveformRow only sets this one,
@@ -129,12 +139,14 @@ function Timeline({
     // propagation before this bubbles up, so a right-click on an actual clip
     // never also triggers the paste menu.
     e.preventDefault()
-    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget))
+    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget, ppb))
   }
 
   if (state.mode === 'sketch') {
     return <SketchStrip />
   }
+
+  const ghostRowHeight = state.mode === 'compact' ? COMPACT_ROW_HEIGHT : GHOST_ROW_HEIGHT
 
   return (
     <div
@@ -145,7 +157,7 @@ function Timeline({
       onContextMenu={handleContextMenu}
       style={{ position: 'relative' }}
     >
-      <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} />
+      <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
       {placedRifffsInOrder(state).map((r) => (
         <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
       ))}
@@ -153,19 +165,19 @@ function Timeline({
         <div
           key={`ghost-${i}`}
           style={{
-            height: GHOST_ROW_HEIGHT,
+            height: ghostRowHeight,
             borderBottom: '1px dashed var(--ra-border)'
           }}
         />
       ))}
-      <Playhead />
+      <Playhead ppb={ppb} />
       {dropBar !== null && (
         <div
           style={{
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: dropBar * PPB,
+            left: dropBar * ppb,
             width: 2,
             background: 'var(--ra-play-on)',
             pointerEvents: 'none',

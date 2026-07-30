@@ -49,12 +49,15 @@ export function getGrabOffsetBars(): number {
  * clientX to a bar position" math exists in exactly one place. Returns null
  * if there's no [data-timeline] ancestor to measure against — shouldn't
  * happen in practice, every drag source here is rendered inside Timeline. */
-export function mouseBarFromDragEvent(e: {
-  currentTarget: EventTarget
-  clientX: number
-}): number | null {
+export function mouseBarFromDragEvent(
+  e: {
+    currentTarget: EventTarget
+    clientX: number
+  },
+  ppb: number = PPB
+): number | null {
   const target = e.currentTarget as HTMLElement
   const rect = target.closest('[data-timeline]')?.getBoundingClientRect()
   if (!rect) return null
-  return Math.max(0, (e.clientX - rect.left) / PPB)
+  return Math.max(0, (e.clientX - rect.left) / ppb)
 }

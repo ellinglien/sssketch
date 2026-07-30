@@ -42,8 +42,10 @@ let isQuitting = false
 function createWindow(): BrowserWindow {
   // Create the browser window.
   const win = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1440,
+    height: 960,
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),

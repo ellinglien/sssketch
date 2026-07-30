@@ -1,21 +1,19 @@
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { clipGeometry } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { PPB } from './Ruler'
+import { COMPACT_PPB } from './Ruler'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { stemKey } from '@shared/types'
 
-// Real bar positions (the shared Ruler PPB, not a separate condensed
-// scale) — a compact-only horizontal scale would also need Timeline's own
-// drag-position math (barForClientX) and dragGrabOffset.ts's
-// mouseBarFromDragEvent updated to match, both of which are shared,
-// mode-agnostic utilities today. Compactness here comes entirely from row
-// height instead: 12px vs. the expanded view's 44px per stem or the
-// collapsed view's 40px per rifff, so many more rifffs fit on screen at
-// once without needing a second horizontal scale to keep in sync
-// everywhere a bar position gets computed.
-export const COMPACT_ROW_HEIGHT = 12
+// Compact mode's own horizontal scale (COMPACT_PPB, defined in Ruler.tsx
+// alongside Normal mode's PPB) — Timeline in App.tsx picks whichever one
+// applies and threads it through its own drag-position math (barForClientX)
+// and the Ruler/Playhead it renders, so this block only ever needs to agree
+// with itself. Vertically compact too: 8px vs. the expanded view's 44px per
+// stem or the collapsed view's 40px per rifff, so many rifffs fit on screen
+// at once in both dimensions.
+export const COMPACT_ROW_HEIGHT = 8
 
 /** Tiles one stem's waveform across the compact block's width, repeating
  * every stemBarLength bars — same tiling idea as CollapsedRifffRow's own
@@ -74,10 +72,22 @@ export function CompactRifffBlock({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const rifff = state.rifffs[groupId]
   const selected = state.sel === groupId
   const color = typeColorVar(rifff.stems[0]?.type ?? 'fx')
-  const geo = clipGeometry(state, groupId, PPB)
+  const geo = clipGeometry(state, groupId, COMPACT_PPB)
+
+  // Click scrubs the playhead to the exact point clicked, same as the
+  // Normal-mode waveform's own click-to-scrub — matches Ruler's free/
+  // unsnapped seek rather than snapping to this block's own start.
+  function handleScrubClick(e: React.MouseEvent): void {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const bar = Math.max(0, geo.leftPx / COMPACT_PPB + (e.clientX - rect.left) / COMPACT_PPB)
+    dispatch({ type: 'SELECT', groupId })
+    dispatch({ type: 'SET_POS', pos: bar })
+    if (playing) void window.rifffApi.engineSetPosition(bar)
+  }
 
   return (
     <div
@@ -92,12 +102,12 @@ export function CompactRifffBlock({
           draggable
           onDragStart={(e) => {
             e.dataTransfer.setData('text/rifff-group-id', groupId)
-            const mouseBar = mouseBarFromDragEvent(e)
+            const mouseBar = mouseBarFromDragEvent(e, COMPACT_PPB)
             if (mouseBar !== null) {
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
-          onClick={() => dispatch({ type: 'SELECT', groupId })}
+          onClick={handleScrubClick}
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()

@@ -3,7 +3,23 @@ import { startPointerDrag } from './dragUtils'
 
 const PPB = 24
 
-export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
+// Compact mode's own, much denser horizontal scale — deliberately a
+// separate constant (not a shrunk row height on the same PPB Normal mode
+// uses) so far more bars fit in the same viewport width, matching "compact
+// horizontally too, not just vertically." Every bar<->pixel conversion the
+// timeline uses (Ruler's own ticks, clipGeometry, drag/drop position math)
+// has to agree on which scale is active, so this is threaded through
+// wherever state.mode is checked rather than hardcoded — see Timeline in
+// App.tsx for the single place that decides which one applies.
+const COMPACT_PPB = 4
+
+export function Ruler({
+  bars: barCount,
+  ppb = PPB
+}: {
+  bars: number
+  ppb?: number
+}): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
   const bars = Array.from({ length: barCount }, (_, i) => i + 1)
@@ -23,10 +39,10 @@ export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
 
   function handleScrubStart(e: React.MouseEvent<HTMLDivElement>): void {
     const rect = e.currentTarget.getBoundingClientRect()
-    const startBar = Math.max(0, (e.clientX - rect.left) / PPB)
+    const startBar = Math.max(0, (e.clientX - rect.left) / ppb)
     seekTo(startBar)
     startPointerDrag(e, (deltaX) => {
-      seekTo(startBar + deltaX / PPB)
+      seekTo(startBar + deltaX / ppb)
     })
   }
 
@@ -42,13 +58,13 @@ export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
         cursor: 'pointer'
       }}
     >
-      <div style={{ position: 'relative', width: barCount * PPB }}>
+      <div style={{ position: 'relative', width: barCount * ppb }}>
         {bars.map((bar) => (
           <div
             key={bar}
             style={{
               position: 'absolute',
-              left: (bar - 1) * PPB,
+              left: (bar - 1) * ppb,
               top: 0,
               bottom: 0,
               borderLeft: `1px solid ${(bar - 1) % 4 === 0 ? 'var(--ra-border)' : 'var(--ra-grid-minor)'}`
@@ -64,4 +80,4 @@ export function Ruler({ bars: barCount }: { bars: number }): React.JSX.Element {
   )
 }
 
-export { PPB }
+export { PPB, COMPACT_PPB }

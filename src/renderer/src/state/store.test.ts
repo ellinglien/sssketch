@@ -369,6 +369,24 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r2', 'r1'] })
       expect(state.trackOrder).toEqual(['r2', 'r1'])
     })
+
+    it('forces stretch on for every sequenced rifff, even one that had it off', () => {
+      // Real bug: SEQUENCE_RIFFFS packs positions using each rifff's raw
+      // barLength, which only matches clipGeometry's rendered width when
+      // stretch is on. A rifff carried into a sketch sequence with stretch
+      // off (e.g. via pasteRifffAction copying a stretch-off source) would
+      // pack correctly here but then render at a different width once
+      // viewed back in Normal/Compact mode, leaving a visible gap.
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = { ...state, stretch: { ...state.stretch, r1: false } }
+      state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r1', 'r2'] })
+      expect(state.stretch.r1).toBe(true)
+      expect(state.stretch.r2).toBe(true)
+    })
   })
 
   describe('initialState', () => {

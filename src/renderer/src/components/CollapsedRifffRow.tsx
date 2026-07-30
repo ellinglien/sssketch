@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
@@ -77,6 +77,7 @@ export function CollapsedRifffRow({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const rifff = state.rifffs[groupId]
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
@@ -250,6 +251,20 @@ export function CollapsedRifffRow({
         setDragFadeOut(null)
       }
     )
+  }
+
+  // Click anywhere on the waveform (that isn't a resize handle, fade dot, or
+  // a real drag) moves the transport playhead to that exact point — same
+  // free/unsnapped scrub Ruler already offers, reachable directly from the
+  // clip itself. Skipped while volumeDragMode is on, since that mode
+  // repurposes this same surface for volume dragging instead.
+  function handleScrubClick(e: React.MouseEvent): void {
+    if (volumeDragMode) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const bar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
+    dispatch({ type: 'SELECT', groupId })
+    dispatch({ type: 'SET_POS', pos: bar })
+    if (playing) void window.rifffApi.engineSetPosition(bar)
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -449,7 +464,12 @@ export function CollapsedRifffRow({
             onMouseDown={(e) => {
               if (volumeDragMode) handleVolumeStart(e)
             }}
-            title={volumeDragMode ? 'drag to adjust group volume · right-click to mute' : undefined}
+            onClick={handleScrubClick}
+            title={
+              volumeDragMode
+                ? 'drag to adjust group volume · right-click to mute'
+                : 'click to scrub playhead · drag to move clip · right-click to mute'
+            }
             style={{
               position: 'absolute',
               inset: 0,

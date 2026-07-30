@@ -199,13 +199,22 @@ export function reducer(state: AppState, action: Action): AppState {
     // top-to-bottom row order stay in sync with each other.
     case 'SEQUENCE_RIFFFS': {
       const rifffs = { ...state.rifffs }
+      const stretch = { ...state.stretch }
       let cursor = 0
       for (const groupId of action.groupIds) {
         const rifff = rifffs[groupId]
         rifffs[groupId] = { ...rifff, startBar: cursor }
         cursor += rifff.barLength
+        // Sketch mode's tiles always play stretched to project tempo (see
+        // the sketch-mode design decision), and this packs positions using
+        // each rifff's raw, unstretched barLength — so stretch must be
+        // forced on here too, or a rifff carried in with stretch off (e.g.
+        // pasted from an existing stretch-off clip) renders at a different
+        // width than the position it was just packed at once viewed back in
+        // Normal/Compact mode, leaving a visible gap or overlap.
+        stretch[groupId] = true
       }
-      return { ...state, rifffs, trackOrder: action.groupIds }
+      return { ...state, rifffs, stretch, trackOrder: action.groupIds }
     }
 
     case 'SELECT':

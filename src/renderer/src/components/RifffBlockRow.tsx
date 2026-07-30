@@ -5,6 +5,8 @@ import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import { clipGeometry } from '../state/selectors'
+import { PPB } from './Ruler'
 
 const NAME_BAR_HEIGHT = 18
 
@@ -30,17 +32,23 @@ export function RifffBlockRow({
     return <CompactRifffBlock groupId={groupId} onOpenContextMenu={onOpenContextMenu} />
   }
 
+  const geo = clipGeometry(state, groupId, PPB)
+
   return (
-    <div style={{ borderBottom: '1px solid var(--ra-border-soft)' }}>
-      {/* Thin name bar, full width — replaces the old 212px-wide left column
-          (name/glyph header + each stem's own label column), which fought
-          over the exact same screen real estate across StemWaveformRow rows
-          (a positioned sibling always painting over a non-positioned one,
-          regardless of DOM order, made the first stem row's own controls
-          unreachable — patched once, but removing the contested column
-          entirely is the actual fix). Selecting here is enough to show this
-          rifff's fuller detail (glyph, stem list, tempo, etc.) in the
-          always-visible Inspector — nothing here needs to duplicate that. */}
+    <div style={{ position: 'relative', borderBottom: '1px solid var(--ra-border-soft)' }}>
+      {/* Spacer reserving the row's vertical space for the name bar below,
+          which is positioned absolutely over it instead of sitting in
+          normal flow. */}
+      <div style={{ height: NAME_BAR_HEIGHT }} />
+      {/* Name bar, positioned directly above the clip's own wave (leftPx/
+          widthPx from clipGeometry) rather than spanning the row's full
+          width from bar 0 — it used to sit at the timeline's left edge
+          regardless of where the clip itself was placed, so a clip parked
+          far right needed scrolling all the way back to the left just to
+          find its own expand/collapse control. Selecting here is enough to
+          show this rifff's fuller detail (glyph, stem list, tempo, etc.) in
+          the always-visible Inspector — nothing here needs to duplicate
+          that. */}
       <div
         draggable
         onDragStart={(e) => {
@@ -62,12 +70,17 @@ export function RifffBlockRow({
         }}
         title={expanded ? 'click to collapse' : 'click to expand'}
         style={{
+          position: 'absolute',
+          top: 0,
+          left: geo.leftPx,
+          width: geo.widthPx,
           height: NAME_BAR_HEIGHT,
           display: 'flex',
           alignItems: 'center',
           gap: 6,
           padding: '0 8px',
           cursor: 'grab',
+          overflow: 'hidden',
           background: selected ? 'var(--ra-bg-row-active)' : 'var(--ra-bg-row)'
         }}
       >
