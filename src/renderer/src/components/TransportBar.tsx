@@ -76,8 +76,23 @@ export function TransportBar(): React.JSX.Element {
       </button>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 16, fontWeight: 700 }}>{positionLabel(pos)}</span>
-        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+        {/* Fixed character-count width (the app's monospace font makes `ch`
+            exact) so the sixteenth-note digit flipping between 1 and 2
+            characters mid-playback doesn't jitter the row and push every
+            button after it left/right. Sized to the longest realistic
+            reading ("032.4.16" / "10:59.9") rather than changing the actual
+            zero-padding convention. */}
+        <span style={{ fontSize: 16, fontWeight: 700, width: '8ch', display: 'inline-block' }}>
+          {positionLabel(pos)}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: 'var(--ra-text-3)',
+            width: '7ch',
+            display: 'inline-block'
+          }}
+        >
           {elapsedLabel(pos, state.bpm)}
         </span>
       </div>
@@ -193,25 +208,6 @@ export function TransportBar(): React.JSX.Element {
         }}
       >
         compact
-      </button>
-
-      <button
-        onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
-        aria-label="Toggle inspector panel"
-        title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
-        style={{
-          height: 22,
-          borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          background: state.inspectorCollapsed
-            ? 'var(--ra-stretch-on-bg)'
-            : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.inspectorCollapsed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.inspectorCollapsed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
-        }}
-      >
-        inspector
       </button>
 
       <div style={{ display: 'flex', gap: 4 }}>
