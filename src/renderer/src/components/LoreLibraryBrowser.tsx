@@ -156,6 +156,12 @@ export function LoreLibraryBrowser({
   const [downloadingRiffCID, setDownloadingRiffCID] = useState<string | null>(null)
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const previewTokenRef = useRef(0)
+  // Invalidates any in-flight background sync (see runBackgroundSync) —
+  // bumped every time the resolve/preview effect below re-runs (a new riff
+  // selected, or selection cleared entirely by a jam switch), so clicking
+  // somewhere else always redirects/stops the walk instead of two queues
+  // racing each other.
+  const syncQueueTokenRef = useRef(0)
   const playing = usePlaying()
   const dispatch = useDispatch()
 
@@ -254,6 +260,53 @@ export function LoreLibraryBrowser({
       return resolved
     } finally {
       setDownloadingRiffCID(null)
+    }
+  }
+
+  /** Same fetch as ensureStemsDownloaded, but for a riff in the background —
+   * doesn't touch downloadingRiffCID (that drives the explicit button's and
+   * Import's own disabled/label state; a background riff having nothing to
+   * do with whatever's currently selected shouldn't make those look stuck)
+   * or resolvedRiff unless it happens to already match what's selected.
+   * Errors are logged and swallowed — one riff failing shouldn't stop the
+   * walk from continuing to the next. */
+  async function backgroundDownload(riffCID: string): Promise<void> {
+    try {
+      const refreshed = await window.rifffApi.loreDownloadMissingStems(riffCID)
+      if (!refreshed) return
+      patchRiffCacheCount(riffCID, refreshed)
+      if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
+    } catch (err) {
+      console.error(`LoreLibraryBrowser: background sync failed for riff ${riffCID}:`, err)
+    }
+  }
+
+  /** Clicking a riff also starts filling in whatever's missing around it —
+   * walks outward from centerRiffCID through the currently-loaded `riffs`
+   * list (alternating forward/backward: +1, -1, +2, -2, ...) downloading
+   * each not-fully-cached one's missing stems in sequence, one riff at a
+   * time. `token` must still match syncQueueTokenRef.current before (and
+   * between) each step — the moment a different riff gets clicked, the
+   * resolve effect below bumps the ref in its own cleanup, and every
+   * in-flight or not-yet-started step here just quietly stops rather than
+   * fighting whatever queue started after it. Bounded by however many riffs
+   * are already loaded (RIFF_PAGE_SIZE per page) — not literally the whole
+   * jam if it hasn't all been paged in yet. */
+  async function runBackgroundSync(token: number, centerRiffCID: string): Promise<void> {
+    const centerIndex = riffs.findIndex((r) => r.riffCID === centerRiffCID)
+    if (centerIndex === -1) return
+    for (let delta = 1; ; delta++) {
+      if (token !== syncQueueTokenRef.current) return
+      const candidateIndices = [centerIndex + delta, centerIndex - delta].filter(
+        (i) => i >= 0 && i < riffs.length
+      )
+      if (candidateIndices.length === 0) return // walked off both ends of the loaded list
+      for (const idx of candidateIndices) {
+        if (token !== syncQueueTokenRef.current) return
+        const riff = riffs[idx]
+        if (riff.cachedStemCount >= riff.stemCount) continue // nothing missing, skip the round trip
+        await backgroundDownload(riff.riffCID)
+      }
     }
   }
 
@@ -464,6 +517,10 @@ export function LoreLibraryBrowser({
     // only rendered when resolvedRiff is truthy).
     if (!selectedRiffCID) return
     let cancelled = false
+    // Stable for this whole effect run's async chain — cleanup below
+    // increments the ref itself, so by the time a new run starts,
+    // syncQueueTokenRef.current already IS this run's own token.
+    const syncQueueToken = syncQueueTokenRef.current
     window.rifffApi
       .loreResolveRiff(selectedRiffCID)
       .then(async (resolved) => {
@@ -482,12 +539,22 @@ export function LoreLibraryBrowser({
         )
         previewSourcesRef.current.push(...sources)
         if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
+
+        // Selecting a riff also starts syncing it (if anything's missing),
+        // then keeps going outward to nearby riffs in the background — see
+        // runBackgroundSync's own doc comment.
+        if (cancelled) return
+        await ensureStemsDownloaded(selectedRiffCID, resolved)
+        if (cancelled || syncQueueToken !== syncQueueTokenRef.current) return
+        void runBackgroundSync(syncQueueToken, selectedRiffCID)
       })
       .catch((err) => {
         console.error('LoreLibraryBrowser: loreResolveRiff() failed:', err)
       })
     return () => {
       cancelled = true
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- the lint rule's concern (reading a ref that may have changed by cleanup time) is exactly the point here: this always bumps whatever the CURRENT token is, invalidating any queue started by this run or a still-in-flight later one, not a stale snapshot from when the effect started
+      syncQueueTokenRef.current++
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded: this only re-runs on riff selection, matching BeatPicker's own pattern of reading transport state at the moment a preview starts rather than tracking it as a dependency
   }, [selectedRiffCID])
