@@ -31,10 +31,17 @@ export const ROW_HEIGHT = 44
 
 export function StemWaveformRow({
   groupId,
-  slot
+  slot,
+  ppb = PPB
 }: {
   groupId: string
   slot: number
+  /** Horizontal scale — defaults to Normal mode's own PPB, but Compact
+   * mode's expanded-stem view (see RifffBlockRow) passes COMPACT_PPB
+   * instead, so an expanded rifff's stems stay aligned with the rest of
+   * that compact timeline (Ruler, other clips) instead of quietly reverting
+   * to Normal mode's much wider spacing underneath it. */
+  ppb?: number
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -90,21 +97,21 @@ export function StemWaveformRow({
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
-  const stemGeo = stemGeometry(state, groupId, slot, PPB)
+  const stemGeo = stemGeometry(state, groupId, slot, ppb)
   const baseStartBar = stemStartBar(state, groupId, slot)
   // The sub-bar nudge offset (off[]) baked into stemGeo.leftPx, isolated so a
   // left-resize preview can recompute leftPx from a new start bar while
   // preserving it — it doesn't change during a resize.
-  const nudgeOffsetPx = stemGeo.leftPx - baseStartBar * PPB
+  const nudgeOffsetPx = stemGeo.leftPx - baseStartBar * ppb
   const displayedStartBar = dragLeftResize?.startBar ?? baseStartBar
-  const leftPx = displayedStartBar * PPB + nudgeOffsetPx
+  const leftPx = displayedStartBar * ppb + nudgeOffsetPx
   // While actively dragging, use the in-progress width instead of the
   // committed-state one, so the row visibly resizes in real time.
   const widthPx =
     dragPlayedBars !== null
-      ? dragPlayedBars * PPB
+      ? dragPlayedBars * ppb
       : dragLeftResize !== null
-        ? dragLeftResize.playedBars * PPB
+        ? dragLeftResize.playedBars * ppb
         : stemGeo.widthPx
 
   // The native engine always loops a stem from its own beginning every
@@ -119,8 +126,8 @@ export function StemWaveformRow({
   const tileCount = Math.max(1, Math.ceil(displayedPlayedBars / stem.barLength))
   const tileOffsets = Array.from({ length: tileCount }, (_, i) => i * tileWidthPx)
 
-  const fadeInPx = displayedFadeIn * PPB
-  const fadeOutPx = displayedFadeOut * PPB
+  const fadeInPx = displayedFadeIn * ppb
+  const fadeOutPx = displayedFadeOut * ppb
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
   const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
@@ -154,7 +161,7 @@ export function StemWaveformRow({
         // Extending a loop makes sense in whole-bar increments (you're adding
         // another repeat, not fine sub-bar precision), and it keeps the tiled
         // waveform below landing on clean tile boundaries most of the time.
-        finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / PPB))
+        finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / ppb))
         setDragPlayedBars(finalPlayedBars)
       },
       (moved) => {
@@ -182,7 +189,7 @@ export function StemWaveformRow({
         // (MIN_PLAYED_BARS is always <= startPlayedBars already, since every
         // committed playedBars value is already clamped to that floor) and
         // startPosBar is always >= 0.
-        const requestedGrow = -Math.round(deltaX / PPB)
+        const requestedGrow = -Math.round(deltaX / ppb)
         const grow = Math.max(
           MIN_PLAYED_BARS - startPlayedBars,
           Math.min(startPosBar, requestedGrow)
@@ -219,7 +226,7 @@ export function StemWaveformRow({
       (deltaX) => {
         finalFadeIn = Math.max(
           0,
-          Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+          Math.min(FADE_MAX, startFadeIn + deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
         setDragFadeIn(finalFadeIn)
       },
@@ -243,7 +250,7 @@ export function StemWaveformRow({
       (deltaX) => {
         finalFadeOut = Math.max(
           0,
-          Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
+          Math.min(FADE_MAX, startFadeOut - deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
         setDragFadeOut(finalFadeOut)
       },
@@ -263,7 +270,7 @@ export function StemWaveformRow({
   function handleScrubClick(e: React.MouseEvent): void {
     if (volumeDragMode) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const bar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
+    const bar = Math.max(0, leftPx / ppb + (e.clientX - rect.left) / ppb)
     dispatch({ type: 'SELECT', groupId })
     dispatch({ type: 'SET_POS', pos: bar })
     if (playing) void window.rifffApi.engineSetPosition(bar)
@@ -299,7 +306,7 @@ export function StemWaveformRow({
   // handleVolumeStart (wired below) calls preventDefault via
   // startPointerDrag whenever volumeDragMode is on.
   function handleWaveformDragStart(e: React.DragEvent): void {
-    const mouseBar = mouseBarFromDragEvent(e)
+    const mouseBar = mouseBarFromDragEvent(e, ppb)
     if (unlinked) {
       e.dataTransfer.setData('text/rifff-stem-key', key)
       if (mouseBar !== null) setGrabOffsetBars(computeGrabOffsetBars(mouseBar, baseStartBar))

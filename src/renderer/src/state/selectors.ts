@@ -29,10 +29,13 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  * One channel per STEM while a rifff is expanded (matches each stem's own
  * TOGGLE_MUTE), or one channel for the WHOLE GROUP while collapsed (matches
  * CollapsedRifffRow's own SET_GROUP_MUTE) — mirroring exactly which mute
- * control that row actually exposes. Neither Compact nor Sketch mode has
- * mixing affordances (CompactRifffBlock is a pure positional overview;
- * sketch tiles deliberately expose no mute/volume/fade at all — see the
- * sketch mode spec), so only 'normal' contributes channels here.
+ * control that row actually exposes. Compact mode's own COLLAPSED state
+ * (CompactRifffBlock) has no mixing affordances at all (a pure positional
+ * overview), but an EXPANDED rifff — reachable in both Normal and Compact
+ * mode now, see RifffBlockRow — renders the exact same StemWaveformRow per
+ * stem either way, so it gets channels here too. Sketch mode's tiles
+ * deliberately expose no mute/volume/fade at all (see the sketch mode
+ * spec), so that's the only mode excluded.
  *
  * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
  * a collapsed group's single row — callers distinguish the two the same way
@@ -44,7 +47,7 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  */
 export function channelMuteLetters(state: AppState): Record<string, string> {
   const out: Record<string, string> = {}
-  if (state.mode !== 'normal') return out
+  if (state.mode === 'sketch') return out
   let i = 0
   for (const rifff of placedRifffsInOrder(state)) {
     if (i >= MUTE_SHORTCUT_KEYS.length) break
@@ -54,7 +57,11 @@ export function channelMuteLetters(state: AppState): Record<string, string> {
         out[stemKey(rifff.groupId, stem.slot)] = MUTE_SHORTCUT_KEYS[i]
         i++
       }
-    } else {
+    } else if (state.mode === 'normal') {
+      // Compact mode's own collapsed view (CompactRifffBlock) has no mute
+      // badge to show this letter on — skip it there rather than spend a
+      // scarce shortcut slot on a rifff that can't display it. Only Normal
+      // mode's CollapsedRifffRow has a collapsed-row badge.
       out[rifff.groupId] = MUTE_SHORTCUT_KEYS[i]
       i++
     }

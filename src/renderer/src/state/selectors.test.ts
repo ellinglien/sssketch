@@ -86,10 +86,16 @@ describe('channelMuteLetters', () => {
     expect(letters.r11).toBeUndefined()
   })
 
-  it('returns no channels at all in compact mode, which has no mixing controls', () => {
+  it('returns no channels for a COLLAPSED rifff in compact mode — CompactRifffBlock has no mute badge to show one on', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = { ...state, mode: 'compact' }
     expect(channelMuteLetters(state)).toEqual({})
+  })
+
+  it('DOES assign per-stem channels for an EXPANDED rifff in compact mode — it renders the same StemWaveformRow as Normal mode', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = { ...state, mode: 'compact', exp: { r1: true } }
+    expect(channelMuteLetters(state)).toEqual({ 'r1:1': 'q' })
   })
 
   it('returns no channels at all in sketch mode either', () => {

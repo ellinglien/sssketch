@@ -6,7 +6,7 @@ import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { clipGeometry } from '../state/selectors'
-import { PPB } from './Ruler'
+import { PPB, COMPACT_PPB } from './Ruler'
 
 const NAME_BAR_HEIGHT = 18
 
@@ -27,12 +27,23 @@ export function RifffBlockRow({
   const selected = state.sel === groupId
   const expanded = !!state.exp[groupId]
   const color = identityColor(rifff)
+  const compact = state.mode === 'compact'
 
-  if (state.mode === 'compact') {
+  // Compact mode's own collapsed view (CompactRifffBlock) only covers the
+  // "everything mixed into one thin row" case — expanding still needs the
+  // full per-stem StemWaveformRow breakdown to actually mute/drag/resize
+  // individual stems, same as Normal mode. Only the collapsed branch
+  // bypasses this component's own name-bar/expand machinery below; once
+  // expanded, compact mode falls through to the exact same structure Normal
+  // mode uses, just at Compact's own horizontal scale (ppb below) so an
+  // expanded rifff's stems stay aligned with everything else in the compact
+  // timeline instead of quietly reverting to Normal mode's wider spacing.
+  if (compact && !expanded) {
     return <CompactRifffBlock groupId={groupId} onOpenContextMenu={onOpenContextMenu} />
   }
 
-  const geo = clipGeometry(state, groupId, PPB)
+  const ppb = compact ? COMPACT_PPB : PPB
+  const geo = clipGeometry(state, groupId, ppb)
 
   return (
     <div style={{ position: 'relative', borderBottom: '1px solid var(--ra-border-soft)' }}>
@@ -53,7 +64,7 @@ export function RifffBlockRow({
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData('text/rifff-group-id', groupId)
-          const mouseBar = mouseBarFromDragEvent(e)
+          const mouseBar = mouseBarFromDragEvent(e, ppb)
           if (mouseBar !== null) {
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }
@@ -106,9 +117,11 @@ export function RifffBlockRow({
 
       {expanded ? (
         rifff.stems.map((stem) => (
-          <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} />
+          <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} ppb={ppb} />
         ))
       ) : (
+        // Only reachable in Normal mode — compact mode's own collapsed
+        // state already returned via CompactRifffBlock above.
         <CollapsedRifffRow groupId={groupId} selected={selected} />
       )}
     </div>
