@@ -133,4 +133,26 @@ describe('buildEngineProject', () => {
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs[0].stems[0].playedBars).toBe(16)
   })
+
+  it("includes sendBuses and each stem's sendLevels", async () => {
+    const state = stateWith({
+      bpm: 150,
+      sendBusPlugins: ['solid-bus-comp', null, null, null],
+      sendLevels: { 'r1:1': [0.5, 0, 0, 0] }
+    })
+    const project = await buildEngineProject(state, vi.fn())
+    expect(project.sendBuses).toEqual([
+      { pluginId: 'solid-bus-comp' },
+      { pluginId: null },
+      { pluginId: null },
+      { pluginId: null }
+    ])
+    expect(project.rifffs[0].stems[0].sendLevels).toEqual([0.5, 0, 0, 0])
+  })
+
+  it('defaults a stem with no sendLevels entry to all zero', async () => {
+    const state = stateWith({ bpm: 150 })
+    const project = await buildEngineProject(state, vi.fn())
+    expect(project.rifffs[0].stems[0].sendLevels).toEqual([0, 0, 0, 0])
+  })
 })
