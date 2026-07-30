@@ -126,21 +126,30 @@ export function BeatPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only: re-running on every `playing` change would re-pause every time the main arrangement is resumed while this picker happens to still be open, which is never the intent
   }, [])
 
-  // The waveform shown is the whole rifff mixed together, not just the identity
-  // stem alone — the transient that actually marks the downbeat (a kick, say)
-  // might live in a different stem than stems[0]. Every other stem is tiled to
-  // match the identity stem's own duration by repeating its buffer from the
-  // start (`i % data.length`), the same way computeStemSchedule tiles a shorter
-  // stem across a longer rifff — so the mix stays aligned to the same beat grid
-  // the picker's gridlines are drawn against. A pure derivation of rifff/stem/
-  // buffers, so useMemo (not an effect writing to its own state) is the right tool.
+  // The waveform shown is the whole rifff mixed together, spanning the whole
+  // rifff's own bar length — not just the identity stem's own (possibly much
+  // shorter) native loop. Real bug this fixed: a rifff whose identity stem
+  // (stems[0]) was a short 4-bar drum loop, but with other stems running much
+  // longer, only ever showed/gridded those 4 bars — hiding most of the loop
+  // (and wherever ITS downbeat-relevant transients were) from the picker
+  // entirely. secPerBar is derived from the identity stem's own known
+  // duration/barLength (every stem in a rifff is beat-locked to the same
+  // clock, so this is exactly the rifff's own tempo), matching
+  // schedulePlayback.ts's identical derivation. Every stem (identity
+  // included) is tiled across that full span by repeating its buffer from
+  // the start (`i % data.length`), the same way computeStemSchedule tiles a
+  // shorter stem across a longer rifff — so the mix stays aligned to the
+  // same beat grid the picker's gridlines are drawn against. A pure
+  // derivation of rifff/stem/buffers, so useMemo (not an effect writing to
+  // its own state) is the right tool.
   const peaks = useMemo<number[] | null>(() => {
     if (!rifff || !stem) return null
     const identityBuf = buffers[stem.slot]
     if (!identityBuf) return null
-    const mix = identityBuf.getChannelData(0).slice()
+    const secPerBar = stem.durationSec / stem.barLength
+    const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
+    const mix = new Float32Array(totalSamples)
     for (const s of rifff.stems) {
-      if (s.slot === stem.slot) continue
       const buf = buffers[s.slot]
       if (!buf) continue
       const data = buf.getChannelData(0)
@@ -198,13 +207,16 @@ export function BeatPicker({
   }, [])
 
   // Sweeps a vertical marker across the waveform while free-playing, so where the
-  // loop currently is has a visual answer, not just an audible one.
+  // loop currently is has a visual answer, not just an audible one. Spans the
+  // whole rifff (not just the identity stem's own duration) — same reasoning
+  // as peaks above, so the sweep matches what's actually drawn.
   useEffect(() => {
-    if (!isFreePlaying || !stem) return
+    if (!isFreePlaying || !stem || !rifff) return
+    const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
     let raf: number
     const tick = (): void => {
       const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
-      setPlayheadPct(((elapsed % stem.durationSec) / stem.durationSec) * 100)
+      setPlayheadPct(((elapsed % riffDurationSec) / riffDurationSec) * 100)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
@@ -215,7 +227,7 @@ export function BeatPicker({
       cancelAnimationFrame(raf)
       setPlayheadPct(null)
     }
-  }, [isFreePlaying, stem])
+  }, [isFreePlaying, stem, rifff])
 
   // commitAndClose is a fresh function every render (it closes over onClose/rifff/
   // state), so depending on it directly would re-run this effect — and fire its
@@ -247,10 +259,13 @@ export function BeatPicker({
     // depend on bindings that only exist when the guard doesn't fire.
     markDownbeatRef.current = () => {
       if (!isFreePlaying || !rifff || !stem) return
-      const beatsInLoop = stem.barLength * 4
+      // Spans the whole rifff, not just the identity stem's own duration —
+      // same reasoning as peaks/totalBeats above.
+      const beatsInLoop = rifff.barLength * 4
+      const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
       const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
-      const elapsedInLoop = elapsed % stem.durationSec
-      const secPerBeatNative = stem.durationSec / beatsInLoop
+      const elapsedInLoop = elapsed % riffDurationSec
+      const secPerBeatNative = riffDurationSec / beatsInLoop
       const beatIndex = Math.round(elapsedInLoop / secPerBeatNative) % beatsInLoop
       const steps = offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
       dispatch({
@@ -286,10 +301,12 @@ export function BeatPicker({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetKey = resolveOffsetKey(state, groupId, stem.slot)
   const currentSteps = state.off[offsetKey] ?? 0
-  // The waveform/peaks span exactly this stem's own duration, not the rifff's — using
-  // rifff.barLength here would mis-space the gridlines whenever the identity stem is
-  // shorter than the rifff (e.g. a 2-bar stem tiled across an 8-bar rifff).
-  const totalBeats = stem.barLength * 4
+  // Matches peaks' own span (the whole rifff, not just the identity stem's
+  // own duration) — see its doc comment for why. Using stem.barLength here
+  // instead would mis-space the gridlines against that wider waveform
+  // whenever the identity stem is shorter than the rifff (e.g. a 4-bar drum
+  // loop identity stem in a 16-bar rifff).
+  const totalBeats = rifff.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
 
   function toggleFreePlay(): void {
