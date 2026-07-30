@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch, usePlaying, usePos } from '../state/StoreContext'
-import { placedRifffsInOrder } from '../state/selectors'
+import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { getAudioContext } from '../audio/peakCache'
@@ -107,6 +107,32 @@ export function SketchStrip(): React.JSX.Element {
         e.preventDefault()
         const index = insertionIndexForClientX(e.clientX)
         setDropIndex(null)
+
+        const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
+        if (shelfSourceId) {
+          const source = state.rifffs[shelfSourceId]
+          if (!source) return
+          const groupIds = sequence.map((r) => r.groupId)
+          if (source.startBar === undefined) {
+            // Not yet placed anywhere — place it (startBar here is
+            // immediately overwritten by the SEQUENCE_RIFFFS dispatch right
+            // below; PLACE_ON_TIMELINE just needs a value, 0 is fine).
+            dispatch({ type: 'PLACE_ON_TIMELINE', groupId: shelfSourceId, startBar: 0 })
+            groupIds.splice(index, 0, shelfSourceId)
+            dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
+          } else {
+            // Already placed elsewhere (e.g. dragged from the shelf a
+            // second time) — an independent copy, same convention as the
+            // normal Timeline's own shelf-drop handling.
+            const action = pasteRifffAction(state, shelfSourceId, 0)
+            if (!action || action.type !== 'PASTE_RIFFF') return
+            dispatch(action)
+            groupIds.splice(index, 0, action.rifff.groupId)
+            dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
+          }
+          return
+        }
+
         const draggedGroupId = e.dataTransfer.getData('text/rifff-group-id')
         if (!draggedGroupId || !sequence.some((r) => r.groupId === draggedGroupId)) return
         const withoutDragged = sequence.map((r) => r.groupId).filter((id) => id !== draggedGroupId)
