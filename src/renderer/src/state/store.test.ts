@@ -200,6 +200,58 @@ describe('reducer', () => {
     expect(state.sel).toBeNull()
   })
 
+  describe('DELETE_RIFFFS', () => {
+    it('removes the rifff entirely, not just from the timeline', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.rifffs.r1).toBeUndefined()
+    })
+
+    it('scrubs per-stem fields (vol, mute) for every stem of the deleted rifff', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:6' })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.vol['r1:1']).toBeUndefined()
+      expect(state.mute['r1:6']).toBeUndefined()
+    })
+
+    it('scrubs both linked (group-keyed) and unlinked (stem-keyed) off/playedBars entries', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 2 })
+      state = reducer(state, { type: 'UNLINK', groupId: 'r1' }) // leaves the group-level off[] entry in place, unused
+      state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1:1', bars: 2 })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.off.r1).toBeUndefined()
+      expect(state.off['r1:1']).toBeUndefined()
+      expect(state.playedBars['r1:1']).toBeUndefined()
+    })
+
+    it('clears selection only if the selected rifff was one of the deleted ones', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'SELECT', groupId: 'r2' })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.sel).toBe('r2') // untouched — r2 wasn't deleted
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r2'] })
+      expect(state.sel).toBeNull()
+    })
+
+    it('deletes multiple rifffs in one dispatch', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1', 'r2'] })
+      expect(state.rifffs).toEqual({})
+    })
+  })
+
   it('applying a bake repoints every stem at its baked path and resets offsets to 0', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })

@@ -102,6 +102,7 @@ export type Action =
   | { type: 'ZERO_OFFSET'; key: string }
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
+  | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_STEM_START'; key: string; startBar: number }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'RESIZE_LEFT'; groupId: string; slot: number; bars: number; startBar: number }
@@ -298,6 +299,55 @@ export function reducer(state: AppState, action: Action): AppState {
         // Dropped from the row order too — if it's placed again later, it
         // rejoins at the bottom rather than snapping back to its old spot.
         trackOrder: state.trackOrder.filter((id) => id !== action.groupId)
+      }
+    }
+
+    // Removes rifffs from the project entirely — the library/shelf's own
+    // Delete-key handling (Shelf.tsx), for rifffs that were never placed
+    // (a placed one is REMOVE_FROM_TIMELINE's job, which only unplaces it;
+    // it stays in the library). Unlike REMOVE_FROM_TIMELINE, this actually
+    // deletes the rifff and scrubs every per-stem/per-group field that
+    // might reference it, rather than just clearing startBar. Takes a list
+    // (not a single groupId) so a multi-select batch delete is one dispatch
+    // — one undo entry — regardless of how many rifffs were selected.
+    case 'DELETE_RIFFFS': {
+      const ids = new Set(action.groupIds)
+      const rifffs = { ...state.rifffs }
+      const stemKeysToStrip = new Set<string>()
+      for (const groupId of ids) {
+        const rifff = rifffs[groupId]
+        if (!rifff) continue
+        for (const stem of rifff.stems) stemKeysToStrip.add(stemKey(groupId, stem.slot))
+        delete rifffs[groupId]
+      }
+      const omitGroups = <T>(rec: Record<string, T>): Record<string, T> => {
+        const next = { ...rec }
+        for (const groupId of ids) delete next[groupId]
+        return next
+      }
+      const omitStems = <T>(rec: Record<string, T>): Record<string, T> => {
+        const next = { ...rec }
+        for (const key of stemKeysToStrip) delete next[key]
+        return next
+      }
+      return {
+        ...state,
+        rifffs,
+        vol: omitStems(state.vol),
+        mute: omitStems(state.mute),
+        // off/playedBars can be keyed by EITHER the bare groupId (linked) or
+        // stemKey(groupId, slot) (unlinked) — see resolveOffsetKey — so both
+        // forms need stripping regardless of the rifff's current link state.
+        off: omitGroups(omitStems(state.off)),
+        playedBars: omitGroups(omitStems(state.playedBars)),
+        stretch: omitGroups(state.stretch),
+        unlinked: omitGroups(state.unlinked),
+        stemStart: omitStems(state.stemStart),
+        fadeIn: omitGroups(state.fadeIn),
+        fadeOut: omitGroups(state.fadeOut),
+        exp: omitGroups(state.exp),
+        trackOrder: state.trackOrder.filter((id) => !ids.has(id)),
+        sel: state.sel && ids.has(state.sel) ? null : state.sel
       }
     }
 
