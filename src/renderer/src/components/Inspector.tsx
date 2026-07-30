@@ -333,6 +333,22 @@ export function Inspector({
                         whiteSpace: 'nowrap'
                       }}
                     />
+                    {stem.author && (
+                      <span
+                        title={`created by ${stem.author}`}
+                        style={{
+                          fontSize: 9,
+                          color: 'var(--ra-text-3)',
+                          flexShrink: 0,
+                          maxWidth: 60,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {stem.author}
+                      </span>
+                    )}
                   </div>
                   {unlinked && (
                     <div
