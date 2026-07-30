@@ -22,7 +22,7 @@ const MAX_HISTORY = 100
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'TOGGLE_VOLUME_DRAG_MODE',
-  'TOGGLE_COMPACT_MODE',
+  'SET_ARRANGER_MODE',
   'TOGGLE_INSPECTOR_COLLAPSED'
 ])
 

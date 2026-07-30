@@ -56,17 +56,17 @@ describe('historyReducer', () => {
   // part of Action at all (see store.ts's own comment on Action), having
   // moved to StoreContext.tsx's own transport state entirely outside this
   // reducer, so there's nothing for historyReducer to filter for them
-  // anymore. TOGGLE_VOLUME_DRAG_MODE/TOGGLE_COMPACT_MODE are what's left in
+  // anymore. TOGGLE_VOLUME_DRAG_MODE/SET_ARRANGER_MODE are what's left in
   // TRANSIENT_ACTION_TYPES, covered below.
   it('does not push history for transient UI-mode actions', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
     const pastLengthAfterRealEdit = h.past.length
     h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
-    h = historyReducer(h, { type: 'TOGGLE_COMPACT_MODE' })
+    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'compact' })
     expect(h.past).toHaveLength(pastLengthAfterRealEdit)
     expect(h.present.volumeDragMode).toBe(true)
-    expect(h.present.compactMode).toBe(true)
+    expect(h.present.mode).toBe('compact')
   })
 
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {

@@ -9,6 +9,8 @@ export const SNAP_DIVS = [4, 8, 16, 32] as const
 // exact value instead of duplicating the literal.
 export const MIN_PLAYED_BARS = 0.25
 
+export type ArrangerMode = 'normal' | 'compact' | 'sketch'
+
 export interface AppState {
   bpm: number
   snapIdx: 0 | 1 | 2 | 3
@@ -47,12 +49,15 @@ export interface AppState {
    * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
    * by the V key — see App.tsx's Frame component. Not persisted (see serialize.ts). */
   volumeDragMode: boolean
-  /** Global arrangement-wide view mode: false (default) is today's per-rifff
-   * collapsed/expanded rendering, true replaces every rifff's row with a
-   * small fixed-size tile at its real timeline position (CompactRifffBlock).
-   * Toggled by the Tab key, Ableton-style — see App.tsx's Frame component.
-   * Not persisted (see serialize.ts). */
-  compactMode: boolean
+  /** Global arrangement-wide view mode. 'normal' is today's per-rifff
+   * collapsed/expanded rendering. 'compact' replaces every rifff's row with
+   * a small fixed-size tile at its real timeline position
+   * (CompactRifffBlock). 'sketch' replaces the whole Timeline with a single
+   * gapless sequence strip (SketchStrip) — only reachable when
+   * isSketchEligible(state) (see selectors.ts). Cycled by the Tab key,
+   * Ableton-style, via selectors.ts's nextArrangerMode — see App.tsx's
+   * Frame component. Not persisted (see serialize.ts). */
+  mode: ArrangerMode
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
   inspectorCollapsed: boolean
@@ -75,7 +80,7 @@ export const initialState: AppState = {
   trackOrder: [],
   exp: {},
   volumeDragMode: false,
-  compactMode: false,
+  mode: 'sketch',
   inspectorCollapsed: false,
   rifffs: {}
 }
@@ -123,7 +128,7 @@ export type Action =
   | { type: 'RENAME_STEM'; groupId: string; slot: number; name: string }
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
-  | { type: 'TOGGLE_COMPACT_MODE' }
+  | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'LOAD_STATE'; state: AppState }
 
@@ -436,8 +441,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_VOLUME_DRAG_MODE':
       return { ...state, volumeDragMode: !state.volumeDragMode }
 
-    case 'TOGGLE_COMPACT_MODE':
-      return { ...state, compactMode: !state.compactMode }
+    case 'SET_ARRANGER_MODE':
+      return { ...state, mode: action.mode }
 
     case 'TOGGLE_INSPECTOR_COLLAPSED':
       return { ...state, inspectorCollapsed: !state.inspectorCollapsed }

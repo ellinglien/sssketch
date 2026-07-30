@@ -279,6 +279,21 @@ describe('reducer', () => {
     expect(state.stretch.r1).toBe(false)
   })
 
+  describe('SET_ARRANGER_MODE', () => {
+    it('sets the mode field directly', () => {
+      let state = reducer(initialState, { type: 'SET_ARRANGER_MODE', mode: 'compact' })
+      expect(state.mode).toBe('compact')
+      state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'sketch' })
+      expect(state.mode).toBe('sketch')
+    })
+  })
+
+  describe('initialState', () => {
+    it('defaults mode to sketch', () => {
+      expect(initialState.mode).toBe('sketch')
+    })
+  })
+
   it('unlink copies the group offset onto each stem key and flags unlinked', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 3 })
@@ -434,16 +449,6 @@ describe('reducer', () => {
       expect(state.volumeDragMode).toBe(true)
       state = reducer(state, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
       expect(state.volumeDragMode).toBe(false)
-    })
-  })
-
-  describe('TOGGLE_COMPACT_MODE', () => {
-    it('starts false and toggles true/false', () => {
-      expect(initialState.compactMode).toBe(false)
-      let state = reducer(initialState, { type: 'TOGGLE_COMPACT_MODE' })
-      expect(state.compactMode).toBe(true)
-      state = reducer(state, { type: 'TOGGLE_COMPACT_MODE' })
-      expect(state.compactMode).toBe(false)
     })
   })
 
