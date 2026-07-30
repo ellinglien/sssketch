@@ -44,6 +44,17 @@ export function LoreLibraryBrowser({
   const [jams, setJams] = useState<LoreJam[]>([])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
+  // Whether the warehouse has more riffs beyond the currently-loaded page(s)
+  // for the current jam/filters — some of Elling's real jams have 20,000+
+  // riffs, so listRiffs is paginated (RIFF_PAGE_SIZE per page) rather than
+  // ever fetching/rendering all of them at once. See handleLoadMore.
+  const [hasMoreRiffs, setHasMoreRiffs] = useState(false)
+  const [loadingMoreRiffs, setLoadingMoreRiffs] = useState(false)
+  // The offset to request for the *next* page — tracks raw SQL rows
+  // consumed server-side (see RiffPage.nextOffset's doc comment), not
+  // riffs.length, which can diverge once the onlyFullyCached filter drops
+  // some rows from a page.
+  const nextOffsetRef = useRef(0)
   const [selectedRiffCID, setSelectedRiffCID] = useState<string | null>(null)
   const [bpmFilter, setBpmFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
@@ -253,21 +264,17 @@ export function LoreLibraryBrowser({
     }
   }, [available, jamFilter])
 
-  useEffect(() => {
-    // No "deselect jam" affordance exists — selecting always moves to a new
-    // non-null jamCID, so there's nothing to clear here; riffs simply starts
-    // at its initial [] and is only ever populated once a jam is picked. The
-    // grid itself is also only rendered when selectedJamCID !== null (see
-    // below), so even a theoretical stale value would never be visible.
-    if (!selectedJamCID) return
-    let cancelled = false
-    const filters: {
-      dateFrom?: number
-      dateTo?: number
-      bpm?: number
-      userName?: string
-      onlyFullyCached?: boolean
-    } = {}
+  // Shared by the initial-page effect below and handleLoadMore — both need
+  // the exact same filters, just a different offset.
+  function buildRiffFilters(offset: number): {
+    dateFrom?: number
+    dateTo?: number
+    bpm?: number
+    userName?: string
+    onlyFullyCached?: boolean
+    offset?: number
+  } {
+    const filters: ReturnType<typeof buildRiffFilters> = {}
     if (dateFromFilter !== '') {
       filters.dateFrom = Math.floor(new Date(`${dateFromFilter}T00:00:00`).getTime() / 1000)
     }
@@ -277,11 +284,25 @@ export function LoreLibraryBrowser({
     if (bpmFilter.trim() !== '' && !Number.isNaN(Number(bpmFilter))) filters.bpm = Number(bpmFilter)
     if (userNameFilter.trim() !== '') filters.userName = userNameFilter.trim()
     if (onlyFullyCached) filters.onlyFullyCached = true
+    if (offset > 0) filters.offset = offset
+    return filters
+  }
 
+  useEffect(() => {
+    // No "deselect jam" affordance exists — selecting always moves to a new
+    // non-null jamCID, so there's nothing to clear here; riffs simply starts
+    // at its initial [] and is only ever populated once a jam is picked. The
+    // grid itself is also only rendered when selectedJamCID !== null (see
+    // below), so even a theoretical stale value would never be visible.
+    if (!selectedJamCID) return
+    let cancelled = false
     window.rifffApi
-      .loreListRiffs(selectedJamCID, filters)
+      .loreListRiffs(selectedJamCID, buildRiffFilters(0))
       .then((result) => {
-        if (!cancelled) setRiffs(result)
+        if (cancelled) return
+        setRiffs(result.riffs)
+        setHasMoreRiffs(result.hasMore)
+        nextOffsetRef.current = result.nextOffset
       })
       .catch((err) => {
         console.error('LoreLibraryBrowser: loreListRiffs() failed:', err)
@@ -289,7 +310,24 @@ export function LoreLibraryBrowser({
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildRiffFilters closes over these same deps; listing both would be redundant and buildRiffFilters itself isn't stable across renders
   }, [selectedJamCID, dateFromFilter, dateToFilter, bpmFilter, userNameFilter, onlyFullyCached])
+
+  function handleLoadMore(): void {
+    if (!selectedJamCID || loadingMoreRiffs) return
+    setLoadingMoreRiffs(true)
+    window.rifffApi
+      .loreListRiffs(selectedJamCID, buildRiffFilters(nextOffsetRef.current))
+      .then((result) => {
+        setRiffs((prev) => [...prev, ...result.riffs])
+        setHasMoreRiffs(result.hasMore)
+        nextOffsetRef.current = result.nextOffset
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreListRiffs() (load more) failed:', err)
+      })
+      .finally(() => setLoadingMoreRiffs(false))
+  }
 
   useEffect(() => {
     stopPreview()
@@ -529,7 +567,7 @@ export function LoreLibraryBrowser({
                       only fully cached
                     </label>
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                      {riffs.length} riffs
+                      {riffs.length} riffs{hasMoreRiffs ? '+' : ''}
                     </span>
                   </div>
 
@@ -585,6 +623,24 @@ export function LoreLibraryBrowser({
                         )}
                       </div>
                     ))}
+                    {hasMoreRiffs && (
+                      <button
+                        onClick={handleLoadMore}
+                        disabled={loadingMoreRiffs}
+                        style={{
+                          height: 18,
+                          borderRadius: 0,
+                          padding: '0 8px',
+                          fontSize: 9,
+                          border: '1px solid var(--ra-border)',
+                          background: 'var(--ra-bg-row-active)',
+                          color: 'var(--ra-text-2)',
+                          cursor: loadingMoreRiffs ? 'default' : 'pointer'
+                        }}
+                      >
+                        {loadingMoreRiffs ? 'loading…' : 'load more'}
+                      </button>
+                    )}
                   </div>
 
                   {resolvedRiff && (

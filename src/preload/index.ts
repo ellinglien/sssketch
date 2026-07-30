@@ -57,8 +57,10 @@ const api = {
       bpm?: number
       userName?: string
       onlyFullyCached?: boolean
+      offset?: number
     }
-  ): Promise<LoreRiffSummary[]> => ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
+  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
+    ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
   loreResolveRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
     ipcRenderer.invoke('lore-resolve-riff', riffCID)
 }

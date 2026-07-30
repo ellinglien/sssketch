@@ -91,6 +91,25 @@ export interface RiffFilters {
   bpm?: number
   userName?: string
   onlyFullyCached?: boolean
+  /** How many riffs (most-recent-first) to skip before this page — 0/undefined
+   * for the first page. Paired with RIFF_PAGE_SIZE so a jam with thousands of
+   * riffs (some of Elling's real jams have 20,000+) doesn't have to load or
+   * render them all at once. */
+  offset?: number
+}
+
+export interface RiffPage {
+  riffs: LoreRiffSummary[]
+  /** True if the underlying query (before the onlyFullyCached post-filter)
+   * returned a full page — i.e. there's likely at least one more riff beyond
+   * this page, regardless of how many survived that filter. */
+  hasMore: boolean
+  /** The `offset` to pass for the next page. Tracks raw SQL rows consumed
+   * (offset + rows.length), NOT riffs.length — those diverge whenever
+   * onlyFullyCached filters some rows out of a page, and paging by
+   * riffs.length in that case would re-request (or skip) rows at the SQL
+   * level. */
+  nextOffset: number
 }
 
 interface RiffRow {
@@ -116,9 +135,10 @@ interface StemLookupRow {
 
 const RIFF_PAGE_SIZE = 200
 
-export function listRiffs(jamCID: string, filters: RiffFilters): LoreRiffSummary[] {
+export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
   const db = getWarehouseDb()
-  if (!db) return []
+  const offset = filters.offset ?? 0
+  if (!db) return { riffs: [], hasMore: false, nextOffset: offset }
 
   const conditions = ['OwnerJamCID = ?']
   const params: (string | number)[] = [jamCID]
@@ -146,9 +166,9 @@ export function listRiffs(jamCID: string, filters: RiffFilters): LoreRiffSummary
        FROM Riffs
        WHERE ${conditions.join(' AND ')}
        ORDER BY CreationTime DESC
-       LIMIT ${RIFF_PAGE_SIZE}`
+       LIMIT ? OFFSET ?`
     )
-    .all(...params) as RiffRow[]
+    .all(...params, RIFF_PAGE_SIZE, offset) as RiffRow[]
 
   // Batch-resolve every referenced StemCID's creator in one query, rather than
   // one query per stem — up to 8 stems x 200 riffs would otherwise be 1600
@@ -192,9 +212,17 @@ export function listRiffs(jamCID: string, filters: RiffFilters): LoreRiffSummary
     }
   })
 
-  return filters.onlyFullyCached
-    ? summaries.filter((s) => s.cachedStemCount === s.stemCount)
-    : summaries
+  return {
+    riffs: filters.onlyFullyCached
+      ? summaries.filter((s) => s.cachedStemCount === s.stemCount)
+      : summaries,
+    // Computed from the raw page (rows.length), not the onlyFullyCached-
+    // filtered summaries — otherwise a page where every riff happens to be
+    // filtered out would look like "no more data" even though later pages
+    // might have plenty.
+    hasMore: rows.length === RIFF_PAGE_SIZE,
+    nextOffset: offset + rows.length
+  }
 }
 
 interface FullRiffRow extends RiffRow {

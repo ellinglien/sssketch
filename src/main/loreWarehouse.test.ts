@@ -176,7 +176,7 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    const riffs = listRiffs('jam-techno', {})
+    const { riffs } = listRiffs('jam-techno', {})
     const riff1 = riffs.find((r) => r.riffCID === 'riff-1')!
     expect(riff1.stemCount).toBe(2)
     expect(riff1.cachedStemCount).toBe(1) // only stem-a is actually on disk
@@ -194,7 +194,7 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    const riffs = listRiffs('jam-ambient', {})
+    const { riffs } = listRiffs('jam-ambient', {})
     expect(riffs.map((r) => r.riffCID)).toEqual(['riff-3'])
   })
 
@@ -204,9 +204,9 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    const riffs = listRiffs('jam-techno', { bpm: 130 })
+    const { riffs } = listRiffs('jam-techno', { bpm: 130 })
     expect(riffs).toHaveLength(2)
-    expect(listRiffs('jam-techno', { bpm: 999 })).toHaveLength(0)
+    expect(listRiffs('jam-techno', { bpm: 999 }).riffs).toHaveLength(0)
   })
 
   it('filters by userName when provided', () => {
@@ -215,8 +215,8 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    expect(listRiffs('jam-techno', { userName: 'elling' })).toHaveLength(2)
-    expect(listRiffs('jam-techno', { userName: 'nobody' })).toHaveLength(0)
+    expect(listRiffs('jam-techno', { userName: 'elling' }).riffs).toHaveLength(2)
+    expect(listRiffs('jam-techno', { userName: 'nobody' }).riffs).toHaveLength(0)
   })
 
   it('filters to only fully-cached riffs when onlyFullyCached is true', () => {
@@ -227,13 +227,46 @@ describe('listRiffs', () => {
 
     // riff-1 has 1 of 2 stems cached (not fully); riff-2 has 0 of 1 (not
     // fully either) — neither should pass a strict "fully cached" filter.
-    const riffs = listRiffs('jam-techno', { onlyFullyCached: true })
+    const { riffs } = listRiffs('jam-techno', { onlyFullyCached: true })
     expect(riffs).toHaveLength(0)
+  })
+
+  it('paginates when a jam has more riffs than fit on one page', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createFixtureWarehouse(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-big', 'Big Jam')`)
+    const insert = db.prepare(
+      'INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName) VALUES (?,?,?,?,?,?)'
+    )
+    // One more than RIFF_PAGE_SIZE (200) — the real bug report this covers:
+    // some of Elling's actual jams have 20,000+ riffs, and the old hard
+    // LIMIT 200 with no offset silently dropped everything past it.
+    for (let i = 0; i < 201; i++) {
+      insert.run(`riff-big-${i}`, 'jam-big', i, 130, 8, 'elling')
+    }
+    db.close()
+    setWarehouseRootForTests(root)
+
+    const page1 = listRiffs('jam-big', {})
+    expect(page1.riffs).toHaveLength(200)
+    expect(page1.hasMore).toBe(true)
+    expect(page1.nextOffset).toBe(200)
+
+    const page2 = listRiffs('jam-big', { offset: page1.nextOffset })
+    expect(page2.riffs).toHaveLength(1)
+    expect(page2.hasMore).toBe(false)
+    expect(page2.nextOffset).toBe(201)
+
+    // Newest-first (CreationTime DESC), so no riff should appear on both
+    // pages.
+    const page1CIDs = new Set(page1.riffs.map((r) => r.riffCID))
+    for (const r of page2.riffs) expect(page1CIDs.has(r.riffCID)).toBe(false)
   })
 
   it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
     setWarehouseRootForTests('/no/such/path')
-    expect(listRiffs('jam-techno', {})).toEqual([])
+    expect(listRiffs('jam-techno', {}).riffs).toEqual([])
   })
 })
 
