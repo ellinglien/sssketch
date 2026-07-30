@@ -208,7 +208,7 @@ interface FullStemRow {
   PresetName: string
   Instrument: number
   BPMrnd: number | null
-  BarLength: number | null
+  Length16s: number | null
 }
 
 export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
@@ -245,17 +245,25 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
   const stems: LoreResolvedStem[] = slots.map(({ slot, stemCID }) => {
     const stemRow = db
       .prepare(
-        'SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength FROM Stems WHERE StemCID = ?'
+        'SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s FROM Stems WHERE StemCID = ?'
       )
       .get(stemCID) as FullStemRow | undefined
     const path = resolveStemPath(riffRow.OwnerJamCID, stemCID)
-    // This stem's OWN bpm/bar-length, not the riff's — a stem can be a
-    // shorter loop tiled across a longer riff (the same distinction
-    // ssstitch's own Stem.barLength vs Rifff.barLength already makes for
-    // drag-and-drop imports). Falls back to the riff's own bpm/1-bar length
-    // only if this stem's row is somehow missing that data.
+    // This stem's OWN bpm/length, not the riff's — a stem can be a shorter
+    // loop tiled across a longer riff (the same distinction ssstitch's own
+    // Stem.barLength vs Rifff.barLength already makes for drag-and-drop
+    // imports). Length16s (the stem's native loop length in sixteenth
+    // notes), not the Stems table's own BarLength column — verified against
+    // 300 real cached stems' actual decoded audio: Length16s/16 matched
+    // measured duration 300/300 times, BarLength matched essentially never
+    // (1/300, coincidental). BarLength on this table isn't the stem's own
+    // bar count; using it produced a durationSec many times longer than the
+    // stem's real audio, which the native engine then padded with silence
+    // to fill out each scheduled tile — the exact "starts, then goes silent"
+    // bug reported for riff 5e203540. Falls back to the riff's own bpm/
+    // 1-bar length only if this stem's row is somehow missing that data.
     const stemBpm = stemRow?.BPMrnd ?? riffRow.BPMrnd
-    const stemBarLength = stemRow?.BarLength ?? 1
+    const stemBarLength = (stemRow?.Length16s ?? 16) / 16
     const durationSec = stemBarLength * (60 / stemBpm) * 4
     return {
       stemCID,

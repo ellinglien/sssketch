@@ -26,7 +26,8 @@ function createFixtureWarehouse(root: string): void {
     );
     CREATE TABLE "Stems" (
       "StemCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreatorUserName" TEXT,
-      "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, PRIMARY KEY("StemCID")
+      "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, "Length16s" REAL,
+      PRIMARY KEY("StemCID")
     );
   `)
   db.close()
@@ -74,7 +75,8 @@ function createSeededFixtureWarehouse(root: string): void {
     );
     CREATE TABLE "Stems" (
       "StemCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreatorUserName" TEXT,
-      "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, PRIMARY KEY("StemCID")
+      "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, "Length16s" REAL,
+      PRIMARY KEY("StemCID")
     );
   `)
   db.exec(`
@@ -138,15 +140,21 @@ function seedStemsAndGains(root: string): void {
       WHERE RiffCID = 'riff-1';
     UPDATE Riffs SET StemCID_1 = 'stem-c' WHERE RiffCID = 'riff-2';
   `)
+  // BarLength is deliberately seeded with a WRONG decoy value (999) on every
+  // row — real-warehouse data proved this column isn't a reliable per-stem
+  // bar count (see resolveRiff's comment); Length16s is what actually
+  // governs durationSec, so these tests assert against ITS values while
+  // BarLength sits there as a trap that would fail the test if the code
+  // regressed to reading the wrong column.
   db.prepare(
-    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength) VALUES (?,?,?,?,?,?,?)`
-  ).run('stem-a', 'jam-techno', 'elling', 'Microphone', 16, 130, 8)
+    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
+  ).run('stem-a', 'jam-techno', 'elling', 'Microphone', 16, 130, 999, 128) // 128/16 = 8 bars
   db.prepare(
-    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength) VALUES (?,?,?,?,?,?,?)`
-  ).run('stem-b', 'jam-techno', 'mvdg', 'Lowpass', 2, 130, 4)
+    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
+  ).run('stem-b', 'jam-techno', 'mvdg', 'Lowpass', 2, 130, 999, 64) // 64/16 = 4 bars
   db.prepare(
-    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength) VALUES (?,?,?,?,?,?,?)`
-  ).run('stem-c', 'jam-techno', 'elling', 'Pianabot', 4, 130, 8)
+    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
+  ).run('stem-c', 'jam-techno', 'elling', 'Pianabot', 4, 130, 999, 128) // 128/16 = 8 bars
   db.close()
 
   // stem-a is "cached" (a real file at its resolved sharded path); stem-b and
@@ -254,7 +262,10 @@ describe('resolveRiff', () => {
     expect(stemA.presetName).toBe('Microphone')
     expect(stemA.instrumentMask).toBe(16)
     expect(stemA.path).not.toBeNull() // it's the one seeded as "on disk"
-    // BPMrnd=130, BarLength=8 -> 8 * (60/130) * 4 = 14.7692...s
+    // Length16s=128 -> 128/16 = 8 bars; BPMrnd=130 -> 8 * (60/130) * 4 =
+    // 14.7692...s. BarLength is seeded as a decoy 999 on this row — if
+    // resolveRiff ever regressed to reading that column instead, this
+    // assertion would fail loudly instead of silently drifting.
     expect(stemA.barLength).toBe(8)
     expect(stemA.durationSec).toBeCloseTo(14.7692, 3)
 
@@ -262,9 +273,10 @@ describe('resolveRiff', () => {
     expect(stemB.slot).toBe(2)
     expect(stemB.gain).toBeCloseTo(0.5)
     expect(stemB.path).toBeNull() // not on disk
-    // Deliberately seeded with a SHORTER BarLength (4) than stem-a's (8) and
-    // than the riff's own BarLength (8, from createSeededFixtureWarehouse) —
-    // proves this stem's own barLength/durationSec are used, not the riff's.
+    // Deliberately seeded with a SHORTER Length16s (64, i.e. 4 bars) than
+    // stem-a's (128, 8 bars) and than the riff's own BarLength (8, from
+    // createSeededFixtureWarehouse) — proves this stem's own
+    // barLength/durationSec are used, not the riff's.
     expect(stemB.barLength).toBe(4)
     expect(stemB.durationSec).toBeCloseTo(7.3846, 3)
   })
