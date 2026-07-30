@@ -8,6 +8,7 @@ import { typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
 import { SEND_PLUGIN_ALLOWLIST } from '@shared/sendPlugins'
 import { stemKey } from '@shared/types'
+import { SendKnob } from './SendKnob'
 
 // A finer, snap-division-independent nudge step: 1ms of real time at this
 // rifff's own bpm, computed with the same formula offsetLabels() itself uses
@@ -350,12 +351,8 @@ export function Inspector({
                       const level = state.sendLevels[key]?.[bus] ?? 0
                       const hasPlugin = state.sendBusPlugins[bus] !== null
                       return (
-                        <input
+                        <SendKnob
                           key={bus}
-                          type="range"
-                          min={0}
-                          max={1}
-                          step={0.01}
                           value={level}
                           disabled={!hasPlugin}
                           title={
@@ -363,15 +360,14 @@ export function Inspector({
                               ? `send to bus ${bus + 1} (${SEND_PLUGIN_ALLOWLIST.find((p) => p.id === state.sendBusPlugins[bus])?.displayName ?? state.sendBusPlugins[bus]})`
                               : `bus ${bus + 1}: no plugin loaded`
                           }
-                          onChange={(e) =>
+                          onChange={(newLevel) =>
                             dispatch({
                               type: 'SET_SEND_LEVEL',
                               stemKey: key,
                               bus,
-                              level: Number(e.target.value)
+                              level: newLevel
                             })
                           }
-                          style={{ width: 32, opacity: hasPlugin ? 1 : 0.3 }}
                         />
                       )
                     })}
