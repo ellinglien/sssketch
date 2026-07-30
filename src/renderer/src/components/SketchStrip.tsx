@@ -3,14 +3,6 @@ import { useAppState, useDispatch, usePlaying, usePos } from '../state/StoreCont
 import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
-import { getAudioContext } from '../audio/peakCache'
-import {
-  startPreviewLoop,
-  stopPreviewSources,
-  registerActivePreview,
-  unregisterActivePreview
-} from '../audio/previewLoop'
-import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -38,11 +30,6 @@ export function SketchStrip(): React.JSX.Element {
     (a, b) => (a.startBar ?? 0) - (b.startBar ?? 0)
   )
 
-  const [previewingGroupId, setPreviewingGroupId] = useState<string | null>(null)
-  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
-  const previewGenerationRef = useRef(0)
-  const previewTokenRef = useRef(0)
-
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -56,16 +43,6 @@ export function SketchStrip(): React.JSX.Element {
     const slot = TILE_SIZE + TILE_GAP
     return Math.max(0, Math.min(sequence.length, Math.round(relativeX / slot)))
   }
-
-  const stopTilePreview = useCallback(() => {
-    stopPreviewSources(previewSourcesRef.current)
-    previewSourcesRef.current = []
-    unregisterActivePreview(previewTokenRef.current)
-  }, [])
-
-  useEffect(() => {
-    return () => stopTilePreview()
-  }, [stopTilePreview])
 
   const removeTile = useCallback(
     (groupId: string) => {
@@ -88,32 +65,23 @@ export function SketchStrip(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [state.sel, sequence, removeTile])
 
+  // Clicking a tile here is an "arranger" gesture, not a "library" one —
+  // unlike Shelf/LORE browser tiles (which aren't placed yet and preview
+  // via an isolated Web Audio loop), these rifffs are already part of the
+  // actual arrangement, so clicking one jumps the REAL transport to its
+  // position and plays from there, same as clicking a spot on the Ruler.
+  // Real bug this fixed: starting an isolated preview also paused the main
+  // transport underneath it, so clicking a tile while playing silently cut
+  // the arrangement's audio — looked exactly like "play isn't working."
   function handleTileClick(rifff: Rifff): void {
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
-    previewGenerationRef.current += 1
-    const generation = previewGenerationRef.current
-    stopTilePreview()
-    if (previewingGroupId === rifff.groupId) {
-      setPreviewingGroupId(null)
-      return
+    const targetPos = rifff.startBar ?? 0
+    dispatch({ type: 'SET_POS', pos: targetPos })
+    if (playing) {
+      void window.rifffApi.engineSetPosition(targetPos)
+    } else {
+      dispatch({ type: 'PLAY' })
     }
-    setPreviewingGroupId(rifff.groupId)
-    if (playing) dispatch({ type: 'PAUSE' })
-    void startPreviewLoop(
-      getAudioContext(),
-      rifff.stems.map((s) => ({
-        path: s.path,
-        gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
-      })),
-      () => previewGenerationRef.current !== generation
-    ).then((sources) => {
-      if (previewGenerationRef.current !== generation) {
-        stopPreviewSources(sources)
-        return
-      }
-      previewSourcesRef.current.push(...sources)
-      if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopTilePreview)
-    })
   }
 
   return (
@@ -202,12 +170,7 @@ export function SketchStrip(): React.JSX.Element {
               width: TILE_SIZE,
               height: TILE_SIZE,
               cursor: 'pointer',
-              // Very subtle — intentionally minimal, first thing to cut if it
-              // reads as too much once it's actually running.
-              boxShadow: isCurrent
-                ? '0 0 10px 1px color-mix(in srgb, var(--ra-text) 35%, transparent)'
-                : 'none',
-              opacity: state.sel === rifff.groupId || previewingGroupId === rifff.groupId ? 1 : 0.85
+              opacity: state.sel === rifff.groupId ? 1 : 0.85
             }}
           >
             <PolarGlyph
