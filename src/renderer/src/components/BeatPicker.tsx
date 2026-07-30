@@ -74,10 +74,26 @@ function rotateBuffer(ctx: AudioContext, buf: AudioBuffer, offsetSec: number): A
 
 export function BeatPicker({
   groupId,
+  batchGroupIds,
+  onNavigate,
   onClose,
   onBaked
 }: {
   groupId: string
+  /** Every riff imported together in the same LORE batch as this one
+   * (including this one), in original import order — omitted for a single
+   * import or an unrelated re-pick via the Inspector's own button. Presence
+   * alone (2+ entries) is what makes the forward/back navigation controls
+   * render; onNavigate must be provided whenever this is. */
+  batchGroupIds?: string[]
+  /** Called with a different batch member's groupId when the back/forward
+   * arrows are clicked — lets a caller reuse one open BeatPicker across a
+   * whole batch, auditioning whichever riff sounds clearest instead of
+   * being stuck with whatever happened to import first. Purely a "look at a
+   * different one" gesture: doesn't bake or commit anything for the riff
+   * being navigated away from (see the picker's own groupId-keyed effect
+   * that stops its preview when this fires). */
+  onNavigate?: (groupId: string) => void
   onClose: () => void
   /** Fired once, right after a real bake actually happens (i.e. the user
    * picked/marked a beat and this closed rather than being dismissed with
@@ -206,6 +222,22 @@ export function BeatPicker({
     setPlayheadPct(null)
   }, [])
 
+  // Navigating to a different batch member (see onNavigate above) keeps
+  // this same component instance mounted — groupId just changes — so
+  // whatever was previewing for the OLD riff needs to be stopped, or its
+  // audio would keep looping underneath the newly-displayed riff's
+  // waveform. The buffers/peaks effects below already react to groupId
+  // changing on their own (rifff is a fresh object reference per riff), so
+  // only the preview-playback side needs this extra nudge. In the cleanup,
+  // not the setup body — same reasoning as the playhead-sweep effect
+  // below's own identical comment: it fires for the OLD groupId right
+  // before the new one's own effects run, and calling setState directly in
+  // an effect's setup (rather than its cleanup) trips
+  // react-hooks/set-state-in-effect.
+  useEffect(() => {
+    return () => stopPreview()
+  }, [groupId, stopPreview])
+
   // Sweeps a vertical marker across the waveform whenever anything from this
   // picker is playing — free-play (isFreePlaying) OR a specific clicked beat
   // (previewingBeat) — so where the loop currently is has a visual answer,
@@ -248,6 +280,7 @@ export function BeatPicker({
   // effect itself stable.
   const commitAndCloseRef = useRef<() => void>(() => {})
   const markDownbeatRef = useRef<() => void>(() => {})
+  const navigateRef = useRef<(delta: number) => void>(() => {})
   useEffect(() => {
     commitAndCloseRef.current = () => {
       if (pendingBakeRef.current !== null && rifff) {
@@ -258,6 +291,20 @@ export function BeatPicker({
       }
       stopPreview()
       onClose()
+    }
+
+    // Wraps around at either end — a small batch (however many riffs the
+    // LORE import pulled in together) doesn't need dead-end prev/next
+    // buttons. Purely a "look at a different one" gesture: doesn't touch
+    // pendingBakeRef, so a pick already made on the riff being left behind
+    // still bakes (onto whichever riff is current when the picker actually
+    // closes — see commitAndCloseRef above) rather than being discarded.
+    navigateRef.current = (delta) => {
+      if (!batchGroupIds || !onNavigate || batchGroupIds.length < 2) return
+      const currentIndex = batchGroupIds.indexOf(groupId)
+      if (currentIndex === -1) return
+      const nextIndex = (currentIndex + delta + batchGroupIds.length) % batchGroupIds.length
+      onNavigate(batchGroupIds[nextIndex])
     }
 
     // Captures the playhead's position within the current free-play loop and marks
@@ -297,6 +344,8 @@ export function BeatPicker({
         e.preventDefault() // otherwise also "clicks" whatever button has focus
         markDownbeatRef.current()
       }
+      if (e.key === 'ArrowLeft') navigateRef.current(-1)
+      if (e.key === 'ArrowRight') navigateRef.current(1)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
@@ -306,6 +355,10 @@ export function BeatPicker({
   }, [stopPreview])
 
   if (!rifff || !stem) return null
+
+  const batchIndex = batchGroupIds?.indexOf(groupId) ?? -1
+  const canNavigate =
+    !!batchGroupIds && !!onNavigate && batchGroupIds.length > 1 && batchIndex !== -1
 
   const color = typeColorVar(stem.type)
   const snapDiv = SNAP_DIVS[state.snapIdx]
@@ -449,6 +502,45 @@ export function BeatPicker({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <span className="ra-eyebrow">pick the downbeat</span>
+          {canNavigate && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={() => navigateRef.current(-1)}
+                title="previous riff in this batch (←)"
+                style={{
+                  height: 22,
+                  width: 22,
+                  borderRadius: 0,
+                  padding: 0,
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                ◀
+              </button>
+              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+                riff {batchIndex + 1} / {batchGroupIds!.length}
+              </span>
+              <button
+                onClick={() => navigateRef.current(1)}
+                title="next riff in this batch (→)"
+                style={{
+                  height: 22,
+                  width: 22,
+                  borderRadius: 0,
+                  padding: 0,
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                ▶
+              </button>
+            </div>
+          )}
           <button
             onClick={() => commitAndCloseRef.current()}
             style={{

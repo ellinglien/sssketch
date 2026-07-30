@@ -307,26 +307,30 @@ function Frame(): React.JSX.Element {
   const pos = usePos()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
-  // Riffs imported together as a LORE library batch, sharing the same jam's
-  // clock phase — set alongside pickerGroupId so BeatPicker opens for just
-  // the first one; once that one is baked, onBaked below applies the same
-  // offset to the rest automatically, rather than opening the picker again
-  // for each. Cleared unconditionally whenever BeatPicker closes (baked or
-  // not), so a stale batch never leaks into some later, unrelated pick.
-  const [pickerBatchSiblingGroupIds, setPickerBatchSiblingGroupIds] = useState<string[]>([])
-  // Whether the CURRENT BeatPicker session was opened for a multi-riff LORE
-  // batch import, as opposed to a single import or an unrelated re-pick via
-  // the Inspector's own button — read (and reset) in BeatPicker's onClose
-  // below, not in onBaked, since onBaked clears pickerBatchSiblingGroupIds
-  // (and runs, if at all, before onClose) and a closed-without-picking
-  // session still needs this to have survived to that point.
-  const [pickerWasBatchImport, setPickerWasBatchImport] = useState(false)
+  // Every riff imported together as one LORE library batch, sharing the same
+  // jam's clock phase, in their original import order — set alongside
+  // pickerGroupId so BeatPicker opens on just the first one. Drives two
+  // things: forward/back navigation between them while the picker's open
+  // (see BeatPicker's onNavigate — auditioning a clearer-sounding rifff from
+  // the same batch instead of being stuck with whichever happened to import
+  // first), and onBaked's downbeat-propagation to "everyone else in the
+  // batch" below, recomputed fresh from the CURRENT pickerGroupId each time
+  // rather than a fixed "siblings" list captured once — otherwise navigating
+  // away from the original first riff would exclude it from ever receiving
+  // the bake, since it was never itself in a "siblings" list.
+  //
+  // Deliberately NOT cleared by onBaked (only by onClose) — onBaked needs
+  // the full, still-intact list to compute "everyone else" at the moment it
+  // runs, and onClose's own "was this actually a batch" check
+  // (pickerBatchGroupIds.length > 1) needs to run before it gets cleared.
+  // Empty for a single import or an unrelated re-pick via the Inspector's
+  // own button.
+  const [pickerBatchGroupIds, setPickerBatchGroupIds] = useState<string[]>([])
 
   function handleLoreImported(groupIds: string[]): void {
     if (groupIds.length === 0) return
     setPickerGroupId(groupIds[0])
-    setPickerBatchSiblingGroupIds(groupIds.slice(1))
-    setPickerWasBatchImport(groupIds.length > 1)
+    setPickerBatchGroupIds(groupIds)
   }
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -642,19 +646,22 @@ function Frame(): React.JSX.Element {
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker
           groupId={pickerGroupId}
+          batchGroupIds={pickerBatchGroupIds.length > 1 ? pickerBatchGroupIds : undefined}
+          onNavigate={setPickerGroupId}
           onClose={() => {
-            setPickerGroupId(null)
-            setPickerBatchSiblingGroupIds([])
             // A batch import means "I picked everything I wanted, now let's
             // arrange" — close the library along with the picker so it
             // doesn't linger in the way. A single import means "I'm
             // browsing one at a time" — leave the library open (it never
             // auto-closes on its own) so the next pick is right there.
-            if (pickerWasBatchImport) setLoreLibraryOpen(false)
-            setPickerWasBatchImport(false)
+            const wasBatchImport = pickerBatchGroupIds.length > 1
+            setPickerGroupId(null)
+            setPickerBatchGroupIds([])
+            if (wasBatchImport) setLoreLibraryOpen(false)
           }}
           onBaked={(steps) => {
-            for (const siblingGroupId of pickerBatchSiblingGroupIds) {
+            const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
+            for (const siblingGroupId of siblingGroupIds) {
               const siblingRifff = state.rifffs[siblingGroupId]
               if (!siblingRifff) continue
               void bakeStems(
@@ -665,7 +672,6 @@ function Frame(): React.JSX.Element {
                 siblingRifff.stems
               )
             }
-            setPickerBatchSiblingGroupIds([])
           }}
         />
       )}

@@ -37,6 +37,10 @@ export function SketchStrip(): React.JSX.Element {
   // convention as Shelf's own multi-select. Separate from state.sel, which
   // stays the single "anchor" tile a plain click always collapses back to.
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  // Set (only) when a real drag of the scrub dot just ended — see
+  // handleTileClick's own doc comment for why the tile's click handler
+  // needs to check this.
+  const suppressNextTileClickRef = useRef(false)
 
   // Nearest gap between tiles, by clientX — tiles are uniform width + a
   // fixed gap, so this is direct arithmetic against the container's own
@@ -92,7 +96,20 @@ export function SketchStrip(): React.JSX.Element {
   // preview also paused the main transport underneath it, so clicking a
   // tile while playing silently cut the arrangement's audio — looked
   // exactly like "play isn't working."
+  //
+  // Also guards against a real bug the scrub dot's drag introduced: the
+  // dot's hit-circle sits INSIDE this tile, and stopPropagation on its own
+  // mousedown (see handleScrubDotMouseDown/dragUtils) only stops that one
+  // event from bubbling — it does nothing about the separate, later `click`
+  // event the browser still synthesizes on mouseup. Without this guard,
+  // releasing a drag on the dot also fired this handler, jumping playback
+  // back to the rifff's own start (or, while paused, starting playback from
+  // there unexpectedly) right as you let go.
   function handleTileClick(e: React.MouseEvent, rifff: Rifff): void {
+    if (suppressNextTileClickRef.current) {
+      suppressNextTileClickRef.current = false
+      return
+    }
     if (e.shiftKey && state.sel) {
       const anchorIndex = sequence.findIndex((r) => r.groupId === state.sel)
       const clickedIndex = sequence.findIndex((r) => r.groupId === rifff.groupId)
@@ -161,9 +178,15 @@ export function SketchStrip(): React.JSX.Element {
     }
 
     seekToClientPoint(startClientX, startClientY)
-    startPointerDrag(e, (deltaX, deltaY) => {
-      seekToClientPoint(startClientX + deltaX, startClientY + deltaY)
-    })
+    startPointerDrag(
+      e,
+      (deltaX, deltaY) => {
+        seekToClientPoint(startClientX + deltaX, startClientY + deltaY)
+      },
+      (moved) => {
+        if (moved) suppressNextTileClickRef.current = true
+      }
+    )
   }
 
   return (
