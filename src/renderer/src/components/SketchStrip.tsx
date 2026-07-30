@@ -43,6 +43,20 @@ export function SketchStrip(): React.JSX.Element {
   const previewGenerationRef = useRef(0)
   const previewTokenRef = useRef(0)
 
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Nearest gap between tiles, by clientX — tiles are uniform width + a
+  // fixed gap, so this is direct arithmetic against the container's own
+  // left edge rather than needing per-tile getBoundingClientRect calls.
+  function insertionIndexForClientX(clientX: number): number {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return sequence.length
+    const relativeX = clientX - rect.left
+    const slot = TILE_SIZE + TILE_GAP
+    return Math.max(0, Math.min(sequence.length, Math.round(relativeX / slot)))
+  }
+
   const stopTilePreview = useCallback(() => {
     stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
@@ -83,6 +97,28 @@ export function SketchStrip(): React.JSX.Element {
 
   return (
     <div
+      ref={containerRef}
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDropIndex(insertionIndexForClientX(e.clientX))
+      }}
+      onDragLeave={() => setDropIndex(null)}
+      onDrop={(e) => {
+        e.preventDefault()
+        const index = insertionIndexForClientX(e.clientX)
+        setDropIndex(null)
+        const draggedGroupId = e.dataTransfer.getData('text/rifff-group-id')
+        if (!draggedGroupId || !sequence.some((r) => r.groupId === draggedGroupId)) return
+        const withoutDragged = sequence.map((r) => r.groupId).filter((id) => id !== draggedGroupId)
+        // index was computed against the FULL sequence (including the
+        // dragged tile's own old slot) — if the drop lands after where it
+        // used to be, removing it first shifts every later index down by
+        // one, so the clamped insertion point needs the same adjustment.
+        const oldIndex = sequence.findIndex((r) => r.groupId === draggedGroupId)
+        const adjustedIndex = index > oldIndex ? index - 1 : index
+        withoutDragged.splice(adjustedIndex, 0, draggedGroupId)
+        dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: withoutDragged })
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -91,7 +127,7 @@ export function SketchStrip(): React.JSX.Element {
         flexWrap: 'wrap'
       }}
     >
-      {sequence.map((rifff) => {
+      {sequence.map((rifff, index) => {
         const start = rifff.startBar ?? 0
         const isCurrent = playing && pos >= start && pos < start + rifff.barLength
         // 0..1 progress through this rifff's own play window — only
@@ -105,9 +141,12 @@ export function SketchStrip(): React.JSX.Element {
         return (
           <div
             key={rifff.groupId}
+            draggable
+            onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
             onClick={() => handleTileClick(rifff)}
             title={rifff.name}
             style={{
+              order: index * 10,
               position: 'relative',
               width: TILE_SIZE,
               height: TILE_SIZE,
@@ -138,6 +177,17 @@ export function SketchStrip(): React.JSX.Element {
           </div>
         )
       })}
+      {dropIndex !== null && (
+        <div
+          style={{
+            order: dropIndex * 10 - 5,
+            width: 2,
+            height: TILE_SIZE,
+            background: 'var(--ra-play-on)',
+            pointerEvents: 'none'
+          }}
+        />
+      )}
       {sequence.length === 0 && (
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', padding: '8px 0' }}>
           drag rifffs in from the shelf or LORE library to start a sketch
