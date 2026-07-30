@@ -119,12 +119,19 @@ namespace ssstitch
             if (bus < 0 || bus >= kNumSendBuses)
                 return;
 
+            // Use the real device's own sample rate / block size, not a
+            // hardcoded guess — prepareToPlay()'ing a plugin for the wrong
+            // block size means processBlock() can later be called with a
+            // buffer larger than the plugin allocated internal storage for
+            // (undefined behaviour, often a crash that takes the whole
+            // engine process down with it, silencing the dry mix too).
+            //
             // IpcConnection itself is only ever touched from the message
             // thread (InterprocessConnection's own contract), but
             // requestLoad's onLoaded callback fires on SendBus's background
             // loader thread — sendJson (and `this` in general) must not be
             // touched from there directly. Post back to the message thread.
-            sendBus.requestLoad(bus, pluginId, 44100.0, 512,
+            sendBus.requestLoad(bus, pluginId, transport.currentSampleRate(), transport.currentBlockSize(),
                 [this, bus, pluginId](bool success, const juce::String& error)
                 {
                     juce::MessageManager::callAsync([this, bus, pluginId, success, error]()

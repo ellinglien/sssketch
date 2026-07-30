@@ -26,6 +26,18 @@ namespace ssstitch
         double currentPositionBars() const { return positionBars.load(); }
         bool isPlaying() const { return playing.load(); }
 
+        /** The real audio device's own sample rate / callback block size —
+         * used when loading a send-bus plugin live, so prepareToPlay() is
+         * told the truth instead of an arbitrary hardcoded guess. A plugin
+         * prepared for the wrong block size can be called with a
+         * processBlock() buffer larger than it allocated internal storage
+         * for (undefined behaviour, often a crash); a plugin prepared for
+         * the wrong sample rate mistunes any rate-dependent internal
+         * coefficients (envelope followers, filters). Defaults (44100Hz /
+         * 512 samples) only apply before the device has ever started. */
+        double currentSampleRate() const { return deviceSampleRate; }
+        int currentBlockSize() const { return deviceBlockSize; }
+
         void setBpm(double bpm) { secPerBar = bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
 
         // juce::AudioIODeviceCallback
@@ -43,5 +55,6 @@ namespace ssstitch
         std::atomic<double> positionBars { 0.0 };
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
+        int deviceBlockSize = 512;
     };
 }

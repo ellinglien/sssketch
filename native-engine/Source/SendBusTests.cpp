@@ -4,9 +4,44 @@
 #include <juce_core/juce_core.h>
 #include <thread>
 #include <atomic>
+#include <cmath>
+#include <limits>
 
 namespace ssstitch
 {
+    /** Stands in for a misbehaving/misconfigured plugin (e.g. one prepared
+     * with the wrong sample rate or block size) that outputs NaN. */
+    class NanProducingProcessor : public juce::AudioProcessor
+    {
+    public:
+        NanProducingProcessor()
+            : juce::AudioProcessor(BusesProperties()
+                .withInput("Input", juce::AudioChannelSet::stereo())
+                .withOutput("Output", juce::AudioChannelSet::stereo()))
+        {}
+
+        void prepareToPlay(double, int) override {}
+        void releaseResources() override {}
+        void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+        {
+            buffer.applyGain(std::numeric_limits<float>::quiet_NaN());
+        }
+
+        const juce::String getName() const override { return "NanProducingProcessor"; }
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram(int) override {}
+        const juce::String getProgramName(int) override { return {}; }
+        void changeProgramName(int, const juce::String&) override {}
+        void getStateInformation(juce::MemoryBlock&) override {}
+        void setStateInformation(const void*, int) override {}
+    };
+
     class SendBusTests : public juce::UnitTest
     {
     public:
@@ -153,6 +188,30 @@ namespace ssstitch
                 bus.loadPluginSync(0, "", 44100.0, 512, error);
                 expect(error.isEmpty());
                 expect(!bus.hasPlugin(0));
+            }
+
+            beginTest("a bus producing NaN never corrupts the mix — regression test for a real bug where a "
+                      "plugin loaded with the wrong sample rate/block size could silence the entire mix, not "
+                      "just its own bus, since a single NaN sample is contagious under +=");
+            {
+                SendBus bus([](const juce::String&, double, int, juce::String& err) -> std::unique_ptr<juce::AudioProcessor>
+                {
+                    err = {};
+                    return std::make_unique<NanProducingProcessor>();
+                });
+                juce::String error;
+                bus.loadPluginSync(0, "fake-plugin", 44100.0, 512, error);
+
+                // Pre-existing dry-mix content, exactly as renderBlock would have
+                // already written before calling mixBackInto.
+                std::vector<float> l(4, 0.25f), r(4, 0.25f);
+                bus.applyPendingSwaps();
+                bus.beginBlock(4);
+                bus.addSample(0, 0, 1.0f, 1.0f, 1.0f);
+                bus.mixBackInto(4, l.data(), r.data());
+
+                for (float s : l) { expect(!std::isnan(s)); expectWithinAbsoluteError(s, 0.25f, 1.0e-6f); }
+                for (float s : r) { expect(!std::isnan(s)); expectWithinAbsoluteError(s, 0.25f, 1.0e-6f); }
             }
         }
     };

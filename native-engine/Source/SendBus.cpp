@@ -2,6 +2,7 @@
 #include "SendBus.h"
 #include "SendPluginAllowlist.h"
 #include <algorithm>
+#include <cmath>
 #include <thread>
 
 namespace ssstitch
@@ -82,8 +83,21 @@ namespace ssstitch
             midi.clear();
             for (int i = 0; i < numSamples; ++i)
             {
-                outL[i] += slot.scratch.getSample(0, i);
-                outR[i] += slot.scratch.getSample(1, i);
+                // A misconfigured or misbehaving plugin (e.g. one loaded
+                // with a sample rate / block size that doesn't match what
+                // it actually receives) can produce NaN/Inf. Since every
+                // bus accumulates into the SAME outL/outR that every dry
+                // stem also writes into, one non-finite sample from one
+                // bus would otherwise silently corrupt the entire mix (a
+                // NaN is contagious under +=) — not just this bus's own
+                // contribution. Treat a non-finite sample as silence
+                // instead of ever letting it reach the device.
+                const float l = slot.scratch.getSample(0, i);
+                const float r = slot.scratch.getSample(1, i);
+                if (std::isfinite(l))
+                    outL[i] += l;
+                if (std::isfinite(r))
+                    outR[i] += r;
             }
         }
     }

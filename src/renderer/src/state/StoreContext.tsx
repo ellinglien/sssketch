@@ -258,6 +258,19 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         next[bus] = success ? null : (error ?? 'unknown error')
         return next
       })
+      // A failed load must not leave sendBusPlugins[bus] pointing at the
+      // plugin that just failed — otherwise a LATER, unrelated engine
+      // crash-recovery restart would resend load-send-plugin for that same
+      // known-bad id (see the onEngineRestarted effect below) and fail
+      // again forever. Uses rawDispatch, not dispatch: dispatch's own
+      // SET_SEND_BUS_PLUGIN case would also reset sendBusStatus/sendBusError
+      // back to 'idle'/null and fire another (pointless) loadSendPlugin IPC
+      // call, wiping out the 'error' + message this same handler just set
+      // above before the user ever sees it. This only needs to correct the
+      // stale project-data field, nothing else.
+      if (!success) {
+        rawDispatch({ type: 'SET_SEND_BUS_PLUGIN', bus: bus as 0 | 1 | 2 | 3, pluginId: null })
+      }
     })
   }, [])
 
