@@ -69,6 +69,7 @@ function Timeline({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const [dropBar, setDropBar] = useState<number | null>(null)
   // Compact mode uses its own, much denser horizontal scale (see Ruler.tsx)
   // — every bar<->pixel conversion below has to agree on which one is
@@ -76,6 +77,23 @@ function Timeline({
   // Playhead/drop-indicator this component renders, rather than assuming
   // the shared PPB everywhere.
   const ppb = state.mode === 'compact' ? COMPACT_PPB : PPB
+
+  // Click anywhere in the arranger that isn't a clip (a stem waveform
+  // already scrubs via its own click handler, computing basically the same
+  // position — this just covers everywhere else: ghost rows, the empty
+  // space past the last placed rifff, gaps within a row before/after a
+  // clip) moves the playhead there — free/unsnapped, same convention as
+  // Ruler's own click-to-scrub. Bubbles up from any descendant that doesn't
+  // stop propagation, so RifffBlockRow's own name bar (expand/collapse, not
+  // a scrub) explicitly stops it — everything else either already computes
+  // the same position anyway or is a low-risk edge case (a bare click, no
+  // drag, on a 5px resize handle).
+  function handleBackgroundClick(e: MouseEvent<HTMLDivElement>): void {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const bar = Math.max(0, (e.clientX - rect.left) / ppb)
+    dispatch({ type: 'SET_POS', pos: bar })
+    if (playing) void window.rifffApi.engineSetPosition(bar)
+  }
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
@@ -156,6 +174,7 @@ function Timeline({
       onDragLeave={() => setDropBar(null)}
       onDrop={handleDrop}
       onContextMenu={handleContextMenu}
+      onClick={handleBackgroundClick}
       style={{ position: 'relative' }}
     >
       <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
@@ -607,12 +626,20 @@ function Frame(): React.JSX.Element {
       </div>
       <Shelf onImported={setPickerGroupId} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
       <TransportBar />
-      <div style={{ display: 'flex' }}>
+      {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
+          row consume all the vertical space left after the header/Shelf/
+          TransportBar rows above take their own natural heights — the row's
+          own children then stretch to fill THAT (flex row's default
+          align-items:stretch), which is what pins the scroll container's
+          horizontal scrollbar to the bottom of the visible frame regardless
+          of how many rows are actually placed, instead of it sitting right
+          after however much content happens to exist. */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* minWidth:0 lets this flex item shrink below its content's intrinsic
             width, which is what allows overflow-x:auto to actually kick in
             instead of the row silently stretching .ra-frame's fixed width. */}
         <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-          <div ref={scrollContainerRef} style={{ overflowX: 'auto' }}>
+          <div ref={scrollContainerRef} style={{ height: '100%', overflowX: 'auto' }}>
             <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
           </div>
           {handModeHeld && (
@@ -656,7 +683,15 @@ function Frame(): React.JSX.Element {
           style={{
             width: state.inspectorCollapsed ? 0 : 308,
             flex: 'none',
-            overflow: 'hidden',
+            // overflowX stays hidden for the slide animation (clips the
+            // fixed-width Inspector while this wrapper's own width
+            // transitions); overflowY is now 'auto' rather than hidden too
+            // — the frame no longer grows to fit tall content (see
+            // .ra-frame's own bounded height), so without this, Inspector
+            // content past the available height would just be invisibly
+            // clipped instead of scrollable.
+            overflowX: 'hidden',
+            overflowY: 'auto',
             transition: 'width 150ms ease'
           }}
         >

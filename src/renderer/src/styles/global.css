@@ -42,7 +42,15 @@ button {
 
 .ra-frame {
   width: 1300px;
+  /* Bounded to the viewport (minus the same 32px margin top and bottom),
+     not auto-height-to-content — the timeline's own scroll container below
+     needs a determinate height to stretch into, or its horizontal
+     scrollbar ends up sitting right after however many rows happen to be
+     placed instead of pinned to the bottom of the visible frame. */
+  height: calc(100vh - 64px);
   margin: 32px auto;
+  display: flex;
+  flex-direction: column;
   background: var(--ra-bg-frame);
   border: 1px solid var(--ra-border);
   border-radius: var(--ra-r-7);

@@ -69,7 +69,11 @@ export function RifffBlockRow({
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }
         }}
-        onClick={() => {
+        onClick={(e) => {
+          // Stops the click from also bubbling up to Timeline's own
+          // background click-to-scrub handler in App.tsx — expanding/
+          // collapsing a rifff shouldn't also jump the playhead.
+          e.stopPropagation()
           dispatch({ type: 'SELECT', groupId })
           dispatch({ type: 'TOGGLE_EXPAND', groupId })
         }}

@@ -226,7 +226,20 @@ export function Shelf({
       </div>
       <div
         onMouseLeave={() => setHoverId(null)}
-        style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 5,
+          alignItems: 'center',
+          // Capped rather than growing unbounded with library size — App.tsx's
+          // .ra-frame is now a fixed height (see its own comment on why), so
+          // an uncapped library that wraps to many rows would squeeze the
+          // arranger below it instead of just making the whole window taller
+          // the way it used to. Roughly 2 rows of TILE_SIZE(42) tiles; scrolls
+          // internally past that.
+          maxHeight: 100,
+          overflowY: 'auto'
+        }}
       >
         {library.map((rifff) => {
           const selected = state.sel === rifff.groupId
