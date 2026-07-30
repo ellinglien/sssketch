@@ -11,6 +11,13 @@ import { exportMixToWav, exportStemsToWavs } from './exportMix'
 import { nativeExport, nativeExportStems } from './nativeExport'
 import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
+import {
+  warehouseAvailable,
+  listJams,
+  listRiffs,
+  resolveRiff,
+  type RiffFilters
+} from './loreWarehouse'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
 // read from the before-quit handler below, which runs in a different
@@ -85,6 +92,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('import-rifff', (_event, paths: string[]) => {
     return importRifff(paths)
   })
+
+  ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
+
+  ipcMain.handle('lore-list-jams', (_event, filterText: string) => listJams(filterText))
+
+  ipcMain.handle('lore-list-riffs', (_event, jamCID: string, filters: RiffFilters) =>
+    listRiffs(jamCID, filters)
+  )
+
+  ipcMain.handle('lore-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })

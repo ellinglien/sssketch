@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff, ExportedStem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
+import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -44,7 +45,22 @@ const api = {
     const listener = (): void => callback()
     ipcRenderer.on('engine-restarted', listener)
     return () => ipcRenderer.removeListener('engine-restarted', listener)
-  }
+  },
+  loreWarehouseAvailable: (): Promise<boolean> => ipcRenderer.invoke('lore-warehouse-available'),
+  loreListJams: (filterText: string): Promise<LoreJam[]> =>
+    ipcRenderer.invoke('lore-list-jams', filterText),
+  loreListRiffs: (
+    jamCID: string,
+    filters: {
+      dateFrom?: number
+      dateTo?: number
+      bpm?: number
+      userName?: string
+      onlyFullyCached?: boolean
+    }
+  ): Promise<LoreRiffSummary[]> => ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
+  loreResolveRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
+    ipcRenderer.invoke('lore-resolve-riff', riffCID)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)
