@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
+import type { LoreJam } from '@shared/loreLibrary'
 
 // Single-user, single-machine app — this is the actual synced folder on
 // Elling's machine. See the design spec's "Background" section for why this
@@ -60,6 +61,22 @@ export function warehouseAvailable(): boolean {
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
   return join(stemCacheRoot(), jamCID, shard, stemCID)
+}
+
+export function listJams(filterText: string): LoreJam[] {
+  const db = getWarehouseDb()
+  if (!db) return []
+  const rows = db
+    .prepare(
+      `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime
+       FROM Jams j
+       LEFT JOIN Riffs r ON r.OwnerJamCID = j.JamCID
+       WHERE j.PublicName LIKE ?
+       GROUP BY j.JamCID
+       ORDER BY lastRiffTime DESC`
+    )
+    .all(`%${filterText}%`) as LoreJam[]
+  return rows
 }
 
 export { getWarehouseDb }
