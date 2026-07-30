@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer } from './store'
+import { initialState, reducer, type AppState } from './store'
 import {
   resolveOffsetKey,
   resolvePlayedBars,
@@ -76,7 +76,7 @@ describe('channelMuteLetters', () => {
   })
 
   it('leaves channels beyond the 10-key row without a shortcut', () => {
-    let state = { ...initialState, mode: 'normal' as const }
+    let state: AppState = { ...initialState, mode: 'normal' }
     for (let i = 0; i < 12; i++) {
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: `r${i}` } })
     }

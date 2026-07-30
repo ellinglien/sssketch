@@ -26,7 +26,7 @@ export function RifffBlockRow({
   const expanded = !!state.exp[groupId]
   const color = identityColor(rifff)
 
-  if (state.compactMode) {
+  if (state.mode === 'compact') {
     return <CompactRifffBlock groupId={groupId} onOpenContextMenu={onOpenContextMenu} />
   }
 

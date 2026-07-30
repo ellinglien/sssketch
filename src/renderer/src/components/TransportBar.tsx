@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAppState, useDispatch, useHistory, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
+import { nextArrangerMode, isSketchEligible } from '../state/selectors'
 
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
@@ -194,20 +195,25 @@ export function TransportBar(): React.JSX.Element {
       </button>
 
       <button
-        onClick={() => dispatch({ type: 'TOGGLE_COMPACT_MODE' })}
-        aria-label="Toggle compact mode"
-        title={state.compactMode ? 'compact mode: on (Tab)' : 'compact mode: off (Tab)'}
+        onClick={() => dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })}
+        aria-label="Cycle arranger mode"
+        title={
+          state.mode === 'normal' && !isSketchEligible(state)
+            ? 'mode: normal (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
+            : `mode: ${state.mode} (Tab)`
+        }
         style={{
           height: 22,
           borderRadius: 0,
           padding: '0 8px',
           fontSize: 10,
-          background: state.compactMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.compactMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.compactMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          background:
+            state.mode !== 'normal' ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        compact
+        {state.mode}
       </button>
 
       <div style={{ display: 'flex', gap: 4 }}>
