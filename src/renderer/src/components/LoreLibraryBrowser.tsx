@@ -6,6 +6,8 @@ import { sqrtGain } from '@shared/mixGain'
 import { usePlaying, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
+import { classifyStems } from '../audio/classifyStems'
+import { stemKey } from '@shared/types'
 
 /** Continuous brightness ramp from dark gray (0% ownership) to white (100%)
  * — a riff missing any cached stems overrides this entirely and renders flat
@@ -43,6 +45,7 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   }
 
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
+  const [importedRiffCIDs, setImportedRiffCIDs] = useState<Set<string>>(new Set())
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const playing = usePlaying()
   const dispatch = useDispatch()
@@ -56,6 +59,53 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
       }
     }
     previewSourcesRef.current = []
+  }
+
+  function handleImport(): void {
+    if (!resolvedRiff || !selectedRiffCID) return
+    const cachedStems = resolvedRiff.stems.filter((s) => s.path !== null)
+    if (cachedStems.length === 0) return
+
+    const groupId = crypto.randomUUID()
+    const rifff = {
+      groupId,
+      name: `LORE riff ${selectedRiffCID.slice(0, 8)}`,
+      bpm: resolvedRiff.bpm,
+      barLength: resolvedRiff.barLength,
+      // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
+      // import. Inspector.tsx's existing "re-import from folder" link displays
+      // this field as-is; an empty string would render as a bare "/", so use a
+      // human-readable descriptor instead. Clicking that link on a LORE-imported
+      // rifff still works exactly like it does for any other rifff (opens a
+      // folder picker and re-imports from wherever the user points it) — this
+      // is display-only, not read back programmatically anywhere.
+      folderPath: 'lore library',
+      stems: cachedStems.map((s) => ({
+        slot: s.slot,
+        author: s.creatorUserName,
+        name: s.presetName,
+        type: instrumentMaskToSoundType(s.instrumentMask) ?? 'fx',
+        path: s.path!,
+        durationSec: s.durationSec, // this stem's own bpm/bar-length, not the riff's — see resolveRiff
+        barLength: s.barLength
+      }))
+    }
+
+    dispatch({ type: 'ADD_TO_SHELF', rifff })
+    for (const stem of cachedStems) {
+      if (Math.abs(stem.gain - 1.0) > 1e-6) {
+        dispatch({ type: 'SET_VOLUME', stemKey: stemKey(groupId, stem.slot), volume: stem.gain })
+      }
+    }
+    setImportedRiffCIDs((prev) => new Set(prev).add(selectedRiffCID))
+
+    // Same "fill in unclassified stems by ear" heuristic drag-and-drop import
+    // already uses — the Instrument bitmask covers drum/note/bass/mic
+    // confidently, but a stem with no matching bit (mapped to 'fx' above)
+    // gets a second chance here, same as today's importer gives every stem.
+    classifyStems(rifff, dispatch).catch((err) => {
+      console.error('LoreLibraryBrowser: failed to classify stem types:', err)
+    })
   }
 
   useEffect(() => {
@@ -377,13 +427,36 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
                         identityColor={typeColorVar('fx')}
                         size={40}
                       />
-                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
                         {resolvedRiff.bpm} BPM · {resolvedRiff.stems.length} stems (
                         {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
                         <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
                           {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
                         </div>
                       </div>
+                      <button
+                        onClick={handleImport}
+                        disabled={resolvedRiff.stems.every((s) => s.path === null)}
+                        style={{
+                          height: 24,
+                          borderRadius: 0,
+                          padding: '0 12px',
+                          fontSize: 10,
+                          border: '1px solid var(--ra-border-strong)',
+                          background:
+                            selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on-bg)'
+                              : 'var(--ra-bg-row-active)',
+                          color:
+                            selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on)'
+                              : 'var(--ra-text)'
+                        }}
+                      >
+                        {selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                          ? 'imported ✓ — import again'
+                          : 'import'}
+                      </button>
                     </div>
                   )}
                 </>
