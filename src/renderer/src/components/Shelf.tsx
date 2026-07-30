@@ -26,6 +26,7 @@ export function Shelf({
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
+  const library = Object.values(state.rifffs)
   const [dragOver, setDragOver] = useState(false)
   // Hovering a tile previews its meta in the header line without changing
   // selection — falls back to the current selection so the line isn't just
@@ -35,6 +36,12 @@ export function Shelf({
   // tile without dragging it to the arranger previews it, matching the LORE
   // library browser's own click-to-preview convention.
   const [previewingGroupId, setPreviewingGroupId] = useState<string | null>(null)
+  // Batch selection (shift-click range, cmd/ctrl-click toggle) — separate
+  // from state.sel, which remains the single "anchor" tile that drives
+  // preview/detail-line/Inspector exactly as before. A plain click always
+  // collapses this back down to just that one tile. Same convention as the
+  // LORE library browser's own multi-select.
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   // Bumped on every click so a preview whose decode is still in flight when
   // a different tile gets clicked knows it's been superseded and shouldn't
@@ -55,7 +62,58 @@ export function Shelf({
     return () => stopTilePreview()
   }, [stopTilePreview])
 
-  function handleTileClick(rifff: Rifff): void {
+  // Delete/Backspace removes the targeted rifff(s) from the library
+  // entirely (DELETE_RIFFFS) — not just from the timeline (that's
+  // App.tsx's/SketchStrip's own domain, guarded to skip unplaced rifffs so
+  // this doesn't double-fire with theirs). Targets the current
+  // multi-selection if there is one, otherwise just the single anchor
+  // (state.sel) — and only ever rifffs that are actually unplaced, since a
+  // placed one belongs to whichever arranger view owns it.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      const targetIds =
+        multiSelected.size > 0 ? multiSelected : new Set(state.sel ? [state.sel] : [])
+      const groupIds = [...targetIds].filter((id) => state.rifffs[id]?.startBar === undefined)
+      if (groupIds.length === 0) return
+      dispatch({ type: 'DELETE_RIFFFS', groupIds })
+      setMultiSelected(new Set())
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [multiSelected, state.sel, state.rifffs, dispatch])
+
+  // Shift-click extends/shrinks a range from the current anchor (state.sel);
+  // cmd/ctrl-click toggles just the clicked tile in/out of the batch,
+  // leaving the anchor alone. Neither previews audio — multi-selecting to
+  // batch-drag or batch-delete shouldn't also start a preview loop, unlike
+  // a plain click. A plain click always collapses back to a single
+  // selection AND previews, exactly as before.
+  function handleTileClick(e: React.MouseEvent, rifff: Rifff): void {
+    if (e.shiftKey && state.sel) {
+      const anchorIndex = library.findIndex((r) => r.groupId === state.sel)
+      const clickedIndex = library.findIndex((r) => r.groupId === rifff.groupId)
+      if (anchorIndex === -1 || clickedIndex === -1) {
+        setMultiSelected(new Set([rifff.groupId]))
+        return
+      }
+      const [start, end] =
+        anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
+      setMultiSelected(new Set(library.slice(start, end + 1).map((r) => r.groupId)))
+      return
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setMultiSelected((prev) => {
+        const next = new Set(prev)
+        if (next.has(rifff.groupId)) next.delete(rifff.groupId)
+        else next.add(rifff.groupId)
+        return next
+      })
+      return
+    }
+    setMultiSelected(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     previewGenerationRef.current += 1
     const generation = previewGenerationRef.current
@@ -127,7 +185,6 @@ export function Shelf({
     }
   }
 
-  const library = Object.values(state.rifffs)
   const detailRifff = state.rifffs[hoverId ?? state.sel ?? ''] ?? null
 
   return (
@@ -174,17 +231,31 @@ export function Shelf({
           const selected = state.sel === rifff.groupId
           const hovered = hoverId === rifff.groupId
           const previewing = previewingGroupId === rifff.groupId
+          const batchSelected = multiSelected.has(rifff.groupId)
           // Already placed on the timeline reads as "in use" — full opacity,
           // same as selected/hovered; everything else dims slightly so the
           // tray doubles as an at-a-glance map of what's already in the
           // arrangement, mirroring the imported/6b mockup's own convention.
-          const lit = selected || hovered || previewing || rifff.startBar !== undefined
+          const lit =
+            selected || hovered || previewing || batchSelected || rifff.startBar !== undefined
           return (
             <button
               key={rifff.groupId}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
+                // Dragging a tile that's part of an active multi-selection
+                // carries the whole batch — SketchStrip reads this to place
+                // all of them at once. Falls back to the singular id above
+                // for anything that only understands single-tile drops
+                // (the normal Timeline), which just places the one tile
+                // under the cursor rather than the whole batch.
+                if (multiSelected.size > 1 && multiSelected.has(rifff.groupId)) {
+                  e.dataTransfer.setData(
+                    'text/rifff-shelf-source-ids',
+                    JSON.stringify([...multiSelected])
+                  )
+                }
                 // Not yet placed — there's no existing on-timeline position to
                 // preserve an offset from, and without this the module could
                 // still be holding a stale value left behind by a previous
@@ -198,14 +269,18 @@ export function Shelf({
                 setPreviewingGroupId(null)
               }}
               onMouseEnter={() => setHoverId(rifff.groupId)}
-              onClick={() => handleTileClick(rifff)}
-              title={`${rifff.name} — click to preview, drag to arrange`}
+              onClick={(e) => handleTileClick(e, rifff)}
+              title={`${rifff.name} — click to preview, drag to arrange, shift/cmd-click to multi-select, delete to remove from library`}
               style={{
                 width: TILE_SIZE,
                 height: TILE_SIZE,
                 flex: 'none',
                 padding: 2,
-                border: previewing ? '1px solid var(--ra-playhead)' : '1px solid transparent',
+                border: previewing
+                  ? '1px solid var(--ra-playhead)'
+                  : batchSelected
+                    ? '1px solid var(--ra-stretch-on)'
+                    : '1px solid transparent',
                 cursor: 'grab',
                 background: 'transparent',
                 opacity: lit ? 1 : 0.72

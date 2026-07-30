@@ -97,28 +97,57 @@ export function SketchStrip(): React.JSX.Element {
         const index = insertionIndexForClientX(e.clientX)
         setDropIndex(null)
 
-        const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
-        if (shelfSourceId) {
+        // Places (or, if already placed elsewhere, pastes an independent
+        // copy of) a single shelf-sourced rifff and returns the groupId it
+        // ends up with — shared by both the single- and multi-select drop
+        // branches below so there's exactly one place that knows "place if
+        // unplaced, else paste a copy."
+        function placeShelfRifff(shelfSourceId: string): string | null {
           const source = state.rifffs[shelfSourceId]
-          if (!source) return
-          const groupIds = sequence.map((r) => r.groupId)
+          if (!source) return null
           if (source.startBar === undefined) {
             // Not yet placed anywhere — place it (startBar here is
-            // immediately overwritten by the SEQUENCE_RIFFFS dispatch right
-            // below; PLACE_ON_TIMELINE just needs a value, 0 is fine).
+            // immediately overwritten by the SEQUENCE_RIFFFS dispatch the
+            // caller issues right after; PLACE_ON_TIMELINE just needs a
+            // value, 0 is fine).
             dispatch({ type: 'PLACE_ON_TIMELINE', groupId: shelfSourceId, startBar: 0 })
-            groupIds.splice(index, 0, shelfSourceId)
-            dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
-          } else {
-            // Already placed elsewhere (e.g. dragged from the shelf a
-            // second time) — an independent copy, same convention as the
-            // normal Timeline's own shelf-drop handling.
-            const action = pasteRifffAction(state, shelfSourceId, 0)
-            if (!action || action.type !== 'PASTE_RIFFF') return
-            dispatch(action)
-            groupIds.splice(index, 0, action.rifff.groupId)
-            dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
+            return shelfSourceId
           }
+          // Already placed elsewhere (e.g. dragged from the shelf a second
+          // time) — an independent copy, same convention as the normal
+          // Timeline's own shelf-drop handling.
+          const action = pasteRifffAction(state, shelfSourceId, 0)
+          if (!action || action.type !== 'PASTE_RIFFF') return null
+          dispatch(action)
+          return action.rifff.groupId
+        }
+
+        const shelfSourceIdsJson = e.dataTransfer.getData('text/rifff-shelf-source-ids')
+        if (shelfSourceIdsJson) {
+          let shelfSourceIds: unknown
+          try {
+            shelfSourceIds = JSON.parse(shelfSourceIdsJson)
+          } catch {
+            return
+          }
+          if (!Array.isArray(shelfSourceIds)) return
+          const groupIds = sequence.map((r) => r.groupId)
+          const placedIds = shelfSourceIds
+            .filter((id): id is string => typeof id === 'string')
+            .map(placeShelfRifff)
+            .filter((id): id is string => id !== null)
+          groupIds.splice(index, 0, ...placedIds)
+          dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
+          return
+        }
+
+        const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
+        if (shelfSourceId) {
+          const groupIds = sequence.map((r) => r.groupId)
+          const placedId = placeShelfRifff(shelfSourceId)
+          if (placedId === null) return
+          groupIds.splice(index, 0, placedId)
+          dispatch({ type: 'SEQUENCE_RIFFFS', groupIds })
           return
         }
 
