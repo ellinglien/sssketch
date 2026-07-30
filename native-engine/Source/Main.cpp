@@ -340,7 +340,7 @@ static int runServe(int port)
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud
 
-    IpcServer server(engine, transport, bufferCache);
+    IpcServer server(engine, transport, bufferCache, sendBus);
     if (!server.beginWaitingForSocket(port, "127.0.0.1"))
     {
         juce::Logger::writeToLog("runServe: failed to bind to port " + juce::String(port));

@@ -17,8 +17,8 @@ namespace ssstitch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c)
-        : engine(e), transport(t), bufferCache(c)
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, SendBus& sb)
+        : engine(e), transport(t), bufferCache(c), sendBus(sb)
     {
     }
 
@@ -110,6 +110,38 @@ namespace ssstitch
             const double pos = payload.isObject() ? (double) payload.getProperty("pos", 0.0) : 0.0;
             transport.setPosition(pos);
         }
+        else if (type == "load-send-plugin")
+        {
+            if (!payload.isObject())
+                return;
+            const int bus = (int) payload.getProperty("bus", -1);
+            const auto pluginId = payload.getProperty("pluginId", "").toString();
+            if (bus < 0 || bus >= kNumSendBuses)
+                return;
+
+            // IpcConnection itself is only ever touched from the message
+            // thread (InterprocessConnection's own contract), but
+            // requestLoad's onLoaded callback fires on SendBus's background
+            // loader thread — sendJson (and `this` in general) must not be
+            // touched from there directly. Post back to the message thread.
+            sendBus.requestLoad(bus, pluginId, 44100.0, 512,
+                [this, bus, pluginId](bool success, const juce::String& error)
+                {
+                    juce::MessageManager::callAsync([this, bus, pluginId, success, error]()
+                    {
+                        juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+                        payloadObj->setProperty("bus", bus);
+                        payloadObj->setProperty("pluginId", pluginId);
+                        payloadObj->setProperty("success", success);
+                        if (!success)
+                            payloadObj->setProperty("error", error);
+                        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                        obj->setProperty("type", "send-plugin-loaded");
+                        obj->setProperty("payload", juce::var(payloadObj.get()));
+                        sendJson(juce::var(obj.get()));
+                    });
+                });
+        }
         else if (type == "render-export")
         {
             if (!payload.isObject())
@@ -134,13 +166,13 @@ namespace ssstitch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c)
-        : engine(e), transport(t), bufferCache(c)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, SendBus& sb)
+        : engine(e), transport(t), bufferCache(c), sendBus(sb)
     {
     }
 
     juce::InterprocessConnection* IpcServer::createConnectionObject()
     {
-        return new IpcConnection(engine, transport, bufferCache);
+        return new IpcConnection(engine, transport, bufferCache, sendBus);
     }
 }

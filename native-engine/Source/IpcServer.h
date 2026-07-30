@@ -4,6 +4,7 @@
 #include "Transport.h"
 #include "EngineProject.h"
 #include "RenderExport.h"
+#include "SendBus.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 
@@ -16,7 +17,7 @@ namespace ssstitch
     class IpcConnection : public juce::InterprocessConnection, private juce::Timer
     {
     public:
-        IpcConnection(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache);
+        IpcConnection(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache, SendBus& sendBus);
         ~IpcConnection() override;
 
         void connectionMade() override;
@@ -30,12 +31,13 @@ namespace ssstitch
         PlaybackEngine& engine;
         Transport& transport;
         StemBufferCache& bufferCache;
+        SendBus& sendBus;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer
     {
     public:
-        IpcServer(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache);
+        IpcServer(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache, SendBus& sendBus);
 
         juce::InterprocessConnection* createConnectionObject() override;
 
@@ -43,5 +45,6 @@ namespace ssstitch
         PlaybackEngine& engine;
         Transport& transport;
         StemBufferCache& bufferCache;
+        SendBus& sendBus;
     };
 }
