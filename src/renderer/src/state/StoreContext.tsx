@@ -192,7 +192,16 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // OTHER tracked field happened to change too. Found via Task 12 manual
     // verification: after a resize-handle drag, the captured EngineProject
     // sent over IPC still showed the pre-drag playedBars.
-    state.playedBars
+    state.playedBars,
+    // Same bug, same fix, for send levels: per the design spec, sendLevels
+    // flows through this general load-project sync (unlike sendBusPlugins,
+    // which is deliberately sent via its own explicit load-send-plugin
+    // message instead — see the SET_SEND_BUS_PLUGIN dispatch case above).
+    // Without this, dragging a stem's send-level control updated the
+    // renderer's own state and the Inspector's UI just fine, but the engine
+    // never learned about it — the send would silently stay at whatever
+    // level (usually 0) it had at the last unrelated resend.
+    state.sendLevels
   ])
 
   useEffect(() => {
