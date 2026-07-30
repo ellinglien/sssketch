@@ -14,7 +14,8 @@ import {
   placedRifffsInOrder,
   channelMuteLetters,
   isSketchEligible,
-  nextArrangerMode
+  nextArrangerMode,
+  groupIdAtPosition
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -408,6 +409,39 @@ describe('nextArrangerMode', () => {
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
     expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('compact')
     expect(nextArrangerMode({ ...state, mode: 'compact' })).toBe('normal') // sketch skipped
+  })
+})
+
+describe('groupIdAtPosition', () => {
+  it('finds which placed rifff contains a given position', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+    expect(groupIdAtPosition(state, 0)).toBe('r1')
+    expect(groupIdAtPosition(state, 3.9)).toBe('r1')
+    expect(groupIdAtPosition(state, 4)).toBe('r2')
+    expect(groupIdAtPosition(state, 7.5)).toBe('r2')
+  })
+
+  it('returns null when the position is past every placed rifff', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    expect(groupIdAtPosition(state, 4)).toBeNull()
+    expect(groupIdAtPosition(state, 100)).toBeNull()
+  })
+
+  it('returns null on an empty timeline', () => {
+    expect(groupIdAtPosition(initialState, 0)).toBeNull()
   })
 })
 

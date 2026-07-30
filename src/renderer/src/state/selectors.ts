@@ -155,6 +155,18 @@ export function nextArrangerMode(state: AppState): ArrangerMode {
   return next
 }
 
+/** Which placed rifff's [startBar, startBar + barLength) range contains
+ * `pos` — used by the sketch-mode Inspector auto-follow effect (App.tsx) to
+ * find "whichever rifff is currently playing." Not sketch-mode-specific
+ * itself; the caller is. */
+export function groupIdAtPosition(state: AppState, pos: number): string | null {
+  for (const rifff of placedRifffsInOrder(state)) {
+    const start = rifff.startBar ?? 0
+    if (pos >= start && pos < start + rifff.barLength) return rifff.groupId
+  }
+  return null
+}
+
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
