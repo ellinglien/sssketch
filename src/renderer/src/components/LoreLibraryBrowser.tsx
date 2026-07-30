@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
-import { instrumentMaskToSoundType } from '@shared/loreLibrary'
+import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -26,6 +26,20 @@ function riffCircleColor(riff: LoreRiffSummary): string {
   const hi = 237 // matches --ra-text's near-white value
   const v = Math.round(lo + riff.ownerFraction * (hi - lo))
   return `rgb(${v}, ${v}, ${v})`
+}
+
+// Persisted locally (not in project files or app state) since it's a
+// per-person identity setting, not something that travels with a project —
+// each tester on their own machine sets their own LORE username once here
+// and it sticks across sessions, rather than being baked into the app.
+const LORE_USERNAME_STORAGE_KEY = 'ssstitch:loreUsername'
+
+function loadStoredLoreUsername(): string {
+  try {
+    return localStorage.getItem(LORE_USERNAME_STORAGE_KEY) ?? LORE_USERNAME
+  } catch {
+    return LORE_USERNAME
+  }
 }
 
 interface RiffDateGroup {
@@ -89,6 +103,21 @@ export function LoreLibraryBrowser({
   const [bpmFilter, setBpmFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
+  // Which LORE username "you" are, for ownerFraction (drives the ownership
+  // brightness coloring below) and the "only mine" filter — editable and
+  // persisted per-machine (see loadStoredLoreUsername), not hardcoded, since
+  // other people testing this app aren't Elling.
+  const [loreUsername, setLoreUsername] = useState(loadStoredLoreUsername)
+  const [onlyContainsMe, setOnlyContainsMe] = useState(false)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LORE_USERNAME_STORAGE_KEY, loreUsername)
+    } catch {
+      // localStorage unavailable (e.g. private mode) — the setting just
+      // won't survive a restart, not worth surfacing as an error.
+    }
+  }, [loreUsername])
   // <input type="date"> values (YYYY-MM-DD strings, or '' for unset) —
   // converted to unix-seconds boundaries (start/end of day) when building
   // the query filters below, since CreationTime is stored as unix seconds.
@@ -302,6 +331,8 @@ export function LoreLibraryBrowser({
     bpm?: number
     userName?: string
     onlyFullyCached?: boolean
+    targetUser?: string
+    onlyContainsUser?: boolean
     offset?: number
   } {
     const filters: ReturnType<typeof buildRiffFilters> = {}
@@ -314,6 +345,11 @@ export function LoreLibraryBrowser({
     if (bpmFilter.trim() !== '' && !Number.isNaN(Number(bpmFilter))) filters.bpm = Number(bpmFilter)
     if (userNameFilter.trim() !== '') filters.userName = userNameFilter.trim()
     if (onlyFullyCached) filters.onlyFullyCached = true
+    // Always sent (not just while the "only mine" filter is checked) — this
+    // also drives ownerFraction's brightness coloring on every riff shown,
+    // not just the filtered subset.
+    if (loreUsername.trim() !== '') filters.targetUser = loreUsername.trim()
+    if (onlyContainsMe) filters.onlyContainsUser = true
     if (offset > 0) filters.offset = offset
     return filters
   }
@@ -341,7 +377,16 @@ export function LoreLibraryBrowser({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildRiffFilters closes over these same deps; listing both would be redundant and buildRiffFilters itself isn't stable across renders
-  }, [selectedJamCID, dateFromFilter, dateToFilter, bpmFilter, userNameFilter, onlyFullyCached])
+  }, [
+    selectedJamCID,
+    dateFromFilter,
+    dateToFilter,
+    bpmFilter,
+    userNameFilter,
+    onlyFullyCached,
+    loreUsername,
+    onlyContainsMe
+  ])
 
   function handleLoadMore(): void {
     if (!selectedJamCID || loadingMoreRiffs) return
@@ -595,6 +640,46 @@ export function LoreLibraryBrowser({
                         onChange={(e) => setOnlyFullyCached(e.target.checked)}
                       />
                       only fully cached
+                    </label>
+                    <span
+                      style={{
+                        width: 1,
+                        alignSelf: 'stretch',
+                        background: 'var(--ra-border)'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      value={loreUsername}
+                      onChange={(e) => setLoreUsername(e.target.value)}
+                      placeholder="your username"
+                      title="your LORE username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
+                      style={{
+                        width: 100,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={onlyContainsMe}
+                        onChange={(e) => setOnlyContainsMe(e.target.checked)}
+                      />
+                      only mine
                     </label>
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                       {riffs.length} riffs{hasMoreRiffs ? '+' : ''}

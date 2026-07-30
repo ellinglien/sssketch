@@ -231,6 +231,39 @@ describe('listRiffs', () => {
     expect(riffs).toHaveLength(0)
   })
 
+  it('scores ownerFraction against targetUser instead of the LORE_USERNAME default when given', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    // Symmetric to the 'reports ... ownerFraction' test above, but scored
+    // against 'mvdg' (stem-b's creator) instead of the default 'elling' —
+    // proves the target user is a real per-call parameter, not baked in.
+    const { riffs } = listRiffs('jam-techno', { targetUser: 'mvdg' })
+    expect(riffs.find((r) => r.riffCID === 'riff-1')!.ownerFraction).toBe(0.5) // mvdg (stem-b) only
+    expect(riffs.find((r) => r.riffCID === 'riff-2')!.ownerFraction).toBe(0) // elling (stem-c) only, no mvdg
+  })
+
+  it('filters to only riffs containing targetUser when onlyContainsUser is true', () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    // Defaults to LORE_USERNAME ('elling') when targetUser is unset — both
+    // riff-1 and riff-2 have an elling stem.
+    expect(listRiffs('jam-techno', { onlyContainsUser: true }).riffs.map((r) => r.riffCID)).toEqual(
+      ['riff-2', 'riff-1']
+    )
+    // Only riff-1 has an mvdg stem (stem-b).
+    expect(
+      listRiffs('jam-techno', { targetUser: 'mvdg', onlyContainsUser: true }).riffs.map(
+        (r) => r.riffCID
+      )
+    ).toEqual(['riff-1'])
+  })
+
   it('paginates when a jam has more riffs than fit on one page', () => {
     root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
     createFixtureWarehouse(root)

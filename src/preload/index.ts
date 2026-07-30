@@ -57,6 +57,8 @@ const api = {
       bpm?: number
       userName?: string
       onlyFullyCached?: boolean
+      targetUser?: string
+      onlyContainsUser?: boolean
       offset?: number
     }
   ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>

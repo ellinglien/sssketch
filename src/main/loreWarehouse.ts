@@ -91,6 +91,15 @@ export interface RiffFilters {
   bpm?: number
   userName?: string
   onlyFullyCached?: boolean
+  /** Whichever LORE username the renderer's "your username" setting is
+   * currently set to (see LoreLibraryBrowser) — drives both ownerFraction
+   * (below) and onlyContainsUser. Not the same field as `userName` above,
+   * which filters by the riff's own top-level owner; this instead affects
+   * how a riff's per-STEM authorship is scored, regardless of who owns it. */
+  targetUser?: string
+  /** Only riffs with at least one stem authored by targetUser (falls back to
+   * LORE_USERNAME if targetUser is unset). */
+  onlyContainsUser?: boolean
   /** How many riffs (most-recent-first) to skip before this page — 0/undefined
    * for the first page. Paired with RIFF_PAGE_SIZE so a jam with thousands of
    * riffs (some of Elling's real jams have 20,000+) doesn't have to load or
@@ -208,14 +217,16 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
       userName: row.UserName,
       stemCount: stemCIDs.length,
       cachedStemCount,
-      ownerFraction: computeOwnerFraction(creatorNames)
+      ownerFraction: computeOwnerFraction(creatorNames, filters.targetUser)
     }
   })
 
+  let riffs = summaries
+  if (filters.onlyFullyCached) riffs = riffs.filter((s) => s.cachedStemCount === s.stemCount)
+  if (filters.onlyContainsUser) riffs = riffs.filter((s) => s.ownerFraction > 0)
+
   return {
-    riffs: filters.onlyFullyCached
-      ? summaries.filter((s) => s.cachedStemCount === s.stemCount)
-      : summaries,
+    riffs,
     // Computed from the raw page (rows.length), not the onlyFullyCached-
     // filtered summaries — otherwise a page where every riff happens to be
     // filtered out would look like "no more data" even though later pages

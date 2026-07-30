@@ -1,8 +1,10 @@
 import type { SoundType } from './types'
 
-/** This app is single-user with no settings/config system — building one just
- * for a value that will essentially never change would be its own scope
- * creep. See the design spec's data model section. */
+/** Default LORE username, used only as the initial value of the
+ * user-editable "your username" setting in LoreLibraryBrowser (persisted to
+ * localStorage from there) and as computeOwnerFraction's own fallback
+ * default below. Not a hardcoded identity any more — other people testing
+ * this app set their own in the LORE library browser's filter bar. */
 export const LORE_USERNAME = 'elling'
 
 export interface LoreJam {
