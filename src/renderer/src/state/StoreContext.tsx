@@ -89,6 +89,10 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         setPos(0)
         rawDispatch(action)
         return
+      case 'SET_SEND_BUS_PLUGIN':
+        rawDispatch(action)
+        void window.rifffApi.loadSendPlugin(action.bus, action.pluginId)
+        return
       default:
         rawDispatch(action)
     }
@@ -198,8 +202,27 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     return window.rifffApi.onEngineRestarted(() => {
       dispatch({ type: 'STOP' })
+      // The respawned engine process starts with every send bus empty — the
+      // main process only resends the last-known *project* on crash-recovery
+      // (playbackEngineLifecycle.ts's own lastProject cache), not send-bus
+      // plugin assignments. Re-issue load-send-plugin for whichever buses
+      // currently have a plugin assigned, from this renderer's own live
+      // state, mirroring how the project itself gets kept in sync.
+      for (const [bus, pluginId] of stateRef.current.sendBusPlugins.entries()) {
+        if (pluginId !== null) {
+          void window.rifffApi.loadSendPlugin(bus, pluginId)
+        }
+      }
     })
   }, [dispatch])
+
+  useEffect(() => {
+    return window.rifffApi.onSendPluginLoaded(({ bus, success, error }) => {
+      if (!success) {
+        console.error(`StoreContext: send bus ${bus} failed to load plugin: ${error}`)
+      }
+    })
+  }, [])
 
   return (
     <StateCtx.Provider value={state}>
