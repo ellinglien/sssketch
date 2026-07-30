@@ -19,7 +19,25 @@ namespace ssstitch
             return true;
 
         juce::File file(path);
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+        if (!file.existsAsFile())
+            return false;
+
+        // Deliberately NOT the File-based createReaderFor(file) overload: that
+        // one first checks the file's extension against each registered
+        // format's known extensions (AudioFormat::canHandleFile) and only
+        // attempts to decode if one matches. LORE-cached stems (see the LORE
+        // library browser feature) have no file extension at all — the path
+        // is just the raw StemCID — so extension-based lookup always failed
+        // for them even though the content is perfectly valid, readable Ogg
+        // Vorbis. This stream-based overload skips the extension check
+        // entirely and tries every registered format's own content-sniffing
+        // reader directly against the actual bytes, which works regardless
+        // of the file's name. A nonexistent/unreadable file still yields no
+        // reader here (every format's own header parse fails on empty/absent
+        // content), so the existing "returns false for a missing file"
+        // contract is unchanged.
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            formatManager.createReaderFor(std::make_unique<juce::FileInputStream>(file)));
         if (reader == nullptr)
             return false;
 

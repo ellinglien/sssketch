@@ -118,6 +118,51 @@ namespace ssstitch
                 oggFile.deleteFile();
             }
 
+            beginTest("loads a real audio file with no file extension at all");
+            {
+                // Regression test for a real bug: LORE-cached stems (see the LORE
+                // library browser feature) live at paths with no extension at all —
+                // just the raw StemCID, e.g. ".../stem_v2/<jam>/<hex>/<stemCID>".
+                // StemBufferCache::load() used to go through
+                // AudioFormatManager::createReaderFor(const File&), which checks the
+                // file's extension against each registered format's known
+                // extensions BEFORE ever trying to decode it — so this always failed
+                // silently for LORE stems even though the content was perfectly
+                // valid, readable Ogg Vorbis. Arranged LORE riffs played back with
+                // Web Audio previews (which sniff content, not extensions) but were
+                // silent in the actual native-engine-driven arranger. Fixed by
+                // switching to the stream-based createReaderFor() overload, which
+                // sniffs content directly and never looks at the filename.
+                auto noExtFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("ssstitch_test_fixture_no_extension");
+
+                juce::OggVorbisAudioFormat oggFormat;
+                std::unique_ptr<juce::FileOutputStream> out(noExtFile.createOutputStream());
+                expect(out != nullptr);
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    oggFormat.createWriterFor(out.get(), 44100.0, 1, 0, {}, 6));
+                expect(writer != nullptr);
+                out.release();
+
+                const int numSamples = 4410;
+                juce::AudioBuffer<float> source(1, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                    source.setSample(0, i, 0.5f);
+                writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+                writer.reset();
+
+                expect(!noExtFile.getFileExtension().isNotEmpty()); // sanity: genuinely no extension
+
+                StemBufferCache cache;
+                expect(cache.load(noExtFile.getFullPathName()));
+                auto* buffer = cache.get(noExtFile.getFullPathName());
+                expect(buffer != nullptr);
+                expectEquals(buffer->getNumChannels(), 1);
+                expectWithinAbsoluteError(buffer->getSample(0, 100), 0.5f, 0.05f);
+
+                noExtFile.deleteFile();
+            }
+
             tempFile.deleteFile();
         }
     };
