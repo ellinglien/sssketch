@@ -259,8 +259,8 @@ describe('reducer', () => {
       type: 'APPLY_BAKE',
       groupId: 'r1',
       results: [
-        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav' },
-        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav' }
+        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
+        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
       ]
     })
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
@@ -275,10 +275,44 @@ describe('reducer', () => {
     state = reducer(state, {
       type: 'APPLY_BAKE',
       groupId: 'r1',
-      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav' }] // slot 6's file failed to bake
+      // slot 6's file failed to bake
+      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }]
     })
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
+  })
+
+  it("updates a stem's durationSec to the baked file's own real measured length, not left stale", () => {
+    // Real bug this covers: a LORE stem's durationSec is derived from the
+    // warehouse database's BPM/Length16s metadata, not measured from the
+    // actual audio — after baking (which decodes the REAL file), leaving
+    // the old value in place could desync the native engine's own
+    // tile-boundary scheduling from what the baked file actually contains,
+    // heard as clicking/stuttering right at tile boundaries.
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      groupId: 'r1',
+      // Deliberately different from makeRifff's own defaults (12.8, 3.2) so
+      // a test that silently kept the old value would fail loudly.
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 },
+        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.19 }
+      ]
+    })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.85)
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.durationSec).toBe(3.19)
+  })
+
+  it("leaves a stem's durationSec unchanged if its path is missing from the results", () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      groupId: 'r1',
+      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 }]
+    })
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.85)
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.durationSec).toBe(3.2) // unchanged default
   })
 
   it('preserves the runtime offset when a bake fails for every stem (e.g. LORE-sourced, not WAV)', () => {
@@ -301,7 +335,7 @@ describe('reducer', () => {
     state = reducer(state, {
       type: 'APPLY_BAKE',
       groupId: 'r1',
-      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav' }] // slot 6 failed
+      results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }] // slot 6 failed
     })
     // The group key is what a linked group actually reads at playback time
     // (see resolveOffsetKey) — zeroing it while slot 6 is still relying on

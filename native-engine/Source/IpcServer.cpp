@@ -21,10 +21,15 @@ namespace ssstitch
     // request/response pair (see BakeStem.h) — main-process bakeOffset.ts
     // routes a LORE-sourced (Ogg) stem's downbeat bake through this instead
     // of its own raw-WAV-byte rotation, since it can't decode Ogg itself.
-    static juce::var makeBakeStemResult(bool success, const juce::String& error)
+    // durationSec is only meaningful (and only included) on success — see
+    // BakeStem.h's own doc comment on why the caller MUST use this instead
+    // of whatever duration metadata it already had for the pre-bake source.
+    static juce::var makeBakeStemResult(bool success, double durationSec, const juce::String& error)
     {
         juce::DynamicObject::Ptr payload = new juce::DynamicObject();
         payload->setProperty("success", success);
+        if (success)
+            payload->setProperty("durationSec", durationSec);
         if (error.isNotEmpty())
             payload->setProperty("error", error);
         juce::DynamicObject::Ptr obj = new juce::DynamicObject();
@@ -148,7 +153,7 @@ namespace ssstitch
         {
             if (!payload.isObject())
             {
-                sendJson(makeBakeStemResult(false, "bake-stem payload must be an object"));
+                sendJson(makeBakeStemResult(false, 0.0, "bake-stem payload must be an object"));
                 return;
             }
             const auto sourcePath = payload.getProperty("path", "").toString();
@@ -156,8 +161,9 @@ namespace ssstitch
             const double rotationSec = (double) payload.getProperty("rotationSec", 0.0);
 
             juce::String error;
-            const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, error);
-            sendJson(makeBakeStemResult(ok, ok ? juce::String() : error));
+            double durationSec = 0.0;
+            const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, durationSec, error);
+            sendJson(makeBakeStemResult(ok, durationSec, ok ? juce::String() : error));
         }
         else if (type == "quit")
         {

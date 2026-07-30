@@ -59,6 +59,10 @@ describe('bakeOffset', () => {
       const results = await bakeOffset([{ path, rotationSec: 0.25 }])
       expect(results).toHaveLength(1)
       expect(results[0].bakedPath).toBe(join(dir, 'source.baked.wav'))
+      // A rotation preserves the exact sample count, so this must still be
+      // 1000 samples / 1000Hz = 1 real second, measured from the actual
+      // rotated bytes rather than assumed.
+      expect(results[0].durationSec).toBeCloseTo(1.0, 5)
       const bytes = readFileSync(results[0].bakedPath)
       const dataOffset = findDataChunkOffset(bytes)
       expect(bytes.readInt16LE(dataOffset)).toBeCloseTo(0.25 * 32000, -2)
@@ -80,6 +84,13 @@ describe('bakeOffset', () => {
       expect(results[0].path).toBe(path)
       expect(results[0].bakedPath).toBe(`${path}.baked.wav`)
       expect(existsSync(results[0].bakedPath)).toBe(true)
+      // Real bug this covers: this must be MEASURED from the actual decoded
+      // Ogg/WAV content (1000 samples / 1000Hz = 1s here), not whatever
+      // metadata-derived durationSec the caller already had for the
+      // pre-bake source — see BakeResult's own doc comment for why a
+      // mismatch there causes audible clicking/stuttering at tile
+      // boundaries once this baked file is actually played.
+      expect(results[0].durationSec).toBeCloseTo(1.0, 5)
 
       // Rotating a ramp by 0.25s (sample 250 of 1000) should put that sample's
       // value at the very start of the baked output.

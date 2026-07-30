@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'fs'
 import { rotateWavFrames } from '@shared/rotateWav'
 import { findWavChunks } from '@shared/wavChunks'
+import { readWavDurationSeconds } from '@shared/wavDuration'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 
@@ -14,6 +15,19 @@ export interface BakeResult {
   /** The job's original path, so the renderer can map results back to stems. */
   path: string
   bakedPath: string
+  /** The baked file's own real, measured duration — the caller (APPLY_BAKE)
+   * must overwrite the stem's existing durationSec with this rather than
+   * leaving it as-is. That existing value can be metadata-derived (a LORE
+   * stem's durationSec comes from the warehouse database's BPM/Length16s
+   * fields, not measured from the actual audio) and disagree with the real
+   * baked file by enough to desync the native engine's own tile-boundary
+   * scheduling — heard as clicking/stuttering right at tile boundaries. A
+   * plain rotation (the WAV path) provably preserves the exact sample
+   * count, so this is expected to already match, but it's measured here
+   * too rather than assumed, for the same reason buildEngineProject.ts
+   * measures a stretched render's real duration instead of trusting the
+   * pre-stretch value. */
+  durationSec: number
 }
 
 // Re-baking (picking a different beat after already baking once) rotates whatever
@@ -55,7 +69,7 @@ function bakeWavJob(job: BakeJob): BakeResult | null {
     const rotated = rotateWavFrames(bytes, rotationFrames)
     const bakedPath = bakedPathFor(job.path)
     writeFileSync(bakedPath, rotated)
-    return { path: job.path, bakedPath }
+    return { path: job.path, bakedPath, durationSec: readWavDurationSeconds(rotated) }
   } catch (err) {
     console.error(`bakeOffset: failed to bake "${job.path}":`, err)
     return null
@@ -83,12 +97,12 @@ async function bakeNativeJobs(jobs: BakeJob[]): Promise<BakeResult[]> {
           'bake-stem',
           { path: job.path, rotationSec: job.rotationSec, outputPath },
           'bake-stem-result'
-        )) as { success: boolean; error?: string }
-        if (!result.success) {
+        )) as { success: boolean; durationSec?: number; error?: string }
+        if (!result.success || result.durationSec === undefined) {
           console.error(`bakeOffset: native bake failed for "${job.path}": ${result.error}`)
           continue
         }
-        results.push({ path: job.path, bakedPath: outputPath })
+        results.push({ path: job.path, bakedPath: outputPath, durationSec: result.durationSec })
       } catch (err) {
         console.error(`bakeOffset: native bake failed for "${job.path}":`, err)
       }

@@ -46,9 +46,15 @@ namespace ssstitch
                 outFile.deleteFile();
 
                 juce::String error;
-                const bool ok = bakeStemToWav(source.getFullPathName(), 0.25, outFile.getFullPathName(), error);
+                double durationSec = 0.0;
+                const bool ok = bakeStemToWav(source.getFullPathName(), 0.25, outFile.getFullPathName(), durationSec, error);
                 expect(ok, error);
                 expect(outFile.existsAsFile());
+                // 1000 samples at 1000Hz = 1 real second — must be measured
+                // from the actual decoded/written audio, not assumed, since
+                // the caller relies on this to keep the native engine's own
+                // tile-boundary scheduling in sync with the real file.
+                expectWithinAbsoluteError(durationSec, 1.0, 0.001);
 
                 StemBufferCache cache;
                 expect(cache.load(outFile.getFullPathName()));
@@ -70,7 +76,8 @@ namespace ssstitch
                 // 1.25s on a 1s-long buffer wraps to the same 0.25s rotation as
                 // the test above.
                 juce::String error;
-                const bool ok = bakeStemToWav(source.getFullPathName(), 1.25, outFile.getFullPathName(), error);
+                double durationSec = 0.0;
+                const bool ok = bakeStemToWav(source.getFullPathName(), 1.25, outFile.getFullPathName(), durationSec, error);
                 expect(ok, error);
 
                 StemBufferCache cache;
@@ -88,7 +95,8 @@ namespace ssstitch
 
                 // -0.25s on a 1s buffer wraps to 0.75s.
                 juce::String error;
-                const bool ok = bakeStemToWav(source.getFullPathName(), -0.25, outFile.getFullPathName(), error);
+                double durationSec = 0.0;
+                const bool ok = bakeStemToWav(source.getFullPathName(), -0.25, outFile.getFullPathName(), durationSec, error);
                 expect(ok, error);
 
                 StemBufferCache cache;
@@ -103,7 +111,8 @@ namespace ssstitch
                                    .getChildFile("ssstitch_bake_should_not_exist.wav");
                 outFile.deleteFile();
                 juce::String error;
-                const bool ok = bakeStemToWav("/no/such/file/at/all.wav", 0.0, outFile.getFullPathName(), error);
+                double durationSec = 0.0;
+                const bool ok = bakeStemToWav("/no/such/file/at/all.wav", 0.0, outFile.getFullPathName(), durationSec, error);
                 expect(!ok);
                 expect(error.isNotEmpty());
                 expect(!outFile.existsAsFile());
@@ -119,7 +128,8 @@ namespace ssstitch
                 outFile.getParentDirectory().deleteRecursively();
 
                 juce::String error;
-                const bool ok = bakeStemToWav(source.getFullPathName(), 0.0, outFile.getFullPathName(), error);
+                double durationSec = 0.0;
+                const bool ok = bakeStemToWav(source.getFullPathName(), 0.0, outFile.getFullPathName(), durationSec, error);
                 expect(ok, error);
                 expect(outFile.existsAsFile());
                 outFile.getParentDirectory().getParentDirectory().deleteRecursively();

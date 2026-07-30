@@ -108,7 +108,11 @@ export type Action =
   | { type: 'RESIZE_LEFT'; groupId: string; slot: number; bars: number; startBar: number }
   | { type: 'SET_FADE_IN'; groupId: string; bars: number }
   | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
-  | { type: 'APPLY_BAKE'; groupId: string; results: { path: string; bakedPath: string }[] }
+  | {
+      type: 'APPLY_BAKE'
+      groupId: string
+      results: { path: string; bakedPath: string; durationSec: number }[]
+    }
   | {
       type: 'PASTE_RIFFF'
       rifff: Rifff
@@ -380,7 +384,18 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'APPLY_BAKE': {
       const rifff = state.rifffs[action.groupId]
       const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
-      const stems = rifff.stems.map((s) => ({ ...s, path: pathMap.get(s.path) ?? s.path }))
+      // durationSec is the baked file's own real, measured length — not
+      // necessarily equal to whatever this stem's durationSec already was
+      // (a LORE stem's is metadata-derived, not measured from the actual
+      // audio; see bakeOffset.ts's BakeResult doc comment). Leaving it stale
+      // desyncs the native engine's own tile-boundary scheduling from the
+      // real baked file, heard as clicking/stuttering.
+      const durationMap = new Map(action.results.map((r) => [r.path, r.durationSec]))
+      const stems = rifff.stems.map((s) => ({
+        ...s,
+        path: pathMap.get(s.path) ?? s.path,
+        durationSec: durationMap.get(s.path) ?? s.durationSec
+      }))
       const off = { ...state.off }
       if (rifff.stems.every((s) => pathMap.has(s.path))) off[action.groupId] = 0
       for (const s of rifff.stems) {

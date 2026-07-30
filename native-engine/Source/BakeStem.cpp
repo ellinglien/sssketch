@@ -11,6 +11,7 @@ namespace ssstitch
         const juce::String& sourcePath,
         double rotationSec,
         const juce::String& outputPath,
+        double& durationSecOut,
         juce::String& errorOut)
     {
         StemBufferCache cache;
@@ -80,6 +81,7 @@ namespace ssstitch
         out.release();
         writer->writeFromAudioSampleBuffer(rotated, 0, numSamples);
         writer.reset();
+        durationSecOut = (double) numSamples / entry.sampleRate;
         return true;
     }
 }

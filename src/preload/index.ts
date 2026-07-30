@@ -20,7 +20,8 @@ const api = {
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
   bakeOffset: (
     jobs: { path: string; rotationSec: number }[]
-  ): Promise<{ path: string; bakedPath: string }[]> => ipcRenderer.invoke('bake-offset', jobs),
+  ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
+    ipcRenderer.invoke('bake-offset', jobs),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
