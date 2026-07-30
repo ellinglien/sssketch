@@ -11,7 +11,7 @@ const PPB = 24
 // has to agree on which scale is active, so this is threaded through
 // wherever state.mode is checked rather than hardcoded — see Timeline in
 // App.tsx for the single place that decides which one applies.
-const COMPACT_PPB = 4
+const COMPACT_PPB = 2
 
 export function Ruler({
   bars: barCount,
