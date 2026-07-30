@@ -44,6 +44,14 @@ function barForClientX(clientX: number, container: HTMLDivElement): number {
 const GHOST_ROW_COUNT = 3
 const GHOST_ROW_HEIGHT = 44
 
+// Always-present trailing empty bars past the arrangement's actual loop end —
+// horizontal counterpart to GHOST_ROW_COUNT above. Display-only: added to
+// loopLengthBars(state) just for the Ruler's rendered width, never to
+// loopLengthBars itself, which also drives the real playback loop boundary
+// (StoreContext.tsx) and export duration (nativeExport.ts) — padding those
+// would silently add 4 bars of real silence to every export.
+const TRAILING_BLANK_BARS = 4
+
 function Timeline({
   onOpenClipMenu,
   onOpenPasteMenu
@@ -112,7 +120,7 @@ function Timeline({
       onContextMenu={handleContextMenu}
       style={{ position: 'relative' }}
     >
-      <Ruler bars={loopLengthBars(state)} />
+      <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} />
       {placedRifffsInOrder(state).map((r) => (
         <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
       ))}
@@ -268,11 +276,19 @@ function Frame(): React.JSX.Element {
   // for each. Cleared unconditionally whenever BeatPicker closes (baked or
   // not), so a stale batch never leaks into some later, unrelated pick.
   const [pickerBatchSiblingGroupIds, setPickerBatchSiblingGroupIds] = useState<string[]>([])
+  // Whether the CURRENT BeatPicker session was opened for a multi-riff LORE
+  // batch import, as opposed to a single import or an unrelated re-pick via
+  // the Inspector's own button — read (and reset) in BeatPicker's onClose
+  // below, not in onBaked, since onBaked clears pickerBatchSiblingGroupIds
+  // (and runs, if at all, before onClose) and a closed-without-picking
+  // session still needs this to have survived to that point.
+  const [pickerWasBatchImport, setPickerWasBatchImport] = useState(false)
 
   function handleLoreImported(groupIds: string[]): void {
     if (groupIds.length === 0) return
     setPickerGroupId(groupIds[0])
     setPickerBatchSiblingGroupIds(groupIds.slice(1))
+    setPickerWasBatchImport(groupIds.length > 1)
   }
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -466,7 +482,40 @@ function Frame(): React.JSX.Element {
         <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
           <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
         </div>
-        {!state.inspectorCollapsed && <Inspector onOpenBeatPicker={setPickerGroupId} />}
+        {/* Drawer handle — same subtle-strip visual language as the stem
+            resize handles (StemWaveformRow/CollapsedRifffRow), just click
+            instead of drag. Always present, on either side of the drawer, so
+            there's a consistent single place to grab regardless of the
+            Inspector's current state. */}
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
+          aria-label="Toggle inspector panel"
+          title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
+          style={{
+            flex: 'none',
+            width: 10,
+            border: 'none',
+            borderLeft: '1px solid var(--ra-border)',
+            background: 'var(--ra-text)',
+            opacity: 0.12,
+            cursor: 'pointer'
+          }}
+        />
+        {/* Inspector itself stays a fixed 308px wide (its own inner layout
+            doesn't reflow during the slide) — this wrapper is what actually
+            animates, clipping it via overflow:hidden rather than
+            mounting/unmounting, so collapsing/expanding reads as a drawer
+            sliding shut rather than a hard cut. */}
+        <div
+          style={{
+            width: state.inspectorCollapsed ? 0 : 308,
+            flex: 'none',
+            overflow: 'hidden',
+            transition: 'width 150ms ease'
+          }}
+        >
+          <Inspector onOpenBeatPicker={setPickerGroupId} />
+        </div>
       </div>
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker
@@ -474,6 +523,13 @@ function Frame(): React.JSX.Element {
           onClose={() => {
             setPickerGroupId(null)
             setPickerBatchSiblingGroupIds([])
+            // A batch import means "I picked everything I wanted, now let's
+            // arrange" — close the library along with the picker so it
+            // doesn't linger in the way. A single import means "I'm
+            // browsing one at a time" — leave the library open (it never
+            // auto-closes on its own) so the next pick is right there.
+            if (pickerWasBatchImport) setLoreLibraryOpen(false)
+            setPickerWasBatchImport(false)
           }}
           onBaked={(steps) => {
             for (const siblingGroupId of pickerBatchSiblingGroupIds) {
