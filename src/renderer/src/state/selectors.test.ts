@@ -12,7 +12,8 @@ import {
   rotationSecondsForStem,
   pasteRifffAction,
   placedRifffsInOrder,
-  channelMuteLetters
+  channelMuteLetters,
+  isSketchEligible
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -278,6 +279,114 @@ describe('placedRifffsInOrder', () => {
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
     expect(placedRifffsInOrder(state)).toEqual([])
+  })
+})
+
+describe('isSketchEligible', () => {
+  it('is true for an empty timeline', () => {
+    expect(isSketchEligible(initialState)).toBe(true)
+  })
+
+  it('is true for rifffs stacked contiguously from bar 0, in bar order', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 8, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+    expect(isSketchEligible(state)).toBe(true)
+  })
+
+  it('is false if there is a gap between rifffs', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 8, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 8 }) // gap: r1 ends at 4
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if the first rifff does not start at bar 0', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 2 })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if two rifffs overlap (e.g. both start at 0, a different track/row)', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if a rifff is unlinked', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if a rifff has a fade', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if a rifff has a resize override (playedBars)', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 2 })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('is false if a rifff has a nonzero offset', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 })
+    expect(isSketchEligible(state)).toBe(false)
+  })
+
+  it('ignores mute and volume — those do not affect positioning', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
+    expect(isSketchEligible(state)).toBe(true)
   })
 })
 

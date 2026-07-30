@@ -1,4 +1,5 @@
 import { initialState, type AppState } from './store'
+import { isSketchEligible } from './selectors'
 
 /** Everything persisted to a .rifffproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -18,5 +19,6 @@ export function serializeProject(state: AppState): string {
 }
 
 export function deserializeProject(data: PersistedProject): AppState {
-  return { ...initialState, ...data }
+  const state = { ...initialState, ...data }
+  return isSketchEligible(state) ? state : { ...state, mode: 'normal' }
 }

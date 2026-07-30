@@ -56,3 +56,21 @@ describe('project serialization', () => {
     expect(restored.inspectorCollapsed).toBe(false)
   })
 })
+
+describe('deserializeProject mode fallback', () => {
+  it('defaults to sketch mode for a plain (sketch-eligible) loaded arrangement', () => {
+    const persisted = JSON.parse(serializeProject(initialState))
+    expect(deserializeProject(persisted).mode).toBe('sketch')
+  })
+
+  it('falls back to normal mode when the loaded arrangement is not sketch-eligible', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
+    const persisted = JSON.parse(serializeProject(state))
+    expect(deserializeProject(persisted).mode).toBe('normal')
+  })
+})

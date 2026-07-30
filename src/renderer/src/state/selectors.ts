@@ -106,6 +106,41 @@ export function placedRifffsInOrder(state: AppState): Rifff[] {
   return ordered.map((id) => state.rifffs[id])
 }
 
+/**
+ * True iff the current arrangement is "plain" enough for sketch mode: every
+ * placed rifff is linked, unfaded, at its natural (un-resized) bar length,
+ * with zero offset, AND the whole set — sorted by startBar, not by
+ * placedRifffsInOrder's row-render order, which is a DIFFERENT ordering —
+ * is perfectly contiguous starting at bar 0 with no gaps or overlaps. An
+ * empty timeline is trivially eligible (starting a fresh sketch is the
+ * common case, not an edge case). Mute and volume are deliberately not
+ * checked — they don't affect positioning/sequencing accuracy, only mix.
+ *
+ * Note there's no separate "track" concept in this data model beyond
+ * trackOrder's render order — every placed rifff gets its own row
+ * regardless of whether its bars overlap another's. Two rifffs both
+ * starting at bar 0 (simultaneous playback, valid in Normal mode) correctly
+ * fails this check, since sketch mode has no way to represent "two things
+ * at once."
+ */
+export function isSketchEligible(state: AppState): boolean {
+  const placed = placedRifffsInOrder(state)
+  for (const rifff of placed) {
+    if (state.unlinked[rifff.groupId]) return false
+    if (state.fadeIn[rifff.groupId]) return false
+    if (state.fadeOut[rifff.groupId]) return false
+    if (state.playedBars[rifff.groupId] !== undefined) return false
+    if ((state.off[rifff.groupId] ?? 0) !== 0) return false
+  }
+  const sorted = [...placed].sort((a, b) => (a.startBar ?? 0) - (b.startBar ?? 0))
+  let expectedStart = 0
+  for (const rifff of sorted) {
+    if (rifff.startBar !== expectedStart) return false
+    expectedStart += rifff.barLength
+  }
+  return true
+}
+
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
