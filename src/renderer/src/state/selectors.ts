@@ -1,5 +1,5 @@
 import { stemKey, type Rifff, type Stem } from '@shared/types'
-import { SNAP_DIVS, type Action, type AppState } from './store'
+import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
 export function resolveOffsetKey(state: AppState, groupId: string, slot: number): string {
   return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
@@ -139,6 +139,20 @@ export function isSketchEligible(state: AppState): boolean {
     expectedStart += rifff.barLength
   }
   return true
+}
+
+const ARRANGER_MODE_ORDER: ArrangerMode[] = ['normal', 'compact', 'sketch']
+
+/** What Tab / the TransportBar's mode button should switch to next —
+ * normal -> compact -> sketch -> normal, skipping 'sketch' entirely (landing
+ * on 'normal' instead) when isSketchEligible(state) is false, so the toggle
+ * never lands on a mode it can't actually show. */
+export function nextArrangerMode(state: AppState): ArrangerMode {
+  const next = ARRANGER_MODE_ORDER[(ARRANGER_MODE_ORDER.indexOf(state.mode) + 1) % 3]
+  if (next === 'sketch' && !isSketchEligible(state)) {
+    return ARRANGER_MODE_ORDER[(ARRANGER_MODE_ORDER.indexOf(next) + 1) % 3]
+  }
+  return next
 }
 
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {

@@ -13,7 +13,8 @@ import {
   pasteRifffAction,
   placedRifffsInOrder,
   channelMuteLetters,
-  isSketchEligible
+  isSketchEligible,
+  nextArrangerMode
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -387,6 +388,26 @@ describe('isSketchEligible', () => {
     state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
     state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
     expect(isSketchEligible(state)).toBe(true)
+  })
+})
+
+describe('nextArrangerMode', () => {
+  it('cycles normal -> compact -> sketch -> normal when sketch-eligible', () => {
+    const state = { ...initialState, mode: 'normal' as const } // empty timeline: trivially eligible
+    expect(nextArrangerMode(state)).toBe('compact')
+    expect(nextArrangerMode({ ...state, mode: 'compact' })).toBe('sketch')
+    expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('normal')
+  })
+
+  it('skips sketch when the arrangement is not eligible', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
+    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('compact')
+    expect(nextArrangerMode({ ...state, mode: 'compact' })).toBe('normal') // sketch skipped
   })
 })
 
