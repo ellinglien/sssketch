@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType } from '@shared/loreLibrary'
 import { getAudioContext } from '../audio/peakCache'
@@ -28,6 +28,35 @@ function riffCircleColor(riff: LoreRiffSummary): string {
   return `rgb(${v}, ${v}, ${v})`
 }
 
+interface RiffDateGroup {
+  label: string
+  riffs: LoreRiffSummary[]
+}
+
+/** Groups riffs by local calendar date, preserving each group's own
+ * most-recent-first order — a jam with thousands of riffs otherwise renders
+ * as one undifferentiated wall of circles with no sense of when anything was
+ * made. Riffs already arrive sorted by CreationTime DESC (see listRiffs), so
+ * a single linear scan is enough: consecutive riffs sharing the same date
+ * label just extend the current group. */
+function groupRiffsByDate(riffs: LoreRiffSummary[]): RiffDateGroup[] {
+  const groups: RiffDateGroup[] = []
+  for (const riff of riffs) {
+    const label = new Date(riff.creationTime * 1000).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
+    const current = groups[groups.length - 1]
+    if (current && current.label === label) {
+      current.riffs.push(riff)
+    } else {
+      groups.push({ label, riffs: [riff] })
+    }
+  }
+  return groups
+}
+
 export function LoreLibraryBrowser({
   onClose,
   onImported
@@ -44,6 +73,7 @@ export function LoreLibraryBrowser({
   const [jams, setJams] = useState<LoreJam[]>([])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
+  const riffGroups = useMemo(() => groupRiffsByDate(riffs), [riffs])
   // Whether the warehouse has more riffs beyond the currently-loaded page(s)
   // for the current jam/filters — some of Elling's real jams have 20,000+
   // riffs, so listRiffs is paginated (RIFF_PAGE_SIZE per page) rather than
@@ -575,52 +605,63 @@ export function LoreLibraryBrowser({
                     style={{
                       marginTop: 10,
                       display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: 5,
+                      flexDirection: 'column',
+                      gap: 10,
                       overflowY: 'auto',
-                      flex: 1,
-                      alignContent: 'flex-start'
+                      flex: 1
                     }}
                   >
-                    {riffs.map((riff) => (
-                      <div
-                        key={riff.riffCID}
-                        style={{ position: 'relative', width: 18, height: 18 }}
-                      >
-                        <button
-                          onClick={(e) => handleRiffClick(e, riff.riffCID)}
-                          title={`${riff.bpm} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                          style={{
-                            width: 18,
-                            height: 18,
-                            borderRadius: '50%',
-                            border:
-                              selectedRiffCID === riff.riffCID
-                                ? '2px solid var(--ra-playhead)'
-                                : selectedRiffCIDs.has(riff.riffCID)
-                                  ? '2px solid var(--ra-stretch-on)'
-                                  : '1px solid var(--ra-border)',
-                            padding: 0,
-                            background: riffCircleColor(riff),
-                            cursor: 'pointer'
-                          }}
-                        />
-                        {importedRiffCIDs.has(riff.riffCID) && (
-                          <span
-                            title="already imported"
-                            style={{
-                              position: 'absolute',
-                              bottom: -2,
-                              right: -2,
-                              width: 6,
-                              height: 6,
-                              borderRadius: '50%',
-                              background: 'var(--ra-stretch-on)',
-                              border: '1px solid var(--ra-bg-bar)',
-                              pointerEvents: 'none'
-                            }}
-                          />
-                        )}
+                    {riffGroups.map((group) => (
+                      <div key={group.label}>
+                        <span
+                          className="ra-eyebrow"
+                          style={{ fontSize: 8, display: 'block', marginBottom: 4 }}
+                        >
+                          {group.label}
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {group.riffs.map((riff) => (
+                            <div
+                              key={riff.riffCID}
+                              style={{ position: 'relative', width: 18, height: 18 }}
+                            >
+                              <button
+                                onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                                title={`${riff.bpm} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                style={{
+                                  width: 18,
+                                  height: 18,
+                                  borderRadius: '50%',
+                                  border:
+                                    selectedRiffCID === riff.riffCID
+                                      ? '2px solid var(--ra-playhead)'
+                                      : selectedRiffCIDs.has(riff.riffCID)
+                                        ? '2px solid var(--ra-stretch-on)'
+                                        : '1px solid var(--ra-border)',
+                                  padding: 0,
+                                  background: riffCircleColor(riff),
+                                  cursor: 'pointer'
+                                }}
+                              />
+                              {importedRiffCIDs.has(riff.riffCID) && (
+                                <span
+                                  title="already imported"
+                                  style={{
+                                    position: 'absolute',
+                                    bottom: -2,
+                                    right: -2,
+                                    width: 6,
+                                    height: 6,
+                                    borderRadius: '50%',
+                                    background: 'var(--ra-stretch-on)',
+                                    border: '1px solid var(--ra-bg-bar)',
+                                    pointerEvents: 'none'
+                                  }}
+                                />
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ))}
                     {hasMoreRiffs && (
@@ -628,6 +669,7 @@ export function LoreLibraryBrowser({
                         onClick={handleLoadMore}
                         disabled={loadingMoreRiffs}
                         style={{
+                          alignSelf: 'flex-start',
                           height: 18,
                           borderRadius: 0,
                           padding: '0 8px',
