@@ -12,6 +12,7 @@ import { Ruler, PPB } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
+import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
@@ -125,6 +126,10 @@ function Timeline({
     // never also triggers the paste menu.
     e.preventDefault()
     onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget))
+  }
+
+  if (state.mode === 'sketch') {
+    return <SketchStrip />
   }
 
   return (
