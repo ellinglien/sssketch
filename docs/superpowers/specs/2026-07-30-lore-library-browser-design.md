@@ -29,7 +29,7 @@ Stem audio lives at `cache/common/stem_v2/<JamCID>/<first-hex-char-of-StemCID>/<
 
 A new main-process module (`src/main/loreWarehouse.ts`) opens `warehouse.db3` read-only via `better-sqlite3` (new dependency — the only SQLite binding with a synchronous API, matching this codebase's existing IPC-handler style) with a busy-timeout, so a moment of LORE writing concurrently degrades gracefully rather than hanging. All querying and file-existence checking happens here — nothing in this module touches the native engine or the renderer's audio pipeline directly.
 
-Three new IPC calls, mirroring the existing `engine-*`/`import-rifff` naming convention:
+Four new IPC calls, mirroring the existing `engine-*`/`import-rifff` naming convention:
 
 - **`lore-warehouse-available(): boolean`** — checked once when the browser panel opens. If the drive isn't mounted or the DB can't be opened, the panel shows "library not available — is the drive mounted?" instead of a broken/empty browser.
 - **`lore-list-jams(filterText: string): LoreJam[]`** — free-text filter on `PublicName`, sorted by each jam's most recent riff timestamp (`MAX(CreationTime)` per `OwnerJamCID`, via the existing `Riff_IndexOwner2Time` index).
