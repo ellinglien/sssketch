@@ -88,23 +88,99 @@ namespace ssstitch
         }
     }
 
-    // --- load/swap: implemented in Task 4 ---
+    static std::unique_ptr<juce::AudioProcessor> instantiateFromAllowlist(
+        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
+    {
+        if (pluginId.isEmpty())
+        {
+            errorOut = {};
+            return nullptr; // "no plugin" is a valid, silent state -- not an error
+        }
+
+        const auto* entry = findSendPlugin(pluginId);
+        if (entry == nullptr)
+        {
+            errorOut = "unknown plugin id: " + pluginId;
+            return nullptr;
+        }
+
+        juce::AudioPluginFormatManager formatManager;
+        formatManager.addDefaultFormats();
+
+        juce::Array<juce::PluginDescription> found;
+        for (auto* format : formatManager.getFormats())
+        {
+            if (!format->fileMightContainThisPluginType(entry->path))
+                continue;
+            juce::KnownPluginList knownPlugins;
+            juce::OwnedArray<juce::PluginDescription> typesFound;
+            knownPlugins.scanAndAddFile(entry->path, false, typesFound, *format);
+            for (auto* desc : typesFound)
+                found.add(*desc);
+        }
+        if (found.isEmpty())
+        {
+            errorOut = "plugin not found at expected path: " + juce::String(entry->path);
+            return nullptr;
+        }
+
+        auto instance = formatManager.createPluginInstance(found.getReference(0), sampleRate, blockSize, errorOut);
+        if (instance == nullptr)
+            return nullptr;
+        instance->prepareToPlay(sampleRate, blockSize);
+        return instance; // AudioPluginInstance IS-A AudioProcessor
+    }
 
     std::unique_ptr<juce::AudioProcessor> SendBus::defaultInstantiate(
-        const juce::String&, double, int, juce::String& errorOut)
+        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
     {
-        errorOut = "not implemented until Task 4";
-        return nullptr;
+        return instantiateFromAllowlist(pluginId, sampleRate, blockSize, errorOut);
     }
 
-    void SendBus::requestLoad(int, const juce::String&, double, int, std::function<void(bool, const juce::String&)>)
+    bool SendBus::loadPluginSync(
+        int busIndex, const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
     {
-        // implemented in Task 4
+        auto instance = instantiator(pluginId, sampleRate, blockSize, errorOut);
+        if (!errorOut.isEmpty())
+            return false;
+        auto& slot = slots[(size_t) busIndex];
+        slot.active = std::move(instance); // nullptr (empty pluginId) is a valid "no plugin" state
+        slot.processChannels = slot.active != nullptr
+            ? std::max({ 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() })
+            : 2;
+        return true;
     }
 
-    bool SendBus::loadPluginSync(int, const juce::String&, double, int, juce::String& errorOut)
+    void SendBus::requestLoad(
+        int busIndex,
+        const juce::String& pluginId,
+        double sampleRate,
+        int blockSize,
+        std::function<void(bool, const juce::String&)> onLoaded)
     {
-        errorOut = "not implemented until Task 4";
-        return false;
+        auto& slot = slots[(size_t) busIndex];
+        // A load already in flight for this bus is superseded, not queued —
+        // only the newest request's result matters. The superseded thread
+        // still runs to completion (a background juce::Thread can't safely
+        // be cancelled mid-instantiation), but whichever publish into
+        // `pending` happens last is what applyPendingSwaps() finds — the
+        // atomic exchange below both publishes this thread's result and
+        // safely discards whatever an in-between one left behind.
+        std::thread([this, &slot, pluginId, sampleRate, blockSize, onLoaded]()
+        {
+            juce::String error;
+            auto instance = instantiator(pluginId, sampleRate, blockSize, error);
+            const bool success = error.isEmpty();
+
+            if (success)
+            {
+                auto* raw = instance.release();
+                delete slot.pending.exchange(raw);
+                slot.pendingReady.store(true);
+            }
+
+            if (onLoaded)
+                onLoaded(success, error);
+        }).detach();
     }
 }
