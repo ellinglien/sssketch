@@ -1,6 +1,8 @@
 // native-engine/Source/PlaybackEngineTests.cpp
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
+#include "SendBus.h"
+#include "TestFixtures.h"
 #include <juce_core/juce_core.h>
 
 namespace ssstitch
@@ -56,7 +58,8 @@ namespace ssstitch
             beginTest("silence when no project is set");
             {
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
                 for (float s : l) expectEquals(s, 0.0f);
@@ -81,7 +84,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
@@ -108,7 +112,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
@@ -131,7 +136,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
@@ -163,7 +169,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
 
                 const double sampleRate = 44100.0;
@@ -209,7 +216,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
 
                 // tile1 starts at t=4.0s; render at t=4.5s, 1.5s into tile1 (and squarely
@@ -261,7 +269,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
@@ -298,7 +307,8 @@ namespace ssstitch
                 project.rifffs.push_back(rifff);
 
                 StemBufferCache cache;
-                PlaybackEngine engine(cache);
+                SendBus sendBus;
+                PlaybackEngine engine(cache, sendBus);
                 engine.setProject(project);
 
                 // Segment starts at t=0; render at t=0.5s, i.e. exactly halfway through the
@@ -310,6 +320,53 @@ namespace ssstitch
                 expectWithinAbsoluteError(l[0], 0.5f, 0.02f);
 
                 ramp.deleteFile();
+            }
+
+            beginTest("a stem's send level routes signal through a loaded send bus into the output, in addition to the dry mix");
+            {
+                // Per the design spec, a send accumulates
+                // sample * gain * stem.volume * sendLevel[bus] — the SAME
+                // gain-adjusted value that goes to the dry output, not a
+                // separate pre-fader tap. So this test keeps stem.volume at
+                // its default (1.0) and checks that the wet (processed)
+                // contribution shows up ON TOP OF the existing dry
+                // contribution, rather than muting the dry path to isolate
+                // the send in isolation (which would require the send to
+                // bypass stem.volume — it doesn't, by design).
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.resolvedPath = fixture.getFullPathName(); // constant 0.5
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.sendLevels[0] = 1.0; // fully sent to bus 0
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                SendBus sendBus([](const juce::String&, double, int, juce::String& err) -> std::unique_ptr<juce::AudioProcessor>
+                {
+                    err = {};
+                    return std::make_unique<GainDoublingProcessor>();
+                });
+                juce::String error;
+                sendBus.loadPluginSync(0, "fake", 44100.0, 512, error);
+
+                PlaybackEngine engine(cache, sendBus);
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                // Dry: 0.5 (source) * 1.0 (volume, default) = 0.5.
+                // Wet: 0.5 (same gain-adjusted sample) * 1.0 (sendLevel) = 0.5
+                // into the bus, doubled by GainDoublingProcessor -> 1.0.
+                // Total: 0.5 (dry) + 1.0 (wet) = 1.5.
+                expectWithinAbsoluteError(l[100], 1.5f, 0.01f);
+                expectWithinAbsoluteError(r[100], 1.5f, 0.01f);
             }
 
             fixture.deleteFile();

@@ -6,7 +6,7 @@
 
 namespace ssstitch
 {
-    PlaybackEngine::PlaybackEngine(StemBufferCache& cache) : bufferCache(cache) {}
+    PlaybackEngine::PlaybackEngine(StemBufferCache& cache, SendBus& sb) : bufferCache(cache), sendBus(sb) {}
 
     void PlaybackEngine::setProject(const EngineProject& project)
     {
@@ -26,6 +26,9 @@ namespace ssstitch
         const double spb = secPerBar();
         if (spb <= 0.0 || currentProject.rifffs.empty())
             return;
+
+        sendBus.applyPendingSwaps();
+        sendBus.beginBlock(numSamples);
 
         const double blockStartSec = positionBars * spb;
         const double blockDurationSec = numSamples / sampleRate;
@@ -171,9 +174,15 @@ namespace ssstitch
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
                         outL[i2] += (float) (l * gain);
                         outR[i2] += (float) (r * gain);
+
+                        for (int b = 0; b < kNumSendBuses; ++b)
+                            sendBus.addSample(
+                                b, i2, (float) (l * gain), (float) (r * gain), (float) stem.sendLevels[(size_t) b]);
                     }
                 }
             }
         }
+
+        sendBus.mixBackInto(numSamples, outL, outR);
     }
 }

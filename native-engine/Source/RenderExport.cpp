@@ -14,7 +14,8 @@ namespace ssstitch
         juce::String& errorOut)
     {
         StemBufferCache bufferCache;
-        PlaybackEngine engine(bufferCache);
+        SendBus sendBus;
+        PlaybackEngine engine(bufferCache, sendBus);
         engine.setProject(project);
 
         const double sampleRate = 44100.0;

@@ -333,7 +333,8 @@ static int runPluginProcess(
 static int runServe(int port)
 {
     StemBufferCache bufferCache;
-    PlaybackEngine engine(bufferCache);
+    SendBus sendBus;
+    PlaybackEngine engine(bufferCache, sendBus);
     Transport transport(engine);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
