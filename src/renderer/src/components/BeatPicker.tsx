@@ -9,6 +9,7 @@ import type { Action } from '../state/store'
 import { linearWave, peaksFromChannel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
+import { stopActivePreview } from '../audio/previewLoop'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
@@ -89,6 +90,21 @@ export function BeatPicker({
   // auditioning several candidate beats doesn't rewrite the file each time; only
   // whichever one you actually leave it on when you close does.
   const pendingBakeRef = useRef<number | null>(null)
+
+  // Runs once, right when this picker opens (mount) — real bug this fixed:
+  // previewing a riff in the LORE library browser, then importing it, left
+  // that preview looping underneath the downbeat picker with no way to hear
+  // the picker's own audio over it. BeatPicker's own toggleFreePlay/pickBeat
+  // already pause the main arrangement when THEY start playing something,
+  // but that's reactive — it does nothing about a preview already running
+  // elsewhere (Shelf's tile preview or the LORE browser's own) at the
+  // moment this picker takes over the screen. Silencing everything else the
+  // instant it opens means the picker's own audio is always what you hear.
+  useEffect(() => {
+    stopActivePreview()
+    if (playing) dispatch({ type: 'PAUSE' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only: re-running on every `playing` change would re-pause every time the main arrangement is resumed while this picker happens to still be open, which is never the intent
+  }, [])
 
   // The waveform shown is the whole rifff mixed together, not just the identity
   // stem alone — the transient that actually marks the downbeat (a kick, say)

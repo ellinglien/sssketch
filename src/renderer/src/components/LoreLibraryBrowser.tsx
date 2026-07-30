@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType } from '@shared/loreLibrary'
 import { getAudioContext } from '../audio/peakCache'
-import { startPreviewLoop, stopPreviewSources } from '../audio/previewLoop'
+import {
+  startPreviewLoop,
+  stopPreviewSources,
+  registerActivePreview,
+  unregisterActivePreview
+} from '../audio/previewLoop'
 import { usePlaying, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
@@ -68,13 +73,18 @@ export function LoreLibraryBrowser({
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
   const [importedRiffCIDs, setImportedRiffCIDs] = useState<Set<string>>(new Set())
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const previewTokenRef = useRef(0)
   const playing = usePlaying()
   const dispatch = useDispatch()
 
-  function stopPreview(): void {
+  // Stable across renders (useCallback, empty deps) so it's safe to pass to
+  // registerActivePreview/reference from effect cleanups without triggering
+  // re-subscriptions.
+  const stopPreview = useCallback(() => {
     stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
-  }
+    unregisterActivePreview(previewTokenRef.current)
+  }, [])
 
   /** Builds a Rifff from a resolved riff and dispatches it, exactly as the
    * single-riff import button already did — extracted so the new batch
@@ -306,6 +316,7 @@ export function LoreLibraryBrowser({
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
+        if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
       })
       .catch((err) => {
         console.error('LoreLibraryBrowser: loreResolveRiff() failed:', err)
@@ -318,7 +329,7 @@ export function LoreLibraryBrowser({
 
   useEffect(() => {
     return () => stopPreview()
-  }, [])
+  }, [stopPreview])
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {

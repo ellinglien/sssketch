@@ -71,3 +71,54 @@ export function stopPreviewSources(sources: AudioBufferSourceNode[]): void {
     }
   }
 }
+
+// Module-level, not component state: Shelf and LoreLibraryBrowser each own
+// their own preview sources independently, with no shared parent that could
+// otherwise coordinate "stop whatever anyone else is playing." A single
+// registry slot for "whichever preview is currently active" lets any of them
+// (and BeatPicker, which needs to silence any of the others the moment it
+// opens — see the real bug this fixed: previewing a riff in the LORE
+// browser, then importing it, left that preview playing underneath the
+// downbeat picker) stop one another without knowing about each other's
+// internals.
+//
+// Identified by an incrementing token rather than the stop function's own
+// identity — a caller comparing "is this still me?" by closing over its own
+// useCallback-returned function reference from inside that same callback's
+// body trips this codebase's react-hooks/immutability lint rule (it can't
+// prove the self-reference is runtime-safe, even though it is here). A
+// token sidesteps that entirely: register() hands back a plain number, the
+// caller stashes it in a ref, and unregister() compares against that.
+let activeGeneration = 0
+let activeStop: (() => void) | null = null
+
+/** Registers `stop` as the currently-active preview's stop function,
+ * immediately stopping whatever was previously registered (starting any new
+ * preview always supersedes an old one, everywhere, not just within the
+ * same component). Call this right after a preview actually starts
+ * playing — not before, or a fast reselect could register-then-immediately-
+ * get-stopped by the very same click that started it. Returns a token to
+ * pass to unregisterActivePreview later. */
+export function registerActivePreview(stop: () => void): number {
+  activeStop?.()
+  activeGeneration += 1
+  activeStop = stop
+  return activeGeneration
+}
+
+/** Clears the registry entry if (and only if) `token` matches the most
+ * recent registerActivePreview() call — used when a component's own
+ * preview ends on its own terms (toggled off, unmounted) so it doesn't
+ * accidentally clear a *different*, newer preview that superseded it in
+ * the meantime. */
+export function unregisterActivePreview(token: number): void {
+  if (token === activeGeneration) activeStop = null
+}
+
+/** Stops whichever preview is currently registered, from anywhere. Safe to
+ * call when nothing is playing. Used by BeatPicker on open, so any preview
+ * running elsewhere never keeps playing underneath it. */
+export function stopActivePreview(): void {
+  activeStop?.()
+  activeStop = null
+}

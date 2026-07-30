@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { setGrabOffsetBars } from './dragGrabOffset'
 import { getAudioContext } from '../audio/peakCache'
-import { startPreviewLoop, stopPreviewSources } from '../audio/previewLoop'
+import {
+  startPreviewLoop,
+  stopPreviewSources,
+  registerActivePreview,
+  unregisterActivePreview
+} from '../audio/previewLoop'
 import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
 
@@ -35,15 +40,20 @@ export function Shelf({
   // a different tile gets clicked knows it's been superseded and shouldn't
   // push its (now-stale) sources once it finally resolves.
   const previewGenerationRef = useRef(0)
+  const previewTokenRef = useRef(0)
 
-  function stopTilePreview(): void {
+  // Stable across renders (useCallback, empty deps) so it's safe to pass to
+  // registerActivePreview/reference from effect cleanups without triggering
+  // re-subscriptions.
+  const stopTilePreview = useCallback(() => {
     stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
-  }
+    unregisterActivePreview(previewTokenRef.current)
+  }, [])
 
   useEffect(() => {
     return () => stopTilePreview()
-  }, [])
+  }, [stopTilePreview])
 
   function handleTileClick(rifff: Rifff): void {
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
@@ -69,6 +79,7 @@ export function Shelf({
         return
       }
       previewSourcesRef.current.push(...sources)
+      if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopTilePreview)
     })
   }
 
@@ -179,6 +190,12 @@ export function Shelf({
                 // still be holding a stale value left behind by a previous
                 // in-arranger reposition drag.
                 setGrabOffsetBars(0)
+                // Dragging into the arranger is a clear "done previewing, now
+                // placing it" signal — whatever tile was previewing (this one
+                // or a different one) should stop, not keep looping alongside
+                // wherever the drag ends up.
+                stopTilePreview()
+                setPreviewingGroupId(null)
               }}
               onMouseEnter={() => setHoverId(rifff.groupId)}
               onClick={() => handleTileClick(rifff)}
