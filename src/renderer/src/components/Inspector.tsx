@@ -284,7 +284,19 @@ export function Inspector({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="ra-eyebrow">stems</span>
             <button
-              onClick={() => dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })}
+              onClick={() => {
+                dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
+                // Unlinking is specifically about dragging/editing each stem
+                // independently — expand so they're actually visible to do
+                // that with, rather than leaving the collapsed single-row
+                // view up with nothing to grab. Only on the unlink
+                // direction, and only if not already expanded (never
+                // auto-collapses). Same fix as the right-click clip menu's
+                // own "unlink" item in App.tsx.
+                if (!unlinked && !state.exp[groupId]) {
+                  dispatch({ type: 'TOGGLE_EXPAND', groupId })
+                }
+              }}
               style={{
                 height: 20,
                 borderRadius: 0,
