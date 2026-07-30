@@ -29,6 +29,8 @@ import {
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
+import { startPointerDrag } from './components/dragUtils'
+import { useHandModeHeld } from './components/useHandModeHeld'
 import { stemKey } from '@shared/types'
 
 function barForClientX(clientX: number, container: HTMLDivElement): number {
@@ -523,6 +525,31 @@ function Frame(): React.JSX.Element {
     }
   }, [state, playing, pos, dispatch])
 
+  // Hold H to pan the arranger view by dragging anywhere in it, rather than
+  // having to grab the scrollbar directly. The overlay below sits on top of
+  // Timeline while held, capturing the drag itself so none of Timeline's own
+  // click/drag interactions (select, move clip, resize...) fire underneath
+  // it — cheaper than teaching every interactive element inside Timeline/
+  // RifffBlockRow/SketchStrip/CompactRifffBlock to ignore mousedown while
+  // hand mode is active.
+  const handModeHeld = useHandModeHeld()
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [panning, setPanning] = useState(false)
+
+  function handlePanMouseDown(e: MouseEvent<HTMLDivElement>): void {
+    const container = scrollContainerRef.current
+    if (!container) return
+    const startScrollLeft = container.scrollLeft
+    setPanning(true)
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        container.scrollLeft = startScrollLeft - deltaX
+      },
+      () => setPanning(false)
+    )
+  }
+
   return (
     <div className="ra-frame">
       <div
@@ -548,8 +575,22 @@ function Frame(): React.JSX.Element {
         {/* minWidth:0 lets this flex item shrink below its content's intrinsic
             width, which is what allows overflow-x:auto to actually kick in
             instead of the row silently stretching .ra-frame's fixed width. */}
-        <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
-          <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          <div ref={scrollContainerRef} style={{ overflowX: 'auto' }}>
+            <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
+          </div>
+          {handModeHeld && (
+            <div
+              onMouseDown={handlePanMouseDown}
+              title="drag to pan (release H to exit)"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                cursor: panning ? 'grabbing' : 'grab',
+                zIndex: 10
+              }}
+            />
+          )}
         </div>
         {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click
