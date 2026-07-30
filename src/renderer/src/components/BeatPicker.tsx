@@ -431,13 +431,7 @@ export function BeatPicker({
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div>
-            <span className="ra-eyebrow">pick the downbeat</span>
-            <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginTop: 4 }}>
-              click a beat in {stem.name}, or play the loop and hit space on the downbeat — baked
-              into the audio when you close this
-            </div>
-          </div>
+          <span className="ra-eyebrow">pick the downbeat</span>
           <button
             onClick={() => commitAndCloseRef.current()}
             style={{
@@ -476,10 +470,11 @@ export function BeatPicker({
               checked={previewAll}
               onChange={(e) => setPreviewAll(e.target.checked)}
             />
-            preview all stems together (they’re beat-locked to the same clock)
+            preview all stems
           </label>
           <button
             onClick={toggleFreePlay}
+            title="click a beat below, or play and hit space on the downbeat"
             style={{
               height: 22,
               borderRadius: 0,
@@ -490,7 +485,7 @@ export function BeatPicker({
               color: isFreePlaying ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
             }}
           >
-            {isFreePlaying ? '■ stop · space to mark the beat' : '▶ play loop'}
+            {isFreePlaying ? '■ stop' : '▶ play'}
           </button>
         </div>
 
@@ -556,8 +551,7 @@ export function BeatPicker({
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          beat {currentBeat + 1} of {totalBeats} selected — click the playing beat again to stop it.
-          nothing is written to disk until you close this.
+          beat {currentBeat + 1} of {totalBeats}
         </div>
       </div>
     </div>

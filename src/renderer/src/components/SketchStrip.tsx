@@ -32,6 +32,10 @@ export function SketchStrip(): React.JSX.Element {
 
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Batch selection (shift-click range, cmd/ctrl-click toggle) — same
+  // convention as Shelf's own multi-select. Separate from state.sel, which
+  // stays the single "anchor" tile a plain click always collapses back to.
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
 
   // Nearest gap between tiles, by clientX — tiles are uniform width + a
   // fixed gap, so this is direct arithmetic against the container's own
@@ -44,10 +48,12 @@ export function SketchStrip(): React.JSX.Element {
     return Math.max(0, Math.min(sequence.length, Math.round(relativeX / slot)))
   }
 
-  const removeTile = useCallback(
-    (groupId: string) => {
-      const remaining = sequence.map((r) => r.groupId).filter((id) => id !== groupId)
-      dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
+  // Removes one or more tiles and re-packs whatever remains, in one
+  // SEQUENCE_RIFFFS dispatch regardless of how many were removed.
+  const removeTiles = useCallback(
+    (groupIds: Set<string>) => {
+      const remaining = sequence.map((r) => r.groupId).filter((id) => !groupIds.has(id))
+      for (const groupId of groupIds) dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
       dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: remaining })
     },
     [sequence, dispatch]
@@ -56,24 +62,58 @@ export function SketchStrip(): React.JSX.Element {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (!state.sel || !sequence.some((r) => r.groupId === state.sel)) return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      removeTile(state.sel)
+      const targets =
+        multiSelected.size > 0
+          ? multiSelected
+          : new Set(state.sel && sequence.some((r) => r.groupId === state.sel) ? [state.sel] : [])
+      if (targets.size === 0) return
+      removeTiles(targets)
+      setMultiSelected(new Set())
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, sequence, removeTile])
+  }, [state.sel, sequence, multiSelected, removeTiles])
 
-  // Clicking a tile here is an "arranger" gesture, not a "library" one —
-  // unlike Shelf/LORE browser tiles (which aren't placed yet and preview
-  // via an isolated Web Audio loop), these rifffs are already part of the
-  // actual arrangement, so clicking one jumps the REAL transport to its
-  // position and plays from there, same as clicking a spot on the Ruler.
-  // Real bug this fixed: starting an isolated preview also paused the main
-  // transport underneath it, so clicking a tile while playing silently cut
-  // the arrangement's audio — looked exactly like "play isn't working."
-  function handleTileClick(rifff: Rifff): void {
+  // Shift-click extends/shrinks a range from the current anchor (state.sel);
+  // cmd/ctrl-click toggles just the clicked tile in/out of the batch — same
+  // convention as Shelf's own multi-select, and neither jumps/plays, unlike
+  // a plain click.
+  //
+  // A plain click is an "arranger" gesture, not a "library" one — unlike
+  // Shelf/LORE browser tiles (which aren't placed yet and preview via an
+  // isolated Web Audio loop), these rifffs are already part of the actual
+  // arrangement, so clicking one (with no modifier) jumps the REAL
+  // transport to its position and plays from there, same as clicking a
+  // spot on the Ruler, and collapses any active batch selection back down
+  // to just that one tile. Real bug this fixed: starting an isolated
+  // preview also paused the main transport underneath it, so clicking a
+  // tile while playing silently cut the arrangement's audio — looked
+  // exactly like "play isn't working."
+  function handleTileClick(e: React.MouseEvent, rifff: Rifff): void {
+    if (e.shiftKey && state.sel) {
+      const anchorIndex = sequence.findIndex((r) => r.groupId === state.sel)
+      const clickedIndex = sequence.findIndex((r) => r.groupId === rifff.groupId)
+      if (anchorIndex === -1 || clickedIndex === -1) {
+        setMultiSelected(new Set([rifff.groupId]))
+        return
+      }
+      const [start, end] =
+        anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
+      setMultiSelected(new Set(sequence.slice(start, end + 1).map((r) => r.groupId)))
+      return
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setMultiSelected((prev) => {
+        const next = new Set(prev)
+        if (next.has(rifff.groupId)) next.delete(rifff.groupId)
+        else next.add(rifff.groupId)
+        return next
+      })
+      return
+    }
+    setMultiSelected(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     const targetPos = rifff.startBar ?? 0
     dispatch({ type: 'SET_POS', pos: targetPos })
@@ -174,6 +214,7 @@ export function SketchStrip(): React.JSX.Element {
       {sequence.map((rifff, index) => {
         const start = rifff.startBar ?? 0
         const isCurrent = playing && pos >= start && pos < start + rifff.barLength
+        const batchSelected = multiSelected.has(rifff.groupId)
         // 0..1 progress through this rifff's own play window — only
         // meaningful while isCurrent, but harmless to compute either way.
         const fraction = (pos - start) / rifff.barLength
@@ -187,19 +228,22 @@ export function SketchStrip(): React.JSX.Element {
             key={rifff.groupId}
             draggable
             onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
-            onClick={() => handleTileClick(rifff)}
+            onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => {
               e.preventDefault()
-              removeTile(rifff.groupId)
+              removeTiles(batchSelected ? multiSelected : new Set([rifff.groupId]))
+              setMultiSelected(new Set())
             }}
-            title={rifff.name}
+            title={`${rifff.name} — shift/cmd-click to multi-select`}
             style={{
               order: index * 10,
               position: 'relative',
               width: TILE_SIZE,
               height: TILE_SIZE,
               cursor: 'pointer',
-              opacity: state.sel === rifff.groupId ? 1 : 0.85
+              border: batchSelected ? '1px solid var(--ra-stretch-on)' : '1px solid transparent',
+              boxSizing: 'border-box',
+              opacity: state.sel === rifff.groupId || batchSelected ? 1 : 0.85
             }}
           >
             <PolarGlyph
@@ -214,7 +258,14 @@ export function SketchStrip(): React.JSX.Element {
                 viewBox="0 0 100 100"
                 style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
               >
-                <circle cx={dotX} cy={dotY} r={2.5} fill="var(--ra-playhead)" />
+                <circle
+                  cx={dotX}
+                  cy={dotY}
+                  r={5}
+                  fill="var(--ra-text)"
+                  stroke="#000"
+                  strokeWidth={1.5}
+                />
               </svg>
             )}
           </div>
