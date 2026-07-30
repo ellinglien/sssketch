@@ -53,6 +53,9 @@ export interface AppState {
    * Toggled by the Tab key, Ableton-style — see App.tsx's Frame component.
    * Not persisted (see serialize.ts). */
   compactMode: boolean
+  /** Hides the Inspector panel entirely, giving its width back to the
+   * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
+  inspectorCollapsed: boolean
   rifffs: Record<string, Rifff>
 }
 
@@ -73,6 +76,7 @@ export const initialState: AppState = {
   exp: {},
   volumeDragMode: false,
   compactMode: false,
+  inspectorCollapsed: false,
   rifffs: {}
 }
 
@@ -120,6 +124,7 @@ export type Action =
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'TOGGLE_COMPACT_MODE' }
+  | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -420,6 +425,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_COMPACT_MODE':
       return { ...state, compactMode: !state.compactMode }
+
+    case 'TOGGLE_INSPECTOR_COLLAPSED':
+      return { ...state, inspectorCollapsed: !state.inspectorCollapsed }
 
     case 'LOAD_STATE':
       return action.state

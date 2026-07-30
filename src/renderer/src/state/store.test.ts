@@ -416,6 +416,16 @@ describe('reducer', () => {
     })
   })
 
+  describe('TOGGLE_INSPECTOR_COLLAPSED', () => {
+    it('starts false and toggles true/false', () => {
+      expect(initialState.inspectorCollapsed).toBe(false)
+      let state = reducer(initialState, { type: 'TOGGLE_INSPECTOR_COLLAPSED' })
+      expect(state.inspectorCollapsed).toBe(true)
+      state = reducer(state, { type: 'TOGGLE_INSPECTOR_COLLAPSED' })
+      expect(state.inspectorCollapsed).toBe(false)
+    })
+  })
+
   describe('SET_GROUP_MUTE', () => {
     it('mutes every stem in the rifff at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

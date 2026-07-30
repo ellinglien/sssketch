@@ -195,6 +195,25 @@ export function TransportBar(): React.JSX.Element {
         compact
       </button>
 
+      <button
+        onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
+        aria-label="Toggle inspector panel"
+        title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: state.inspectorCollapsed
+            ? 'var(--ra-stretch-on-bg)'
+            : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.inspectorCollapsed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.inspectorCollapsed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        inspector
+      </button>
+
       <div style={{ display: 'flex', gap: 4 }}>
         <button
           onClick={history.undo}

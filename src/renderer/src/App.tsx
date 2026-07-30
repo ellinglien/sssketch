@@ -451,7 +451,7 @@ function Frame(): React.JSX.Element {
         <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
           <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
         </div>
-        <Inspector onOpenBeatPicker={setPickerGroupId} />
+        {!state.inspectorCollapsed && <Inspector onOpenBeatPicker={setPickerGroupId} />}
       </div>
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker groupId={pickerGroupId} onClose={() => setPickerGroupId(null)} />

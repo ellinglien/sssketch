@@ -43,4 +43,16 @@ describe('project serialization', () => {
     const restored = deserializeProject(JSON.parse(json))
     expect(restored.volumeDragMode).toBe(false)
   })
+
+  it('does not persist inspectorCollapsed — always reopens with it expanded', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'TOGGLE_INSPECTOR_COLLAPSED' })
+    expect(state.inspectorCollapsed).toBe(true)
+
+    const json = serializeProject(state)
+    expect(JSON.parse(json).inspectorCollapsed).toBeUndefined()
+
+    const restored = deserializeProject(JSON.parse(json))
+    expect(restored.inspectorCollapsed).toBe(false)
+  })
 })
