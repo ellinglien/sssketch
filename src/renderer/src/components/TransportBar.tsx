@@ -1,7 +1,15 @@
 import { useState } from 'react'
-import { useAppState, useDispatch, useHistory, usePos, usePlaying } from '../state/StoreContext'
+import {
+  useAppState,
+  useDispatch,
+  useHistory,
+  usePos,
+  usePlaying,
+  useSendBusStatus
+} from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
+import { SEND_PLUGIN_ALLOWLIST } from '@shared/sendPlugins'
 
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
@@ -9,6 +17,8 @@ export function TransportBar(): React.JSX.Element {
   const history = useHistory()
   const pos = usePos()
   const playing = usePlaying()
+  const [sendsPanelOpen, setSendsPanelOpen] = useState(false)
+  const sendBusStatus = useSendBusStatus()
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -37,6 +47,7 @@ export function TransportBar(): React.JSX.Element {
   return (
     <div
       style={{
+        position: 'relative',
         height: 46,
         background: 'var(--ra-bg-bar)',
         borderBottom: '1px solid var(--ra-border)',
@@ -195,6 +206,22 @@ export function TransportBar(): React.JSX.Element {
         compact
       </button>
 
+      <button
+        onClick={() => setSendsPanelOpen((v) => !v)}
+        aria-label="Toggle sends panel"
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: sendsPanelOpen ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${sendsPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: sendsPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        sends
+      </button>
+
       <div style={{ display: 'flex', gap: 4 }}>
         <button
           onClick={history.undo}
@@ -231,6 +258,69 @@ export function TransportBar(): React.JSX.Element {
           ↷
         </button>
       </div>
+
+      {sendsPanelOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 46,
+            right: 14,
+            zIndex: 20,
+            background: 'var(--ra-bg-bar)',
+            border: '1px solid var(--ra-border-strong)',
+            padding: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            minWidth: 220
+          }}
+        >
+          {([0, 1, 2, 3] as const).map((bus) => (
+            <div key={bus} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 12 }}>{bus + 1}</span>
+              <select
+                value={state.sendBusPlugins[bus] ?? ''}
+                onChange={(e) =>
+                  dispatch({
+                    type: 'SET_SEND_BUS_PLUGIN',
+                    bus,
+                    pluginId: e.target.value || null
+                  })
+                }
+                style={{
+                  flex: 1,
+                  height: 22,
+                  fontSize: 10,
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)',
+                  border: '1px solid var(--ra-border)'
+                }}
+              >
+                <option value="">none</option>
+                {SEND_PLUGIN_ALLOWLIST.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.displayName}
+                  </option>
+                ))}
+              </select>
+              <span
+                style={{
+                  fontSize: 9,
+                  width: 44,
+                  color:
+                    sendBusStatus[bus] === 'error'
+                      ? 'var(--ra-mute-on)'
+                      : sendBusStatus[bus] === 'loaded'
+                        ? 'var(--ra-text)'
+                        : 'var(--ra-text-3)'
+                }}
+              >
+                {sendBusStatus[bus]}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

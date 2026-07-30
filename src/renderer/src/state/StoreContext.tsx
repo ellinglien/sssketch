@@ -40,6 +40,12 @@ const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 
+export type SendBusStatus = 'idle' | 'loading' | 'loaded' | 'error'
+
+const SendBusStatusCtx = createContext<
+  [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
+>(['idle', 'idle', 'idle', 'idle'])
+
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -59,6 +65,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const state = history.present
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [sendBusStatus, setSendBusStatus] = useState<
+    [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
+  >(['idle', 'idle', 'idle', 'idle'])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -91,6 +100,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         return
       case 'SET_SEND_BUS_PLUGIN':
         rawDispatch(action)
+        setSendBusStatus((s) => {
+          const next = [...s] as typeof s
+          next[action.bus] = action.pluginId ? 'loading' : 'idle'
+          return next
+        })
         void window.rifffApi.loadSendPlugin(action.bus, action.pluginId)
         return
       default:
@@ -218,9 +232,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 
   useEffect(() => {
     return window.rifffApi.onSendPluginLoaded(({ bus, success, error }) => {
-      if (!success) {
-        console.error(`StoreContext: send bus ${bus} failed to load plugin: ${error}`)
-      }
+      if (!success) console.error(`StoreContext: send bus ${bus} failed to load plugin: ${error}`)
+      setSendBusStatus((s) => {
+        const next = [...s] as typeof s
+        next[bus] = success ? 'loaded' : 'error'
+        return next
+      })
     })
   }, [])
 
@@ -229,7 +246,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       <DispatchCtx.Provider value={dispatch}>
         <PosCtx.Provider value={pos}>
           <PlayingCtx.Provider value={playing}>
-            <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+            <SendBusStatusCtx.Provider value={sendBusStatus}>
+              <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+            </SendBusStatusCtx.Provider>
           </PlayingCtx.Provider>
         </PosCtx.Provider>
       </DispatchCtx.Provider>
@@ -255,6 +274,11 @@ export function usePos(): number {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function usePlaying(): boolean {
   return useContext(PlayingCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useSendBusStatus(): [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus] {
+  return useContext(SendBusStatusCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
