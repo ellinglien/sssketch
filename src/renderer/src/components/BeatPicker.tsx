@@ -340,7 +340,19 @@ export function BeatPicker({
       if (!buf) continue
       const source = ctx.createBufferSource()
       source.buffer = buf
-      source.loop = true // loops the whole buffer from its own start, repeatedly
+      source.loop = true
+      // Explicit bounds, not the buffer's own natural length (loopEnd's
+      // default, 0, means "the whole buffer") — real bug this fixed: two
+      // stems that are SUPPOSED to loop at exact bar-multiples of each
+      // other can still decode to slightly different raw sample counts
+      // (encoder padding, rounding — Ogg vs. WAV especially), so looping
+      // each one at its own buffer's natural length drifts them out of
+      // phase over many iterations, even though they started perfectly in
+      // sync. Locking loopEnd to this stem's own precise, metadata-derived
+      // durationSec (the same value the native engine's own tiling math
+      // uses) keeps every stem's loop period exactly bar-accurate instead.
+      source.loopStart = 0
+      source.loopEnd = Math.min(s.durationSec, buf.duration)
       const gainNode = ctx.createGain()
       gainNode.gain.value = gain
       source.connect(gainNode)
@@ -390,6 +402,11 @@ export function BeatPicker({
       // it, since a looped source never stops itself.
       source.buffer = rotateBuffer(ctx, buf, offsetSec)
       source.loop = true
+      // Same fix as toggleFreePlay above, same reason — rotateBuffer
+      // preserves the original buffer's raw sample count, which can still
+      // differ slightly from this stem's true bar-derived durationSec.
+      source.loopStart = 0
+      source.loopEnd = Math.min(s.durationSec, buf.duration)
       const gainNode = ctx.createGain()
       gainNode.gain.value = gain
       source.connect(gainNode)

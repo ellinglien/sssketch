@@ -128,7 +128,8 @@ export function Shelf({
       getAudioContext(),
       rifff.stems.map((s) => ({
         path: s.path,
-        gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
+        gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1,
+        durationSec: s.durationSec
       })),
       () => previewGenerationRef.current !== generation
     ).then((sources) => {

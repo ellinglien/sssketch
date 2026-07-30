@@ -5,6 +5,16 @@ export interface PreviewStemInput {
   /** Extra per-stem gain multiplier beyond the shared sqrtGain headroom
    * normalization (e.g. a stem's own saved volume) — defaults to 1. */
   gain?: number
+  /** This stem's true, bar-derived duration in seconds (Stem.durationSec) —
+   * when provided, the loop point is locked to exactly this instead of the
+   * decoded buffer's own raw length. Real bug this fixed: two stems that
+   * are supposed to loop at exact bar-multiples of each other can still
+   * decode to slightly different raw sample counts (encoder padding,
+   * rounding), so looping each one at its own buffer's natural length
+   * drifts them out of phase over many iterations even though they started
+   * perfectly in sync. Optional so a caller without this metadata handy
+   * still gets the old (buffer-length) behavior rather than a type error. */
+  durationSec?: number
 }
 
 /**
@@ -48,6 +58,10 @@ export async function startPreviewLoop(
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.loop = true
+    if (stem.durationSec !== undefined) {
+      source.loopStart = 0
+      source.loopEnd = Math.min(stem.durationSec, buffer.duration)
+    }
     const gainNode = ctx.createGain()
     gainNode.gain.value = gain * (stem.gain ?? 1)
     source.connect(gainNode)

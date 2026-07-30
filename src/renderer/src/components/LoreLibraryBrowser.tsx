@@ -380,7 +380,7 @@ export function LoreLibraryBrowser({
         const cachedStems = resolved.stems.filter((s) => s.path !== null)
         const sources = await startPreviewLoop(
           getAudioContext(),
-          cachedStems.map((s) => ({ path: s.path!, gain: s.gain })),
+          cachedStems.map((s) => ({ path: s.path!, gain: s.gain, durationSec: s.durationSec })),
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
