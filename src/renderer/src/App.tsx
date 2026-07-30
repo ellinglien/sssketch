@@ -13,7 +13,7 @@ import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { RifffBlockRow } from './components/RifffBlockRow'
 import { Playhead } from './components/Playhead'
-import { BeatPicker } from './components/BeatPicker'
+import { BeatPicker, bakeStems } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
@@ -23,7 +23,7 @@ import {
   placedRifffsInOrder,
   muteShortcutLetters
 } from './state/selectors'
-import { initialState } from './state/store'
+import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { stemKey } from '@shared/types'
 
@@ -261,6 +261,19 @@ function Frame(): React.JSX.Element {
   const playing = usePlaying()
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
+  // Riffs imported together as a LORE library batch, sharing the same jam's
+  // clock phase — set alongside pickerGroupId so BeatPicker opens for just
+  // the first one; once that one is baked, onBaked below applies the same
+  // offset to the rest automatically, rather than opening the picker again
+  // for each. Cleared unconditionally whenever BeatPicker closes (baked or
+  // not), so a stale batch never leaks into some later, unrelated pick.
+  const [pickerBatchSiblingGroupIds, setPickerBatchSiblingGroupIds] = useState<string[]>([])
+
+  function handleLoreImported(groupIds: string[]): void {
+    if (groupIds.length === 0) return
+    setPickerGroupId(groupIds[0])
+    setPickerBatchSiblingGroupIds(groupIds.slice(1))
+  }
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -456,9 +469,34 @@ function Frame(): React.JSX.Element {
         {!state.inspectorCollapsed && <Inspector onOpenBeatPicker={setPickerGroupId} />}
       </div>
       {pickerGroupId && state.rifffs[pickerGroupId] && (
-        <BeatPicker groupId={pickerGroupId} onClose={() => setPickerGroupId(null)} />
+        <BeatPicker
+          groupId={pickerGroupId}
+          onClose={() => {
+            setPickerGroupId(null)
+            setPickerBatchSiblingGroupIds([])
+          }}
+          onBaked={(steps) => {
+            for (const siblingGroupId of pickerBatchSiblingGroupIds) {
+              const siblingRifff = state.rifffs[siblingGroupId]
+              if (!siblingRifff) continue
+              void bakeStems(
+                dispatch,
+                siblingGroupId,
+                steps,
+                SNAP_DIVS[state.snapIdx],
+                siblingRifff.stems
+              )
+            }
+            setPickerBatchSiblingGroupIds([])
+          }}
+        />
       )}
-      {loreLibraryOpen && <LoreLibraryBrowser onClose={() => setLoreLibraryOpen(false)} />}
+      {loreLibraryOpen && (
+        <LoreLibraryBrowser
+          onClose={() => setLoreLibraryOpen(false)}
+          onImported={handleLoreImported}
+        />
+      )}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

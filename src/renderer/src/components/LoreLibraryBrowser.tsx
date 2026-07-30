@@ -23,7 +23,17 @@ function riffCircleColor(riff: LoreRiffSummary): string {
   return `rgb(${v}, ${v}, ${v})`
 }
 
-export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function LoreLibraryBrowser({
+  onClose,
+  onImported
+}: {
+  onClose: () => void
+  /** Called once import(s) succeed with every newly-created groupId (one for
+   * a single import, several for a batch) — lets the caller drive downbeat
+   * correction (open BeatPicker for the first one, propagate its picked
+   * offset to the rest) the same way drag-and-drop import already does. */
+  onImported: (groupIds: string[]) => void
+}): React.JSX.Element {
   const [available, setAvailable] = useState<boolean | null>(null)
   const [jamFilter, setJamFilter] = useState('')
   const [jams, setJams] = useState<LoreJam[]>([])
@@ -69,11 +79,11 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   /** Builds a Rifff from a resolved riff and dispatches it, exactly as the
    * single-riff import button already did — extracted so the new batch
    * import path (multiple riffs, each resolved on demand) can share the
-   * same logic instead of duplicating it. Returns false (no-op) if the riff
-   * has no locally-cached stems at all. */
-  function importResolvedRiff(riffCID: string, resolved: LoreResolvedRiff): boolean {
+   * same logic instead of duplicating it. Returns the newly-created groupId,
+   * or null (no-op) if the riff has no locally-cached stems at all. */
+  function importResolvedRiff(riffCID: string, resolved: LoreResolvedRiff): string | null {
     const cachedStems = resolved.stems.filter((s) => s.path !== null)
-    if (cachedStems.length === 0) return false
+    if (cachedStems.length === 0) return null
 
     const groupId = crypto.randomUUID()
     const rifff = {
@@ -115,12 +125,13 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     classifyStems(rifff, dispatch).catch((err) => {
       console.error('LoreLibraryBrowser: failed to classify stem types:', err)
     })
-    return true
+    return groupId
   }
 
   function handleImport(): void {
     if (!resolvedRiff || !selectedRiffCID) return
-    importResolvedRiff(selectedRiffCID, resolvedRiff)
+    const groupId = importResolvedRiff(selectedRiffCID, resolvedRiff)
+    if (groupId) onImported([groupId])
   }
 
   /** Batch import for shift/cmd-click multi-selection. The anchor riff
@@ -132,13 +143,17 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
    * about failures for (one bad riff logs and moves on, same spirit as the
    * per-stem try/catch elsewhere in this component). */
   async function handleImportSelected(): Promise<void> {
+    const groupIds: string[] = []
     for (const riffCID of selectedRiffCIDs) {
       try {
         const resolved =
           riffCID === selectedRiffCID && resolvedRiff
             ? resolvedRiff
             : await window.rifffApi.loreResolveRiff(riffCID)
-        if (resolved) importResolvedRiff(riffCID, resolved)
+        if (resolved) {
+          const groupId = importResolvedRiff(riffCID, resolved)
+          if (groupId) groupIds.push(groupId)
+        }
       } catch (err) {
         console.error(
           `LoreLibraryBrowser: failed to import riff ${riffCID} during batch import:`,
@@ -146,6 +161,7 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
         )
       }
     }
+    if (groupIds.length > 0) onImported(groupIds)
   }
 
   /** Standard file-browser multi-select convention: plain click selects

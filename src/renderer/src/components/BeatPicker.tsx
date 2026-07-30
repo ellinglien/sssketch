@@ -27,7 +27,13 @@ import type { Stem } from '@shared/types'
 // and so can't reference anything declared after it. Called once, when the picker
 // closes — not on every pick, which would rewrite the file on every exploratory
 // click while auditioning candidates, making "the one" a moving target.
-async function bakeStems(
+//
+// Exported so callers driving a batch downbeat-correction flow (e.g. the LORE
+// library browser importing several riffs from the same jam at once) can
+// apply the same picked offset to sibling riffs directly, without opening
+// this picker again for each one — see onBaked below.
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
+export async function bakeStems(
   dispatch: Dispatch<Action>,
   groupId: string,
   steps: number,
@@ -47,10 +53,18 @@ async function bakeStems(
 }
 export function BeatPicker({
   groupId,
-  onClose
+  onClose,
+  onBaked
 }: {
   groupId: string
   onClose: () => void
+  /** Fired once, right after a real bake actually happens (i.e. the user
+   * picked/marked a beat and this closed rather than being dismissed with
+   * nothing picked) — with the exact snap-grid `steps` offset that was
+   * applied. Lets a caller propagate the same correction to sibling riffs
+   * it knows share this one's clock phase (see bakeStems above), rather
+   * than making the user re-pick the downbeat for every riff individually. */
+  onBaked?: (steps: number) => void
 }): React.JSX.Element | null {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -182,6 +196,7 @@ export function BeatPicker({
         const steps = pendingBakeRef.current
         pendingBakeRef.current = null
         bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
+        onBaked?.(steps)
       }
       stopPreview()
       onClose()
@@ -330,7 +345,12 @@ export function BeatPicker({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 10
+        // Higher than LoreLibraryBrowser's own overlay (zIndex 10): after a
+        // LORE import, BeatPicker can open while that panel is still open
+        // behind it (the panel deliberately stays open across imports so
+        // browsing isn't interrupted) — needs to render on top to actually
+        // be usable, not just visually present underneath.
+        zIndex: 20
       }}
     >
       <div
