@@ -416,6 +416,58 @@ describe('reducer', () => {
     })
   })
 
+  describe('SET_SEND_LEVEL', () => {
+    it("sets one bus's send level for a stem, defaulting others to 0", () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_SEND_LEVEL', stemKey: 'r1:1', bus: 2, level: 0.75 })
+      expect(state.sendLevels['r1:1']).toEqual([0, 0, 0.75, 0])
+    })
+
+    it('clamps level to [0, 1]', () => {
+      let state = reducer(initialState, {
+        type: 'SET_SEND_LEVEL',
+        stemKey: 'r1:1',
+        bus: 0,
+        level: 5
+      })
+      expect(state.sendLevels['r1:1'][0]).toBe(1)
+      state = reducer(state, { type: 'SET_SEND_LEVEL', stemKey: 'r1:1', bus: 0, level: -2 })
+      expect(state.sendLevels['r1:1'][0]).toBe(0)
+    })
+
+    it('preserves other buses already set on the same stem', () => {
+      let state = reducer(initialState, {
+        type: 'SET_SEND_LEVEL',
+        stemKey: 'r1:1',
+        bus: 0,
+        level: 0.3
+      })
+      state = reducer(state, { type: 'SET_SEND_LEVEL', stemKey: 'r1:1', bus: 1, level: 0.6 })
+      expect(state.sendLevels['r1:1']).toEqual([0.3, 0.6, 0, 0])
+    })
+  })
+
+  describe('SET_SEND_BUS_PLUGIN', () => {
+    it("sets a bus's plugin id", () => {
+      const state = reducer(initialState, {
+        type: 'SET_SEND_BUS_PLUGIN',
+        bus: 1,
+        pluginId: 'soothe2'
+      })
+      expect(state.sendBusPlugins).toEqual([null, 'soothe2', null, null])
+    })
+
+    it('setting pluginId to null clears a bus', () => {
+      let state = reducer(initialState, {
+        type: 'SET_SEND_BUS_PLUGIN',
+        bus: 1,
+        pluginId: 'soothe2'
+      })
+      state = reducer(state, { type: 'SET_SEND_BUS_PLUGIN', bus: 1, pluginId: null })
+      expect(state.sendBusPlugins).toEqual([null, null, null, null])
+    })
+  })
+
   describe('SET_GROUP_MUTE', () => {
     it('mutes every stem in the rifff at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
