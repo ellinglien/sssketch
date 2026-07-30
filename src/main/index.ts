@@ -16,6 +16,7 @@ import {
   listJams,
   listRiffs,
   resolveRiff,
+  downloadMissingStems,
   type RiffFilters
 } from './loreWarehouse'
 
@@ -104,6 +105,10 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('lore-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
+
+  ipcMain.handle('lore-download-missing-stems', (_event, riffCID: string) =>
+    downloadMissingStems(riffCID)
+  )
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })

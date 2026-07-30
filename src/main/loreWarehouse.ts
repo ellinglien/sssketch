@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import Database from 'better-sqlite3'
 import type {
   LoreJam,
@@ -7,7 +7,7 @@ import type {
   LoreResolvedRiff,
   LoreResolvedStem
 } from '@shared/loreLibrary'
-import { computeOwnerFraction } from '@shared/loreLibrary'
+import { computeOwnerFraction, stemDownloadUrl } from '@shared/loreLibrary'
 
 // Single-user, single-machine app — this is the actual synced folder on
 // Elling's machine. See the design spec's "Background" section for why this
@@ -248,6 +248,9 @@ interface FullStemRow {
   Instrument: number
   BPMrnd: number | null
   Length16s: number | null
+  FileEndpoint: string | null
+  FileBucket: string | null
+  FileKey: string | null
 }
 
 export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
@@ -284,7 +287,9 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
   const stems: LoreResolvedStem[] = slots.map(({ slot, stemCID }) => {
     const stemRow = db
       .prepare(
-        'SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s FROM Stems WHERE StemCID = ?'
+        `SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s,
+                FileEndpoint, FileBucket, FileKey
+         FROM Stems WHERE StemCID = ?`
       )
       .get(stemCID) as FullStemRow | undefined
     const path = resolveStemPath(riffRow.OwnerJamCID, stemCID)
@@ -313,7 +318,11 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
       presetName: stemRow?.PresetName ?? '',
       instrumentMask: stemRow?.Instrument ?? 0,
       durationSec,
-      barLength: stemBarLength
+      barLength: stemBarLength,
+      downloadUrl:
+        stemRow?.FileEndpoint && stemRow?.FileKey
+          ? stemDownloadUrl(stemRow.FileEndpoint, stemRow.FileBucket ?? '', stemRow.FileKey)
+          : null
     }
   })
 
@@ -323,6 +332,62 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
     barLength: riffRow.BarLength,
     stems
   }
+}
+
+/** Downloads one stem's audio to exactly the local path resolveStemPath
+ * already expects it at, so it becomes indistinguishable from a normally
+ * LORE-synced file the moment it lands — every other reader (listRiffs'
+ * cachedStemCount, resolveRiff's own path field, the native engine) just
+ * sees it there. Writes to a `.downloading` sibling then renames into place,
+ * so a killed/failed download never leaves a corrupt partial file sitting at
+ * the real path. Returns false (never throws) on any network or filesystem
+ * failure — the caller treats a failed stem as "still missing," not fatal to
+ * the rest of the riff's downloads. */
+async function downloadOneStem(
+  jamCID: string,
+  stemCID: string,
+  downloadUrl: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(downloadUrl)
+    if (!res.ok) {
+      console.error(`loreWarehouse: download failed for stem ${stemCID}: HTTP ${res.status}`)
+      return false
+    }
+    const bytes = Buffer.from(await res.arrayBuffer())
+    const finalPath = resolveStemPath(jamCID, stemCID)
+    mkdirSync(dirname(finalPath), { recursive: true })
+    const tmpPath = `${finalPath}.downloading`
+    writeFileSync(tmpPath, bytes)
+    renameSync(tmpPath, finalPath)
+    return true
+  } catch (err) {
+    console.error(`loreWarehouse: failed to download stem ${stemCID}:`, err)
+    return false
+  }
+}
+
+/** Fetches every currently-uncached, populated stem for a riff directly from
+ * its (public, unauthenticated — see stemDownloadUrl's doc comment) storage
+ * URL, then re-resolves the riff so the caller gets back fresh path values
+ * without a second round trip of its own. Downloads run in parallel (a riff
+ * has at most 8 stems) rather than sequentially. Returns null if the riff
+ * itself can't be resolved (unavailable warehouse, unknown riffCID) — same
+ * "never throws" convention as every other warehouse function. */
+export async function downloadMissingStems(riffCID: string): Promise<LoreResolvedRiff | null> {
+  const db = getWarehouseDb()
+  if (!db) return null
+  const riffRow = db.prepare('SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?').get(riffCID) as
+    { OwnerJamCID: string } | undefined
+  if (!riffRow) return null
+
+  const resolved = resolveRiff(riffCID)
+  if (!resolved) return null
+  const missing = resolved.stems.filter((s) => s.path === null && s.downloadUrl !== null)
+  await Promise.all(
+    missing.map((s) => downloadOneStem(riffRow.OwnerJamCID, s.stemCID, s.downloadUrl!))
+  )
+  return resolveRiff(riffCID)
 }
 
 export { getWarehouseDb }

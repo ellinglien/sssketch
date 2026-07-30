@@ -1,5 +1,5 @@
-import { describe, expect, it, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, afterEach, vi } from 'vitest'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -9,8 +9,10 @@ import {
   setWarehouseRootForTests,
   listJams,
   listRiffs,
-  resolveRiff
+  resolveRiff,
+  downloadMissingStems
 } from './loreWarehouse'
+import { stemDownloadUrl } from '@shared/loreLibrary'
 
 function createFixtureWarehouse(root: string): void {
   mkdirSync(join(root, 'cache', 'common'), { recursive: true })
@@ -27,6 +29,7 @@ function createFixtureWarehouse(root: string): void {
     CREATE TABLE "Stems" (
       "StemCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreatorUserName" TEXT,
       "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, "Length16s" REAL,
+      "FileEndpoint" TEXT, "FileBucket" TEXT, "FileKey" TEXT, "FileLength" INTEGER,
       PRIMARY KEY("StemCID")
     );
   `)
@@ -76,6 +79,7 @@ function createSeededFixtureWarehouse(root: string): void {
     CREATE TABLE "Stems" (
       "StemCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreatorUserName" TEXT,
       "PresetName" TEXT, "Instrument" INTEGER, "BPMrnd" REAL, "BarLength" REAL, "Length16s" REAL,
+      "FileEndpoint" TEXT, "FileBucket" TEXT, "FileKey" TEXT, "FileLength" INTEGER,
       PRIMARY KEY("StemCID")
     );
   `)
@@ -150,8 +154,21 @@ function seedStemsAndGains(root: string): void {
     `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
   ).run('stem-a', 'jam-techno', 'elling', 'Microphone', 16, 130, 999, 128) // 128/16 = 8 bars
   db.prepare(
-    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
-  ).run('stem-b', 'jam-techno', 'mvdg', 'Lowpass', 2, 130, 999, 64) // 64/16 = 4 bars
+    `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s, FileEndpoint, FileBucket, FileKey, FileLength) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    'stem-b',
+    'jam-techno',
+    'mvdg',
+    'Lowpass',
+    2,
+    130,
+    999,
+    64, // 64/16 = 4 bars
+    'endlesss-dev.fra1.digitaloceanspaces.com',
+    '',
+    'attachments/oggAudio/jam-techno/stem-b',
+    9
+  )
   db.prepare(
     `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, BarLength, Length16s) VALUES (?,?,?,?,?,?,?,?)`
   ).run('stem-c', 'jam-techno', 'elling', 'Pianabot', 4, 130, 999, 128) // 128/16 = 8 bars
@@ -339,6 +356,17 @@ describe('resolveRiff', () => {
     expect(stemB.slot).toBe(2)
     expect(stemB.gain).toBeCloseTo(0.5)
     expect(stemB.path).toBeNull() // not on disk
+    expect(stemB.downloadUrl).toBe(
+      stemDownloadUrl(
+        'endlesss-dev.fra1.digitaloceanspaces.com',
+        '',
+        'attachments/oggAudio/jam-techno/stem-b'
+      )
+    )
+    // stem-a is cached and has no FileEndpoint/FileKey seeded — downloadUrl
+    // is still null for it (no Stems row data to build one from), which is
+    // fine since nothing needs it once path is already non-null.
+    expect(stemA.downloadUrl).toBeNull()
     // Deliberately seeded with a SHORTER Length16s (64, i.e. 4 bars) than
     // stem-a's (128, 8 bars) and than the riff's own BarLength (8, from
     // createSeededFixtureWarehouse) — proves this stem's own
@@ -367,5 +395,76 @@ describe('resolveRiff', () => {
   it('returns null when the warehouse is unavailable, rather than throwing', () => {
     setWarehouseRootForTests('/no/such/path')
     expect(resolveRiff('riff-1')).toBeNull()
+  })
+})
+
+describe('downloadMissingStems', () => {
+  let root: string
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+    vi.unstubAllGlobals()
+  })
+
+  it('fetches every uncached stem and writes it to the path resolveStemPath expects', async () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe(
+        stemDownloadUrl(
+          'endlesss-dev.fra1.digitaloceanspaces.com',
+          '',
+          'attachments/oggAudio/jam-techno/stem-b'
+        )
+      )
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new TextEncoder().encode('fake ogg bytes for stem-b').buffer
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // riff-1 has stem-a (already cached) and stem-b (not cached) — only
+    // stem-b should trigger a fetch.
+    const result = await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const stemB = result!.stems.find((s) => s.stemCID === 'stem-b')!
+    expect(stemB.path).not.toBeNull() // now cached, post-download
+    expect(readFileSync(stemB.path!, 'utf-8')).toBe('fake ogg bytes for stem-b')
+
+    // stem-a was already cached and shouldn't have been touched/refetched.
+    const stemA = result!.stems.find((s) => s.stemCID === 'stem-a')!
+    expect(stemA.path).not.toBeNull()
+  })
+
+  it('leaves a stem uncached (and reports it that way) when its fetch fails, without throwing', async () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 404 }) as Response)
+    )
+
+    const result = await downloadMissingStems('riff-1')
+    expect(result!.stems.find((s) => s.stemCID === 'stem-b')!.path).toBeNull()
+  })
+
+  it('returns null for a nonexistent RiffCID', async () => {
+    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setWarehouseRootForTests(root)
+    expect(await downloadMissingStems('no-such-riff')).toBeNull()
+  })
+
+  it('returns null when the warehouse is unavailable, rather than throwing', async () => {
+    setWarehouseRootForTests('/no/such/path')
+    expect(await downloadMissingStems('riff-1')).toBeNull()
   })
 })

@@ -34,6 +34,14 @@ export interface LoreResolvedStem {
   instrumentMask: number
   durationSec: number // computed from this stem's own BPMrnd/BarLength, not the riff's
   barLength: number // this stem's own loop length — may differ from the riff's own barLength if the stem tiles
+  /** Direct, unauthenticated HTTPS URL for this stem's audio — the actual
+   * stem blobs turn out to be public DigitalOcean Spaces objects (verified
+   * against the real warehouse; the login LORE asks for is only for the
+   * Endlesss metadata API, not for fetching cached-elsewhere audio). Null
+   * only if the Stems row itself is missing (shouldn't happen for a
+   * populated slot). Present even when path is already non-null — a caller
+   * downloading only cares about the ones where path is null. */
+  downloadUrl: string | null
 }
 
 export interface LoreResolvedRiff {
@@ -56,6 +64,18 @@ export function instrumentMaskToSoundType(mask: number): SoundType | null {
   if ((mask & (1 << 3)) !== 0) return 'bass'
   if ((mask & (1 << 4)) !== 0) return 'audioIn'
   return null
+}
+
+/** The stem's direct download URL, from its Stems row's FileEndpoint/
+ * FileBucket/FileKey columns. Verified empirically against several real
+ * FileEndpoint values (a mix of endpoints with FileBucket empty, where
+ * FileEndpoint alone is already the full virtual-hosted host, and endpoints
+ * with FileBucket set, where the bucket is a subdomain of a shared regional
+ * endpoint) — both forms resolve to a working, unauthenticated HTTPS URL
+ * whose Content-Length matches the DB's own FileLength exactly. */
+export function stemDownloadUrl(fileEndpoint: string, fileBucket: string, fileKey: string): string {
+  const host = fileBucket ? `${fileBucket}.${fileEndpoint}` : fileEndpoint
+  return `https://${host}/${fileKey}`
 }
 
 /** Fraction of `creatorUserNames` equal to `targetUser` (defaults to

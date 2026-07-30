@@ -14,14 +14,21 @@ import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { stemKey } from '@shared/types'
 
-/** Continuous brightness ramp from dark gray (0% ownership) to white (100%)
- * — a riff missing any cached stems overrides this entirely and renders flat
- * black, since it can't be previewed or imported yet regardless of who made
- * it. One brightness axis, no separate accent hue, matching the app's
- * existing "color spent only on things that carry information" design
- * language (see tokens.css). */
+/** Continuous brightness ramp from dark gray (0% ownership) to white (100%
+ * ownership) — one brightness axis, no separate accent hue, matching the
+ * app's existing "color spent only on things that carry information" design
+ * language (see tokens.css).
+ *
+ * Used to render flat black for any riff missing cached stems, regardless of
+ * ownership — but that collapsed two different meanings into the same
+ * color: "not yours" and "not downloaded to this machine yet" (which, it
+ * turns out, isn't necessarily temporary — some stems only ever get fetched
+ * on demand by LORE itself, streamed live over the network rather than
+ * pre-cached, so a riff can stay "not fully cached" indefinitely even though
+ * every stem in it is real and downloadable — see downloadMissingStems).
+ * Ownership brightness now always applies; "not fully cached" gets its own
+ * dashed-border cue instead (see the circle's own border logic below). */
 function riffCircleColor(riff: LoreRiffSummary): string {
-  if (riff.cachedStemCount < riff.stemCount) return '#000000'
   const lo = 60 // dark gray floor, not pure black, so 0% still reads as "a riff", not "empty"
   const hi = 237 // matches --ra-text's near-white value
   const v = Math.round(lo + riff.ownerFraction * (hi - lo))
@@ -142,6 +149,11 @@ export function LoreLibraryBrowser({
 
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
   const [importedRiffCIDs, setImportedRiffCIDs] = useState<Set<string>>(new Set())
+  // Which riff (if any) currently has a download-missing-stems fetch in
+  // flight — a single riffCID rather than a Set, since only one download can
+  // be triggered at a time from this panel (the button/import action that
+  // starts one is disabled while it's running).
+  const [downloadingRiffCID, setDownloadingRiffCID] = useState<string | null>(null)
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const previewTokenRef = useRef(0)
   const playing = usePlaying()
@@ -208,9 +220,47 @@ export function LoreLibraryBrowser({
     return groupId
   }
 
-  function handleImport(): void {
+  /** Patches just this one riff's cachedStemCount in the already-loaded
+   * `riffs` list (the grid's own data) after a download — cheaper and more
+   * immediate than re-running loreListRiffs, and the only field
+   * riffCircleColor's "fully cached" check actually reads. */
+  function patchRiffCacheCount(riffCID: string, resolved: LoreResolvedRiff): void {
+    const cachedStemCount = resolved.stems.filter((s) => s.path !== null).length
+    setRiffs((prev) => prev.map((r) => (r.riffCID === riffCID ? { ...r, cachedStemCount } : r)))
+  }
+
+  /** Fetches every not-yet-cached stem for `riffCID` directly from its
+   * public storage URL (see stemDownloadUrl's doc comment — no Endlesss
+   * login involved) and returns the freshly re-resolved riff, updating both
+   * resolvedRiff and the grid's own cachedStemCount as a side effect. Shared
+   * by the explicit "download missing stems" button and both import paths'
+   * auto-fetch fallback below. Returns the ORIGINAL riff unchanged if the
+   * download fails (network error, etc.) rather than null, so a caller
+   * chaining into an import still has something to import. */
+  async function ensureStemsDownloaded(
+    riffCID: string,
+    resolved: LoreResolvedRiff
+  ): Promise<LoreResolvedRiff> {
+    if (!resolved.stems.some((s) => s.path === null)) return resolved
+    setDownloadingRiffCID(riffCID)
+    try {
+      const refreshed = await window.rifffApi.loreDownloadMissingStems(riffCID)
+      if (!refreshed) return resolved
+      if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
+      patchRiffCacheCount(riffCID, refreshed)
+      return refreshed
+    } catch (err) {
+      console.error(`LoreLibraryBrowser: loreDownloadMissingStems(${riffCID}) failed:`, err)
+      return resolved
+    } finally {
+      setDownloadingRiffCID(null)
+    }
+  }
+
+  async function handleImport(): Promise<void> {
     if (!resolvedRiff || !selectedRiffCID) return
-    const groupId = importResolvedRiff(selectedRiffCID, resolvedRiff)
+    const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
+    const groupId = importResolvedRiff(selectedRiffCID, toImport)
     if (groupId) onImported([groupId])
   }
 
@@ -221,7 +271,8 @@ export function LoreLibraryBrowser({
    * shift-click doesn't need the batched-query machinery listRiffs uses for
    * hundreds of rows, and sequential keeps this simple and easy to reason
    * about failures for (one bad riff logs and moves on, same spirit as the
-   * per-stem try/catch elsewhere in this component). */
+   * per-stem try/catch elsewhere in this component). Each riff also gets its
+   * own auto-download-missing-stems pass, same as the single-import path. */
   async function handleImportSelected(): Promise<void> {
     const groupIds: string[] = []
     for (const riffCID of selectedRiffCIDs) {
@@ -231,7 +282,8 @@ export function LoreLibraryBrowser({
             ? resolvedRiff
             : await window.rifffApi.loreResolveRiff(riffCID)
         if (resolved) {
-          const groupId = importResolvedRiff(riffCID, resolved)
+          const toImport = await ensureStemsDownloaded(riffCID, resolved)
+          const groupId = importResolvedRiff(riffCID, toImport)
           if (groupId) groupIds.push(groupId)
         }
       } catch (err) {
@@ -717,12 +769,19 @@ export function LoreLibraryBrowser({
                                   width: 18,
                                   height: 18,
                                   borderRadius: '50%',
+                                  // Dashed border flags "not fully cached" independently of
+                                  // the ownership brightness fill (riffCircleColor) — see its
+                                  // own doc comment for why these used to be conflated.
+                                  // Selection rings take priority over the dashed cue since
+                                  // they're the stronger, more immediate signal.
                                   border:
                                     selectedRiffCID === riff.riffCID
                                       ? '2px solid var(--ra-playhead)'
                                       : selectedRiffCIDs.has(riff.riffCID)
                                         ? '2px solid var(--ra-stretch-on)'
-                                        : '1px solid var(--ra-border)',
+                                        : riff.cachedStemCount < riff.stemCount
+                                          ? '1px dashed var(--ra-text-3)'
+                                          : '1px solid var(--ra-border)',
                                   padding: 0,
                                   background: riffCircleColor(riff),
                                   cursor: 'pointer'
@@ -794,18 +853,44 @@ export function LoreLibraryBrowser({
                           {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
                         </div>
                       </div>
+                      {resolvedRiff.stems.some((s) => s.path === null) && (
+                        <button
+                          onClick={() => {
+                            if (selectedRiffCID)
+                              void ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
+                          }}
+                          disabled={downloadingRiffCID !== null}
+                          title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"
+                          style={{
+                            height: 24,
+                            borderRadius: 0,
+                            padding: '0 10px',
+                            fontSize: 10,
+                            border: '1px solid var(--ra-border)',
+                            background: 'var(--ra-bg-row-active)',
+                            color:
+                              downloadingRiffCID !== null ? 'var(--ra-text-4)' : 'var(--ra-text-2)'
+                          }}
+                        >
+                          {downloadingRiffCID === selectedRiffCID
+                            ? 'downloading…'
+                            : 'download missing stems'}
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           if (selectedRiffCIDs.size > 1) {
                             void handleImportSelected()
                           } else {
-                            handleImport()
+                            void handleImport()
                           }
                         }}
-                        disabled={
-                          selectedRiffCIDs.size <= 1 &&
-                          resolvedRiff.stems.every((s) => s.path === null)
-                        }
+                        // No longer disabled just because nothing's cached yet — Import
+                        // itself now auto-fetches missing stems first (ensureStemsDownloaded
+                        // above), so a riff with zero cached stems is still importable, just
+                        // slower. importResolvedRiff already no-ops safely (returns null) if
+                        // that fetch fails and truly nothing ends up cached.
+                        disabled={downloadingRiffCID !== null}
                         style={{
                           height: 24,
                           borderRadius: 0,

@@ -64,7 +64,9 @@ const api = {
   ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
     ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
   loreResolveRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
-    ipcRenderer.invoke('lore-resolve-riff', riffCID)
+    ipcRenderer.invoke('lore-resolve-riff', riffCID),
+  loreDownloadMissingStems: (riffCID: string): Promise<LoreResolvedRiff | null> =>
+    ipcRenderer.invoke('lore-download-missing-stems', riffCID)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

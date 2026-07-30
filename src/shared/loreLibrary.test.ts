@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { instrumentMaskToSoundType, computeOwnerFraction, LORE_USERNAME } from './loreLibrary'
+import {
+  instrumentMaskToSoundType,
+  computeOwnerFraction,
+  stemDownloadUrl,
+  LORE_USERNAME
+} from './loreLibrary'
 
 describe('instrumentMaskToSoundType', () => {
   it('maps the drum bit (2) to drums', () => {
@@ -54,5 +59,31 @@ describe('computeOwnerFraction', () => {
 
   it('matches LORE_USERNAME by default when no target is passed', () => {
     expect(computeOwnerFraction([LORE_USERNAME], undefined)).toBe(1)
+  })
+})
+
+describe('stemDownloadUrl', () => {
+  it('uses the endpoint directly as the host when FileBucket is empty', () => {
+    expect(
+      stemDownloadUrl(
+        'endlesss-dev.fra1.digitaloceanspaces.com',
+        '',
+        'attachments/oggAudio/band19a7cb92f9/fa5413b0a70211ec93b025334e28e697'
+      )
+    ).toBe(
+      'https://endlesss-dev.fra1.digitaloceanspaces.com/attachments/oggAudio/band19a7cb92f9/fa5413b0a70211ec93b025334e28e697'
+    )
+  })
+
+  it('prefixes the endpoint with FileBucket as a subdomain when set', () => {
+    expect(
+      stemDownloadUrl(
+        'fra1.digitaloceanspaces.com',
+        'endlesss-dev',
+        'attachments/oggAudio/banddfeb9ee860/4a7630cfce7211e9b0cf020000000000'
+      )
+    ).toBe(
+      'https://endlesss-dev.fra1.digitaloceanspaces.com/attachments/oggAudio/banddfeb9ee860/4a7630cfce7211e9b0cf020000000000'
+    )
   })
 })
