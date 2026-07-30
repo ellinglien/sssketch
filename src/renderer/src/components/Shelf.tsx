@@ -1,9 +1,13 @@
-import { useState, type DragEvent } from 'react'
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { setGrabOffsetBars } from './dragGrabOffset'
+import { getAudioContext } from '../audio/peakCache'
+import { startPreviewLoop, stopPreviewSources } from '../audio/previewLoop'
+import { stemKey } from '@shared/types'
+import type { Rifff } from '@shared/types'
 
 const TILE_SIZE = 42
 
@@ -16,11 +20,57 @@ export function Shelf({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const [dragOver, setDragOver] = useState(false)
   // Hovering a tile previews its meta in the header line without changing
   // selection — falls back to the current selection so the line isn't just
   // blank whenever the mouse isn't over the tray at all.
   const [hoverId, setHoverId] = useState<string | null>(null)
+  // Which shelf tile (if any) is currently looping a preview — clicking a
+  // tile without dragging it to the arranger previews it, matching the LORE
+  // library browser's own click-to-preview convention.
+  const [previewingGroupId, setPreviewingGroupId] = useState<string | null>(null)
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  // Bumped on every click so a preview whose decode is still in flight when
+  // a different tile gets clicked knows it's been superseded and shouldn't
+  // push its (now-stale) sources once it finally resolves.
+  const previewGenerationRef = useRef(0)
+
+  function stopTilePreview(): void {
+    stopPreviewSources(previewSourcesRef.current)
+    previewSourcesRef.current = []
+  }
+
+  useEffect(() => {
+    return () => stopTilePreview()
+  }, [])
+
+  function handleTileClick(rifff: Rifff): void {
+    dispatch({ type: 'SELECT', groupId: rifff.groupId })
+    previewGenerationRef.current += 1
+    const generation = previewGenerationRef.current
+    stopTilePreview()
+    if (previewingGroupId === rifff.groupId) {
+      setPreviewingGroupId(null)
+      return
+    }
+    setPreviewingGroupId(rifff.groupId)
+    if (playing) dispatch({ type: 'PAUSE' })
+    void startPreviewLoop(
+      getAudioContext(),
+      rifff.stems.map((s) => ({
+        path: s.path,
+        gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
+      })),
+      () => previewGenerationRef.current !== generation
+    ).then((sources) => {
+      if (previewGenerationRef.current !== generation) {
+        stopPreviewSources(sources)
+        return
+      }
+      previewSourcesRef.current.push(...sources)
+    })
+  }
 
   async function handleDrop(e: DragEvent<HTMLDivElement>): Promise<void> {
     e.preventDefault()
@@ -112,11 +162,12 @@ export function Shelf({
         {library.map((rifff) => {
           const selected = state.sel === rifff.groupId
           const hovered = hoverId === rifff.groupId
+          const previewing = previewingGroupId === rifff.groupId
           // Already placed on the timeline reads as "in use" — full opacity,
           // same as selected/hovered; everything else dims slightly so the
           // tray doubles as an at-a-glance map of what's already in the
           // arrangement, mirroring the imported/6b mockup's own convention.
-          const lit = selected || hovered || rifff.startBar !== undefined
+          const lit = selected || hovered || previewing || rifff.startBar !== undefined
           return (
             <button
               key={rifff.groupId}
@@ -130,14 +181,14 @@ export function Shelf({
                 setGrabOffsetBars(0)
               }}
               onMouseEnter={() => setHoverId(rifff.groupId)}
-              onClick={() => dispatch({ type: 'SELECT', groupId: rifff.groupId })}
-              title={rifff.name}
+              onClick={() => handleTileClick(rifff)}
+              title={`${rifff.name} — click to preview, drag to arrange`}
               style={{
                 width: TILE_SIZE,
                 height: TILE_SIZE,
                 flex: 'none',
                 padding: 2,
-                border: 'none',
+                border: previewing ? '1px solid var(--ra-playhead)' : '1px solid transparent',
                 cursor: 'grab',
                 background: 'transparent',
                 opacity: lit ? 1 : 0.72

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType } from '@shared/loreLibrary'
 import { getAudioContext } from '../audio/peakCache'
-import { sqrtGain } from '@shared/mixGain'
+import { startPreviewLoop, stopPreviewSources } from '../audio/previewLoop'
 import { usePlaying, useDispatch } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
@@ -62,13 +62,7 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   const dispatch = useDispatch()
 
   function stopPreview(): void {
-    for (const source of previewSourcesRef.current) {
-      try {
-        source.stop()
-      } catch {
-        // already stopped
-      }
-    }
+    stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
   }
 
@@ -290,45 +284,12 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
         // two don't play over each other.
         if (playing) dispatch({ type: 'PAUSE' })
         const cachedStems = resolved.stems.filter((s) => s.path !== null)
-        const ctx = getAudioContext()
-        const gain = sqrtGain(cachedStems.length)
-
-        // Decode every stem in parallel FIRST, then start them all together
-        // in one synchronous pass below. Starting each source right after
-        // its own decode finished (the previous approach) staggered the
-        // .start(0) calls by however long each stem's own fetch+decode
-        // took — later stems in the list audibly lagged behind earlier
-        // ones. Matches BeatPicker.tsx's own decode-everything-then-play
-        // two-phase pattern.
-        const decodeResults = await Promise.allSettled(
-          cachedStems.map(async (stem) => {
-            const bytes = await window.rifffApi.readAudioFile(stem.path!)
-            const arrayBuffer = bytes.buffer.slice(
-              bytes.byteOffset,
-              bytes.byteOffset + bytes.byteLength
-            )
-            const buffer = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
-            return { stem, buffer }
-          })
+        const sources = await startPreviewLoop(
+          getAudioContext(),
+          cachedStems.map((s) => ({ path: s.path!, gain: s.gain })),
+          () => cancelled
         )
-        if (cancelled) return
-
-        for (const result of decodeResults) {
-          if (result.status === 'rejected') {
-            console.error('LoreLibraryBrowser: failed to decode preview audio:', result.reason)
-            continue
-          }
-          const { stem, buffer } = result.value
-          const source = ctx.createBufferSource()
-          source.buffer = buffer
-          source.loop = true
-          const gainNode = ctx.createGain()
-          gainNode.gain.value = gain * stem.gain
-          source.connect(gainNode)
-          gainNode.connect(ctx.destination)
-          source.start(0)
-          previewSourcesRef.current.push(source)
-        }
+        previewSourcesRef.current.push(...sources)
       })
       .catch((err) => {
         console.error('LoreLibraryBrowser: loreResolveRiff() failed:', err)
