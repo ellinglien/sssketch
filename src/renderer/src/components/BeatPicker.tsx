@@ -52,6 +52,26 @@ export async function bakeStems(
     console.error('BeatPicker: failed to bake offset into audio files:', err)
   }
 }
+/** Returns a copy of `buf` circularly shifted so the sample at `offsetSec`
+ * becomes sample 0, preserving every channel — used to preview a picked
+ * downbeat as a full-length loop starting exactly there, matching what
+ * baking actually produces on disk. Looping just [offsetSec, duration)
+ * (the previous approach) meant a beat picked near the end of the loop
+ * produced a loop of almost zero length — this always loops the stem's
+ * full duration, just rotated. */
+function rotateBuffer(ctx: AudioContext, buf: AudioBuffer, offsetSec: number): AudioBuffer {
+  const offsetSamples = Math.round(offsetSec * buf.sampleRate)
+  if (offsetSamples <= 0 || offsetSamples >= buf.length) return buf
+  const rotated = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate)
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const src = buf.getChannelData(ch)
+    const dst = rotated.getChannelData(ch)
+    dst.set(src.subarray(offsetSamples))
+    dst.set(src.subarray(0, offsetSamples), buf.length - offsetSamples)
+  }
+  return rotated
+}
+
 export function BeatPicker({
   groupId,
   onClose,
@@ -329,22 +349,21 @@ export function BeatPicker({
       const buf = buffers[s.slot]
       if (!buf) continue
       const offsetSec = rotationSecondsForStem(steps, snapDiv, s)
-      if (offsetSec >= buf.duration) continue
       const source = ctx.createBufferSource()
-      source.buffer = buf
-      // Loops the picked-beat-to-end segment continuously — stems are often short
-      // (1-2 bar) loops, so a single play-through can be too brief to judge the
-      // downbeat by ear. Looping mirrors how it actually sounds once placed in the
-      // arranger. stopPreview() (called above, and again on the next pick or on
-      // close) is what ends it, since a looped source never stops itself.
+      // Rotated (not the raw buffer with loopStart=offsetSec) so every pick
+      // loops the stem's full duration — see rotateBuffer's doc comment.
+      // Stems are often short (1-2 bar) loops, so a single play-through can
+      // be too brief to judge the downbeat by ear; looping mirrors how it
+      // actually sounds once baked and placed in the arranger. stopPreview()
+      // (called above, and again on the next pick or on close) is what ends
+      // it, since a looped source never stops itself.
+      source.buffer = rotateBuffer(ctx, buf, offsetSec)
       source.loop = true
-      source.loopStart = offsetSec
-      source.loopEnd = buf.duration
       const gainNode = ctx.createGain()
       gainNode.gain.value = gain
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
-      source.start(0, offsetSec)
+      source.start(0)
       previewSourcesRef.current.push(source)
     }
     setPreviewingBeat(beatIndex)
