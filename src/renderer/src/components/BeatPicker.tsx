@@ -206,17 +206,27 @@ export function BeatPicker({
     setPlayheadPct(null)
   }, [])
 
-  // Sweeps a vertical marker across the waveform while free-playing, so where the
-  // loop currently is has a visual answer, not just an audible one. Spans the
-  // whole rifff (not just the identity stem's own duration) — same reasoning
-  // as peaks above, so the sweep matches what's actually drawn.
+  // Sweeps a vertical marker across the waveform whenever anything from this
+  // picker is playing — free-play (isFreePlaying) OR a specific clicked beat
+  // (previewingBeat) — so where the loop currently is has a visual answer,
+  // not just an audible one. Previously only ran for free-play, leaving
+  // click-to-pick with no visible playhead at all. Spans the whole rifff
+  // (not just the identity stem's own duration) — same reasoning as peaks
+  // above, so the sweep matches what's actually drawn. pickBeat's preview
+  // plays a buffer ROTATED to start at the clicked beat (see rotateBuffer),
+  // so the sweep has to add that beat's own position back in to land on the
+  // right spot of the un-rotated waveform being displayed.
   useEffect(() => {
-    if (!isFreePlaying || !stem || !rifff) return
+    if ((!isFreePlaying && previewingBeat === null) || !stem || !rifff) return
     const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
+    const totalBeats = rifff.barLength * 4
+    const startPositionSec =
+      previewingBeat !== null ? previewingBeat * (riffDurationSec / totalBeats) : 0
     let raf: number
     const tick = (): void => {
       const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
-      setPlayheadPct(((elapsed % riffDurationSec) / riffDurationSec) * 100)
+      const positionSec = (startPositionSec + elapsed) % riffDurationSec
+      setPlayheadPct((positionSec / riffDurationSec) * 100)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
@@ -227,7 +237,7 @@ export function BeatPicker({
       cancelAnimationFrame(raf)
       setPlayheadPct(null)
     }
-  }, [isFreePlaying, stem, rifff])
+  }, [isFreePlaying, previewingBeat, stem, rifff])
 
   // commitAndClose is a fresh function every render (it closes over onClose/rifff/
   // state), so depending on it directly would re-run this effect — and fire its
@@ -362,6 +372,10 @@ export function BeatPicker({
     const stemsToPreview = previewAll ? rifff.stems : [stem]
     const ctx = getAudioContext()
     const gain = sqrtGain(stemsToPreview.length)
+    // Marks when THIS pick's playback began, so the playhead sweep (which
+    // reads this same ref — see the effect above) tracks from here rather
+    // than a stale timestamp left over from a previous pick or free-play.
+    freeStartTimeRef.current = ctx.currentTime
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
