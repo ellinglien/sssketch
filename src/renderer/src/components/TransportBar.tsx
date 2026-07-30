@@ -5,7 +5,8 @@ import {
   useHistory,
   usePos,
   usePlaying,
-  useSendBusStatus
+  useSendBusStatus,
+  useSendBusError
 } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
@@ -19,6 +20,7 @@ export function TransportBar(): React.JSX.Element {
   const playing = usePlaying()
   const [sendsPanelOpen, setSendsPanelOpen] = useState(false)
   const sendBusStatus = useSendBusStatus()
+  const sendBusError = useSendBusError()
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -304,6 +306,9 @@ export function TransportBar(): React.JSX.Element {
                 ))}
               </select>
               <span
+                title={
+                  sendBusStatus[bus] === 'error' ? (sendBusError[bus] ?? undefined) : undefined
+                }
                 style={{
                   fontSize: 9,
                   width: 44,

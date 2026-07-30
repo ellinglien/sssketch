@@ -46,6 +46,13 @@ const SendBusStatusCtx = createContext<
   [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
 >(['idle', 'idle', 'idle', 'idle'])
 
+// Separate from SendBusStatusCtx (rather than folded into it) so a bus's
+// status enum stays a plain, cheap-to-compare 4-tuple — only the sends
+// panel's error tooltip needs the message text itself.
+const SendBusErrorCtx = createContext<[string | null, string | null, string | null, string | null]>(
+  [null, null, null, null]
+)
+
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -68,6 +75,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const [sendBusStatus, setSendBusStatus] = useState<
     [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus]
   >(['idle', 'idle', 'idle', 'idle'])
+  const [sendBusError, setSendBusError] = useState<
+    [string | null, string | null, string | null, string | null]
+  >([null, null, null, null])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -103,6 +113,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         setSendBusStatus((s) => {
           const next = [...s] as typeof s
           next[action.bus] = action.pluginId ? 'loading' : 'idle'
+          return next
+        })
+        setSendBusError((s) => {
+          const next = [...s] as typeof s
+          next[action.bus] = null
           return next
         })
         void window.rifffApi.loadSendPlugin(action.bus, action.pluginId)
@@ -238,6 +253,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         next[bus] = success ? 'loaded' : 'error'
         return next
       })
+      setSendBusError((s) => {
+        const next = [...s] as typeof s
+        next[bus] = success ? null : (error ?? 'unknown error')
+        return next
+      })
     })
   }, [])
 
@@ -247,7 +267,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         <PosCtx.Provider value={pos}>
           <PlayingCtx.Provider value={playing}>
             <SendBusStatusCtx.Provider value={sendBusStatus}>
-              <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+              <SendBusErrorCtx.Provider value={sendBusError}>
+                <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+              </SendBusErrorCtx.Provider>
             </SendBusStatusCtx.Provider>
           </PlayingCtx.Provider>
         </PosCtx.Provider>
@@ -279,6 +301,11 @@ export function usePlaying(): boolean {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useSendBusStatus(): [SendBusStatus, SendBusStatus, SendBusStatus, SendBusStatus] {
   return useContext(SendBusStatusCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useSendBusError(): [string | null, string | null, string | null, string | null] {
+  return useContext(SendBusErrorCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
