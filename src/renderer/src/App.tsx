@@ -390,7 +390,17 @@ function Frame(): React.JSX.Element {
         },
         {
           label: unlinked ? 'relink' : 'unlink',
-          onClick: () => dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
+          onClick: () => {
+            dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
+            // Unlinking is specifically about dragging/editing each stem
+            // independently — expand so they're actually visible to do that
+            // with, rather than leaving the collapsed single-row view up
+            // with nothing to grab. Only on the unlink direction, and only
+            // if not already expanded (never auto-collapses).
+            if (!unlinked && !state.exp[groupId]) {
+              dispatch({ type: 'TOGGLE_EXPAND', groupId })
+            }
+          }
         },
         ...(hasUnbakedOffset
           ? [
