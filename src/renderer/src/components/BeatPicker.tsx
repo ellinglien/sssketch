@@ -5,7 +5,7 @@ import {
   offsetStepsForBeatIndex,
   rotationSecondsForStem
 } from '../state/selectors'
-import type { Action } from '../state/store'
+import type { Action, AppState } from '../state/store'
 import { linearWave, peaksFromChannel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -52,6 +52,40 @@ export async function bakeStems(
     console.error('BeatPicker: failed to bake offset into audio files:', err)
   }
 }
+
+/** Re-bakes whatever downbeat correction a rifff's stems ALREADY have live
+ * (state.off, via resolveOffsetKey — handles both a linked rifff's single
+ * shared value and an unlinked one's independent per-stem values) without
+ * needing to reopen BeatPicker and re-pick. Exists for a rifff whose
+ * correction is still sitting as a runtime offset rather than physically
+ * baked in — the main case being a LORE-sourced stem picked before
+ * bakeOffset.ts gained the ability to bake those at all (see its own doc
+ * comment): the offset kept working correctly for playback (SchedulePlayback
+ * wraps it), but never actually got baked, so re-selecting this same riff
+ * later just reopens the picker instead of committing anything. Called from
+ * App.tsx's clip context menu ("re-bake downbeat"), shown only when at least
+ * one stem has a nonzero offset. */
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
+export async function rebakeRifff(
+  dispatch: Dispatch<Action>,
+  state: AppState,
+  groupId: string
+): Promise<void> {
+  const rifff = state.rifffs[groupId]
+  if (!rifff) return
+  const snapDiv = SNAP_DIVS[state.snapIdx]
+  try {
+    const jobs = rifff.stems.map((s) => {
+      const steps = state.off[resolveOffsetKey(state, groupId, s.slot)] ?? 0
+      return { path: s.path, rotationSec: rotationSecondsForStem(steps, snapDiv, s) }
+    })
+    const results = await window.rifffApi.bakeOffset(jobs)
+    dispatch({ type: 'APPLY_BAKE', groupId, results })
+  } catch (err) {
+    console.error('BeatPicker: failed to re-bake offset into audio files:', err)
+  }
+}
+
 /** Returns a copy of `buf` circularly shifted so the sample at `offsetSec`
  * becomes sample 0, preserving every channel — used to preview a picked
  * downbeat as a full-length loop starting exactly there, matching what

@@ -17,6 +17,22 @@ namespace ssstitch
         return juce::var(obj.get());
     }
 
+    // Mirrors makeRenderExportResult above exactly, for bake-stem's own
+    // request/response pair (see BakeStem.h) — main-process bakeOffset.ts
+    // routes a LORE-sourced (Ogg) stem's downbeat bake through this instead
+    // of its own raw-WAV-byte rotation, since it can't decode Ogg itself.
+    static juce::var makeBakeStemResult(bool success, const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("success", success);
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "bake-stem-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        return juce::var(obj.get());
+    }
+
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c)
         : engine(e), transport(t), bufferCache(c)
     {
@@ -127,6 +143,21 @@ namespace ssstitch
             juce::String error;
             const bool ok = renderProjectToWavFile(engine.currentProjectForExport(), outputPath, durationBars, error);
             sendJson(makeRenderExportResult(ok, ok ? juce::String() : error));
+        }
+        else if (type == "bake-stem")
+        {
+            if (!payload.isObject())
+            {
+                sendJson(makeBakeStemResult(false, "bake-stem payload must be an object"));
+                return;
+            }
+            const auto sourcePath = payload.getProperty("path", "").toString();
+            const auto outputPath = payload.getProperty("outputPath", "").toString();
+            const double rotationSec = (double) payload.getProperty("rotationSec", 0.0);
+
+            juce::String error;
+            const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, error);
+            sendJson(makeBakeStemResult(ok, ok ? juce::String() : error));
         }
         else if (type == "quit")
         {

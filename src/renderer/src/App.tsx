@@ -16,7 +16,7 @@ import { RifffBlockRow } from './components/RifffBlockRow'
 import { COMPACT_ROW_HEIGHT } from './components/CompactRifffBlock'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
-import { BeatPicker, bakeStems } from './components/BeatPicker'
+import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { serializeProject, deserializeProject } from './state/serialize'
@@ -26,7 +26,8 @@ import {
   placedRifffsInOrder,
   channelMuteLetters,
   nextArrangerMode,
-  groupIdAtPosition
+  groupIdAtPosition,
+  resolveOffsetKey
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -347,6 +348,15 @@ function Frame(): React.JSX.Element {
     const rifff = state.rifffs[groupId]
     if (!rifff) return
     const unlinked = !!state.unlinked[groupId]
+    // A rifff can be left with a live but never-actually-baked downbeat
+    // correction — the main case being a LORE-sourced stem picked before
+    // bakeOffset.ts could bake those at all (see its own doc comment).
+    // Playback already accounts for it correctly (SchedulePlayback wraps
+    // the offset), so this is a "clean up, not fix" action — only offered
+    // when there's actually something to re-bake.
+    const hasUnbakedOffset = rifff.stems.some(
+      (s) => (state.off[resolveOffsetKey(state, groupId, s.slot)] ?? 0) !== 0
+    )
     setContextMenu({
       x,
       y,
@@ -363,6 +373,16 @@ function Frame(): React.JSX.Element {
           label: unlinked ? 'relink' : 'unlink',
           onClick: () => dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
         },
+        ...(hasUnbakedOffset
+          ? [
+              {
+                label: 're-bake downbeat',
+                onClick: () => {
+                  void rebakeRifff(dispatch, state, groupId)
+                }
+              }
+            ]
+          : []),
         {
           label: 'delete',
           danger: true,

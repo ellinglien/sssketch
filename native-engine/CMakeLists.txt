@@ -34,6 +34,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/Transport.cpp
   Source/IpcServer.cpp
   Source/RenderExport.cpp
+  Source/BakeStem.cpp
+  Source/BakeStemTests.cpp
 )
 
 target_compile_definitions(ssstitch_engine PRIVATE

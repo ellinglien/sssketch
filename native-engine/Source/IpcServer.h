@@ -4,6 +4,7 @@
 #include "Transport.h"
 #include "EngineProject.h"
 #include "RenderExport.h"
+#include "BakeStem.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 
