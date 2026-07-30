@@ -288,6 +288,37 @@ describe('reducer', () => {
     })
   })
 
+  describe('SEQUENCE_RIFFFS', () => {
+    it('repacks rifffs into contiguous bar positions in the given order, starting at 0', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2', barLength: 4 })
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r3', barLength: 2 })
+      })
+      state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r2', 'r3', 'r1'] })
+      expect(state.rifffs.r2.startBar).toBe(0)
+      expect(state.rifffs.r3.startBar).toBe(4) // right after r2's 4 bars
+      expect(state.rifffs.r1.startBar).toBe(6) // right after r3's 2 bars
+    })
+
+    it('replaces trackOrder with the new sequence order', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r2', 'r1'] })
+      expect(state.trackOrder).toEqual(['r2', 'r1'])
+    })
+  })
+
   describe('initialState', () => {
     it('defaults mode to sketch', () => {
       expect(initialState.mode).toBe('sketch')

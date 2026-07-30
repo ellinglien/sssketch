@@ -94,6 +94,7 @@ export const initialState: AppState = {
 export type Action =
   | { type: 'ADD_TO_SHELF'; rifff: Rifff }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
+  | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
   | { type: 'CYCLE_SNAP' }
@@ -183,6 +184,27 @@ export function reducer(state: AppState, action: Action): AppState {
             ? [...state.trackOrder, action.groupId]
             : state.trackOrder
       }
+    }
+
+    // Repacks every rifff in groupIds into contiguous bar positions, in that
+    // order, starting at bar 0 — the only way rifffs get reordered/inserted
+    // in sketch mode (dragging to reorder, or dropping a new rifff in at
+    // some position). groupIds must be the COMPLETE set of currently-placed
+    // rifffs in their new order: sketch mode only ever calls this with
+    // exactly that (isSketchEligible guarantees there's nothing else placed
+    // to leave out). One dispatch, one undo entry, regardless of how many
+    // rifffs shifted position. trackOrder is replaced outright to match —
+    // sketch mode's left-to-right sequence and Normal/Compact mode's
+    // top-to-bottom row order stay in sync with each other.
+    case 'SEQUENCE_RIFFFS': {
+      const rifffs = { ...state.rifffs }
+      let cursor = 0
+      for (const groupId of action.groupIds) {
+        const rifff = rifffs[groupId]
+        rifffs[groupId] = { ...rifff, startBar: cursor }
+        cursor += rifff.barLength
+      }
+      return { ...state, rifffs, trackOrder: action.groupIds }
     }
 
     case 'SELECT':
