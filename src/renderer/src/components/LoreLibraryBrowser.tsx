@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react'
-import type { LoreJam, LoreRiffSummary } from '@shared/loreLibrary'
+import { useEffect, useRef, useState } from 'react'
+import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
+import { instrumentMaskToSoundType } from '@shared/loreLibrary'
+import { getAudioContext } from '../audio/peakCache'
+import { sqrtGain } from '@shared/mixGain'
+import { usePlaying, useDispatch } from '../state/StoreContext'
+import { PolarGlyph } from './PolarGlyph'
+import { typeColorVar } from '../theme/typeColor'
 
 /** Continuous brightness ramp from dark gray (0% ownership) to white (100%)
  * — a riff missing any cached stems overrides this entirely and renders flat
@@ -34,6 +40,22 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   if (selectedJamCID !== resetForJamCID) {
     setResetForJamCID(selectedJamCID)
     setSelectedRiffCID(null)
+  }
+
+  const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const playing = usePlaying()
+  const dispatch = useDispatch()
+
+  function stopPreview(): void {
+    for (const source of previewSourcesRef.current) {
+      try {
+        source.stop()
+      } catch {
+        // already stopped
+      }
+    }
+    previewSourcesRef.current = []
   }
 
   useEffect(() => {
@@ -81,6 +103,58 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
       cancelled = true
     }
   }, [selectedJamCID, bpmFilter, userNameFilter, onlyFullyCached])
+
+  useEffect(() => {
+    stopPreview()
+    // No "deselect riff" affordance exists — selecting always moves to a new
+    // non-null riffCID, so there's nothing to clear here; resolvedRiff stays
+    // stale-but-unrendered the same way riffs does above (the detail line is
+    // only rendered when resolvedRiff is truthy).
+    if (!selectedRiffCID) return
+    let cancelled = false
+    void window.rifffApi.loreResolveRiff(selectedRiffCID).then(async (resolved) => {
+      if (cancelled || !resolved) return
+      setResolvedRiff(resolved)
+
+      // Auto-preview on selection, full mix only — same reasoning as
+      // BeatPicker's own preview: pause the main arrangement first so the
+      // two don't play over each other.
+      if (playing) dispatch({ type: 'PAUSE' })
+      const cachedStems = resolved.stems.filter((s) => s.path !== null)
+      const ctx = getAudioContext()
+      const gain = sqrtGain(cachedStems.length)
+      for (const stem of cachedStems) {
+        try {
+          const bytes = await window.rifffApi.readAudioFile(stem.path!)
+          const arrayBuffer = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength
+          )
+          const decoded = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
+          if (cancelled) return
+          const source = ctx.createBufferSource()
+          source.buffer = decoded
+          source.loop = true
+          const gainNode = ctx.createGain()
+          gainNode.gain.value = gain * stem.gain
+          source.connect(gainNode)
+          gainNode.connect(ctx.destination)
+          source.start(0)
+          previewSourcesRef.current.push(source)
+        } catch (err) {
+          console.error(`LoreLibraryBrowser: failed to decode preview audio for ${stem.path}:`, err)
+        }
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded: this only re-runs on riff selection, matching BeatPicker's own pattern of reading transport state at the moment a preview starts rather than tracking it as a dependency
+  }, [selectedRiffCID])
+
+  useEffect(() => {
+    return () => stopPreview()
+  }, [])
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
@@ -285,6 +359,33 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
                       />
                     ))}
                   </div>
+
+                  {resolvedRiff && (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
+                      <PolarGlyph
+                        stems={resolvedRiff.stems
+                          .filter((s) => s.path !== null)
+                          .map((s) => ({
+                            slot: s.slot,
+                            author: s.creatorUserName,
+                            name: s.presetName,
+                            type: instrumentMaskToSoundType(s.instrumentMask) ?? 'fx',
+                            path: s.path!,
+                            durationSec: s.durationSec,
+                            barLength: s.barLength
+                          }))}
+                        identityColor={typeColorVar('fx')}
+                        size={40}
+                      />
+                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                        {resolvedRiff.bpm} BPM · {resolvedRiff.stems.length} stems (
+                        {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                        <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
+                          {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
