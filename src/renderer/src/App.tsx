@@ -21,7 +21,8 @@ import {
   loopLengthBars,
   pasteRifffAction,
   placedRifffsInOrder,
-  channelMuteLetters
+  channelMuteLetters,
+  nextArrangerMode
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -410,21 +411,22 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
-  // Tab toggles compact mode, Ableton-style ("this could switch between
-  // compact mode"). Skipped while focus is in a text input — Tab's native
+  // Tab cycles the arranger mode, Ableton-style: normal -> compact -> sketch
+  // -> normal, skipping sketch when isSketchEligible(state) is false (see
+  // nextArrangerMode). Skipped while focus is in a text input — Tab's native
   // move-to-next-field behavior is more useful there than the arrangement's
-  // own view-mode toggle (matches Delete/V/undo's same input-skip pattern).
+  // own view-mode cycle (matches Delete/V/undo's same input-skip pattern).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Tab') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
-      dispatch({ type: 'TOGGLE_COMPACT_MODE' })
+      dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [dispatch])
+  }, [state, dispatch])
 
   // Shift+<qwerty letter> mutes/unmutes any currently-visible channel — see
   // channelMuteLetters' doc comment for the matching on-screen letter shown
