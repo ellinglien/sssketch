@@ -44,9 +44,15 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
   // rendering" pattern TransportBar.tsx's own tempo-resync already uses,
   // rather than the extra render cycle a useEffect-based reset would cause.
   const [resetForJamCID, setResetForJamCID] = useState<string | null>(null)
+  // The batch/multi-selection (shift-click range, cmd/ctrl-click toggle) —
+  // separate from selectedRiffCID, which remains the "anchor" riff that
+  // drives preview/detail-line/PolarGlyph exactly as before. A plain click
+  // always collapses this back down to just that one riff.
+  const [selectedRiffCIDs, setSelectedRiffCIDs] = useState<Set<string>>(new Set())
   if (selectedJamCID !== resetForJamCID) {
     setResetForJamCID(selectedJamCID)
     setSelectedRiffCID(null)
+    setSelectedRiffCIDs(new Set())
   }
 
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
@@ -66,17 +72,21 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     previewSourcesRef.current = []
   }
 
-  function handleImport(): void {
-    if (!resolvedRiff || !selectedRiffCID) return
-    const cachedStems = resolvedRiff.stems.filter((s) => s.path !== null)
-    if (cachedStems.length === 0) return
+  /** Builds a Rifff from a resolved riff and dispatches it, exactly as the
+   * single-riff import button already did — extracted so the new batch
+   * import path (multiple riffs, each resolved on demand) can share the
+   * same logic instead of duplicating it. Returns false (no-op) if the riff
+   * has no locally-cached stems at all. */
+  function importResolvedRiff(riffCID: string, resolved: LoreResolvedRiff): boolean {
+    const cachedStems = resolved.stems.filter((s) => s.path !== null)
+    if (cachedStems.length === 0) return false
 
     const groupId = crypto.randomUUID()
     const rifff = {
       groupId,
-      name: `LORE riff ${selectedRiffCID.slice(0, 8)}`,
-      bpm: resolvedRiff.bpm,
-      barLength: resolvedRiff.barLength,
+      name: `LORE riff ${riffCID.slice(0, 8)}`,
+      bpm: resolved.bpm,
+      barLength: resolved.barLength,
       // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
       // import. Inspector.tsx's existing "re-import from folder" link displays
       // this field as-is; an empty string would render as a bare "/", so use a
@@ -102,7 +112,7 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
         dispatch({ type: 'SET_VOLUME', stemKey: stemKey(groupId, stem.slot), volume: stem.gain })
       }
     }
-    setImportedRiffCIDs((prev) => new Set(prev).add(selectedRiffCID))
+    setImportedRiffCIDs((prev) => new Set(prev).add(riffCID))
 
     // Same "fill in unclassified stems by ear" heuristic drag-and-drop import
     // already uses — the Instrument bitmask covers drum/note/bass/mic
@@ -111,6 +121,75 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
     classifyStems(rifff, dispatch).catch((err) => {
       console.error('LoreLibraryBrowser: failed to classify stem types:', err)
     })
+    return true
+  }
+
+  function handleImport(): void {
+    if (!resolvedRiff || !selectedRiffCID) return
+    importResolvedRiff(selectedRiffCID, resolvedRiff)
+  }
+
+  /** Batch import for shift/cmd-click multi-selection. The anchor riff
+   * (selectedRiffCID) is already resolved (resolvedRiff, from the preview
+   * effect) and reused directly; every other selected riff is resolved
+   * on-demand here, sequentially — a handful of riffs at a time from one
+   * shift-click doesn't need the batched-query machinery listRiffs uses for
+   * hundreds of rows, and sequential keeps this simple and easy to reason
+   * about failures for (one bad riff logs and moves on, same spirit as the
+   * per-stem try/catch elsewhere in this component). */
+  async function handleImportSelected(): Promise<void> {
+    for (const riffCID of selectedRiffCIDs) {
+      try {
+        const resolved =
+          riffCID === selectedRiffCID && resolvedRiff
+            ? resolvedRiff
+            : await window.rifffApi.loreResolveRiff(riffCID)
+        if (resolved) importResolvedRiff(riffCID, resolved)
+      } catch (err) {
+        console.error(
+          `LoreLibraryBrowser: failed to import riff ${riffCID} during batch import:`,
+          err
+        )
+      }
+    }
+  }
+
+  /** Standard file-browser multi-select convention: plain click selects
+   * just this one riff (and becomes the new anchor/preview); shift-click
+   * extends a contiguous range from the current anchor to this riff, based
+   * on their order in the currently-filtered `riffs` list; cmd/ctrl-click
+   * toggles this one riff in or out of the selection without disturbing the
+   * rest, and moves the anchor to it. */
+  function handleRiffClick(e: React.MouseEvent, riffCID: string): void {
+    if (e.shiftKey && selectedRiffCID) {
+      const anchorIndex = riffs.findIndex((r) => r.riffCID === selectedRiffCID)
+      const clickedIndex = riffs.findIndex((r) => r.riffCID === riffCID)
+      if (anchorIndex === -1 || clickedIndex === -1) {
+        setSelectedRiffCID(riffCID)
+        setSelectedRiffCIDs(new Set([riffCID]))
+        return
+      }
+      const [start, end] =
+        anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
+      setSelectedRiffCIDs(new Set(riffs.slice(start, end + 1).map((r) => r.riffCID)))
+      // Anchor deliberately stays put — repeated shift-clicks keep extending
+      // or shrinking the range from the same starting point, matching
+      // standard file-browser shift-click behavior, rather than the range
+      // jumping to a new anchor on every click.
+      return
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedRiffCIDs((prev) => {
+        const next = new Set(prev)
+        if (next.has(riffCID)) next.delete(riffCID)
+        else next.add(riffCID)
+        return next
+      })
+      setSelectedRiffCID(riffCID)
+      return
+    }
+    setSelectedRiffCID(riffCID)
+    setSelectedRiffCIDs(new Set([riffCID]))
   }
 
   useEffect(() => {
@@ -213,30 +292,42 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
         const cachedStems = resolved.stems.filter((s) => s.path !== null)
         const ctx = getAudioContext()
         const gain = sqrtGain(cachedStems.length)
-        for (const stem of cachedStems) {
-          try {
+
+        // Decode every stem in parallel FIRST, then start them all together
+        // in one synchronous pass below. Starting each source right after
+        // its own decode finished (the previous approach) staggered the
+        // .start(0) calls by however long each stem's own fetch+decode
+        // took — later stems in the list audibly lagged behind earlier
+        // ones. Matches BeatPicker.tsx's own decode-everything-then-play
+        // two-phase pattern.
+        const decodeResults = await Promise.allSettled(
+          cachedStems.map(async (stem) => {
             const bytes = await window.rifffApi.readAudioFile(stem.path!)
             const arrayBuffer = bytes.buffer.slice(
               bytes.byteOffset,
               bytes.byteOffset + bytes.byteLength
             )
-            const decoded = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
-            if (cancelled) return
-            const source = ctx.createBufferSource()
-            source.buffer = decoded
-            source.loop = true
-            const gainNode = ctx.createGain()
-            gainNode.gain.value = gain * stem.gain
-            source.connect(gainNode)
-            gainNode.connect(ctx.destination)
-            source.start(0)
-            previewSourcesRef.current.push(source)
-          } catch (err) {
-            console.error(
-              `LoreLibraryBrowser: failed to decode preview audio for ${stem.path}:`,
-              err
-            )
+            const buffer = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
+            return { stem, buffer }
+          })
+        )
+        if (cancelled) return
+
+        for (const result of decodeResults) {
+          if (result.status === 'rejected') {
+            console.error('LoreLibraryBrowser: failed to decode preview audio:', result.reason)
+            continue
           }
+          const { stem, buffer } = result.value
+          const source = ctx.createBufferSource()
+          source.buffer = buffer
+          source.loop = true
+          const gainNode = ctx.createGain()
+          gainNode.gain.value = gain * stem.gain
+          source.connect(gainNode)
+          gainNode.connect(ctx.destination)
+          source.start(0)
+          previewSourcesRef.current.push(source)
         }
       })
       .catch((err) => {
@@ -466,23 +557,45 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
                     }}
                   >
                     {riffs.map((riff) => (
-                      <button
+                      <div
                         key={riff.riffCID}
-                        onClick={() => setSelectedRiffCID(riff.riffCID)}
-                        title={`${riff.bpm} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                        style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: '50%',
-                          border:
-                            selectedRiffCID === riff.riffCID
-                              ? '2px solid var(--ra-playhead)'
-                              : '1px solid var(--ra-border)',
-                          padding: 0,
-                          background: riffCircleColor(riff),
-                          cursor: 'pointer'
-                        }}
-                      />
+                        style={{ position: 'relative', width: 18, height: 18 }}
+                      >
+                        <button
+                          onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                          title={`${riff.bpm} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: '50%',
+                            border:
+                              selectedRiffCID === riff.riffCID
+                                ? '2px solid var(--ra-playhead)'
+                                : selectedRiffCIDs.has(riff.riffCID)
+                                  ? '2px solid var(--ra-stretch-on)'
+                                  : '1px solid var(--ra-border)',
+                            padding: 0,
+                            background: riffCircleColor(riff),
+                            cursor: 'pointer'
+                          }}
+                        />
+                        {importedRiffCIDs.has(riff.riffCID) && (
+                          <span
+                            title="already imported"
+                            style={{
+                              position: 'absolute',
+                              bottom: -2,
+                              right: -2,
+                              width: 6,
+                              height: 6,
+                              borderRadius: '50%',
+                              background: 'var(--ra-stretch-on)',
+                              border: '1px solid var(--ra-bg-bar)',
+                              pointerEvents: 'none'
+                            }}
+                          />
+                        )}
+                      </div>
                     ))}
                   </div>
 
@@ -511,8 +624,17 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
                         </div>
                       </div>
                       <button
-                        onClick={handleImport}
-                        disabled={resolvedRiff.stems.every((s) => s.path === null)}
+                        onClick={() => {
+                          if (selectedRiffCIDs.size > 1) {
+                            void handleImportSelected()
+                          } else {
+                            handleImport()
+                          }
+                        }}
+                        disabled={
+                          selectedRiffCIDs.size <= 1 &&
+                          resolvedRiff.stems.every((s) => s.path === null)
+                        }
                         style={{
                           height: 24,
                           borderRadius: 0,
@@ -529,9 +651,11 @@ export function LoreLibraryBrowser({ onClose }: { onClose: () => void }): React.
                               : 'var(--ra-text)'
                         }}
                       >
-                        {selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
-                          ? 'imported ✓ — import again'
-                          : 'import'}
+                        {selectedRiffCIDs.size > 1
+                          ? `import ${selectedRiffCIDs.size} riffs`
+                          : selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                            ? 'imported ✓ — import again'
+                            : 'import'}
                       </button>
                     </div>
                   )}
