@@ -937,8 +937,8 @@ export function BeatPicker({
                         top: 0,
                         bottom: 0,
                         left: `${pct}%`,
-                        width: 1,
-                        background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
+                        width: 2,
+                        background: 'color-mix(in srgb, white 80%, transparent)',
                         pointerEvents: 'none'
                       }}
                     />
