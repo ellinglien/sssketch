@@ -33,6 +33,17 @@ namespace ssstitch
         // matching each one's existing pre-fade behavior.
         void pause();
         void stop();
+        // Doesn't jump synchronously — a raw position jump mid-waveform is
+        // exactly the same class of click as an unfaded pause/stop, just
+        // landing on unrelated new content instead of silence. Arms a
+        // reposition that the audio callback applies as a quick fade-out at
+        // the old position followed by a fade-in at the new one. Repeated
+        // calls in quick succession (an active scrub drag calls this on
+        // every pointer move) extend the fade-out/hold-at-silence phase
+        // rather than each restarting their own fade-in, so a fast drag
+        // mutes smoothly instead of clicking or stuttering through every
+        // intermediate position — audio only fades back in once the drag
+        // settles on wherever it last landed.
         void setPosition(double positionBars);
         double currentPositionBars() const { return positionBars.load(); }
         bool isPlaying() const { return playing.load(); }
@@ -57,16 +68,32 @@ namespace ssstitch
         void audioDeviceStopped() override;
 
     private:
+        // Renders numSamples starting at `pos`, transparently splitting the
+        // render and declicking across a loop-boundary crossing if one falls
+        // within this block (see LoopBoundaryFade.h) — shared by the normal
+        // playback path and both halves of a reposition fade below, so the
+        // loop-seam treatment applies uniformly no matter which of those is
+        // currently rendering. Returns the new (already wrapped, if
+        // applicable) position after this block; doesn't store it —
+        // callers decide when/whether to commit it to positionBars.
+        double renderLoopAware(double pos, int numSamples, float* outL, float* outR) const;
+
+
         PlaybackEngine& engine;
         juce::AudioDeviceManager deviceManager;
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
         std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
-        // Both audio-thread-only (never touched off that thread) — no atomics needed.
+        std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
+        std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
+        // All audio-thread-only (never touched off that thread) — no atomics needed.
         bool fadingOut = false;
         HaltKind activeHaltKind = HaltKind::None;
         double haltFadeElapsedSec = 0.0;
+        bool repositioning = false;
+        bool repositionFadingIn = false;
+        double repositionElapsedSec = 0.0;
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
     };

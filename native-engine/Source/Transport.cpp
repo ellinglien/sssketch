@@ -13,14 +13,15 @@ namespace ssstitch
         // discontinuity a hard position jump would otherwise produce.
         constexpr double kLoopSeamFadeSec = 0.003;
 
-        // Longer than the loop-seam declick above on purpose — this is a
-        // deliberate, audible pause/stop rather than an invisible
-        // discontinuity fix, so it can afford to be a little more generous
-        // while still reading as instant. Linear, matching FadeGain.cpp's
-        // own fade-out shape (a single fade-to-silence, not a two-signal
+        // Longer than the loop-seam declick above on purpose — these are
+        // deliberate, audible transitions rather than invisible
+        // discontinuity fixes, so they can afford to be a little more
+        // generous while still reading as instant. Linear, matching
+        // FadeGain.cpp's own fade shape (a single fade, not a two-signal
         // blend, has none of the equal-power "avoid a loudness dip" concern
         // LoopSewing.cpp and the loop-seam blend below both have).
         constexpr double kHaltFadeSec = 0.015;
+        constexpr double kRepositionFadeSec = 0.012;
     }
 
     Transport::Transport(PlaybackEngine& e) : engine(e) {}
@@ -54,7 +55,76 @@ namespace ssstitch
 
     void Transport::stop() { pendingHalt.store(HaltKind::Stop); }
 
-    void Transport::setPosition(double bars) { positionBars.store(bars); }
+    void Transport::setPosition(double bars)
+    {
+        repositionTarget.store(bars);
+        repositionRequested.store(true);
+    }
+
+    double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR) const
+    {
+        const double loopBars = loopLengthBars.load();
+        const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
+        const double blockDurationBars = numSamples * barsPerSample;
+
+        if (loopBars <= 0.0)
+        {
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
+            return pos + blockDurationBars;
+        }
+
+        // pos is always kept within [0, loopBars) by this function's own
+        // wrap below, so distToEnd is always positive here.
+        const double distToEnd = loopBars - pos;
+        if (distToEnd >= blockDurationBars)
+        {
+            // No wrap within this block.
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
+        }
+        else
+        {
+            // The wrap falls partway through this block -- render each side
+            // from its own correct (and, for the incoming side, correctly
+            // wrapped-to-0) position rather than letting a single render run
+            // unclamped past the loop's own end, which would just find
+            // nothing placed there and render silence for what should be
+            // the start of the next lap.
+            const int splitIndex =
+                std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
+            if (splitIndex > 0)
+                engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR);
+            if (splitIndex < numSamples)
+                engine.renderBlock(0.0, deviceSampleRate, numSamples - splitIndex,
+                                    outL + splitIndex, outR + splitIndex);
+        }
+
+        // Declicks the seam by pulling the outgoing lap's last `fadeBars`
+        // toward the incoming lap's own first sample VALUE (not toward
+        // silence — see LoopBoundaryFade.h for why) — a fixed anchor, same
+        // scheme LoopSewing.cpp already uses for a single stem buffer's own
+        // tail-toward-head blend, just applied here to the whole mixed
+        // master output instead.
+        const double fadeBars = std::min(kLoopSeamFadeSec / secPerBar, loopBars / 2.0);
+        if (distToEnd < fadeBars + blockDurationBars)
+        {
+            float anchorL = 0.0f, anchorR = 0.0f;
+            engine.renderBlock(0.0, deviceSampleRate, 1, &anchorL, &anchorR);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double samplePos = pos + (double) i * barsPerSample;
+                if (samplePos >= loopBars)
+                    break; // only the outgoing tail gets pulled toward the anchor
+                const double distFromEnd = loopBars - samplePos;
+                const float coeff = loopSeamBlendCoeff(distFromEnd, fadeBars);
+                if (coeff <= 0.0f)
+                    continue;
+                outL[i] = outL[i] + (anchorL - outL[i]) * coeff;
+                outR[i] = outR[i] + (anchorR - outR[i]) * coeff;
+            }
+        }
+
+        return std::fmod(pos + blockDurationBars, loopBars);
+    }
 
     void Transport::audioDeviceIOCallbackWithContext(
         const float* const* /*inputChannelData*/, int /*numInputChannels*/,
@@ -89,72 +159,73 @@ namespace ssstitch
         }
 
         if (!playing.load() && !fadingOut)
-            return; // fully halted, no fade in progress -- true silence
+        {
+            // Fully halted, no fade in progress -- true silence. Nothing
+            // audible is happening, so any pending reposition needs no fade
+            // treatment either; drop it so a stale request can't linger and
+            // fire a pointless mute/fade-in once playback resumes elsewhere.
+            repositionRequested.store(false);
+            repositioning = false;
+            return;
+        }
 
         if (secPerBar <= 0.0)
             return;
 
-        const double pos = positionBars.load();
-        const double loopBars = loopLengthBars.load();
-        const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
-        const double blockDurationBars = numSamples * barsPerSample;
-
-        if (loopBars <= 0.0)
+        if (playing.load() && repositionRequested.exchange(false))
         {
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
-        }
-        else
-        {
-            // pos is always kept within [0, loopBars) by this function's own
-            // wrap below, so distToEnd is always positive here.
-            const double distToEnd = loopBars - pos;
-            if (distToEnd >= blockDurationBars)
+            // (Re)start or extend the fade-out/hold-at-silence phase — a
+            // fresh request always means "not settled yet," whether we were
+            // idle, already fading out, or partway through fading back in
+            // at a now-superseded target. Repeated requests in quick
+            // succession (an active scrub drag) never restart the elapsed
+            // clock once already fading out, so a fast drag mutes smoothly
+            // instead of clicking through every intermediate position.
+            if (!repositioning)
             {
-                // No wrap within this block.
-                engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
+                repositioning = true;
+                repositionElapsedSec = 0.0;
+            }
+            repositionFadingIn = false;
+        }
+
+        const double blockDurationSec = numSamples / deviceSampleRate;
+
+        if (repositioning)
+        {
+            const double pos = positionBars.load();
+            const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double elapsed = repositionElapsedSec + (double) i / deviceSampleRate;
+                const double frac = std::clamp(elapsed / kRepositionFadeSec, 0.0, 1.0);
+                const float gain = (float) (repositionFadingIn ? frac : 1.0 - frac);
+                outL[i] *= gain;
+                outR[i] *= gain;
+            }
+            repositionElapsedSec += blockDurationSec;
+
+            if (!repositionFadingIn)
+            {
+                positionBars.store(newPos); // still advancing normally while winding down to silence
+                if (repositionElapsedSec >= kRepositionFadeSec)
+                {
+                    positionBars.store(repositionTarget.load());
+                    repositionFadingIn = true;
+                    repositionElapsedSec = 0.0;
+                }
             }
             else
             {
-                // The wrap falls partway through this block -- render each
-                // side from its own correct (and, for the incoming side,
-                // correctly wrapped-to-0) position rather than letting a
-                // single render run unclamped past the loop's own end, which
-                // would just find nothing placed there and render silence
-                // for what should be the start of the next lap.
-                const int splitIndex =
-                    std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
-                if (splitIndex > 0)
-                    engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR);
-                if (splitIndex < numSamples)
-                    engine.renderBlock(0.0, deviceSampleRate, numSamples - splitIndex,
-                                        outL + splitIndex, outR + splitIndex);
+                positionBars.store(newPos);
+                if (repositionElapsedSec >= kRepositionFadeSec)
+                    repositioning = false;
             }
-
-            // Declicks the seam by pulling the outgoing lap's last `fadeBars`
-            // toward the incoming lap's own first sample VALUE (not toward
-            // silence — see LoopBoundaryFade.h for why) — a fixed anchor,
-            // same scheme LoopSewing.cpp already uses for a single stem
-            // buffer's own tail-toward-head blend, just applied here to the
-            // whole mixed master output instead.
-            const double fadeBars = std::min(kLoopSeamFadeSec / secPerBar, loopBars / 2.0);
-            if (distToEnd < fadeBars + blockDurationBars)
-            {
-                float anchorL = 0.0f, anchorR = 0.0f;
-                engine.renderBlock(0.0, deviceSampleRate, 1, &anchorL, &anchorR);
-                for (int i = 0; i < numSamples; ++i)
-                {
-                    const double samplePos = pos + (double) i * barsPerSample;
-                    if (samplePos >= loopBars)
-                        break; // only the outgoing tail gets pulled toward the anchor
-                    const double distFromEnd = loopBars - samplePos;
-                    const float coeff = loopSeamBlendCoeff(distFromEnd, fadeBars);
-                    if (coeff <= 0.0f)
-                        continue;
-                    outL[i] = outL[i] + (anchorL - outL[i]) * coeff;
-                    outR[i] = outR[i] + (anchorR - outR[i]) * coeff;
-                }
-            }
+            return;
         }
+
+        const double pos = positionBars.load();
+        const double newPos = renderLoopAware(pos, numSamples, outL, outR);
 
         if (fadingOut)
         {
@@ -165,12 +236,8 @@ namespace ssstitch
                 outL[i] *= gain;
                 outR[i] *= gain;
             }
-            haltFadeElapsedSec += (double) numSamples / deviceSampleRate;
+            haltFadeElapsedSec += blockDurationSec;
         }
-
-        double newPos = pos + blockDurationBars;
-        if (loopBars > 0.0)
-            newPos = std::fmod(newPos, loopBars);
 
         if (fadingOut && haltFadeElapsedSec >= kHaltFadeSec)
         {
