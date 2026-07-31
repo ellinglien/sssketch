@@ -1,5 +1,6 @@
 // native-engine/Source/MasterChain.cpp
 #include "MasterChain.h"
+#include "MasterChainAllowlist.h"
 #include <algorithm>
 #include <cmath>
 #include <thread>
@@ -78,22 +79,53 @@ namespace ssstitch
         }
     }
 
-    // The real allowlist-based instantiation path (instantiateFromAllowlist)
-    // is added in Task 2 of docs/superpowers/plans/2026-07-31-master-plugin-chain-implementation.md,
-    // which replaces this stub's body. This stub is never actually called by
-    // this task's own tests (they all inject a fake Instantiator via the
-    // MasterChain constructor) — it exists only so defaultInstantiate has a
-    // definition and the file links cleanly on its own.
-    std::unique_ptr<juce::AudioProcessor> MasterChain::defaultInstantiate(
-        const juce::String& pluginId, double /*sampleRate*/, int /*blockSize*/, juce::String& errorOut)
+    static std::unique_ptr<juce::AudioProcessor> instantiateFromAllowlist(
+        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
     {
         if (pluginId.isEmpty())
         {
             errorOut = {};
+            return nullptr; // "no plugin" is a valid, silent/passthrough state -- not an error
+        }
+
+        const auto* entry = findMasterChainPlugin(pluginId);
+        if (entry == nullptr)
+        {
+            errorOut = "unknown plugin id: " + pluginId;
             return nullptr;
         }
-        errorOut = "MasterChain::defaultInstantiate not yet implemented (see Task 2)";
-        return nullptr;
+
+        juce::AudioPluginFormatManager formatManager;
+        formatManager.addDefaultFormats();
+
+        juce::Array<juce::PluginDescription> found;
+        for (auto* format : formatManager.getFormats())
+        {
+            if (!format->fileMightContainThisPluginType(entry->path))
+                continue;
+            juce::KnownPluginList knownPlugins;
+            juce::OwnedArray<juce::PluginDescription> typesFound;
+            knownPlugins.scanAndAddFile(entry->path, false, typesFound, *format);
+            for (auto* desc : typesFound)
+                found.add(*desc);
+        }
+        if (found.isEmpty())
+        {
+            errorOut = "plugin not found at expected path: " + juce::String(entry->path);
+            return nullptr;
+        }
+
+        auto instance = formatManager.createPluginInstance(found.getReference(0), sampleRate, blockSize, errorOut);
+        if (instance == nullptr)
+            return nullptr;
+        instance->prepareToPlay(sampleRate, blockSize);
+        return instance; // AudioPluginInstance IS-A AudioProcessor
+    }
+
+    std::unique_ptr<juce::AudioProcessor> MasterChain::defaultInstantiate(
+        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
+    {
+        return instantiateFromAllowlist(pluginId, sampleRate, blockSize, errorOut);
     }
 
     bool MasterChain::loadPluginSync(
