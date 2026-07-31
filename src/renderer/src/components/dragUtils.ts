@@ -33,8 +33,31 @@ export function startPointerDrag(
   function handleUp(): void {
     window.removeEventListener('mousemove', handleMove)
     window.removeEventListener('mouseup', handleUp)
+    if (moved) {
+      // A real drag ending back over the page still makes the browser
+      // synthesize a plain 'click' event afterward, targeted at whatever
+      // element is under the cursor at release — not necessarily the one
+      // the drag started on. Left unstopped, that click bubbles up and can
+      // trigger an unrelated ancestor handler (e.g. the Timeline's own
+      // click-to-scrub) as if the user had deliberately clicked wherever
+      // they happened to release the mouse — the exact bug this fixes: a
+      // resize/fade/volume drag jumping playback to the release point
+      // instead of leaving it alone. Registered on the capture phase so
+      // it's swallowed before any handler along the way sees it, and
+      // `once: true` means only this one synthesized click is caught — a
+      // genuinely new, unrelated click still works normally afterward.
+      window.addEventListener('click', suppressSyntheticClick, {
+        capture: true,
+        once: true
+      })
+    }
     onEnd?.(moved)
   }
   window.addEventListener('mousemove', handleMove)
   window.addEventListener('mouseup', handleUp)
+}
+
+function suppressSyntheticClick(ev: MouseEvent): void {
+  ev.stopPropagation()
+  ev.preventDefault()
 }
