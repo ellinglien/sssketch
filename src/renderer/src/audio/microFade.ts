@@ -44,7 +44,7 @@ export function applyLoopMicroFadeToChannel(
 }
 
 const LOOP_SEWING_MIN_WINDOW_SAMPLES = 512
-const LOOP_SEWING_MAX_WINDOW_SAMPLES = 2048
+const LOOP_SEWING_MAX_WINDOW_SAMPLES = 4096
 
 /** Chooses a loop-sewing blend window, in samples, from how "bassy" the
  * content right before `loopEndSample` is — estimated via zero-crossing
@@ -57,6 +57,11 @@ const LOOP_SEWING_MAX_WINDOW_SAMPLES = 2048
  * wider window, giving the blend more room to land smoothly; a bright/
  * percussive one keeps the narrower minimum, since a wide window there
  * would needlessly smear a transient sitting close to the loop point.
+ *
+ * Falls back to the minimum window for a tail quiet enough to read as
+ * silence too (near-silence has almost no zero crossings for a different
+ * reason than genuine bass — there's no phase to preserve, so a wide window
+ * would just ramp audible silence up into whatever the head sounds like).
  *
  * Mirrors LoopSewing.cpp's own adaptiveLoopSewingWindow exactly (same
  * thresholds, same log-frequency interpolation) — kept as a pure function
@@ -72,9 +77,22 @@ export function adaptiveLoopSewingWindowSamples(
   if (analysisWindow < 2 || sampleRate <= 0) return LOOP_SEWING_MIN_WINDOW_SAMPLES
   const startIndex = clampedLoopEnd - analysisWindow
   let crossings = 0
+  let sumSquares = 0
   for (let i = startIndex + 1; i < clampedLoopEnd; i++) {
     if (data[i - 1] < 0 !== data[i] < 0) crossings++
+    sumSquares += data[i] * data[i]
   }
+  // Near-silence has almost no zero crossings too — not because it's bassy,
+  // but because there's no signal to cross zero at all. Reading that as
+  // "maximally bassy" picks the widest window on exactly the seams a wide
+  // blend can hurt most: a quiet/silent tail forcibly ramped up over many
+  // samples to match a loud head value (e.g. a downbeat's own onset, the
+  // common case for a re-one'd loop) reads as an audible swell into the
+  // beat, not a fix. Below this RMS floor there's no meaningful phase to
+  // preserve either way, so just use the minimum window.
+  const rms = Math.sqrt(sumSquares / analysisWindow)
+  const kSilenceRms = 0.01 // ~ -40dBFS
+  if (rms < kSilenceRms) return LOOP_SEWING_MIN_WINDOW_SAMPLES
   const windowDurationSec = analysisWindow / sampleRate
   const estimatedFreqHz = crossings / 2 / windowDurationSec
   const kBassyFreqHz = 150

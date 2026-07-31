@@ -75,7 +75,7 @@ describe('adaptiveLoopSewingWindowSamples', () => {
 
   it('picks the max window for a bassy (low-frequency) tail', () => {
     const data = sineWave(8192, 50, sampleRate)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(2048)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(4096)
   })
 
   it('picks the min window for a bright (high-frequency) tail', () => {
@@ -87,7 +87,7 @@ describe('adaptiveLoopSewingWindowSamples', () => {
     const data = sineWave(8192, 400, sampleRate)
     const window = adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)
     expect(window).toBeGreaterThan(512)
-    expect(window).toBeLessThan(2048)
+    expect(window).toBeLessThan(4096)
   })
 
   it('falls back to the min window for an invalid sample rate', () => {
@@ -99,6 +99,15 @@ describe('adaptiveLoopSewingWindowSamples', () => {
   it('falls back to the min window for a loop too short to analyze', () => {
     const data = new Float32Array([0.5])
     expect(adaptiveLoopSewingWindowSamples(data, 1, sampleRate)).toBe(512)
+  })
+
+  it('falls back to the min window for a near-silent tail, even though it has almost no zero crossings', () => {
+    // Same low frequency as the "bassy" test above, but at 0.001 amplitude
+    // -- a naive zero-crossing-only heuristic would misread this as bassy
+    // too, and forcibly ramp near-silence up into whatever the head sounds
+    // like (e.g. a downbeat's own onset for a re-one'd loop).
+    const data = sineWave(8192, 50, sampleRate).map((v) => v * 0.001)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(512)
   })
 })
 

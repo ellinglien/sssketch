@@ -124,7 +124,7 @@ function microFadeGain(
 // fade/gain, so these references have to apply it to their own copy of the
 // raw fixture samples too, in the same order (blend first, then fade/gain).
 const LOOP_SEWING_MIN_WINDOW = 512
-const LOOP_SEWING_MAX_WINDOW = 2048
+const LOOP_SEWING_MAX_WINDOW = 4096
 
 function adaptiveLoopSewingWindow(samples: Float64Array, sampleRate: number): number {
   const n = samples.length
@@ -132,9 +132,20 @@ function adaptiveLoopSewingWindow(samples: Float64Array, sampleRate: number): nu
   if (analysisWindow < 2) return LOOP_SEWING_MIN_WINDOW
   const startIndex = n - analysisWindow
   let crossings = 0
+  let sumSquares = 0
   for (let i = startIndex + 1; i < n; i++) {
     if (samples[i - 1] < 0 !== samples[i] < 0) crossings++
+    // Normalized to the same -1..1 float range the native engine's own
+    // AudioFormatReader decodes 16-bit PCM into — `samples` here are still
+    // raw int16 magnitudes (see rawSamples above), and kSilenceRms below is
+    // calibrated for the normalized domain production actually compares it
+    // against.
+    const normalized = samples[i] / 32768
+    sumSquares += normalized * normalized
   }
+  const rms = Math.sqrt(sumSquares / analysisWindow)
+  const kSilenceRms = 0.01
+  if (rms < kSilenceRms) return LOOP_SEWING_MIN_WINDOW
   const windowDurationSec = analysisWindow / sampleRate
   const estimatedFreqHz = crossings / 2 / windowDurationSec
   const kBassyFreqHz = 150

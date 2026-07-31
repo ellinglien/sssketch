@@ -55,7 +55,7 @@ namespace ssstitch
         // The window itself adapts to how bassy the seam sounds (see
         // adaptiveLoopSewingWindow's own doc comment) rather than using one
         // fixed size for every stem.
-        const int window = adaptiveLoopSewingWindow(entry.buffer, 512, 2048, entry.sampleRate);
+        const int window = adaptiveLoopSewingWindow(entry.buffer, 512, 4096, entry.sampleRate);
         applyLoopSewingBlend(entry.buffer, window);
 
         cache.emplace(key, std::move(entry));

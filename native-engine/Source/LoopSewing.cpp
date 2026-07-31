@@ -45,11 +45,27 @@ namespace ssstitch
         const auto* data = buffer.getReadPointer(0);
         const int startIndex = numSamples - analysisWindow;
         int crossings = 0;
+        double sumSquares = 0.0;
         for (int i = startIndex + 1; i < numSamples; ++i)
         {
             if ((data[i - 1] < 0.0f) != (data[i] < 0.0f))
                 ++crossings;
+            sumSquares += (double) data[i] * (double) data[i];
         }
+
+        // Near-silence has almost no zero crossings too — not because it's
+        // bassy, but because there's no signal to cross zero at all. Reading
+        // that as "maximally bassy" picks the widest window on exactly the
+        // seams a wide blend can hurt most: a quiet/silent tail forcibly
+        // ramped up over many samples to match a loud head value (e.g. a
+        // downbeat's own onset, the common case for a re-one'd/baked loop)
+        // reads as an audible swell into the beat, not a fix. Below this
+        // RMS floor, there's no meaningful phase to preserve either way, so
+        // just use the minimum window.
+        const double rms = std::sqrt(sumSquares / analysisWindow);
+        constexpr double kSilenceRms = 0.01; // ~ -40dBFS
+        if (rms < kSilenceRms)
+            return minWindow;
 
         const double windowDurationSec = (double) analysisWindow / sampleRate;
         const double estimatedFreqHz = (crossings / 2.0) / windowDurationSec;

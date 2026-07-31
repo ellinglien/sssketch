@@ -57,7 +57,12 @@ namespace ssstitch
      * Returns `maxWindow` at or below 150Hz, `minWindow` at or above
      * 1000Hz, interpolated in log-frequency space (matching how pitch
      * itself is perceived) in between. Falls back to `minWindow` for an
-     * empty buffer or invalid sample rate. */
+     * empty buffer, invalid sample rate, or a tail quiet enough to read as
+     * silence (near-silence has almost no zero crossings too, but for a
+     * different reason than genuine bass — there's no phase to preserve, so
+     * a wide window there would just ramp audible silence up into whatever
+     * the head sounds like, e.g. a downbeat's own onset for a re-one'd
+     * loop). */
     int adaptiveLoopSewingWindow(
         const juce::AudioBuffer<float>& buffer, int minWindow, int maxWindow, double sampleRate);
 }
