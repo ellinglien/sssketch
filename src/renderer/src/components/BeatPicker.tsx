@@ -18,6 +18,7 @@ import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
 import { computePitchContour } from '@shared/pitchContour'
 import { octaveGridlines } from '@shared/noteNames'
 import { SpectrogramCanvas } from './SpectrogramCanvas'
+import { LoadingLoader } from './LoadingLoader'
 
 // Shared frequency range/resolution for every stem's spectrogram lane —
 // explicit here (rather than relying on computeSpectrogram's own defaults)
@@ -871,35 +872,7 @@ export function BeatPicker({
                 gap: 8
               }}
             >
-              {/* A left-to-right filling bar — echoes what's actually
-                  happening (decoding + an STFT pass over every stem) as
-                  visible progress rather than a generic spinner, and reuses
-                  the identity stem's own color so it still reads as "this
-                  picker," not a bare loading screen. There's no real
-                  discrete progress to report (the decode/STFT work
-                  resolves all at once), so it loops rather than tracking
-                  actual completion. */}
-              <div
-                style={{
-                  position: 'absolute',
-                  left: '20%',
-                  right: '20%',
-                  bottom: '35%',
-                  height: 3,
-                  overflow: 'hidden',
-                  background: 'var(--ra-border)'
-                }}
-              >
-                <div
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    background: typeColorVar(stem.type),
-                    transformOrigin: 'left',
-                    animation: 'ra-loading-fill 1.4s ease-in-out infinite'
-                  }}
-                />
-              </div>
+              <LoadingLoader size={64} />
               <span className="ra-eyebrow" style={{ position: 'relative' }}>
                 loading…
               </span>
