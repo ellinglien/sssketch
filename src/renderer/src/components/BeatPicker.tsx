@@ -6,21 +6,23 @@ import {
   rotationSecondsForStem
 } from '../state/selectors'
 import type { Action, AppState } from '../state/store'
-import { linearWave, peaksFromChannel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import { stopActivePreview } from '../audio/previewLoop'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
+import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
+import { SpectrogramCanvas } from './SpectrogramCanvas'
 
 /**
  * Endlesss stems are internally beat-locked, but a rifff's declared bar length can
- * be off by a few beats relative to the timeline's bar boundary. Rather than a
- * numeric offset entry, this shows the identity stem's full waveform with a beat
- * grid overlaid and lets the user click whichever beat is the true downbeat —
- * offsetStepsForBeatIndex converts that click into the shift needed to land it on
- * the clip's timeline start.
+ * be off by a few beats relative to the timeline's bar boundary. Framed to the user
+ * as "re-one" — find the beginning of the loop, not a numeric offset entry: every
+ * stem gets its own spectrogram lane (all layers visible at once, not just a
+ * combined mix) with a beat grid overlaid, and the user clicks whichever beat is
+ * where the loop actually starts. offsetStepsForBeatIndex converts that click into
+ * the shift needed to land it on the clip's timeline start.
  */
 
 // Module-level (not a closure over component state) so it can be called safely
@@ -176,39 +178,44 @@ export function BeatPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only: re-running on every `playing` change would re-pause every time the main arrangement is resumed while this picker happens to still be open, which is never the intent
   }, [])
 
-  // The waveform shown is the whole rifff mixed together, spanning the whole
-  // rifff's own bar length — not just the identity stem's own (possibly much
-  // shorter) native loop. Real bug this fixed: a rifff whose identity stem
-  // (stems[0]) was a short 4-bar drum loop, but with other stems running much
-  // longer, only ever showed/gridded those 4 bars — hiding most of the loop
-  // (and wherever ITS downbeat-relevant transients were) from the picker
-  // entirely. secPerBar is derived from the identity stem's own known
-  // duration/barLength (every stem in a rifff is beat-locked to the same
-  // clock, so this is exactly the rifff's own tempo), matching
-  // schedulePlayback.ts's identical derivation. Every stem (identity
-  // included) is tiled across that full span by repeating its buffer from
-  // the start (`i % data.length`), the same way computeStemSchedule tiles a
-  // shorter stem across a longer rifff — so the mix stays aligned to the
-  // same beat grid the picker's gridlines are drawn against. A pure
-  // derivation of rifff/stem/buffers, so useMemo (not an effect writing to
-  // its own state) is the right tool.
-  const peaks = useMemo<number[] | null>(() => {
+  // One spectrogram per stem, each spanning the whole rifff's own bar length
+  // — not just the identity stem's own (possibly much shorter) native loop.
+  // Real bug this fixed (back when this was a single combined waveform):
+  // a rifff whose identity stem (stems[0]) was a short 4-bar drum loop, but
+  // with other stems running much longer, only ever showed/gridded those 4
+  // bars — hiding most of the loop (and wherever ITS downbeat-relevant
+  // transients were) from the picker entirely. secPerBar is derived from the
+  // identity stem's own known duration/barLength (every stem in a rifff is
+  // beat-locked to the same clock, so this is exactly the rifff's own
+  // tempo), matching schedulePlayback.ts's identical derivation. Each stem
+  // is tiled across that full span by repeating its own buffer from the
+  // start (`i % data.length`), the same way computeStemSchedule tiles a
+  // shorter stem across a longer rifff — so every lane stays aligned to the
+  // same beat grid the picker's gridlines are drawn against. Kept as
+  // separate per-stem spectrograms (rather than one combined mix) so the
+  // layers are visible together instead of summed into one blur — the whole
+  // point of "see where the loops happen in the melody" across all of them
+  // at once. A pure derivation of rifff/stem/buffers, so useMemo (not an
+  // effect writing to its own state) is the right tool.
+  const stemSpectrograms = useMemo<{ stem: Stem; spectrogram: Spectrogram }[] | null>(() => {
     if (!rifff || !stem) return null
     const identityBuf = buffers[stem.slot]
     if (!identityBuf) return null
     const secPerBar = stem.durationSec / stem.barLength
     const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
-    const mix = new Float32Array(totalSamples)
+    const results: { stem: Stem; spectrogram: Spectrogram }[] = []
     for (const s of rifff.stems) {
       const buf = buffers[s.slot]
       if (!buf) continue
       const data = buf.getChannelData(0)
       if (data.length === 0) continue
-      for (let i = 0; i < mix.length; i++) {
-        mix[i] += data[i % data.length]
+      const tiled = new Float32Array(totalSamples)
+      for (let i = 0; i < totalSamples; i++) {
+        tiled[i] = data[i % data.length]
       }
+      results.push({ stem: s, spectrogram: computeSpectrogram(tiled, buf.sampleRate) })
     }
-    return peaksFromChannel(mix, 128)
+    return results
   }, [rifff, stem, buffers])
 
   // Decoded here (not just getPeaks' 128-bucket summary) since previewing
@@ -394,7 +401,6 @@ export function BeatPicker({
   const canNavigate =
     !!batchGroupIds && !!onNavigate && batchGroupIds.length > 1 && batchIndex !== -1
 
-  const color = typeColorVar(stem.type)
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetKey = resolveOffsetKey(state, groupId, stem.slot)
   const currentSteps = state.off[offsetKey] ?? 0
@@ -405,6 +411,11 @@ export function BeatPicker({
   // loop identity stem in a 16-bar rifff).
   const totalBeats = rifff.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
+  const LANE_HEIGHT = 52
+  const LANE_GAP = 3
+  const lanesHeight = stemSpectrograms?.length
+    ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
+    : 140
 
   function toggleFreePlay(): void {
     if (isFreePlaying) {
@@ -526,7 +537,7 @@ export function BeatPicker({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 700,
+          width: 820,
           maxWidth: '90vw',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
@@ -535,7 +546,7 @@ export function BeatPicker({
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span className="ra-eyebrow">pick the downbeat</span>
+          <span className="ra-eyebrow">re-one — find the beginning of the loop</span>
           {canNavigate && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
@@ -617,7 +628,7 @@ export function BeatPicker({
           </label>
           <button
             onClick={toggleFreePlay}
-            title="click a beat below, or play and hit space on the downbeat"
+            title="click a beat below, or play and hit space where the loop begins"
             style={{
               height: 22,
               borderRadius: 0,
@@ -635,66 +646,93 @@ export function BeatPicker({
         <div
           style={{
             position: 'relative',
-            height: 140,
             marginTop: 14,
             border: '1px solid var(--ra-border)',
             borderRadius: 0,
-            overflow: 'hidden',
-            background: 'var(--ra-bg-row)'
+            background: 'var(--ra-bg-row)',
+            maxHeight: '55vh',
+            overflowY: lanesHeight > 220 ? 'auto' : 'hidden'
           }}
         >
-          {peaks && (
-            <svg
-              width="100%"
-              height="100%"
-              viewBox="0 0 128 100"
-              preserveAspectRatio="none"
-              style={{ position: 'absolute', inset: 0 }}
-            >
-              <path d={linearWave(peaks)} fill={color} opacity={0.75} shapeRendering="crispEdges" />
-            </svg>
-          )}
-          {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
-            <button
-              key={beatIndex}
-              onClick={() => pickBeat(beatIndex)}
-              title={`beat ${beatIndex + 1}`}
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: `${(beatIndex / totalBeats) * 100}%`,
-                width: `${100 / totalBeats}%`,
-                border: 'none',
-                borderLeft:
-                  beatIndex % 4 === 0
-                    ? '1px solid var(--ra-border-strong)'
-                    : '1px solid var(--ra-grid-minor)',
-                background:
-                  beatIndex === currentBeat
-                    ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
-                    : 'transparent',
-                cursor: 'pointer'
-              }}
-            />
-          ))}
-          {playheadPct !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: `${playheadPct}%`,
-                width: 2,
-                background: 'var(--ra-playhead)',
-                pointerEvents: 'none'
-              }}
-            />
-          )}
+          <div style={{ position: 'relative', height: lanesHeight }}>
+            {stemSpectrograms?.map(({ stem: s, spectrogram }, i) => (
+              <div
+                key={s.slot}
+                style={{
+                  position: 'absolute',
+                  top: i * (LANE_HEIGHT + LANE_GAP),
+                  left: 0,
+                  right: 0,
+                  height: LANE_HEIGHT,
+                  overflow: 'hidden',
+                  borderBottom:
+                    i < stemSpectrograms.length - 1 ? '1px solid var(--ra-border)' : 'none'
+                }}
+              >
+                <SpectrogramCanvas
+                  spectrogram={spectrogram}
+                  color={typeColorVar(s.type)}
+                  height={LANE_HEIGHT}
+                />
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: 4,
+                    fontSize: 8,
+                    letterSpacing: 0.4,
+                    textTransform: 'uppercase',
+                    color: 'var(--ra-text-2)',
+                    textShadow: '0 0 3px var(--ra-bg-row), 0 0 3px var(--ra-bg-row)',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  {s.name}
+                </span>
+              </div>
+            ))}
+            {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
+              <button
+                key={beatIndex}
+                onClick={() => pickBeat(beatIndex)}
+                title={`beat ${beatIndex + 1}`}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: `${(beatIndex / totalBeats) * 100}%`,
+                  width: `${100 / totalBeats}%`,
+                  border: 'none',
+                  borderLeft:
+                    beatIndex % 4 === 0
+                      ? '1px solid var(--ra-border-strong)'
+                      : '1px solid var(--ra-grid-minor)',
+                  background:
+                    beatIndex === currentBeat
+                      ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
+                      : 'transparent',
+                  cursor: 'pointer'
+                }}
+              />
+            ))}
+            {playheadPct !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: `${playheadPct}%`,
+                  width: 2,
+                  background: 'var(--ra-playhead)',
+                  pointerEvents: 'none'
+                }}
+              />
+            )}
+          </div>
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          beat {currentBeat + 1} of {totalBeats}
+          loop begins at beat {currentBeat + 1} of {totalBeats}
         </div>
       </div>
     </div>
