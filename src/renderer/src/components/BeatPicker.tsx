@@ -915,8 +915,10 @@ export function BeatPicker({
                     right: 0,
                     height: LANE_HEIGHT,
                     overflow: 'hidden',
-                    borderBottom:
-                      i < stemSpectrograms.length - 1 ? '1px solid var(--ra-border)' : 'none'
+                    // A full border (not just a bottom rule) reads as a
+                    // distinct clip boundary per stem, rather than one
+                    // continuous strip loosely divided into rows.
+                    border: '1px solid var(--ra-border-strong)'
                   }}
                 >
                   <SpectrogramCanvas
@@ -929,9 +931,6 @@ export function BeatPicker({
                       marker StemWaveformRow already draws in the main
                       arranger, just as a percentage of this lane's full
                       rifff-spanning width instead of a pixel offset. */}
-                  {/* Cyan rather than white/black — the pitch contour line
-                      just below is drawn as a white-on-black halo, and a
-                      matching white made the two indistinguishable. */}
                   {tileBoundaryPcts.map((pct) => (
                     <div
                       key={pct}
@@ -941,7 +940,7 @@ export function BeatPicker({
                         bottom: 0,
                         left: `${pct}%`,
                         width: 2,
-                        background: 'color-mix(in srgb, #5ec8ff 85%, transparent)',
+                        background: 'color-mix(in srgb, white 80%, transparent)',
                         pointerEvents: 'none'
                       }}
                     />
@@ -992,7 +991,7 @@ export function BeatPicker({
                       />
                       <path
                         d={pitchPathD}
-                        stroke="white"
+                        stroke="#5ec8ff"
                         strokeOpacity={0.9}
                         strokeWidth={0.9}
                         fill="none"
