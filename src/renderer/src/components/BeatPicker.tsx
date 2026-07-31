@@ -892,8 +892,10 @@ export function BeatPicker({
               >
                 <div
                   style={{
+                    width: '100%',
                     height: '100%',
                     background: typeColorVar(stem.type),
+                    transformOrigin: 'left',
                     animation: 'ra-loading-fill 1.4s ease-in-out infinite'
                   }}
                 />

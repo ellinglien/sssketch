@@ -85,13 +85,17 @@ textarea {
 }
 
 /* Left-to-right filling bar loading indicator — see BeatPicker's "loading…"
-   state, shown while a rifff's stems are still decoding/being analyzed. */
+   state, shown while a rifff's stems are still decoding/being analyzed.
+   transform (not width) so the browser can composite it on the GPU instead
+   of re-running layout every frame — animating width directly was landing
+   as a static bar rather than a visible fill in practice. The element
+   itself is full-width with transformOrigin:'left'; this just scales it. */
 @keyframes ra-loading-fill {
   0% {
-    width: 0%;
+    transform: scaleX(0);
   }
   100% {
-    width: 100%;
+    transform: scaleX(1);
   }
 }
 
