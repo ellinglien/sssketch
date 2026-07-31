@@ -28,6 +28,15 @@ namespace ssstitch
 
         void setBpm(double bpm) { secPerBar = bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
 
+        // 0 (the default) disables wrapping entirely — positionBars advances
+        // monotonically forever, same as before this existed. Set from
+        // load-project's own loopLengthBars field (see EngineProject.h) so
+        // the transport can wrap its own clock in-thread, sample-accurately,
+        // instead of the renderer having to notice via its position-update
+        // poll and round-trip a correcting set-position over IPC. See
+        // LoopBoundaryFade.h for the declick fade applied right at the wrap.
+        void setLoopLengthBars(double bars) { loopLengthBars.store(bars); }
+
         // juce::AudioIODeviceCallback
         void audioDeviceIOCallbackWithContext(
             const float* const* inputChannelData, int numInputChannels,
@@ -41,6 +50,7 @@ namespace ssstitch
         juce::AudioDeviceManager deviceManager;
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };
+        std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
     };

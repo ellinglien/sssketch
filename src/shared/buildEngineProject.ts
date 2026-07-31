@@ -1,6 +1,11 @@
 import type { AppState } from '../renderer/src/state/store'
 import { SNAP_DIVS } from '../renderer/src/state/store'
-import { resolveOffsetKey, resolvePlayedBars, stemStartBar } from '../renderer/src/state/selectors'
+import {
+  loopLengthBars,
+  resolveOffsetKey,
+  resolvePlayedBars,
+  stemStartBar
+} from '../renderer/src/state/selectors'
 import { stemKey } from './types'
 
 export interface EngineStem {
@@ -27,6 +32,17 @@ export interface EngineRifff {
 export interface EngineProject {
   bpm: number
   snapDiv: number
+  /** The whole arrangement's own loop length, in bars — lets the native
+   * transport wrap `positionBars` back to 0 itself, sample-accurately and
+   * in-thread, instead of relying on the renderer to notice (via the ~30Hz
+   * position-update poll) and round-trip a correcting `set-position` over
+   * IPC. That round trip let playback run up to one poll tick past the true
+   * loop boundary before jumping back — a jump with no anti-click treatment
+   * at all, since it isn't any individual clip's own start/end (see
+   * FadeGain.cpp) and isn't a single stem's own tiling repeat (see
+   * LoopSewing.cpp) either. See LoopBoundaryFade.h for the declick fade
+   * applied right at this wrap point. */
+  loopLengthBars: number
   rifffs: EngineRifff[]
 }
 
@@ -135,5 +151,10 @@ export async function buildEngineProject(
     })
   }
 
-  return { bpm: state.bpm, snapDiv: SNAP_DIVS[state.snapIdx], rifffs }
+  return {
+    bpm: state.bpm,
+    snapDiv: SNAP_DIVS[state.snapIdx],
+    loopLengthBars: loopLengthBars(state),
+    rifffs
+  }
 }

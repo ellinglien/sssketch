@@ -101,6 +101,7 @@ namespace ssstitch
             if (parseEngineProject(payloadJson, project, error))
             {
                 transport.setBpm(project.bpm);
+                transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
             }
             else

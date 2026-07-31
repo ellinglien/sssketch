@@ -37,6 +37,10 @@ namespace ssstitch
     {
         double bpm = 120.0;
         double snapDiv = 16.0;
+        // 0.0 = no wrap (unbounded playback) — the default a payload without
+        // this field parses to, matching Transport's own disabled-by-default
+        // semantics for setLoopLengthBars.
+        double loopLengthBars = 0.0;
         std::vector<EngineRifff> rifffs;
     };
 

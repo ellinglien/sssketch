@@ -1,5 +1,18 @@
 // native-engine/Source/Transport.cpp
 #include "Transport.h"
+#include "LoopBoundaryFade.h"
+#include <cmath>
+
+namespace ssstitch
+{
+    namespace
+    {
+        // Matches FadeGain.cpp's own kMicroFadeSec: short enough to be
+        // inaudible as an intentional fade, just enough to remove the
+        // discontinuity a hard position jump would otherwise produce.
+        constexpr double kLoopSeamFadeSec = 0.003;
+    }
+}
 
 namespace ssstitch
 {
@@ -58,7 +71,29 @@ namespace ssstitch
 
         const double pos = positionBars.load();
         engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
-        positionBars.store(pos + (numSamples / deviceSampleRate) / secPerBar);
+
+        const double loopBars = loopLengthBars.load();
+        if (loopBars > 0.0)
+        {
+            // Declicks the wrap this block is about to perform below (or is
+            // approaching, if the wrap itself falls in a later block) — a
+            // fixed-duration fade converted to bars at the current tempo, so
+            // it stays a constant ~3ms regardless of bpm.
+            const double fadeBars = kLoopSeamFadeSec / secPerBar;
+            const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double samplePosBars = pos + (double) i * barsPerSample;
+                const float gain = loopBoundaryGain(samplePosBars, loopBars, fadeBars);
+                outL[i] *= gain;
+                outR[i] *= gain;
+            }
+        }
+
+        double newPos = pos + (numSamples / deviceSampleRate) / secPerBar;
+        if (loopBars > 0.0)
+            newPos = std::fmod(newPos, loopBars);
+        positionBars.store(newPos);
     }
 
     void Transport::audioDeviceAboutToStart(juce::AudioIODevice* device)

@@ -40,6 +40,7 @@ namespace ssstitch
         EngineProject project;
         project.bpm = getDouble(parsed, "bpm", 120.0);
         project.snapDiv = getDouble(parsed, "snapDiv", 16.0);
+        project.loopLengthBars = getDouble(parsed, "loopLengthBars", 0.0);
 
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())
