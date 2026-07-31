@@ -142,7 +142,14 @@ export function TransportBar(): React.JSX.Element {
             color: 'var(--ra-text)',
             border: '1px solid var(--ra-border)',
             borderRadius: 0,
-            height: 20
+            height: 20,
+            padding: 0,
+            // Chromium's native spin-button UI for type="number" eats into the
+            // field's own width, clipping the last digit of a 3-digit value
+            // (e.g. "142") — redundant anyway since the +/- buttons already
+            // cover that. MozAppearance covers Firefox's equivalent.
+            WebkitAppearance: 'none',
+            MozAppearance: 'textfield'
           }}
         />
         <button

@@ -616,6 +616,18 @@ function Frame(): React.JSX.Element {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [panning, setPanning] = useState(false)
 
+  // Sets the cursor at the document level (not just on the pan overlay div
+  // below) so pressing M shows the hand immediately no matter where the
+  // mouse already happens to be sitting — the overlay's own `cursor` style
+  // only takes effect once the mouse actually enters the arranger area.
+  useEffect(() => {
+    if (!handModeHeld) return
+    document.body.style.cursor = panning ? 'grabbing' : 'grab'
+    return () => {
+      document.body.style.cursor = ''
+    }
+  }, [handModeHeld, panning])
+
   function handlePanMouseDown(e: MouseEvent<HTMLDivElement>): void {
     const container = scrollContainerRef.current
     if (!container) return
@@ -670,7 +682,7 @@ function Frame(): React.JSX.Element {
           {handModeHeld && (
             <div
               onMouseDown={handlePanMouseDown}
-              title="drag to pan (release H to exit)"
+              title="drag to pan (release M to exit)"
               style={{
                 position: 'absolute',
                 inset: 0,

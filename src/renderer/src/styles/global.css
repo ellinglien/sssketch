@@ -84,14 +84,14 @@ textarea {
   font-family: inherit;
 }
 
-/* Sweeping scan-beam loading indicator — see BeatPicker's "re-oning…" state,
-   shown while a rifff's stems are still decoding/being analyzed. */
-@keyframes ra-scan {
+/* Left-to-right filling bar loading indicator — see BeatPicker's "loading…"
+   state, shown while a rifff's stems are still decoding/being analyzed. */
+@keyframes ra-loading-fill {
   0% {
-    left: -30%;
+    width: 0%;
   }
   100% {
-    left: 100%;
+    width: 100%;
   }
 }
 
@@ -118,4 +118,14 @@ textarea {
   text-transform: uppercase;
   letter-spacing: var(--ra-track-eyebrow);
   color: var(--ra-text-3);
+}
+
+/* Chromium's native spin-button pseudo-elements for type="number" inputs
+   can't be removed via an inline style's WebkitAppearance (pseudo-elements
+   need their own selector) — they were eating into narrow fields like the
+   tempo box, clipping the last digit of a 3-digit value. */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }

@@ -781,24 +781,35 @@ export function BeatPicker({
                 gap: 8
               }}
             >
-              {/* A sweeping scan beam — echoes what's actually happening
-                  (decoding + an STFT pass over every stem) rather than a
-                  generic spinner, and reuses the identity stem's own color
-                  so it still reads as "this picker," not a bare loading
-                  screen. */}
+              {/* A left-to-right filling bar — echoes what's actually
+                  happening (decoding + an STFT pass over every stem) as
+                  visible progress rather than a generic spinner, and reuses
+                  the identity stem's own color so it still reads as "this
+                  picker," not a bare loading screen. There's no real
+                  discrete progress to report (the decode/STFT work
+                  resolves all at once), so it loops rather than tracking
+                  actual completion. */}
               <div
                 style={{
                   position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  width: '30%',
-                  background: `linear-gradient(90deg, transparent, ${typeColorVar(stem.type)}, transparent)`,
-                  opacity: 0.5,
-                  animation: 'ra-scan 1.4s ease-in-out infinite'
+                  left: '20%',
+                  right: '20%',
+                  bottom: '35%',
+                  height: 3,
+                  overflow: 'hidden',
+                  background: 'var(--ra-border)'
                 }}
-              />
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    background: typeColorVar(stem.type),
+                    animation: 'ra-loading-fill 1.4s ease-in-out infinite'
+                  }}
+                />
+              </div>
               <span className="ra-eyebrow" style={{ position: 'relative' }}>
-                re-oning…
+                loading…
               </span>
             </div>
           )}
