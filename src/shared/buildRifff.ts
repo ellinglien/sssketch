@@ -1,5 +1,6 @@
 import { parseStemFilename } from './parseFilename'
 import { readWavDurationSeconds } from './wavDuration'
+import { guessSoundTypeFromPresetName } from './presetNames'
 import type { Rifff, Stem } from './types'
 
 export interface ScannedFile {
@@ -90,10 +91,11 @@ export function buildRifff(
       slot: parsed.slot,
       author: parsed.author,
       name: parsed.stemName,
-      // Sound-type isn't encoded in Endlesss filenames, so every stem defaults to
-      // 'fx' here. This is deliberate, not a placeholder bug — Task 13 makes it
-      // user-editable via a click-to-cycle control in the UI.
-      type: 'fx',
+      // Sound-type isn't directly encoded in Endlesss filenames, but the preset
+      // name often is — check it against the known built-in/purchased-pack names
+      // first (presetNames.ts) before falling back to the 'fx' default. Also
+      // user-editable via a click-to-cycle control in the UI regardless.
+      type: guessSoundTypeFromPresetName(parsed.stemName) ?? 'fx',
       path: file.path,
       durationSec,
       barLength: barsForDuration(durationSec, parsed.bpm)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
+import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -211,7 +212,10 @@ export function LoreLibraryBrowser({
         slot: s.slot,
         author: s.creatorUserName,
         name: s.presetName,
-        type: instrumentMaskToSoundType(s.instrumentMask) ?? 'fx',
+        type:
+          instrumentMaskToSoundType(s.instrumentMask) ??
+          guessSoundTypeFromPresetName(s.presetName) ??
+          'fx',
         path: s.path!,
         durationSec: s.durationSec, // this stem's own bpm/bar-length, not the riff's — see resolveRiff
         barLength: s.barLength
@@ -936,7 +940,10 @@ export function LoreLibraryBrowser({
                             slot: s.slot,
                             author: s.creatorUserName,
                             name: s.presetName,
-                            type: instrumentMaskToSoundType(s.instrumentMask) ?? 'fx',
+                            type:
+                              instrumentMaskToSoundType(s.instrumentMask) ??
+                              guessSoundTypeFromPresetName(s.presetName) ??
+                              'fx',
                             path: s.path!,
                             durationSec: s.durationSec,
                             barLength: s.barLength

@@ -61,6 +61,30 @@ describe('buildRifff', () => {
     expect(rifff?.stems.every((s) => s.type === 'fx')).toBe(true)
   })
 
+  it('types a stem as notes/audioIn when its preset name matches a known pack/mic name', () => {
+    const files: ScannedFile[] = [
+      {
+        filename: '1 - elling - Pianabot - 120BPM - 2020-11-11-13-53.wav',
+        path: '/x/1.wav',
+        bytes: wavBytes(1.6)
+      },
+      {
+        filename: '2 - elling - Microphone - 120BPM - 2020-11-11-13-53.wav',
+        path: '/x/2.wav',
+        bytes: wavBytes(1.6)
+      },
+      {
+        filename: '3 - elling - my cool loop - 120BPM - 2020-11-11-13-53.wav',
+        path: '/x/3.wav',
+        bytes: wavBytes(1.6)
+      }
+    ]
+    const rifff = buildRifff('/x', 'my jam 120 Stems', files)
+    expect(rifff?.stems[0].type).toBe('notes') // Pianabot
+    expect(rifff?.stems[1].type).toBe('audioIn') // Microphone
+    expect(rifff?.stems[2].type).toBe('fx') // unrecognized name, falls back to the default
+  })
+
   it('returns null when no files match the convention', () => {
     const files: ScannedFile[] = [
       { filename: 'recording 165 (Bass).wav', path: '/y/a.wav', bytes: new Uint8Array(0) }
