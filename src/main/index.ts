@@ -5,7 +5,13 @@ import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
-import { saveProjectAs, openProject } from './projectFile'
+import {
+  saveProjectAs,
+  openProject,
+  writeAutosave,
+  loadAutosave,
+  clearAutosave
+} from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
 import { nativeExport, nativeExportStems } from './nativeExport'
@@ -132,6 +138,12 @@ app.whenReady().then(async () => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     return openProject(win)
   })
+
+  ipcMain.handle('autosave-project', (_event, json: string) => writeAutosave(json))
+
+  ipcMain.handle('load-autosave', () => loadAutosave())
+
+  ipcMain.handle('clear-autosave', () => clearAutosave())
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
     const win = BrowserWindow.fromWebContents(event.sender)!

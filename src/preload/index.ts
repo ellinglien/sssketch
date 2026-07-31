@@ -25,6 +25,9 @@ const api = {
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
+  autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
+  loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
+  clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
