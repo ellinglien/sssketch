@@ -55,26 +55,15 @@ describe('loopLengthBarsFor', () => {
     expect(loopLengthBarsFor(stateWith({ rifffs: {} }))).toBe(32)
   })
 
-  it('uses the rifff-level end (startBar + barLength) when linked', () => {
+  it('uses the rifff-level end (startBar + barLength)', () => {
     // startBar 4 + barLength 8 = 12
     expect(loopLengthBarsFor(stateWith({}))).toBe(12)
   })
 
-  it('accounts for an unlinked stem dragged out past its group span', () => {
-    // Group's own span would end at 4 + 8 = 12, but slot 2 has been dragged out
-    // to stemStart 20, so its own end is 20 + 8 = 28 — that must win.
-    const state = stateWith({
-      unlinked: { r1: true },
-      stemStart: { 'r1:2': 20 }
-    })
-    expect(loopLengthBarsFor(state)).toBe(28)
-  })
-
-  it('still uses the group startBar fallback for unlinked stems that were never dragged', () => {
-    // Unlinked but no stemStart override recorded for either slot -> both fall
-    // back to rifff.startBar (4), so the end is still 4 + 8 = 12.
-    const state = stateWith({ unlinked: { r1: true } })
-    expect(loopLengthBarsFor(state)).toBe(12)
+  it('respects a playedBars resize override, not just raw barLength', () => {
+    // startBar 4 + a resize to 16 bars = 20, not 4 + 8 = 12.
+    const state = stateWith({ playedBars: { r1: 16 } })
+    expect(loopLengthBarsFor(state)).toBe(20)
   })
 })
 

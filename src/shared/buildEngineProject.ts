@@ -1,11 +1,6 @@
 import type { AppState } from '../renderer/src/state/store'
 import { SNAP_DIVS } from '../renderer/src/state/store'
-import {
-  loopLengthBars,
-  resolveOffsetKey,
-  resolvePlayedBars,
-  stemStartBar
-} from '../renderer/src/state/selectors'
+import { loopLengthBars, resolvePlayedBars } from '../renderer/src/state/selectors'
 import { stemKey } from './types'
 
 export interface EngineStem {
@@ -63,10 +58,15 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
  * Projects AppState down to exactly what the native engine needs to schedule
  * and mix playback — resolving stretch (via the caller-supplied resolver, the
  * same IPC round-trip src/main/resolveStretchedForExport.ts and
- * src/renderer/src/audio/resolveStretchedForPlayback.ts already use) and
- * unlinked-stem start positions (via the existing stemStartBar selector, so
- * there's exactly one place that logic lives) ahead of time, so the engine
- * itself never needs to know about stretch ratios or unlink state at all.
+ * src/renderer/src/audio/resolveStretchedForPlayback.ts already use) ahead of
+ * time, so the engine itself never needs to know about stretch ratios at all.
+ * EngineStem.startBarOverride stays -1 unconditionally now — it used to
+ * carry an unlinked stem's own diverged start position, but a stem can no
+ * longer diverge from its rifff (see store.ts's UNGROUP: it becomes a fully
+ * independent rifff instead, with its own ordinary startBar). Left in the
+ * wire format rather than removed, since the native engine's own parsing
+ * doesn't need to change either way and -1 is already its "no override"
+ * case.
  */
 export async function buildEngineProject(
   state: AppState,
@@ -116,10 +116,7 @@ export async function buildEngineProject(
       }
 
       const key = stemKey(rifff.groupId, stem.slot)
-      const offsetSteps = state.off[resolveOffsetKey(state, rifff.groupId, stem.slot)] ?? 0
-      const override = state.unlinked[rifff.groupId]
-        ? stemStartBar(state, rifff.groupId, stem.slot)
-        : -1
+      const offsetSteps = state.off[rifff.groupId] ?? 0
 
       stems.push({
         stemKey: key,
@@ -133,9 +130,9 @@ export async function buildEngineProject(
         // slowed down relative to its own native bpm.
         durationSec: resolved.durationSec,
         barLength: stem.barLength,
-        playedBars: resolvePlayedBars(state, rifff.groupId, stem.slot),
+        playedBars: resolvePlayedBars(state, rifff.groupId),
         offsetSteps,
-        startBarOverride: override,
+        startBarOverride: -1,
         volume: state.vol[key] ?? 1,
         muted: state.mute[key] ?? false
       })

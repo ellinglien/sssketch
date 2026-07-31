@@ -135,17 +135,7 @@ describe('buildEngineProject', () => {
     expect(project.rifffs[0].fadeOutBars).toBe(0.5)
   })
 
-  it('uses the unlinked stem start override when the group is unlinked', async () => {
-    const state = stateWith({
-      bpm: 150, // matches rifff.bpm -> ratio 1, no stretch call needed
-      unlinked: { r1: true },
-      stemStart: { 'r1:1': 9 }
-    })
-    const project = await buildEngineProject(state, vi.fn())
-    expect(project.rifffs[0].stems[0].startBarOverride).toBe(9)
-  })
-
-  it('uses -1 as startBarOverride when the stem is not unlinked (matches the rifff default)', async () => {
+  it('always uses -1 as startBarOverride — a stem can no longer diverge from its own rifff (see UNGROUP)', async () => {
     const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs[0].stems[0].startBarOverride).toBe(-1)
