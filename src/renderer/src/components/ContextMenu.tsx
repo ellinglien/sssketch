@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 export interface ContextMenuItem {
   label: string
@@ -17,8 +17,20 @@ export function ContextMenu({
   items: ContextMenuItem[]
   onClose: () => void
 }): React.JSX.Element {
+  const menuRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
-    function handleDismiss(): void {
+    // Capture phase, not bubble — a bubble-phase window listener never fires
+    // if anything the click lands on (a clip's own onClick/onContextMenu,
+    // common throughout this app — row select, scrub, mute toggle, etc.)
+    // calls stopPropagation() first, which silently left this menu open
+    // through almost any click elsewhere. Capture fires on the way DOWN
+    // from window, before any of those handlers get a chance to stop it, so
+    // dismissal no longer depends on what the clicked element does. Only
+    // exempted click target: something actually inside this menu (an item
+    // button's own onClick already calls onClose() itself after running).
+    function handleDismiss(e: MouseEvent): void {
+      if (menuRef.current?.contains(e.target as Node)) return
       onClose()
     }
     function handleKeyDown(e: KeyboardEvent): void {
@@ -28,21 +40,21 @@ export function ContextMenu({
     // opens this (a right-click) is itself followed by a native 'click' in some
     // environments, which would otherwise dismiss the menu the instant it opens.
     const id = setTimeout(() => {
-      window.addEventListener('click', handleDismiss)
-      window.addEventListener('contextmenu', handleDismiss)
+      window.addEventListener('click', handleDismiss, true)
+      window.addEventListener('contextmenu', handleDismiss, true)
     }, 0)
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       clearTimeout(id)
-      window.removeEventListener('click', handleDismiss)
-      window.removeEventListener('contextmenu', handleDismiss)
+      window.removeEventListener('click', handleDismiss, true)
+      window.removeEventListener('contextmenu', handleDismiss, true)
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [onClose])
 
   return (
     <div
-      onClick={(e) => e.stopPropagation()}
+      ref={menuRef}
       onContextMenu={(e) => e.preventDefault()}
       style={{
         position: 'fixed',
