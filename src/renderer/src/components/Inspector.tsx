@@ -1,6 +1,6 @@
 import { Fragment } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
-import { resolveOffsetKey, stretchRatio } from '../state/selectors'
+import { stretchRatio } from '../state/selectors'
 import { offsetLabels } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
@@ -51,11 +51,10 @@ export function Inspector({
   const color = typeColorVar(rifff.stems[0]?.type ?? 'fx')
   const stretchOn = state.stretch[groupId] ?? true
   const ratio = stretchRatio(state, groupId)
-  const groupOffsetKey = resolveOffsetKey(state, groupId, rifff.stems[0]?.slot ?? 0)
+  const groupOffsetKey = groupId
   const groupOffsetSteps = state.off[groupId] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const labels = offsetLabels(groupOffsetSteps, snapDiv, state.bpm)
-  const unlinked = !!state.unlinked[groupId]
 
   const section = (children: React.JSX.Element): React.JSX.Element => (
     <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ra-border)' }}>
@@ -281,38 +280,29 @@ export function Inspector({
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="ra-eyebrow">stems</span>
-            <button
-              onClick={() => {
-                dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
-                // Unlinking is specifically about dragging/editing each stem
-                // independently — expand so they're actually visible to do
-                // that with, rather than leaving the collapsed single-row
-                // view up with nothing to grab. Only on the unlink
-                // direction, and only if not already expanded (never
-                // auto-collapses). Same fix as the right-click clip menu's
-                // own "unlink" item in App.tsx.
-                if (!unlinked && !state.exp[groupId]) {
-                  dispatch({ type: 'TOGGLE_EXPAND', groupId })
-                }
-              }}
-              style={{
-                height: 20,
-                borderRadius: 0,
-                padding: '0 6px',
-                fontSize: 10,
-                background: 'var(--ra-bg-row-active)',
-                color: unlinked ? 'var(--ra-text-2)' : 'var(--ra-mute-on)',
-                border: `1px solid ${unlinked ? 'var(--ra-border)' : 'color-mix(in srgb, var(--ra-mute-on) 55%, transparent)'}`
-              }}
-            >
-              {unlinked ? 'relink group' : 'unlink group'}
-            </button>
+            {/* Meaningless (and hidden) for an already-single-stem rifff —
+                there'd be nothing to split apart. One-way: there's no
+                "regroup" — see UNGROUP's own doc comment in store.ts. */}
+            {rifff.stems.length > 1 && (
+              <button
+                onClick={() => dispatch({ type: 'UNGROUP', groupId })}
+                title="split every stem into its own independent clip — cannot be undone back into a group"
+                style={{
+                  height: 20,
+                  borderRadius: 0,
+                  padding: '0 6px',
+                  fontSize: 10,
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-mute-on)',
+                  border: '1px solid color-mix(in srgb, var(--ra-mute-on) 55%, transparent)'
+                }}
+              >
+                ungroup
+              </button>
+            )}
           </div>
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
             {rifff.stems.map((stem) => {
-              const stemOffsetKey = resolveOffsetKey(state, groupId, stem.slot)
-              const stemOffsetSteps = state.off[stemOffsetKey] ?? 0
-              const stemLabels = offsetLabels(stemOffsetSteps, snapDiv, state.bpm)
               return (
                 <Fragment key={stem.slot}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 24 }}>
@@ -360,81 +350,6 @@ export function Inspector({
                       </span>
                     )}
                   </div>
-                  {unlinked && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        marginLeft: 13,
-                        marginBottom: 2
-                      }}
-                    >
-                      <button
-                        onClick={() =>
-                          dispatch({
-                            type: 'NUDGE_OFFSET',
-                            key: stemOffsetKey,
-                            delta: -fineNudgeDelta(state.bpm, snapDiv)
-                          })
-                        }
-                        style={{
-                          width: 18,
-                          height: 16,
-                          borderRadius: 0,
-                          border: '1px solid var(--ra-border)',
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          fontSize: 9
-                        }}
-                      >
-                        −
-                      </button>
-                      <span
-                        style={{
-                          fontSize: 9,
-                          color: stemOffsetSteps ? typeColorVar(stem.type) : 'var(--ra-text-3)',
-                          minWidth: 24
-                        }}
-                      >
-                        {stemLabels.ms}
-                      </span>
-                      <button
-                        onClick={() =>
-                          dispatch({
-                            type: 'NUDGE_OFFSET',
-                            key: stemOffsetKey,
-                            delta: fineNudgeDelta(state.bpm, snapDiv)
-                          })
-                        }
-                        style={{
-                          width: 18,
-                          height: 16,
-                          borderRadius: 0,
-                          border: '1px solid var(--ra-border)',
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          fontSize: 9
-                        }}
-                      >
-                        +
-                      </button>
-                      <button
-                        onClick={() => dispatch({ type: 'ZERO_OFFSET', key: stemOffsetKey })}
-                        style={{
-                          height: 16,
-                          borderRadius: 0,
-                          padding: '0 5px',
-                          fontSize: 9,
-                          border: '1px solid var(--ra-border)',
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text-2)'
-                        }}
-                      >
-                        zero
-                      </button>
-                    </div>
-                  )}
                 </Fragment>
               )
             })}

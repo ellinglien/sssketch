@@ -23,12 +23,10 @@ import { serializeProject, deserializeProject } from './state/serialize'
 import {
   loopLengthBars,
   pasteRifffAction,
-  pasteStemAction,
   placedRifffsInOrder,
   channelMuteLetters,
   nextArrangerMode,
-  groupIdAtPosition,
-  resolveOffsetKey
+  groupIdAtPosition
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -114,29 +112,6 @@ function Timeline({
       barForClientX(e.clientX, e.currentTarget, ppb),
       getGrabOffsetBars()
     )
-
-    // Checked first — more specific than a whole-group drag, and the two payloads
-    // are never both set on the same drop (StemWaveformRow only sets this one,
-    // and only while its stem's group is unlinked).
-    const stemDragKey = e.dataTransfer.getData('text/rifff-stem-key')
-    if (stemDragKey) {
-      // Cmd/Ctrl held at drop = duplicate just this one stem rather than move
-      // it — the per-stem equivalent of the whole-rifff duplicate below.
-      // stemKey's own format is `${groupId}:${slot}` — split on the LAST ':'
-      // since groupId is always a crypto.randomUUID() (never contains one),
-      // matching the same split App.tsx's Shift+letter mute handler already
-      // uses for the same reason.
-      if (e.metaKey || e.ctrlKey) {
-        const sepIndex = stemDragKey.lastIndexOf(':')
-        const sourceGroupId = stemDragKey.slice(0, sepIndex)
-        const slot = Number(stemDragKey.slice(sepIndex + 1))
-        const action = pasteStemAction(state, sourceGroupId, slot, startBar)
-        if (action) dispatch(action)
-        return
-      }
-      dispatch({ type: 'SET_STEM_START', key: stemDragKey, startBar })
-      return
-    }
 
     // From the shelf — either the rifff's first-ever placement, or (if it's
     // already placed elsewhere) an independent copy, never a reposition of an
@@ -399,16 +374,13 @@ function Frame(): React.JSX.Element {
   function openClipMenu(x: number, y: number, groupId: string): void {
     const rifff = state.rifffs[groupId]
     if (!rifff) return
-    const unlinked = !!state.unlinked[groupId]
     // A rifff can be left with a live but never-actually-baked downbeat
     // correction — the main case being a LORE-sourced stem picked before
     // bakeOffset.ts could bake those at all (see its own doc comment).
     // Playback already accounts for it correctly (SchedulePlayback wraps
     // the offset), so this is a "clean up, not fix" action — only offered
     // when there's actually something to re-bake.
-    const hasUnbakedOffset = rifff.stems.some(
-      (s) => (state.off[resolveOffsetKey(state, groupId, s.slot)] ?? 0) !== 0
-    )
+    const hasUnbakedOffset = (state.off[groupId] ?? 0) !== 0
     setContextMenu({
       x,
       y,
@@ -421,20 +393,10 @@ function Frame(): React.JSX.Element {
             if (action) dispatch(action)
           }
         },
-        {
-          label: unlinked ? 'relink' : 'unlink',
-          onClick: () => {
-            dispatch({ type: unlinked ? 'RELINK' : 'UNLINK', groupId })
-            // Unlinking is specifically about dragging/editing each stem
-            // independently — expand so they're actually visible to do that
-            // with, rather than leaving the collapsed single-row view up
-            // with nothing to grab. Only on the unlink direction, and only
-            // if not already expanded (never auto-collapses).
-            if (!unlinked && !state.exp[groupId]) {
-              dispatch({ type: 'TOGGLE_EXPAND', groupId })
-            }
-          }
-        },
+        // Meaningless for an already-single-stem rifff — nothing to split.
+        ...(rifff.stems.length > 1
+          ? [{ label: 'ungroup', onClick: () => dispatch({ type: 'UNGROUP', groupId }) }]
+          : []),
         ...(hasUnbakedOffset
           ? [
               {
