@@ -81,6 +81,14 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                         : 'var(--ra-border)'
               }}
             />
+            <button
+              onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
+              disabled={slotStatus !== 'loaded'}
+              aria-label={`edit slot ${label} plugin`}
+              style={{ fontSize: 10, padding: '1px 6px' }}
+            >
+              edit
+            </button>
           </div>
         )
       })}

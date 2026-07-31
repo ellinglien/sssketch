@@ -209,6 +209,14 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('load-master-plugin', { slot, pluginId })
   })
 
+  ipcMain.handle('engine-open-master-plugin-editor', (_event, slot: number) => {
+    playbackEngine?.client.send('open-master-plugin-editor', { slot })
+  })
+
+  ipcMain.handle('engine-close-master-plugin-editor', (_event, slot: number) => {
+    playbackEngine?.client.send('close-master-plugin-editor', { slot })
+  })
+
   createWindow()
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc

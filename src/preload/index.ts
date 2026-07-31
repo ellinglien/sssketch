@@ -44,6 +44,10 @@ const api = {
     ipcRenderer.invoke('engine-set-metronome', enabled),
   engineLoadMasterPlugin: (slot: number, pluginId: string | null): Promise<void> =>
     ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId),
+  engineOpenMasterPluginEditor: (slot: number): Promise<void> =>
+    ipcRenderer.invoke('engine-open-master-plugin-editor', slot),
+  engineCloseMasterPluginEditor: (slot: number): Promise<void> =>
+    ipcRenderer.invoke('engine-close-master-plugin-editor', slot),
   onMasterPluginLoaded: (
     callback: (result: { slot: number; pluginId: string; success: boolean; error?: string }) => void
   ): (() => void) => {
