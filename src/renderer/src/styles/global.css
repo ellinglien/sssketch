@@ -34,6 +34,40 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* App-wide scrollbar styling — the OS default (light, rounded, chrome-y)
+   clashed badly with the near-black, sharp-edged shell everywhere else.
+   scrollbar-color/-width cover standards-track browsers; the ::-webkit-*
+   pseudo-elements (what Electron's Chromium actually renders) give the
+   finer control (track/thumb/corner separately, a border to inset the
+   thumb) neither of those two properties alone can express. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ra-border-strong) var(--ra-bg-page);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ra-bg-page);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ra-border-strong);
+  border: 2px solid var(--ra-bg-page);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ra-text-3);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--ra-bg-page);
+}
+
 button {
   font-family: inherit;
   cursor: pointer;

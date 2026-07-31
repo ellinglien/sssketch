@@ -452,15 +452,17 @@ function secondsForBars(bars: number, bpm: number): number {
   return bars * (60 / bpm) * 4
 }
 
-/** Every whole-bar option the dropdown offers, ascending — always at least
- * 1..64 bars, extended further only if this particular rifff's own natural
- * length is longer than that (so its full, untrimmed length is always
- * reachable even for an unusually long rifff). */
-function barOptions(naturalBars: number): number[] {
-  const max = Math.max(64, Math.ceil(naturalBars))
-  const options: number[] = []
-  for (let b = 1; b <= max; b++) options.push(b)
-  return options
+/** A short, deliberately limited set of common bar counts (powers of two) —
+ * every full option-by-option list (1..64) felt overwhelming for what's
+ * usually a quick "make it shorter/longer" choice. The rifff's own natural
+ * (untrimmed) length and whatever it's currently set to are always folded
+ * in too, even when neither is a power of two, so neither ever silently
+ * disappears from the list just because it isn't one of the presets. */
+function barOptions(naturalBars: number, currentBars: number): number[] {
+  const options = new Set([1, 2, 4, 8, 16])
+  options.add(Math.max(1, Math.round(naturalBars)))
+  options.add(Math.max(1, Math.round(currentBars)))
+  return [...options].sort((a, b) => a - b)
 }
 
 /** Right-click popup for setting how many WHOLE bars a sketch tile plays
@@ -563,7 +565,7 @@ function SketchTileBarsMenu({
           border: '1px solid var(--ra-border)'
         }}
       >
-        {barOptions(naturalBars).map((bars) => {
+        {barOptions(naturalBars, currentBars).map((bars) => {
           const isCurrent = bars === currentBars
           // The rifff's own untrimmed length — clicking this is how you
           // "reset" a trim/extend back to normal, so it's called out
