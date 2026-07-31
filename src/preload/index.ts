@@ -42,6 +42,18 @@ const api = {
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   engineSetMetronome: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('engine-set-metronome', enabled),
+  engineLoadMasterPlugin: (slot: number, pluginId: string | null): Promise<void> =>
+    ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId),
+  onMasterPluginLoaded: (
+    callback: (result: { slot: number; pluginId: string; success: boolean; error?: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: { slot: number; pluginId: string; success: boolean; error?: string }
+    ): void => callback(payload)
+    ipcRenderer.on('master-plugin-loaded', listener)
+    return () => ipcRenderer.removeListener('master-plugin-loaded', listener)
+  },
   onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {
     const listener = (_event: unknown, payload: { pos: number }): void => callback(payload.pos)
     ipcRenderer.on('engine-position-update', listener)

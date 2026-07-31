@@ -205,6 +205,10 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-metronome', { enabled })
   })
 
+  ipcMain.handle('engine-load-master-plugin', (_event, slot: number, pluginId: string | null) => {
+    playbackEngine?.client.send('load-master-plugin', { slot, pluginId })
+  })
+
   createWindow()
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc
@@ -233,10 +237,19 @@ app.whenReady().then(async () => {
         }
       })
     }
+    function subscribeToMasterPluginLoaded(): void {
+      engine.client.on('master-plugin-loaded', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('master-plugin-loaded', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
+    subscribeToMasterPluginLoaded()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
+      subscribeToMasterPluginLoaded()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }
