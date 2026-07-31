@@ -49,6 +49,7 @@ namespace ssstitch
     {
         positionBars.store(fromPositionBars);
         playing.store(true);
+        playRequested.store(true);
     }
 
     void Transport::pause() { pendingHalt.store(HaltKind::Pause); }
@@ -139,23 +140,29 @@ namespace ssstitch
         juce::FloatVectorOperations::clear(outL, numSamples);
         juce::FloatVectorOperations::clear(outR, numSamples);
 
-        if (playing.load())
+        if (playRequested.exchange(false))
         {
             // An explicit Play always wins over any pause/stop fade still
             // winding down from a rapid halt-then-play — abrupt, but this is
             // a rare edge case, and resuming instantly matters more here
             // than finishing a fade nobody asked to hear the tail of.
+            //
+            // Deliberately NOT `if (playing.load())` — playing stays true
+            // for the entire halt fade below (only finalization sets it
+            // false once the fade actually completes), so checking it here
+            // could never detect a pending halt in the first place: every
+            // callback between stop() and the fade's own completion would
+            // see playing still true, reset fadingOut before it's even
+            // examined pendingHalt, and the halt would never process at all.
             fadingOut = false;
         }
-        else
+
+        const HaltKind requested = pendingHalt.exchange(HaltKind::None);
+        if (requested != HaltKind::None && !fadingOut)
         {
-            const HaltKind requested = pendingHalt.exchange(HaltKind::None);
-            if (requested != HaltKind::None && !fadingOut)
-            {
-                fadingOut = true;
-                activeHaltKind = requested;
-                haltFadeElapsedSec = 0.0;
-            }
+            fadingOut = true;
+            activeHaltKind = requested;
+            haltFadeElapsedSec = 0.0;
         }
 
         if (!playing.load() && !fadingOut)

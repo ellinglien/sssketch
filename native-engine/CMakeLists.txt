@@ -38,6 +38,7 @@ target_sources(ssstitch_engine PRIVATE
   Source/PlaybackEngine.cpp
   Source/PlaybackEngineTests.cpp
   Source/Transport.cpp
+  Source/TransportTests.cpp
   Source/IpcServer.cpp
   Source/RenderExport.cpp
   Source/BakeStem.cpp

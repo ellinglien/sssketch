@@ -85,6 +85,12 @@ namespace ssstitch
         std::atomic<double> positionBars { 0.0 };
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
         std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
+        // `playing` stays true for the entire duration of a halt fade (only
+        // finalization, once the fade completes, sets it false) — so it
+        // can't itself be used to detect "Play was just (re)pressed," the
+        // signal needed to cancel a fade already in progress. This is that
+        // signal, set by play(), consumed once by the audio thread.
+        std::atomic<bool> playRequested { false };
         std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
         std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
         // All audio-thread-only (never touched off that thread) — no atomics needed.
