@@ -79,6 +79,45 @@ function readWavSamples(path: string): Int16Array {
   return samples
 }
 
+// Mirrors FadeGain.cpp/fadeGain.ts's always-on ~3ms anti-click floor (see
+// either file's own doc comment) — these "expected" references are computed
+// by hand rather than through any shared fade function, so the floor has to
+// be reproduced here too or every test with an unfaded (fadeInBars/
+// fadeOutBars = 0) segment would diverge from the native engine's real
+// output right at that segment's start/end.
+const MICRO_FADE_SEC = 0.003
+
+function microFadeGain(
+  tSec: number,
+  segmentDurationSec: number,
+  fadeInBars: number,
+  fadeOutBars: number,
+  secPerBar: number,
+  isFirstSegment: boolean,
+  isLastSegment: boolean
+): number {
+  const halfDuration = segmentDurationSec / 2
+  let gain = 1.0
+  if (isFirstSegment) {
+    const fadeInSec = Math.max(
+      Math.min(fadeInBars * secPerBar, halfDuration),
+      Math.min(MICRO_FADE_SEC, halfDuration)
+    )
+    if (fadeInSec > 0 && tSec < fadeInSec) gain = Math.min(gain, tSec / fadeInSec)
+  }
+  if (isLastSegment) {
+    const fadeOutSec = Math.max(
+      Math.min(fadeOutBars * secPerBar, halfDuration),
+      Math.min(MICRO_FADE_SEC, halfDuration)
+    )
+    const fadeOutStart = segmentDurationSec - fadeOutSec
+    if (fadeOutSec > 0 && tSec > fadeOutStart) {
+      gain = Math.min(gain, (segmentDurationSec - tSec) / fadeOutSec)
+    }
+  }
+  return Math.max(0, gain)
+}
+
 describe('native engine vs Web Audio export — render parity', () => {
   let dir: string
   let tonePath: string
@@ -132,10 +171,13 @@ describe('native engine vs Web Audio export — render parity', () => {
     // this test. This mirrors exactly what the native engine's mixing does for
     // one unstretched, unmuted, unfaded stem: sample[i] = sourceSample[i] * volume. ---
     const toneBuf = readFileSync(tonePath)
-    const expectedSamples = new Int16Array(Math.floor(4.0 * 44100))
+    const sampleRate = 44100
+    const segmentDurationSec = 4.0
+    const expectedSamples = new Int16Array(Math.floor(segmentDurationSec * sampleRate))
     for (let i = 0; i < expectedSamples.length; i++) {
       const src = toneBuf.readInt16LE(44 + i * 2)
-      expectedSamples[i] = Math.round(src * 0.8)
+      const gain = microFadeGain(i / sampleRate, segmentDurationSec, 0, 0, 4.0, true, true)
+      expectedSamples[i] = Math.round(src * 0.8 * gain)
     }
 
     expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
@@ -186,12 +228,14 @@ describe('native engine vs Web Audio export — render parity', () => {
 
     const toneBuf = readFileSync(tonePath)
     const sampleRate = 44100
-    const fadeInSec = 2.0
-    const expectedSamples = new Int16Array(Math.floor(4.0 * sampleRate))
+    const segmentDurationSec = 4.0
+    const expectedSamples = new Int16Array(Math.floor(segmentDurationSec * sampleRate))
     for (let i = 0; i < expectedSamples.length; i++) {
       const src = toneBuf.readInt16LE(44 + i * 2)
-      const t = i / sampleRate
-      const gain = t < fadeInSec ? t / fadeInSec : 1.0
+      // fadeInBars 0.5 -> 2s explicit fade-in (far bigger than the floor, so
+      // unaffected by it); fadeOutBars 0 -> only the anti-click floor applies
+      // at the very end, which this test didn't have to account for before.
+      const gain = microFadeGain(i / sampleRate, segmentDurationSec, 0.5, 0, 4.0, true, true)
       expectedSamples[i] = Math.round(src * gain)
     }
 
@@ -292,7 +336,8 @@ describe('native engine vs Web Audio export — render parity', () => {
     // use. It does not reimplement any stretch/resampling math.
     const expectedSamples = new Int16Array(stretchedSamples.length)
     for (let i = 0; i < expectedSamples.length; i++) {
-      expectedSamples[i] = Math.round(stretchedSamples[i] * 0.8)
+      const gain = microFadeGain(i / 44100, stretchedDurationSec, 0, 0, secPerBar, true, true)
+      expectedSamples[i] = Math.round(stretchedSamples[i] * 0.8 * gain)
     }
 
     expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
@@ -350,14 +395,26 @@ describe('native engine vs Web Audio export — render parity', () => {
     // Reference: the 4s tone concatenated with itself (two full, unstretched,
     // unfaded repeats back-to-back), each repeat starting from the buffer's own
     // sample 0 — exactly what "re-loops from the beginning" means.
+    // The anti-click floor only touches the FIRST tile's own start (isFirst,
+    // not isLast) and the SECOND tile's own end (isLast, not isFirst) — the
+    // seam between the two tiles at the 4s mark gets no fade at all, matching
+    // the native engine's own isFirstSegment/isLastSegment scoping (see
+    // FadeGain.cpp: applies at a stem's own overall play-window edges, not
+    // every internal tiling repetition).
+    const sampleRate = 44100
+    const tileDurationSec = 4.0
     const toneBuf = readFileSync(tonePath)
-    const oneTileSamples = new Int16Array(Math.floor(4.0 * 44100))
+    const oneTileSamples = new Int16Array(Math.floor(tileDurationSec * sampleRate))
     for (let i = 0; i < oneTileSamples.length; i++) {
       oneTileSamples[i] = toneBuf.readInt16LE(44 + i * 2)
     }
     const expectedSamples = new Int16Array(oneTileSamples.length * 2)
-    expectedSamples.set(oneTileSamples, 0)
-    expectedSamples.set(oneTileSamples, oneTileSamples.length)
+    for (let i = 0; i < oneTileSamples.length; i++) {
+      const gainTile0 = microFadeGain(i / sampleRate, tileDurationSec, 0, 0, 4.0, true, false)
+      expectedSamples[i] = Math.round(oneTileSamples[i] * gainTile0)
+      const gainTile1 = microFadeGain(i / sampleRate, tileDurationSec, 0, 0, 4.0, false, true)
+      expectedSamples[oneTileSamples.length + i] = Math.round(oneTileSamples[i] * gainTile1)
+    }
 
     expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
     let maxDiff = 0

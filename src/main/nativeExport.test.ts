@@ -120,6 +120,25 @@ function findDataChunkOffset(buf: Buffer): number {
   throw new Error(`no "data" chunk found in WAV (${buf.length} bytes)`)
 }
 
+// Mirrors FadeGain.cpp/fadeGain.ts's always-on ~3ms anti-click floor (see
+// either file's own doc comment) — this reference is computed independently
+// by hand, so the floor has to be reproduced here too or every unfaded
+// (fadeInBars/fadeOutBars = 0, the default) segment in this fixture would
+// diverge from the native engine's real output right at its start/end.
+const MICRO_FADE_SEC = 0.003
+
+// Simpler than render-parity.test.ts's own version of this helper: this
+// fixture never sets fadeInBars/fadeOutBars (both default to 0), so only the
+// flat MICRO_FADE_SEC floor ever applies — no need to also take secPerBar.
+function microFadeGain(tSec: number, segmentDurationSec: number): number {
+  const fadeSec = Math.min(MICRO_FADE_SEC, segmentDurationSec / 2)
+  if (fadeSec <= 0) return 1.0
+  if (tSec < fadeSec) return tSec / fadeSec
+  const fadeOutStart = segmentDurationSec - fadeSec
+  if (tSec > fadeOutStart) return Math.max(0, (segmentDurationSec - tSec) / fadeSec)
+  return 1.0
+}
+
 describe('nativeExport — multi-stem/multi-rifff parity against reference math', () => {
   it('produces near-identical output for a two-stem, two-rifff project', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssstitch-export-parity-'))
@@ -172,15 +191,16 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
       // at volume 1 (state.vol has no entries -> default 1, per
       // buildEngineProject.ts), both starting at bar 0 and both exactly 1
       // bar long matching their rifff's own length. So the expected output
-      // is simply the sample-wise sum of the two constant-value fixtures,
-      // clamped to int16 range — exactly what the native engine's mixing
-      // would produce for this fixture, computed here as independent
-      // reference math rather than by calling nativeExport() a second time
-      // (which is the function under test, so it can't also serve as its
-      // own reference).
+      // is the sample-wise sum of the two constant-value fixtures (each
+      // carrying its own anti-click floor — see microFadeGain — since both
+      // are single, whole-clip segments), clamped to int16 range — exactly
+      // what the native engine's mixing would produce for this fixture,
+      // computed here as independent reference math rather than by calling
+      // nativeExport() a second time (which is the function under test, so
+      // it can't also serve as its own reference).
       const a16 = Math.round(volA * 32767)
       const b16 = Math.round(volB * 32767)
-      const expected16 = Math.max(-32768, Math.min(32767, a16 + b16))
+      const segmentDurationSec = numSamples / sampleRate
 
       const nativeBuf = Buffer.from(nativeBytes.buffer, nativeBytes.byteOffset, nativeBytes.byteLength)
       const nativeDataStart = findDataChunkOffset(nativeBuf)
@@ -191,6 +211,8 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
 
       let maxDiff = 0
       for (let i = 0; i < numSamples; i++) {
+        const gain = microFadeGain(i / sampleRate, segmentDurationSec)
+        const expected16 = Math.max(-32768, Math.min(32767, Math.round(a16 * gain + b16 * gain)))
         const left = nativeBuf.readInt16LE(nativeDataStart + i * 4)
         maxDiff = Math.max(maxDiff, Math.abs(left - expected16))
       }

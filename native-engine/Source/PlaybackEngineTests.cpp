@@ -86,9 +86,12 @@ namespace ssstitch
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
-                // source sample value 0.5 * stem volume 0.5 = 0.25 (no fades configured)
-                expectWithinAbsoluteError(l[100], 0.25f, 0.01f);
-                expectWithinAbsoluteError(r[100], 0.25f, 0.01f);
+                // source sample value 0.5 * stem volume 0.5 = 0.25 (no fadeInBars/
+                // fadeOutBars configured). Sampled at index 200 (~4.5ms), past the
+                // always-on ~3ms anti-click fade-in floor (see FadeGain.cpp) — index
+                // 100 (~2.3ms) would still be partway through that ramp.
+                expectWithinAbsoluteError(l[200], 0.25f, 0.01f);
+                expectWithinAbsoluteError(r[200], 0.25f, 0.01f);
             }
 
             beginTest("muted stem contributes nothing");
@@ -268,8 +271,10 @@ namespace ssstitch
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
 
                 // 0.3 + 0.2 = 0.5, not either fixture's value alone — proves accumulation.
-                expectWithinAbsoluteError(l[100], 0.5f, 0.01f);
-                expectWithinAbsoluteError(r[100], 0.5f, 0.01f);
+                // Index 200 (~4.5ms), past the anti-click fade-in floor — see the
+                // identical note on the single-stem test above.
+                expectWithinAbsoluteError(l[200], 0.5f, 0.01f);
+                expectWithinAbsoluteError(r[200], 0.5f, 0.01f);
 
                 fixtureA.deleteFile();
                 fixtureB.deleteFile();

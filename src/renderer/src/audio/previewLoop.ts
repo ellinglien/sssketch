@@ -1,4 +1,5 @@
 import { sqrtGain } from '@shared/mixGain'
+import { applyLoopMicroFade } from './microFade'
 
 export interface PreviewStemInput {
   path: string
@@ -55,8 +56,13 @@ export async function startPreviewLoop(
       continue
     }
     const { stem, buffer } = result.value
+    // Loop content isn't guaranteed to zero-cross exactly at the seam —
+    // native buffer looping wraps sample-accurately with no per-iteration
+    // hook to schedule a fade against, so a short one gets baked directly
+    // into a copy of the decoded samples instead (see microFade.ts).
+    const loopEndSec = stem.durationSec !== undefined ? stem.durationSec : buffer.duration
     const source = ctx.createBufferSource()
-    source.buffer = buffer
+    source.buffer = applyLoopMicroFade(ctx, buffer, Math.min(loopEndSec, buffer.duration))
     source.loop = true
     if (stem.durationSec !== undefined) {
       source.loopStart = 0

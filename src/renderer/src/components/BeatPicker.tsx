@@ -9,6 +9,7 @@ import type { Action, AppState } from '../state/store'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import { stopActivePreview } from '../audio/previewLoop'
+import { applyLoopMicroFade } from '../audio/microFade'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
@@ -494,8 +495,13 @@ export function BeatPicker({
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
+      const loopEndSec = Math.min(s.durationSec, buf.duration)
       const source = ctx.createBufferSource()
-      source.buffer = buf
+      // A micro fade baked into a copy of the samples (see microFade.ts) —
+      // native buffer looping wraps sample-accurately with no per-iteration
+      // hook to schedule a fade against, so this is the only way to remove
+      // a click at the loop seam for a Web Audio preview.
+      source.buffer = applyLoopMicroFade(ctx, buf, loopEndSec)
       source.loop = true
       // Explicit bounds, not the buffer's own natural length (loopEnd's
       // default, 0, means "the whole buffer") — real bug this fixed: two
@@ -508,7 +514,7 @@ export function BeatPicker({
       // durationSec (the same value the native engine's own tiling math
       // uses) keeps every stem's loop period exactly bar-accurate instead.
       source.loopStart = 0
-      source.loopEnd = Math.min(s.durationSec, buf.duration)
+      source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
       gainNode.gain.value = gain
       source.connect(gainNode)
@@ -548,6 +554,7 @@ export function BeatPicker({
       const buf = buffers[s.slot]
       if (!buf) continue
       const offsetSec = rotationSecondsForStem(steps, snapDiv, s)
+      const loopEndSec = Math.min(s.durationSec, buf.duration)
       const source = ctx.createBufferSource()
       // Rotated (not the raw buffer with loopStart=offsetSec) so every pick
       // loops the stem's full duration — see rotateBuffer's doc comment.
@@ -555,14 +562,17 @@ export function BeatPicker({
       // be too brief to judge the downbeat by ear; looping mirrors how it
       // actually sounds once baked and placed in the arranger. stopPreview()
       // (called above, and again on the next pick or on close) is what ends
-      // it, since a looped source never stops itself.
-      source.buffer = rotateBuffer(ctx, buf, offsetSec)
+      // it, since a looped source never stops itself. The micro-fade is
+      // applied AFTER rotation, on the rotated result — a rotation can
+      // introduce its own new seam wherever the split point landed, on top
+      // of whatever seam already existed at the original loop boundary.
+      source.buffer = applyLoopMicroFade(ctx, rotateBuffer(ctx, buf, offsetSec), loopEndSec)
       source.loop = true
       // Same fix as toggleFreePlay above, same reason — rotateBuffer
       // preserves the original buffer's raw sample count, which can still
       // differ slightly from this stem's true bar-derived durationSec.
       source.loopStart = 0
-      source.loopEnd = Math.min(s.durationSec, buf.duration)
+      source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
       gainNode.gain.value = gain
       source.connect(gainNode)

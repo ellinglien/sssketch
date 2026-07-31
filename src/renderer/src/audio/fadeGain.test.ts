@@ -77,9 +77,22 @@ describe('applyFade', () => {
     ])
   })
 
-  it('does nothing when fade bars are zero', () => {
+  it('still applies a tiny (3ms) anti-click floor even when fade bars are zero', () => {
     const { calls, param } = fakeParam()
     applyFade(param, 0, 8, true, true, true, { fadeInBars: 0, fadeOutBars: 0, secPerBar: 2 })
-    expect(calls).toHaveLength(0)
+    expect(calls).toEqual([
+      { method: 'setValueAtTime', value: 0, time: 0 },
+      { method: 'linearRampToValueAtTime', value: 1, time: 0.003 },
+      { method: 'setValueAtTime', value: 1, time: 7.997 },
+      { method: 'linearRampToValueAtTime', value: 0, time: 8 }
+    ])
+  })
+
+  it("the anti-click floor never shortens a user's own larger configured fade", () => {
+    const { calls, param } = fakeParam()
+    applyFade(param, 0, 8, true, true, true, config)
+    expect(calls).toHaveLength(4)
+    expect(calls[1].time).toBe(2) // still the full 2s fade-in, not clamped down to 3ms
+    expect(calls[2].time).toBe(6)
   })
 })

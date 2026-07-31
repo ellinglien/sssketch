@@ -3,6 +3,20 @@
 
 namespace ssstitch
 {
+    namespace
+    {
+        // An always-on, user-invisible safety net — independent of whatever
+        // fadeInBars/fadeOutBars the user has (or hasn't) set. Starting or
+        // stopping a sample stream at a non-zero-crossing sample produces an
+        // audible click at that exact edge; 3ms is far too short to read as
+        // an intentional fade (nothing like the musical fades fadeInBars/
+        // fadeOutBars produce), just enough to smooth the discontinuity.
+        // Applied as a floor (via std::max below), so a user's own larger
+        // fade is never shortened by this — it only fills in when there'd
+        // otherwise be none at all.
+        constexpr double kMicroFadeSec = 0.003;
+    }
+
     GainRampPoints buildFadePoints(
         double when,
         double duration,
@@ -13,18 +27,30 @@ namespace ssstitch
     {
         GainRampPoints points;
 
-        if (isFirstSegment && isFreshStart && config.fadeInBars > 0.0)
+        if (isFirstSegment && isFreshStart)
         {
-            const double fadeInSec = std::min(config.fadeInBars * config.secPerBar, duration / 2.0);
-            points.push_back({ 0.0, when, false });
-            points.push_back({ 1.0, when + fadeInSec, true });
+            const double halfDuration = duration / 2.0;
+            const double fadeInSec = std::max(
+                std::min(config.fadeInBars * config.secPerBar, halfDuration),
+                std::min(kMicroFadeSec, halfDuration));
+            if (fadeInSec > 0.0)
+            {
+                points.push_back({ 0.0, when, false });
+                points.push_back({ 1.0, when + fadeInSec, true });
+            }
         }
-        if (isLastSegment && config.fadeOutBars > 0.0)
+        if (isLastSegment)
         {
-            const double fadeOutSec = std::min(config.fadeOutBars * config.secPerBar, duration / 2.0);
-            const double endTime = when + duration;
-            points.push_back({ 1.0, std::max(when, endTime - fadeOutSec), false });
-            points.push_back({ 0.0, endTime, true });
+            const double halfDuration = duration / 2.0;
+            const double fadeOutSec = std::max(
+                std::min(config.fadeOutBars * config.secPerBar, halfDuration),
+                std::min(kMicroFadeSec, halfDuration));
+            if (fadeOutSec > 0.0)
+            {
+                const double endTime = when + duration;
+                points.push_back({ 1.0, std::max(when, endTime - fadeOutSec), false });
+                points.push_back({ 0.0, endTime, true });
+            }
         }
         return points;
     }
