@@ -24,6 +24,13 @@ export function LoadingLoader({ size = 64 }: { size?: number }): React.JSX.Eleme
       autoplay: true,
       animationData: loaderData
     })
+    // The source file's own full morph cycle is 90 frames at 30fps (3
+    // seconds) — but BeatPicker's loading state (decode + an STFT pass)
+    // often resolves well before that, so only the very start of one slow
+    // morph is ever visible before it's torn down, reading as "static"
+    // even though it genuinely was playing. 3x speed gets meaningful,
+    // visible motion into even a sub-second loading window.
+    anim.setSpeed(3)
     return () => {
       anim?.destroy()
       anim = null

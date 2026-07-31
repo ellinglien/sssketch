@@ -118,65 +118,26 @@ function microFadeGain(
   return Math.max(0, gain)
 }
 
-// Mirrors LoopSewing.cpp's applyLoopSewingBlend and adaptiveLoopSewingWindow
-// (ported from OUROVEON's Stem::applyLoopSewingBlend — see that file's own
-// doc comment) — applied ONCE when a buffer is loaded/cached, before any
-// fade/gain, so these references have to apply it to their own copy of the
-// raw fixture samples too, in the same order (blend first, then fade/gain).
-const LOOP_SEWING_MIN_WINDOW = 512
-const LOOP_SEWING_MAX_WINDOW = 4096
-
-function adaptiveLoopSewingWindow(
-  samples: Float64Array,
-  loopEndSample: number,
-  sampleRate: number
-): number {
-  const analysisWindow = Math.min(LOOP_SEWING_MAX_WINDOW, loopEndSample)
-  if (analysisWindow < 2) return LOOP_SEWING_MIN_WINDOW
-  const startIndex = loopEndSample - analysisWindow
-  let crossings = 0
-  let sumSquares = 0
-  for (let i = startIndex + 1; i < loopEndSample; i++) {
-    if (samples[i - 1] < 0 !== samples[i] < 0) crossings++
-    // Normalized to the same -1..1 float range the native engine's own
-    // AudioFormatReader decodes 16-bit PCM into — `samples` here are still
-    // raw int16 magnitudes (see rawSamples above), and kSilenceRms below is
-    // calibrated for the normalized domain production actually compares it
-    // against.
-    const normalized = samples[i] / 32768
-    sumSquares += normalized * normalized
-  }
-  const rms = Math.sqrt(sumSquares / analysisWindow)
-  const kSilenceRms = 0.01
-  if (rms < kSilenceRms) return LOOP_SEWING_MIN_WINDOW
-  const windowDurationSec = analysisWindow / sampleRate
-  const estimatedFreqHz = crossings / 2 / windowDurationSec
-  const kBassyFreqHz = 150
-  const kBrightFreqHz = 1000
-  if (estimatedFreqHz <= kBassyFreqHz) return LOOP_SEWING_MAX_WINDOW
-  if (estimatedFreqHz >= kBrightFreqHz) return LOOP_SEWING_MIN_WINDOW
-  const logLow = Math.log(kBassyFreqHz)
-  const logHigh = Math.log(kBrightFreqHz)
-  const t = (Math.log(estimatedFreqHz) - logLow) / (logHigh - logLow)
-  return Math.round(LOOP_SEWING_MAX_WINDOW + t * (LOOP_SEWING_MIN_WINDOW - LOOP_SEWING_MAX_WINDOW))
-}
+// Mirrors LoopSewing.cpp's applyLoopSewingBlend (ported from OUROVEON's
+// Stem::applyLoopSewingBlend — see that file's own doc comment, and
+// LoopSewing.h's, on why this matches OUROVEON's own literal 128-sample
+// tuning exactly rather than a wider or per-stem-adaptive window) — applied
+// ONCE when a buffer is loaded/cached, before any fade/gain, so these
+// references have to apply it to their own copy of the raw fixture samples
+// too, in the same order (blend first, then fade/gain).
+const LOOP_SEWING_WINDOW = 128
 
 // loopEndSample defaults to the full sample count, matching
 // StemBufferCache::load's own fallback when a stem's metadata durationSec
 // isn't usable — callers with a known true duration (distinct from the raw
 // decoded length, e.g. a LORE stem's metadata-derived durationSec) should
 // pass `Math.round(durationSec * sampleRate)` instead, matching production.
-function applyLoopSewingBlend(
-  samples: Float64Array,
-  sampleRate = 44100,
-  loopEndSample = samples.length
-): void {
-  const window = adaptiveLoopSewingWindow(samples, loopEndSample, sampleRate)
-  if (loopEndSample <= window * 2) return
+function applyLoopSewingBlend(samples: Float64Array, loopEndSample = samples.length): void {
+  if (loopEndSample <= LOOP_SEWING_WINDOW * 2) return
   const startSample = samples[0]
-  for (let i = 0; i < window; i++) {
+  for (let i = 0; i < LOOP_SEWING_WINDOW; i++) {
     const endIndex = loopEndSample - 1 - i
-    const t = -1.0 + (i / window) * 2.0
+    const t = -1.0 + (i / LOOP_SEWING_WINDOW) * 2.0
     const coeff = Math.sqrt(0.5 * (1.0 - t))
     samples[endIndex] = samples[endIndex] + (startSample - samples[endIndex]) * coeff
   }

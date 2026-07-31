@@ -69,12 +69,10 @@ namespace ssstitch
         // toward its head ONCE here, rather than per-block in renderBlock,
         // means every tiled repeat downstream is automatically click-free
         // with zero changes needed to the real-time render path itself.
-        // The window itself adapts to how bassy the seam sounds (see
-        // adaptiveLoopSewingWindow's own doc comment) rather than using one
-        // fixed size for every stem.
-        const int window =
-            adaptiveLoopSewingWindow(entry.buffer, loopEndSample, 512, 4096, entry.sampleRate);
-        applyLoopSewingBlend(entry.buffer, loopEndSample, window);
+        // Uses applyLoopSewingBlend's own default window (matching
+        // OUROVEON's fixed 128-sample tuning exactly — see its doc comment
+        // for why a bigger, per-stem-adaptive window was tried and reverted).
+        applyLoopSewingBlend(entry.buffer, loopEndSample);
 
         cache.emplace(key, std::move(entry));
         return true;

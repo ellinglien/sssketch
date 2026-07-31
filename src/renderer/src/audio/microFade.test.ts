@@ -1,19 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import {
-  adaptiveLoopSewingWindowSamples,
-  applyLoopMicroFade,
-  applyLoopMicroFadeToChannel
-} from './microFade'
+import { applyLoopMicroFade, applyLoopMicroFadeToChannel } from './microFade'
 
 function ramp(length: number): Float32Array {
   const data = new Float32Array(length)
   for (let i = 0; i < length; i++) data[i] = i
-  return data
-}
-
-function sineWave(length: number, freqHz: number, sampleRate: number): Float32Array {
-  const data = new Float32Array(length)
-  for (let i = 0; i < length; i++) data[i] = Math.sin((2 * Math.PI * freqHz * i) / sampleRate)
   return data
 }
 
@@ -70,47 +60,6 @@ describe('applyLoopMicroFadeToChannel', () => {
   })
 })
 
-describe('adaptiveLoopSewingWindowSamples', () => {
-  const sampleRate = 44100
-
-  it('picks the max window for a bassy (low-frequency) tail', () => {
-    const data = sineWave(8192, 50, sampleRate)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(4096)
-  })
-
-  it('picks the min window for a bright (high-frequency) tail', () => {
-    const data = sineWave(8192, 5000, sampleRate)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(512)
-  })
-
-  it('picks something strictly between the two extremes for a mid-range tail', () => {
-    const data = sineWave(8192, 400, sampleRate)
-    const window = adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)
-    expect(window).toBeGreaterThan(512)
-    expect(window).toBeLessThan(4096)
-  })
-
-  it('falls back to the min window for an invalid sample rate', () => {
-    const data = sineWave(8192, 50, sampleRate)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, 0)).toBe(512)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, -sampleRate)).toBe(512)
-  })
-
-  it('falls back to the min window for a loop too short to analyze', () => {
-    const data = new Float32Array([0.5])
-    expect(adaptiveLoopSewingWindowSamples(data, 1, sampleRate)).toBe(512)
-  })
-
-  it('falls back to the min window for a near-silent tail, even though it has almost no zero crossings', () => {
-    // Same low frequency as the "bassy" test above, but at 0.001 amplitude
-    // -- a naive zero-crossing-only heuristic would misread this as bassy
-    // too, and forcibly ramp near-silence up into whatever the head sounds
-    // like (e.g. a downbeat's own onset for a re-one'd loop).
-    const data = sineWave(8192, 50, sampleRate).map((v) => v * 0.001)
-    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(512)
-  })
-})
-
 describe('applyLoopMicroFade', () => {
   function fakeBuffer(channels: Float32Array[], sampleRate: number): AudioBuffer {
     return {
@@ -135,22 +84,18 @@ describe('applyLoopMicroFade', () => {
     } as unknown as AudioContext
   }
 
-  it('uses an adaptive window (not a fixed size) when windowSec is omitted', () => {
+  it('defaults to a 128-sample window when windowSec is omitted, matching OUROVEON', () => {
     const sampleRate = 44100
-    const data = sineWave(8192, 50, sampleRate) // bassy -> should pick the 2048-sample max window
+    const data = ramp(1000)
     const buf = fakeBuffer([data], sampleRate)
     const ctx = fakeContext()
 
     const result = applyLoopMicroFade(ctx, buf, data.length / sampleRate)
 
-    // 1000 samples before the end is inside the adaptive (2048) window but
-    // would be untouched by the old fixed 512-sample default -- confirms
-    // the wider, bass-aware window actually took effect.
-    const untouchedUnderOldDefault = data[data.length - 1000]
-    expect(result.getChannelData(0)[data.length - 1000]).not.toBeCloseTo(
-      untouchedUnderOldDefault,
-      3
-    )
+    // Just outside a 128-sample window: untouched.
+    expect(result.getChannelData(0)[871]).toBeCloseTo(871, 4)
+    // Inside it: blended toward the start value.
+    expect(result.getChannelData(0)[999]).toBeCloseTo(result.getChannelData(0)[0], 4)
   })
 
   it('returns a copy, leaving the original buffer untouched', () => {
