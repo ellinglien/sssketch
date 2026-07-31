@@ -929,6 +929,9 @@ export function BeatPicker({
                       marker StemWaveformRow already draws in the main
                       arranger, just as a percentage of this lane's full
                       rifff-spanning width instead of a pixel offset. */}
+                  {/* Cyan rather than white/black — the pitch contour line
+                      just below is drawn as a white-on-black halo, and a
+                      matching white made the two indistinguishable. */}
                   {tileBoundaryPcts.map((pct) => (
                     <div
                       key={pct}
@@ -938,7 +941,7 @@ export function BeatPicker({
                         bottom: 0,
                         left: `${pct}%`,
                         width: 2,
-                        background: 'color-mix(in srgb, white 80%, transparent)',
+                        background: 'color-mix(in srgb, #5ec8ff 85%, transparent)',
                         pointerEvents: 'none'
                       }}
                     />
