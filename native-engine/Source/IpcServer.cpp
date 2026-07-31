@@ -177,6 +177,20 @@ namespace ssstitch
                     });
                 });
         }
+        else if (type == "open-master-plugin-editor")
+        {
+            if (!payload.isObject())
+                return;
+            const int slot = (int) payload.getProperty("slot", -1);
+            masterChain.openEditorWindow(slot);
+        }
+        else if (type == "close-master-plugin-editor")
+        {
+            if (!payload.isObject())
+                return;
+            const int slot = (int) payload.getProperty("slot", -1);
+            masterChain.closeEditorWindow(slot);
+        }
         else if (type == "render-export")
         {
             if (!payload.isObject())

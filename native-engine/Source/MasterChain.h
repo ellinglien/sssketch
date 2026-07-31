@@ -1,6 +1,7 @@
 // native-engine/Source/MasterChain.h
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 #include <atomic>
 #include <functional>
@@ -80,9 +81,54 @@ namespace ssstitch
          * split across multiple renderBlock calls at a loop boundary. */
         void process(int numSamples, float* outL, float* outR);
 
+        /** Message-thread API: opens a DocumentWindow hosting slotIndex's
+         * plugin's own AudioProcessorEditor, if that slot has a plugin
+         * loaded and doesn't already have an open window. No-op (not an
+         * error) if the slot is empty, already has a window open, or the
+         * plugin reports no editor -- mirrors this app's existing
+         * "silently do nothing" convention for a redundant UI action (e.g.
+         * re-clicking an already-selected rifff). Returns false only if
+         * slotIndex is out of range. */
+        bool openEditorWindow(int slotIndex);
+
+        /** Message-thread API: closes slotIndex's editor window if one is
+         * open. The underlying plugin instance keeps loaded and processing
+         * either way -- closing the editor is purely a UI action. No-op if
+         * no window is open for that slot. */
+        void closeEditorWindow(int slotIndex);
+
     private:
         static std::unique_ptr<juce::AudioProcessor> defaultInstantiate(
             const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut);
+
+        // Mirrors the concrete DocumentWindow-hosting-an-AudioProcessorEditor
+        // pattern used by JUCE's own AudioPluginHost example (see
+        // extras/AudioPluginHost/Source/UI/PluginWindow.h), simplified to
+        // this app's actual needs (no resizable-editor constrainer, no
+        // per-window-type variants -- always the plugin's own "normal"
+        // editor, never the generic parameter-list fallback).
+        class EditorWindow : public juce::DocumentWindow
+        {
+        public:
+            EditorWindow(const juce::String& name, juce::AudioProcessorEditor* editor, std::function<void()> onClosed)
+                : juce::DocumentWindow(name, juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
+                  onClosedCallback(std::move(onClosed))
+            {
+                setUsingNativeTitleBar(true);
+                setContentOwned(editor, true);
+                setResizable(editor->isResizable(), false);
+                centreWithSize(getWidth(), getHeight());
+                setVisible(true);
+            }
+            void closeButtonPressed() override
+            {
+                if (onClosedCallback)
+                    onClosedCallback();
+            }
+
+        private:
+            std::function<void()> onClosedCallback;
+        };
 
         struct Slot
         {
@@ -91,6 +137,7 @@ namespace ssstitch
             std::atomic<juce::AudioProcessor*> pending { nullptr };
             std::atomic<bool> pendingReady { false };
             juce::AudioBuffer<float> scratch;
+            std::unique_ptr<EditorWindow> editorWindow;
         };
 
         std::array<Slot, kNumMasterChainSlots> slots;

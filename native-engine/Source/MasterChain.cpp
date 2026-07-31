@@ -142,6 +142,30 @@ namespace ssstitch
         return true;
     }
 
+    bool MasterChain::openEditorWindow(int slotIndex)
+    {
+        if (slotIndex < 0 || slotIndex >= kNumMasterChainSlots)
+            return false;
+        auto& slot = slots[(size_t) slotIndex];
+        if (slot.active == nullptr || slot.editorWindow != nullptr || !slot.active->hasEditor())
+            return true; // no-op: nothing to open, or already open
+
+        auto* editor = slot.active->createEditorIfNeeded();
+        if (editor == nullptr)
+            return true;
+
+        slot.editorWindow = std::make_unique<EditorWindow>(
+            slot.active->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
+        return true;
+    }
+
+    void MasterChain::closeEditorWindow(int slotIndex)
+    {
+        if (slotIndex < 0 || slotIndex >= kNumMasterChainSlots)
+            return;
+        slots[(size_t) slotIndex].editorWindow.reset();
+    }
+
     void MasterChain::requestLoad(
         int slotIndex,
         const juce::String& pluginId,
