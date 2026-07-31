@@ -49,6 +49,25 @@ function CompactTiles({
           <Waveform path={path} color={color} opacity={opacity} />
         </div>
       ))}
+      {/* One thin line at every point the underlying loop restarts (skipping
+          the first, at the block's own left edge) — see StemWaveformRow's
+          identical marker for why: makes how long the stem's own native loop
+          actually is legible at a glance. */}
+      {tileCount > 1 &&
+        tileOffsets.slice(1).map((left) => (
+          <div
+            key={left}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left,
+              width: 1,
+              background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
+              pointerEvents: 'none'
+            }}
+          />
+        ))}
     </>
   )
 }
@@ -112,14 +131,14 @@ export function CompactRifffBlock({
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
-            if (e.metaKey || e.ctrlKey) {
+            if (e.ctrlKey) {
               dispatch({ type: 'SOLO_GROUP', groupId })
               return
             }
             dispatch({ type: 'SELECT', groupId })
             onOpenContextMenu(e.clientX, e.clientY, groupId)
           }}
-          title={`${rifff.name} — cmd/ctrl+right-click to solo`}
+          title={`${rifff.name} — ctrl+right-click to solo`}
           style={{
             position: 'absolute',
             top: 0,

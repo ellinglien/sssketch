@@ -64,6 +64,25 @@ function CollapsedTiles({
           <Waveform path={path} color={color} opacity={opacity} />
         </div>
       ))}
+      {/* One thin line at every point the underlying loop restarts (skipping
+          the first, at the block's own left edge) — see StemWaveformRow's
+          identical marker for why: makes how long the stem's own native loop
+          actually is legible at a glance. */}
+      {tileCount > 1 &&
+        tileOffsets.slice(1).map((left) => (
+          <div
+            key={left}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left,
+              width: 1,
+              background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
+              pointerEvents: 'none'
+            }}
+          />
+        ))}
     </>
   )
 }
@@ -113,11 +132,12 @@ export function CollapsedRifffRow({
   // Right-click anywhere on the block toggles the whole group's mute —
   // moved off plain click, same as StemWaveformRow's identical change, since
   // an accidental click meant for something else used to silently mute the
-  // whole group. Cmd/Ctrl+right-click solos this rifff instead (see
-  // SOLO_GROUP).
+  // whole group. Ctrl+right-click solos this rifff instead (see
+  // SOLO_GROUP) — cmd dropped from this gesture per user request, since
+  // cmd+right-click wasn't reliably reaching the app on their system.
   function handleBlockContextMenu(e: React.MouseEvent): void {
     e.preventDefault()
-    if (e.metaKey || e.ctrlKey) {
+    if (e.ctrlKey) {
       dispatch({ type: 'SOLO_GROUP', groupId })
       return
     }
@@ -306,7 +326,7 @@ export function CollapsedRifffRow({
             }
           }}
           onContextMenu={handleBlockContextMenu}
-          title="right-click to mute group · cmd/ctrl+right-click to solo"
+          title="right-click to mute group · ctrl+right-click to solo"
           style={{
             position: 'absolute',
             top: 0,

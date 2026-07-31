@@ -79,12 +79,11 @@ export function StemWaveformRow({
   // register — used to silently mute a stem. Right-click has no other use
   // here, so it can dispatch immediately with no debounce/disambiguation
   // needed against the separate onDoubleClick (reset volume) handler below.
-  // Cmd/Ctrl+right-click solos this stem's whole rifff instead (see
-  // SOLO_GROUP) — same modifier convention as cmd-drag-to-duplicate
-  // elsewhere in the app.
+  // Ctrl+right-click solos this stem's whole rifff instead (see
+  // SOLO_GROUP).
   function handleWaveformContextMenu(e: React.MouseEvent): void {
     e.preventDefault()
-    if (e.metaKey || e.ctrlKey) {
+    if (e.ctrlKey) {
       dispatch({ type: 'SOLO_GROUP', groupId })
       return
     }
@@ -410,6 +409,30 @@ export function StemWaveformRow({
               />
             </svg>
           )}
+
+          {/* One thin line at every point the underlying loop restarts (i.e.
+              every tileOffsets entry after the first — the first is just the
+              clip's own left edge, already visually bounded) — makes how
+              long the stem's own native loop actually is legible at a
+              glance: a short loop shows several closely-packed lines, a long
+              one shows few or none within the clip's own width. Purely
+              informational (pointer-events none), drawn under the resize/
+              fade handles so it never competes with them for clicks. */}
+          {tileCount > 1 &&
+            tileOffsets.slice(1).map((left) => (
+              <div
+                key={left}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left,
+                  width: 1,
+                  background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
+                  pointerEvents: 'none'
+                }}
+              />
+            ))}
 
           {/* Resize handles, both edges: dragging either extends/shrinks the
               loop (always tiled from the stem's own beginning — see the
