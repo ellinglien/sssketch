@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { initialState, reducer } from './store'
-import { serializeProject, deserializeProject } from './serialize'
+import { serializeProject, deserializeProject, type LegacyPersistedProject } from './serialize'
 import type { Rifff } from '@shared/types'
 
 const rifff: Rifff = {
@@ -72,5 +72,31 @@ describe('deserializeProject mode fallback', () => {
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
     const persisted = JSON.parse(serializeProject(state))
     expect(deserializeProject(persisted).mode).toBe('normal')
+  })
+})
+
+describe('deserializeProject migration from trackOrder', () => {
+  it('migrates an old-shape project (trackOrder, no channelOrder/channelOf) into one channel per clip, same order', () => {
+    const legacy = {
+      rifffs: {
+        r1: { ...rifff, startBar: 0 },
+        r2: { ...rifff, groupId: 'r2', startBar: 4 }
+      },
+      trackOrder: ['r1', 'r2']
+    } as unknown as LegacyPersistedProject
+    const restored = deserializeProject(legacy)
+    expect(restored.channelOrder).toEqual(['r1', 'r2'])
+    expect(restored.channelOf).toEqual({ r1: 'r1', r2: 'r2' })
+    expect(restored.rifffs.r1.startBar).toBe(0)
+    expect(restored.rifffs.r2.startBar).toBe(4)
+  })
+
+  it('does not re-migrate a project that already has channelOrder', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    const persisted = JSON.parse(serializeProject(state))
+    const restored = deserializeProject(persisted)
+    expect(restored.channelOrder).toEqual(['r1'])
+    expect(restored.channelOf).toEqual({ r1: 'r1' })
   })
 })
