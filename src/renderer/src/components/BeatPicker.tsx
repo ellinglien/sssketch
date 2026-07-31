@@ -464,7 +464,18 @@ export function BeatPicker({
   // playing yet, so hitting Space before pressing Play did nothing at all).
   const spaceRef = useRef<() => void>(() => {})
   useEffect(() => {
-    commitAndCloseRef.current = () => {
+    // Async, deliberately — this used to fire bakeStems without awaiting it,
+    // then immediately call onBaked/stopPreview/onClose in the same tick.
+    // The picker would visibly close (and, in a batch import, move on to
+    // the NEXT riff via onBaked) while the actual file rotation + write was
+    // still in flight in the background, with nothing waiting for it to
+    // land. Real bug this fixed: the user closing the picker (or a batch
+    // flow advancing) before a slower bake genuinely finished, sometimes
+    // reading as "the rotation didn't take" or racing a second bake against
+    // the first one's still-pending APPLY_BAKE dispatch. bakeStems itself
+    // never throws (its own try/catch swallows and logs), so this can
+    // always safely run through to completion.
+    commitAndCloseRef.current = async () => {
       if (pendingBakeRef.current !== null && rifff) {
         // A wrong pick on a brand-new import is easy to make without
         // realizing (Escape/click-outside is an easy accidental close) and
@@ -477,7 +488,7 @@ export function BeatPicker({
         }
         const steps = pendingBakeRef.current
         pendingBakeRef.current = null
-        bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
+        await bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
         onBaked?.(steps)
       }
       stopPreview()
