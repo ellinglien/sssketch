@@ -105,6 +105,10 @@ export interface AppState {
    * serialize.ts) — always starts off, matching every other "how I'm
    * currently working" toggle in this app. */
   metronomeEnabled: boolean
+  /** masterChain[i] is an allowlist id (see src/shared/masterChainAllowlist.ts)
+   * or null for an empty slot. Persists normally -- real arrangement data, not
+   * transient UI state. See docs/superpowers/specs/2026-07-31-master-plugin-chain-design.md. */
+  masterChain: [string | null, string | null, string | null, string | null]
   rifffs: Record<string, Rifff>
 }
 
@@ -126,6 +130,7 @@ export const initialState: AppState = {
   mode: 'sketch',
   inspectorCollapsed: false,
   metronomeEnabled: false,
+  masterChain: [null, null, null, null],
   rifffs: {}
 }
 
@@ -181,6 +186,7 @@ export type Action =
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_METRONOME' }
+  | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -690,6 +696,12 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }
+
+    case 'SET_MASTER_CHAIN_PLUGIN': {
+      const masterChain = [...state.masterChain] as AppState['masterChain']
+      masterChain[action.slot] = action.pluginId
+      return { ...state, masterChain }
+    }
 
     case 'SET_ARRANGER_MODE':
       return { ...state, mode: action.mode }

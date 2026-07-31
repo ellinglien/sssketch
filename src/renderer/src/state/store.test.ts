@@ -840,4 +840,28 @@ describe('reducer', () => {
       expect(state.vol['r2:1']).not.toBe(0.3)
     })
   })
+
+  describe('SET_MASTER_CHAIN_PLUGIN', () => {
+    it('sets the given slot to the given plugin id, leaving other slots untouched', () => {
+      let state = reducer(initialState, {
+        type: 'SET_MASTER_CHAIN_PLUGIN',
+        slot: 1,
+        pluginId: 'pro-q-3'
+      })
+      expect(state.masterChain).toEqual([null, 'pro-q-3', null, null])
+
+      state = reducer(state, { type: 'SET_MASTER_CHAIN_PLUGIN', slot: 3, pluginId: 'soothe2' })
+      expect(state.masterChain).toEqual([null, 'pro-q-3', null, 'soothe2'])
+    })
+
+    it('clears a slot back to null', () => {
+      let state = reducer(initialState, {
+        type: 'SET_MASTER_CHAIN_PLUGIN',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+      state = reducer(state, { type: 'SET_MASTER_CHAIN_PLUGIN', slot: 0, pluginId: null })
+      expect(state.masterChain).toEqual([null, null, null, null])
+    })
+  })
 })
