@@ -38,8 +38,8 @@ namespace ssstitch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c)
-        : engine(e), transport(t), bufferCache(c)
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, MasterChain& mc)
+        : engine(e), transport(t), bufferCache(c), masterChain(mc)
     {
     }
 
@@ -137,6 +137,46 @@ namespace ssstitch
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
             engine.setMetronomeEnabled(enabled);
         }
+        else if (type == "load-master-plugin")
+        {
+            if (!payload.isObject())
+                return;
+            const int slot = (int) payload.getProperty("slot", -1);
+            const auto pluginId = payload.getProperty("pluginId", "").toString();
+            if (slot < 0 || slot >= kNumMasterChainSlots)
+                return;
+
+            // Use the real device's own sample rate / block size, not a
+            // hardcoded guess -- prepareToPlay()'ing a plugin for the wrong
+            // block size means processBlock() can later be called with a
+            // buffer larger than it allocated internal storage for
+            // (undefined behaviour, often a crash that takes the whole
+            // engine process down, silencing the dry mix too).
+            //
+            // IpcConnection itself is only ever touched from the message
+            // thread (InterprocessConnection's own contract), but
+            // requestLoad's onLoaded callback fires on MasterChain's
+            // background loader thread -- sendJson (and `this` in general)
+            // must not be touched from there directly. Post back to the
+            // message thread.
+            masterChain.requestLoad(slot, pluginId, transport.currentSampleRate(), transport.currentBlockSize(),
+                [this, slot, pluginId](bool success, const juce::String& error)
+                {
+                    juce::MessageManager::callAsync([this, slot, pluginId, success, error]()
+                    {
+                        juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+                        payloadObj->setProperty("slot", slot);
+                        payloadObj->setProperty("pluginId", pluginId);
+                        payloadObj->setProperty("success", success);
+                        if (!success)
+                            payloadObj->setProperty("error", error);
+                        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                        obj->setProperty("type", "master-plugin-loaded");
+                        obj->setProperty("payload", juce::var(payloadObj.get()));
+                        sendJson(juce::var(obj.get()));
+                    });
+                });
+        }
         else if (type == "render-export")
         {
             if (!payload.isObject())
@@ -177,13 +217,13 @@ namespace ssstitch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c)
-        : engine(e), transport(t), bufferCache(c)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, MasterChain& mc)
+        : engine(e), transport(t), bufferCache(c), masterChain(mc)
     {
     }
 
     juce::InterprocessConnection* IpcServer::createConnectionObject()
     {
-        return new IpcConnection(engine, transport, bufferCache);
+        return new IpcConnection(engine, transport, bufferCache, masterChain);
     }
 }

@@ -97,6 +97,31 @@ namespace ssstitch
                 expect(!parseEngineProject(json, project, error));
                 expect(error.isNotEmpty());
             }
+
+            beginTest("parses masterChain from the wire payload");
+            {
+                const auto json = R"({
+                    "bpm": 120, "snapDiv": 16, "rifffs": [],
+                    "masterChain": ["pro-q-3", "", "soothe2", ""]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectEquals(project.masterChain[0], juce::String("pro-q-3"));
+                expectEquals(project.masterChain[1], juce::String(""));
+                expectEquals(project.masterChain[2], juce::String("soothe2"));
+                expectEquals(project.masterChain[3], juce::String(""));
+            }
+
+            beginTest("missing masterChain defaults to all-empty slots");
+            {
+                const auto json = R"({"bpm": 120, "snapDiv": 16, "rifffs": []})";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                for (const auto& slot : project.masterChain)
+                    expectEquals(slot, juce::String(""));
+            }
         }
     };
 

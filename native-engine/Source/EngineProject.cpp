@@ -42,6 +42,17 @@ namespace ssstitch
         project.snapDiv = getDouble(parsed, "snapDiv", 16.0);
         project.loopLengthBars = getDouble(parsed, "loopLengthBars", 0.0);
 
+        auto masterChainVar = parsed.getProperty("masterChain", juce::var());
+        if (auto* masterChainArray = masterChainVar.getArray())
+        {
+            for (int i = 0; i < kNumMasterChainSlots; ++i)
+                project.masterChain[(size_t) i] =
+                    i < masterChainArray->size() ? (*masterChainArray)[i].toString() : juce::String();
+        }
+        // else: leave the default-constructed all-empty masterChain as-is
+        // (missing/absent masterChain is not a parse error, matching this
+        // function's existing lenient-parse convention for other fields).
+
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())
         {

@@ -1,5 +1,7 @@
 #pragma once
+#include "MasterChain.h"
 #include <juce_core/juce_core.h>
+#include <array>
 #include <vector>
 
 namespace ssstitch
@@ -42,6 +44,11 @@ namespace ssstitch
         // semantics for setLoopLengthBars.
         double loopLengthBars = 0.0;
         std::vector<EngineRifff> rifffs;
+        // "" (empty string) = no plugin loaded for that slot. Always exactly
+        // kNumMasterChainSlots entries; parseEngineProject fills missing/short
+        // wire-format arrays with empty strings rather than failing, matching
+        // this file's existing lenient-parse convention for other fields.
+        std::array<juce::String, kNumMasterChainSlots> masterChain {};
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.
