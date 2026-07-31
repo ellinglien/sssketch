@@ -10,6 +10,10 @@ namespace ssstitch
      * from its callback — the transport's position clock IS the audio device's
      * own clock, advanced by exactly numSamples/sampleRate each callback, same
      * as Web Audio's ctx.currentTime advancing via the hardware clock. */
+    /** Pause and Stop don't cut to silence synchronously — see HaltKind
+     * below. */
+    enum class HaltKind { None, Pause, Stop };
+
     class Transport : public juce::AudioIODeviceCallback
     {
     public:
@@ -20,6 +24,13 @@ namespace ssstitch
         void closeDevice();
 
         void play(double fromPositionBars);
+        // Both arm a short fade-out that the audio callback applies to the
+        // next block(s) of real content before actually going silent —
+        // rather than cutting straight to zero at whatever amplitude the
+        // waveform happened to be at, a previously unnoticed click every
+        // time either was pressed mid-tone. Pause leaves position where
+        // playback had reached once the fade completes; Stop resets it to 0,
+        // matching each one's existing pre-fade behavior.
         void pause();
         void stop();
         void setPosition(double positionBars);
@@ -51,6 +62,11 @@ namespace ssstitch
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
+        std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
+        // Both audio-thread-only (never touched off that thread) — no atomics needed.
+        bool fadingOut = false;
+        HaltKind activeHaltKind = HaltKind::None;
+        double haltFadeElapsedSec = 0.0;
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
     };

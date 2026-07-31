@@ -10,50 +10,43 @@ namespace ssstitch
 
         void runTest() override
         {
-            beginTest("is 1.0 (no-op) well away from any loop boundary");
+            beginTest("is exactly 1.0 (fully the anchor) right at the boundary");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(4.0, 8.0, 0.01), 1.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(0.0, 0.01), 1.0f, 1.0e-6f);
             }
 
-            beginTest("is exactly 0.0 right at the loop boundary");
+            beginTest("is exactly 0.0 (untouched) at the far edge of the window");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(8.0, 8.0, 0.01), 0.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(0.01, 0.01), 0.0f, 1.0e-6f);
             }
 
-            beginTest("ramps back up to 1.0 within fadeBars just after wrapping to 0");
+            beginTest("is 0.0 well before the window even starts");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(0.0, 8.0, 0.01), 0.0f, 1.0e-6f);
-                expectWithinAbsoluteError(loopBoundaryGain(0.005, 8.0, 0.01), 0.5f, 1.0e-3f);
-                expectWithinAbsoluteError(loopBoundaryGain(0.01, 8.0, 0.01), 1.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(1.0, 0.01), 0.0f, 1.0e-6f);
             }
 
-            beginTest("ramps down toward 0.0 approaching the boundary from before it");
+            beginTest("is partway blended at the midpoint of the window");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(7.995, 8.0, 0.01), 0.5f, 1.0e-3f);
+                const float mid = loopSeamBlendCoeff(0.005, 0.01);
+                expect(mid > 0.0f && mid < 1.0f);
             }
 
-            beginTest("handles a position several laps into the loop the same as the first lap");
+            beginTest("increases monotonically as the sample approaches the boundary");
             {
-                const float first = loopBoundaryGain(0.005, 8.0, 0.01);
-                const float later = loopBoundaryGain(8.0 * 37.0 + 0.005, 8.0, 0.01);
-                expectWithinAbsoluteError(later, first, 1.0e-6f);
+                const float far = loopSeamBlendCoeff(0.008, 0.01);
+                const float near = loopSeamBlendCoeff(0.002, 0.01);
+                expect(near > far);
             }
 
-            beginTest("is a no-op when loop length is 0 (wrapping disabled)");
+            beginTest("is a no-op (0.0) when fadeBars is non-positive");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(0.0, 0.0, 0.01), 1.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(0.0, 0.0), 0.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(0.005, -1.0), 0.0f, 1.0e-6f);
             }
 
-            beginTest("is a no-op when fadeBars is 0");
+            beginTest("treats a negative distance the same as zero (fully the anchor)");
             {
-                expectWithinAbsoluteError(loopBoundaryGain(8.0, 8.0, 0.0), 1.0f, 1.0e-6f);
-            }
-
-            beginTest("clamps an oversized fade window to half the loop length");
-            {
-                // fadeBars (100) far exceeds loopLengthBars/2 (1.0) -- the
-                // midpoint of the loop should still reach full gain.
-                expectWithinAbsoluteError(loopBoundaryGain(1.0, 2.0, 100.0), 1.0f, 1.0e-6f);
+                expectWithinAbsoluteError(loopSeamBlendCoeff(-0.001, 0.01), 1.0f, 1.0e-6f);
             }
         }
     };
