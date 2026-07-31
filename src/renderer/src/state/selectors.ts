@@ -116,13 +116,20 @@ export function placedRifffsInOrder(state: AppState): Rifff[] {
 
 /**
  * True iff the current arrangement is "plain" enough for sketch mode: every
- * placed rifff is linked, unfaded, at its natural (un-resized) bar length,
- * with zero offset, AND the whole set — sorted by startBar, not by
- * placedRifffsInOrder's row-render order, which is a DIFFERENT ordering —
- * is perfectly contiguous starting at bar 0 with no gaps or overlaps. An
- * empty timeline is trivially eligible (starting a fresh sketch is the
- * common case, not an edge case). Mute and volume are deliberately not
- * checked — they don't affect positioning/sequencing accuracy, only mix.
+ * placed rifff is linked and unfaded, with zero offset, AND the whole set —
+ * sorted by startBar, not by placedRifffsInOrder's row-render order, which
+ * is a DIFFERENT ordering — is perfectly contiguous starting at bar 0 with
+ * no gaps or overlaps. An empty timeline is trivially eligible (starting a
+ * fresh sketch is the common case, not an edge case). Mute and volume are
+ * deliberately not checked — they don't affect positioning/sequencing
+ * accuracy, only mix.
+ *
+ * A playedBars trim (state.playedBars[groupId]) does NOT disqualify a rifff
+ * — sketch mode's own "how many bars does this tile play" control (see
+ * SketchStrip's right-click menu) sets this same field, reusing the normal
+ * arranger's resize-handle mechanism rather than inventing a second one. The
+ * contiguity check below sums each rifff's PLAYED length, not its raw
+ * barLength, to match: SEQUENCE_RIFFFS packs tiles the same way.
  *
  * Note there's no separate "track" concept in this data model beyond
  * trackOrder's render order — every placed rifff gets its own row
@@ -137,14 +144,13 @@ export function isSketchEligible(state: AppState): boolean {
     if (state.unlinked[rifff.groupId]) return false
     if (state.fadeIn[rifff.groupId]) return false
     if (state.fadeOut[rifff.groupId]) return false
-    if (state.playedBars[rifff.groupId] !== undefined) return false
     if ((state.off[rifff.groupId] ?? 0) !== 0) return false
   }
   const sorted = [...placed].sort((a, b) => (a.startBar ?? 0) - (b.startBar ?? 0))
   let expectedStart = 0
   for (const rifff of sorted) {
     if (rifff.startBar !== expectedStart) return false
-    expectedStart += rifff.barLength
+    expectedStart += state.playedBars[rifff.groupId] ?? rifff.barLength
   }
   return true
 }
@@ -163,14 +169,18 @@ export function nextArrangerMode(state: AppState): ArrangerMode {
   return next
 }
 
-/** Which placed rifff's [startBar, startBar + barLength) range contains
+/** Which placed rifff's [startBar, startBar + playedBars) range contains
  * `pos` — used by the sketch-mode Inspector auto-follow effect (App.tsx) to
  * find "whichever rifff is currently playing." Not sketch-mode-specific
- * itself; the caller is. */
+ * itself, but its only caller lives in that world, where every placed rifff
+ * is linked (see isSketchEligible) — so reading state.playedBars keyed
+ * directly by groupId (rather than the slot-aware resolvePlayedBars) is
+ * safe here specifically. */
 export function groupIdAtPosition(state: AppState, pos: number): string | null {
   for (const rifff of placedRifffsInOrder(state)) {
     const start = rifff.startBar ?? 0
-    if (pos >= start && pos < start + rifff.barLength) return rifff.groupId
+    const bars = state.playedBars[rifff.groupId] ?? rifff.barLength
+    if (pos >= start && pos < start + bars) return rifff.groupId
   }
   return null
 }

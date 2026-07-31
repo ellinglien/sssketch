@@ -376,14 +376,33 @@ describe('isSketchEligible', () => {
     expect(isSketchEligible(state)).toBe(false)
   })
 
-  it('is false if a rifff has a resize override (playedBars)', () => {
+  it("a playedBars trim/extend does not disqualify by itself — sketch mode's own beat-count menu sets this same field", () => {
     let state = reducer(initialState, {
       type: 'ADD_TO_SHELF',
       rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 2 })
+    expect(isSketchEligible(state)).toBe(true)
+  })
+
+  it('checks contiguity against the playedBars-trimmed length, not raw barLength', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 2 })
+    // r1 now only plays 2 bars, so r2 starting at 4 leaves a gap.
     expect(isSketchEligible(state)).toBe(false)
+    // Repacked against the trim (what SEQUENCE_RIFFFS itself would do).
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 2 })
+    expect(isSketchEligible(state)).toBe(true)
   })
 
   it('is false if a rifff has a nonzero offset', () => {
@@ -444,6 +463,23 @@ describe('groupIdAtPosition', () => {
     expect(groupIdAtPosition(state, 3.9)).toBe('r1')
     expect(groupIdAtPosition(state, 4)).toBe('r2')
     expect(groupIdAtPosition(state, 7.5)).toBe('r2')
+  })
+
+  it("respects a playedBars trim, not the rifff's raw barLength", () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 2 })
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 2 })
+    expect(groupIdAtPosition(state, 1)).toBe('r1')
+    // Past r1's trimmed 2-bar window even though its raw barLength is 4.
+    expect(groupIdAtPosition(state, 2)).toBe('r2')
   })
 
   it('returns null when the position is past every placed rifff', () => {

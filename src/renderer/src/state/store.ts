@@ -209,7 +209,13 @@ export function reducer(state: AppState, action: Action): AppState {
       for (const groupId of action.groupIds) {
         const rifff = rifffs[groupId]
         rifffs[groupId] = { ...rifff, startBar: cursor }
-        cursor += rifff.barLength
+        // A sketch tile's own playedBars trim (set via SketchStrip's
+        // right-click menu) shortens/lengthens how much timeline space it
+        // actually occupies in the sequence — not selectors.ts's
+        // resolvePlayedBars (importing it here would be circular; every
+        // sketch-eligible rifff is linked, so this direct groupId lookup is
+        // the same value that helper would resolve to anyway).
+        cursor += state.playedBars[groupId] ?? rifff.barLength
         // Sketch mode's tiles always play stretched to project tempo (see
         // the sketch-mode design decision), and this packs positions using
         // each rifff's raw, unstretched barLength — so stretch must be

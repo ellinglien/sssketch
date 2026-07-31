@@ -394,6 +394,21 @@ describe('reducer', () => {
       expect(state.rifffs.r1.startBar).toBe(6) // right after r3's 2 bars
     })
 
+    it("packs against a playedBars trim, not raw barLength — sketch mode's own beat-count menu", () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1', barLength: 4 })
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2', barLength: 4 })
+      })
+      state = { ...state, playedBars: { ...state.playedBars, r1: 2 } }
+      state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r1', 'r2'] })
+      expect(state.rifffs.r1.startBar).toBe(0)
+      expect(state.rifffs.r2.startBar).toBe(2) // right after r1's TRIMMED 2 bars, not its raw 4
+    })
+
     it('replaces trackOrder with the new sequence order', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
