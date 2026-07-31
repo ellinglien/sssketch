@@ -16,82 +16,97 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
   const error = useMasterChainError()
 
   return (
+    // Fixed + centered in the viewport rather than anchored to the
+    // TransportBar's own right edge -- anchoring there put the panel over
+    // the Inspector column, which sits on top of it and clipped/obscured
+    // the rightmost controls (status dot, edit button). A backdrop click
+    // also closes the panel, matching a normal modal convention.
     <div
+      onClick={onClose}
       style={{
-        position: 'absolute',
-        top: 32,
-        right: 8,
-        zIndex: 20,
-        background: 'var(--ra-bg-row-active)',
-        border: '1px solid var(--ra-border)',
-        borderRadius: 4,
-        padding: 8,
-        width: 260,
-        fontSize: 11
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        background: 'rgba(0, 0, 0, 0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ color: 'var(--ra-text-2)' }}>master chain</span>
-        <button onClick={onClose} aria-label="Close master chain panel">
-          ×
-        </button>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border)',
+          borderRadius: 4,
+          padding: 8,
+          width: 260,
+          fontSize: 11
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ color: 'var(--ra-text-2)' }}>master chain</span>
+          <button onClick={onClose} aria-label="Close master chain panel">
+            ×
+          </button>
+        </div>
+        {SLOT_LABELS.map((label, slot) => {
+          const pluginId = state.masterChain[slot]
+          const slotStatus = status[slot]
+          const slotError = error[slot]
+          return (
+            <div
+              key={slot}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}
+              title={slotError ?? undefined}
+            >
+              <span style={{ color: 'var(--ra-text-2)', width: 12 }}>{label}</span>
+              <select
+                value={pluginId ?? ''}
+                onChange={(e) =>
+                  dispatch({
+                    type: 'SET_MASTER_CHAIN_PLUGIN',
+                    slot: slot as 0 | 1 | 2 | 3,
+                    pluginId: e.target.value === '' ? null : e.target.value
+                  })
+                }
+                style={{ flex: 1, fontSize: 11 }}
+              >
+                <option value="">none</option>
+                {MASTER_CHAIN_ALLOWLIST.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName}
+                  </option>
+                ))}
+              </select>
+              <span
+                aria-label={`slot ${label} status: ${slotStatus}`}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background:
+                    slotStatus === 'loaded'
+                      ? 'var(--ra-stretch-on)'
+                      : slotStatus === 'error'
+                        ? '#e05555'
+                        : slotStatus === 'loading'
+                          ? '#d9c34f'
+                          : 'var(--ra-border)'
+                }}
+              />
+              <button
+                onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
+                disabled={slotStatus !== 'loaded'}
+                aria-label={`edit slot ${label} plugin`}
+                style={{ fontSize: 10, padding: '1px 6px' }}
+              >
+                edit
+              </button>
+            </div>
+          )
+        })}
       </div>
-      {SLOT_LABELS.map((label, slot) => {
-        const pluginId = state.masterChain[slot]
-        const slotStatus = status[slot]
-        const slotError = error[slot]
-        return (
-          <div
-            key={slot}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}
-            title={slotError ?? undefined}
-          >
-            <span style={{ color: 'var(--ra-text-2)', width: 12 }}>{label}</span>
-            <select
-              value={pluginId ?? ''}
-              onChange={(e) =>
-                dispatch({
-                  type: 'SET_MASTER_CHAIN_PLUGIN',
-                  slot: slot as 0 | 1 | 2 | 3,
-                  pluginId: e.target.value === '' ? null : e.target.value
-                })
-              }
-              style={{ flex: 1, fontSize: 11 }}
-            >
-              <option value="">none</option>
-              {MASTER_CHAIN_ALLOWLIST.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.displayName}
-                </option>
-              ))}
-            </select>
-            <span
-              aria-label={`slot ${label} status: ${slotStatus}`}
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background:
-                  slotStatus === 'loaded'
-                    ? 'var(--ra-stretch-on)'
-                    : slotStatus === 'error'
-                      ? '#e05555'
-                      : slotStatus === 'loading'
-                        ? '#d9c34f'
-                        : 'var(--ra-border)'
-              }}
-            />
-            <button
-              onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
-              disabled={slotStatus !== 'loaded'}
-              aria-label={`edit slot ${label} plugin`}
-              style={{ fontSize: 10, padding: '1px 6px' }}
-            >
-              edit
-            </button>
-          </div>
-        )
-      })}
     </div>
   )
 }

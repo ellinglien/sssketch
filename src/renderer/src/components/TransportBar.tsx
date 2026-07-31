@@ -41,7 +41,6 @@ export function TransportBar(): React.JSX.Element {
   return (
     <div
       style={{
-        position: 'relative',
         height: 46,
         background: 'var(--ra-bg-bar)',
         borderBottom: '1px solid var(--ra-border)',
