@@ -361,11 +361,29 @@ function Frame(): React.JSX.Element {
   // Empty for a single import or an unrelated re-pick via the Inspector's
   // own button.
   const [pickerBatchGroupIds, setPickerBatchGroupIds] = useState<string[]>([])
+  // True only when the picker was opened straight off an import (Shelf drag-
+  // drop or a LORE library batch) — false for the Inspector's own "re-pick
+  // downbeat" button, which reopens an already-placed rifff for a deliberate
+  // correction. Drives BeatPicker's close-confirmation: a wrong pick on a
+  // brand-new import is easy to miss and harder to notice later, so that
+  // path alone confirms before baking.
+  const [pickerIsNewImport, setPickerIsNewImport] = useState(false)
+
+  function handleImported(groupId: string): void {
+    setPickerGroupId(groupId)
+    setPickerIsNewImport(true)
+  }
 
   function handleLoreImported(groupIds: string[]): void {
     if (groupIds.length === 0) return
     setPickerGroupId(groupIds[0])
     setPickerBatchGroupIds(groupIds)
+    setPickerIsNewImport(true)
+  }
+
+  function handleOpenBeatPickerForEdit(groupId: string): void {
+    setPickerGroupId(groupId)
+    setPickerIsNewImport(false)
   }
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -661,7 +679,7 @@ function Frame(): React.JSX.Element {
           <ProjectMenu />
         </div>
       </div>
-      <Shelf onImported={setPickerGroupId} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
+      <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
       <TransportBar />
       {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
@@ -732,12 +750,13 @@ function Frame(): React.JSX.Element {
             transition: 'width 150ms ease'
           }}
         >
-          <Inspector onOpenBeatPicker={setPickerGroupId} />
+          <Inspector onOpenBeatPicker={handleOpenBeatPickerForEdit} />
         </div>
       </div>
       {pickerGroupId && state.rifffs[pickerGroupId] && (
         <BeatPicker
           groupId={pickerGroupId}
+          isNewImport={pickerIsNewImport}
           batchGroupIds={pickerBatchGroupIds.length > 1 ? pickerBatchGroupIds : undefined}
           onNavigate={setPickerGroupId}
           onClose={() => {

@@ -137,12 +137,20 @@ function rotateBuffer(ctx: AudioContext, buf: AudioBuffer, offsetSec: number): A
 
 export function BeatPicker({
   groupId,
+  isNewImport = false,
   batchGroupIds,
   onNavigate,
   onClose,
   onBaked
 }: {
   groupId: string
+  /** True when this picker was opened straight off an import (Shelf
+   * drag-drop or a LORE library batch) rather than the Inspector's own
+   * "re-pick downbeat" button reopening an already-placed rifff for a
+   * deliberate correction. Gates commitAndClose's confirmation dialog: a
+   * wrong pick on a brand-new import is easy to miss and harder to notice
+   * later, so only that path confirms before baking. */
+  isNewImport?: boolean
   /** Every riff imported together in the same LORE batch as this one
    * (including this one), in original import order — omitted for a single
    * import or an unrelated re-pick via the Inspector's own button. Presence
@@ -241,19 +249,41 @@ export function BeatPicker({
   // at once. A pure derivation of rifff/stem/buffers, so useMemo (not an
   // effect writing to its own state) is the right tool.
   const stemSpectrograms = useMemo<
-    { stem: Stem; spectrogram: Spectrogram; pitchPathD: string }[] | null
+    | {
+        stem: Stem
+        spectrogram: Spectrogram
+        pitchPathD: string
+        /** Where this stem's own native loop repeats within the full
+         * rifff-spanning lane, as percentages of the lane's width — one entry
+         * per internal repeat boundary (excludes the very start, same as
+         * StemWaveformRow's own tileOffsets.slice(1) in the main arranger).
+         * Lets the picker show the same "how long is this stem's own loop"
+         * markers the arranger already does, since a rifff-length lane here
+         * can otherwise make a short stem's frequent tiling invisible. */
+        tileBoundaryPcts: number[]
+      }[]
+    | null
   >(() => {
     if (!rifff || !stem) return null
     const identityBuf = buffers[stem.slot]
     if (!identityBuf) return null
     const secPerBar = stem.durationSec / stem.barLength
     const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
-    const results: { stem: Stem; spectrogram: Spectrogram; pitchPathD: string }[] = []
+    const results: {
+      stem: Stem
+      spectrogram: Spectrogram
+      pitchPathD: string
+      tileBoundaryPcts: number[]
+    }[] = []
     for (const s of rifff.stems) {
       const buf = buffers[s.slot]
       if (!buf) continue
       const data = buf.getChannelData(0)
       if (data.length === 0) continue
+      const tileBoundaryPcts: number[] = []
+      for (let boundary = data.length; boundary < totalSamples; boundary += data.length) {
+        tileBoundaryPcts.push((boundary / totalSamples) * 100)
+      }
       const tiled = new Float32Array(totalSamples)
       for (let i = 0; i < totalSamples; i++) {
         tiled[i] = data[i % data.length]
@@ -289,7 +319,7 @@ export function BeatPicker({
         drawing = true
       }
 
-      results.push({ stem: s, spectrogram, pitchPathD })
+      results.push({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts })
     }
     return results
   }, [rifff, stem, buffers])
@@ -431,9 +461,24 @@ export function BeatPicker({
   const commitAndCloseRef = useRef<() => void>(() => {})
   const markDownbeatRef = useRef<() => void>(() => {})
   const navigateRef = useRef<(delta: number) => void>(() => {})
+  // Space's own behavior depends on whether free-play is already running —
+  // first press starts it, every press after that marks the downbeat at
+  // the current playhead instead (real bug this fixed: Space used to only
+  // ever call markDownbeat, which is a silent no-op while nothing is
+  // playing yet, so hitting Space before pressing Play did nothing at all).
+  const spaceRef = useRef<() => void>(() => {})
   useEffect(() => {
     commitAndCloseRef.current = () => {
       if (pendingBakeRef.current !== null && rifff) {
+        // A wrong pick on a brand-new import is easy to make without
+        // realizing (Escape/click-outside is an easy accidental close) and
+        // harder to notice/fix later once it's baked into the file — confirm
+        // before committing. Re-picks via the Inspector's own button are a
+        // deliberate correction the user already meant to make, so those
+        // close without asking, same as before this existed.
+        if (isNewImport && !window.confirm('Bake this downbeat pick into the audio file?')) {
+          return
+        }
         const steps = pendingBakeRef.current
         pendingBakeRef.current = null
         bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
@@ -482,6 +527,14 @@ export function BeatPicker({
       })
       pendingBakeRef.current = steps
     }
+
+    spaceRef.current = () => {
+      if (isFreePlaying) {
+        markDownbeatRef.current()
+      } else {
+        toggleFreePlay()
+      }
+    }
   })
 
   useEffect(() => {
@@ -492,7 +545,7 @@ export function BeatPicker({
       }
       if (e.code === 'Space') {
         e.preventDefault() // otherwise also "clicks" whatever button has focus
-        markDownbeatRef.current()
+        spaceRef.current()
       }
       if (e.key === 'ArrowLeft') navigateRef.current(-1)
       if (e.key === 'ArrowRight') navigateRef.current(1)
@@ -852,7 +905,7 @@ export function BeatPicker({
           )}
           {stemSpectrograms && (
             <div style={{ position: 'relative', height: lanesHeight }}>
-              {stemSpectrograms.map(({ stem: s, spectrogram, pitchPathD }, i) => (
+              {stemSpectrograms.map(({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts }, i) => (
                 <div
                   key={s.slot}
                   style={{
@@ -871,6 +924,25 @@ export function BeatPicker({
                     color={typeColorVar(s.type)}
                     height={LANE_HEIGHT}
                   />
+                  {/* One thin line at every point this stem's own native loop
+                      repeats — same "how long is the underlying loop"
+                      marker StemWaveformRow already draws in the main
+                      arranger, just as a percentage of this lane's full
+                      rifff-spanning width instead of a pixel offset. */}
+                  {tileBoundaryPcts.map((pct) => (
+                    <div
+                      key={pct}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${pct}%`,
+                        width: 1,
+                        background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  ))}
                   {NOTE_GRIDLINES.map((g, gi) => (
                     <div
                       key={g.label}
