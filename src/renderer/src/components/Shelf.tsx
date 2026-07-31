@@ -4,6 +4,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { setGrabOffsetBars } from './dragGrabOffset'
+import { suppressNextSyntheticClick } from './dragUtils'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -283,6 +284,7 @@ export function Shelf({
                 stopTilePreview()
                 setPreviewingGroupId(null)
               }}
+              onDragEnd={suppressNextSyntheticClick}
               onMouseEnter={() => setHoverId(rifff.groupId)}
               onClick={(e) => handleTileClick(e, rifff)}
               title={`${rifff.name} — click to preview, drag to arrange, shift/cmd-click to multi-select, delete to remove from library`}

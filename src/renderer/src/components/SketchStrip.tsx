@@ -3,7 +3,7 @@ import { useAppState, useDispatch, usePlaying, usePos } from '../state/StoreCont
 import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
-import { startPointerDrag } from './dragUtils'
+import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -367,6 +367,7 @@ export function SketchStrip(): React.JSX.Element {
             key={rifff.groupId}
             draggable
             onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
+            onDragEnd={suppressNextSyntheticClick}
             onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => handleBarsMouseDown(e, rifff)}

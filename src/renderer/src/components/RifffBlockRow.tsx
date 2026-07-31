@@ -7,6 +7,7 @@ import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { clipGeometry } from '../state/selectors'
 import { PPB, COMPACT_PPB } from './Ruler'
+import { suppressNextSyntheticClick } from './dragUtils'
 
 const NAME_BAR_HEIGHT = 18
 
@@ -69,6 +70,7 @@ export function RifffBlockRow({
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }
         }}
+        onDragEnd={suppressNextSyntheticClick}
         onClick={(e) => {
           // Stops the click from also bubbling up to Timeline's own
           // background click-to-scrub handler in App.tsx — expanding/

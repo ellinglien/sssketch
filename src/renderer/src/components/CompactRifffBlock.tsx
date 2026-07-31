@@ -5,6 +5,7 @@ import { Waveform } from './Waveform'
 import { COMPACT_PPB } from './Ruler'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { stemKey } from '@shared/types'
+import { suppressNextSyntheticClick } from './dragUtils'
 
 // Compact mode's own horizontal scale (COMPACT_PPB, defined in Ruler.tsx
 // alongside Normal mode's PPB) — Timeline in App.tsx picks whichever one
@@ -127,6 +128,7 @@ export function CompactRifffBlock({
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
+          onDragEnd={suppressNextSyntheticClick}
           onClick={handleScrubClick}
           onContextMenu={(e) => {
             e.preventDefault()

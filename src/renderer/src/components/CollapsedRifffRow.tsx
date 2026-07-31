@@ -24,7 +24,7 @@ import {
   envelopeCurveD,
   buildEnvelopePath
 } from './envelope'
-import { startPointerDrag } from './dragUtils'
+import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 
 /** Tiles one stem's waveform across the collapsed block's width, repeating
@@ -325,6 +325,7 @@ export function CollapsedRifffRow({
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
+          onDragEnd={suppressNextSyntheticClick}
           onContextMenu={handleBlockContextMenu}
           title="right-click to mute group · ctrl+right-click to solo"
           style={{

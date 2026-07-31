@@ -14,7 +14,7 @@ import {
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
-import { startPointerDrag } from './dragUtils'
+import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { useShiftHeld } from './useShiftHeld'
 import {
@@ -323,6 +323,7 @@ export function StemWaveformRow({
         <div
           draggable
           onDragStart={handleWaveformDragStart}
+          onDragEnd={suppressNextSyntheticClick}
           onContextMenu={handleWaveformContextMenu}
           onDoubleClick={() => {
             // Mirrors the import-time default seeded in store.ts's
