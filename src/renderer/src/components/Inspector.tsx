@@ -42,9 +42,6 @@ export function Inspector({
       >
         <div style={{ padding: '12px 14px' }}>
           <span className="ra-eyebrow">inspector</span>
-          <div style={{ marginTop: 8, fontSize: 10, color: 'var(--ra-text-3)' }}>
-            select a rifff block to inspect it
-          </div>
         </div>
       </div>
     )

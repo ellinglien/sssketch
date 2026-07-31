@@ -451,11 +451,6 @@ export function SketchStrip(): React.JSX.Element {
           }}
         />
       )}
-      {sequence.length === 0 && (
-        <div style={{ fontSize: 10, color: 'var(--ra-text-3)', padding: '8px 0' }}>
-          drag rifffs in from the shelf or LORE library to start a sketch
-        </div>
-      )}
     </div>
   )
 }
