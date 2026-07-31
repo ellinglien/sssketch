@@ -82,27 +82,48 @@ export interface ClipGeometry {
   widthPx: number
 }
 
-/** Placed rifffs in their visual top-to-bottom row order. Prefers
- * state.trackOrder (populated as rifffs are placed/pasted/removed — see
- * store.ts), falling back to object-insertion order for any placed rifff
- * trackOrder doesn't (yet) know about — covers projects saved before
- * trackOrder existed, so old saves keep rendering in the same order they
- * always did rather than needing a migration step. */
-export function placedRifffsInOrder(state: AppState): Rifff[] {
-  const placed = new Set(
-    Object.values(state.rifffs)
-      .filter((r) => r.startBar !== undefined)
-      .map((r) => r.groupId)
-  )
-  const ordered = state.trackOrder.filter((id) => placed.has(id))
-  const seen = new Set(ordered)
+export interface Channel {
+  channelId: string
+  rifffs: Rifff[]
+}
+
+/** Every channel that currently has at least one placed clip on it, in
+ * top-to-bottom row order — the single source of truth Timeline renders
+ * from (one ChannelRow per entry). Prefers state.channelOrder, falling back
+ * to first-seen order for any channel it doesn't (yet) know about — same
+ * defensive fallback placedRifffsInOrder always had for trackOrder. A
+ * placed rifff with no channelOf entry at all falls back to its own groupId
+ * as an implicit solo channel (matching PLACE_ON_TIMELINE's own "own groupId
+ * as channel id" default elsewhere) rather than silently vanishing from the
+ * arranger. */
+export function channelsInOrder(state: AppState): Channel[] {
+  const byChannel = new Map<string, Rifff[]>()
   for (const rifff of Object.values(state.rifffs)) {
-    if (placed.has(rifff.groupId) && !seen.has(rifff.groupId)) {
-      ordered.push(rifff.groupId)
-      seen.add(rifff.groupId)
+    if (rifff.startBar === undefined) continue
+    const channelId = state.channelOf[rifff.groupId] ?? rifff.groupId
+    const list = byChannel.get(channelId)
+    if (list) list.push(rifff)
+    else byChannel.set(channelId, [rifff])
+  }
+  const ordered = state.channelOrder.filter((id) => byChannel.has(id))
+  const seen = new Set(ordered)
+  for (const channelId of byChannel.keys()) {
+    if (!seen.has(channelId)) {
+      ordered.push(channelId)
+      seen.add(channelId)
     }
   }
-  return ordered.map((id) => state.rifffs[id])
+  return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId)! }))
+}
+
+/** Every placed rifff, flattened out of channelsInOrder — channel by
+ * channel, top to bottom, then each channel's own clips in their array
+ * order. Every OTHER selector that just wants "all placed rifffs, in
+ * render order" (channelMuteLetters, isSketchEligible, loopLengthBars,
+ * groupIdAtPosition) keeps working unchanged against this, with no
+ * awareness of channels needed at their level at all. */
+export function placedRifffsInOrder(state: AppState): Rifff[] {
+  return channelsInOrder(state).flatMap((channel) => channel.rifffs)
 }
 
 /**

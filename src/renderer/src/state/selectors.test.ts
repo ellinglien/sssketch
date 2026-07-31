@@ -10,6 +10,7 @@ import {
   pasteRifffAction,
   pasteStemAction,
   placedRifffsInOrder,
+  channelsInOrder,
   channelMuteLetters,
   isSketchEligible,
   nextArrangerMode,
@@ -185,11 +186,11 @@ describe('placedRifffsInOrder', () => {
   // The shared `rifff` fixture above has startBar: 4 baked in (used by other
   // describe blocks that want an already-placed clip) — unsuitable here,
   // since these tests need genuinely unplaced-then-placed transitions to
-  // exercise trackOrder. Each test below starts from its own startBar:
+  // exercise channelOrder. Each test below starts from its own startBar:
   // undefined copy instead.
   const unplaced: Rifff = { ...rifff, startBar: undefined }
 
-  it('orders placed rifffs by trackOrder, not object-insertion order', () => {
+  it('orders placed rifffs by channelOrder, not object-insertion order', () => {
     const second: Rifff = { ...unplaced, groupId: 'r2' }
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced }) // r1 added first
     state = reducer(state, { type: 'ADD_TO_SHELF', rifff: second })
@@ -198,20 +199,54 @@ describe('placedRifffsInOrder', () => {
     expect(placedRifffsInOrder(state).map((r) => r.groupId)).toEqual(['r2', 'r1'])
   })
 
-  it('falls back to object order for a placed rifff missing from trackOrder (old save)', () => {
+  it('falls back to first-seen order for a placed rifff with no channel assignment', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-    // Simulates a project saved before trackOrder existed — the field is empty
-    // even though a rifff is placed.
-    const legacyState = { ...state, trackOrder: [] }
-    expect(placedRifffsInOrder(legacyState).map((r) => r.groupId)).toEqual(['r1'])
+    // Simulates a placed rifff that somehow has no channel entry — channelOf
+    // and channelOrder both empty even though r1 is placed.
+    const noChannel = { ...state, channelOf: {}, channelOrder: [] }
+    expect(placedRifffsInOrder(noChannel).map((r) => r.groupId)).toEqual(['r1'])
   })
 
-  it('excludes unplaced rifffs even if they linger in trackOrder', () => {
+  it('excludes unplaced rifffs even if they linger in channelOrder', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
     expect(placedRifffsInOrder(state)).toEqual([])
+  })
+
+  it('multiple clips on one channel all appear, in that channel’s own array order', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...unplaced, groupId: 'r2' } })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+    state = reducer(state, {
+      type: 'MOVE_TO_CHANNEL',
+      groupId: 'r2',
+      startBar: 4,
+      channelId: 'r1'
+    })
+    expect(placedRifffsInOrder(state).map((r) => r.groupId)).toEqual(['r1', 'r2'])
+  })
+})
+
+describe('channelsInOrder', () => {
+  it('groups clips sharing a channel into one Channel entry', () => {
+    const unplaced: Rifff = { ...rifff, startBar: undefined }
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...unplaced, groupId: 'r2' } })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+    state = reducer(state, {
+      type: 'MOVE_TO_CHANNEL',
+      groupId: 'r2',
+      startBar: 4,
+      channelId: 'r1'
+    })
+    const channels = channelsInOrder(state)
+    expect(channels).toHaveLength(1)
+    expect(channels[0].channelId).toBe('r1')
+    expect(channels[0].rifffs.map((r) => r.groupId)).toEqual(['r1', 'r2'])
   })
 })
 
