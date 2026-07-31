@@ -24,7 +24,14 @@ export interface ParsedStemFilename {
 // BPM itself isn't always a whole number either (observed: "62.7024BPM" — Endlesss
 // doesn't round a jam's tempo to an integer), so the digits group allows an optional
 // decimal tail.
-const STEM_FILENAME_RE = /^(\d+)(?: \S+)? - (.+?) - (.+) - (\d+(?:\.\d+)?)BPM - (.+?)\s*\.wav$/i
+//
+// The stem-name field is `(.*)`, not `(.+)` — real Endlesss exports can have a
+// genuinely empty sound name (observed: "6 - wokenap -  - 116.044BPM - ....wav",
+// two spaces between the hyphens). `(.+)` requires at least one character, so it
+// rejected the whole filename rather than parsing an empty stemName — the entire
+// import silently failed for a single-file drop with no other candidate to fall
+// back on.
+const STEM_FILENAME_RE = /^(\d+)(?: \S+)? - (.+?) - (.*) - (\d+(?:\.\d+)?)BPM - (.+?)\s*\.wav$/i
 
 export function parseStemFilename(filename: string): ParsedStemFilename | null {
   const match = STEM_FILENAME_RE.exec(filename)

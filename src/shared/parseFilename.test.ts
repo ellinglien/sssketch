@@ -43,6 +43,16 @@ describe('parseStemFilename', () => {
       timestamp: '2023-12-11-20-25'
     })
   })
+  it('parses a genuinely empty stem-name field (real Endlesss export: "6 - wokenap -  - 116.044BPM - 2021-04-19-19-03.wav")', () => {
+    const parsed = parseStemFilename('6 - wokenap -  - 116.044BPM - 2021-04-19-19-03.wav')
+    expect(parsed).toEqual({
+      slot: 6,
+      author: 'wokenap',
+      stemName: '',
+      bpm: 116.044,
+      timestamp: '2021-04-19-19-03'
+    })
+  })
   it('parses a non-integer bpm (real Endlesss jams aren’t always whole-number tempo)', () => {
     const parsed = parseStemFilename(
       '4 HQ - elling - Tape MELLO-FI - 62.7024BPM - 2023-11-12-17-35.wav'
