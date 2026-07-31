@@ -8,7 +8,7 @@ import {
   registerActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
-import { usePlaying, useDispatch } from '../state/StoreContext'
+import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
@@ -148,7 +148,12 @@ export function LoreLibraryBrowser({
   }
 
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
-  const [importedRiffCIDs, setImportedRiffCIDs] = useState<Set<string>>(new Set())
+  // riffCID -> the groupId it was imported as, so re-clicking Import after
+  // more of a riff's stems finish downloading in the background (see
+  // ensureStemsDownloaded) merges the newly-available ones into that SAME
+  // rifff/tile instead of leaving a stale, permanently-incomplete one
+  // behind and creating an unrelated duplicate — see importResolvedRiff.
+  const [importedRiffGroupIds, setImportedRiffGroupIds] = useState<Map<string, string>>(new Map())
   // Which riff (if any) currently has a download-missing-stems fetch in
   // flight — a single riffCID rather than a Set, since only one download can
   // be triggered at a time from this panel (the button/import action that
@@ -164,6 +169,7 @@ export function LoreLibraryBrowser({
   const syncQueueTokenRef = useRef(0)
   const playing = usePlaying()
   const dispatch = useDispatch()
+  const state = useAppState()
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
@@ -177,27 +183,30 @@ export function LoreLibraryBrowser({
   /** Builds a Rifff from a resolved riff and dispatches it, exactly as the
    * single-riff import button already did — extracted so the new batch
    * import path (multiple riffs, each resolved on demand) can share the
-   * same logic instead of duplicating it. Returns the newly-created groupId,
-   * or null (no-op) if the riff has no locally-cached stems at all. */
+   * same logic instead of duplicating it. Returns the (possibly reused)
+   * groupId, or null (no-op) if the riff has no locally-cached stems at all
+   * and nothing was previously imported either.
+   *
+   * If this riffCID was already imported once, this MERGES rather than
+   * re-creates: only stems not already present (by slot) get added, onto
+   * the SAME existing rifff/groupId, leaving its placement, name, and every
+   * already-present stem's mute/volume/type untouched. Real bug this fixes:
+   * a riff selected/imported before all its stems finished downloading in
+   * the background (ensureStemsDownloaded) permanently missed whichever
+   * ones weren't cached yet — re-importing via crypto.randomUUID() every
+   * time just left the original incomplete tile sitting there and created
+   * an unrelated duplicate alongside it, with no way back to a single
+   * complete one. */
   function importResolvedRiff(riffCID: string, resolved: LoreResolvedRiff): string | null {
     const cachedStems = resolved.stems.filter((s) => s.path !== null)
-    if (cachedStems.length === 0) return null
+    const existingGroupId = importedRiffGroupIds.get(riffCID)
+    const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
+    if (!existing && cachedStems.length === 0) return null
 
-    const groupId = crypto.randomUUID()
-    const rifff = {
-      groupId,
-      name: `LORE riff ${riffCID.slice(0, 8)}`,
-      bpm: resolved.bpm,
-      barLength: resolved.barLength,
-      // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
-      // import. Inspector.tsx's existing "re-import from folder" link displays
-      // this field as-is; an empty string would render as a bare "/", so use a
-      // human-readable descriptor instead. Clicking that link on a LORE-imported
-      // rifff still works exactly like it does for any other rifff (opens a
-      // folder picker and re-imports from wherever the user points it) — this
-      // is display-only, not read back programmatically anywhere.
-      folderPath: 'lore library',
-      stems: cachedStems.map((s) => ({
+    const existingSlots = new Set(existing?.stems.map((s) => s.slot) ?? [])
+    const newStems = cachedStems
+      .filter((s) => !existingSlots.has(s.slot))
+      .map((s) => ({
         slot: s.slot,
         author: s.creatorUserName,
         name: s.presetName,
@@ -206,7 +215,26 @@ export function LoreLibraryBrowser({
         durationSec: s.durationSec, // this stem's own bpm/bar-length, not the riff's — see resolveRiff
         barLength: s.barLength
       }))
-    }
+    if (existing && newStems.length === 0) return existing.groupId // already fully up to date
+
+    const groupId = existing?.groupId ?? crypto.randomUUID()
+    const rifff = existing
+      ? { ...existing, stems: [...existing.stems, ...newStems] }
+      : {
+          groupId,
+          name: `LORE riff ${riffCID.slice(0, 8)}`,
+          bpm: resolved.bpm,
+          barLength: resolved.barLength,
+          // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
+          // import. Inspector.tsx's existing "re-import from folder" link displays
+          // this field as-is; an empty string would render as a bare "/", so use a
+          // human-readable descriptor instead. Clicking that link on a LORE-imported
+          // rifff still works exactly like it does for any other rifff (opens a
+          // folder picker and re-imports from wherever the user points it) — this
+          // is display-only, not read back programmatically anywhere.
+          folderPath: 'lore library',
+          stems: newStems
+        }
 
     dispatch({ type: 'ADD_TO_SHELF', rifff })
     for (const stem of cachedStems) {
@@ -214,13 +242,15 @@ export function LoreLibraryBrowser({
         dispatch({ type: 'SET_VOLUME', stemKey: stemKey(groupId, stem.slot), volume: stem.gain })
       }
     }
-    setImportedRiffCIDs((prev) => new Set(prev).add(riffCID))
+    setImportedRiffGroupIds((prev) => new Map(prev).set(riffCID, groupId))
 
     // Same "fill in unclassified stems by ear" heuristic drag-and-drop import
     // already uses — the Instrument bitmask covers drum/note/bass/mic
     // confidently, but a stem with no matching bit (mapped to 'fx' above)
     // gets a second chance here, same as today's importer gives every stem.
-    classifyStems(rifff, dispatch).catch((err) => {
+    // Scoped to just the NEW stems on a merge — re-classifying an existing
+    // stem here would silently overwrite any type the user picked by hand.
+    classifyStems({ ...rifff, stems: newStems }, dispatch).catch((err) => {
       console.error('LoreLibraryBrowser: failed to classify stem types:', err)
     })
     return groupId
@@ -854,7 +884,7 @@ export function LoreLibraryBrowser({
                                   cursor: 'pointer'
                                 }}
                               />
-                              {importedRiffCIDs.has(riff.riffCID) && (
+                              {importedRiffGroupIds.has(riff.riffCID) && (
                                 <span
                                   title="already imported"
                                   style={{
@@ -965,18 +995,18 @@ export function LoreLibraryBrowser({
                           fontSize: 10,
                           border: '1px solid var(--ra-border-strong)',
                           background:
-                            selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
                               ? 'var(--ra-stretch-on-bg)'
                               : 'var(--ra-bg-row-active)',
                           color:
-                            selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
                               ? 'var(--ra-stretch-on)'
                               : 'var(--ra-text)'
                         }}
                       >
                         {selectedRiffCIDs.size > 1
                           ? `import ${selectedRiffCIDs.size} riffs`
-                          : selectedRiffCID !== null && importedRiffCIDs.has(selectedRiffCID)
+                          : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
                             ? 'imported ✓ — import again'
                             : 'import'}
                       </button>
