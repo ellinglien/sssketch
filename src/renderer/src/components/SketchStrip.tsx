@@ -4,7 +4,6 @@ import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { startPointerDrag } from './dragUtils'
-import { MIN_PLAYED_BARS } from '../state/store'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -345,9 +344,7 @@ export function SketchStrip(): React.JSX.Element {
             />
             {/* How many bars this tile plays before the sequence advances —
                 always shown, not just when trimmed, so the whole sketch's
-                pacing is readable at a glance. Black per its own explicit
-                ask; the halo keeps it legible against whatever identity
-                color sits in PolarGlyph's own center circle underneath. */}
+                pacing is readable at a glance. */}
             <span
               style={{
                 position: 'absolute',
@@ -357,9 +354,7 @@ export function SketchStrip(): React.JSX.Element {
                 fontSize: 11,
                 fontWeight: 700,
                 color: '#000',
-                pointerEvents: 'none',
-                textShadow:
-                  '0 0 2px rgba(255,255,255,0.8), 0 0 2px rgba(255,255,255,0.8), 0 0 4px rgba(255,255,255,0.6)'
+                pointerEvents: 'none'
               }}
             >
               {bars}
@@ -425,6 +420,8 @@ export function SketchStrip(): React.JSX.Element {
               y={barsMenuFor.y}
               name={rifff.name}
               currentBars={effectiveBars(rifff)}
+              naturalBars={rifff.barLength}
+              bpm={state.bpm}
               onApply={(bars) => {
                 dispatch({ type: 'SET_PLAYED_BARS', key: rifff.groupId, bars })
                 // Re-packs every OTHER tile's startBar against the new
@@ -446,19 +443,42 @@ export function SketchStrip(): React.JSX.Element {
   )
 }
 
-/** Right-click popup for setting how many bars a sketch tile plays before
- * the sequence advances — reuses the normal arranger's playedBars resize
- * mechanism (see effectiveBars/SEQUENCE_RIFFFS's own doc comments) rather
- * than a drag handle, since these tiles are small fixed-size glyphs with no
- * edge to grab. Mirrors ContextMenu's own dismiss-on-outside-click/Escape
- * pattern directly (rather than reusing that component) since it needs a
- * text input in the body, which ContextMenu's plain items-list API doesn't
- * support. */
+/** How long `bars` bars actually take to play at `bpm`, in seconds — assumes
+ * 4/4 (this app's only supported time signature; see totalBeats = barLength
+ * * 4 elsewhere, e.g. BeatPicker) and PROJECT tempo, not the rifff's own
+ * native bpm: sketch mode always forces stretch on (see SEQUENCE_RIFFFS), so
+ * project tempo is what it actually plays back at. */
+function secondsForBars(bars: number, bpm: number): number {
+  return bars * (60 / bpm) * 4
+}
+
+/** Every whole-bar option the dropdown offers, ascending — always at least
+ * 1..64 bars, extended further only if this particular rifff's own natural
+ * length is longer than that (so its full, untrimmed length is always
+ * reachable even for an unusually long rifff). */
+function barOptions(naturalBars: number): number[] {
+  const max = Math.max(64, Math.ceil(naturalBars))
+  const options: number[] = []
+  for (let b = 1; b <= max; b++) options.push(b)
+  return options
+}
+
+/** Right-click popup for setting how many WHOLE bars a sketch tile plays
+ * before the sequence advances — reuses the normal arranger's playedBars
+ * resize mechanism (see effectiveBars/SEQUENCE_RIFFFS's own doc comments)
+ * rather than a drag handle, since these tiles are small fixed-size glyphs
+ * with no edge to grab. A plain dropdown (not a free-form number field) so
+ * there's no way to land on a fractional bar count, and picking is a single
+ * click. Mirrors ContextMenu's own dismiss-on-outside-click/Escape pattern
+ * directly (rather than reusing that component) since it needs a select in
+ * the body, which ContextMenu's plain items-list API doesn't support. */
 function SketchTileBarsMenu({
   x,
   y,
   name,
   currentBars,
+  naturalBars,
+  bpm,
   onApply,
   onRemove,
   onClose
@@ -467,16 +487,16 @@ function SketchTileBarsMenu({
   y: number
   name: string
   currentBars: number
+  naturalBars: number
+  bpm: number
   onApply: (bars: number) => void
   onRemove: () => void
   onClose: () => void
 }): React.JSX.Element {
-  const [value, setValue] = useState(String(currentBars))
-  const inputRef = useRef<HTMLInputElement>(null)
+  const selectRef = useRef<HTMLSelectElement>(null)
 
   useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
+    selectRef.current?.focus()
   }, [])
 
   useEffect(() => {
@@ -503,12 +523,6 @@ function SketchTileBarsMenu({
     }
   }, [onClose])
 
-  function commit(): void {
-    const bars = Math.round(Number(value))
-    if (Number.isFinite(bars)) onApply(Math.max(MIN_PLAYED_BARS, bars))
-    else onClose()
-  }
-
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -522,7 +536,7 @@ function SketchTileBarsMenu({
         border: '1px solid var(--ra-border-strong)',
         borderRadius: 0,
         padding: 10,
-        minWidth: 180,
+        minWidth: 200,
         boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
       }}
     >
@@ -538,50 +552,32 @@ function SketchTileBarsMenu({
       >
         {name}
       </div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <input
-          ref={inputRef}
-          type="number"
-          min={MIN_PLAYED_BARS}
-          step={1}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit()
-          }}
-          style={{
-            width: 56,
-            fontSize: 12,
-            padding: '4px 6px',
-            background: 'var(--ra-bg-row)',
-            border: '1px solid var(--ra-border)',
-            borderRadius: 0,
-            color: 'var(--ra-text)'
-          }}
-        />
-        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>bars</span>
-      </label>
-      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-        <button
-          onClick={commit}
-          style={{
-            flex: 1,
-            height: 22,
-            fontSize: 10,
-            border: '1px solid var(--ra-border-strong)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text)',
-            borderRadius: 0,
-            cursor: 'pointer'
-          }}
-        >
-          set
-        </button>
+      <select
+        ref={selectRef}
+        value={currentBars}
+        onChange={(e) => onApply(Number(e.target.value))}
+        style={{
+          width: '100%',
+          fontSize: 12,
+          padding: '4px 6px',
+          background: 'var(--ra-bg-row)',
+          border: '1px solid var(--ra-border)',
+          borderRadius: 0,
+          color: 'var(--ra-text)'
+        }}
+      >
+        {barOptions(naturalBars).map((bars) => (
+          <option key={bars} value={bars}>
+            {bars} {bars === 1 ? 'bar' : 'bars'} — {secondsForBars(bars, bpm).toFixed(1)}s
+          </option>
+        ))}
+      </select>
+      <div style={{ display: 'flex', marginTop: 8 }}>
         <button
           onClick={onRemove}
           style={{
+            flex: 1,
             height: 22,
-            padding: '0 10px',
             fontSize: 10,
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
