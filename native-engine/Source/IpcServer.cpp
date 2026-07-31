@@ -132,6 +132,11 @@ namespace ssstitch
             const double pos = payload.isObject() ? (double) payload.getProperty("pos", 0.0) : 0.0;
             transport.setPosition(pos);
         }
+        else if (type == "set-metronome")
+        {
+            const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
+            engine.setMetronomeEnabled(enabled);
+        }
         else if (type == "render-export")
         {
             if (!payload.isObject())

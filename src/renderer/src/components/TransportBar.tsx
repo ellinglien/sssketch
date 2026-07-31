@@ -216,6 +216,25 @@ export function TransportBar(): React.JSX.Element {
         {state.mode}
       </button>
 
+      <button
+        onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
+        aria-label="Toggle metronome"
+        title={state.metronomeEnabled ? 'metronome: on' : 'metronome: off'}
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: state.metronomeEnabled
+            ? 'var(--ra-stretch-on-bg)'
+            : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        click
+      </button>
+
       <div style={{ display: 'flex', gap: 4 }}>
         <button
           onClick={history.undo}

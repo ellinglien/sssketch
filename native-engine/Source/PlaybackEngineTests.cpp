@@ -2,6 +2,7 @@
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
 #include <juce_core/juce_core.h>
+#include <cmath>
 
 namespace ssstitch
 {
@@ -57,6 +58,47 @@ namespace ssstitch
             {
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                for (float s : l) expectEquals(s, 0.0f);
+            }
+
+            beginTest("metronome clicks even on a project with zero placed rifffs");
+            {
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0, secPerBeat = 1.0
+                project.snapDiv = 16.0;
+                // Deliberately no rifffs pushed — a metronome click is useful
+                // as a reference before anything's even placed.
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                expect(!engine.isMetronomeEnabled()); // off by default
+                engine.setMetronomeEnabled(true);
+                expect(engine.isMetronomeEnabled());
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                // Sample 0 is exactly the downbeat's own zero-crossing (a
+                // sine starts at 0, not its peak) — sample 1, a moment into
+                // the click's decay envelope, is where "nonzero" actually
+                // holds (see Metronome.h's own doc comment).
+                expect(std::abs(l[1]) > 0.0f);
+                expect(std::abs(r[1]) > 0.0f);
+                expectWithinAbsoluteError(l[1], r[1], 1.0e-6f); // mono click, identical on both channels
+            }
+
+            beginTest("metronome contributes nothing when disabled (the default)");
+            {
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
                 for (float s : l) expectEquals(s, 0.0f);

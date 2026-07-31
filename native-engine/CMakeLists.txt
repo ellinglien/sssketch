@@ -27,6 +27,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/FadeGainTests.cpp
   Source/LoopSewing.cpp
   Source/LoopSewingTests.cpp
+  Source/Metronome.cpp
+  Source/MetronomeTests.cpp
   Source/LoopBoundaryFade.cpp
   Source/LoopBoundaryFadeTests.cpp
   Source/EngineProject.cpp

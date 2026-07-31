@@ -37,6 +37,8 @@ const api = {
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
+  engineSetMetronome: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke('engine-set-metronome', enabled),
   onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {
     const listener = (_event: unknown, payload: { pos: number }): void => callback(payload.pos)
     ipcRenderer.on('engine-position-update', listener)

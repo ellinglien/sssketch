@@ -10,6 +10,7 @@ import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import { stopActivePreview } from '../audio/previewLoop'
 import { applyLoopMicroFade } from '../audio/microFade'
+import { buildMetronomeBuffer } from '../audio/metronome'
 import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
@@ -174,6 +175,11 @@ export function BeatPicker({
   // together (the default) needs all of them. Keyed by slot.
   const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
   const [previewAll, setPreviewAll] = useState(true)
+  // Independent of the main arranger's own metronome toggle (state.
+  // metronomeEnabled) — this picker never touches the native engine at all,
+  // so it needs its own local Web Audio click track. Off by default, same
+  // as the arranger's.
+  const [metronomeOn, setMetronomeOn] = useState(false)
   const [isFreePlaying, setIsFreePlaying] = useState(false)
   // Which gridline (if any) is the source of the audio currently playing — lets a
   // second click on the same beat act as a stop, rather than every click always
@@ -476,6 +482,28 @@ export function BeatPicker({
     ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
     : 140
 
+  // Always restarts its own phase (downbeat) at t=0 of whichever preview
+  // just began, rather than trying to line its "1" up with wherever the
+  // picked beat falls within the rifff — this is a practice click for
+  // judging tempo, not a claim about where the rifff's own downbeat is (that
+  // claim is exactly what the picker itself is for). Pushed into
+  // previewSourcesRef so stopPreview() (called on every new pick, and on
+  // close) stops it along with the stem sources, with no separate cleanup
+  // path needed.
+  function startMetronomeIfEnabled(ctx: AudioContext): void {
+    if (!metronomeOn || !stem.barLength) return
+    const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
+    const secPerBeat = riffDurationSec / totalBeats
+    const source = ctx.createBufferSource()
+    source.buffer = buildMetronomeBuffer(ctx, riffDurationSec, secPerBeat)
+    source.loop = true
+    source.loopStart = 0
+    source.loopEnd = riffDurationSec
+    source.connect(ctx.destination)
+    source.start(0)
+    previewSourcesRef.current.push(source)
+  }
+
   function toggleFreePlay(): void {
     if (isFreePlaying) {
       stopPreview()
@@ -490,6 +518,7 @@ export function BeatPicker({
     if (playing) dispatch({ type: 'PAUSE' })
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
+    startMetronomeIfEnabled(ctx)
     const stemsToPreview = previewAll ? rifff.stems : [stem]
     const gain = sqrtGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
@@ -550,6 +579,7 @@ export function BeatPicker({
     // reads this same ref — see the effect above) tracks from here rather
     // than a stale timestamp left over from a previous pick or free-play.
     freeStartTimeRef.current = ctx.currentTime
+    startMetronomeIfEnabled(ctx)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -693,6 +723,22 @@ export function BeatPicker({
               onChange={(e) => setPreviewAll(e.target.checked)}
             />
             preview all stems
+          </label>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={metronomeOn}
+              onChange={(e) => setMetronomeOn(e.target.checked)}
+            />
+            click
           </label>
           <button
             onClick={toggleFreePlay}

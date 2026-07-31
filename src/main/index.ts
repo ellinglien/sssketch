@@ -189,6 +189,10 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
+  ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
+    playbackEngine?.client.send('set-metronome', { enabled })
+  })
+
   createWindow()
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc

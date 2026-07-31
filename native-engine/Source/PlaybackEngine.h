@@ -39,8 +39,19 @@ namespace ssstitch
          * loaded" without inventing a second way to pass project data. */
         const EngineProject& currentProjectForExport() const { return currentProject; }
 
+        /** Toggled by the 'set-metronome' IPC message — off by default, so a
+         * freshly-constructed engine (including RenderExport's own, offline)
+         * never includes the click unless explicitly turned on. Live
+         * playback and offline export share this same renderBlock, but
+         * export always uses its own fresh PlaybackEngine instance (see
+         * RenderExport.cpp), so this defaulting to false there is automatic
+         * — the metronome is a practice aid, not part of the actual mix. */
+        void setMetronomeEnabled(bool enabled) { metronomeEnabled = enabled; }
+        bool isMetronomeEnabled() const { return metronomeEnabled; }
+
     private:
         StemBufferCache& bufferCache;
         EngineProject currentProject;
+        bool metronomeEnabled = false;
     };
 }

@@ -61,6 +61,13 @@ export interface AppState {
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
   inspectorCollapsed: boolean
+  /** A 4/4 click track, higher-pitched on beat 1 of each bar — a practice/
+   * reference aid, not part of the actual arrangement. Toggled from
+   * TransportBar; StoreContext.tsx pushes the current value to the native
+   * engine (engineSetMetronome) whenever it changes. Not persisted (see
+   * serialize.ts) — always starts off, matching every other "how I'm
+   * currently working" toggle in this app. */
+  metronomeEnabled: boolean
   rifffs: Record<string, Rifff>
 }
 
@@ -82,6 +89,7 @@ export const initialState: AppState = {
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
+  metronomeEnabled: false,
   rifffs: {}
 }
 
@@ -137,6 +145,7 @@ export type Action =
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
+  | { type: 'TOGGLE_METRONOME' }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -593,6 +602,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_VOLUME_DRAG_MODE':
       return { ...state, volumeDragMode: !state.volumeDragMode }
+
+    case 'TOGGLE_METRONOME':
+      return { ...state, metronomeEnabled: !state.metronomeEnabled }
 
     case 'SET_ARRANGER_MODE':
       return { ...state, mode: action.mode }

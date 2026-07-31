@@ -1,6 +1,7 @@
 // native-engine/Source/PlaybackEngine.cpp
 #include "PlaybackEngine.h"
 #include "FadeGain.h"
+#include "Metronome.h"
 #include <algorithm>
 #include <cmath>
 
@@ -24,13 +25,35 @@ namespace ssstitch
         float* outR) const
     {
         const double spb = secPerBar();
-        if (spb <= 0.0 || currentProject.rifffs.empty())
+        if (spb <= 0.0)
             return;
 
         const double blockStartSec = positionBars * spb;
         const double blockDurationSec = numSamples / sampleRate;
 
         const double blockEndSec = blockStartSec + blockDurationSec;
+
+        // Rendered before the empty-project early-return below (and outside
+        // the per-rifff loop entirely) — the click should tick on a totally
+        // empty arrangement too, same as a real metronome doesn't need
+        // anything else playing to be useful. metronomeSampleAt is a pure
+        // function of absolute time (see its own doc comment), so it's
+        // already correctly phase-locked through any seek/scrub with no
+        // extra state needed here.
+        if (metronomeEnabled)
+        {
+            const double secPerBeat = spb / (double) kMetronomeBeatsPerBar;
+            for (int i2 = 0; i2 < numSamples; ++i2)
+            {
+                const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
+                const float click = metronomeSampleAt(sampleTimeSec, secPerBeat);
+                outL[i2] += click;
+                outR[i2] += click;
+            }
+        }
+
+        if (currentProject.rifffs.empty())
+            return;
 
         for (const auto& rifff : currentProject.rifffs)
         {

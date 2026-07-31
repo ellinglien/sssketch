@@ -172,6 +172,10 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [playing])
 
   useEffect(() => {
+    void window.rifffApi.engineSetMetronome(state.metronomeEnabled)
+  }, [state.metronomeEnabled])
+
+  useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
       // The native engine's 30Hz position timer only stops once it processes
       // an in-flight 'stop' message — a tick already queued before that lands
