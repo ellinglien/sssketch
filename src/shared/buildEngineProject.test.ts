@@ -164,4 +164,10 @@ describe('buildEngineProject', () => {
     const project = await buildEngineProject(state, vi.fn())
     expect(project.rifffs[0].stems[0].playedBars).toBe(16)
   })
+
+  it('includes masterChain in the built project, using "" for an empty slot', async () => {
+    const state = stateWith({ bpm: 150, masterChain: [null, 'pro-q-3', null, 'soothe2'] })
+    const project = await buildEngineProject(state, vi.fn())
+    expect(project.masterChain).toEqual(['', 'pro-q-3', '', 'soothe2'])
+  })
 })

@@ -39,6 +39,11 @@ export interface EngineProject {
    * applied right at this wrap point. */
   loopLengthBars: number
   rifffs: EngineRifff[]
+  /** "" (empty string) for an empty slot, matching the native engine's own
+   * wire-format convention (see MasterChainAllowlist.h) -- state.masterChain
+   * uses `null` on the renderer side since that's this codebase's existing
+   * convention for "unset" everywhere else (e.g. Rifff.startBar). */
+  masterChain: [string, string, string, string]
 }
 
 export interface StretchedStem {
@@ -152,6 +157,7 @@ export async function buildEngineProject(
     bpm: state.bpm,
     snapDiv: SNAP_DIVS[state.snapIdx],
     loopLengthBars: loopLengthBars(state),
+    masterChain: state.masterChain.map((id) => id ?? '') as [string, string, string, string],
     rifffs
   }
 }
