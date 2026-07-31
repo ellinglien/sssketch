@@ -9,6 +9,11 @@ import type { Rifff } from '@shared/types'
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
 
+// Vertical pixels of right-click-drag movement per step through a tile's
+// bar-length option list (see handleBarsMouseDown) — small enough that the
+// whole short preset list is reachable within a comfortable drag distance.
+const BARS_DRAG_PX_PER_STEP = 20
+
 /** Sketch mode's own view — a single left-to-right sequence of every placed
  * rifff, packed edge to edge (see isSketchEligible: this is only ever
  * mounted when that's already true, so `startBar` is already contiguous
@@ -41,11 +46,12 @@ export function SketchStrip(): React.JSX.Element {
   // handleTileClick's own doc comment for why the tile's click handler
   // needs to check this.
   const suppressNextTileClickRef = useRef(false)
-  // Right-click's "adjust length" popup — at most one open at a time, keyed
-  // by which tile it's for plus where to draw it (the click position).
-  const [barsMenuFor, setBarsMenuFor] = useState<{ groupId: string; x: number; y: number } | null>(
-    null
-  )
+  // Live preview while right-click-dragging a tile's bar-length (see
+  // handleBarsMouseDown) — the committed value doesn't change until
+  // release, but the tile's own label shows the candidate value as you drag,
+  // same "preview locally, commit on release" convention as the normal
+  // arranger's own resize-drag state (e.g. CollapsedRifffRow's dragPlayedBars).
+  const [dragBarsFor, setDragBarsFor] = useState<{ groupId: string; bars: number } | null>(null)
 
   // How many bars THIS tile actually plays before the sequence advances to
   // the next one — state.playedBars[groupId] when the right-click "adjust
@@ -211,6 +217,49 @@ export function SketchStrip(): React.JSX.Element {
     )
   }
 
+  // Right-click-drag sets how many bars this tile plays before the sequence
+  // advances — replaces an earlier click-to-open-a-list popup, which felt
+  // like more UI than this deserved. Dragging steps through the SAME short
+  // preset list barOptions() already offers (1/2/4/8/16 plus this rifff's
+  // own natural/current length) rather than a fine linear ramp, since that
+  // list is already the deliberately-small "don't overwhelm" set. Committed
+  // only on release (see effectiveBars/dragBarsFor's own doc comment) —
+  // right-click-drag without releasing on THIS tile, or a plain right-click
+  // with no drag at all, changes nothing.
+  function handleBarsMouseDown(e: React.MouseEvent, rifff: Rifff): void {
+    if (e.button !== 2) return
+    if (e.metaKey || e.ctrlKey) {
+      dispatch({ type: 'SOLO_GROUP', groupId: rifff.groupId })
+      return
+    }
+    const startBars = effectiveBars(rifff)
+    const options = barOptions(rifff.barLength, startBars)
+    const startIndex = options.indexOf(startBars)
+    let finalBars = startBars
+    startPointerDrag(
+      e,
+      (_deltaX, deltaY) => {
+        // Drag UP increases (screen Y decreases upward), matching a
+        // fader/knob's usual sense — DRAG_PX_PER_STEP of vertical movement
+        // moves exactly one step through the option list.
+        const stepsMoved = Math.round(-deltaY / BARS_DRAG_PX_PER_STEP)
+        const newIndex = Math.max(0, Math.min(options.length - 1, startIndex + stepsMoved))
+        finalBars = options[newIndex]
+        setDragBarsFor({ groupId: rifff.groupId, bars: finalBars })
+      },
+      (moved) => {
+        setDragBarsFor(null)
+        if (moved && finalBars !== startBars) {
+          dispatch({ type: 'SET_PLAYED_BARS', key: rifff.groupId, bars: finalBars })
+          // Re-packs every OTHER tile's startBar against the new length —
+          // SET_PLAYED_BARS alone only updates this one tile's own trim, it
+          // doesn't ripple the shift through the rest of the sequence.
+          dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: sequence.map((r) => r.groupId) })
+        }
+      }
+    )
+  }
+
   return (
     <div
       ref={containerRef}
@@ -310,6 +359,8 @@ export function SketchStrip(): React.JSX.Element {
         const orbitRadius = 46 // just outside PolarGlyph's own outermost ring
         const dotX = 50 + orbitRadius * Math.cos(angleRad)
         const dotY = 50 + orbitRadius * Math.sin(angleRad)
+        const isDraggingBars = dragBarsFor?.groupId === rifff.groupId
+        const displayBars = isDraggingBars ? dragBarsFor.bars : bars
 
         return (
           <div
@@ -317,15 +368,9 @@ export function SketchStrip(): React.JSX.Element {
             draggable
             onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
             onClick={(e) => handleTileClick(e, rifff)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              if (e.metaKey || e.ctrlKey) {
-                dispatch({ type: 'SOLO_GROUP', groupId: rifff.groupId })
-                return
-              }
-              setBarsMenuFor({ groupId: rifff.groupId, x: e.clientX, y: e.clientY })
-            }}
-            title={`${rifff.name} — shift/cmd-click to multi-select · right-click to adjust length · cmd/ctrl+right-click to solo`}
+            onContextMenu={(e) => e.preventDefault()}
+            onMouseDown={(e) => handleBarsMouseDown(e, rifff)}
+            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · cmd/ctrl+right-click to solo`}
             style={{
               order: index * 10,
               position: 'relative',
@@ -353,11 +398,11 @@ export function SketchStrip(): React.JSX.Element {
                 transform: 'translate(-50%, -50%)',
                 fontSize: 14,
                 fontWeight: 700,
-                color: '#fff',
+                color: isDraggingBars ? 'var(--ra-stretch-on)' : '#fff',
                 pointerEvents: 'none'
               }}
             >
-              {bars}
+              {displayBars}
             </span>
             {isCurrent && (
               <svg
@@ -410,46 +455,8 @@ export function SketchStrip(): React.JSX.Element {
           drag rifffs in from the shelf or LORE library to start a sketch
         </div>
       )}
-      {barsMenuFor &&
-        (() => {
-          const rifff = state.rifffs[barsMenuFor.groupId]
-          if (!rifff) return null
-          return (
-            <SketchTileBarsMenu
-              x={barsMenuFor.x}
-              y={barsMenuFor.y}
-              name={rifff.name}
-              currentBars={effectiveBars(rifff)}
-              naturalBars={rifff.barLength}
-              bpm={state.bpm}
-              onApply={(bars) => {
-                dispatch({ type: 'SET_PLAYED_BARS', key: rifff.groupId, bars })
-                // Re-packs every OTHER tile's startBar against the new
-                // length — SET_PLAYED_BARS alone only updates this one
-                // tile's own trim, it doesn't ripple the shift through the
-                // rest of the sequence.
-                dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: sequence.map((r) => r.groupId) })
-                setBarsMenuFor(null)
-              }}
-              onRemove={() => {
-                removeTiles(new Set([rifff.groupId]))
-                setBarsMenuFor(null)
-              }}
-              onClose={() => setBarsMenuFor(null)}
-            />
-          )
-        })()}
     </div>
   )
-}
-
-/** How long `bars` bars actually take to play at `bpm`, in seconds — assumes
- * 4/4 (this app's only supported time signature; see totalBeats = barLength
- * * 4 elsewhere, e.g. BeatPicker) and PROJECT tempo, not the rifff's own
- * native bpm: sketch mode always forces stretch on (see SEQUENCE_RIFFFS), so
- * project tempo is what it actually plays back at. */
-function secondsForBars(bars: number, bpm: number): number {
-  return bars * (60 / bpm) * 4
 }
 
 /** A short, deliberately limited set of common bar counts (powers of two) —
@@ -463,165 +470,4 @@ function barOptions(naturalBars: number, currentBars: number): number[] {
   options.add(Math.max(1, Math.round(naturalBars)))
   options.add(Math.max(1, Math.round(currentBars)))
   return [...options].sort((a, b) => a - b)
-}
-
-/** Right-click popup for setting how many WHOLE bars a sketch tile plays
- * before the sequence advances — reuses the normal arranger's playedBars
- * resize mechanism (see effectiveBars/SEQUENCE_RIFFFS's own doc comments)
- * rather than a drag handle, since these tiles are small fixed-size glyphs
- * with no edge to grab. The full option list is shown open immediately
- * (not a native <select>, which needs a second click just to reveal its own
- * options) — one click picks. Mirrors ContextMenu's own
- * dismiss-on-outside-click/Escape pattern directly (rather than reusing
- * that component) since it needs a scrollable list in the body, which
- * ContextMenu's plain items-list API doesn't support. */
-function SketchTileBarsMenu({
-  x,
-  y,
-  name,
-  currentBars,
-  naturalBars,
-  bpm,
-  onApply,
-  onRemove,
-  onClose
-}: {
-  x: number
-  y: number
-  name: string
-  currentBars: number
-  naturalBars: number
-  bpm: number
-  onApply: (bars: number) => void
-  onRemove: () => void
-  onClose: () => void
-}): React.JSX.Element {
-  const currentOptionRef = useRef<HTMLButtonElement>(null)
-
-  // Scrolls the currently-applied value into view the instant the list
-  // opens — with up to 64+ options, whatever's already selected can easily
-  // start below the fold otherwise.
-  useEffect(() => {
-    currentOptionRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [])
-
-  useEffect(() => {
-    function handleDismiss(): void {
-      onClose()
-    }
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
-    }
-    // Registered on the next tick, not immediately — same reasoning as
-    // ContextMenu's own identical setTimeout: the contextmenu event that
-    // opens this is followed by a synthesized 'click' in some environments,
-    // which would otherwise dismiss the menu the instant it opens.
-    const id = setTimeout(() => {
-      window.addEventListener('click', handleDismiss)
-      window.addEventListener('contextmenu', handleDismiss)
-    }, 0)
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      clearTimeout(id)
-      window.removeEventListener('click', handleDismiss)
-      window.removeEventListener('contextmenu', handleDismiss)
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [onClose])
-
-  return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
-      style={{
-        position: 'fixed',
-        left: x,
-        top: y,
-        zIndex: 20,
-        background: 'var(--ra-bg-bar)',
-        border: '1px solid var(--ra-border-strong)',
-        borderRadius: 0,
-        padding: 10,
-        minWidth: 200,
-        boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          color: 'var(--ra-text-3)',
-          marginBottom: 6,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis'
-        }}
-      >
-        {name}
-      </div>
-      <div
-        style={{
-          maxHeight: 240,
-          overflowY: 'auto',
-          border: '1px solid var(--ra-border)'
-        }}
-      >
-        {barOptions(naturalBars, currentBars).map((bars) => {
-          const isCurrent = bars === currentBars
-          // The rifff's own untrimmed length — clicking this is how you
-          // "reset" a trim/extend back to normal, so it's called out
-          // distinctly (bold + label) rather than looking like just another
-          // number in the list.
-          const isNatural = bars === Math.round(naturalBars)
-          return (
-            <button
-              key={bars}
-              ref={isCurrent ? currentOptionRef : undefined}
-              onClick={() => onApply(bars)}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                width: '100%',
-                textAlign: 'left',
-                padding: '4px 8px',
-                fontSize: 11,
-                fontWeight: isNatural ? 700 : 400,
-                border: 'none',
-                borderBottom: '1px solid var(--ra-border)',
-                background: isCurrent
-                  ? 'color-mix(in srgb, var(--ra-stretch-on) 20%, transparent)'
-                  : 'transparent',
-                color: isCurrent ? 'var(--ra-stretch-on)' : 'var(--ra-text)',
-                cursor: 'pointer'
-              }}
-            >
-              <span>
-                {bars} {bars === 1 ? 'bar' : 'bars'}
-                {isNatural ? ' (original)' : ''}
-              </span>
-              <span style={{ color: isCurrent ? 'inherit' : 'var(--ra-text-3)' }}>
-                {secondsForBars(bars, bpm).toFixed(1)}s
-              </span>
-            </button>
-          )
-        })}
-      </div>
-      <div style={{ display: 'flex', marginTop: 8 }}>
-        <button
-          onClick={onRemove}
-          style={{
-            flex: 1,
-            height: 22,
-            fontSize: 10,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-mute-on)',
-            borderRadius: 0,
-            cursor: 'pointer'
-          }}
-        >
-          remove
-        </button>
-      </div>
-    </div>
-  )
 }
