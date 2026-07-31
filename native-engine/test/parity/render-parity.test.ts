@@ -123,7 +123,7 @@ function microFadeGain(
 // ONCE when a buffer is loaded/cached, before any fade/gain, so these
 // references have to apply it to their own copy of the raw fixture samples
 // too, in the same order (blend first, then fade/gain).
-const LOOP_SEWING_WINDOW = 128
+const LOOP_SEWING_WINDOW = 512
 
 function applyLoopSewingBlend(samples: Float64Array): void {
   const n = samples.length

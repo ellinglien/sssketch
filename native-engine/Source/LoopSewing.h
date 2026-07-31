@@ -27,7 +27,16 @@ namespace ssstitch
      * playback instance actually loops.
      *
      * No-op if the buffer is too short to have a clean, non-overlapping
-     * window (mirrors OUROVEON's own guard). `windowSize` defaults to 128
-     * samples (~2.9ms at 44.1kHz) — OUROVEON's own tuned value. */
-    void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int windowSize = 128);
+     * window (mirrors OUROVEON's own guard). `windowSize` defaults to 512
+     * samples (~11.6ms at 44.1kHz) — widened from OUROVEON's own 128-sample
+     * value after real-world testing in this app found low-frequency
+     * sustained tones still audibly clicking: 128 samples is a large
+     * fraction of one whole cycle for a low tone, so blending toward the
+     * head's fixed value within that short a window has to bend the
+     * waveform's own phase to get there, which itself reads as a tick/warble
+     * rather than a true click. A wider window gives the blend more room to
+     * land smoothly even for low tones, at the cost of shaping slightly more
+     * of the tail — a tradeoff toward this app's actual content over
+     * OUROVEON's own tuning. */
+    void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int windowSize = 512);
 }

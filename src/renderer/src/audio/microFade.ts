@@ -46,14 +46,16 @@ export function applyLoopMicroFadeToChannel(
 /** Returns a COPY of `buf` (never mutates the original — callers may reuse
  * it elsewhere, e.g. BeatPicker's spectrogram analysis) with the loop-sewing
  * blend applied to every channel, ending exactly at `loopEndSec`. `windowSec`
- * defaults to ~2.9ms (128 samples at 44.1kHz, matching LoopSewing.cpp's own
- * default) — far too short to read as a musical fade, just enough to remove
- * the discontinuity. */
+ * defaults to ~11.6ms (512 samples at 44.1kHz, matching LoopSewing.cpp's own
+ * default — see its doc comment for why this is wider than OUROVEON's own
+ * 128-sample value) — still far too short to read as a musical fade, just
+ * enough to remove the discontinuity even for a low-frequency sustained
+ * tone. */
 export function applyLoopMicroFade(
   ctx: AudioContext,
   buf: AudioBuffer,
   loopEndSec: number,
-  windowSec = 128 / 44100
+  windowSec = 512 / 44100
 ): AudioBuffer {
   const loopEndSample = Math.round(loopEndSec * buf.sampleRate)
   const windowSamples = Math.round(windowSec * buf.sampleRate)
