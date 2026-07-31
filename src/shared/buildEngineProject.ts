@@ -61,10 +61,29 @@ export async function buildEngineProject(
 
   for (const rifff of placed) {
     const stretchOn = state.stretch[rifff.groupId] ?? true
-    const ratio = stretchOn ? state.bpm / rifff.bpm : 1
 
     const stems: EngineStem[] = []
     for (const stem of rifff.stems) {
+      // Per-stem, not state.bpm / rifff.bpm once for the whole rifff — a
+      // rifff's own declared bpm is what MOST of its stems were recorded
+      // at, but not always: LORE riffs can (and, in the wild, do) mix in a
+      // stem that was originally captured at a different native tempo,
+      // still perfectly loop-locked to the riff (same bar count, sample-
+      // accurate), just at a different real-world seconds-per-bar. Deriving
+      // the ratio from THIS stem's own measured durationSec/barLength
+      // (rather than trusting rifff.bpm to apply uniformly) is exactly
+      // "measured, not assumed" — same principle as durationSec itself
+      // elsewhere in this file — and produces the identical ratio as the
+      // old formula whenever a stem DOES share the riff's own tempo, so
+      // this is a strict correctness fix, not a behavior change for the
+      // common case. Real bug this fixes: specific stems in a riff audibly
+      // playing at the wrong speed relative to the others, because they'd
+      // been recorded at a different native tempo than the riff's own
+      // declared bpm and were being stretched by the wrong ratio.
+      const secPerBarAtProjectTempo = (60 / state.bpm) * 4
+      const stemNativeSecPerBar = stem.durationSec / stem.barLength
+      const ratio = stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
+
       let resolved: StretchedStem = { path: stem.path, durationSec: stem.durationSec }
       if (Math.abs(ratio - 1) >= 0.001) {
         try {

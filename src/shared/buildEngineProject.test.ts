@@ -36,7 +36,10 @@ describe('buildEngineProject', () => {
       .mockResolvedValue({ path: '/a-stretched.wav', durationSec: 19.2 })
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
     const project = await buildEngineProject(state, resolveStretched)
-    expect(resolveStretched).toHaveBeenCalledWith('/a.wav', 100 / 150)
+    expect(resolveStretched).toHaveBeenCalledTimes(1)
+    const [calledPath, calledRatio] = resolveStretched.mock.calls[0]
+    expect(calledPath).toBe('/a.wav')
+    expect(calledRatio).toBeCloseTo(100 / 150, 10)
     expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a-stretched.wav')
   })
 
@@ -59,6 +62,44 @@ describe('buildEngineProject', () => {
     // project's own tempo and silently truncates the tail of the loop.
     expect(stem.durationSec).toBe(19.2)
     expect(stem.durationSec).not.toBe(rifff.stems[0].durationSec)
+  })
+
+  it("computes each stem's stretch ratio from its OWN duration/barLength, not the rifff's declared bpm — regression test for a real LORE riff (b5a204a0, verified against the actual warehouse) where one stem was recorded at a different native tempo than the rest of the riff, still perfectly loop-locked (same bar count). The old code used state.bpm/rifff.bpm uniformly for every stem, which stretched that one stem by the wrong ratio and made it audibly play at the wrong speed relative to the others", async () => {
+    const mixedTempoRifff: Rifff = {
+      ...rifff,
+      bpm: 150, // the riff's own declared bpm — no longer used in the ratio calc at all
+      stems: [
+        // native ~150bpm: durationSec/barLength = 1.6 sec/bar = (60/150)*4
+        {
+          slot: 1,
+          author: 'e',
+          name: 'a',
+          type: 'fx',
+          path: '/a.wav',
+          durationSec: 12.8,
+          barLength: 8
+        },
+        // native ~100bpm: durationSec/barLength = 2.4 sec/bar = (60/100)*4 — mismatched vs the riff's own 150bpm
+        {
+          slot: 2,
+          author: 'e',
+          name: 'b',
+          type: 'fx',
+          path: '/b.wav',
+          durationSec: 19.2,
+          barLength: 8
+        }
+      ]
+    }
+    const resolveStretched = vi.fn().mockResolvedValue({ path: '/stretched.wav', durationSec: 1 })
+    const state = stateWith({ bpm: 120, rifffs: { r1: mixedTempoRifff }, stretch: { r1: true } })
+    await buildEngineProject(state, resolveStretched)
+
+    const calls = resolveStretched.mock.calls
+    const aCall = calls.find((c) => c[0] === '/a.wav')
+    const bCall = calls.find((c) => c[0] === '/b.wav')
+    expect(aCall?.[1]).toBeCloseTo(120 / 150, 5)
+    expect(bCall?.[1]).toBeCloseTo(120 / 100, 5)
   })
 
   it('skips unstretched-path resolution when stretch is explicitly off, even if bpm differs', async () => {
