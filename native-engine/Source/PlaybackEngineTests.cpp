@@ -170,15 +170,21 @@ namespace ssstitch
                 engine.setProject(project);
 
                 const double sampleRate = 44100.0;
-                const int numSamples = 64;
-                // Straddle t=4.0s (the tile0/tile1 boundary) with 32 samples on either side.
-                const double blockStartSec = 4.0 - 32.0 / sampleRate;
+                // 150 samples before the boundary, 10 after — the pre-boundary side is
+                // deliberately kept outside LoopSewing's own 128-sample tail-blend window
+                // (see StemBufferCache::load), which pulls tile0's last 128 samples toward
+                // ITS OWN start value (~0.0 for this ramp) and would otherwise make this
+                // test's "near 1.0" assumption false for reasons unrelated to what it's
+                // actually checking (segment-relative vs. block-relative indexing).
+                const int numSamples = 160;
+                const double blockStartSec = 4.0 - 150.0 / sampleRate;
                 const double positionBars = blockStartSec / 4.0;
 
                 std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
                 engine.renderBlock(positionBars, sampleRate, numSamples, l.data(), r.data());
 
-                // First sample: still in tile0, near the very end of its 4s buffer -> near 1.0.
+                // First sample: still in tile0, near (but outside the loop-sewing blend
+                // window of) the end of its 4s buffer -> near 1.0.
                 expect(l[0] > 0.9f);
                 // Last sample: now in tile1, near the very start of its own buffer -> near 0.0,
                 // NOT a continuation of tile0's near-1.0 tail (which a block-relative, rather

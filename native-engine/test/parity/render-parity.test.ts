@@ -118,6 +118,25 @@ function microFadeGain(
   return Math.max(0, gain)
 }
 
+// Mirrors LoopSewing.cpp's applyLoopSewingBlend (ported from OUROVEON's
+// Stem::applyLoopSewingBlend — see that file's own doc comment) — applied
+// ONCE when a buffer is loaded/cached, before any fade/gain, so these
+// references have to apply it to their own copy of the raw fixture samples
+// too, in the same order (blend first, then fade/gain).
+const LOOP_SEWING_WINDOW = 128
+
+function applyLoopSewingBlend(samples: Float64Array): void {
+  const n = samples.length
+  if (n <= LOOP_SEWING_WINDOW * 2) return
+  const startSample = samples[0]
+  for (let i = 0; i < LOOP_SEWING_WINDOW; i++) {
+    const endIndex = n - 1 - i
+    const t = -1.0 + (i / LOOP_SEWING_WINDOW) * 2.0
+    const coeff = Math.sqrt(0.5 * (1.0 - t))
+    samples[endIndex] = samples[endIndex] + (startSample - samples[endIndex]) * coeff
+  }
+}
+
 describe('native engine vs Web Audio export — render parity', () => {
   let dir: string
   let tonePath: string
@@ -173,11 +192,15 @@ describe('native engine vs Web Audio export — render parity', () => {
     const toneBuf = readFileSync(tonePath)
     const sampleRate = 44100
     const segmentDurationSec = 4.0
-    const expectedSamples = new Int16Array(Math.floor(segmentDurationSec * sampleRate))
-    for (let i = 0; i < expectedSamples.length; i++) {
-      const src = toneBuf.readInt16LE(44 + i * 2)
+    const numSamples = Math.floor(segmentDurationSec * sampleRate)
+    const rawSamples = new Float64Array(numSamples)
+    for (let i = 0; i < numSamples; i++) rawSamples[i] = toneBuf.readInt16LE(44 + i * 2)
+    applyLoopSewingBlend(rawSamples)
+
+    const expectedSamples = new Int16Array(numSamples)
+    for (let i = 0; i < numSamples; i++) {
       const gain = microFadeGain(i / sampleRate, segmentDurationSec, 0, 0, 4.0, true, true)
-      expectedSamples[i] = Math.round(src * 0.8 * gain)
+      expectedSamples[i] = Math.round(rawSamples[i] * 0.8 * gain)
     }
 
     expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
@@ -229,14 +252,18 @@ describe('native engine vs Web Audio export — render parity', () => {
     const toneBuf = readFileSync(tonePath)
     const sampleRate = 44100
     const segmentDurationSec = 4.0
-    const expectedSamples = new Int16Array(Math.floor(segmentDurationSec * sampleRate))
-    for (let i = 0; i < expectedSamples.length; i++) {
-      const src = toneBuf.readInt16LE(44 + i * 2)
+    const numSamples = Math.floor(segmentDurationSec * sampleRate)
+    const rawSamples = new Float64Array(numSamples)
+    for (let i = 0; i < numSamples; i++) rawSamples[i] = toneBuf.readInt16LE(44 + i * 2)
+    applyLoopSewingBlend(rawSamples)
+
+    const expectedSamples = new Int16Array(numSamples)
+    for (let i = 0; i < numSamples; i++) {
       // fadeInBars 0.5 -> 2s explicit fade-in (far bigger than the floor, so
       // unaffected by it); fadeOutBars 0 -> only the anti-click floor applies
       // at the very end, which this test didn't have to account for before.
       const gain = microFadeGain(i / sampleRate, segmentDurationSec, 0.5, 0, 4.0, true, true)
-      expectedSamples[i] = Math.round(src * gain)
+      expectedSamples[i] = Math.round(rawSamples[i] * gain)
     }
 
     let maxDiff = 0
@@ -334,10 +361,13 @@ describe('native engine vs Web Audio export — render parity', () => {
     // outside the native engine) — this reference reads the STRETCHED file's
     // own samples and applies the same plain volume scaling the other cases
     // use. It does not reimplement any stretch/resampling math.
+    const stretchedRawSamples = Float64Array.from(stretchedSamples)
+    applyLoopSewingBlend(stretchedRawSamples)
+
     const expectedSamples = new Int16Array(stretchedSamples.length)
     for (let i = 0; i < expectedSamples.length; i++) {
       const gain = microFadeGain(i / 44100, stretchedDurationSec, 0, 0, secPerBar, true, true)
-      expectedSamples[i] = Math.round(stretchedSamples[i] * 0.8 * gain)
+      expectedSamples[i] = Math.round(stretchedRawSamples[i] * 0.8 * gain)
     }
 
     expect(nativeSamples.length).toBeGreaterThanOrEqual(expectedSamples.length)
@@ -404,10 +434,15 @@ describe('native engine vs Web Audio export — render parity', () => {
     const sampleRate = 44100
     const tileDurationSec = 4.0
     const toneBuf = readFileSync(tonePath)
-    const oneTileSamples = new Int16Array(Math.floor(tileDurationSec * sampleRate))
+    // Loaded ONCE (mirroring StemBufferCache: one cached buffer, read twice
+    // for the two tiles) — the loop-sewing blend is applied here, to that
+    // single shared buffer, not independently per tile-read.
+    const oneTileSamples = new Float64Array(Math.floor(tileDurationSec * sampleRate))
     for (let i = 0; i < oneTileSamples.length; i++) {
       oneTileSamples[i] = toneBuf.readInt16LE(44 + i * 2)
     }
+    applyLoopSewingBlend(oneTileSamples)
+
     const expectedSamples = new Int16Array(oneTileSamples.length * 2)
     for (let i = 0; i < oneTileSamples.length; i++) {
       const gainTile0 = microFadeGain(i / sampleRate, tileDurationSec, 0, 0, 4.0, true, false)

@@ -1,5 +1,6 @@
 // native-engine/Source/StemBufferCache.cpp
 #include "StemBufferCache.h"
+#include "LoopSewing.h"
 
 namespace ssstitch
 {
@@ -46,6 +47,13 @@ namespace ssstitch
         entry.buffer.setSize((int) reader->numChannels, (int) reader->lengthInSamples);
         if (!reader->read(&entry.buffer, 0, (int) reader->lengthInSamples, 0, true, true))
             return false;
+
+        // Every stem this app plays is loop-eligible content by nature (see
+        // LoopSewing.h's own doc comment) — blending the buffer's own tail
+        // toward its head ONCE here, rather than per-block in renderBlock,
+        // means every tiled repeat downstream is automatically click-free
+        // with zero changes needed to the real-time render path itself.
+        applyLoopSewingBlend(entry.buffer);
 
         cache.emplace(key, std::move(entry));
         return true;

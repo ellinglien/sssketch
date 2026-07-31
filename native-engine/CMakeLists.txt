@@ -25,6 +25,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp
   Source/FadeGainTests.cpp
+  Source/LoopSewing.cpp
+  Source/LoopSewingTests.cpp
   Source/EngineProject.cpp
   Source/EngineProjectTests.cpp
   Source/StemBufferCache.cpp
