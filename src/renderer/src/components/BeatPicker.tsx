@@ -712,139 +712,177 @@ export function BeatPicker({
             overflowY: lanesHeight > 400 ? 'auto' : 'hidden'
           }}
         >
-          <div style={{ position: 'relative', height: lanesHeight }}>
-            {stemSpectrograms?.map(({ stem: s, spectrogram, pitchPathD }, i) => (
+          {!stemSpectrograms && (
+            <div
+              style={{
+                position: 'relative',
+                height: lanesHeight,
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8
+              }}
+            >
+              {/* A sweeping scan beam — echoes what's actually happening
+                  (decoding + an STFT pass over every stem) rather than a
+                  generic spinner, and reuses the identity stem's own color
+                  so it still reads as "this picker," not a bare loading
+                  screen. */}
               <div
-                key={s.slot}
                 style={{
                   position: 'absolute',
-                  top: i * (LANE_HEIGHT + LANE_GAP),
-                  left: 0,
-                  right: 0,
-                  height: LANE_HEIGHT,
-                  overflow: 'hidden',
-                  borderBottom:
-                    i < stemSpectrograms.length - 1 ? '1px solid var(--ra-border)' : 'none'
+                  top: 0,
+                  bottom: 0,
+                  width: '30%',
+                  background: `linear-gradient(90deg, transparent, ${typeColorVar(stem.type)}, transparent)`,
+                  opacity: 0.5,
+                  animation: 'ra-scan 1.4s ease-in-out infinite'
                 }}
-              >
-                <SpectrogramCanvas
-                  spectrogram={spectrogram}
-                  color={typeColorVar(s.type)}
-                  height={LANE_HEIGHT}
-                />
-                {NOTE_GRIDLINES.map((g, gi) => (
-                  <div
-                    key={g.label}
+              />
+              <span className="ra-eyebrow" style={{ position: 'relative' }}>
+                re-oning…
+              </span>
+            </div>
+          )}
+          {stemSpectrograms && (
+            <div style={{ position: 'relative', height: lanesHeight }}>
+              {stemSpectrograms.map(({ stem: s, spectrogram, pitchPathD }, i) => (
+                <div
+                  key={s.slot}
+                  style={{
+                    position: 'absolute',
+                    top: i * (LANE_HEIGHT + LANE_GAP),
+                    left: 0,
+                    right: 0,
+                    height: LANE_HEIGHT,
+                    overflow: 'hidden',
+                    borderBottom:
+                      i < stemSpectrograms.length - 1 ? '1px solid var(--ra-border)' : 'none'
+                  }}
+                >
+                  <SpectrogramCanvas
+                    spectrogram={spectrogram}
+                    color={typeColorVar(s.type)}
+                    height={LANE_HEIGHT}
+                  />
+                  {NOTE_GRIDLINES.map((g, gi) => (
+                    <div
+                      key={g.label}
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        top: `${freqToTopPct(g.freqHz)}%`,
+                        borderTop: '1px solid color-mix(in srgb, var(--ra-text) 20%, transparent)',
+                        pointerEvents: 'none'
+                      }}
+                    >
+                      {gi % 2 === 0 && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: 2,
+                            top: -6,
+                            fontSize: 6,
+                            color: 'var(--ra-text-3)',
+                            textShadow: '0 0 2px var(--ra-bg-row), 0 0 2px var(--ra-bg-row)'
+                          }}
+                        >
+                          {g.label}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  {pitchPathD && (
+                    <svg
+                      width="100%"
+                      height="100%"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+                    >
+                      <path
+                        d={pitchPathD}
+                        stroke="black"
+                        strokeOpacity={0.45}
+                        strokeWidth={2.2}
+                        fill="none"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <path
+                        d={pitchPathD}
+                        stroke="white"
+                        strokeOpacity={0.9}
+                        strokeWidth={0.9}
+                        fill="none"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                  )}
+                  <span
                     style={{
                       position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: `${freqToTopPct(g.freqHz)}%`,
-                      borderTop: '1px solid color-mix(in srgb, var(--ra-text) 20%, transparent)',
+                      top: 2,
+                      right: 4,
+                      fontSize: 8,
+                      letterSpacing: 0.4,
+                      textTransform: 'uppercase',
+                      color: 'var(--ra-text-2)',
+                      textShadow: '0 0 3px var(--ra-bg-row), 0 0 3px var(--ra-bg-row)',
                       pointerEvents: 'none'
                     }}
                   >
-                    {gi % 2 === 0 && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: 2,
-                          top: -6,
-                          fontSize: 6,
-                          color: 'var(--ra-text-3)',
-                          textShadow: '0 0 2px var(--ra-bg-row), 0 0 2px var(--ra-bg-row)'
-                        }}
-                      >
-                        {g.label}
-                      </span>
-                    )}
-                  </div>
-                ))}
-                {pitchPathD && (
-                  <svg
-                    width="100%"
-                    height="100%"
-                    viewBox="0 0 100 100"
-                    preserveAspectRatio="none"
-                    style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-                  >
-                    <path
-                      d={pitchPathD}
-                      stroke="black"
-                      strokeOpacity={0.45}
-                      strokeWidth={2.2}
-                      fill="none"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <path
-                      d={pitchPathD}
-                      stroke="white"
-                      strokeOpacity={0.9}
-                      strokeWidth={0.9}
-                      fill="none"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </svg>
-                )}
-                <span
+                    {s.name}
+                  </span>
+                </div>
+              ))}
+              {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
+                <button
+                  key={beatIndex}
+                  onClick={() => pickBeat(beatIndex)}
+                  title={`beat ${beatIndex + 1}`}
                   style={{
                     position: 'absolute',
-                    top: 2,
-                    right: 4,
-                    fontSize: 8,
-                    letterSpacing: 0.4,
-                    textTransform: 'uppercase',
-                    color: 'var(--ra-text-2)',
-                    textShadow: '0 0 3px var(--ra-bg-row), 0 0 3px var(--ra-bg-row)',
+                    top: 0,
+                    bottom: 0,
+                    left: `${(beatIndex / totalBeats) * 100}%`,
+                    width: `${100 / totalBeats}%`,
+                    border: 'none',
+                    borderLeft:
+                      beatIndex % 4 === 0
+                        ? '1px solid var(--ra-border-strong)'
+                        : '1px solid var(--ra-grid-minor)',
+                    background:
+                      beatIndex === currentBeat
+                        ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
+                        : 'transparent',
+                    cursor: 'pointer'
+                  }}
+                />
+              ))}
+              {playheadPct !== null && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    left: `${playheadPct}%`,
+                    width: 2,
+                    background: 'var(--ra-playhead)',
                     pointerEvents: 'none'
                   }}
-                >
-                  {s.name}
-                </span>
-              </div>
-            ))}
-            {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
-              <button
-                key={beatIndex}
-                onClick={() => pickBeat(beatIndex)}
-                title={`beat ${beatIndex + 1}`}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: `${(beatIndex / totalBeats) * 100}%`,
-                  width: `${100 / totalBeats}%`,
-                  border: 'none',
-                  borderLeft:
-                    beatIndex % 4 === 0
-                      ? '1px solid var(--ra-border-strong)'
-                      : '1px solid var(--ra-grid-minor)',
-                  background:
-                    beatIndex === currentBeat
-                      ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
-                      : 'transparent',
-                  cursor: 'pointer'
-                }}
-              />
-            ))}
-            {playheadPct !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: `${playheadPct}%`,
-                  width: 2,
-                  background: 'var(--ra-playhead)',
-                  pointerEvents: 'none'
-                }}
-              />
-            )}
-          </div>
+                />
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          loop begins at beat {currentBeat + 1} of {totalBeats}
+          {stemSpectrograms
+            ? `loop begins at beat ${currentBeat + 1} of ${totalBeats}`
+            : 'decoding stems and analyzing…'}
         </div>
       </div>
     </div>

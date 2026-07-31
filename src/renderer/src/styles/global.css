@@ -40,6 +40,27 @@ button {
   color: inherit;
 }
 
+/* Browsers don't inherit font-family into form controls by default (only
+   button was covered above) — without this, every input/select silently
+   falls back to the system UI font instead of the app's own, which is
+   exactly what made the BPM field read as visually inconsistent. */
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Sweeping scan-beam loading indicator — see BeatPicker's "re-oning…" state,
+   shown while a rifff's stems are still decoding/being analyzed. */
+@keyframes ra-scan {
+  0% {
+    left: -30%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
 .ra-frame {
   width: 1300px;
   /* Bounded to the viewport (minus the same 32px margin top and bottom),

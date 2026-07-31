@@ -351,9 +351,9 @@ export function SketchStrip(): React.JSX.Element {
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                fontSize: 11,
+                fontSize: 14,
                 fontWeight: 700,
-                color: '#000',
+                color: '#fff',
                 pointerEvents: 'none'
               }}
             >
