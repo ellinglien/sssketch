@@ -95,21 +95,22 @@ describe('reducer', () => {
     expect(state.bpm).toBe(120)
   })
 
-  describe('trackOrder', () => {
-    it('a placed rifff joins the end of trackOrder, regardless of shelf-add order', () => {
+  describe('channels', () => {
+    it('a placed rifff gets its own channel, added to the end of channelOrder', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
       })
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
       // r2 was added to the shelf second, but placed on the timeline first —
-      // trackOrder should reflect placement order, not shelf-add order.
+      // channelOrder should reflect placement order, not shelf-add order.
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
-      expect(state.trackOrder).toEqual(['r2', 'r1'])
+      expect(state.channelOrder).toEqual(['r2', 'r1'])
+      expect(state.channelOf).toEqual({ r2: 'r2', r1: 'r1' })
     })
 
-    it('repositioning an already-placed clip does not reorder trackOrder', () => {
+    it('repositioning an already-placed clip (same PLACE_ON_TIMELINE action) leaves its channel untouched', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -118,10 +119,11 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 8 }) // dragged
-      expect(state.trackOrder).toEqual(['r1', 'r2'])
+      expect(state.channelOrder).toEqual(['r1', 'r2'])
+      expect(state.channelOf).toEqual({ r1: 'r1', r2: 'r2' })
     })
 
-    it('removing from the timeline drops it from trackOrder; re-placing rejoins at the bottom', () => {
+    it('removing from the timeline drops its now-empty channel; re-placing gets a fresh one at the bottom', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -130,9 +132,85 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
-      expect(state.trackOrder).toEqual(['r2'])
+      expect(state.channelOrder).toEqual(['r2'])
+      expect(state.channelOf.r1).toBeUndefined()
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-      expect(state.trackOrder).toEqual(['r2', 'r1'])
+      expect(state.channelOrder).toEqual(['r2', 'r1'])
+    })
+
+    it('MOVE_TO_CHANNEL on a first-ever placement still adopts the clip’s own bpm as project tempo', () => {
+      // Regression test: an earlier version of MOVE_TO_CHANNEL didn't share
+      // PLACE_ON_TIMELINE's placeOnTimeline() logic and silently dropped
+      // this — since a later task (Task 11) routes every Timeline drop
+      // (including first-ever shelf placements) through MOVE_TO_CHANNEL when
+      // a specific channel target is known, this must work here too, not
+      // just via PLACE_ON_TIMELINE.
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1', bpm: 150 })
+      })
+      expect(state.bpm).toBe(80) // untouched default
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'r1'
+      })
+      expect(state.bpm).toBe(150)
+    })
+
+    it('MOVE_TO_CHANNEL reassigns to an existing channel and drops the old one once it is empty', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 6,
+        channelId: 'r2'
+      })
+      expect(state.channelOf).toEqual({ r1: 'r2', r2: 'r2' })
+      expect(state.channelOrder).toEqual(['r2']) // r1's own now-empty channel is gone
+      expect(state.rifffs.r1.startBar).toBe(6)
+      expect(state.sel).toBe('r1')
+    })
+
+    it('MOVE_TO_CHANNEL onto a brand new channel id creates it', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'fresh-channel'
+      })
+      expect(state.channelOf.r1).toBe('fresh-channel')
+      expect(state.channelOrder).toEqual(['fresh-channel']) // r1's own default channel is gone, replaced
+    })
+
+    it('two clips can share one channel (MOVE_TO_CHANNEL onto an occupied one)', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 8,
+        channelId: 'r1'
+      })
+      expect(state.channelOf).toEqual({ r1: 'r1', r2: 'r1' })
+      expect(state.channelOrder).toEqual(['r1'])
     })
   })
 
@@ -216,16 +294,22 @@ describe('reducer', () => {
       expect(state.mute['r1:6']).toBeUndefined()
     })
 
-    it('scrubs both linked (group-keyed) and unlinked (stem-keyed) off/playedBars entries', () => {
+    it('scrubs off/playedBars entries for the deleted rifff', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 2 })
-      state = reducer(state, { type: 'UNLINK', groupId: 'r1' }) // leaves the group-level off[] entry in place, unused
-      state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1:1', bars: 2 })
+      state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 2 })
       state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
       expect(state.off.r1).toBeUndefined()
-      expect(state.off['r1:1']).toBeUndefined()
-      expect(state.playedBars['r1:1']).toBeUndefined()
+      expect(state.playedBars.r1).toBeUndefined()
+    })
+
+    it('drops a deleted rifff’s channel from channelOrder if nothing else is on it', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.channelOrder).toEqual([])
+      expect(state.channelOf.r1).toBeUndefined()
     })
 
     it('clears selection only if the selected rifff was one of the deleted ones', () => {
@@ -416,7 +500,7 @@ describe('reducer', () => {
       })
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
       state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r2', 'r1'] })
-      expect(state.trackOrder).toEqual(['r2', 'r1'])
+      expect(state.channelOrder).toEqual(['r2', 'r1'])
     })
 
     it('forces stretch on for every sequenced rifff, even one that had it off', () => {

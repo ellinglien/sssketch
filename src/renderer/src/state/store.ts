@@ -9,6 +9,36 @@ export const SNAP_DIVS = [4, 8, 16, 32] as const
 // exact value instead of duplicating the literal.
 export const MIN_PLAYED_BARS = 0.25
 
+// True if some placed clip still has channelOf pointing at channelId — used
+// to decide whether a channel that just lost a clip (moved elsewhere,
+// removed, or deleted) still has anything left on it, or should drop out of
+// channelOrder entirely. A channel is never a persisted, independently
+// "created"/"deleted" thing — it exists exactly as long as something is on
+// it (see channelOrder's own doc comment).
+function channelHasAnyClip(channelOf: Record<string, string>, channelId: string): boolean {
+  return Object.values(channelOf).includes(channelId)
+}
+
+// Shared by PLACE_ON_TIMELINE and MOVE_TO_CHANNEL — everything about placing
+// a clip in TIME (as opposed to which channel it lands on, which each of
+// those two actions decides differently). The very first clip placed on an
+// otherwise-empty timeline adopts its own bpm as the project tempo, rather
+// than leaving it at the app's arbitrary default — repositioning that same
+// clip, or placing a second one alongside it, doesn't retrigger this.
+function placeOnTimeline(state: AppState, groupId: string, startBar: number): AppState {
+  const rifff = state.rifffs[groupId]
+  const isFirstPlacement =
+    rifff.startBar === undefined &&
+    !Object.values(state.rifffs).some((r) => r.groupId !== groupId && r.startBar !== undefined)
+  return {
+    ...state,
+    rifffs: { ...state.rifffs, [groupId]: { ...rifff, startBar: Math.max(0, startBar) } },
+    bpm: isFirstPlacement ? rifff.bpm : state.bpm,
+    sel: groupId,
+    stretch: { ...state.stretch, [groupId]: true }
+  }
+}
+
 export type ArrangerMode = 'normal' | 'compact' | 'sketch'
 
 export interface AppState {
@@ -34,16 +64,29 @@ export interface AppState {
    * behavior, unchanged for a project with no resize edits. */
   playedBars: Record<string, number>
   sel: string | null
-  /** Visual top-to-bottom row order for placed rifffs, as groupIds — a rifff
-   * joins the end of this list the moment it's placed (from the shelf, or
-   * pasted), and drops out again when removed. Without this, row order was
-   * just Object.values(state.rifffs)'s own iteration order, i.e. whatever
-   * order rifffs were originally imported into the shelf — meaning a rifff
-   * placed later could render ABOVE one placed earlier, regardless of drop
-   * position. Read via selectors.ts's placedRifffsInOrder, which falls back
-   * to object order for any placed rifff missing from this list (keeps old
-   * saves, made before this field existed, rendering exactly as before). */
-  trackOrder: string[]
+  /** Visual top-to-bottom row order, as channel IDs — a fresh channel joins
+   * the end of this list the moment a clip first lands on it (placed from
+   * the shelf, pasted, or dragged off another channel), and drops out again
+   * once nothing references it any more. Multiple clips can share one
+   * channel (see channelOf below) — that's the whole point: this is what
+   * makes "drag a clip onto another channel" and "two clips on the same
+   * line" possible, replacing the old trackOrder, which was always
+   * exactly one row per rifff, permanently. Read via selectors.ts's
+   * channelsInOrder/placedRifffsInOrder, which fall back to object order
+   * for any placed rifff missing a channel assignment (keeps old saves —
+   * see serialize.ts's migration step — and any placed rifff that somehow
+   * never got a channel, rendering sensibly instead of vanishing). */
+  channelOrder: string[]
+  /** Which channel a placed rifff currently renders on, keyed by groupId.
+   * Set automatically to the rifff's own groupId the moment it's first
+   * placed or pasted (so the common "one clip, one row" case needs no
+   * explicit choice) — only ever set to something ELSE via MOVE_TO_CHANNEL,
+   * dispatched when a clip is deliberately dragged onto a different
+   * existing channel or off to a brand new one. Purely a rendering/
+   * organizational concern — the native engine (buildEngineProject.ts)
+   * never reads this field at all; playback doesn't care which row a clip
+   * is drawn on. */
+  channelOf: Record<string, string>
   exp: Record<string, boolean>
   /** Global interaction mode for the expanded waveform's open body: false (default)
    * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
@@ -84,7 +127,8 @@ export const initialState: AppState = {
   fadeOut: {},
   playedBars: {},
   sel: null,
-  trackOrder: [],
+  channelOrder: [],
+  channelOf: {},
   exp: {},
   volumeDragMode: false,
   mode: 'sketch',
@@ -102,6 +146,7 @@ export const initialState: AppState = {
 export type Action =
   | { type: 'ADD_TO_SHELF'; rifff: Rifff }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
+  | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
@@ -171,34 +216,50 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'PLACE_ON_TIMELINE': {
-      const rifff = state.rifffs[action.groupId]
-      const wasUnplaced = rifff.startBar === undefined
-      // The very first clip placed on an otherwise-empty timeline sets the
-      // project's tempo, rather than leaving it at the app's arbitrary default —
-      // repositioning that same clip, or placing a second one alongside it,
-      // shouldn't retrigger this.
-      const isFirstPlacement =
-        wasUnplaced &&
-        !Object.values(state.rifffs).some(
-          (r) => r.groupId !== action.groupId && r.startBar !== undefined
-        )
+      // Auto-assigns a clip its own channel (reusing its own groupId as the
+      // channel's id) the moment it's first placed — every OTHER dispatcher
+      // of this action (existing tests, SketchStrip.tsx) keeps working with
+      // zero changes, since this only ever ADDS a channel, never removes
+      // one. Repositioning an already-placed clip leaves its channel exactly
+      // as it was — moving it to a DIFFERENT channel is MOVE_TO_CHANNEL's
+      // job, not this one's.
+      const channelId = state.channelOf[action.groupId] ?? action.groupId
+      const placed = placeOnTimeline(state, action.groupId, action.startBar)
       return {
-        ...state,
-        rifffs: {
-          ...state.rifffs,
-          [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
-        },
-        bpm: isFirstPlacement ? rifff.bpm : state.bpm,
-        sel: action.groupId,
-        stretch: { ...state.stretch, [action.groupId]: true },
-        // Joins the bottom of the visual stack the moment it's placed —
-        // repositioning an already-placed clip (wasUnplaced false) leaves
-        // its row order alone.
-        trackOrder:
-          wasUnplaced && !state.trackOrder.includes(action.groupId)
-            ? [...state.trackOrder, action.groupId]
-            : state.trackOrder
+        ...placed,
+        channelOf: { ...state.channelOf, [action.groupId]: channelId },
+        channelOrder: state.channelOrder.includes(channelId)
+          ? state.channelOrder
+          : [...state.channelOrder, channelId]
       }
+    }
+
+    // Dispatched when a clip is dragged onto a SPECIFIC channel — either an
+    // existing one (another ChannelRow's own onDrop) or a brand new one (a
+    // ghost row, with the caller minting a fresh crypto.randomUUID() before
+    // dispatching), or even a first-ever placement landing directly on a
+    // specific existing channel — see App.tsx's Timeline, which uses this
+    // for every drop that has a specific channel target, reserving plain
+    // PLACE_ON_TIMELINE for dispatchers that don't care (tests,
+    // SketchStrip.tsx). Shares placeOnTimeline's bpm/stretch/select logic
+    // with PLACE_ON_TIMELINE — the only difference is this ALWAYS sets
+    // channelOf explicitly, and cleans up the channel a clip just left if
+    // nothing else is on it any more.
+    case 'MOVE_TO_CHANNEL': {
+      const previousChannelId = state.channelOf[action.groupId]
+      const placed = placeOnTimeline(state, action.groupId, action.startBar)
+      const channelOf = { ...state.channelOf, [action.groupId]: action.channelId }
+      let channelOrder = state.channelOrder.includes(action.channelId)
+        ? state.channelOrder
+        : [...state.channelOrder, action.channelId]
+      if (
+        previousChannelId !== undefined &&
+        previousChannelId !== action.channelId &&
+        !channelHasAnyClip(channelOf, previousChannelId)
+      ) {
+        channelOrder = channelOrder.filter((id) => id !== previousChannelId)
+      }
+      return { ...placed, channelOf, channelOrder }
     }
 
     // Repacks every rifff in groupIds into contiguous bar positions, in that
@@ -321,13 +382,19 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
+      const previousChannelId = state.channelOf[action.groupId]
+      const channelOf = { ...state.channelOf }
+      delete channelOf[action.groupId]
+      const channelOrder =
+        previousChannelId !== undefined && !channelHasAnyClip(channelOf, previousChannelId)
+          ? state.channelOrder.filter((id) => id !== previousChannelId)
+          : state.channelOrder
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, startBar: undefined } },
         sel: state.sel === action.groupId ? null : state.sel,
-        // Dropped from the row order too — if it's placed again later, it
-        // rejoins at the bottom rather than snapping back to its old spot.
-        trackOrder: state.trackOrder.filter((id) => id !== action.groupId)
+        channelOf,
+        channelOrder
       }
     }
 
@@ -359,23 +426,23 @@ export function reducer(state: AppState, action: Action): AppState {
         for (const key of stemKeysToStrip) delete next[key]
         return next
       }
+      const channelOf = omitGroups(state.channelOf)
+      const channelOrder = state.channelOrder.filter((id) => channelHasAnyClip(channelOf, id))
       return {
         ...state,
         rifffs,
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
-        // off/playedBars can be keyed by EITHER the bare groupId (linked) or
-        // stemKey(groupId, slot) (unlinked) — see resolveOffsetKey — so both
-        // forms need stripping regardless of the rifff's current link state.
-        off: omitGroups(omitStems(state.off)),
-        playedBars: omitGroups(omitStems(state.playedBars)),
+        off: omitGroups(state.off),
+        playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),
         unlinked: omitGroups(state.unlinked),
         stemStart: omitStems(state.stemStart),
         fadeIn: omitGroups(state.fadeIn),
         fadeOut: omitGroups(state.fadeOut),
         exp: omitGroups(state.exp),
-        trackOrder: state.trackOrder.filter((id) => !ids.has(id)),
+        channelOf,
+        channelOrder,
         sel: state.sel && ids.has(state.sel) ? null : state.sel
       }
     }
@@ -438,7 +505,11 @@ export function reducer(state: AppState, action: Action): AppState {
         off: { ...state.off, ...action.off },
         stretch: { ...state.stretch, [action.rifff.groupId]: action.stretch },
         sel: action.rifff.groupId,
-        trackOrder: [...state.trackOrder, action.rifff.groupId]
+        // Every pasted/duplicated clip is a fresh groupId that's never had a
+        // channel before, so this always ADDS a new one-clip channel — same
+        // "own groupId as channel id" default as a first-time PLACE_ON_TIMELINE.
+        channelOf: { ...state.channelOf, [action.rifff.groupId]: action.rifff.groupId },
+        channelOrder: [...state.channelOrder, action.rifff.groupId]
       }
 
     case 'SET_VOLUME':
