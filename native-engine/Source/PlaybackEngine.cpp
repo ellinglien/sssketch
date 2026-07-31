@@ -14,7 +14,13 @@ namespace ssstitch
         currentProject = project;
         for (auto& rifff : currentProject.rifffs)
             for (auto& stem : rifff.stems)
-                bufferCache.load(stem.resolvedPath); // failure is fine — renderBlock skips missing buffers
+                // stem.durationSec: see StemBufferCache::load's own doc
+                // comment on why the loop-sewing blend needs this (not just
+                // the raw decoded buffer length) to land on the same point
+                // renderBlock's own tiling math actually wraps at, below.
+                // Failure is fine either way — renderBlock skips missing
+                // buffers.
+                bufferCache.load(stem.resolvedPath, stem.durationSec);
     }
 
     void PlaybackEngine::renderBlock(

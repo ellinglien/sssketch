@@ -40,8 +40,19 @@ namespace ssstitch
         /** Loads and decodes the file at `path` if not already cached. Returns
          * false (and leaves the cache untouched) if the file can't be read or
          * decoded — mirrors AudioEngine.ts's per-stem try/catch failure
-         * isolation, so one bad stem doesn't block loading the rest. */
-        bool load(const juce::String& path);
+         * isolation, so one bad stem doesn't block loading the rest.
+         *
+         * `trueDurationSec`, when positive, is the stem's own known real
+         * duration (EngineStem::durationSec) — used as the loop-sewing
+         * blend's actual loop-end point instead of the raw decoded buffer's
+         * full length, since those two can differ (a LORE-sourced stem's
+         * durationSec is metadata-derived — bars × tempo — not measured
+         * from the real Ogg Vorbis audio; see LoopSewing.h's own doc
+         * comment on why blending at the wrong point leaves the real,
+         * played seam completely untouched). Ignored (falls back to the
+         * buffer's own full length) if <= 0, or if converting it to a
+         * sample count would exceed the buffer's actual length. */
+        bool load(const juce::String& path, double trueDurationSec = -1.0);
 
         /** Returns the cached buffer for `path`, or nullptr if never
          * successfully loaded. */

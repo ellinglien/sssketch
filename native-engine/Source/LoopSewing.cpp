@@ -5,10 +5,10 @@
 
 namespace ssstitch
 {
-    void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int windowSize)
+    void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int loopEndSample, int windowSize)
     {
-        const int numSamples = buffer.getNumSamples();
-        if (numSamples <= windowSize * 2)
+        const int clampedLoopEnd = std::clamp(loopEndSample, 0, buffer.getNumSamples());
+        if (clampedLoopEnd <= windowSize * 2)
             return;
 
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
@@ -17,7 +17,7 @@ namespace ssstitch
             const float startSample = data[0];
             for (int i = 0; i < windowSize; ++i)
             {
-                const int endIndex = (numSamples - 1) - i;
+                const int endIndex = (clampedLoopEnd - 1) - i;
                 // Equal-power crossfade coefficient: 1.0 at the seam itself
                 // (i=0, blends fully to startSample) down toward 0.0 as i
                 // approaches windowSize (leaves the original tail content
@@ -31,22 +31,22 @@ namespace ssstitch
         }
     }
 
-    int adaptiveLoopSewingWindow(
-        const juce::AudioBuffer<float>& buffer, int minWindow, int maxWindow, double sampleRate)
+    int adaptiveLoopSewingWindow(const juce::AudioBuffer<float>& buffer, int loopEndSample,
+        int minWindow, int maxWindow, double sampleRate)
     {
         if (buffer.getNumChannels() == 0 || sampleRate <= 0.0)
             return minWindow;
 
-        const int numSamples = buffer.getNumSamples();
-        const int analysisWindow = std::min(maxWindow, numSamples);
+        const int clampedLoopEnd = std::clamp(loopEndSample, 0, buffer.getNumSamples());
+        const int analysisWindow = std::min(maxWindow, clampedLoopEnd);
         if (analysisWindow < 2)
             return minWindow;
 
         const auto* data = buffer.getReadPointer(0);
-        const int startIndex = numSamples - analysisWindow;
+        const int startIndex = clampedLoopEnd - analysisWindow;
         int crossings = 0;
         double sumSquares = 0.0;
-        for (int i = startIndex + 1; i < numSamples; ++i)
+        for (int i = startIndex + 1; i < clampedLoopEnd; ++i)
         {
             if ((data[i - 1] < 0.0f) != (data[i] < 0.0f))
                 ++crossings;

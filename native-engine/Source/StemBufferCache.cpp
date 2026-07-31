@@ -1,6 +1,7 @@
 // native-engine/Source/StemBufferCache.cpp
 #include "StemBufferCache.h"
 #include "LoopSewing.h"
+#include <cmath>
 
 namespace ssstitch
 {
@@ -37,7 +38,7 @@ namespace ssstitch
         return reader->read(&bufferOut, 0, (int) reader->lengthInSamples, 0, true, true);
     }
 
-    bool StemBufferCache::load(const juce::String& path)
+    bool StemBufferCache::load(const juce::String& path, double trueDurationSec)
     {
         const auto key = path.toStdString();
         if (cache.find(key) != cache.end())
@@ -47,6 +48,22 @@ namespace ssstitch
         if (!decodeRawAudioFile(path, entry.buffer, entry.sampleRate))
             return false;
 
+        // Where playback actually wraps this stem, matching
+        // PlaybackEngine::renderBlock's own srcSample rounding exactly —
+        // NOT necessarily the buffer's own full decoded length, since a
+        // LORE-sourced stem's durationSec is metadata-derived rather than
+        // measured (see LoopSewing.h's own doc comment). Falls back to the
+        // buffer's own length when no usable duration was given, or it
+        // doesn't make sense (non-positive, or longer than what actually
+        // got decoded).
+        int loopEndSample = entry.buffer.getNumSamples();
+        if (trueDurationSec > 0.0)
+        {
+            const int candidate = (int) std::llround(trueDurationSec * entry.sampleRate);
+            if (candidate > 0 && candidate <= entry.buffer.getNumSamples())
+                loopEndSample = candidate;
+        }
+
         // Every stem this app plays is loop-eligible content by nature (see
         // LoopSewing.h's own doc comment) — blending the buffer's own tail
         // toward its head ONCE here, rather than per-block in renderBlock,
@@ -55,8 +72,9 @@ namespace ssstitch
         // The window itself adapts to how bassy the seam sounds (see
         // adaptiveLoopSewingWindow's own doc comment) rather than using one
         // fixed size for every stem.
-        const int window = adaptiveLoopSewingWindow(entry.buffer, 512, 4096, entry.sampleRate);
-        applyLoopSewingBlend(entry.buffer, window);
+        const int window =
+            adaptiveLoopSewingWindow(entry.buffer, loopEndSample, 512, 4096, entry.sampleRate);
+        applyLoopSewingBlend(entry.buffer, loopEndSample, window);
 
         cache.emplace(key, std::move(entry));
         return true;

@@ -16,7 +16,7 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 1000);
                 for (int i = 0; i < 1000; ++i)
                     buffer.setSample(0, i, (float) i); // a ramp, easy to reason about
-                applyLoopSewingBlend(buffer, 128);
+                applyLoopSewingBlend(buffer, 1000, 128);
                 expectWithinAbsoluteError(buffer.getSample(0, 999), buffer.getSample(0, 0), 1.0e-5f);
             }
 
@@ -25,7 +25,7 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 1000);
                 for (int i = 0; i < 1000; ++i)
                     buffer.setSample(0, i, (float) i);
-                applyLoopSewingBlend(buffer, 128);
+                applyLoopSewingBlend(buffer, 1000, 128);
                 // Sample 999 - 128 = 871 is the first one OUTSIDE the blended
                 // window (i would be 128 there, the loop only runs i < 128).
                 expectWithinAbsoluteError(buffer.getSample(0, 871), 871.0f, 1.0e-5f);
@@ -38,7 +38,7 @@ namespace ssstitch
                 for (int i = 0; i < 1000; ++i)
                     buffer.setSample(0, i, 100.0f); // constant, except sample 0
                 buffer.setSample(0, 0, 0.0f); // start value distinctly different from the rest
-                applyLoopSewingBlend(buffer, 128);
+                applyLoopSewingBlend(buffer, 1000, 128);
                 // Right at the seam: fully blended to the start value (0).
                 expectWithinAbsoluteError(buffer.getSample(0, 999), 0.0f, 1.0e-4f);
                 // Midway through the window: partially blended (between the
@@ -57,7 +57,7 @@ namespace ssstitch
                     buffer.setSample(0, i, (float) i);
                     buffer.setSample(1, i, (float) i * 2.0f);
                 }
-                applyLoopSewingBlend(buffer, 128);
+                applyLoopSewingBlend(buffer, 1000, 128);
                 expectWithinAbsoluteError(buffer.getSample(0, 999), buffer.getSample(0, 0), 1.0e-5f);
                 expectWithinAbsoluteError(buffer.getSample(1, 999), buffer.getSample(1, 0), 1.0e-5f);
             }
@@ -67,9 +67,31 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 200); // <= 128*2
                 for (int i = 0; i < 200; ++i)
                     buffer.setSample(0, i, (float) i);
-                applyLoopSewingBlend(buffer, 128);
+                applyLoopSewingBlend(buffer, 200, 128);
                 for (int i = 0; i < 200; ++i)
                     expectWithinAbsoluteError(buffer.getSample(0, i), (float) i, 1.0e-5f);
+            }
+
+            beginTest("blends at loopEndSample, not the buffer's own full length, when they differ");
+            {
+                // The buffer has 700 "real" trailing samples beyond the true
+                // loop end (300) -- as if the decoded file had extra content
+                // (e.g. Ogg Vorbis encoder padding) past the stem's own
+                // metadata-known duration. The blend must land at index 299
+                // (loopEndSample - 1), not index 999 (the buffer's raw end).
+                juce::AudioBuffer<float> buffer(1, 1000);
+                for (int i = 0; i < 1000; ++i)
+                    buffer.setSample(0, i, 100.0f);
+                buffer.setSample(0, 0, 0.0f); // start value distinctly different from the rest
+                applyLoopSewingBlend(buffer, 300, 128);
+                // Right at the TRUE seam (index 299): fully blended to the start value.
+                expectWithinAbsoluteError(buffer.getSample(0, 299), 0.0f, 1.0e-4f);
+                // Just outside the window, but still before loopEndSample: untouched.
+                expectWithinAbsoluteError(buffer.getSample(0, 171), 100.0f, 1.0e-4f);
+                // Past loopEndSample entirely -- never touched, regardless of
+                // how close it is to the buffer's own raw end.
+                expectWithinAbsoluteError(buffer.getSample(0, 999), 100.0f, 1.0e-4f);
+                expectWithinAbsoluteError(buffer.getSample(0, 300), 100.0f, 1.0e-4f);
             }
 
             beginTest("adaptiveLoopSewingWindow: a bassy (low-frequency) tail gets the max window");
@@ -78,7 +100,7 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 8192);
                 for (int i = 0; i < buffer.getNumSamples(); ++i)
                     buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 50.0 * i / sampleRate));
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, sampleRate), 4096);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, sampleRate), 4096);
             }
 
             beginTest("adaptiveLoopSewingWindow: a bright (high-frequency) tail gets the min window");
@@ -87,7 +109,7 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 8192);
                 for (int i = 0; i < buffer.getNumSamples(); ++i)
                     buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 5000.0 * i / sampleRate));
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, sampleRate), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, sampleRate), 512);
             }
 
             beginTest("adaptiveLoopSewingWindow: a mid-range tail lands strictly between the two extremes");
@@ -96,22 +118,22 @@ namespace ssstitch
                 juce::AudioBuffer<float> buffer(1, 8192);
                 for (int i = 0; i < buffer.getNumSamples(); ++i)
                     buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 400.0 * i / sampleRate));
-                const int window = adaptiveLoopSewingWindow(buffer, 512, 4096, sampleRate);
+                const int window = adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, sampleRate);
                 expect(window > 512 && window < 4096);
             }
 
             beginTest("adaptiveLoopSewingWindow: falls back to minWindow for an invalid sample rate");
             {
                 juce::AudioBuffer<float> buffer(1, 8192);
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, 0.0), 512);
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, -44100.0), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, 0.0), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, -44100.0), 512);
             }
 
             beginTest("adaptiveLoopSewingWindow: falls back to minWindow for a buffer too short to analyze");
             {
                 juce::AudioBuffer<float> buffer(1, 1);
                 buffer.setSample(0, 0, 0.5f);
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, 44100.0), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, 44100.0), 512);
             }
 
             beginTest("adaptiveLoopSewingWindow: falls back to minWindow for a near-silent tail, even though it has almost no zero crossings");
@@ -125,7 +147,23 @@ namespace ssstitch
                     buffer.setSample(
                         0, i,
                         0.001f * (float) std::sin(2.0 * juce::MathConstants<double>::pi * 50.0 * i / sampleRate));
-                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 4096, sampleRate), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, buffer.getNumSamples(), 512, 4096, sampleRate), 512);
+            }
+
+            beginTest("adaptiveLoopSewingWindow: analyzes content up to loopEndSample, not the buffer's own full length");
+            {
+                // Bassy content up to index 8192, then bright/high-frequency
+                // "junk" (e.g. encoder padding) for another 8192 samples.
+                // Passing the buffer's true length would analyze the bright
+                // tail and pick the min window; passing loopEndSample=8192
+                // must still pick the max window from the bassy content.
+                const double sampleRate = 44100.0;
+                juce::AudioBuffer<float> buffer(1, 16384);
+                for (int i = 0; i < 8192; ++i)
+                    buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 50.0 * i / sampleRate));
+                for (int i = 8192; i < 16384; ++i)
+                    buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 5000.0 * i / sampleRate));
+                expectEquals(adaptiveLoopSewingWindow(buffer, 8192, 512, 4096, sampleRate), 4096);
             }
         }
     };

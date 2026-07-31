@@ -126,14 +126,17 @@ function microFadeGain(
 const LOOP_SEWING_MIN_WINDOW = 512
 const LOOP_SEWING_MAX_WINDOW = 4096
 
-function adaptiveLoopSewingWindow(samples: Float64Array, sampleRate: number): number {
-  const n = samples.length
-  const analysisWindow = Math.min(LOOP_SEWING_MAX_WINDOW, n)
+function adaptiveLoopSewingWindow(
+  samples: Float64Array,
+  loopEndSample: number,
+  sampleRate: number
+): number {
+  const analysisWindow = Math.min(LOOP_SEWING_MAX_WINDOW, loopEndSample)
   if (analysisWindow < 2) return LOOP_SEWING_MIN_WINDOW
-  const startIndex = n - analysisWindow
+  const startIndex = loopEndSample - analysisWindow
   let crossings = 0
   let sumSquares = 0
-  for (let i = startIndex + 1; i < n; i++) {
+  for (let i = startIndex + 1; i < loopEndSample; i++) {
     if (samples[i - 1] < 0 !== samples[i] < 0) crossings++
     // Normalized to the same -1..1 float range the native engine's own
     // AudioFormatReader decodes 16-bit PCM into — `samples` here are still
@@ -158,13 +161,21 @@ function adaptiveLoopSewingWindow(samples: Float64Array, sampleRate: number): nu
   return Math.round(LOOP_SEWING_MAX_WINDOW + t * (LOOP_SEWING_MIN_WINDOW - LOOP_SEWING_MAX_WINDOW))
 }
 
-function applyLoopSewingBlend(samples: Float64Array, sampleRate = 44100): void {
-  const n = samples.length
-  const window = adaptiveLoopSewingWindow(samples, sampleRate)
-  if (n <= window * 2) return
+// loopEndSample defaults to the full sample count, matching
+// StemBufferCache::load's own fallback when a stem's metadata durationSec
+// isn't usable — callers with a known true duration (distinct from the raw
+// decoded length, e.g. a LORE stem's metadata-derived durationSec) should
+// pass `Math.round(durationSec * sampleRate)` instead, matching production.
+function applyLoopSewingBlend(
+  samples: Float64Array,
+  sampleRate = 44100,
+  loopEndSample = samples.length
+): void {
+  const window = adaptiveLoopSewingWindow(samples, loopEndSample, sampleRate)
+  if (loopEndSample <= window * 2) return
   const startSample = samples[0]
   for (let i = 0; i < window; i++) {
-    const endIndex = n - 1 - i
+    const endIndex = loopEndSample - 1 - i
     const t = -1.0 + (i / window) * 2.0
     const coeff = Math.sqrt(0.5 * (1.0 - t))
     samples[endIndex] = samples[endIndex] + (startSample - samples[endIndex]) * coeff
