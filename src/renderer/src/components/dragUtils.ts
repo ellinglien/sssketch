@@ -53,8 +53,12 @@ export function startPointerDrag(
  * click regardless of which mechanism drove the drag — starting an
  * unrelated Shelf tile's preview if it happened to be released over one.
  * Callers using native drag-and-drop (`draggable`/`onDragStart`) should call
- * this from `onDragEnd`, which fires whenever a drag concludes whether or
- * not it was dropped on a valid target.
+ * this from `onDragStart` itself, arming it right at the start of the drag
+ * rather than waiting for `onDragEnd` — the relative order of a native
+ * drag's own `dragend` and the trailing synthetic click isn't guaranteed
+ * the way mouseup-then-click is for a plain pointer drag (see
+ * startPointerDrag above), so arming as early as possible is the only way
+ * to be sure the listener is in place before whichever fires first.
  *
  * Registered on the capture phase so it's swallowed before any handler
  * along the way sees it, and `once: true` means only this one synthesized

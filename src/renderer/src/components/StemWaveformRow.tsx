@@ -305,6 +305,7 @@ export function StemWaveformRow({
   // handleVolumeStart (wired below) calls preventDefault via
   // startPointerDrag whenever volumeDragMode is on.
   function handleWaveformDragStart(e: React.DragEvent): void {
+    suppressNextSyntheticClick()
     const mouseBar = mouseBarFromDragEvent(e, ppb)
     if (unlinked) {
       e.dataTransfer.setData('text/rifff-stem-key', key)
@@ -323,7 +324,6 @@ export function StemWaveformRow({
         <div
           draggable
           onDragStart={handleWaveformDragStart}
-          onDragEnd={suppressNextSyntheticClick}
           onContextMenu={handleWaveformContextMenu}
           onDoubleClick={() => {
             // Mirrors the import-time default seeded in store.ts's

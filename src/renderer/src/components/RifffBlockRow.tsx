@@ -64,13 +64,13 @@ export function RifffBlockRow({
       <div
         draggable
         onDragStart={(e) => {
+          suppressNextSyntheticClick()
           e.dataTransfer.setData('text/rifff-group-id', groupId)
           const mouseBar = mouseBarFromDragEvent(e, ppb)
           if (mouseBar !== null) {
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }
         }}
-        onDragEnd={suppressNextSyntheticClick}
         onClick={(e) => {
           // Stops the click from also bubbling up to Timeline's own
           // background click-to-scrub handler in App.tsx — expanding/

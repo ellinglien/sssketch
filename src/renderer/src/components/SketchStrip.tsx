@@ -366,8 +366,10 @@ export function SketchStrip(): React.JSX.Element {
           <div
             key={rifff.groupId}
             draggable
-            onDragStart={(e) => e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)}
-            onDragEnd={suppressNextSyntheticClick}
+            onDragStart={(e) => {
+              suppressNextSyntheticClick()
+              e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
+            }}
             onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => handleBarsMouseDown(e, rifff)}

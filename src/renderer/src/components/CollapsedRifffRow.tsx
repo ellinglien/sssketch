@@ -314,6 +314,7 @@ export function CollapsedRifffRow({
         <div
           draggable
           onDragStart={(e) => {
+            suppressNextSyntheticClick()
             // Always moves the whole group, regardless of link state —
             // unlike the expanded view's per-stem grab targets. Collapsing
             // hides per-stem detail; a summary block dragging "part of
@@ -325,7 +326,6 @@ export function CollapsedRifffRow({
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
-          onDragEnd={suppressNextSyntheticClick}
           onContextMenu={handleBlockContextMenu}
           title="right-click to mute group · ctrl+right-click to solo"
           style={{

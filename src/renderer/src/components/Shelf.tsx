@@ -259,6 +259,7 @@ export function Shelf({
               key={rifff.groupId}
               draggable
               onDragStart={(e) => {
+                suppressNextSyntheticClick()
                 e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
                 // Dragging a tile that's part of an active multi-selection
                 // carries the whole batch — SketchStrip reads this to place
@@ -284,7 +285,6 @@ export function Shelf({
                 stopTilePreview()
                 setPreviewingGroupId(null)
               }}
-              onDragEnd={suppressNextSyntheticClick}
               onMouseEnter={() => setHoverId(rifff.groupId)}
               onClick={(e) => handleTileClick(e, rifff)}
               title={`${rifff.name} — click to preview, drag to arrange, shift/cmd-click to multi-select, delete to remove from library`}

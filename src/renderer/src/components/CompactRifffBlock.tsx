@@ -122,13 +122,13 @@ export function CompactRifffBlock({
         <div
           draggable
           onDragStart={(e) => {
+            suppressNextSyntheticClick()
             e.dataTransfer.setData('text/rifff-group-id', groupId)
             const mouseBar = mouseBarFromDragEvent(e, COMPACT_PPB)
             if (mouseBar !== null) {
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
           }}
-          onDragEnd={suppressNextSyntheticClick}
           onClick={handleScrubClick}
           onContextMenu={(e) => {
             e.preventDefault()
