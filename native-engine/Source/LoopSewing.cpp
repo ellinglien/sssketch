@@ -1,5 +1,6 @@
 // native-engine/Source/LoopSewing.cpp
 #include "LoopSewing.h"
+#include <algorithm>
 #include <cmath>
 
 namespace ssstitch
@@ -28,5 +29,41 @@ namespace ssstitch
                 data[endIndex] = data[endIndex] + (startSample - data[endIndex]) * coeff;
             }
         }
+    }
+
+    int adaptiveLoopSewingWindow(
+        const juce::AudioBuffer<float>& buffer, int minWindow, int maxWindow, double sampleRate)
+    {
+        if (buffer.getNumChannels() == 0 || sampleRate <= 0.0)
+            return minWindow;
+
+        const int numSamples = buffer.getNumSamples();
+        const int analysisWindow = std::min(maxWindow, numSamples);
+        if (analysisWindow < 2)
+            return minWindow;
+
+        const auto* data = buffer.getReadPointer(0);
+        const int startIndex = numSamples - analysisWindow;
+        int crossings = 0;
+        for (int i = startIndex + 1; i < numSamples; ++i)
+        {
+            if ((data[i - 1] < 0.0f) != (data[i] < 0.0f))
+                ++crossings;
+        }
+
+        const double windowDurationSec = (double) analysisWindow / sampleRate;
+        const double estimatedFreqHz = (crossings / 2.0) / windowDurationSec;
+
+        constexpr double kBassyFreqHz = 150.0;
+        constexpr double kBrightFreqHz = 1000.0;
+        if (estimatedFreqHz <= kBassyFreqHz)
+            return maxWindow;
+        if (estimatedFreqHz >= kBrightFreqHz)
+            return minWindow;
+
+        const double logLow = std::log(kBassyFreqHz);
+        const double logHigh = std::log(kBrightFreqHz);
+        const double t = (std::log(estimatedFreqHz) - logLow) / (logHigh - logLow);
+        return (int) std::lround(maxWindow + t * (minWindow - maxWindow));
     }
 }

@@ -4,21 +4,9 @@
 
 namespace ssstitch
 {
-    StemBufferCache::StemBufferCache()
+    bool decodeRawAudioFile(
+        const juce::String& path, juce::AudioBuffer<float>& bufferOut, double& sampleRateOut)
     {
-        // WAV, AIFF, Ogg Vorbis (default JUCE_USE_OGGVORBIS=1), etc. Endlesss's own
-        // native export is WAV; LORE-cached stems (see the LORE library browser
-        // feature) are Ogg Vorbis — both load through this same reader, no
-        // format-specific code needed anywhere downstream.
-        formatManager.registerBasicFormats();
-    }
-
-    bool StemBufferCache::load(const juce::String& path)
-    {
-        const auto key = path.toStdString();
-        if (cache.find(key) != cache.end())
-            return true;
-
         juce::File file(path);
         if (!file.existsAsFile())
             return false;
@@ -37,15 +25,26 @@ namespace ssstitch
         // reader here (every format's own header parse fails on empty/absent
         // content), so the existing "returns false for a missing file"
         // contract is unchanged.
+        juce::AudioFormatManager manager;
+        manager.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> reader(
-            formatManager.createReaderFor(std::make_unique<juce::FileInputStream>(file)));
+            manager.createReaderFor(std::make_unique<juce::FileInputStream>(file)));
         if (reader == nullptr)
             return false;
 
+        sampleRateOut = reader->sampleRate;
+        bufferOut.setSize((int) reader->numChannels, (int) reader->lengthInSamples);
+        return reader->read(&bufferOut, 0, (int) reader->lengthInSamples, 0, true, true);
+    }
+
+    bool StemBufferCache::load(const juce::String& path)
+    {
+        const auto key = path.toStdString();
+        if (cache.find(key) != cache.end())
+            return true;
+
         Entry entry;
-        entry.sampleRate = reader->sampleRate;
-        entry.buffer.setSize((int) reader->numChannels, (int) reader->lengthInSamples);
-        if (!reader->read(&entry.buffer, 0, (int) reader->lengthInSamples, 0, true, true))
+        if (!decodeRawAudioFile(path, entry.buffer, entry.sampleRate))
             return false;
 
         // Every stem this app plays is loop-eligible content by nature (see
@@ -53,7 +52,11 @@ namespace ssstitch
         // toward its head ONCE here, rather than per-block in renderBlock,
         // means every tiled repeat downstream is automatically click-free
         // with zero changes needed to the real-time render path itself.
-        applyLoopSewingBlend(entry.buffer);
+        // The window itself adapts to how bassy the seam sounds (see
+        // adaptiveLoopSewingWindow's own doc comment) rather than using one
+        // fixed size for every stem.
+        const int window = adaptiveLoopSewingWindow(entry.buffer, 512, 2048, entry.sampleRate);
+        applyLoopSewingBlend(entry.buffer, window);
 
         cache.emplace(key, std::move(entry));
         return true;

@@ -43,22 +43,73 @@ export function applyLoopMicroFadeToChannel(
   }
 }
 
+const LOOP_SEWING_MIN_WINDOW_SAMPLES = 512
+const LOOP_SEWING_MAX_WINDOW_SAMPLES = 2048
+
+/** Chooses a loop-sewing blend window, in samples, from how "bassy" the
+ * content right before `loopEndSample` is — estimated via zero-crossing
+ * rate over the last `LOOP_SEWING_MAX_WINDOW_SAMPLES` samples (or fewer, if
+ * the loop is shorter), a cheap FFT-free proxy for dominant frequency:
+ * fewer crossings per second means a lower tone. A low tone doesn't
+ * complete even one full cycle within a short fixed window, forcing the
+ * blend to bend its own phase to land on the head's value — audible as a
+ * tick/warble rather than a resolved discontinuity. A bassy seam gets a
+ * wider window, giving the blend more room to land smoothly; a bright/
+ * percussive one keeps the narrower minimum, since a wide window there
+ * would needlessly smear a transient sitting close to the loop point.
+ *
+ * Mirrors LoopSewing.cpp's own adaptiveLoopSewingWindow exactly (same
+ * thresholds, same log-frequency interpolation) — kept as a pure function
+ * over Float32Array so it's directly unit-testable, same as
+ * applyLoopMicroFadeToChannel above. */
+export function adaptiveLoopSewingWindowSamples(
+  data: Float32Array,
+  loopEndSample: number,
+  sampleRate: number
+): number {
+  const clampedLoopEnd = Math.max(0, Math.min(loopEndSample, data.length))
+  const analysisWindow = Math.min(LOOP_SEWING_MAX_WINDOW_SAMPLES, clampedLoopEnd)
+  if (analysisWindow < 2 || sampleRate <= 0) return LOOP_SEWING_MIN_WINDOW_SAMPLES
+  const startIndex = clampedLoopEnd - analysisWindow
+  let crossings = 0
+  for (let i = startIndex + 1; i < clampedLoopEnd; i++) {
+    if (data[i - 1] < 0 !== data[i] < 0) crossings++
+  }
+  const windowDurationSec = analysisWindow / sampleRate
+  const estimatedFreqHz = crossings / 2 / windowDurationSec
+  const kBassyFreqHz = 150
+  const kBrightFreqHz = 1000
+  if (estimatedFreqHz <= kBassyFreqHz) return LOOP_SEWING_MAX_WINDOW_SAMPLES
+  if (estimatedFreqHz >= kBrightFreqHz) return LOOP_SEWING_MIN_WINDOW_SAMPLES
+  const logLow = Math.log(kBassyFreqHz)
+  const logHigh = Math.log(kBrightFreqHz)
+  const t = (Math.log(estimatedFreqHz) - logLow) / (logHigh - logLow)
+  return Math.round(
+    LOOP_SEWING_MAX_WINDOW_SAMPLES +
+      t * (LOOP_SEWING_MIN_WINDOW_SAMPLES - LOOP_SEWING_MAX_WINDOW_SAMPLES)
+  )
+}
+
 /** Returns a COPY of `buf` (never mutates the original — callers may reuse
  * it elsewhere, e.g. BeatPicker's spectrogram analysis) with the loop-sewing
  * blend applied to every channel, ending exactly at `loopEndSec`. `windowSec`
- * defaults to ~11.6ms (512 samples at 44.1kHz, matching LoopSewing.cpp's own
- * default — see its doc comment for why this is wider than OUROVEON's own
- * 128-sample value) — still far too short to read as a musical fade, just
- * enough to remove the discontinuity even for a low-frequency sustained
- * tone. */
+ * defaults to an adaptive, bass-aware window (see
+ * adaptiveLoopSewingWindowSamples above) computed once from channel 0 and
+ * applied to every channel — matching LoopSewing.cpp's own "compute once,
+ * apply uniformly" — rather than a single fixed size; pass an explicit
+ * value to opt back into a fixed window (e.g. for a caller with its own,
+ * already-known-good size). */
 export function applyLoopMicroFade(
   ctx: AudioContext,
   buf: AudioBuffer,
   loopEndSec: number,
-  windowSec = 512 / 44100
+  windowSec?: number
 ): AudioBuffer {
   const loopEndSample = Math.round(loopEndSec * buf.sampleRate)
-  const windowSamples = Math.round(windowSec * buf.sampleRate)
+  const windowSamples =
+    windowSec !== undefined
+      ? Math.round(windowSec * buf.sampleRate)
+      : adaptiveLoopSewingWindowSamples(buf.getChannelData(0), loopEndSample, buf.sampleRate)
   const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate)
   for (let ch = 0; ch < buf.numberOfChannels; ch++) {
     const dst = out.getChannelData(ch)

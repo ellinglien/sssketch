@@ -14,20 +14,23 @@ namespace ssstitch
         double& durationSecOut,
         juce::String& errorOut)
     {
-        StemBufferCache cache;
-        if (!cache.load(sourcePath))
+        // decodeRawAudioFile, not StemBufferCache::load — baking needs the
+        // source's raw, unmodified samples to rotate. Going through the
+        // cache's own load() here would apply the loop-sewing declick blend
+        // to the SOURCE before rotation, on top of the blend the ROTATED
+        // (baked) output already gets the next time StemBufferCache::load
+        // reads it back in for real playback — two blends, chosen from two
+        // generally unrelated windows/targets, which could visibly reshape
+        // real content rather than just resolving a discontinuity. See
+        // decodeRawAudioFile's own doc comment.
+        juce::AudioBuffer<float> source;
+        double sampleRate = 44100.0;
+        if (!decodeRawAudioFile(sourcePath, source, sampleRate))
         {
             errorOut = "failed to decode source: " + sourcePath;
             return false;
         }
-        const auto entry = cache.getEntry(sourcePath);
-        if (entry.buffer == nullptr)
-        {
-            errorOut = "no buffer for: " + sourcePath;
-            return false;
-        }
 
-        const auto& source = *entry.buffer;
         const int numSamples = source.getNumSamples();
         const int numChannels = source.getNumChannels();
         if (numSamples <= 0 || numChannels <= 0)
@@ -40,7 +43,7 @@ namespace ssstitch
         // (or a negative one) must still land in range rather than reading
         // out of bounds; std::fmod alone can return a negative result for a
         // negative input, hence the second wrap.
-        double rotationSamplesD = std::fmod(rotationSec * entry.sampleRate, (double) numSamples);
+        double rotationSamplesD = std::fmod(rotationSec * sampleRate, (double) numSamples);
         if (rotationSamplesD < 0.0)
             rotationSamplesD += (double) numSamples;
         const int rotationSamples = (int) std::round(rotationSamplesD) % numSamples;
@@ -72,7 +75,7 @@ namespace ssstitch
             return false;
         }
         std::unique_ptr<juce::AudioFormatWriter> writer(wavFormat.createWriterFor(
-            out.get(), entry.sampleRate, (unsigned int) numChannels, 16, {}, 0));
+            out.get(), sampleRate, (unsigned int) numChannels, 16, {}, 0));
         if (writer == nullptr)
         {
             errorOut = "failed to create WAV writer for: " + outputPath;
@@ -81,7 +84,7 @@ namespace ssstitch
         out.release();
         writer->writeFromAudioSampleBuffer(rotated, 0, numSamples);
         writer.reset();
-        durationSecOut = (double) numSamples / entry.sampleRate;
+        durationSecOut = (double) numSamples / sampleRate;
         return true;
     }
 }

@@ -71,6 +71,48 @@ namespace ssstitch
                 for (int i = 0; i < 200; ++i)
                     expectWithinAbsoluteError(buffer.getSample(0, i), (float) i, 1.0e-5f);
             }
+
+            beginTest("adaptiveLoopSewingWindow: a bassy (low-frequency) tail gets the max window");
+            {
+                const double sampleRate = 44100.0;
+                juce::AudioBuffer<float> buffer(1, 8192);
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 50.0 * i / sampleRate));
+                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 2048, sampleRate), 2048);
+            }
+
+            beginTest("adaptiveLoopSewingWindow: a bright (high-frequency) tail gets the min window");
+            {
+                const double sampleRate = 44100.0;
+                juce::AudioBuffer<float> buffer(1, 8192);
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 5000.0 * i / sampleRate));
+                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 2048, sampleRate), 512);
+            }
+
+            beginTest("adaptiveLoopSewingWindow: a mid-range tail lands strictly between the two extremes");
+            {
+                const double sampleRate = 44100.0;
+                juce::AudioBuffer<float> buffer(1, 8192);
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    buffer.setSample(0, i, std::sin(2.0 * juce::MathConstants<double>::pi * 400.0 * i / sampleRate));
+                const int window = adaptiveLoopSewingWindow(buffer, 512, 2048, sampleRate);
+                expect(window > 512 && window < 2048);
+            }
+
+            beginTest("adaptiveLoopSewingWindow: falls back to minWindow for an invalid sample rate");
+            {
+                juce::AudioBuffer<float> buffer(1, 8192);
+                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 2048, 0.0), 512);
+                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 2048, -44100.0), 512);
+            }
+
+            beginTest("adaptiveLoopSewingWindow: falls back to minWindow for a buffer too short to analyze");
+            {
+                juce::AudioBuffer<float> buffer(1, 1);
+                buffer.setSample(0, 0, 0.5f);
+                expectEquals(adaptiveLoopSewingWindow(buffer, 512, 2048, 44100.0), 512);
+            }
         }
     };
 

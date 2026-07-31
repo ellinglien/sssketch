@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { applyLoopMicroFade, applyLoopMicroFadeToChannel } from './microFade'
+import {
+  adaptiveLoopSewingWindowSamples,
+  applyLoopMicroFade,
+  applyLoopMicroFadeToChannel
+} from './microFade'
 
 function ramp(length: number): Float32Array {
   const data = new Float32Array(length)
   for (let i = 0; i < length; i++) data[i] = i
+  return data
+}
+
+function sineWave(length: number, freqHz: number, sampleRate: number): Float32Array {
+  const data = new Float32Array(length)
+  for (let i = 0; i < length; i++) data[i] = Math.sin((2 * Math.PI * freqHz * i) / sampleRate)
   return data
 }
 
@@ -60,6 +70,38 @@ describe('applyLoopMicroFadeToChannel', () => {
   })
 })
 
+describe('adaptiveLoopSewingWindowSamples', () => {
+  const sampleRate = 44100
+
+  it('picks the max window for a bassy (low-frequency) tail', () => {
+    const data = sineWave(8192, 50, sampleRate)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(2048)
+  })
+
+  it('picks the min window for a bright (high-frequency) tail', () => {
+    const data = sineWave(8192, 5000, sampleRate)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)).toBe(512)
+  })
+
+  it('picks something strictly between the two extremes for a mid-range tail', () => {
+    const data = sineWave(8192, 400, sampleRate)
+    const window = adaptiveLoopSewingWindowSamples(data, data.length, sampleRate)
+    expect(window).toBeGreaterThan(512)
+    expect(window).toBeLessThan(2048)
+  })
+
+  it('falls back to the min window for an invalid sample rate', () => {
+    const data = sineWave(8192, 50, sampleRate)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, 0)).toBe(512)
+    expect(adaptiveLoopSewingWindowSamples(data, data.length, -sampleRate)).toBe(512)
+  })
+
+  it('falls back to the min window for a loop too short to analyze', () => {
+    const data = new Float32Array([0.5])
+    expect(adaptiveLoopSewingWindowSamples(data, 1, sampleRate)).toBe(512)
+  })
+})
+
 describe('applyLoopMicroFade', () => {
   function fakeBuffer(channels: Float32Array[], sampleRate: number): AudioBuffer {
     return {
@@ -83,6 +125,24 @@ describe('applyLoopMicroFade', () => {
       }
     } as unknown as AudioContext
   }
+
+  it('uses an adaptive window (not a fixed size) when windowSec is omitted', () => {
+    const sampleRate = 44100
+    const data = sineWave(8192, 50, sampleRate) // bassy -> should pick the 2048-sample max window
+    const buf = fakeBuffer([data], sampleRate)
+    const ctx = fakeContext()
+
+    const result = applyLoopMicroFade(ctx, buf, data.length / sampleRate)
+
+    // 1000 samples before the end is inside the adaptive (2048) window but
+    // would be untouched by the old fixed 512-sample default -- confirms
+    // the wider, bass-aware window actually took effect.
+    const untouchedUnderOldDefault = data[data.length - 1000]
+    expect(result.getChannelData(0)[data.length - 1000]).not.toBeCloseTo(
+      untouchedUnderOldDefault,
+      3
+    )
+  })
 
   it('returns a copy, leaving the original buffer untouched', () => {
     const original = ramp(100)

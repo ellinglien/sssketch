@@ -39,4 +39,25 @@ namespace ssstitch
      * of the tail — a tradeoff toward this app's actual content over
      * OUROVEON's own tuning. */
     void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int windowSize = 512);
+
+    /** Chooses a loop-sewing blend window, in samples, from how "bassy" the
+     * buffer's own tail content is — estimated via zero-crossing rate over
+     * the last `maxWindow` samples of channel 0 (or the whole buffer, if
+     * shorter), a cheap FFT-free proxy for dominant frequency: fewer
+     * crossings per second means a lower tone. A low tone doesn't complete
+     * even one full cycle within a short fixed window, forcing the blend to
+     * bend its own phase to land on the head's value — audible as a tick/
+     * warble (see applyLoopSewingBlend's own doc comment on why the default
+     * window was already widened once for this same reason). A bassy seam
+     * gets a wider window still, giving the blend more room to land
+     * smoothly; a bright/percussive one keeps closer to the narrower
+     * default, since a wide window there would needlessly smear a
+     * transient sitting close to the loop point.
+     *
+     * Returns `maxWindow` at or below 150Hz, `minWindow` at or above
+     * 1000Hz, interpolated in log-frequency space (matching how pitch
+     * itself is perceived) in between. Falls back to `minWindow` for an
+     * empty buffer or invalid sample rate. */
+    int adaptiveLoopSewingWindow(
+        const juce::AudioBuffer<float>& buffer, int minWindow, int maxWindow, double sampleRate);
 }

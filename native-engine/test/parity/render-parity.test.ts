@@ -118,20 +118,43 @@ function microFadeGain(
   return Math.max(0, gain)
 }
 
-// Mirrors LoopSewing.cpp's applyLoopSewingBlend (ported from OUROVEON's
-// Stem::applyLoopSewingBlend — see that file's own doc comment) — applied
-// ONCE when a buffer is loaded/cached, before any fade/gain, so these
-// references have to apply it to their own copy of the raw fixture samples
-// too, in the same order (blend first, then fade/gain).
-const LOOP_SEWING_WINDOW = 512
+// Mirrors LoopSewing.cpp's applyLoopSewingBlend and adaptiveLoopSewingWindow
+// (ported from OUROVEON's Stem::applyLoopSewingBlend — see that file's own
+// doc comment) — applied ONCE when a buffer is loaded/cached, before any
+// fade/gain, so these references have to apply it to their own copy of the
+// raw fixture samples too, in the same order (blend first, then fade/gain).
+const LOOP_SEWING_MIN_WINDOW = 512
+const LOOP_SEWING_MAX_WINDOW = 2048
 
-function applyLoopSewingBlend(samples: Float64Array): void {
+function adaptiveLoopSewingWindow(samples: Float64Array, sampleRate: number): number {
   const n = samples.length
-  if (n <= LOOP_SEWING_WINDOW * 2) return
+  const analysisWindow = Math.min(LOOP_SEWING_MAX_WINDOW, n)
+  if (analysisWindow < 2) return LOOP_SEWING_MIN_WINDOW
+  const startIndex = n - analysisWindow
+  let crossings = 0
+  for (let i = startIndex + 1; i < n; i++) {
+    if (samples[i - 1] < 0 !== samples[i] < 0) crossings++
+  }
+  const windowDurationSec = analysisWindow / sampleRate
+  const estimatedFreqHz = crossings / 2 / windowDurationSec
+  const kBassyFreqHz = 150
+  const kBrightFreqHz = 1000
+  if (estimatedFreqHz <= kBassyFreqHz) return LOOP_SEWING_MAX_WINDOW
+  if (estimatedFreqHz >= kBrightFreqHz) return LOOP_SEWING_MIN_WINDOW
+  const logLow = Math.log(kBassyFreqHz)
+  const logHigh = Math.log(kBrightFreqHz)
+  const t = (Math.log(estimatedFreqHz) - logLow) / (logHigh - logLow)
+  return Math.round(LOOP_SEWING_MAX_WINDOW + t * (LOOP_SEWING_MIN_WINDOW - LOOP_SEWING_MAX_WINDOW))
+}
+
+function applyLoopSewingBlend(samples: Float64Array, sampleRate = 44100): void {
+  const n = samples.length
+  const window = adaptiveLoopSewingWindow(samples, sampleRate)
+  if (n <= window * 2) return
   const startSample = samples[0]
-  for (let i = 0; i < LOOP_SEWING_WINDOW; i++) {
+  for (let i = 0; i < window; i++) {
     const endIndex = n - 1 - i
-    const t = -1.0 + (i / LOOP_SEWING_WINDOW) * 2.0
+    const t = -1.0 + (i / window) * 2.0
     const coeff = Math.sqrt(0.5 * (1.0 - t))
     samples[endIndex] = samples[endIndex] + (startSample - samples[endIndex]) * coeff
   }

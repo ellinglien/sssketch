@@ -6,6 +6,21 @@
 
 namespace ssstitch
 {
+    /** Decodes the file at `path` into `bufferOut`/`sampleRateOut` with NO
+     * further processing — deliberately separate from StemBufferCache::load,
+     * which additionally applies the loop-sewing declick blend. BakeStem.cpp
+     * uses this instead of the cache for exactly that reason: baking needs
+     * the source's raw, unmodified samples to rotate, since the rotated
+     * (baked) output gets its OWN loop-sewing blend anyway the next time
+     * StemBufferCache::load reads it back in for real playback — going
+     * through the blending load() here first, before baking, was double-
+     * applying the blend under two different (and generally unrelated)
+     * window/target choices, which could visibly reshape real content
+     * rather than just resolving a discontinuity. Returns false (leaving
+     * the outputs unspecified) if the file can't be read or decoded. */
+    bool decodeRawAudioFile(
+        const juce::String& path, juce::AudioBuffer<float>& bufferOut, double& sampleRateOut);
+
     /** buffer is nullptr (sampleRate the unused default) if the path was never
      * successfully loaded. */
     struct StemBufferEntry
@@ -22,8 +37,6 @@ namespace ssstitch
     class StemBufferCache
     {
     public:
-        StemBufferCache();
-
         /** Loads and decodes the file at `path` if not already cached. Returns
          * false (and leaves the cache untouched) if the file can't be read or
          * decoded — mirrors AudioEngine.ts's per-stem try/catch failure
@@ -43,7 +56,6 @@ namespace ssstitch
         StemBufferEntry getEntry(const juce::String& path) const;
 
     private:
-        juce::AudioFormatManager formatManager;
         struct Entry
         {
             juce::AudioBuffer<float> buffer;

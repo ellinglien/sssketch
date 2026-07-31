@@ -212,14 +212,16 @@ namespace ssstitch
                 engine.setProject(project);
 
                 const double sampleRate = 44100.0;
-                // 600 samples before the boundary, 20 after — the pre-boundary side is
-                // deliberately kept outside LoopSewing's own 512-sample tail-blend window
-                // (see StemBufferCache::load), which pulls tile0's last 512 samples toward
-                // ITS OWN start value (~0.0 for this ramp) and would otherwise make this
-                // test's "near 1.0" assumption false for reasons unrelated to what it's
-                // actually checking (segment-relative vs. block-relative indexing).
-                const int numSamples = 620;
-                const double blockStartSec = 4.0 - 600.0 / sampleRate;
+                // 2100 samples before the boundary, 20 after — the pre-boundary side is
+                // deliberately kept outside LoopSewing's own adaptive tail-blend window
+                // (see StemBufferCache::load): a ramp never crosses zero, so
+                // adaptiveLoopSewingWindow reads it as maximally bassy and picks its
+                // largest window (2048 samples), which would otherwise pull tile0's tail
+                // toward ITS OWN start value (~0.0) and make this test's "near 1.0"
+                // assumption false for reasons unrelated to what it's actually checking
+                // (segment-relative vs. block-relative indexing).
+                const int numSamples = 2120;
+                const double blockStartSec = 4.0 - 2100.0 / sampleRate;
                 const double positionBars = blockStartSec / 4.0;
 
                 std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
