@@ -12,7 +12,7 @@ import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB, COMPACT_PPB } from './components/Ruler'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
-import { RifffBlockRow } from './components/RifffBlockRow'
+import { ChannelRow } from './components/ChannelRow'
 import { COMPACT_ROW_HEIGHT } from './components/CompactRifffBlock'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
@@ -23,7 +23,7 @@ import { serializeProject, deserializeProject } from './state/serialize'
 import {
   loopLengthBars,
   pasteRifffAction,
-  placedRifffsInOrder,
+  channelsInOrder,
   channelMuteLetters,
   nextArrangerMode,
   groupIdAtPosition
@@ -105,8 +105,13 @@ function Timeline({
     e.dataTransfer.dropEffect = e.metaKey || e.ctrlKey ? 'copy' : 'move'
   }
 
-  function handleDrop(e: DragEvent<HTMLDivElement>): void {
+  // Shared by both drop entry points below — targetChannelId is the specific
+  // channel the drop landed on (a real ChannelRow), or undefined (the
+  // Timeline container's own fallback: a ghost row, or any other background
+  // space) meaning "give this clip its own brand new channel."
+  function resolveDrop(e: DragEvent<HTMLDivElement>, targetChannelId: string | undefined): void {
     e.preventDefault()
+    e.stopPropagation()
     setDropBar(null)
     const startBar = applyGrabOffset(
       barForClientX(e.clientX, e.currentTarget, ppb),
@@ -121,7 +126,8 @@ function Timeline({
       const source = state.rifffs[shelfSourceId]
       if (!source) return
       if (source.startBar === undefined) {
-        dispatch({ type: 'PLACE_ON_TIMELINE', groupId: shelfSourceId, startBar })
+        const channelId = targetChannelId ?? crypto.randomUUID()
+        dispatch({ type: 'MOVE_TO_CHANNEL', groupId: shelfSourceId, startBar, channelId })
       } else {
         const action = pasteRifffAction(state, shelfSourceId, startBar)
         if (action) dispatch(action)
@@ -140,7 +146,22 @@ function Timeline({
       if (action) dispatch(action)
       return
     }
-    dispatch({ type: 'PLACE_ON_TIMELINE', groupId, startBar })
+    const channelId = targetChannelId ?? state.channelOf[groupId] ?? crypto.randomUUID()
+    dispatch({ type: 'MOVE_TO_CHANNEL', groupId, startBar, channelId })
+  }
+
+  // The Timeline container's own catch-all — fires for anything a specific
+  // ChannelRow's own onDrop (below) didn't already stop propagation for:
+  // ghost rows, or any other background space. Always resolves to "give
+  // this clip a brand new channel" (targetChannelId undefined).
+  function handleDrop(e: DragEvent<HTMLDivElement>): void {
+    resolveDrop(e, undefined)
+  }
+
+  // Passed to every ChannelRow — a drop that lands there always means
+  // "reassign to (or land initially on) THIS channel."
+  function handleDropOnChannel(e: DragEvent<HTMLDivElement>, channelId: string): void {
+    resolveDrop(e, channelId)
   }
 
   function handleContextMenu(e: MouseEvent<HTMLDivElement>): void {
@@ -168,8 +189,14 @@ function Timeline({
       style={{ position: 'relative' }}
     >
       <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
-      {placedRifffsInOrder(state).map((r) => (
-        <RifffBlockRow key={r.groupId} groupId={r.groupId} onOpenContextMenu={onOpenClipMenu} />
+      {channelsInOrder(state).map((channel) => (
+        <ChannelRow
+          key={channel.channelId}
+          channelId={channel.channelId}
+          rifffs={channel.rifffs}
+          onOpenContextMenu={onOpenClipMenu}
+          onDropOnChannel={handleDropOnChannel}
+        />
       ))}
       {Array.from({ length: GHOST_ROW_COUNT }, (_, i) => (
         <div
