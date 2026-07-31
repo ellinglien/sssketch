@@ -40,6 +40,18 @@ const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 
+export type MasterChainSlotStatus = 'idle' | 'loading' | 'loaded' | 'error'
+
+const MasterChainStatusCtx = createContext<
+  [MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus]
+>(['idle', 'idle', 'idle', 'idle'])
+// Separate from MasterChainStatusCtx (rather than folded into it) so a
+// slot's status enum stays a plain, cheap-to-compare 4-tuple -- only the
+// panel's own hover tooltip needs the message text.
+const MasterChainErrorCtx = createContext<
+  [string | null, string | null, string | null, string | null]
+>([null, null, null, null])
+
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -59,6 +71,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const state = history.present
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [masterChainStatus, setMasterChainStatus] = useState<
+    [MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus]
+  >(['idle', 'idle', 'idle', 'idle'])
+  const [masterChainError, setMasterChainError] = useState<
+    [string | null, string | null, string | null, string | null]
+  >([null, null, null, null])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -157,7 +175,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // OTHER tracked field happened to change too. Found via Task 12 manual
     // verification: after a resize-handle drag, the captured EngineProject
     // sent over IPC still showed the pre-drag playedBars.
-    state.playedBars
+    state.playedBars,
+    // masterChain plugin IDs flow through this general project sync (the
+    // native engine's own EngineProject.masterChain field just needs to
+    // stay current); actually LOADING/swapping the plugin binary is a
+    // separate, explicit engineLoadMasterPlugin call below instead -- see
+    // the SET_MASTER_CHAIN_PLUGIN dispatch-side effect.
+    state.masterChain
   ])
 
   useEffect(() => {
@@ -172,6 +196,60 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     void window.rifffApi.engineSetMetronome(state.metronomeEnabled)
   }, [state.metronomeEnabled])
+
+  // Diffs against the previous masterChain on every change so only the ONE
+  // slot that actually changed gets reloaded -- an unrelated arrangement
+  // edit elsewhere must never accidentally trigger a plugin reload/swap
+  // glitch on a slot nobody touched (see the design spec's "separate,
+  // explicit load-master-plugin message" rationale).
+  const masterChainRef = useRef(state.masterChain)
+  useEffect(() => {
+    const prev = masterChainRef.current
+    masterChainRef.current = state.masterChain
+    state.masterChain.forEach((pluginId, slot) => {
+      if (pluginId !== prev[slot]) {
+        setMasterChainStatus((s) => {
+          const next = [...s] as typeof s
+          next[slot] = pluginId === null ? 'idle' : 'loading'
+          return next
+        })
+        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId)
+      }
+    })
+  }, [state.masterChain])
+
+  useEffect(() => {
+    return window.rifffApi.onMasterPluginLoaded(({ slot, success, error }) => {
+      if (!success)
+        console.error(`StoreContext: master chain slot ${slot} failed to load plugin: ${error}`)
+      setMasterChainStatus((s) => {
+        const next = [...s] as typeof s
+        next[slot] = success ? 'loaded' : 'error'
+        return next
+      })
+      setMasterChainError((s) => {
+        const next = [...s] as typeof s
+        next[slot] = success ? null : (error ?? 'unknown error')
+        return next
+      })
+      if (!success) {
+        // A failed load must not leave state.masterChain[slot] pointing at the
+        // plugin id that just failed -- otherwise a later, unrelated engine
+        // crash-recovery restart would keep resending load-master-plugin for
+        // the same known-bad id forever. rawDispatch (not dispatch) since this
+        // is plain state cleanup, not a user edit worth its own undo step; the
+        // SET_MASTER_CHAIN_PLUGIN case above would also reset
+        // masterChainStatus/masterChainError back to 'idle'/null and fire
+        // another (pointless) engineLoadMasterPlugin IPC call right back --
+        // acceptable, matches the reverted send-bus feature's own precedent.
+        rawDispatch({
+          type: 'SET_MASTER_CHAIN_PLUGIN',
+          slot: slot as 0 | 1 | 2 | 3,
+          pluginId: null
+        })
+      }
+    })
+  }, [])
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
@@ -208,7 +286,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       <DispatchCtx.Provider value={dispatch}>
         <PosCtx.Provider value={pos}>
           <PlayingCtx.Provider value={playing}>
-            <HistoryCtx.Provider value={historyControls}>{children}</HistoryCtx.Provider>
+            <HistoryCtx.Provider value={historyControls}>
+              <MasterChainStatusCtx.Provider value={masterChainStatus}>
+                <MasterChainErrorCtx.Provider value={masterChainError}>
+                  {children}
+                </MasterChainErrorCtx.Provider>
+              </MasterChainStatusCtx.Provider>
+            </HistoryCtx.Provider>
           </PlayingCtx.Provider>
         </PosCtx.Provider>
       </DispatchCtx.Provider>
@@ -239,4 +323,24 @@ export function usePlaying(): boolean {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useHistory(): HistoryControls {
   return useContext(HistoryCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useMasterChainStatus(): [
+  MasterChainSlotStatus,
+  MasterChainSlotStatus,
+  MasterChainSlotStatus,
+  MasterChainSlotStatus
+] {
+  return useContext(MasterChainStatusCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useMasterChainError(): [
+  string | null,
+  string | null,
+  string | null,
+  string | null
+] {
+  return useContext(MasterChainErrorCtx)
 }
