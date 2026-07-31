@@ -13,7 +13,32 @@ import { SNAP_DIVS } from '../state/store'
 import { typeColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
 import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
+import { computePitchContour } from '@shared/pitchContour'
+import { octaveGridlines } from '@shared/noteNames'
 import { SpectrogramCanvas } from './SpectrogramCanvas'
+
+// Shared frequency range/resolution for every stem's spectrogram lane —
+// explicit here (rather than relying on computeSpectrogram's own defaults)
+// so the note gridlines and pitch contour overlays, which need this same
+// range to place themselves correctly, can't silently drift out of sync
+// with it.
+const SPECTROGRAM_MIN_FREQ_HZ = 40
+const SPECTROGRAM_MAX_FREQ_HZ = 8000
+const SPECTROGRAM_NUM_FREQ_BINS = 64
+const SPECTROGRAM_DYNAMIC_RANGE_DB = 45
+const PITCH_HOP_SIZE = 1024
+const NOTE_GRIDLINES = octaveGridlines(SPECTROGRAM_MIN_FREQ_HZ, SPECTROGRAM_MAX_FREQ_HZ)
+
+/** Where a frequency lands vertically within a lane, as a percentage from
+ * the top — must match SpectrogramCanvas's own low-frequency-at-the-bottom
+ * flip (see its doc comment) for the gridlines/contour to actually line up
+ * with the spectrogram bands drawn underneath them. */
+function freqToTopPct(freqHz: number): number {
+  const logMin = Math.log2(SPECTROGRAM_MIN_FREQ_HZ)
+  const logMax = Math.log2(SPECTROGRAM_MAX_FREQ_HZ)
+  const frac = (Math.log2(freqHz) - logMin) / (logMax - logMin)
+  return (1 - Math.max(0, Math.min(1, frac))) * 100
+}
 
 /**
  * Endlesss stems are internally beat-locked, but a rifff's declared bar length can
@@ -197,13 +222,15 @@ export function BeatPicker({
   // point of "see where the loops happen in the melody" across all of them
   // at once. A pure derivation of rifff/stem/buffers, so useMemo (not an
   // effect writing to its own state) is the right tool.
-  const stemSpectrograms = useMemo<{ stem: Stem; spectrogram: Spectrogram }[] | null>(() => {
+  const stemSpectrograms = useMemo<
+    { stem: Stem; spectrogram: Spectrogram; pitchPathD: string }[] | null
+  >(() => {
     if (!rifff || !stem) return null
     const identityBuf = buffers[stem.slot]
     if (!identityBuf) return null
     const secPerBar = stem.durationSec / stem.barLength
     const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
-    const results: { stem: Stem; spectrogram: Spectrogram }[] = []
+    const results: { stem: Stem; spectrogram: Spectrogram; pitchPathD: string }[] = []
     for (const s of rifff.stems) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -213,7 +240,38 @@ export function BeatPicker({
       for (let i = 0; i < totalSamples; i++) {
         tiled[i] = data[i % data.length]
       }
-      results.push({ stem: s, spectrogram: computeSpectrogram(tiled, buf.sampleRate) })
+      const spectrogram = computeSpectrogram(tiled, buf.sampleRate, {
+        minFreqHz: SPECTROGRAM_MIN_FREQ_HZ,
+        maxFreqHz: SPECTROGRAM_MAX_FREQ_HZ,
+        numFreqBins: SPECTROGRAM_NUM_FREQ_BINS,
+        dynamicRangeDb: SPECTROGRAM_DYNAMIC_RANGE_DB
+      })
+
+      // A melody-contour line drawn on top of the spectrogram — built as a
+      // single SVG path (multiple "M" subpaths at gaps, rather than one
+      // <path>/<circle> per frame) so it stays cheap to render even at a
+      // long rifff's frame count. Unpitched frames (freqHz 0 — see
+      // computePitchContour's own confidence-threshold doc comment) break
+      // the line rather than being interpolated across, since a percussive
+      // gap really isn't "on" any pitch.
+      const pitch = computePitchContour(tiled, buf.sampleRate, { hopSize: PITCH_HOP_SIZE })
+      let pitchPathD = ''
+      let drawing = false
+      for (let t = 0; t < pitch.numFrames; t++) {
+        const f = pitch.freqHz[t]
+        if (f <= 0) {
+          drawing = false
+          continue
+        }
+        const xPct = ((t * PITCH_HOP_SIZE) / totalSamples) * 100
+        const yPct = freqToTopPct(f)
+        pitchPathD += drawing
+          ? ` L ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
+          : `M ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
+        drawing = true
+      }
+
+      results.push({ stem: s, spectrogram, pitchPathD })
     }
     return results
   }, [rifff, stem, buffers])
@@ -411,7 +469,7 @@ export function BeatPicker({
   // loop identity stem in a 16-bar rifff).
   const totalBeats = rifff.barLength * 4
   const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
-  const LANE_HEIGHT = 52
+  const LANE_HEIGHT = 68
   const LANE_GAP = 3
   const lanesHeight = stemSpectrograms?.length
     ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
@@ -537,8 +595,8 @@ export function BeatPicker({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 820,
-          maxWidth: '90vw',
+          width: 'min(1400px, 94vw)',
+          maxWidth: '94vw',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
           borderRadius: 0,
@@ -650,12 +708,12 @@ export function BeatPicker({
             border: '1px solid var(--ra-border)',
             borderRadius: 0,
             background: 'var(--ra-bg-row)',
-            maxHeight: '55vh',
-            overflowY: lanesHeight > 220 ? 'auto' : 'hidden'
+            maxHeight: '74vh',
+            overflowY: lanesHeight > 400 ? 'auto' : 'hidden'
           }}
         >
           <div style={{ position: 'relative', height: lanesHeight }}>
-            {stemSpectrograms?.map(({ stem: s, spectrogram }, i) => (
+            {stemSpectrograms?.map(({ stem: s, spectrogram, pitchPathD }, i) => (
               <div
                 key={s.slot}
                 style={{
@@ -674,11 +732,65 @@ export function BeatPicker({
                   color={typeColorVar(s.type)}
                   height={LANE_HEIGHT}
                 />
+                {NOTE_GRIDLINES.map((g, gi) => (
+                  <div
+                    key={g.label}
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      top: `${freqToTopPct(g.freqHz)}%`,
+                      borderTop: '1px solid color-mix(in srgb, var(--ra-text) 20%, transparent)',
+                      pointerEvents: 'none'
+                    }}
+                  >
+                    {gi % 2 === 0 && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 2,
+                          top: -6,
+                          fontSize: 6,
+                          color: 'var(--ra-text-3)',
+                          textShadow: '0 0 2px var(--ra-bg-row), 0 0 2px var(--ra-bg-row)'
+                        }}
+                      >
+                        {g.label}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {pitchPathD && (
+                  <svg
+                    width="100%"
+                    height="100%"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+                  >
+                    <path
+                      d={pitchPathD}
+                      stroke="black"
+                      strokeOpacity={0.45}
+                      strokeWidth={2.2}
+                      fill="none"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <path
+                      d={pitchPathD}
+                      stroke="white"
+                      strokeOpacity={0.9}
+                      strokeWidth={0.9}
+                      fill="none"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+                )}
                 <span
                   style={{
                     position: 'absolute',
                     top: 2,
-                    left: 4,
+                    right: 4,
                     fontSize: 8,
                     letterSpacing: 0.4,
                     textTransform: 'uppercase',
