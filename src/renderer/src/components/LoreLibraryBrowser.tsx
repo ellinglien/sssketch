@@ -57,33 +57,53 @@ function loadStoredLoreUsername(): string {
   }
 }
 
-interface RiffDateGroup {
-  label: string
+interface RiffTempoGroup {
+  bpm: number // rounded to the nearest whole BPM — the grouping key for "similar tempos"
   riffs: LoreRiffSummary[]
 }
 
-/** Groups riffs by local calendar date, preserving each group's own
- * most-recent-first order — a jam with thousands of riffs otherwise renders
- * as one undifferentiated wall of circles with no sense of when anything was
- * made. Riffs already arrive sorted by CreationTime DESC (see listRiffs), so
- * a single linear scan is enough: consecutive riffs sharing the same date
- * label just extend the current group. */
-function groupRiffsByDate(riffs: LoreRiffSummary[]): RiffDateGroup[] {
-  const groups: RiffDateGroup[] = []
+interface RiffDateGroup {
+  label: string
+  tempoGroups: RiffTempoGroup[]
+}
+
+/** Groups riffs by local calendar date, then by tempo within each date —
+ * date > tempo. A jam with thousands of riffs otherwise renders as one
+ * undifferentiated wall of circles with no sense of when anything was made
+ * or which ones actually belong together tempo-wise. Riffs already arrive
+ * sorted by CreationTime DESC (see listRiffs), so a single linear scan is
+ * enough for the date grouping: consecutive riffs sharing the same date
+ * label just extend the current group. Tempo grouping keys on the rounded
+ * whole-number BPM (not exact equality) — LORE's own BPMrnd column carries
+ * floating-point noise (see formatBpm's own doc comment), so two riffs that
+ * are really "the same tempo" rarely match exactly. Each date's tempo
+ * groups are then sorted numerically ascending, for easy scanning rather
+ * than whatever order they happened to occur in that day. */
+function groupRiffsByDateAndTempo(riffs: LoreRiffSummary[]): RiffDateGroup[] {
+  const dateGroups: RiffDateGroup[] = []
   for (const riff of riffs) {
     const label = new Date(riff.creationTime * 1000).toLocaleDateString(undefined, {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
     })
-    const current = groups[groups.length - 1]
-    if (current && current.label === label) {
-      current.riffs.push(riff)
-    } else {
-      groups.push({ label, riffs: [riff] })
+    let dateGroup = dateGroups[dateGroups.length - 1]
+    if (!dateGroup || dateGroup.label !== label) {
+      dateGroup = { label, tempoGroups: [] }
+      dateGroups.push(dateGroup)
     }
+    const bpm = Math.round(riff.bpm)
+    let tempoGroup = dateGroup.tempoGroups.find((g) => g.bpm === bpm)
+    if (!tempoGroup) {
+      tempoGroup = { bpm, riffs: [] }
+      dateGroup.tempoGroups.push(tempoGroup)
+    }
+    tempoGroup.riffs.push(riff)
   }
-  return groups
+  for (const dateGroup of dateGroups) {
+    dateGroup.tempoGroups.sort((a, b) => a.bpm - b.bpm)
+  }
+  return dateGroups
 }
 
 export function LoreLibraryBrowser({
@@ -102,7 +122,7 @@ export function LoreLibraryBrowser({
   const [jams, setJams] = useState<LoreJam[]>([])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
-  const riffGroups = useMemo(() => groupRiffsByDate(riffs), [riffs])
+  const riffGroups = useMemo(() => groupRiffsByDateAndTempo(riffs), [riffs])
   // Whether the warehouse has more riffs beyond the currently-loaded page(s)
   // for the current jam/filters — some of Elling's real jams have 20,000+
   // riffs, so listRiffs is paginated (RIFF_PAGE_SIZE per page) rather than
@@ -876,56 +896,70 @@ export function LoreLibraryBrowser({
                         >
                           {group.label}
                         </span>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                          {group.riffs.map((riff) => (
-                            <div
-                              key={riff.riffCID}
-                              style={{ position: 'relative', width: 18, height: 18 }}
+                        {group.tempoGroups.map((tempoGroup) => (
+                          <div key={tempoGroup.bpm} style={{ marginBottom: 6 }}>
+                            <span
+                              style={{
+                                fontSize: 8,
+                                color: 'var(--ra-text-3)',
+                                display: 'block',
+                                marginBottom: 3
+                              }}
                             >
-                              <button
-                                onClick={(e) => handleRiffClick(e, riff.riffCID)}
-                                title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                                style={{
-                                  width: 18,
-                                  height: 18,
-                                  borderRadius: '50%',
-                                  // Dashed border flags "not fully cached" independently of
-                                  // the ownership brightness fill (riffCircleColor) — see its
-                                  // own doc comment for why these used to be conflated.
-                                  // Selection rings take priority over the dashed cue since
-                                  // they're the stronger, more immediate signal.
-                                  border:
-                                    selectedRiffCID === riff.riffCID
-                                      ? '2px solid var(--ra-playhead)'
-                                      : selectedRiffCIDs.has(riff.riffCID)
-                                        ? '2px solid var(--ra-stretch-on)'
-                                        : riff.cachedStemCount < riff.stemCount
-                                          ? '1px dashed var(--ra-text-3)'
-                                          : '1px solid var(--ra-border)',
-                                  padding: 0,
-                                  background: riffCircleColor(riff),
-                                  cursor: 'pointer'
-                                }}
-                              />
-                              {importedRiffGroupIds.has(riff.riffCID) && (
-                                <span
-                                  title="already imported"
-                                  style={{
-                                    position: 'absolute',
-                                    bottom: -2,
-                                    right: -2,
-                                    width: 6,
-                                    height: 6,
-                                    borderRadius: '50%',
-                                    background: 'var(--ra-stretch-on)',
-                                    border: '1px solid var(--ra-bg-bar)',
-                                    pointerEvents: 'none'
-                                  }}
-                                />
-                              )}
+                              {tempoGroup.bpm} BPM
+                            </span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                              {tempoGroup.riffs.map((riff) => (
+                                <div
+                                  key={riff.riffCID}
+                                  style={{ position: 'relative', width: 18, height: 18 }}
+                                >
+                                  <button
+                                    onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                                    title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                    style={{
+                                      width: 18,
+                                      height: 18,
+                                      borderRadius: '50%',
+                                      // Dashed border flags "not fully cached" independently of
+                                      // the ownership brightness fill (riffCircleColor) — see its
+                                      // own doc comment for why these used to be conflated.
+                                      // Selection rings take priority over the dashed cue since
+                                      // they're the stronger, more immediate signal.
+                                      border:
+                                        selectedRiffCID === riff.riffCID
+                                          ? '2px solid var(--ra-playhead)'
+                                          : selectedRiffCIDs.has(riff.riffCID)
+                                            ? '2px solid var(--ra-stretch-on)'
+                                            : riff.cachedStemCount < riff.stemCount
+                                              ? '1px dashed var(--ra-text-3)'
+                                              : '1px solid var(--ra-border)',
+                                      padding: 0,
+                                      background: riffCircleColor(riff),
+                                      cursor: 'pointer'
+                                    }}
+                                  />
+                                  {importedRiffGroupIds.has(riff.riffCID) && (
+                                    <span
+                                      title="already imported"
+                                      style={{
+                                        position: 'absolute',
+                                        bottom: -2,
+                                        right: -2,
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: '50%',
+                                        background: 'var(--ra-stretch-on)',
+                                        border: '1px solid var(--ra-bg-bar)',
+                                        pointerEvents: 'none'
+                                      }}
+                                    />
+                                  )}
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
+                          </div>
+                        ))}
                       </div>
                     ))}
                     {/* Loading more happens automatically on scroll (see the
