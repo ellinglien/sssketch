@@ -153,28 +153,26 @@ namespace ssstitch
             // (undefined behaviour, often a crash that takes the whole
             // engine process down, silencing the dry mix too).
             //
-            // IpcConnection itself is only ever touched from the message
-            // thread (InterprocessConnection's own contract), but
-            // requestLoad's onLoaded callback fires on MasterChain's
-            // background loader thread -- sendJson (and `this` in general)
-            // must not be touched from there directly. Post back to the
-            // message thread.
+            // requestLoad's onLoaded callback fires on the message thread
+            // (see MasterChain::requestLoad's own doc comment -- plugin
+            // instantiation can't safely happen on an arbitrary background
+            // thread, since some plugins' init code touches macOS UI-toolkit
+            // APIs that assert they're on the main thread), which is also
+            // where IpcConnection itself always runs, so sendJson can be
+            // called directly here with no further thread-hop needed.
             masterChain.requestLoad(slot, pluginId, transport.currentSampleRate(), transport.currentBlockSize(),
                 [this, slot, pluginId](bool success, const juce::String& error)
                 {
-                    juce::MessageManager::callAsync([this, slot, pluginId, success, error]()
-                    {
-                        juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
-                        payloadObj->setProperty("slot", slot);
-                        payloadObj->setProperty("pluginId", pluginId);
-                        payloadObj->setProperty("success", success);
-                        if (!success)
-                            payloadObj->setProperty("error", error);
-                        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
-                        obj->setProperty("type", "master-plugin-loaded");
-                        obj->setProperty("payload", juce::var(payloadObj.get()));
-                        sendJson(juce::var(obj.get()));
-                    });
+                    juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+                    payloadObj->setProperty("slot", slot);
+                    payloadObj->setProperty("pluginId", pluginId);
+                    payloadObj->setProperty("success", success);
+                    if (!success)
+                        payloadObj->setProperty("error", error);
+                    juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                    obj->setProperty("type", "master-plugin-loaded");
+                    obj->setProperty("payload", juce::var(payloadObj.get()));
+                    sendJson(juce::var(obj.get()));
                 });
         }
         else if (type == "open-master-plugin-editor")

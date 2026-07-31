@@ -173,9 +173,24 @@ namespace ssstitch
         int blockSize,
         std::function<void(bool, const juce::String&)> onLoaded)
     {
-        auto& slot = slots[(size_t) slotIndex];
-        std::thread([this, &slot, pluginId, sampleRate, blockSize, onLoaded]()
+        // Deliberately NOT a raw background std::thread (an earlier version
+        // of this function used one, mirroring the reverted SendBus design
+        // it was ported from). A real crash was found doing exactly that:
+        // Solid Bus Comp's own instantiation touches macOS's HIToolbox/TSM
+        // input-source APIs during init, which assert (dispatch_assert_queue)
+        // that they're running on the main thread -- calling them from an
+        // arbitrary background thread aborts the whole process
+        // (EXC_BREAKPOINT/SIGTRAP). Not every plugin does this, but nothing
+        // in this codebase can predict which ones will, so instantiation
+        // must happen on the message thread. callAsync still keeps this
+        // asynchronous relative to the caller (the IPC handler that
+        // dispatched this returns immediately; the actual load runs on a
+        // later message-loop iteration) -- it's off the audio thread, which
+        // is the property that actually matters for real-time safety here,
+        // just no longer off the message thread too.
+        juce::MessageManager::callAsync([this, slotIndex, pluginId, sampleRate, blockSize, onLoaded]()
         {
+            auto& slot = slots[(size_t) slotIndex];
             juce::String error;
             auto instance = instantiator(pluginId, sampleRate, blockSize, error);
             const bool success = error.isEmpty();
@@ -189,6 +204,6 @@ namespace ssstitch
 
             if (onLoaded)
                 onLoaded(success, error);
-        }).detach();
+        });
     }
 }
