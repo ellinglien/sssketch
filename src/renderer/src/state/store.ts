@@ -265,6 +265,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SEQUENCE_RIFFFS': {
       const rifffs = { ...state.rifffs }
       const stretch = { ...state.stretch }
+      const channelOf = { ...state.channelOf }
       let cursor = 0
       for (const groupId of action.groupIds) {
         const rifff = rifffs[groupId]
@@ -284,8 +285,13 @@ export function reducer(state: AppState, action: Action): AppState {
         // width than the position it was just packed at once viewed back in
         // Normal/Compact mode, leaving a visible gap or overlap.
         stretch[groupId] = true
+        // One channel per clip, matching sequence order — a sketch-eligible
+        // arrangement is always 1:1 clip:channel (see isSketchEligible's own
+        // contiguity check, which already rejects multiple channels or
+        // overlapping clips).
+        channelOf[groupId] = groupId
       }
-      return { ...state, rifffs, stretch, trackOrder: action.groupIds }
+      return { ...state, rifffs, stretch, channelOf, channelOrder: action.groupIds }
     }
 
     case 'SELECT':

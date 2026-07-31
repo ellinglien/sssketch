@@ -493,7 +493,7 @@ describe('reducer', () => {
       expect(state.rifffs.r2.startBar).toBe(2) // right after r1's TRIMMED 2 bars, not its raw 4
     })
 
-    it('replaces trackOrder with the new sequence order', () => {
+    it('replaces channelOrder with the new sequence order, one channel per clip', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -501,6 +501,7 @@ describe('reducer', () => {
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
       state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r2', 'r1'] })
       expect(state.channelOrder).toEqual(['r2', 'r1'])
+      expect(state.channelOf).toEqual({ r2: 'r2', r1: 'r1' })
     })
 
     it('forces stretch on for every sequenced rifff, even one that had it off', () => {
