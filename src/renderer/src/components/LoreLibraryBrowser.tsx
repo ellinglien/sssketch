@@ -13,6 +13,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { stemKey } from '@shared/types'
+import { formatBpm } from '@shared/format'
 
 /** Continuous brightness ramp from dark gray (0% ownership) to white (100%
  * ownership) — one brightness axis, no separate accent hue, matching the
@@ -861,7 +862,7 @@ export function LoreLibraryBrowser({
                             >
                               <button
                                 onClick={(e) => handleRiffClick(e, riff.riffCID)}
-                                title={`${riff.bpm} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
                                 style={{
                                   width: 18,
                                   height: 18,
@@ -944,7 +945,7 @@ export function LoreLibraryBrowser({
                         size={40}
                       />
                       <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
-                        {resolvedRiff.bpm} BPM · {resolvedRiff.stems.length} stems (
+                        {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
                         {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
                         <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
                           {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}

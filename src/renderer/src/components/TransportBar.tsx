@@ -134,7 +134,7 @@ export function TransportBar(): React.JSX.Element {
           }}
           aria-label="Tempo (BPM)"
           style={{
-            fontSize: 14,
+            fontSize: 11,
             fontWeight: 700,
             width: 44,
             textAlign: 'center',

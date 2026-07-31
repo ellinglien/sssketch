@@ -13,6 +13,7 @@ import {
 } from '../audio/previewLoop'
 import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
+import { formatBpm } from '@shared/format'
 
 const TILE_SIZE = 42
 
@@ -205,8 +206,8 @@ export function Shelf({
         <span style={{ flex: 1 }} />
         {detailRifff && (
           <span style={{ fontSize: 9, color: 'var(--ra-text-2)', whiteSpace: 'nowrap' }}>
-            {detailRifff.name} — {detailRifff.bpm} BPM · {detailRifff.stems.length} stems ·{' '}
-            {detailRifff.barLength} bars
+            {detailRifff.name} — {formatBpm(detailRifff.bpm)} BPM · {detailRifff.stems.length} stems
+            · {detailRifff.barLength} bars
           </span>
         )}
         <button

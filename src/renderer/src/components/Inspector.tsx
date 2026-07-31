@@ -6,6 +6,7 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
+import { formatBpm } from '@shared/format'
 
 // A finer, snap-division-independent nudge step: 1ms of real time at this
 // rifff's own bpm, computed with the same formula offsetLabels() itself uses
@@ -145,9 +146,9 @@ export function Inspector({
             }}
           >
             <div>
-              <span style={{ fontSize: 19, fontWeight: 700 }}>{rifff.bpm}</span>
+              <span style={{ fontSize: 19, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
               <span style={{ margin: '0 6px' }}>→</span>
-              <span style={{ fontSize: 19, fontWeight: 700, color }}>{state.bpm}</span>
+              <span style={{ fontSize: 19, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
             </div>
             <button
               onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}

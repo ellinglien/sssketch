@@ -467,11 +467,12 @@ function barOptions(naturalBars: number): number[] {
  * before the sequence advances — reuses the normal arranger's playedBars
  * resize mechanism (see effectiveBars/SEQUENCE_RIFFFS's own doc comments)
  * rather than a drag handle, since these tiles are small fixed-size glyphs
- * with no edge to grab. A plain dropdown (not a free-form number field) so
- * there's no way to land on a fractional bar count, and picking is a single
- * click. Mirrors ContextMenu's own dismiss-on-outside-click/Escape pattern
- * directly (rather than reusing that component) since it needs a select in
- * the body, which ContextMenu's plain items-list API doesn't support. */
+ * with no edge to grab. The full option list is shown open immediately
+ * (not a native <select>, which needs a second click just to reveal its own
+ * options) — one click picks. Mirrors ContextMenu's own
+ * dismiss-on-outside-click/Escape pattern directly (rather than reusing
+ * that component) since it needs a scrollable list in the body, which
+ * ContextMenu's plain items-list API doesn't support. */
 function SketchTileBarsMenu({
   x,
   y,
@@ -493,10 +494,13 @@ function SketchTileBarsMenu({
   onRemove: () => void
   onClose: () => void
 }): React.JSX.Element {
-  const selectRef = useRef<HTMLSelectElement>(null)
+  const currentOptionRef = useRef<HTMLButtonElement>(null)
 
+  // Scrolls the currently-applied value into view the instant the list
+  // opens — with up to 64+ options, whatever's already selected can easily
+  // start below the fold otherwise.
   useEffect(() => {
-    selectRef.current?.focus()
+    currentOptionRef.current?.scrollIntoView({ block: 'nearest' })
   }, [])
 
   useEffect(() => {
@@ -552,26 +556,53 @@ function SketchTileBarsMenu({
       >
         {name}
       </div>
-      <select
-        ref={selectRef}
-        value={currentBars}
-        onChange={(e) => onApply(Number(e.target.value))}
+      <div
         style={{
-          width: '100%',
-          fontSize: 12,
-          padding: '4px 6px',
-          background: 'var(--ra-bg-row)',
-          border: '1px solid var(--ra-border)',
-          borderRadius: 0,
-          color: 'var(--ra-text)'
+          maxHeight: 240,
+          overflowY: 'auto',
+          border: '1px solid var(--ra-border)'
         }}
       >
-        {barOptions(naturalBars).map((bars) => (
-          <option key={bars} value={bars}>
-            {bars} {bars === 1 ? 'bar' : 'bars'} — {secondsForBars(bars, bpm).toFixed(1)}s
-          </option>
-        ))}
-      </select>
+        {barOptions(naturalBars).map((bars) => {
+          const isCurrent = bars === currentBars
+          // The rifff's own untrimmed length — clicking this is how you
+          // "reset" a trim/extend back to normal, so it's called out
+          // distinctly (bold + label) rather than looking like just another
+          // number in the list.
+          const isNatural = bars === Math.round(naturalBars)
+          return (
+            <button
+              key={bars}
+              ref={isCurrent ? currentOptionRef : undefined}
+              onClick={() => onApply(bars)}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                width: '100%',
+                textAlign: 'left',
+                padding: '4px 8px',
+                fontSize: 11,
+                fontWeight: isNatural ? 700 : 400,
+                border: 'none',
+                borderBottom: '1px solid var(--ra-border)',
+                background: isCurrent
+                  ? 'color-mix(in srgb, var(--ra-stretch-on) 20%, transparent)'
+                  : 'transparent',
+                color: isCurrent ? 'var(--ra-stretch-on)' : 'var(--ra-text)',
+                cursor: 'pointer'
+              }}
+            >
+              <span>
+                {bars} {bars === 1 ? 'bar' : 'bars'}
+                {isNatural ? ' (original)' : ''}
+              </span>
+              <span style={{ color: isCurrent ? 'inherit' : 'var(--ra-text-3)' }}>
+                {secondsForBars(bars, bpm).toFixed(1)}s
+              </span>
+            </button>
+          )
+        })}
+      </div>
       <div style={{ display: 'flex', marginTop: 8 }}>
         <button
           onClick={onRemove}
