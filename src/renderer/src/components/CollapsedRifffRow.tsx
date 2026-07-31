@@ -3,13 +3,7 @@ import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
-import {
-  stemGeometry,
-  resolveOffsetKey,
-  resolvePlayedBars,
-  stemStartBar,
-  channelMuteLetters
-} from '../state/selectors'
+import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
@@ -144,22 +138,15 @@ export function CollapsedRifffRow({
     dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })
   }
 
-  // stemGeometry (not clipGeometry) so an active playedBars resize is
-  // reflected here too — clipGeometry predates the resize feature and always
-  // uses rifff.barLength, silently ignoring one. For a stem in a linked
-  // group this resolves to the same group-level position/width clipGeometry
-  // was trying to compute (resolveOffsetKey/resolvePlayedBars both key on
-  // groupId while linked) — correct for the common case, and a reasonable
-  // "represents the first stem" fallback if collapsed while unlinked. The
-  // same applies to the resize handles below: resizing here dispatches
-  // through resolveOffsetKey/RESIZE_LEFT exactly like StemWaveformRow's own
-  // handles, so it resizes the whole group while linked (the common case).
-  const playedBarsKey = resolveOffsetKey(state, groupId, firstStem.slot)
-  const resolvedPlayedBars = resolvePlayedBars(state, groupId, firstStem.slot)
+  // For a collapsed row, geometry is simply the group's own clipGeometry —
+  // there's exactly one shared position/width for the whole rifff to show
+  // here, same value every stem's own row would use if expanded instead.
+  const playedBarsKey = groupId
+  const resolvedPlayedBars = resolvePlayedBars(state, groupId)
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
-  const baseStartBar = stemStartBar(state, groupId, firstStem.slot)
+  const baseStartBar = rifff.startBar ?? 0
 
-  const geo = stemGeometry(state, groupId, firstStem.slot, PPB)
+  const geo = clipGeometry(state, groupId, PPB)
   // Sub-bar nudge offset (off[]) baked into geo.leftPx, isolated so a
   // left-resize preview can recompute leftPx from a new start bar while
   // preserving it — see StemWaveformRow's identical pattern.
@@ -230,7 +217,6 @@ export function CollapsedRifffRow({
           dispatch({
             type: 'RESIZE_LEFT',
             groupId,
-            slot: firstStem.slot,
             bars: finalPlayedBars,
             startBar: finalStartBar
           })

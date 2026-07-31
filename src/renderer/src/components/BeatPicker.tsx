@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
-import {
-  resolveOffsetKey,
-  offsetStepsForBeatIndex,
-  rotationSecondsForStem
-} from '../state/selectors'
+import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/selectors'
 import type { Action, AppState } from '../state/store'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -84,8 +80,7 @@ export async function bakeStems(
 }
 
 /** Re-bakes whatever downbeat correction a rifff's stems ALREADY have live
- * (state.off, via resolveOffsetKey — handles both a linked rifff's single
- * shared value and an unlinked one's independent per-stem values) without
+ * (state.off, keyed by groupId) without
  * needing to reopen BeatPicker and re-pick. Exists for a rifff whose
  * correction is still sitting as a runtime offset rather than physically
  * baked in — the main case being a LORE-sourced stem picked before
@@ -106,7 +101,7 @@ export async function rebakeRifff(
   const snapDiv = SNAP_DIVS[state.snapIdx]
   try {
     const jobs = rifff.stems.map((s) => {
-      const steps = state.off[resolveOffsetKey(state, groupId, s.slot)] ?? 0
+      const steps = state.off[groupId] ?? 0
       return { path: s.path, rotationSec: rotationSecondsForStem(steps, snapDiv, s) }
     })
     const results = await window.rifffApi.bakeOffset(jobs)
@@ -523,7 +518,7 @@ export function BeatPicker({
       const steps = offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
       dispatch({
         type: 'SET_OFFSET_STEPS',
-        key: resolveOffsetKey(state, groupId, stem.slot),
+        key: groupId,
         steps
       })
       pendingBakeRef.current = steps
@@ -565,7 +560,7 @@ export function BeatPicker({
     !!batchGroupIds && !!onNavigate && batchGroupIds.length > 1 && batchIndex !== -1
 
   const snapDiv = SNAP_DIVS[state.snapIdx]
-  const offsetKey = resolveOffsetKey(state, groupId, stem.slot)
+  const offsetKey = groupId
   const currentSteps = state.off[offsetKey] ?? 0
   // Matches peaks' own span (the whole rifff, not just the identity stem's
   // own duration) — see its doc comment for why. Using stem.barLength here

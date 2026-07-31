@@ -4,13 +4,7 @@ import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
-import {
-  stemGeometry,
-  resolveOffsetKey,
-  resolvePlayedBars,
-  stemStartBar,
-  channelMuteLetters
-} from '../state/selectors'
+import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { PPB } from './Ruler'
@@ -50,9 +44,8 @@ export function StemWaveformRow({
   const stem = rifff.stems.find((s) => s.slot === slot)!
   const color = typeColorVar(stem.type)
   const key = stemKey(groupId, slot)
-  const playedBarsKey = resolveOffsetKey(state, groupId, slot)
+  const playedBarsKey = groupId
   const muted = !!state.mute[key]
-  const unlinked = !!state.unlinked[groupId]
   const volumeDragMode = state.volumeDragMode
   const volume = state.vol[key] ?? 1
   const fadeIn = state.fadeIn[groupId] ?? 0
@@ -90,14 +83,14 @@ export function StemWaveformRow({
     dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
   }
 
-  const resolvedPlayedBars = resolvePlayedBars(state, groupId, slot)
+  const resolvedPlayedBars = resolvePlayedBars(state, groupId)
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
-  const stemGeo = stemGeometry(state, groupId, slot, ppb)
-  const baseStartBar = stemStartBar(state, groupId, slot)
+  const stemGeo = clipGeometry(state, groupId, ppb)
+  const baseStartBar = rifff.startBar ?? 0
   // The sub-bar nudge offset (off[]) baked into stemGeo.leftPx, isolated so a
   // left-resize preview can recompute leftPx from a new start bar while
   // preserving it — it doesn't change during a resize.
@@ -202,7 +195,6 @@ export function StemWaveformRow({
           dispatch({
             type: 'RESIZE_LEFT',
             groupId,
-            slot,
             bars: finalPlayedBars,
             startBar: finalStartBar
           })
@@ -297,24 +289,17 @@ export function StemWaveformRow({
   }
 
   // Default (volumeDragMode off): the waveform body is a native HTML5 drag
-  // target, moving the clip — same linked/unlinked branching as everywhere
-  // else in this app (whole rifff when linked, just this stem when
-  // unlinked), just exposed on a wider surface than the label column alone.
-  // When volumeDragMode is on, this never fires: the browser only initiates
-  // a native drag from a mousedown that wasn't already preventDefault'd, and
-  // handleVolumeStart (wired below) calls preventDefault via
-  // startPointerDrag whenever volumeDragMode is on.
+  // target, moving the whole rifff — exposed on a wider surface than the
+  // label column alone. When volumeDragMode is on, this never fires: the
+  // browser only initiates a native drag from a mousedown that wasn't
+  // already preventDefault'd, and handleVolumeStart (wired below) calls
+  // preventDefault via startPointerDrag whenever volumeDragMode is on.
   function handleWaveformDragStart(e: React.DragEvent): void {
     suppressNextSyntheticClick()
+    e.dataTransfer.setData('text/rifff-group-id', groupId)
     const mouseBar = mouseBarFromDragEvent(e, ppb)
-    if (unlinked) {
-      e.dataTransfer.setData('text/rifff-stem-key', key)
-      if (mouseBar !== null) setGrabOffsetBars(computeGrabOffsetBars(mouseBar, baseStartBar))
-    } else {
-      e.dataTransfer.setData('text/rifff-group-id', groupId)
-      if (mouseBar !== null) {
-        setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
-      }
+    if (mouseBar !== null) {
+      setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
     }
   }
 
@@ -336,11 +321,7 @@ export function StemWaveformRow({
             const target = sqrtGain(rifff.stems.length)
             if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
-          title={
-            unlinked
-              ? 'right-click to mute · double-click to reset volume · cmd/ctrl-drag to duplicate this stem'
-              : 'right-click to mute · double-click to reset volume'
-          }
+          title="right-click to mute · double-click to reset volume"
           style={{
             position: 'absolute',
             top: 0,
