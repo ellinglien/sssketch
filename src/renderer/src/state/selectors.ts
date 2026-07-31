@@ -1,10 +1,6 @@
 import { stemKey, type Rifff, type Stem } from '@shared/types'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
-export function resolveOffsetKey(state: AppState, groupId: string, slot: number): string {
-  return state.unlinked[groupId] ? stemKey(groupId, slot) : groupId
-}
-
 /** Top-row QWERTY keys, in order — the Shift+letter mute shortcuts assign
  * one to each currently-visible mute channel, top-to-bottom. Comfortably
  * covers more channels than typically fit on screen at once; a channel
@@ -38,9 +34,8 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  * spec), so that's the only mode excluded.
  *
  * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
- * a collapsed group's single row — callers distinguish the two the same way
- * resolveOffsetKey's callers do (state.exp[groupId] tells you which one
- * applies to a given rifff). Walks rifff.stems in its own array order, NOT
+ * a collapsed group's single row — callers distinguish the two via
+ * state.exp[groupId]. Walks rifff.stems in its own array order, NOT
  * sorted by slot — RifffBlockRow renders StemWaveformRow in that same array
  * order, and matching it is the whole point (each badge should read
  * top-to-bottom exactly as the rows do on screen).
@@ -69,16 +64,12 @@ export function channelMuteLetters(state: AppState): Record<string, string> {
   return out
 }
 
-/** A stem's own played length, in bars — the tiling loop's bound for this
- * specific stem. Falls back to rifff.barLength (today's implicit behavior)
- * when no override has been set. Same linked/unlinked resolution as `off`
- * (shared per-group while linked, independent per-stem once unlinked) —
- * unlike `vol`/`mute`, which are always keyed per-stem regardless of link
- * state. */
-export function resolvePlayedBars(state: AppState, groupId: string, slot: number): number {
+/** A clip's own played length, in bars — the tiling loop's bound. Falls
+ * back to rifff.barLength (today's implicit behavior) when no resize
+ * override has been set. */
+export function resolvePlayedBars(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
-  const key = resolveOffsetKey(state, groupId, slot)
-  return state.playedBars[key] ?? rifff.barLength
+  return state.playedBars[groupId] ?? rifff.barLength
 }
 
 export function stretchRatio(state: AppState, groupId: string): number {
@@ -116,7 +107,7 @@ export function placedRifffsInOrder(state: AppState): Rifff[] {
 
 /**
  * True iff the current arrangement is "plain" enough for sketch mode: every
- * placed rifff is linked and unfaded, with zero offset, AND the whole set —
+ * placed rifff is unfaded, with zero offset, AND the whole set —
  * sorted by startBar, not by placedRifffsInOrder's row-render order, which
  * is a DIFFERENT ordering — is perfectly contiguous starting at bar 0 with
  * no gaps or overlaps. An empty timeline is trivially eligible (starting a
@@ -141,7 +132,6 @@ export function placedRifffsInOrder(state: AppState): Rifff[] {
 export function isSketchEligible(state: AppState): boolean {
   const placed = placedRifffsInOrder(state)
   for (const rifff of placed) {
-    if (state.unlinked[rifff.groupId]) return false
     if (state.fadeIn[rifff.groupId]) return false
     if (state.fadeOut[rifff.groupId]) return false
     if ((state.off[rifff.groupId] ?? 0) !== 0) return false
@@ -185,46 +175,19 @@ export function groupIdAtPosition(state: AppState, pos: number): string | null {
   return null
 }
 
+/** A clip's screen position/width. Uses resolvePlayedBars (which reflects
+ * an active playedBars resize override) rather than raw rifff.barLength, so
+ * a resized clip's rendered width actually matches its resize — this used
+ * to only use rifff.barLength unconditionally, a real bug that stemGeometry
+ * (now folded in here, since per-stem geometry divergence no longer exists
+ * — see UNGROUP) used to work around for the expanded per-stem view only. */
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
   const offsetSteps = state.off[groupId] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetPx = (offsetSteps * ppb) / snapDiv
-  const stretchOn = state.stretch[groupId] ?? true
-  const shownBars = stretchOn ? rifff.barLength : rifff.barLength * (rifff.bpm / state.bpm)
-  return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
-}
-
-/** A stem's own position — independent of its group's once unlinked and dragged,
- * falling back to the group's startBar otherwise (before any drag, or while still
- * linked). */
-export function stemStartBar(state: AppState, groupId: string, slot: number): number {
-  const rifff = state.rifffs[groupId]
-  if (state.unlinked[groupId]) {
-    return state.stemStart[stemKey(groupId, slot)] ?? rifff.startBar ?? 0
-  }
-  return rifff.startBar ?? 0
-}
-
-/** Same shape as clipGeometry, anchored to the stem's own position instead of its
- * group's — identical to clipGeometry's LEFT position while linked (or before a
- * drag), diverging once unlinked and moved. WIDTH can now diverge from
- * clipGeometry even while linked: clipGeometry always uses rifff.barLength,
- * but this uses resolvePlayedBars, which reflects a playedBars resize
- * override the moment one is set. */
-export function stemGeometry(
-  state: AppState,
-  groupId: string,
-  slot: number,
-  ppb: number
-): ClipGeometry {
-  const rifff = state.rifffs[groupId]
-  const start = stemStartBar(state, groupId, slot)
-  const offsetSteps = state.off[resolveOffsetKey(state, groupId, slot)] ?? 0
-  const snapDiv = SNAP_DIVS[state.snapIdx]
-  const offsetPx = (offsetSteps * ppb) / snapDiv
-  const playedBars = resolvePlayedBars(state, groupId, slot)
+  const playedBars = resolvePlayedBars(state, groupId)
   const stretchOn = state.stretch[groupId] ?? true
   const shownBars = stretchOn ? playedBars : playedBars * (rifff.bpm / state.bpm)
   return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
@@ -233,28 +196,13 @@ export function stemGeometry(
 const DEFAULT_LOOP_BARS = 32
 
 /** Loop length auto-fits to whichever placed clip ends latest, falling back to a
- * sensible default when the timeline is empty rather than collapsing to 0. An
- * unlinked stem dragged out past its group's own span must count too, or it would
- * fall outside the loop and never be reached during playback. */
+ * sensible default when the timeline is empty rather than collapsing to 0. */
 export function loopLengthBars(state: AppState): number {
   const ends: number[] = []
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
-    if (state.unlinked[rifff.groupId]) {
-      for (const stem of rifff.stems) {
-        const playedBars = resolvePlayedBars(state, rifff.groupId, stem.slot)
-        ends.push(stemStartBar(state, rifff.groupId, stem.slot) + playedBars)
-      }
-    } else {
-      // Deliberately inlined rather than calling resolvePlayedBars(state,
-      // rifff.groupId, <some stem's slot>) — while linked, the resolved value
-      // doesn't depend on which stem's slot is passed (resolveOffsetKey
-      // returns the same groupId key regardless), so picking one would be
-      // arbitrary, and would need extra handling if rifff.stems were ever
-      // empty. Don't "simplify" this back to the per-slot helper.
-      const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
-      ends.push(rifff.startBar + playedBars)
-    }
+    const playedBars = resolvePlayedBars(state, rifff.groupId)
+    ends.push(rifff.startBar + playedBars)
   }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
 }
@@ -369,7 +317,7 @@ export function pasteStemAction(
     groupId: newGroupId,
     name: stem.name,
     bpm: source.bpm,
-    barLength: resolvePlayedBars(state, sourceGroupId, slot),
+    barLength: resolvePlayedBars(state, sourceGroupId),
     folderPath: source.folderPath,
     startBar,
     stems: [{ ...stem }]
@@ -387,7 +335,7 @@ export function pasteStemAction(
     rifff,
     vol,
     mute,
-    off: { [newGroupId]: state.off[resolveOffsetKey(state, sourceGroupId, slot)] ?? 0 },
+    off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
     stretch: state.stretch[sourceGroupId] ?? true
   }
 }
