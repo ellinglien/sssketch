@@ -7,6 +7,7 @@ import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { clipGeometry } from '../state/selectors'
 import { PPB, COMPACT_PPB } from './Ruler'
+import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 
 const NAME_BAR_HEIGHT = 18
@@ -127,6 +128,26 @@ export function RifffBlockRow({
         // Only reachable in Normal mode — compact mode's own collapsed
         // state already returned via CompactRifffBlock above.
         <CollapsedRifffRow groupId={groupId} selected={selected} />
+      )}
+
+      {/* Selection outline, wrapping the whole clip (name bar + every stem
+          row) — expanded mode has no other selection cue on the stem rows
+          themselves (only the name bar's background shifts), which read as
+          too subtle to tell which rifff is selected at a glance. A plain
+          overlay rather than styling each row individually, so it doesn't
+          have to thread `selected` through StemWaveformRow. */}
+      {selected && expanded && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: geo.leftPx,
+            width: geo.widthPx,
+            height: NAME_BAR_HEIGHT + rifff.stems.length * ROW_HEIGHT,
+            border: `2px solid ${color}`,
+            pointerEvents: 'none'
+          }}
+        />
       )}
     </div>
   )

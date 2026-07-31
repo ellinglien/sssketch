@@ -335,7 +335,9 @@ export function CollapsedRifffRow({
             left: leftPx,
             width: widthPx,
             borderRadius: 0,
-            border: `1px solid color-mix(in srgb, ${color} ${selected ? 70 : 40}%, transparent)`,
+            border: selected
+              ? `2px solid ${color}`
+              : `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
             overflow: 'hidden',
             cursor: 'grab'

@@ -497,17 +497,22 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [state.sel, state.mode, state.rifffs, dispatch])
 
-  // Space toggles play/pause, the standard DAW convention. Skipped whenever the
-  // beat-picker is open (it owns spacebar for tap-to-mark while it's up) or focus
-  // is on a naturally space-activated control (typing a space, or triggering a
-  // focused button/checkbox) — only intercepted when space wouldn't otherwise do
-  // anything useful.
+  // Space toggles play/pause, the standard DAW convention. Skipped only while
+  // the beat-picker is open (it owns spacebar for tap-to-mark while it's up)
+  // or focus is in a text field (typing a literal space). Deliberately does
+  // NOT exempt a focused button/select the way the other shortcuts below
+  // don't either — an earlier version did, so that after clicking almost any
+  // button in the app (mute, solo, unlink...), the next spacebar press would
+  // silently re-trigger that stale-focused button instead of toggling
+  // playback, reading as "space sometimes does something else." Nothing in
+  // this app relies on space-activates-the-focused-button (no native
+  // <select> exists, and every button is mouse-driven), so there's no
+  // legitimate behavior left to preserve there.
   useEffect(() => {
-    const interactiveTags = new Set(['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'])
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.code !== 'Space' || pickerGroupId) return
       const target = e.target as HTMLElement | null
-      if (target && interactiveTags.has(target.tagName)) return
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
       dispatch({ type: playing ? 'PAUSE' : 'PLAY' })
     }

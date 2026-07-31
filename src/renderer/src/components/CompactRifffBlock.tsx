@@ -147,7 +147,9 @@ export function CompactRifffBlock({
             bottom: 0,
             left: geo.leftPx,
             width: geo.widthPx,
-            border: `1px solid color-mix(in srgb, ${color} ${selected ? 70 : 40}%, transparent)`,
+            border: selected
+              ? `2px solid ${color}`
+              : `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
             background: 'var(--ra-bg-row-sub)',
             overflow: 'hidden',
             cursor: 'grab'
