@@ -24,7 +24,7 @@ namespace ssstitch
         constexpr double kRepositionFadeSec = 0.012;
     }
 
-    Transport::Transport(PlaybackEngine& e) : engine(e) {}
+    Transport::Transport(PlaybackEngine& e, MasterChain& mc) : engine(e), masterChain(mc) {}
     Transport::~Transport() { closeDevice(); }
 
     bool Transport::openDefaultDevice()
@@ -132,6 +132,12 @@ namespace ssstitch
         float* const* outputChannelData, int numOutputChannels,
         int numSamples, const juce::AudioIODeviceCallbackContext&)
     {
+        // Cheap, non-blocking pointer check -- must run every callback
+        // regardless of playback state so a plugin load requested while
+        // paused/stopped is still promoted promptly once ready, not stuck
+        // waiting for the next block that actually renders real audio.
+        masterChain.applyPendingSwaps();
+
         if (numOutputChannels < 2 || outputChannelData[0] == nullptr || outputChannelData[1] == nullptr)
             return;
 
@@ -202,6 +208,7 @@ namespace ssstitch
         {
             const double pos = positionBars.load();
             const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+            masterChain.process(numSamples, outL, outR);
             for (int i = 0; i < numSamples; ++i)
             {
                 const double elapsed = repositionElapsedSec + (double) i / deviceSampleRate;
@@ -233,6 +240,7 @@ namespace ssstitch
 
         const double pos = positionBars.load();
         const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+        masterChain.process(numSamples, outL, outR);
 
         if (fadingOut)
         {
@@ -263,6 +271,7 @@ namespace ssstitch
     void Transport::audioDeviceAboutToStart(juce::AudioIODevice* device)
     {
         deviceSampleRate = device->getCurrentSampleRate();
+        deviceBlockSize = device->getCurrentBufferSizeSamples();
     }
 
     void Transport::audioDeviceStopped() {}

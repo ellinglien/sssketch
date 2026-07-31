@@ -59,7 +59,8 @@ namespace ssstitch
                 PlaybackEngine engine(cache);
                 engine.setProject(project);
 
-                Transport transport(engine);
+                MasterChain masterChain;
+                Transport transport(engine, masterChain);
                 transport.setBpm(60.0);
                 transport.play(0.0);
 
@@ -116,7 +117,8 @@ namespace ssstitch
                 PlaybackEngine engine(cache);
                 engine.setProject(project);
 
-                Transport transport(engine);
+                MasterChain masterChain;
+                Transport transport(engine, masterChain);
                 transport.setBpm(60.0);
                 transport.play(0.0);
 

@@ -2,6 +2,7 @@
 #include "RenderExport.h"
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
+#include "MasterChain.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 
@@ -18,6 +19,25 @@ namespace ssstitch
         engine.setProject(project);
 
         const double sampleRate = 44100.0;
+        const int blockSize = 512;
+
+        // Export has no real-time deadline, so plugins are loaded directly
+        // and synchronously here rather than via MasterChain::requestLoad's
+        // background-thread hand-off (that machinery exists for live
+        // playback, where blocking the audio thread on plugin instantiation
+        // would cause an audible dropout).
+        MasterChain masterChain;
+        for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
+        {
+            const auto& pluginId = project.masterChain[(size_t) slot];
+            juce::String slotError;
+            if (!masterChain.loadPluginSync(slot, pluginId, sampleRate, blockSize, slotError))
+            {
+                errorOut = "master chain slot " + juce::String(slot) + " failed to load: " + slotError;
+                return false;
+            }
+        }
+
         const double secPerBar = project.bpm > 0.0 ? (60.0 / project.bpm) * 4.0 : 0.0;
         if (secPerBar <= 0.0)
         {
@@ -25,7 +45,6 @@ namespace ssstitch
             return false;
         }
         const int totalSamples = (int) std::ceil(durationBars * secPerBar * sampleRate);
-        const int blockSize = 512;
 
         juce::AudioBuffer<float> output(2, juce::jmax(1, totalSamples));
         output.clear();
@@ -34,10 +53,10 @@ namespace ssstitch
         {
             const int numSamples = juce::jmin(blockSize, totalSamples - startSample);
             const double positionBars = (startSample / sampleRate) / secPerBar;
-            engine.renderBlock(
-                positionBars, sampleRate, numSamples,
-                output.getWritePointer(0, startSample),
-                output.getWritePointer(1, startSample));
+            auto* l = output.getWritePointer(0, startSample);
+            auto* r = output.getWritePointer(1, startSample);
+            engine.renderBlock(positionBars, sampleRate, numSamples, l, r);
+            masterChain.process(numSamples, l, r);
         }
 
         juce::WavAudioFormat wavFormat;

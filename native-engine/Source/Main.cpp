@@ -193,12 +193,13 @@ static int runServe(int port)
 {
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
-    Transport transport(engine);
+    MasterChain masterChain;
+    Transport transport(engine, masterChain);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud
 
-    IpcServer server(engine, transport, bufferCache);
+    IpcServer server(engine, transport, bufferCache, masterChain);
     if (!server.beginWaitingForSocket(port, "127.0.0.1"))
     {
         juce::Logger::writeToLog("runServe: failed to bind to port " + juce::String(port));
