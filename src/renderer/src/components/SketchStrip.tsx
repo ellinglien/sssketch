@@ -51,7 +51,9 @@ export function SketchStrip(): React.JSX.Element {
   // release, but the tile's own label shows the candidate value as you drag,
   // same "preview locally, commit on release" convention as the normal
   // arranger's own resize-drag state (e.g. CollapsedRifffRow's dragPlayedBars).
-  const [dragBarsFor, setDragBarsFor] = useState<{ groupId: string; bars: number } | null>(null)
+  const [dragBarsFor, setDragBarsFor] = useState<{ groupIds: Set<string>; bars: number } | null>(
+    null
+  )
 
   // How many bars THIS tile actually plays before the sequence advances to
   // the next one — state.playedBars[groupId] when the right-click "adjust
@@ -235,6 +237,14 @@ export function SketchStrip(): React.JSX.Element {
     const startBars = effectiveBars(rifff)
     const options = barOptions(rifff.barLength, startBars)
     const startIndex = options.indexOf(startBars)
+    // Dragging a tile that's part of an active multi-selection applies the
+    // resulting bar count to every selected tile, not just the one under the
+    // cursor — same "act on the whole batch" convention multi-select already
+    // has elsewhere in this component (delete, drag-out).
+    const targetGroupIds =
+      multiSelected.size > 1 && multiSelected.has(rifff.groupId)
+        ? multiSelected
+        : new Set([rifff.groupId])
     let finalBars = startBars
     startPointerDrag(
       e,
@@ -245,14 +255,16 @@ export function SketchStrip(): React.JSX.Element {
         const stepsMoved = Math.round(-deltaY / BARS_DRAG_PX_PER_STEP)
         const newIndex = Math.max(0, Math.min(options.length - 1, startIndex + stepsMoved))
         finalBars = options[newIndex]
-        setDragBarsFor({ groupId: rifff.groupId, bars: finalBars })
+        setDragBarsFor({ groupIds: targetGroupIds, bars: finalBars })
       },
       (moved) => {
         setDragBarsFor(null)
         if (moved && finalBars !== startBars) {
-          dispatch({ type: 'SET_PLAYED_BARS', key: rifff.groupId, bars: finalBars })
-          // Re-packs every OTHER tile's startBar against the new length —
-          // SET_PLAYED_BARS alone only updates this one tile's own trim, it
+          for (const groupId of targetGroupIds) {
+            dispatch({ type: 'SET_PLAYED_BARS', key: groupId, bars: finalBars })
+          }
+          // Re-packs every OTHER tile's startBar against the new length(s) —
+          // SET_PLAYED_BARS alone only updates each tile's own trim, it
           // doesn't ripple the shift through the rest of the sequence.
           dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: sequence.map((r) => r.groupId) })
         }
@@ -359,8 +371,8 @@ export function SketchStrip(): React.JSX.Element {
         const orbitRadius = 46 // just outside PolarGlyph's own outermost ring
         const dotX = 50 + orbitRadius * Math.cos(angleRad)
         const dotY = 50 + orbitRadius * Math.sin(angleRad)
-        const isDraggingBars = dragBarsFor?.groupId === rifff.groupId
-        const displayBars = isDraggingBars ? dragBarsFor.bars : bars
+        const isDraggingBars = !!dragBarsFor?.groupIds.has(rifff.groupId)
+        const displayBars = dragBarsFor?.groupIds.has(rifff.groupId) ? dragBarsFor.bars : bars
 
         return (
           <div

@@ -43,6 +43,12 @@ function riffCircleColor(riff: LoreRiffSummary): string {
 // and it sticks across sessions, rather than being baked into the app.
 const LORE_USERNAME_STORAGE_KEY = 'ssstitch:loreUsername'
 
+// Triggers the next page fetch this far (in px) before the riff grid's
+// scroll container actually bottoms out, so the next page is ready before
+// the user hits a dead stop — replaces an earlier explicit "load more"
+// button with plain infinite scroll.
+const SCROLL_LOAD_MORE_THRESHOLD_PX = 200
+
 function loadStoredLoreUsername(): string {
   try {
     return localStorage.getItem(LORE_USERNAME_STORAGE_KEY) ?? LORE_USERNAME
@@ -841,6 +847,18 @@ export function LoreLibraryBrowser({
                   </div>
 
                   <div
+                    onScroll={(e) => {
+                      // Fires more auto-loading than a bottom-edge-only check
+                      // would strictly need, but handleLoadMore's own
+                      // loadingMoreRiffs guard already makes repeat calls a
+                      // no-op while a page is in flight, so there's no real
+                      // cost to checking on every scroll event rather than
+                      // debouncing.
+                      if (!hasMoreRiffs || loadingMoreRiffs) return
+                      const el = e.currentTarget
+                      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+                      if (distanceFromBottom < SCROLL_LOAD_MORE_THRESHOLD_PX) handleLoadMore()
+                    }}
                     style={{
                       marginTop: 10,
                       display: 'flex',
@@ -910,24 +928,19 @@ export function LoreLibraryBrowser({
                         </div>
                       </div>
                     ))}
-                    {hasMoreRiffs && (
-                      <button
-                        onClick={handleLoadMore}
-                        disabled={loadingMoreRiffs}
+                    {/* Loading more happens automatically on scroll (see the
+                        container's own onScroll above) — this is feedback
+                        only, not a control. */}
+                    {loadingMoreRiffs && (
+                      <span
                         style={{
                           alignSelf: 'flex-start',
-                          height: 18,
-                          borderRadius: 0,
-                          padding: '0 8px',
                           fontSize: 9,
-                          border: '1px solid var(--ra-border)',
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text-2)',
-                          cursor: loadingMoreRiffs ? 'default' : 'pointer'
+                          color: 'var(--ra-text-3)'
                         }}
                       >
-                        {loadingMoreRiffs ? 'loading…' : 'load more'}
-                      </button>
+                        loading…
+                      </span>
                     )}
                   </div>
 

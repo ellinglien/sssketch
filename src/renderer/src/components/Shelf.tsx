@@ -248,12 +248,15 @@ export function Shelf({
           const hovered = hoverId === rifff.groupId
           const previewing = previewingGroupId === rifff.groupId
           const batchSelected = multiSelected.has(rifff.groupId)
-          // Already placed on the timeline reads as "in use" — full opacity,
-          // same as selected/hovered; everything else dims slightly so the
-          // tray doubles as an at-a-glance map of what's already in the
-          // arrangement, mirroring the imported/6b mockup's own convention.
-          const lit =
-            selected || hovered || previewing || batchSelected || rifff.startBar !== undefined
+          const placed = rifff.startBar !== undefined
+          // Already placed on the timeline dims further than the normal idle
+          // state — it's already in the arrangement, so the shelf's default
+          // (unlit) view should draw the eye toward what's still available to
+          // drag in, not what's already been used. Active interaction state
+          // (selected/hovered/previewing/batch-selected) still lights it up
+          // normally regardless of placement — greying out is only the idle
+          // default, not a suppression of interaction feedback.
+          const lit = selected || hovered || previewing || batchSelected
           return (
             <button
               key={rifff.groupId}
@@ -300,7 +303,7 @@ export function Shelf({
                     : '1px solid transparent',
                 cursor: 'grab',
                 background: 'transparent',
-                opacity: lit ? 1 : 0.72
+                opacity: lit ? 1 : placed ? 0.4 : 0.72
               }}
             >
               <PolarGlyph
