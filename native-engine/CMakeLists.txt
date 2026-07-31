@@ -13,8 +13,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_console_app(ssstitch_engine
+# Was juce_add_console_app -- switched to juce_add_gui_app so this process
+# gets full NSApplication/window-server integration on macOS, needed to host
+# a real plugin editor window (see MasterChain::openEditorWindow). This is
+# spawned silently by Electron as a background helper, never launched by the
+# user directly -- LSUIElement=1 (via PLIST_TO_MERGE below) keeps it out of
+# the Dock and Cmd+Tab switcher unless/until it actually opens an editor
+# window. BUNDLE_ID is set explicitly since the default (derived from
+# COMPANY_NAME, which this project never sets) would otherwise fall back to
+# something generic.
+juce_add_gui_app(ssstitch_engine
   PRODUCT_NAME "ssstitch-engine"
+  BUNDLE_ID "com.ellinglien.ssstitch-engine"
+  PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
 )
 
 target_sources(ssstitch_engine PRIVATE

@@ -7,7 +7,7 @@ import { EngineClient } from './engineClient'
 
 const ENGINE_BINARY = join(
   __dirname,
-  '../../native-engine/build/ssstitch_engine_artefacts/Debug/ssstitch_engine'
+  '../../native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
 )
 const TEST_PORT = 45323 // distinct from Phase 1's ipc-roundtrip.test.ts's 45322
 

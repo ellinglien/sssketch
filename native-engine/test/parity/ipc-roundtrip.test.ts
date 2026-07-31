@@ -4,7 +4,10 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const ENGINE_BINARY = join(__dirname, '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine')
+const ENGINE_BINARY = join(
+  __dirname,
+  '../../build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+)
 const TEST_PORT = 45322 // fixed dev port, matches the design doc's single-connection assumption
 
 let serverProcess: ChildProcess | undefined

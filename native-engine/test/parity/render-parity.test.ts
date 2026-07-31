@@ -18,7 +18,10 @@ const { renderStretched } = await import('../../../src/main/rubberband')
 // Assumes native-engine has already been built (Tasks 1-8) — same precondition
 // as every other manual verification step in this plan. Path matches the
 // Debug artefact location confirmed throughout Phase 0/1.
-const ENGINE_BINARY = join(__dirname, '../../build/ssstitch_engine_artefacts/Debug/ssstitch_engine')
+const ENGINE_BINARY = join(
+  __dirname,
+  '../../build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+)
 
 function writeToneWav(path: string, durationSec: number, sampleRate = 44100): void {
   // A simple 16-bit mono WAV containing a fixed low-frequency sine, generated
