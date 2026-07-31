@@ -61,14 +61,16 @@ export function startPointerDrag(
  * to be sure the listener is in place before whichever fires first.
  *
  * Registered on the capture phase so it's swallowed before any handler
- * along the way sees it, and `once: true` means only this one synthesized
- * click is caught — a genuinely new, unrelated click still works normally
- * afterward. */
+ * along the way sees it. Stays armed for a short window rather than
+ * consuming exactly one event (`once: true`) — a single native drag has
+ * been observed producing more than one trailing click in some cases, and
+ * `once` would let the second one straight through. A genuinely new,
+ * unrelated click arriving after the window still works normally. */
 export function suppressNextSyntheticClick(): void {
-  window.addEventListener('click', suppressSyntheticClick, {
-    capture: true,
-    once: true
-  })
+  window.addEventListener('click', suppressSyntheticClick, { capture: true })
+  window.setTimeout(() => {
+    window.removeEventListener('click', suppressSyntheticClick, { capture: true })
+  }, 300)
 }
 
 function suppressSyntheticClick(ev: MouseEvent): void {

@@ -3,6 +3,7 @@ import { useAppState, useDispatch, useHistory, usePos, usePlaying } from '../sta
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { nextArrangerMode, isSketchEligible } from '../state/selectors'
+import { stopActivePreview } from '../audio/previewLoop'
 
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
@@ -48,7 +49,15 @@ export function TransportBar(): React.JSX.Element {
       }}
     >
       <button
-        onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+        onClick={() => {
+          // A Shelf/SketchStrip/LORE-browser tile preview is a separate Web
+          // Audio loop, entirely outside the native transport this button
+          // otherwise controls — starting real playback should always win
+          // over whatever preview happens to still be looping, same as
+          // BeatPicker already does the moment it opens.
+          stopActivePreview()
+          dispatch({ type: playing ? 'PAUSE' : 'PLAY' })
+        }}
         aria-label={playing ? 'Pause' : 'Play'}
         style={{
           width: 36,
@@ -62,7 +71,15 @@ export function TransportBar(): React.JSX.Element {
         {playing ? '❙❙' : '▶'}
       </button>
       <button
-        onClick={() => dispatch({ type: 'STOP' })}
+        onClick={() => {
+          // Also a safety net for a tile preview stuck playing with no
+          // obvious way to stop it (e.g. an accidental click during a drag)
+          // — Stop is the one button a user reaches for by reflex when
+          // something's audibly wrong, so it should be able to kill
+          // anything audible, not just the native transport.
+          stopActivePreview()
+          dispatch({ type: 'STOP' })
+        }}
         aria-label="Stop"
         style={{
           width: 28,
