@@ -172,8 +172,19 @@ export function BeatPicker({
   const rifff = state.rifffs[groupId]
   const stem = rifff?.stems[0]
   // Every stem is decoded, not just the identity one — previewing the whole rifff
-  // together (the default) needs all of them. Keyed by slot.
-  const [buffers, setBuffers] = useState<Record<number, AudioBuffer>>({})
+  // together (the default) needs all of them. Keyed by slot. Tagged with the
+  // groupId it was decoded for (rather than just the raw map) so navigating
+  // to a different rifff can't accidentally serve up the PREVIOUS rifff's
+  // buffers while the new ones are still decoding — see the loading effect
+  // below for the bug this fixes.
+  const [bufferState, setBufferState] = useState<{
+    groupId: string
+    map: Record<number, AudioBuffer>
+  } | null>(null)
+  const buffers = useMemo(
+    () => (bufferState?.groupId === rifff?.groupId ? bufferState.map : {}),
+    [bufferState, rifff]
+  )
   const [previewAll, setPreviewAll] = useState(true)
   // Independent of the main arranger's own metronome toggle (state.
   // metronomeEnabled) — this picker never touches the native engine at all,
@@ -307,7 +318,7 @@ export function BeatPicker({
       if (cancelled) return
       const map: Record<number, AudioBuffer> = {}
       for (const r of results) if (r) map[r[0]] = r[1]
-      setBuffers(map)
+      setBufferState({ groupId: rifff.groupId, map })
     })
     return () => {
       cancelled = true
@@ -376,6 +387,39 @@ export function BeatPicker({
       setPlayheadPct(null)
     }
   }, [isFreePlaying, previewingBeat, stem, rifff])
+
+  // Reactive to metronomeOn/isFreePlaying/previewingBeat directly, rather
+  // than only being started once at the top of toggleFreePlay/pickBeat —
+  // real bug this fixed: checking/unchecking the metronome box while a
+  // preview was already running had no audible effect until the next
+  // pick/play, since the click was only ever (re)started at the moment a
+  // NEW preview began. Always restarts its own phase (downbeat) at t=0 of
+  // whichever effect run started it, rather than trying to line its "1" up
+  // with wherever the picked beat falls within the rifff — this is a
+  // practice click for judging tempo, not a claim about where the rifff's
+  // own downbeat is (that claim is exactly what the picker itself is for).
+  useEffect(() => {
+    if (!metronomeOn || (!isFreePlaying && previewingBeat === null) || !stem || !rifff) return
+    if (!stem.barLength) return
+    const ctx = getAudioContext()
+    const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
+    const beatsInLoop = rifff.barLength * 4
+    const secPerBeat = riffDurationSec / beatsInLoop
+    const source = ctx.createBufferSource()
+    source.buffer = buildMetronomeBuffer(ctx, riffDurationSec, secPerBeat)
+    source.loop = true
+    source.loopStart = 0
+    source.loopEnd = riffDurationSec
+    source.connect(ctx.destination)
+    source.start(0)
+    return () => {
+      try {
+        source.stop()
+      } catch {
+        // already stopped
+      }
+    }
+  }, [metronomeOn, isFreePlaying, previewingBeat, stem, rifff])
 
   // commitAndClose is a fresh function every render (it closes over onClose/rifff/
   // state), so depending on it directly would re-run this effect — and fire its
@@ -482,28 +526,6 @@ export function BeatPicker({
     ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
     : 140
 
-  // Always restarts its own phase (downbeat) at t=0 of whichever preview
-  // just began, rather than trying to line its "1" up with wherever the
-  // picked beat falls within the rifff — this is a practice click for
-  // judging tempo, not a claim about where the rifff's own downbeat is (that
-  // claim is exactly what the picker itself is for). Pushed into
-  // previewSourcesRef so stopPreview() (called on every new pick, and on
-  // close) stops it along with the stem sources, with no separate cleanup
-  // path needed.
-  function startMetronomeIfEnabled(ctx: AudioContext): void {
-    if (!metronomeOn || !stem.barLength) return
-    const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
-    const secPerBeat = riffDurationSec / totalBeats
-    const source = ctx.createBufferSource()
-    source.buffer = buildMetronomeBuffer(ctx, riffDurationSec, secPerBeat)
-    source.loop = true
-    source.loopStart = 0
-    source.loopEnd = riffDurationSec
-    source.connect(ctx.destination)
-    source.start(0)
-    previewSourcesRef.current.push(source)
-  }
-
   function toggleFreePlay(): void {
     if (isFreePlaying) {
       stopPreview()
@@ -518,7 +540,6 @@ export function BeatPicker({
     if (playing) dispatch({ type: 'PAUSE' })
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
-    startMetronomeIfEnabled(ctx)
     const stemsToPreview = previewAll ? rifff.stems : [stem]
     const gain = sqrtGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
@@ -579,7 +600,6 @@ export function BeatPicker({
     // reads this same ref — see the effect above) tracks from here rather
     // than a stale timestamp left over from a previous pick or free-play.
     freeStartTimeRef.current = ctx.currentTime
-    startMetronomeIfEnabled(ctx)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -724,37 +744,54 @@ export function BeatPicker({
             />
             preview all stems
           </label>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 10,
-              color: 'var(--ra-text-2)'
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={metronomeOn}
-              onChange={(e) => setMetronomeOn(e.target.checked)}
-            />
-            click
-          </label>
-          <button
-            onClick={toggleFreePlay}
-            title="click a beat below, or play and hit space where the loop begins"
-            style={{
-              height: 22,
-              borderRadius: 0,
-              padding: '0 10px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border-strong)',
-              background: isFreePlaying ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
-              color: isFreePlaying ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
-            }}
-          >
-            {isFreePlaying ? '■ stop' : '▶ play'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              onClick={() => setMetronomeOn((v) => !v)}
+              aria-label="Toggle metronome click"
+              title={metronomeOn ? 'metronome click: on' : 'metronome click: off'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: 22,
+                width: 22,
+                borderRadius: 0,
+                padding: 0,
+                border: '1px solid var(--ra-border-strong)',
+                background: metronomeOn ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
+                color: metronomeOn ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+              }}
+            >
+              <svg
+                width="12"
+                height="14"
+                viewBox="0 0 12 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M2 13h8L7.5 1h-3L2 13z" />
+                <line x1="6" y1="10" x2="8.5" y2="2.5" />
+              </svg>
+            </button>
+            <button
+              onClick={toggleFreePlay}
+              title="click a beat below, or play and hit space where the loop begins"
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border-strong)',
+                background: isFreePlaying ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
+                color: isFreePlaying ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+              }}
+            >
+              {isFreePlaying ? '■ stop' : '▶ play'}
+            </button>
+          </div>
         </div>
 
         <div
