@@ -4,6 +4,7 @@ import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { nextArrangerMode, isSketchEligible } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
+import { MasterChainPanel } from './MasterChainPanel'
 
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
@@ -11,6 +12,7 @@ export function TransportBar(): React.JSX.Element {
   const history = useHistory()
   const pos = usePos()
   const playing = usePlaying()
+  const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -39,6 +41,7 @@ export function TransportBar(): React.JSX.Element {
   return (
     <div
       style={{
+        position: 'relative',
         height: 46,
         background: 'var(--ra-bg-bar)',
         borderBottom: '1px solid var(--ra-border)',
@@ -217,6 +220,24 @@ export function TransportBar(): React.JSX.Element {
       >
         envelope
       </button>
+
+      <button
+        onClick={() => setMasterChainPanelOpen((open) => !open)}
+        aria-label="Toggle master chain panel"
+        title="master plugin chain"
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: masterChainPanelOpen ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        master
+      </button>
+      {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
       <button
         onClick={() => dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })}
