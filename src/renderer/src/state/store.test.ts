@@ -528,58 +528,6 @@ describe('reducer', () => {
     })
   })
 
-  it('unlink copies the group offset onto each stem key and flags unlinked', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-    state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 3 })
-    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-    expect(state.unlinked.r1).toBe(true)
-    expect(state.off['r1:1']).toBe(3)
-    expect(state.off['r1:6']).toBe(3)
-  })
-
-  it('unlink seeds each stem’s independent start at the group’s current position', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-    expect(state.stemStart['r1:1']).toBe(6)
-    expect(state.stemStart['r1:6']).toBe(6)
-  })
-
-  it('unlink copies a group-level resize (playedBars) onto each stem key, so it does not revert to full length', () => {
-    // Real bug this covers: resolveOffsetKey (and so resolvePlayedBars)
-    // switches from the bare groupId key to each stem's own key the moment
-    // unlinked flips true — a resize made while still linked lives at
-    // playedBars[groupId], which becomes unreachable once unlinked, so
-    // every stem silently reverted to rifff.barLength (full length) right
-    // at the moment of unlinking.
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 4 })
-    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-    expect(state.playedBars['r1:1']).toBe(4)
-    expect(state.playedBars['r1:6']).toBe(4)
-  })
-
-  it('unlink does not invent a playedBars override for a stem that was never resized', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-    expect(state.playedBars['r1:1']).toBeUndefined()
-    expect(state.playedBars['r1:6']).toBeUndefined()
-  })
-
-  it('relink clears the unlinked flag', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-    state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-    state = reducer(state, { type: 'RELINK', groupId: 'r1' })
-    expect(state.unlinked.r1).toBe(false)
-  })
-
-  it('sets an independent stem start, clamped to 0', () => {
-    let state = reducer(initialState, { type: 'SET_STEM_START', key: 'r1:1', startBar: 9 })
-    expect(state.stemStart['r1:1']).toBe(9)
-    state = reducer(state, { type: 'SET_STEM_START', key: 'r1:1', startBar: -3 })
-    expect(state.stemStart['r1:1']).toBe(0)
-  })
-
   describe('SET_PLAYED_BARS', () => {
     it('sets playedBars for the given key', () => {
       const next = reducer(initialState, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 12 })
@@ -593,48 +541,98 @@ describe('reducer', () => {
   })
 
   describe('RESIZE_LEFT', () => {
-    it('while linked, sets playedBars on the group key and moves the rifff’s own startBar', () => {
+    it('sets playedBars on the group key and moves the rifff’s own startBar', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        slot: 1,
-        bars: 10,
-        startBar: 4
-      })
+      state = reducer(state, { type: 'RESIZE_LEFT', groupId: 'r1', bars: 10, startBar: 4 })
       expect(state.playedBars.r1).toBe(10)
       expect(state.rifffs.r1.startBar).toBe(4)
-    })
-
-    it('while unlinked, sets playedBars and stemStart on the stem’s own keys, leaving the rifff’s startBar untouched', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, { type: 'UNLINK', groupId: 'r1' })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        slot: 1,
-        bars: 10,
-        startBar: 4
-      })
-      expect(state.playedBars['r1:1']).toBe(10)
-      expect(state.stemStart['r1:1']).toBe(4)
-      expect(state.rifffs.r1.startBar).toBe(6)
     })
 
     it('clamps playedBars to a minimum of 0.25 and startBar to a minimum of 0', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        slot: 1,
-        bars: -3,
-        startBar: -2
-      })
+      state = reducer(state, { type: 'RESIZE_LEFT', groupId: 'r1', bars: -3, startBar: -2 })
       expect(state.playedBars.r1).toBe(0.25)
       expect(state.rifffs.r1.startBar).toBe(0)
+    })
+  })
+
+  describe('UNGROUP', () => {
+    it('splits every stem into its own independent, selected one-stem rifff', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+
+      expect(state.rifffs.r1).toBeUndefined()
+      const newRifffs = Object.values(state.rifffs)
+      expect(newRifffs).toHaveLength(2) // makeRifff() has 2 stems
+      expect(newRifffs.every((r) => r.stems.length === 1)).toBe(true)
+      expect(newRifffs.every((r) => r.startBar === 6)).toBe(true)
+      expect(state.sel).toBe(newRifffs[0].groupId)
+    })
+
+    it('lands every new clip on the SAME channel the parent was on', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      const parentChannel = state.channelOf.r1
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+      const newGroupIds = Object.keys(state.rifffs)
+      expect(newGroupIds).toHaveLength(2)
+      for (const groupId of newGroupIds) {
+        expect(state.channelOf[groupId]).toBe(parentChannel)
+      }
+      expect(state.channelOrder).toContain(parentChannel)
+    })
+
+    it('carries over each stem’s own volume and mute, keyed to its new groupId', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.4 })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:6' })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+
+      const slot1Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 1)!
+      const slot6Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 6)!
+      expect(state.vol[`${slot1Rifff.groupId}:1`]).toBe(0.4)
+      expect(state.mute[`${slot6Rifff.groupId}:6`]).toBe(true)
+      expect(state.vol['r1:1']).toBeUndefined() // old keys scrubbed
+      expect(state.mute['r1:6']).toBeUndefined()
+    })
+
+    it('copies group-level fade/stretch identically to every new clip', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 2 })
+      state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 1 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+
+      for (const groupId of Object.keys(state.rifffs)) {
+        expect(state.fadeIn[groupId]).toBe(2)
+        expect(state.fadeOut[groupId]).toBe(1)
+        expect(state.stretch[groupId]).toBe(true)
+      }
+    })
+
+    it('uses the group’s current resolved playedBars as each new clip’s own barLength', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() }) // barLength 8
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 3 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+      for (const rifff of Object.values(state.rifffs)) {
+        expect(rifff.barLength).toBe(3)
+      }
+    })
+
+    it('deletes the parent rifff’s own now-orphaned per-group state', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 2 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+      expect(state.fadeIn.r1).toBeUndefined()
+      expect(state.off.r1).toBeUndefined()
+      expect(state.stretch.r1).toBeUndefined()
+      expect(state.channelOf.r1).toBeUndefined()
     })
   })
 

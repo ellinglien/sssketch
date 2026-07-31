@@ -15,8 +15,8 @@ export function computeGrabOffsetBars(mouseBar: number, clipStartBar: number): n
 // offsetBars from it would otherwise produce a fractional result that can
 // never land exactly on bar 1 (or anywhere else on the grid) no matter how
 // carefully the drag is aimed. Clamped to >= 0 for the same reason
-// SET_STEM_START clamps its own startBar — a clip can't start before the
-// timeline's own beginning.
+// PLACE_ON_TIMELINE/MOVE_TO_CHANNEL clamp their own startBar the same way —
+// a clip can't start before the timeline's own beginning.
 export function applyGrabOffset(mouseBar: number, offsetBars: number): number {
   return Math.max(0, Math.round(mouseBar - offsetBars))
 }

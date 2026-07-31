@@ -48,20 +48,14 @@ export interface AppState {
   mute: Record<string, boolean>
   off: Record<string, number>
   stretch: Record<string, boolean>
-  unlinked: Record<string, boolean>
-  /** Independent position for an unlinked stem, keyed by stemKey. Only consulted
-   * while that stem's group is unlinked — a linked stem always follows its
-   * group's own startBar, same as before unlinking existed. */
-  stemStart: Record<string, number>
   /** Fade in/out length, in bars, keyed by groupId. Applies at the clip's overall
    * start/end (not at each internal tiling repetition) during both live playback
    * and export. */
   fadeIn: Record<string, number>
   fadeOut: Record<string, number>
-  /** This stem's own played length, in bars — the tiling loop's bound for this
-   * specific stem, resolved via resolveOffsetKey (shared while linked, per-stem
-   * once unlinked). Unset means "use rifff.barLength" — today's implicit
-   * behavior, unchanged for a project with no resize edits. */
+  /** A rifff's own played length, in bars — the tiling loop's bound, keyed by
+   * groupId. Unset means "use rifff.barLength" — today's implicit behavior,
+   * unchanged for a project with no resize edits. */
   playedBars: Record<string, number>
   sel: string | null
   /** Visual top-to-bottom row order, as channel IDs — a fresh channel joins
@@ -121,8 +115,6 @@ export const initialState: AppState = {
   mute: {},
   off: {},
   stretch: {},
-  unlinked: {},
-  stemStart: {},
   fadeIn: {},
   fadeOut: {},
   playedBars: {},
@@ -156,9 +148,8 @@ export type Action =
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
-  | { type: 'SET_STEM_START'; key: string; startBar: number }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
-  | { type: 'RESIZE_LEFT'; groupId: string; slot: number; bars: number; startBar: number }
+  | { type: 'RESIZE_LEFT'; groupId: string; bars: number; startBar: number }
   | { type: 'SET_FADE_IN'; groupId: string; bars: number }
   | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | {
@@ -180,8 +171,7 @@ export type Action =
   | { type: 'SOLO_GROUP'; groupId: string }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
-  | { type: 'UNLINK'; groupId: string }
-  | { type: 'RELINK'; groupId: string }
+  | { type: 'UNGROUP'; groupId: string }
   | { type: 'CYCLE_TYPE'; groupId: string; slot: number }
   | { type: 'SET_STEM_TYPE'; groupId: string; slot: number; soundType: SoundType }
   | { type: 'RENAME_RIFFF'; groupId: string; name: string }
@@ -323,46 +313,24 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_OFFSET_STEPS':
       return { ...state, off: { ...state.off, [action.key]: action.steps } }
 
-    case 'SET_STEM_START':
-      return {
-        ...state,
-        stemStart: { ...state.stemStart, [action.key]: Math.max(0, action.startBar) }
-      }
-
     case 'SET_PLAYED_BARS':
       return {
         ...state,
         playedBars: { ...state.playedBars, [action.key]: Math.max(MIN_PLAYED_BARS, action.bars) }
       }
 
-    // Dragging the LEFT resize handle: playedBars and the stem's start move
-    // together in one atomic edit (one undo step, not two) so the clip's
-    // right edge — where the loop currently ends — stays exactly in place
-    // while the loop extends backward. Same linked/unlinked resolution as
-    // SET_PLAYED_BARS/SET_STEM_START individually: shared across the group's
-    // own startBar while linked, independent per-stem once unlinked.
+    // Dragging the LEFT resize handle: playedBars and the rifff's own start
+    // move together in one atomic edit (one undo step, not two) so the
+    // clip's right edge — where the loop currently ends — stays exactly in
+    // place while the loop extends backward.
     case 'RESIZE_LEFT': {
-      const playedBarsKey = state.unlinked[action.groupId]
-        ? stemKey(action.groupId, action.slot)
-        : action.groupId
-      const playedBars = {
-        ...state.playedBars,
-        [playedBarsKey]: Math.max(MIN_PLAYED_BARS, action.bars)
-      }
-      if (state.unlinked[action.groupId]) {
-        return {
-          ...state,
-          playedBars,
-          stemStart: {
-            ...state.stemStart,
-            [stemKey(action.groupId, action.slot)]: Math.max(0, action.startBar)
-          }
-        }
-      }
       const rifff = state.rifffs[action.groupId]
       return {
         ...state,
-        playedBars,
+        playedBars: {
+          ...state.playedBars,
+          [action.groupId]: Math.max(MIN_PLAYED_BARS, action.bars)
+        },
         rifffs: {
           ...state.rifffs,
           [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
@@ -436,8 +404,6 @@ export function reducer(state: AppState, action: Action): AppState {
         off: omitGroups(state.off),
         playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),
-        unlinked: omitGroups(state.unlinked),
-        stemStart: omitStems(state.stemStart),
         fadeIn: omitGroups(state.fadeIn),
         fadeOut: omitGroups(state.fadeOut),
         exp: omitGroups(state.exp),
@@ -491,11 +457,7 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Adds a fresh, independent rifff instance (new groupId, same stem file paths
-    // — no audio is actually duplicated on disk) built by pasteRifffAction. Always
-    // lands linked, regardless of the source's unlinked state: replaying a
-    // hand-diverged per-stem arrangement onto a new position/groupId gets messy
-    // fast, so the paste starts clean and the user can re-unlink from there if
-    // they want that again.
+    // — no audio is actually duplicated on disk) built by pasteRifffAction.
     case 'PASTE_RIFFF':
       return {
         ...state,
@@ -582,49 +544,87 @@ export function reducer(state: AppState, action: Action): AppState {
         stretch: { ...state.stretch, [action.groupId]: !state.stretch[action.groupId] }
       }
 
-    case 'UNLINK': {
+    // Splits every stem in a linked, multi-stem rifff into its own
+    // independent one-stem rifff, immediately and permanently — matching the
+    // user's own "grouping/ungrouping" framing. There's deliberately no
+    // reverse action (RELINK doesn't exist any more): once split, each stem
+    // is an ordinary placed rifff like any other, with nothing left
+    // connecting it back to its old siblings except that they all land on
+    // the same channel, at the same startBar, as the parent did — stacked
+    // exactly on top of each other (channels already allow overlap; see
+    // channelHasAnyClip's own doc comment), so dragging them apart is the
+    // very next, obvious thing to do.
+    case 'UNGROUP': {
       const rifff = state.rifffs[action.groupId]
-      const groupOffset = state.off[action.groupId] ?? 0
-      // undefined (not defaulted to rifff.barLength) means "no resize
-      // happened" — left that way below too, so an un-resized stem still
-      // correctly falls through to resolvePlayedBars' own rifff.barLength
-      // fallback post-unlink, same as it did while linked.
-      const groupPlayedBars = state.playedBars[action.groupId]
+      const channelId = state.channelOf[action.groupId]
+      const groupOff = state.off[action.groupId] ?? 0
+      const groupPlayedBars = state.playedBars[action.groupId] ?? rifff.barLength
+      const groupFadeIn = state.fadeIn[action.groupId] ?? 0
+      const groupFadeOut = state.fadeOut[action.groupId] ?? 0
+      const groupStretch = state.stretch[action.groupId] ?? true
+
+      const rifffs = { ...state.rifffs }
+      delete rifffs[action.groupId]
+      const vol = { ...state.vol }
+      const mute = { ...state.mute }
       const off = { ...state.off }
-      const stemStart = { ...state.stemStart }
       const playedBars = { ...state.playedBars }
+      const fadeIn = { ...state.fadeIn }
+      const fadeOut = { ...state.fadeOut }
+      const stretch = { ...state.stretch }
+      const channelOf = { ...state.channelOf }
+      // The parent's own group-level entries are gone once it's deleted below
+      // — nothing left to reference them.
+      delete off[action.groupId]
+      delete playedBars[action.groupId]
+      delete fadeIn[action.groupId]
+      delete fadeOut[action.groupId]
+      delete stretch[action.groupId]
+      delete channelOf[action.groupId]
+
+      const newGroupIds: string[] = []
       for (const stem of rifff.stems) {
-        const key = stemKey(action.groupId, stem.slot)
-        off[key] = groupOffset
-        // Seeded to the group's current position so nothing visually jumps at the
-        // moment of unlinking — dragging a stem afterward is what actually makes
-        // it diverge.
-        stemStart[key] = rifff.startBar ?? 0
-        // Real bug this fixed: resolveOffsetKey (and so resolvePlayedBars)
-        // switches from the bare groupId key to each stem's own key the
-        // moment unlinked flips true — a resize made while still linked
-        // lives at playedBars[groupId], which is now unreachable, so every
-        // stem silently fell back to rifff.barLength (full length) right
-        // when unlinking, discarding the resize with no other place it was
-        // captured. Same "copy forward across the key switch" fix off[]
-        // already got above.
-        if (groupPlayedBars !== undefined) playedBars[key] = groupPlayedBars
+        const newGroupId = crypto.randomUUID()
+        newGroupIds.push(newGroupId)
+        rifffs[newGroupId] = {
+          groupId: newGroupId,
+          name: stem.name,
+          bpm: rifff.bpm,
+          // The group's own CURRENT resolved length (reflecting any active
+          // resize), not stem.barLength — matches pasteStemAction's own
+          // "duplicate it, or a trimmed portion of it" convention.
+          barLength: groupPlayedBars,
+          folderPath: rifff.folderPath,
+          startBar: rifff.startBar,
+          stems: [{ ...stem }]
+        }
+        const oldKey = stemKey(action.groupId, stem.slot)
+        const newKey = stemKey(newGroupId, stem.slot)
+        if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
+        if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+        delete vol[oldKey]
+        delete mute[oldKey]
+        off[newGroupId] = groupOff
+        fadeIn[newGroupId] = groupFadeIn
+        fadeOut[newGroupId] = groupFadeOut
+        stretch[newGroupId] = groupStretch
+        channelOf[newGroupId] = channelId
       }
-      // The group-level off[groupId]/playedBars[groupId] entries are intentionally
-      // left in place (unused while unlinked) rather than deleted — resolveOffsetKey
-      // always reads the per-stem key when unlinked, and RELINK makes the group key
-      // authoritative again.
+
       return {
         ...state,
-        unlinked: { ...state.unlinked, [action.groupId]: true },
+        rifffs,
+        vol,
+        mute,
         off,
-        stemStart,
-        playedBars
+        playedBars,
+        fadeIn,
+        fadeOut,
+        stretch,
+        channelOf,
+        sel: newGroupIds[0] ?? null
       }
     }
-
-    case 'RELINK':
-      return { ...state, unlinked: { ...state.unlinked, [action.groupId]: false } }
 
     case 'CYCLE_TYPE': {
       const rifff = state.rifffs[action.groupId]
