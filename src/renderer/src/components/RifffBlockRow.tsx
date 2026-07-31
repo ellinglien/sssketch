@@ -80,16 +80,14 @@ export function RifffBlockRow({
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          if (e.metaKey || e.ctrlKey) {
+          if (e.ctrlKey) {
             dispatch({ type: 'SOLO_GROUP', groupId })
             return
           }
           dispatch({ type: 'SELECT', groupId })
           onOpenContextMenu(e.clientX, e.clientY, groupId)
         }}
-        title={
-          (expanded ? 'click to collapse' : 'click to expand') + ' · cmd/ctrl+right-click to solo'
-        }
+        title={(expanded ? 'click to collapse' : 'click to expand') + ' · ctrl+right-click to solo'}
         style={{
           position: 'absolute',
           top: 0,
