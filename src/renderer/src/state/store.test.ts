@@ -745,12 +745,14 @@ describe('reducer', () => {
   })
 
   describe('SOLO_GROUP', () => {
-    it('mutes every stem in every other rifff and unmutes every stem in this one', () => {
+    it('mutes every stem in every other PLACED rifff and unmutes every stem in this one', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
       })
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r1:1']).toBe(false)
       expect(state.mute['r1:6']).toBe(false)
@@ -763,6 +765,7 @@ describe('reducer', () => {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
       })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r1:1']).toBe(false)
@@ -774,6 +777,8 @@ describe('reducer', () => {
         rifff: makeRifff({ groupId: 'r1' })
       })
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r1:1']).toBe(false)
@@ -786,10 +791,25 @@ describe('reducer', () => {
         rifff: makeRifff({ groupId: 'r1' })
       })
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r2' })
       expect(state.mute['r1:1']).toBe(true)
       expect(state.mute['r2:1']).toBe(false)
+    })
+
+    it('does not touch a rifff still sitting unplaced in the shelf — regression test for a real bug where soloing anything would silently mute every shelf-only rifff, so a brand new clip could arrive pre-muted the moment it was later dragged onto the timeline', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      // r2 is deliberately left unplaced, still sitting in the shelf.
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      expect(state.mute['r2:1']).toBeUndefined()
+      expect(state.mute['r2:6']).toBeUndefined()
     })
   })
 

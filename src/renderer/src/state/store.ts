@@ -503,16 +503,24 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
-    // compact, sketch) — mutes every stem in every OTHER rifff and unmutes
-    // every stem in this one. A second SOLO_GROUP for the SAME groupId while
-    // it's already the only unmuted one toggles back to fully unmuted,
-    // rather than needing a separate "un-solo" action or having to snapshot
-    // the exact prior per-stem mute state (which stem was individually
-    // muted before soloing is usually not what you want restored anyway —
-    // "solo" is normally a temporary A/B listen, not a state worth
-    // preserving precisely).
+    // compact, sketch) — mutes every stem in every OTHER PLACED rifff and
+    // unmutes every stem in this one. A second SOLO_GROUP for the SAME
+    // groupId while it's already the only unmuted one toggles back to fully
+    // unmuted, rather than needing a separate "un-solo" action or having to
+    // snapshot the exact prior per-stem mute state (which stem was
+    // individually muted before soloing is usually not what you want
+    // restored anyway — "solo" is normally a temporary A/B listen, not a
+    // state worth preserving precisely).
+    //
+    // Scoped to PLACED rifffs only — real bug this fixes: iterating every
+    // rifff in state.rifffs (unfiltered) also mutated stems belonging to
+    // rifffs still sitting unplaced in the shelf, which never plays and so
+    // has no business being touched by "solo." A rifff sitting in the shelf
+    // during ANY solo action elsewhere would silently pick up a muted stem
+    // it was never actually muted on, surfacing later as "why is this brand
+    // new clip already muted" the moment it's dragged onto the timeline.
     case 'SOLO_GROUP': {
-      const rifffList = Object.values(state.rifffs)
+      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
       const alreadySoloed = rifffList.every((rifff) =>
         rifff.stems.every((stem) => {
           const expectedMuted = rifff.groupId !== action.groupId
