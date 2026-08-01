@@ -67,6 +67,14 @@ function createWindow(): BrowserWindow {
 
   mainWindow = win
 
+  // The default (1440x960) and minimum (900x600) sizes above are both a 3:2
+  // ratio -- that's the layout's intended shape. Without a lock, dragging
+  // the window to an off-ratio size (very wide+short, or narrow+tall) makes
+  // the app's panels feel cramped or leaves dead space. Locking the aspect
+  // ratio means a corner drag resizes proportionately, the same way holding
+  // shift does for an image.
+  win.setAspectRatio(1440 / 960)
+
   win.on('ready-to-show', () => {
     win.show()
   })
