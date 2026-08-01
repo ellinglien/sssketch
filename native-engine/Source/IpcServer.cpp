@@ -38,7 +38,7 @@ namespace ssstitch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, MasterChain& mc)
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc)
         : engine(e), transport(t), bufferCache(c), masterChain(mc)
     {
     }
@@ -155,7 +155,7 @@ namespace ssstitch
             // engine process down, silencing the dry mix too).
             //
             // requestLoad's onLoaded callback fires on the message thread
-            // (see MasterChain::requestLoad's own doc comment -- plugin
+            // (see PluginChain::requestLoad's own doc comment -- plugin
             // instantiation can't safely happen on an arbitrary background
             // thread, since some plugins' init code touches macOS UI-toolkit
             // APIs that assert they're on the main thread), which is also
@@ -234,7 +234,7 @@ namespace ssstitch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, MasterChain& mc)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc)
         : engine(e), transport(t), bufferCache(c), masterChain(mc)
     {
     }

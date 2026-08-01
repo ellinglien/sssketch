@@ -1,14 +1,14 @@
-// native-engine/Source/MasterChain.cpp
-#include "MasterChain.h"
+// native-engine/Source/PluginChain.cpp
+#include "PluginChain.h"
 #include <algorithm>
 #include <cmath>
 #include <thread>
 
 namespace ssstitch
 {
-    MasterChain::MasterChain(Instantiator inst) : instantiator(std::move(inst)) {}
+    PluginChain::PluginChain(int numSlots, Instantiator inst) : slots(numSlots), instantiator(std::move(inst)) {}
 
-    MasterChain::~MasterChain()
+    PluginChain::~PluginChain()
     {
         // Any pending instance that never got promoted is still owned here.
         // A background load still in flight at destruction time only holds
@@ -21,7 +21,7 @@ namespace ssstitch
             delete slot.pending.exchange(nullptr);
     }
 
-    void MasterChain::applyPendingSwaps()
+    void PluginChain::applyPendingSwaps()
     {
         for (auto& slot : slots)
         {
@@ -42,7 +42,7 @@ namespace ssstitch
         }
     }
 
-    void MasterChain::process(int numSamples, float* outL, float* outR)
+    void PluginChain::process(int numSamples, float* outL, float* outR)
     {
         juce::MidiBuffer midi;
         for (auto& slot : slots)
@@ -117,13 +117,13 @@ namespace ssstitch
         return instance; // AudioPluginInstance IS-A AudioProcessor
     }
 
-    std::unique_ptr<juce::AudioProcessor> MasterChain::defaultInstantiate(
+    std::unique_ptr<juce::AudioProcessor> PluginChain::defaultInstantiate(
         const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
     {
         return instantiateFromPath(path, sampleRate, blockSize, errorOut);
     }
 
-    bool MasterChain::loadPluginSync(
+    bool PluginChain::loadPluginSync(
         int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
     {
         auto instance = instantiator(path, sampleRate, blockSize, errorOut);
@@ -137,9 +137,9 @@ namespace ssstitch
         return true;
     }
 
-    bool MasterChain::openEditorWindow(int slotIndex)
+    bool PluginChain::openEditorWindow(int slotIndex)
     {
-        if (slotIndex < 0 || slotIndex >= kNumMasterChainSlots)
+        if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return false;
         auto& slot = slots[(size_t) slotIndex];
         if (slot.active == nullptr || slot.editorWindow != nullptr || !slot.active->hasEditor())
@@ -154,14 +154,14 @@ namespace ssstitch
         return true;
     }
 
-    void MasterChain::closeEditorWindow(int slotIndex)
+    void PluginChain::closeEditorWindow(int slotIndex)
     {
-        if (slotIndex < 0 || slotIndex >= kNumMasterChainSlots)
+        if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return;
         slots[(size_t) slotIndex].editorWindow.reset();
     }
 
-    void MasterChain::requestLoad(
+    void PluginChain::requestLoad(
         int slotIndex,
         const juce::String& path,
         double sampleRate,

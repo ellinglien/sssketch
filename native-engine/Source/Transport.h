@@ -1,7 +1,7 @@
 // native-engine/Source/Transport.h
 #pragma once
 #include "PlaybackEngine.h"
-#include "MasterChain.h"
+#include "PluginChain.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
 
@@ -18,7 +18,7 @@ namespace ssstitch
     class Transport : public juce::AudioIODeviceCallback
     {
     public:
-        explicit Transport(PlaybackEngine& engine, MasterChain& masterChain);
+        explicit Transport(PlaybackEngine& engine, PluginChain& masterChain);
         ~Transport() override;
 
         bool openDefaultDevice(); // returns false if no output device is available
@@ -93,7 +93,7 @@ namespace ssstitch
 
 
         PlaybackEngine& engine;
-        MasterChain& masterChain;
+        PluginChain& masterChain;
         juce::AudioDeviceManager deviceManager;
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };

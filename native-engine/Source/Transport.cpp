@@ -24,7 +24,7 @@ namespace ssstitch
         constexpr double kRepositionFadeSec = 0.012;
     }
 
-    Transport::Transport(PlaybackEngine& e, MasterChain& mc) : engine(e), masterChain(mc) {}
+    Transport::Transport(PlaybackEngine& e, PluginChain& mc) : engine(e), masterChain(mc) {}
     Transport::~Transport() { closeDevice(); }
 
     bool Transport::openDefaultDevice()

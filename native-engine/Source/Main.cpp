@@ -275,7 +275,7 @@ static int runServe(int port)
 {
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
-    MasterChain masterChain;
+    PluginChain masterChain(kNumMasterChainSlots);
     Transport transport(engine, masterChain);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine

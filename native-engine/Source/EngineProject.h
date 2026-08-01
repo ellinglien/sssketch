@@ -1,5 +1,5 @@
 #pragma once
-#include "MasterChain.h"
+#include "PluginChain.h"
 #include <juce_core/juce_core.h>
 #include <array>
 #include <vector>

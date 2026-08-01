@@ -1,22 +1,24 @@
-// native-engine/Source/MasterChain.h
+// native-engine/Source/PluginChain.h
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace ssstitch
 {
     static constexpr int kNumMasterChainSlots = 4;
+    static constexpr int kNumChannelChainSlots = 2;
 
-    /** Owns up to kNumMasterChainSlots live plugin instances, processed IN
-     * SERIES (slot 0 -> 1 -> 2 -> 3) over the final mixed master output. See
-     * docs/superpowers/specs/2026-07-31-master-plugin-chain-design.md for
-     * the full rationale — this is the master-insert-chain equivalent of
-     * the reverted SendBus's parallel-send design, reusing its real-time-
-     * safe load/swap pattern unchanged.
+    /** Owns N live plugin instances (N set at construction), processed IN
+     * SERIES (slot 0 -> 1 -> ...) over whatever buffer process() is given.
+     * Used both for the fixed-4-slot master bus chain and for per-channel
+     * 2-slot chains (see ChannelChainRegistry) -- the class itself has no
+     * "master" or "channel" semantics baked in, just "an ordered plugin
+     * chain." See docs/superpowers/specs/2026-07-31-master-plugin-chain-design.md
+     * and docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md.
      *
      * Real-time (audio-thread) API: applyPendingSwaps(), process() — called
      * once per block, in that order, from Transport.cpp (live) or
@@ -27,7 +29,7 @@ namespace ssstitch
      * to a background thread) and loadPluginSync() (any thread, blocking —
      * export path only, where nothing concurrently reads a slot from an
      * audio callback). */
-    class MasterChain
+    class PluginChain
     {
     public:
         /** A plugin file path -> live processor instance factory. Production
@@ -43,11 +45,11 @@ namespace ssstitch
         using Instantiator = std::function<std::unique_ptr<juce::AudioProcessor>(
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)>;
 
-        explicit MasterChain(Instantiator instantiator = &MasterChain::defaultInstantiate);
-        ~MasterChain();
+        explicit PluginChain(int numSlots, Instantiator instantiator = &PluginChain::defaultInstantiate);
+        ~PluginChain();
 
-        MasterChain(const MasterChain&) = delete;
-        MasterChain& operator=(const MasterChain&) = delete;
+        PluginChain(const PluginChain&) = delete;
+        PluginChain& operator=(const PluginChain&) = delete;
 
         /** Message-thread API: kicks off loading the plugin at `path` (or an
          * empty string for "no plugin") onto `slotIndex`. Safe to call again
@@ -144,7 +146,7 @@ namespace ssstitch
             std::unique_ptr<EditorWindow> editorWindow;
         };
 
-        std::array<Slot, kNumMasterChainSlots> slots;
+        std::vector<Slot> slots;
         Instantiator instantiator;
     };
 }

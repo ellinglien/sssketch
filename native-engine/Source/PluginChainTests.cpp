@@ -1,5 +1,5 @@
-// native-engine/Source/MasterChainTests.cpp
-#include "MasterChain.h"
+// native-engine/Source/PluginChainTests.cpp
+#include "PluginChain.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <map>
 
@@ -67,7 +67,7 @@ namespace ssstitch
             void setStateInformation(const void*, int) override {}
         };
 
-        MasterChain::Instantiator fakeInstantiator(std::map<int, float> gainsBySlot)
+        PluginChain::Instantiator fakeInstantiator(std::map<int, float> gainsBySlot)
         {
             // Captured by value into the returned std::function; slotIndex isn't
             // known at instantiation time (only pluginId is), so tests instead
@@ -90,16 +90,16 @@ namespace ssstitch
             };
         }
 
-        class MasterChainTests : public juce::UnitTest
+        class PluginChainTests : public juce::UnitTest
         {
         public:
-            MasterChainTests() : juce::UnitTest("MasterChain", "MasterChain") {}
+            PluginChainTests() : juce::UnitTest("PluginChain", "PluginChain") {}
 
             void runTest() override
             {
                 beginTest("empty chain is a no-op passthrough");
                 {
-                    MasterChain chain;
+                    PluginChain chain(4);
                     chain.applyPendingSwaps();
                     float l[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
                     float r[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
@@ -112,7 +112,7 @@ namespace ssstitch
                 {
                     // Slot 0 halves, slot 1 halves again -> net *0.25, not *0.5 as
                     // parallel accumulation would produce.
-                    MasterChain chain(fakeInstantiator({ { 0, 0.5f }, { 1, 0.5f } }));
+                    PluginChain chain(4, fakeInstantiator({ { 0, 0.5f }, { 1, 0.5f } }));
                     juce::String err;
                     expect(chain.loadPluginSync(0, "gain:0", 44100.0, 512, err));
                     expect(chain.loadPluginSync(1, "gain:1", 44100.0, 512, err));
@@ -126,7 +126,7 @@ namespace ssstitch
 
                 beginTest("a non-finite sample from one slot is dropped, not propagated");
                 {
-                    MasterChain chain(fakeInstantiator({}));
+                    PluginChain chain(4, fakeInstantiator({}));
                     juce::String err;
                     expect(chain.loadPluginSync(0, "nan-plugin", 44100.0, 512, err));
 
@@ -139,6 +139,6 @@ namespace ssstitch
             }
         };
 
-        static MasterChainTests masterChainTests;
+        static PluginChainTests pluginChainTests;
     }
 }

@@ -2,7 +2,7 @@
 #include "RenderExport.h"
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
-#include "MasterChain.h"
+#include "PluginChain.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 
@@ -22,11 +22,11 @@ namespace ssstitch
         const int blockSize = 512;
 
         // Export has no real-time deadline, so plugins are loaded directly
-        // and synchronously here rather than via MasterChain::requestLoad's
+        // and synchronously here rather than via PluginChain::requestLoad's
         // async hand-off (that machinery exists for live playback, where
         // blocking the audio thread on plugin instantiation would cause an
         // audible dropout).
-        MasterChain masterChain;
+        PluginChain masterChain(kNumMasterChainSlots);
         for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
         {
             const auto& path = project.masterChain[(size_t) slot].path;

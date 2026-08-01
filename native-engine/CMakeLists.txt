@@ -15,7 +15,7 @@ FetchContent_MakeAvailable(JUCE)
 
 # Was juce_add_console_app -- switched to juce_add_gui_app so this process
 # gets full NSApplication/window-server integration on macOS, needed to host
-# a real plugin editor window (see MasterChain::openEditorWindow). This is
+# a real plugin editor window (see PluginChain::openEditorWindow). This is
 # spawned silently by Electron as a background helper, never launched by the
 # user directly -- LSUIElement=1 (via PLIST_TO_MERGE below) keeps it out of
 # the Dock and Cmd+Tab switcher unless/until it actually opens an editor
@@ -30,8 +30,8 @@ juce_add_gui_app(ssstitch_engine
 
 target_sources(ssstitch_engine PRIVATE
   Source/Main.cpp
-  Source/MasterChain.cpp
-  Source/MasterChainTests.cpp
+  Source/PluginChain.cpp
+  Source/PluginChainTests.cpp
   Source/SchedulePlayback.cpp
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp
