@@ -233,9 +233,12 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('open-channel-plugin-editor', { channelId, slot })
   })
 
-  ipcMain.handle('engine-close-channel-plugin-editor', (_event, channelId: string, slot: number) => {
-    playbackEngine?.client.send('close-channel-plugin-editor', { channelId, slot })
-  })
+  ipcMain.handle(
+    'engine-close-channel-plugin-editor',
+    (_event, channelId: string, slot: number) => {
+      playbackEngine?.client.send('close-channel-plugin-editor', { channelId, slot })
+    }
+  )
 
   ipcMain.handle('scan-plugins', async (event) => {
     const catalog = await runFullScan((progress) => {

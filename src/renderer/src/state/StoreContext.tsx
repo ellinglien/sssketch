@@ -53,6 +53,11 @@ const MasterChainErrorCtx = createContext<
   [string | null, string | null, string | null, string | null]
 >([null, null, null, null])
 
+const ChannelChainStatusCtx = createContext<
+  Record<string, [MasterChainSlotStatus, MasterChainSlotStatus]>
+>({})
+const ChannelChainErrorCtx = createContext<Record<string, [string | null, string | null]>>({})
+
 const PluginCatalogCtx = createContext<PluginCatalog>({ plugins: [], favouriteIds: [] })
 const PluginScanStateCtx = createContext<{
   scanning: boolean
@@ -107,6 +112,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const [masterChainError, setMasterChainError] = useState<
     [string | null, string | null, string | null, string | null]
   >([null, null, null, null])
+  const [channelChainStatus, setChannelChainStatus] = useState<
+    Record<string, [MasterChainSlotStatus, MasterChainSlotStatus]>
+  >({})
+  const [channelChainError, setChannelChainError] = useState<
+    Record<string, [string | null, string | null]>
+  >({})
   const [pluginCatalog, setPluginCatalog] = useState<PluginCatalog>({
     plugins: [],
     favouriteIds: []
@@ -250,7 +261,20 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // before the catalog finished loading would be sent to the engine with
     // an empty, unresolvable path forever, never re-sent once the real path
     // became known.
-    pluginCatalog
+    pluginCatalog,
+    // channelPlugins flows through this general project sync the same way
+    // masterChain's own ids already do -- actual loading/swapping is the
+    // separate, explicit engineLoadChannelPlugin call in the diffing effect
+    // below instead.
+    state.channelPlugins,
+    // channelOf determines each rifff's EngineRifff.channelId (see
+    // buildEngineProject.ts), which now directly decides which channel's
+    // plugin chain a rifff's audio routes through -- missing here would mean
+    // dragging a clip onto a different channel doesn't actually re-route its
+    // audio through that channel's chain until some OTHER tracked field
+    // happens to change too, same class of bug as the SET_PLAYED_BARS gap
+    // documented above.
+    state.channelOf
   ])
 
   useEffect(() => {
@@ -291,6 +315,36 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value), never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
   }, [state.masterChain])
+
+  // Per-channel equivalent of the masterChainRef diffing effect above --
+  // same reasoning, generalized from a fixed 4-tuple to a Record<channelId,
+  // [SlotStatus, SlotStatus]> keyed by channel id.
+  const channelPluginsRef = useRef(state.channelPlugins)
+  useEffect(() => {
+    const prev = channelPluginsRef.current
+    channelPluginsRef.current = state.channelPlugins
+    for (const channelId of Object.keys(state.channelPlugins)) {
+      const slots = state.channelPlugins[channelId]
+      const prevSlots = prev[channelId]
+      slots.forEach((pluginId, slot) => {
+        if (pluginId !== (prevSlots?.[slot] ?? null)) {
+          setChannelChainStatus((s) => {
+            const existing =
+              s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
+            const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
+            next[slot] = pluginId === null ? 'idle' : 'loading'
+            return { ...s, [channelId]: next }
+          })
+          const path =
+            pluginId === null
+              ? null
+              : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
+          void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path)
+        }
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog, matching the master chain's own equivalent effect's own reasoning above
+  }, [state.channelPlugins])
 
   // Runs the old-slug-to-catalog-id migration once the scan catalog is
   // loaded -- this can't live in serialize.ts's pure deserializeProject the
@@ -345,6 +399,39 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [])
 
   useEffect(() => {
+    return window.rifffApi.onChannelPluginLoaded(({ channelId, slot, success, error }) => {
+      if (!success)
+        console.error(
+          `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
+        )
+      setChannelChainStatus((s) => {
+        const existing =
+          s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
+        const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
+        next[slot] = success ? 'loaded' : 'error'
+        return { ...s, [channelId]: next }
+      })
+      setChannelChainError((s) => {
+        const existing = s[channelId] ?? ([null, null] as [string | null, string | null])
+        const next = [...existing] as [string | null, string | null]
+        next[slot] = success ? null : (error ?? 'unknown error')
+        return { ...s, [channelId]: next }
+      })
+      if (!success) {
+        // Same reasoning as the master chain's own equivalent cleanup above
+        // -- a failed load must not leave channelPlugins[channelId][slot]
+        // pointing at the plugin id that just failed.
+        rawDispatch({
+          type: 'SET_CHANNEL_CHAIN_PLUGIN',
+          channelId,
+          slot: slot as 0 | 1,
+          pluginId: null
+        })
+      }
+    })
+  }, [])
+
+  useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
       // The native engine's 30Hz position timer only stops once it processes
       // an in-flight 'stop' message — a tick already queued before that lands
@@ -382,13 +469,17 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             <HistoryCtx.Provider value={historyControls}>
               <MasterChainStatusCtx.Provider value={masterChainStatus}>
                 <MasterChainErrorCtx.Provider value={masterChainError}>
-                  <PluginCatalogCtx.Provider value={pluginCatalog}>
-                    <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
-                      <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                        {children}
-                      </PluginCatalogActionsCtx.Provider>
-                    </PluginScanStateCtx.Provider>
-                  </PluginCatalogCtx.Provider>
+                  <ChannelChainStatusCtx.Provider value={channelChainStatus}>
+                    <ChannelChainErrorCtx.Provider value={channelChainError}>
+                      <PluginCatalogCtx.Provider value={pluginCatalog}>
+                        <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
+                          <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                            {children}
+                          </PluginCatalogActionsCtx.Provider>
+                        </PluginScanStateCtx.Provider>
+                      </PluginCatalogCtx.Provider>
+                    </ChannelChainErrorCtx.Provider>
+                  </ChannelChainStatusCtx.Provider>
                 </MasterChainErrorCtx.Provider>
               </MasterChainStatusCtx.Provider>
             </HistoryCtx.Provider>
@@ -442,6 +533,19 @@ export function useMasterChainError(): [
   string | null
 ] {
   return useContext(MasterChainErrorCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useChannelChainStatus(): Record<
+  string,
+  [MasterChainSlotStatus, MasterChainSlotStatus]
+> {
+  return useContext(ChannelChainStatusCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useChannelChainError(): Record<string, [string | null, string | null]> {
+  return useContext(ChannelChainErrorCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component

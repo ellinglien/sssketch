@@ -57,7 +57,8 @@ const api = {
     slot: number,
     pluginId: string | null,
     path: string | null
-  ): Promise<void> => ipcRenderer.invoke('engine-load-channel-plugin', channelId, slot, pluginId, path),
+  ): Promise<void> =>
+    ipcRenderer.invoke('engine-load-channel-plugin', channelId, slot, pluginId, path),
   engineOpenChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-open-channel-plugin-editor', channelId, slot),
   engineCloseChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>
@@ -93,7 +94,13 @@ const api = {
   ): (() => void) => {
     const listener = (
       _event: unknown,
-      payload: { channelId: string; slot: number; pluginId: string; success: boolean; error?: string }
+      payload: {
+        channelId: string
+        slot: number
+        pluginId: string
+        success: boolean
+        error?: string
+      }
     ): void => callback(payload)
     ipcRenderer.on('channel-plugin-loaded', listener)
     return () => ipcRenderer.removeListener('channel-plugin-loaded', listener)
