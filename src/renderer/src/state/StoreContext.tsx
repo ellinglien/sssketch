@@ -66,6 +66,22 @@ const PluginCatalogActionsCtx = createContext<{
   toggleFavourite: (id: string) => void
 }>({ triggerScan: () => {}, toggleFavourite: () => {} })
 
+// The 5 plugins the old hardcoded allowlist (src/shared/masterChainAllowlist.ts,
+// deleted once the scan-based catalog replaced it) used to reference by these
+// exact slugs. A pre-existing project save's masterChain array may still
+// contain one of these slugs -- this table resolves it to the real file path
+// so it can be matched against a freshly-scanned catalog entry and swapped
+// for that entry's real id (JUCE's PluginDescription::createIdentifierString(),
+// not a slug). See docs/superpowers/specs/2026-07-31-plugin-scan-favourites-design.md's
+// "Migration for existing saves" section.
+const OLD_ALLOWLIST_SLUG_TO_PATH: Record<string, string> = {
+  'solid-bus-comp': '/Library/Audio/Plug-Ins/VST3/Solid Bus Comp.vst3',
+  'pro-q-3': '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3',
+  soothe2: '/Library/Audio/Plug-Ins/VST3/soothe2.vst3',
+  'sausage-fattener': '/Library/Audio/Plug-Ins/VST3/SausageFattener.vst3',
+  'sunset-sound-reverb': '/Library/Audio/Plug-Ins/VST3/TR5 Sunset Sound Studio Reverb.vst3'
+}
+
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -264,6 +280,25 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       }
     })
   }, [state.masterChain])
+
+  // Runs the old-slug-to-catalog-id migration once the scan catalog is
+  // loaded -- this can't live in serialize.ts's pure deserializeProject the
+  // way DAW mode's own trackOrder migration did, since it needs the
+  // async-loaded plugin catalog to resolve a stale slug to a real id.
+  // Reuses the existing SET_MASTER_CHAIN_PLUGIN action, no new reducer case
+  // needed.
+  useEffect(() => {
+    if (pluginCatalog.plugins.length === 0) return // catalog not loaded yet, or never scanned
+    state.masterChain.forEach((pluginId, slot) => {
+      if (pluginId === null) return
+      const oldPath = OLD_ALLOWLIST_SLUG_TO_PATH[pluginId]
+      if (oldPath === undefined) return // not a stale slug, nothing to migrate
+      const match = pluginCatalog.plugins.find((p) => p.path === oldPath)
+      if (match === undefined) return // scan hasn't found it (not installed, or scan not run yet) -- leave as-is
+      dispatch({ type: 'SET_MASTER_CHAIN_PLUGIN', slot: slot as 0 | 1 | 2 | 3, pluginId: match.id })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-runs on catalog/masterChain changes only; dispatch is stable
+  }, [pluginCatalog, state.masterChain])
 
   useEffect(() => {
     return window.rifffApi.onMasterPluginLoaded(({ slot, success, error }) => {

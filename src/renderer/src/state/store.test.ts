@@ -864,4 +864,20 @@ describe('reducer', () => {
       expect(state.masterChain).toEqual([null, null, null, null])
     })
   })
+
+  describe('SET_MASTER_CHAIN_PLUGIN (migration overwrite case)', () => {
+    it('overwrites an old allowlist slug with a real catalog id', () => {
+      let state = reducer(initialState, {
+        type: 'SET_MASTER_CHAIN_PLUGIN',
+        slot: 0,
+        pluginId: 'solid-bus-comp'
+      })
+      state = reducer(state, {
+        type: 'SET_MASTER_CHAIN_PLUGIN',
+        slot: 0,
+        pluginId: 'VST3-1234-real-identifier-string'
+      })
+      expect(state.masterChain[0]).toBe('VST3-1234-real-identifier-string')
+    })
+  })
 })
