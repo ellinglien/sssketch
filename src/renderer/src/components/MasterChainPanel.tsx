@@ -3,9 +3,11 @@ import {
   useAppState,
   useDispatch,
   useMasterChainStatus,
-  useMasterChainError
+  useMasterChainError,
+  usePluginCatalog,
+  usePluginScanState,
+  usePluginCatalogActions
 } from '../state/StoreContext'
-import { MASTER_CHAIN_ALLOWLIST } from '@shared/masterChainAllowlist'
 
 const SLOT_LABELS = ['1', '2', '3', '4'] as const
 
@@ -14,13 +16,12 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
   const dispatch = useDispatch()
   const status = useMasterChainStatus()
   const error = useMasterChainError()
+  const catalog = usePluginCatalog()
+  const { scanning, progress } = usePluginScanState()
+  const { triggerScan } = usePluginCatalogActions()
+  const favourites = catalog.plugins.filter((p) => catalog.favouriteIds.includes(p.id))
 
   return (
-    // Fixed + centered in the viewport rather than anchored to the
-    // TransportBar's own right edge -- anchoring there put the panel over
-    // the Inspector column, which sits on top of it and clipped/obscured
-    // the rightmost controls (status dot, edit button). A backdrop click
-    // also closes the panel, matching a normal modal convention.
     <div
       onClick={onClose}
       style={{
@@ -50,6 +51,17 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
             ×
           </button>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          <button
+            onClick={triggerScan}
+            disabled={scanning}
+            style={{ fontSize: 10, padding: '2px 6px' }}
+          >
+            {scanning
+              ? `scanning... ${progress ? `${progress.done}/${progress.total}` : ''}`
+              : 'scan for plugins'}
+          </button>
+        </div>
         {SLOT_LABELS.map((label, slot) => {
           const pluginId = state.masterChain[slot]
           const slotStatus = status[slot]
@@ -73,9 +85,9 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                 style={{ flex: 1, fontSize: 11 }}
               >
                 <option value="">none</option>
-                {MASTER_CHAIN_ALLOWLIST.map((entry) => (
+                {favourites.map((entry) => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.displayName}
+                    {entry.name}
                   </option>
                 ))}
               </select>
