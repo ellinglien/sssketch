@@ -13,6 +13,37 @@ import { PluginCatalogBrowser } from './PluginCatalogBrowser'
 
 const SLOT_LABELS = ['1', '2', '3', '4'] as const
 
+// This app's buttons render with no default chrome of their own (see
+// global.css: `button { color: inherit }`, no background) -- every button
+// here needs an explicit dark-theme style or it falls back to the browser's
+// own default control chrome (light background, near-white inherited text
+// = nearly invisible). Matches the button convention already used
+// elsewhere (e.g. TransportBar's snap-grid button). A disabled button gets
+// a visibly dimmer treatment since setting an explicit background/color
+// overrides the browser's own automatic disabled-button styling.
+function buttonStyle(disabled?: boolean): React.CSSProperties {
+  return {
+    fontFamily: 'inherit',
+    fontSize: 10,
+    padding: '3px 8px',
+    background: 'var(--ra-bg-row-active)',
+    border: `1px solid ${disabled ? 'var(--ra-border-soft)' : 'var(--ra-border)'}`,
+    borderRadius: 2,
+    color: disabled ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+    cursor: disabled ? 'default' : 'pointer'
+  }
+}
+
+const selectStyle: React.CSSProperties = {
+  fontFamily: 'inherit',
+  fontSize: 11,
+  padding: '3px 4px',
+  background: 'var(--ra-bg-row)',
+  border: '1px solid var(--ra-border)',
+  borderRadius: 2,
+  color: 'var(--ra-text)'
+}
+
 export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -43,23 +74,26 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
           background: 'var(--ra-bg-row-active)',
           border: '1px solid var(--ra-border)',
           borderRadius: 4,
-          padding: 8,
-          width: 260,
+          padding: 10,
+          width: 300,
           fontSize: 11
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 8
+          }}
+        >
           <span style={{ color: 'var(--ra-text-2)' }}>master chain</span>
-          <button onClick={onClose} aria-label="Close master chain panel">
+          <button onClick={onClose} aria-label="Close master chain panel" style={buttonStyle()}>
             ×
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-          <button
-            onClick={triggerScan}
-            disabled={scanning}
-            style={{ fontSize: 10, padding: '2px 6px' }}
-          >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          <button onClick={triggerScan} disabled={scanning} style={buttonStyle(scanning)}>
             {scanning
               ? `scanning... ${progress ? `${progress.done}/${progress.total}` : ''}`
               : 'scan for plugins'}
@@ -69,10 +103,11 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
           const pluginId = state.masterChain[slot]
           const slotStatus = status[slot]
           const slotError = error[slot]
+          const editDisabled = slotStatus !== 'loaded'
           return (
             <div
               key={slot}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}
               title={slotError ?? undefined}
             >
               <span style={{ color: 'var(--ra-text-2)', width: 12 }}>{label}</span>
@@ -89,7 +124,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                     pluginId: e.target.value === '' ? null : e.target.value
                   })
                 }}
-                style={{ flex: 1, fontSize: 11 }}
+                style={{ ...selectStyle, flex: 1 }}
               >
                 <option value="">none</option>
                 {favourites.map((entry) => (
@@ -101,25 +136,27 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
               </select>
               <span
                 aria-label={`slot ${label} status: ${slotStatus}`}
+                title={slotStatus}
                 style={{
-                  width: 8,
-                  height: 8,
+                  width: 9,
+                  height: 9,
+                  flexShrink: 0,
                   borderRadius: '50%',
                   background:
                     slotStatus === 'loaded'
                       ? 'var(--ra-stretch-on)'
                       : slotStatus === 'error'
-                        ? '#e05555'
+                        ? 'var(--ra-mute-on)'
                         : slotStatus === 'loading'
-                          ? '#d9c34f'
-                          : 'var(--ra-border)'
+                          ? 'var(--ra-type-notes)'
+                          : 'var(--ra-border-strong)'
                 }}
               />
               <button
                 onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
-                disabled={slotStatus !== 'loaded'}
+                disabled={editDisabled}
                 aria-label={`edit slot ${label} plugin`}
-                style={{ fontSize: 10, padding: '1px 6px' }}
+                style={buttonStyle(editDisabled)}
               >
                 edit
               </button>
