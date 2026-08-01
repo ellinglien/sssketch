@@ -1,4 +1,5 @@
 #include "IpcServer.h"
+#include <algorithm>
 
 namespace ssstitch
 {
@@ -38,8 +39,8 @@ namespace ssstitch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc)
-        : engine(e), transport(t), bufferCache(c), masterChain(mc)
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc, ChannelChainRegistry& cc)
+        : engine(e), transport(t), bufferCache(c), masterChain(mc), channelChains(cc)
     {
     }
 
@@ -103,6 +104,14 @@ namespace ssstitch
                 transport.setBpm(project.bpm);
                 transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
+
+                std::vector<juce::String> channelIds;
+                for (const auto& rifff : project.rifffs)
+                {
+                    if (std::find(channelIds.begin(), channelIds.end(), rifff.channelId) == channelIds.end())
+                        channelIds.push_back(rifff.channelId);
+                }
+                channelChains.updateChannelSet(channelIds);
             }
             else
             {
@@ -194,6 +203,49 @@ namespace ssstitch
             const int slot = (int) payload.getProperty("slot", -1);
             masterChain.closeEditorWindow(slot);
         }
+        else if (type == "load-channel-plugin")
+        {
+            if (!payload.isObject())
+                return;
+            const auto channelId = payload.getProperty("channelId", "").toString();
+            const int slot = (int) payload.getProperty("slot", -1);
+            const auto pluginId = payload.getProperty("pluginId", "").toString();
+            const auto path = payload.getProperty("path", "").toString();
+            if (slot < 0 || slot >= kNumChannelChainSlots)
+                return;
+
+            channelChains.requestLoad(channelId, slot, path, transport.currentSampleRate(), transport.currentBlockSize(),
+                [this, channelId, slot, pluginId](bool success, const juce::String& error)
+                {
+                    juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+                    payloadObj->setProperty("channelId", channelId);
+                    payloadObj->setProperty("slot", slot);
+                    payloadObj->setProperty("pluginId", pluginId);
+                    payloadObj->setProperty("success", success);
+                    if (!success)
+                        payloadObj->setProperty("error", error);
+                    juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                    obj->setProperty("type", "channel-plugin-loaded");
+                    obj->setProperty("payload", juce::var(payloadObj.get()));
+                    sendJson(juce::var(obj.get()));
+                });
+        }
+        else if (type == "open-channel-plugin-editor")
+        {
+            if (!payload.isObject())
+                return;
+            const auto channelId = payload.getProperty("channelId", "").toString();
+            const int slot = (int) payload.getProperty("slot", -1);
+            channelChains.openEditorWindow(channelId, slot);
+        }
+        else if (type == "close-channel-plugin-editor")
+        {
+            if (!payload.isObject())
+                return;
+            const auto channelId = payload.getProperty("channelId", "").toString();
+            const int slot = (int) payload.getProperty("slot", -1);
+            channelChains.closeEditorWindow(channelId, slot);
+        }
         else if (type == "render-export")
         {
             if (!payload.isObject())
@@ -234,13 +286,13 @@ namespace ssstitch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc)
-        : engine(e), transport(t), bufferCache(c), masterChain(mc)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc, ChannelChainRegistry& cc)
+        : engine(e), transport(t), bufferCache(c), masterChain(mc), channelChains(cc)
     {
     }
 
     juce::InterprocessConnection* IpcServer::createConnectionObject()
     {
-        return new IpcConnection(engine, transport, bufferCache, masterChain);
+        return new IpcConnection(engine, transport, bufferCache, masterChain, channelChains);
     }
 }

@@ -6,6 +6,7 @@
 #include "RenderExport.h"
 #include "BakeStem.h"
 #include "PluginChain.h"
+#include "ChannelChainRegistry.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 
@@ -18,7 +19,8 @@ namespace ssstitch
     class IpcConnection : public juce::InterprocessConnection, private juce::Timer
     {
     public:
-        IpcConnection(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache, PluginChain& masterChain);
+        IpcConnection(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache,
+            PluginChain& masterChain, ChannelChainRegistry& channelChains);
         ~IpcConnection() override;
 
         void connectionMade() override;
@@ -33,12 +35,14 @@ namespace ssstitch
         Transport& transport;
         StemBufferCache& bufferCache;
         PluginChain& masterChain;
+        ChannelChainRegistry& channelChains;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer
     {
     public:
-        IpcServer(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache, PluginChain& masterChain);
+        IpcServer(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache,
+            PluginChain& masterChain, ChannelChainRegistry& channelChains);
 
         juce::InterprocessConnection* createConnectionObject() override;
 
@@ -47,5 +51,6 @@ namespace ssstitch
         Transport& transport;
         StemBufferCache& bufferCache;
         PluginChain& masterChain;
+        ChannelChainRegistry& channelChains;
     };
 }
