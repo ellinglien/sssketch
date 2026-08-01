@@ -1,6 +1,7 @@
 // build/afterSign.js
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
+const fs = require('node:fs')
 
 // Signs the nested sssketch-engine.app bundle (the native JUCE audio engine,
 // copied into the outer Electron app's Resources/ dir -- see
@@ -31,23 +32,38 @@ exports.default = async function afterSign(context) {
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
-  const enginePath = path.join(appPath, 'Contents/Resources/native-engine/sssketch-engine.app')
   const entitlementsPath = path.join(__dirname, 'entitlements.engine.plist')
 
-  console.log(`afterSign: signing nested engine bundle at ${enginePath}`)
-  execFileSync(
-    'codesign',
-    [
-      '--deep',
-      '--force',
-      '--options',
-      'runtime',
-      '--entitlements',
-      entitlementsPath,
-      '--sign',
-      identity,
-      enginePath
-    ],
-    { stdio: 'inherit' }
-  )
+  const bundlesToSign = [
+    path.join(appPath, 'Contents/Resources/native-engine/sssketch-engine.app'),
+    path.join(appPath, 'Contents/Resources/native-engine-bridge/sssketch-bridge.app')
+  ]
+
+  for (const bundlePath of bundlesToSign) {
+    // The bridge bundle is a genuinely new build target introduced
+    // alongside the x86_64 plugin bridge feature -- skip signing it
+    // gracefully if it wasn't built for this particular packaging run,
+    // same "optional/degradable" philosophy as engineProcess.ts's own
+    // existsSync check before passing --bridge-binary.
+    if (!fs.existsSync(bundlePath)) {
+      console.log(`afterSign: ${bundlePath} not found, skipping (not built this run)`)
+      continue
+    }
+    console.log(`afterSign: signing nested bundle at ${bundlePath}`)
+    execFileSync(
+      'codesign',
+      [
+        '--deep',
+        '--force',
+        '--options',
+        'runtime',
+        '--entitlements',
+        entitlementsPath,
+        '--sign',
+        identity,
+        bundlePath
+      ],
+      { stdio: 'inherit' }
+    )
+  }
 }

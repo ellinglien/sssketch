@@ -15,6 +15,8 @@ asarUnpack:
 extraResources:
   - from: native-engine/build/sssketch_engine_artefacts/sssketch-engine.app
     to: native-engine/sssketch-engine.app
+  - from: native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app
+    to: native-engine-bridge/sssketch-bridge.app
 win:
   executableName: sssketch
 nsis:
