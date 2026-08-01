@@ -109,6 +109,15 @@ export interface AppState {
    * or null for an empty slot. Persists normally -- real arrangement data, not
    * transient UI state. See docs/superpowers/specs/2026-07-31-plugin-scan-favourites-design.md. */
   masterChain: [string | null, string | null, string | null, string | null]
+  /** channelPlugins[channelId] is a 2-slot chain of catalog ids or null,
+   * exactly mirroring masterChain's own shape and convention -- see
+   * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md. A
+   * channelId absent from this record has no plugins on it (the correct
+   * default for both a fresh channel and an old save from before this
+   * feature existed). Deleted in lockstep with channelOrder's own cleanup
+   * in REMOVE_FROM_TIMELINE, DELETE_RIFFFS, and MOVE_TO_CHANNEL -- never a
+   * separate pass. */
+  channelPlugins: Record<string, [string | null, string | null]>
   rifffs: Record<string, Rifff>
 }
 
@@ -131,6 +140,7 @@ export const initialState: AppState = {
   inspectorCollapsed: false,
   metronomeEnabled: false,
   masterChain: [null, null, null, null],
+  channelPlugins: {},
   rifffs: {}
 }
 
@@ -187,6 +197,7 @@ export type Action =
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
+  | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -248,14 +259,19 @@ export function reducer(state: AppState, action: Action): AppState {
       let channelOrder = state.channelOrder.includes(action.channelId)
         ? state.channelOrder
         : [...state.channelOrder, action.channelId]
+      let channelPlugins = state.channelPlugins
       if (
         previousChannelId !== undefined &&
         previousChannelId !== action.channelId &&
         !channelHasAnyClip(channelOf, previousChannelId)
       ) {
         channelOrder = channelOrder.filter((id) => id !== previousChannelId)
+        if (previousChannelId in channelPlugins) {
+          channelPlugins = { ...channelPlugins }
+          delete channelPlugins[previousChannelId]
+        }
       }
-      return { ...placed, channelOf, channelOrder }
+      return { ...placed, channelOf, channelOrder, channelPlugins }
     }
 
     // Repacks every rifff in groupIds into contiguous bar positions, in that
@@ -365,16 +381,23 @@ export function reducer(state: AppState, action: Action): AppState {
       const previousChannelId = state.channelOf[action.groupId]
       const channelOf = { ...state.channelOf }
       delete channelOf[action.groupId]
-      const channelOrder =
+      const channelBecameEmpty =
         previousChannelId !== undefined && !channelHasAnyClip(channelOf, previousChannelId)
-          ? state.channelOrder.filter((id) => id !== previousChannelId)
-          : state.channelOrder
+      const channelOrder = channelBecameEmpty
+        ? state.channelOrder.filter((id) => id !== previousChannelId)
+        : state.channelOrder
+      let channelPlugins = state.channelPlugins
+      if (channelBecameEmpty && previousChannelId! in channelPlugins) {
+        channelPlugins = { ...channelPlugins }
+        delete channelPlugins[previousChannelId!]
+      }
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, startBar: undefined } },
         sel: state.sel === action.groupId ? null : state.sel,
         channelOf,
-        channelOrder
+        channelOrder,
+        channelPlugins
       }
     }
 
@@ -408,6 +431,10 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const channelOf = omitGroups(state.channelOf)
       const channelOrder = state.channelOrder.filter((id) => channelHasAnyClip(channelOf, id))
+      const channelPlugins = { ...state.channelPlugins }
+      for (const channelId of Object.keys(channelPlugins)) {
+        if (!channelHasAnyClip(channelOf, channelId)) delete channelPlugins[channelId]
+      }
       return {
         ...state,
         rifffs,
@@ -421,6 +448,7 @@ export function reducer(state: AppState, action: Action): AppState {
         exp: omitGroups(state.exp),
         channelOf,
         channelOrder,
+        channelPlugins,
         sel: state.sel && ids.has(state.sel) ? null : state.sel
       }
     }
@@ -701,6 +729,13 @@ export function reducer(state: AppState, action: Action): AppState {
       const masterChain = [...state.masterChain] as AppState['masterChain']
       masterChain[action.slot] = action.pluginId
       return { ...state, masterChain }
+    }
+
+    case 'SET_CHANNEL_CHAIN_PLUGIN': {
+      const existing = state.channelPlugins[action.channelId] ?? [null, null]
+      const slots = [...existing] as [string | null, string | null]
+      slots[action.slot] = action.pluginId
+      return { ...state, channelPlugins: { ...state.channelPlugins, [action.channelId]: slots } }
     }
 
     case 'SET_ARRANGER_MODE':

@@ -880,4 +880,82 @@ describe('reducer', () => {
       expect(state.masterChain[0]).toBe('VST3-1234-real-identifier-string')
     })
   })
+
+  describe('SET_CHANNEL_CHAIN_PLUGIN', () => {
+    it('sets the given channel+slot to the given plugin id, leaving other channels/slots untouched', () => {
+      let state = reducer(initialState, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'ch-1',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+      expect(state.channelPlugins['ch-1']).toEqual(['pro-q-3', null])
+
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'ch-1',
+        slot: 1,
+        pluginId: 'soothe2'
+      })
+      expect(state.channelPlugins['ch-1']).toEqual(['pro-q-3', 'soothe2'])
+      expect(state.channelPlugins['ch-2']).toBeUndefined()
+    })
+  })
+
+  describe('channelPlugins cleanup on channel removal', () => {
+    it('REMOVE_FROM_TIMELINE deletes channelPlugins for a channel that becomes empty', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'r1',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+      expect(state.channelPlugins['r1']).toEqual(['pro-q-3', null])
+
+      state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+      expect(state.channelPlugins['r1']).toBeUndefined()
+    })
+
+    it('DELETE_RIFFFS deletes channelPlugins for a channel that becomes empty', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'r1',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.channelPlugins['r1']).toBeUndefined()
+    })
+
+    it('MOVE_TO_CHANNEL deletes channelPlugins for the previous channel once it becomes empty, keeps the destination channel untouched', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'r1',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'other-channel',
+        slot: 0,
+        pluginId: 'soothe2'
+      })
+
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'other-channel'
+      })
+      expect(state.channelPlugins['r1']).toBeUndefined()
+      expect(state.channelPlugins['other-channel']).toEqual(['soothe2', null])
+    })
+  })
 })
