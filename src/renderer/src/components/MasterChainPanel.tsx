@@ -1,4 +1,5 @@
 // src/renderer/src/components/MasterChainPanel.tsx
+import { useState } from 'react'
 import {
   useAppState,
   useDispatch,
@@ -8,6 +9,7 @@ import {
   usePluginScanState,
   usePluginCatalogActions
 } from '../state/StoreContext'
+import { PluginCatalogBrowser } from './PluginCatalogBrowser'
 
 const SLOT_LABELS = ['1', '2', '3', '4'] as const
 
@@ -20,6 +22,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
   const { scanning, progress } = usePluginScanState()
   const { triggerScan } = usePluginCatalogActions()
   const favourites = catalog.plugins.filter((p) => catalog.favouriteIds.includes(p.id))
+  const [browsingSlot, setBrowsingSlot] = useState<number | null>(null)
 
   return (
     <div
@@ -75,13 +78,17 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
               <span style={{ color: 'var(--ra-text-2)', width: 12 }}>{label}</span>
               <select
                 value={pluginId ?? ''}
-                onChange={(e) =>
+                onChange={(e) => {
+                  if (e.target.value === '__browse__') {
+                    setBrowsingSlot(slot)
+                    return
+                  }
                   dispatch({
                     type: 'SET_MASTER_CHAIN_PLUGIN',
                     slot: slot as 0 | 1 | 2 | 3,
                     pluginId: e.target.value === '' ? null : e.target.value
                   })
-                }
+                }}
                 style={{ flex: 1, fontSize: 11 }}
               >
                 <option value="">none</option>
@@ -90,6 +97,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                     {entry.name}
                   </option>
                 ))}
+                <option value="__browse__">browse all...</option>
               </select>
               <span
                 aria-label={`slot ${label} status: ${slotStatus}`}
@@ -119,6 +127,18 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
           )
         })}
       </div>
+      {browsingSlot !== null && (
+        <PluginCatalogBrowser
+          onSelect={(id) =>
+            dispatch({
+              type: 'SET_MASTER_CHAIN_PLUGIN',
+              slot: browsingSlot as 0 | 1 | 2 | 3,
+              pluginId: id
+            })
+          }
+          onClose={() => setBrowsingSlot(null)}
+        />
+      )}
     </div>
   )
 }
