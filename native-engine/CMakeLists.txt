@@ -30,6 +30,7 @@ juce_add_gui_app(sssketch_engine
 
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
+  Source/PluginArchitecture.cpp
   Source/PluginChain.cpp
   Source/PluginChainTests.cpp
   Source/ChannelChainRegistry.cpp

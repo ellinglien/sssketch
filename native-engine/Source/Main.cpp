@@ -9,6 +9,7 @@
 #include "StemBufferCache.h"
 #include "EngineProject.h"
 #include "RenderExport.h"
+#include "PluginArchitecture.h"
 
 // PlaybackEngine, Transport, IpcServer, StemBufferCache, EngineProject, and
 // parseEngineProject all live in namespace sssketch (see their headers) — the
@@ -50,40 +51,6 @@ static void scanOneFileInto(
         for (auto* desc : typesFound)
             found.add(*desc);
     }
-}
-
-// Shells out to the system `file` command against a VST3 bundle's inner
-// Mach-O binary, since JUCE has no built-in architecture-detection API.
-// Confirmed manually against real installed plugins during this feature's
-// own design: some VST3s on this machine are x86_64-only (fail to load
-// natively on this arm64 host — expected, not a bug) while others are
-// arm64-native or universal.
-static juce::String detectArchitecture(const juce::String& bundlePath)
-{
-    juce::File bundle(bundlePath);
-    auto macOSDir = bundle.getChildFile("Contents").getChildFile("MacOS");
-    auto binaries = macOSDir.findChildFiles(juce::File::findFiles, false);
-    if (binaries.isEmpty())
-        return "unknown";
-
-    // Uses the StringArray overload, not the single-String one -- the
-    // latter does its own naive whitespace tokenization (not real shell
-    // parsing), so a path containing spaces (e.g. "Solid Bus Comp.vst3")
-    // wrapped in literal quote characters doesn't work as intended; the
-    // StringArray overload passes each argument through directly, with no
-    // quoting needed. Found via manual smoke-testing during this task.
-    juce::ChildProcess fileProc;
-    if (!fileProc.start(juce::StringArray { "file", binaries[0].getFullPathName() }))
-        return "unknown";
-    const auto output = fileProc.readAllProcessOutput();
-    fileProc.waitForProcessToFinish(5000);
-
-    const bool hasArm64 = output.containsIgnoreCase("arm64");
-    const bool hasX86 = output.containsIgnoreCase("x86_64");
-    if (hasArm64 && hasX86) return "universal";
-    if (hasArm64) return "arm64";
-    if (hasX86) return "x86_64";
-    return "unknown";
 }
 
 // A curated allowlist, not a directory sweep. See PHASE0_FINDINGS.md: scanning
@@ -164,7 +131,7 @@ static int runScanOneJson(const juce::String& path)
     }
     else
     {
-        const auto arch = detectArchitecture(path);
+        const auto arch = detectPluginArchitecture(path);
         juce::Array<juce::var> plugins;
         for (const auto& desc : found)
         {

@@ -1,5 +1,6 @@
 // native-engine/Source/PluginChain.h
 #pragma once
+#include "PluginEditorWindow.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
@@ -117,47 +118,6 @@ namespace sssketch
         static std::unique_ptr<juce::AudioProcessor> defaultInstantiate(
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
-        // Mirrors the concrete DocumentWindow-hosting-an-AudioProcessorEditor
-        // pattern used by JUCE's own AudioPluginHost example (see
-        // extras/AudioPluginHost/Source/UI/PluginWindow.h), simplified to
-        // this app's actual needs (no resizable-editor constrainer, no
-        // per-window-type variants -- always the plugin's own "normal"
-        // editor, never the generic parameter-list fallback).
-        class EditorWindow : public juce::DocumentWindow
-        {
-        public:
-            EditorWindow(const juce::String& name, juce::AudioProcessorEditor* editor, std::function<void()> onClosed)
-                : juce::DocumentWindow(name, juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
-                  onClosedCallback(std::move(onClosed))
-            {
-                setUsingNativeTitleBar(true);
-                setContentOwned(editor, true);
-                setResizable(editor->isResizable(), false);
-                centreWithSize(getWidth(), getHeight());
-                // Three different cross-process "activate the engine app so
-                // its window comes to the front" mechanisms were tried and
-                // all failed in practice (self-activation via
-                // juce::Process::makeForegroundProcess(), `open -a` from
-                // Electron, NSRunningApplication::activateWithOptions: from
-                // Electron) -- see git history. Sidestepping the whole
-                // problem: pin the window itself above everything at the
-                // window-server level, which the OS enforces directly based
-                // on window level, independent of which app is currently
-                // active. Doesn't depend on any activation mechanism working
-                // at all.
-                setAlwaysOnTop(true);
-                setVisible(true);
-            }
-            void closeButtonPressed() override
-            {
-                if (onClosedCallback)
-                    onClosedCallback();
-            }
-
-        private:
-            std::function<void()> onClosedCallback;
-        };
-
         // One shared playhead per chain (not per slot) -- tempo is a
         // chain-wide, not per-plugin, concept. setBpm() writes the atomic;
         // getPosition() reads it -- called by a hosted plugin from inside
@@ -187,7 +147,7 @@ namespace sssketch
             std::atomic<juce::AudioProcessor*> pending { nullptr };
             std::atomic<bool> pendingReady { false };
             juce::AudioBuffer<float> scratch;
-            std::unique_ptr<EditorWindow> editorWindow;
+            std::unique_ptr<PluginEditorWindow> editorWindow;
         };
 
         std::vector<Slot> slots;

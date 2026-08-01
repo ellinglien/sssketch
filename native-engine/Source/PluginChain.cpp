@@ -171,7 +171,7 @@ namespace sssketch
         if (editor == nullptr)
             return true;
 
-        slot.editorWindow = std::make_unique<EditorWindow>(
+        slot.editorWindow = std::make_unique<PluginEditorWindow>(
             slot.active->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
         return true;
     }
