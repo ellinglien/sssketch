@@ -298,6 +298,17 @@ static int runServe(int port)
     // integration. See the JUCE_MODAL_LOOPS_PERMITTED comment in
     // CMakeLists.txt for the full explanation (that flag is required for
     // runDispatchLoopUntil() to even be compiled in).
+    //
+    // Re-confirmed empirically after this session's console-app ->
+    // juce_add_gui_app conversion (needed for real plugin editor windows):
+    // switching to runDispatchLoop() STILL exits immediately after logging
+    // readiness, never actually serving -- this app's --serve mode is
+    // reached via a custom CLI dispatch in main(), not through JUCE's normal
+    // START_JUCE_APPLICATION lifecycle, so it likely never gets the usual
+    // applicationDidFinishLaunching-driven setup [NSApp run] depends on.
+    // Not the cause of the plugin-editor-window-doesn't-come-to-front issue
+    // -- ruled out by this exact experiment, kept as a note so it isn't
+    // re-attempted blindly.
     while (!juce::MessageManager::getInstance()->hasStopMessageBeenSent())
         juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
     return 0;
