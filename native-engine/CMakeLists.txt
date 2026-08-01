@@ -32,6 +32,8 @@ target_sources(ssstitch_engine PRIVATE
   Source/Main.cpp
   Source/PluginChain.cpp
   Source/PluginChainTests.cpp
+  Source/ChannelChainRegistry.cpp
+  Source/ChannelChainRegistryTests.cpp
   Source/SchedulePlayback.cpp
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp
