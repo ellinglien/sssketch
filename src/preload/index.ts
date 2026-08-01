@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff, ExportedStem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
+import type { PluginCatalog } from '../main/pluginCatalog'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -48,6 +49,16 @@ const api = {
     ipcRenderer.invoke('engine-open-master-plugin-editor', slot),
   engineCloseMasterPluginEditor: (slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-close-master-plugin-editor', slot),
+  scanPlugins: (): Promise<PluginCatalog> => ipcRenderer.invoke('scan-plugins'),
+  getPluginCatalog: (): Promise<PluginCatalog> => ipcRenderer.invoke('get-plugin-catalog'),
+  togglePluginFavourite: (id: string): Promise<PluginCatalog> =>
+    ipcRenderer.invoke('toggle-plugin-favourite', id),
+  onScanProgress: (callback: (progress: { done: number; total: number }) => void): (() => void) => {
+    const listener = (_event: unknown, progress: { done: number; total: number }): void =>
+      callback(progress)
+    ipcRenderer.on('scan-progress', listener)
+    return () => ipcRenderer.removeListener('scan-progress', listener)
+  },
   onMasterPluginLoaded: (
     callback: (result: { slot: number; pluginId: string; success: boolean; error?: string }) => void
   ): (() => void) => {

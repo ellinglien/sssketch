@@ -17,6 +17,8 @@ import { exportMixToWav, exportStemsToWavs } from './exportMix'
 import { nativeExport, nativeExportStems } from './nativeExport'
 import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
+import { runFullScan } from './runFullScan'
+import { loadCatalog, toggleFavourite } from './pluginCatalog'
 import {
   warehouseAvailable,
   listJams,
@@ -215,6 +217,20 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-close-master-plugin-editor', (_event, slot: number) => {
     playbackEngine?.client.send('close-master-plugin-editor', { slot })
+  })
+
+  ipcMain.handle('scan-plugins', async (event) => {
+    const catalog = await runFullScan((progress) => {
+      event.sender.send('scan-progress', progress)
+    })
+    return catalog
+  })
+
+  ipcMain.handle('get-plugin-catalog', () => loadCatalog())
+
+  ipcMain.handle('toggle-plugin-favourite', (_event, id: string) => {
+    toggleFavourite(id)
+    return loadCatalog()
   })
 
   createWindow()
