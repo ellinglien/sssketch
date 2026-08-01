@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
@@ -255,6 +256,19 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+
+  // Only in a packaged (production) build -- never in dev, where there's no
+  // meaningful "newer published release" to check against, and running it
+  // unconditionally would just spam electron-updater's own network calls +
+  // logging on every dev-server restart for no benefit. Failure here (no
+  // network, no releases published yet, etc.) must never be fatal to the
+  // rest of the app -- it's a background convenience check, not a
+  // load-bearing startup step.
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify().catch((err: unknown) => {
+      console.error('index: auto-update check failed', err)
+    })
+  }
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc
   // comment) that re-reads the live EngineClient on every *property access*
