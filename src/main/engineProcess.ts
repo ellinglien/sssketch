@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { app } from 'electron'
 
 export interface EngineHandle {
@@ -41,6 +41,23 @@ function defaultBinaryPath(): string {
     app.getAppPath(),
     'native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
   )
+}
+
+/**
+ * The engine's own .app bundle directory (three levels up from the inner
+ * Mach-O binary defaultBinaryPath() resolves: strip
+ * ssstitch-engine/MacOS/Contents). Used by main/index.ts to activate the
+ * already-running engine process via `open -a` when surfacing a plugin
+ * editor window -- see that call site's own doc comment for why this is
+ * more reliable than asking the engine process to activate itself
+ * (juce::Process::makeForegroundProcess(), which recent macOS versions
+ * increasingly ignore for a backgrounded LSUIElement process with no prior
+ * direct user interaction). `open -a` operates on the bundle, not the
+ * executable inside it, which is why this isn't just defaultBinaryPath()
+ * itself.
+ */
+export function engineAppBundlePath(): string {
+  return dirname(dirname(dirname(defaultBinaryPath())))
 }
 
 function pickEphemeralPort(): number {

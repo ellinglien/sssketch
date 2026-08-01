@@ -1,7 +1,9 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { spawn } from 'node:child_process'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
+import { engineAppBundlePath } from './engineProcess'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
 import { readAudioFile } from './readAudioFile'
@@ -28,6 +30,24 @@ import {
   downloadMissingStems,
   type RiffFilters
 } from './loreWarehouse'
+
+// Brings the native engine's own windows (a plugin editor) to the actual
+// foreground -- macOS-only, best-effort. The engine process itself calling
+// juce::Process::makeForegroundProcess() (NSApp activateIgnoringOtherApps:)
+// was tried first and found unreliable in practice: recent macOS versions
+// increasingly ignore self-activation requests from a backgrounded
+// LSUIElement process with no immediately-preceding direct user interaction
+// with that process, as an anti-focus-stealing measure. `open -a` asks
+// Launch Services to activate an already-running app by its bundle path
+// (de-duped by bundle identifier, so this doesn't launch a second engine
+// instance) -- requested FROM Electron, which IS the currently-frontmost,
+// user-interacted-with app at the moment "edit" is clicked, so the request
+// is one macOS actually honors. No Accessibility/Automation permission
+// prompt needed (unlike a System Events/UI-scripting approach).
+function activateEngineWindow(): void {
+  if (process.platform !== 'darwin') return
+  spawn('open', ['-a', engineAppBundlePath()])
+}
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
 // read from the before-quit handler below, which runs in a different
@@ -217,6 +237,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-open-master-plugin-editor', (_event, slot: number) => {
     playbackEngine?.client.send('open-master-plugin-editor', { slot })
+    activateEngineWindow()
   })
 
   ipcMain.handle('engine-close-master-plugin-editor', (_event, slot: number) => {
@@ -232,6 +253,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-open-channel-plugin-editor', (_event, channelId: string, slot: number) => {
     playbackEngine?.client.send('open-channel-plugin-editor', { channelId, slot })
+    activateEngineWindow()
   })
 
   ipcMain.handle(
