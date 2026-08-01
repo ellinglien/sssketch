@@ -82,7 +82,8 @@ export function PluginCatalogBrowser({
           </div>
         )}
         {catalog.plugins.map((entry) => {
-          const loadable = entry.arch === 'arm64' || entry.arch === 'universal'
+          const loadable =
+            entry.arch === 'arm64' || entry.arch === 'universal' || entry.arch === 'x86_64'
           const isFavourite = catalog.favouriteIds.includes(entry.id)
           return (
             <div
@@ -107,7 +108,14 @@ export function PluginCatalogBrowser({
                 {isFavourite ? '★' : '☆'}
               </button>
               <span style={{ flex: 1, color: 'var(--ra-text)' }}>{entry.name}</span>
-              <span style={{ color: 'var(--ra-text-2)', fontSize: 9 }}>{entry.arch}</span>
+              <span
+                style={{
+                  color: entry.arch === 'x86_64' ? 'var(--ra-type-fx)' : 'var(--ra-text-2)',
+                  fontSize: 9
+                }}
+              >
+                {entry.arch}
+              </span>
               <button
                 onClick={() => {
                   onSelect(entry.id)

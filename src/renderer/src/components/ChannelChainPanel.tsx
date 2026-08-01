@@ -140,6 +140,7 @@ export function ChannelChainPanel({
                 {favourites.map((entry) => (
                   <option key={entry.id} value={entry.id}>
                     {entry.name}
+                    {entry.arch === 'x86_64' ? ' (bridged)' : ''}
                   </option>
                 ))}
                 <option value="__browse__">browse all...</option>
