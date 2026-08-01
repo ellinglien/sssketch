@@ -132,6 +132,68 @@ namespace ssstitch
                     expectEquals(slot.path, juce::String(""));
                 }
             }
+
+            beginTest("parses channelId on a rifff");
+            {
+                const auto json = R"({
+                    "bpm": 120, "snapDiv": 16,
+                    "rifffs": [
+                        { "groupId": "r1", "channelId": "ch-1", "startBar": 0, "barLength": 8, "fadeInBars": 0, "fadeOutBars": 0, "stems": [] }
+                    ]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectEquals((int) project.rifffs.size(), 1);
+                expectEquals(project.rifffs[0].channelId, juce::String("ch-1"));
+            }
+
+            beginTest("missing channelId on a rifff defaults to empty");
+            {
+                const auto json = R"({
+                    "bpm": 120, "snapDiv": 16,
+                    "rifffs": [
+                        { "groupId": "r1", "startBar": 0, "barLength": 8, "fadeInBars": 0, "fadeOutBars": 0, "stems": [] }
+                    ]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectEquals(project.rifffs[0].channelId, juce::String(""));
+            }
+
+            beginTest("parses channelChains from the wire payload");
+            {
+                const auto json = R"({
+                    "bpm": 120, "snapDiv": 16, "rifffs": [],
+                    "channelChains": [
+                        {
+                            "channelId": "ch-1",
+                            "slots": [
+                                { "pluginId": "id-a", "path": "/a.vst3" },
+                                { "pluginId": "", "path": "" }
+                            ]
+                        }
+                    ]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectEquals((int) project.channelChains.size(), 1);
+                expectEquals(project.channelChains[0].channelId, juce::String("ch-1"));
+                expectEquals(project.channelChains[0].slots[0].pluginId, juce::String("id-a"));
+                expectEquals(project.channelChains[0].slots[0].path, juce::String("/a.vst3"));
+                expectEquals(project.channelChains[0].slots[1].pluginId, juce::String(""));
+            }
+
+            beginTest("missing channelChains defaults to empty");
+            {
+                const auto json = R"({"bpm": 120, "snapDiv": 16, "rifffs": []})";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expect(project.channelChains.empty());
+            }
         }
     };
 

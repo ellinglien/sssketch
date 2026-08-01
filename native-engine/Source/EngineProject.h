@@ -28,6 +28,7 @@ namespace ssstitch
     struct EngineRifff
     {
         juce::String groupId;
+        juce::String channelId; // which channel this rifff's clip is on
         double startBar = 0.0;
         int barLength = 0;
         double fadeInBars = 0.0;
@@ -59,6 +60,17 @@ namespace ssstitch
             juce::String path;
         };
         std::array<MasterChainSlot, kNumMasterChainSlots> masterChain {};
+
+        // One entry per channel that has at least one non-empty slot; a
+        // channelId absent from this vector is treated identically to one
+        // present with two empty slots (pure passthrough) -- see
+        // docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md.
+        struct EngineChannelChain
+        {
+            juce::String channelId;
+            std::array<MasterChainSlot, kNumChannelChainSlots> slots {};
+        };
+        std::vector<EngineChannelChain> channelChains;
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.

@@ -57,6 +57,31 @@ namespace ssstitch
         // (missing/absent masterChain is not a parse error, matching this
         // function's existing lenient-parse convention for other fields).
 
+        auto channelChainsVar = parsed.getProperty("channelChains", juce::var());
+        if (auto* channelChainsArray = channelChainsVar.getArray())
+        {
+            for (auto& entryVar : *channelChainsArray)
+            {
+                EngineProject::EngineChannelChain chain;
+                chain.channelId = entryVar.getProperty("channelId", "").toString();
+                auto slotsVar = entryVar.getProperty("slots", juce::var());
+                if (auto* slotsArray = slotsVar.getArray())
+                {
+                    for (int i = 0; i < kNumChannelChainSlots; ++i)
+                    {
+                        if (i >= slotsArray->size()) continue;
+                        const auto& slotVar = (*slotsArray)[i];
+                        chain.slots[(size_t) i].pluginId = slotVar.getProperty("pluginId", "").toString();
+                        chain.slots[(size_t) i].path = slotVar.getProperty("path", "").toString();
+                    }
+                }
+                project.channelChains.push_back(std::move(chain));
+            }
+        }
+        // else: leave channelChains empty (missing/absent is not a parse
+        // error, matching this function's existing lenient-parse
+        // convention).
+
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())
         {
@@ -69,6 +94,7 @@ namespace ssstitch
                 }
                 EngineRifff rifff;
                 rifff.groupId = rifffVar.getProperty("groupId", "").toString();
+                rifff.channelId = rifffVar.getProperty("channelId", "").toString();
                 rifff.startBar = getDouble(rifffVar, "startBar", 0.0);
                 rifff.barLength = (int) getDouble(rifffVar, "barLength", 0.0);
                 rifff.fadeInBars = getDouble(rifffVar, "fadeInBars", 0.0);
