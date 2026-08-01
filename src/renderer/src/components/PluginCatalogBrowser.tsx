@@ -49,7 +49,16 @@ export function PluginCatalogBrowser({
           borderRadius: 4,
           padding: 10,
           width: 380,
-          maxHeight: 420,
+          // minHeight: 0 overrides the browser's default min-height: auto on
+          // a flex child (this box is a child of the backdrop's own
+          // display:flex) -- without it, a flex child ignores maxHeight and
+          // just grows to fit all its content instead, so the list ran off
+          // the bottom of the screen with no scrollbar and no way to reach
+          // the rest, reading as "stuck"/"fixed" rather than actually
+          // scrollable. maxHeight is viewport-relative (not a fixed 420px)
+          // so it stays sane on a shorter window too.
+          minHeight: 0,
+          maxHeight: '70vh',
           overflowY: 'auto',
           fontSize: 11
         }}
