@@ -6,7 +6,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <map>
 
-namespace ssstitch
+namespace sssketch
 {
     class PlaybackEngine
     {

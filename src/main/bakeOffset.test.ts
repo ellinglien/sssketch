@@ -52,7 +52,7 @@ function findDataChunkOffset(buf: Buffer): number {
 
 describe('bakeOffset', () => {
   it('bakes a .wav job via the existing JS rotation, unaffected by the native routing added alongside it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-bake-test-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {
       const path = join(dir, 'source.wav')
       writeRampWav(path, 1000, 1000)
@@ -72,7 +72,7 @@ describe('bakeOffset', () => {
   })
 
   it('bakes an extensionless (LORE-style) job through the native engine, writing a .baked.wav sibling next to the original', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-bake-test-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {
       // No extension at all — matches loreWarehouse.ts's resolveStemPath
       // exactly (the path is just the raw StemCID).
@@ -107,7 +107,7 @@ describe('bakeOffset', () => {
   }, 20000)
 
   it('skips (and logs, does not throw) a WAV job with no usable fmt chunk', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-bake-test-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {
       const path = join(dir, 'bad.wav')
       writeFileSync(path, Buffer.from('not a real wav file'))

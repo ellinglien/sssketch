@@ -21,7 +21,7 @@ function defaultBinaryPath(): string {
   if (app.isPackaged) {
     return join(
       process.resourcesPath,
-      'native-engine/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+      'native-engine/sssketch-engine.app/Contents/MacOS/sssketch-engine'
     )
   }
 
@@ -39,7 +39,7 @@ function defaultBinaryPath(): string {
   // launched or communicated with over IPC changes.
   return join(
     app.getAppPath(),
-    'native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+    'native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
   )
 }
 

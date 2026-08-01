@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {

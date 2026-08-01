@@ -1,7 +1,7 @@
 #include "SchedulePlayback.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     class SchedulePlaybackTests : public juce::UnitTest
     {

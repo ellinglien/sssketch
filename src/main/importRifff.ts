@@ -42,7 +42,7 @@ function readWavHeaderBytes(path: string): Uint8Array {
 }
 
 function libraryRoot(): string {
-  return join(homedir(), 'Music', 'ssstitch Library')
+  return join(homedir(), 'Music', 'sssketch Library')
 }
 
 /**

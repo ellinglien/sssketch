@@ -1,7 +1,7 @@
 #include "LoopBoundaryFade.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     class LoopBoundaryFadeTests : public juce::UnitTest
     {

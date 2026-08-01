@@ -1,7 +1,7 @@
 #include "LoopSewing.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     class LoopSewingTests : public juce::UnitTest
     {

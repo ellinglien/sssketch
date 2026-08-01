@@ -6,7 +6,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Owns a real AudioDeviceManager and drives PlaybackEngine::renderBlock
      * from its callback — the transport's position clock IS the audio device's

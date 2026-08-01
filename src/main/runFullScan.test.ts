@@ -34,7 +34,7 @@ vi.mock('./pluginScan', () => ({
 
 describe('runFullScan', () => {
   beforeEach(() => {
-    userDataDir = mkdtempSync(join(tmpdir(), 'ssstitch-fullscan-test-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-fullscan-test-'))
   })
 
   afterEach(() => {

@@ -1,5 +1,5 @@
-appId: com.ellinglien.ssstitch
-productName: ssstitch
+appId: com.ellinglien.sssketch
+productName: sssketch
 directories:
   buildResources: build
 afterSign: build/afterSign.js
@@ -13,10 +13,10 @@ files:
 asarUnpack:
   - resources/**
 extraResources:
-  - from: native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app
-    to: native-engine/ssstitch-engine.app
+  - from: native-engine/build/sssketch_engine_artefacts/sssketch-engine.app
+    to: native-engine/sssketch-engine.app
 win:
-  executableName: ssstitch
+  executableName: sssketch
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -50,4 +50,4 @@ npmRebuild: false
 publish:
   provider: github
   owner: ellinglien
-  repo: ssstitch
+  repo: sssketch

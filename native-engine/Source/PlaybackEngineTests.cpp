@@ -5,7 +5,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     static juce::File writeFixtureWav(const juce::String& name, float value, int numSamples, double sampleRate = 44100.0)
     {
@@ -53,7 +53,7 @@ namespace ssstitch
         {
             // 1 second of constant 0.5 at 44100Hz -> 1 bar at 60bpm (4 beats/bar, 1s/beat = 4s/bar)
             // Use a stem exactly 1 bar long at duration matching a simple bpm for round numbers.
-            auto fixture = writeFixtureWav("ssstitch_pe_fixture.wav", 0.5f, 44100);
+            auto fixture = writeFixtureWav("sssketch_pe_fixture.wav", 0.5f, 44100);
 
             beginTest("silence when no project is set");
             {
@@ -199,7 +199,7 @@ namespace ssstitch
                 // resets to each segment's own start rather than continuing to read
                 // forward from wherever the block itself started.
                 const int rampSamples = 176400; // 4s @ 44100Hz, matches durationSec below
-                auto ramp = writeRampFixtureWav("ssstitch_pe_ramp.wav", rampSamples);
+                auto ramp = writeRampFixtureWav("sssketch_pe_ramp.wav", rampSamples);
 
                 EngineProject project;
                 project.bpm = 60.0; // secPerBar = 4.0
@@ -292,8 +292,8 @@ namespace ssstitch
                 // instead of `outL[i2] +=`) would pass every one of them. Two stems, two
                 // different constant-value fixtures, both active for the whole block:
                 // the output must equal the sum of each stem's own contribution.
-                auto fixtureA = writeFixtureWav("ssstitch_pe_mix_a.wav", 0.3f, 44100);
-                auto fixtureB = writeFixtureWav("ssstitch_pe_mix_b.wav", 0.2f, 44100);
+                auto fixtureA = writeFixtureWav("sssketch_pe_mix_a.wav", 0.3f, 44100);
+                auto fixtureB = writeFixtureWav("sssketch_pe_mix_b.wav", 0.2f, 44100);
 
                 EngineProject project;
                 project.bpm = 60.0; // secPerBar = 4.0
@@ -345,7 +345,7 @@ namespace ssstitch
                 // convert elapsed time to a sample index, the computed index would land
                 // out of bounds (skipped -> silence) instead of at the correct value.
                 const int rampSamples = 22050; // 1.0s @ 22050Hz, matches durationSec below
-                auto ramp = writeRampFixtureWav("ssstitch_pe_ramp_22050.wav", rampSamples, 22050.0);
+                auto ramp = writeRampFixtureWav("sssketch_pe_ramp_22050.wav", rampSamples, 22050.0);
 
                 EngineProject project;
                 project.bpm = 60.0; // secPerBar = 4.0
@@ -388,8 +388,8 @@ namespace ssstitch
                 // summed back in) didn't break anything: both channels'
                 // stems must still audibly contribute, deterministically,
                 // with no NaN/Inf introduced by the extra indirection.
-                auto toneA = writeFixtureWav("ssstitch_pe_channel_a.wav", 0.3f, 44100);
-                auto toneB = writeFixtureWav("ssstitch_pe_channel_b.wav", 0.2f, 44100);
+                auto toneA = writeFixtureWav("sssketch_pe_channel_a.wav", 0.3f, 44100);
+                auto toneB = writeFixtureWav("sssketch_pe_channel_b.wav", 0.2f, 44100);
 
                 EngineProject project;
                 project.bpm = 60.0; // secPerBar = 4.0

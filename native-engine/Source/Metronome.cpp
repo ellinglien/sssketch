@@ -2,7 +2,7 @@
 #include "Metronome.h"
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {

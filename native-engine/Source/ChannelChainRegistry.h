@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Owns a dynamically-sized collection of 2-slot PluginChain instances,
      * one per currently-known channel ID. Channels are created/destroyed by

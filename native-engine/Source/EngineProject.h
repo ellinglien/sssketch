@@ -4,7 +4,7 @@
 #include <array>
 #include <vector>
 
-namespace ssstitch
+namespace sssketch
 {
     struct EngineStem
     {

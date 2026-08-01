@@ -38,7 +38,7 @@ export async function nativeExport(state: AppState): Promise<Uint8Array> {
 
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
-  const tempPath = join(tmpdir(), `ssstitch-export-${randomUUID()}.wav`)
+  const tempPath = join(tmpdir(), `sssketch-export-${randomUUID()}.wav`)
 
   try {
     await client.connect(engineHandle.port)
@@ -112,7 +112,7 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
       const soloState: AppState = { ...state, mute: soloMute }
 
       const project = await buildEngineProject(soloState, resolveStretchedForExport, pluginCatalog)
-      const tempPath = join(tmpdir(), `ssstitch-export-${randomUUID()}.wav`)
+      const tempPath = join(tmpdir(), `sssketch-export-${randomUUID()}.wav`)
 
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(

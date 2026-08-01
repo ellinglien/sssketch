@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-namespace ssstitch
+namespace sssketch
 {
     static constexpr int kNumMasterChainSlots = 4;
     static constexpr int kNumChannelChainSlots = 2;

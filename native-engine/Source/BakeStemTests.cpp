@@ -4,7 +4,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     /** A linear ramp from ~0 to ~1 across the file, so a test can tell whether
      * a read landed near the buffer's head or its tail just from the sample
@@ -40,9 +40,9 @@ namespace ssstitch
                 // 1 second at 1000Hz, ramp 0..~1 -> sample N has value N/1000.
                 // Rotating by 0.25s (sample 250) should make the output's very
                 // first sample equal the source's sample 250 (~0.25).
-                auto source = writeRampFixtureWav("ssstitch_bake_ramp.wav", 1000, 1000.0);
+                auto source = writeRampFixtureWav("sssketch_bake_ramp.wav", 1000, 1000.0);
                 auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                   .getChildFile("ssstitch_bake_out.wav");
+                                   .getChildFile("sssketch_bake_out.wav");
                 outFile.deleteFile();
 
                 juce::String error;
@@ -68,9 +68,9 @@ namespace ssstitch
 
             beginTest("wraps a rotation larger than the buffer's own length");
             {
-                auto source = writeRampFixtureWav("ssstitch_bake_ramp2.wav", 1000, 1000.0);
+                auto source = writeRampFixtureWav("sssketch_bake_ramp2.wav", 1000, 1000.0);
                 auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                   .getChildFile("ssstitch_bake_out2.wav");
+                                   .getChildFile("sssketch_bake_out2.wav");
                 outFile.deleteFile();
 
                 // 1.25s on a 1s-long buffer wraps to the same 0.25s rotation as
@@ -88,9 +88,9 @@ namespace ssstitch
 
             beginTest("wraps a negative rotation into the positive range");
             {
-                auto source = writeRampFixtureWav("ssstitch_bake_ramp3.wav", 1000, 1000.0);
+                auto source = writeRampFixtureWav("sssketch_bake_ramp3.wav", 1000, 1000.0);
                 auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                   .getChildFile("ssstitch_bake_out3.wav");
+                                   .getChildFile("sssketch_bake_out3.wav");
                 outFile.deleteFile();
 
                 // -0.25s on a 1s buffer wraps to 0.75s.
@@ -108,7 +108,7 @@ namespace ssstitch
             beginTest("returns false for a nonexistent source path, without throwing");
             {
                 auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                   .getChildFile("ssstitch_bake_should_not_exist.wav");
+                                   .getChildFile("sssketch_bake_should_not_exist.wav");
                 outFile.deleteFile();
                 juce::String error;
                 double durationSec = 0.0;
@@ -120,9 +120,9 @@ namespace ssstitch
 
             beginTest("creates missing parent directories for the output path");
             {
-                auto source = writeRampFixtureWav("ssstitch_bake_ramp4.wav", 100, 1000.0);
+                auto source = writeRampFixtureWav("sssketch_bake_ramp4.wav", 100, 1000.0);
                 auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                   .getChildFile("ssstitch_bake_nested_dir")
+                                   .getChildFile("sssketch_bake_nested_dir")
                                    .getChildFile("deeper")
                                    .getChildFile("out.wav");
                 outFile.getParentDirectory().deleteRecursively();

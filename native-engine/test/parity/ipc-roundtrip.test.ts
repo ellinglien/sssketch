@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 const ENGINE_BINARY = join(
   __dirname,
-  '../../build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+  '../../build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
 )
 const TEST_PORT = 45322 // fixed dev port, matches the design doc's single-connection assumption
 
@@ -19,7 +19,7 @@ afterEach(() => {
 
 // NOTE: JUCE's juce::Logger::writeToLog writes to stderr on macOS (confirmed
 // during Task 8's review, via juce_SystemStats_mac.mm), not stdout — every
-// "ssstitch-engine serving on...", "test-client: connected", "received ..."
+// "sssketch-engine serving on...", "test-client: connected", "received ..."
 // line this test needs to observe comes through stderr. Both helpers below
 // listen on stderr accordingly.
 function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number): Promise<void> {
@@ -47,7 +47,7 @@ function collectOutput(proc: ChildProcess): { text: () => string } {
 
 describe('IPC round-trip: --serve <-> --test-client', () => {
   it('receives position-update pushes after play, advancing over time', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-ipc-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-ipc-'))
     const projectPath = join(dir, 'project.json')
     // No real audio file needed — the project references a stem path that
     // doesn't exist. PlaybackEngine.setProject skips stems whose buffer fails

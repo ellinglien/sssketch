@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ssstitch_engine VERSION 0.1.0 LANGUAGES C CXX)
+project(sssketch_engine VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,13 +22,13 @@ FetchContent_MakeAvailable(JUCE)
 # window. BUNDLE_ID is set explicitly since the default (derived from
 # COMPANY_NAME, which this project never sets) would otherwise fall back to
 # something generic.
-juce_add_gui_app(ssstitch_engine
-  PRODUCT_NAME "ssstitch-engine"
-  BUNDLE_ID "com.ellinglien.ssstitch-engine"
+juce_add_gui_app(sssketch_engine
+  PRODUCT_NAME "sssketch-engine"
+  BUNDLE_ID "com.ellinglien.sssketch-engine"
   PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
 )
 
-target_sources(ssstitch_engine PRIVATE
+target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
   Source/PluginChain.cpp
   Source/PluginChainTests.cpp
@@ -58,7 +58,7 @@ target_sources(ssstitch_engine PRIVATE
   Source/BakeStemTests.cpp
 )
 
-target_compile_definitions(ssstitch_engine PRIVATE
+target_compile_definitions(sssketch_engine PRIVATE
   JUCE_USE_CURL=0
   JUCE_WEB_BROWSER=0
   JUCE_PLUGINHOST_VST3=1
@@ -74,7 +74,7 @@ target_compile_definitions(ssstitch_engine PRIVATE
   JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
-target_link_libraries(ssstitch_engine PRIVATE
+target_link_libraries(sssketch_engine PRIVATE
   juce::juce_core
   juce::juce_recommended_config_flags
   juce::juce_audio_processors

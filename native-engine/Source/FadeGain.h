@@ -4,7 +4,7 @@
 #include <cassert>
 #include <cstddef>
 
-namespace ssstitch
+namespace sssketch
 {
     struct FadeConfig
     {

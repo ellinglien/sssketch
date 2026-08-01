@@ -3,7 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <map>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {

@@ -3,7 +3,7 @@
 #include "LoopSewing.h"
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     bool decodeRawAudioFile(
         const juce::String& path, juce::AudioBuffer<float>& bufferOut, double& sampleRateOut)

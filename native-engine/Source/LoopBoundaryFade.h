@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ssstitch
+namespace sssketch
 {
     /** Blend coefficient in [0,1] for pulling a tail sample, `distFromEndBars`
      * bars before the loop's own end, toward a fixed anchor value (the

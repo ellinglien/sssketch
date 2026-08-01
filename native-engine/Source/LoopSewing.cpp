@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     void applyLoopSewingBlend(juce::AudioBuffer<float>& buffer, int loopEndSample, int windowSize)
     {

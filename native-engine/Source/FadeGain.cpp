@@ -1,7 +1,7 @@
 #include "FadeGain.h"
 #include <algorithm>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {

@@ -354,7 +354,7 @@ function Frame(): React.JSX.Element {
   // Once, on mount: offer to restore a crash-recovery snapshot from a
   // previous session that never got explicitly saved (see projectFile.ts's
   // writeAutosave/loadAutosave/clearAutosave — a dedicated file, decoupled
-  // from the user's own named .rifffproj saves). Cleared either way once
+  // from the user's own named .sssketchproj saves). Cleared either way once
   // answered, so a later launch doesn't keep asking about the same stale
   // snapshot.
   useEffect(() => {

@@ -7,7 +7,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     bool renderProjectToWavFile(
         const EngineProject& project,

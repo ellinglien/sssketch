@@ -1,7 +1,7 @@
 #include "IpcServer.h"
 #include <algorithm>
 
-namespace ssstitch
+namespace sssketch
 {
     // File-local helper for building the render-export-result reply — mirrors
     // how position-update's payload is built inline in timerCallback() above,

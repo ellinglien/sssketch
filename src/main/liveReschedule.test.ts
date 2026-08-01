@@ -7,7 +7,7 @@ import { EngineClient } from './engineClient'
 
 const ENGINE_BINARY = join(
   __dirname,
-  '../../native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+  '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
 )
 const TEST_PORT = 45323 // distinct from Phase 1's ipc-roundtrip.test.ts's 45322
 
@@ -38,7 +38,7 @@ function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number
 
 describe('live reschedule: load-project while already playing', () => {
   it('accepts a second load-project mid-playback, keeps pushing position-update, and never disconnects', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-live-reschedule-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-live-reschedule-'))
     const projectA = {
       bpm: 60,
       snapDiv: 16,

@@ -10,7 +10,7 @@ import type { EngineProject } from '../../../src/shared/buildEngineProject'
 // there's no real Electron process under Vitest, so `app` is mocked to point the
 // cache at a plain OS temp dir. Same pattern already established in
 // src/main/playbackEngineLifecycle.test.ts for app.getAppPath.
-const rubberbandCacheDir = mkdtempSync(join(tmpdir(), 'ssstitch-rb-cache-'))
+const rubberbandCacheDir = mkdtempSync(join(tmpdir(), 'sssketch-rb-cache-'))
 vi.mock('electron', () => ({ app: { getPath: () => rubberbandCacheDir } }))
 
 const { renderStretched } = await import('../../../src/main/rubberband')
@@ -20,7 +20,7 @@ const { renderStretched } = await import('../../../src/main/rubberband')
 // Debug artefact location confirmed throughout Phase 0/1.
 const ENGINE_BINARY = join(
   __dirname,
-  '../../build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+  '../../build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
 )
 
 function writeToneWav(path: string, durationSec: number, sampleRate = 44100): void {
@@ -151,7 +151,7 @@ describe('native engine vs Web Audio export — render parity', () => {
   let tonePath: string
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'ssstitch-parity-'))
+    dir = mkdtempSync(join(tmpdir(), 'sssketch-parity-'))
     tonePath = join(dir, 'tone.wav')
     writeToneWav(tonePath, 4.0) // 4 seconds — exactly 1 bar at 60bpm
   })

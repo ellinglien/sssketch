@@ -138,7 +138,7 @@ function microFadeGain(tSec: number, segmentDurationSec: number): number {
 
 describe('nativeExport — multi-stem/multi-rifff parity against reference math', () => {
   it('produces near-identical output for a two-stem, two-rifff project', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-export-parity-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-export-parity-'))
     const stemAPath = join(dir, 'a.wav')
     const stemBPath = join(dir, 'b.wav')
     const sampleRate = 44100

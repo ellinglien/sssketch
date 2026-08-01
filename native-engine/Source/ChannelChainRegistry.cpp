@@ -2,7 +2,7 @@
 #include "ChannelChainRegistry.h"
 #include <thread>
 
-namespace ssstitch
+namespace sssketch
 {
     ChannelChainRegistry::ChannelChainRegistry(PluginChain::Instantiator inst)
         : published(new ChannelChainMap()), instantiator(std::move(inst))

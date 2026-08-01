@@ -10,7 +10,7 @@
 #include <juce_events/juce_events.h>
 #include <memory>
 
-namespace ssstitch
+namespace sssketch
 {
     /** One accepted client connection. Handles the Electron -> JUCE messages
      * documented in docs/superpowers/specs/2026-07-28-juce-audio-engine-design.md's

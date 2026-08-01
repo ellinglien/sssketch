@@ -11,10 +11,10 @@
 #include "RenderExport.h"
 
 // PlaybackEngine, Transport, IpcServer, StemBufferCache, EngineProject, and
-// parseEngineProject all live in namespace ssstitch (see their headers) — the
+// parseEngineProject all live in namespace sssketch (see their headers) — the
 // plan's sample code below calls them unqualified, so this using-directive is
 // required for it to compile at all.
-using namespace ssstitch;
+using namespace sssketch;
 
 static int runUnitTests()
 {
@@ -288,7 +288,7 @@ static int runServe(int port)
         juce::Logger::writeToLog("runServe: failed to bind to port " + juce::String(port));
         return 1;
     }
-    juce::Logger::writeToLog("ssstitch-engine serving on 127.0.0.1:" + juce::String(port));
+    juce::Logger::writeToLog("sssketch-engine serving on 127.0.0.1:" + juce::String(port));
 
     // Deliberately not the more obvious `runDispatchLoop()`: on macOS that
     // blocks on [NSApp run], which needs a full Aqua/WindowServer session and
@@ -337,7 +337,7 @@ static int runRenderTest(const juce::String& projectJsonPath, const juce::String
     return 0;
 }
 
-namespace ssstitch
+namespace sssketch
 {
     // Minimal IPC client used only by the Task 11 round-trip test. Uses JUCE's
     // own InterprocessConnection on the client side too, so the wire framing
@@ -400,7 +400,7 @@ namespace ssstitch
 
 static int runTestClient(int port, const juce::String& projectJsonPath)
 {
-    ssstitch::TestClient client;
+    sssketch::TestClient client;
     if (!client.connectToSocket("127.0.0.1", port, 2000))
     {
         juce::Logger::writeToLog("test-client: failed to connect on port " + juce::String(port));
@@ -469,6 +469,6 @@ int main(int argc, char* argv[])
     if (argc > 3 && juce::String(argv[1]) == "--test-client")
         return runTestClient(juce::String(argv[2]).getIntValue(), juce::String(argv[3]));
 
-    juce::Logger::writeToLog("ssstitch-engine Phase 0 spike: JUCE core linked OK.");
+    juce::Logger::writeToLog("sssketch-engine Phase 0 spike: JUCE core linked OK.");
     return 0;
 }

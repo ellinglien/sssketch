@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <memory>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Decodes the file at `path` into `bufferOut`/`sampleRateOut` with NO
      * further processing — deliberately separate from StemBufferCache::load,

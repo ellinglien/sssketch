@@ -41,7 +41,7 @@ function riffCircleColor(riff: LoreRiffSummary): string {
 // per-person identity setting, not something that travels with a project —
 // each tester on their own machine sets their own LORE username once here
 // and it sticks across sessions, rather than being baked into the app.
-const LORE_USERNAME_STORAGE_KEY = 'ssstitch:loreUsername'
+const LORE_USERNAME_STORAGE_KEY = 'sssketch:loreUsername'
 
 // Triggers the next page fetch this far (in px) before the riff grid's
 // scroll container actually bottoms out, so the next page is ready before

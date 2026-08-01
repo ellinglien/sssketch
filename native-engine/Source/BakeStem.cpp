@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace ssstitch
+namespace sssketch
 {
     bool bakeStemToWav(
         const juce::String& sourcePath,

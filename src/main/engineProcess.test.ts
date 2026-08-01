@@ -19,7 +19,7 @@ import { spawnEngine, type EngineHandle } from './engineProcess'
 // require either a running Electron app or a mocked one).
 const realBinaryPath = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+  '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
 )
 
 let handle: EngineHandle | undefined

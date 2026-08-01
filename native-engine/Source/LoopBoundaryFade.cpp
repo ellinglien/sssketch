@@ -1,7 +1,7 @@
 #include "LoopBoundaryFade.h"
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     float loopSeamBlendCoeff(double distFromEndBars, double fadeBars)
     {

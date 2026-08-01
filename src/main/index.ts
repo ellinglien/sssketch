@@ -92,7 +92,7 @@ function createWindow(): BrowserWindow {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.ellinglien.ssstitch')
+  electronApp.setAppUserModelId('com.ellinglien.sssketch')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -184,7 +184,7 @@ app.whenReady().then(async () => {
     console.error('index: failed to start the native playback engine', err)
     dialog.showErrorBox(
       'Playback engine failed to start',
-      `ssstitch could not start its native audio engine, so live playback will not work this session. Export and other features are unaffected.\n\n${String(err)}`
+      `sssketch could not start its native audio engine, so live playback will not work this session. Export and other features are unaffected.\n\n${String(err)}`
     )
   }
 

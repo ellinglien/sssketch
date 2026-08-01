@@ -1,6 +1,6 @@
 #include "EngineProject.h"
 
-namespace ssstitch
+namespace sssketch
 {
     static double getDouble(const juce::var& v, const char* key, double fallback)
     {

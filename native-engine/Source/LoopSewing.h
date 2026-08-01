@@ -2,7 +2,7 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Blends the `windowSize` samples right before `loopEndSample` toward
      * `buffer`'s own first sample, per channel, using an equal-power

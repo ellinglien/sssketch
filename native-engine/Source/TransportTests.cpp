@@ -6,7 +6,7 @@
 #include <juce_core/juce_core.h>
 #include <vector>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {
@@ -40,7 +40,7 @@ namespace ssstitch
                       "check reset the halt fade every single callback before it was ever examined, "
                       "so a requested Stop silently did nothing, forever");
             {
-                auto tone = writeConstantToneWav("ssstitch_transport_tone.wav", 44100);
+                auto tone = writeConstantToneWav("sssketch_transport_tone.wav", 44100);
 
                 EngineProject project;
                 project.bpm = 60.0;
@@ -99,7 +99,7 @@ namespace ssstitch
 
             beginTest("a fresh play() cancels an in-flight stop fade instead of getting stuck fading out forever");
             {
-                auto tone = writeConstantToneWav("ssstitch_transport_tone2.wav", 44100);
+                auto tone = writeConstantToneWav("sssketch_transport_tone2.wav", 44100);
 
                 EngineProject project;
                 project.bpm = 60.0;

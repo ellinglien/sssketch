@@ -1,7 +1,7 @@
 // native-engine/Source/Metronome.h
 #pragma once
 
-namespace ssstitch
+namespace sssketch
 {
     /** This app only supports 4/4 — same convention as BeatPicker's own
      * totalBeats = barLength*4. */

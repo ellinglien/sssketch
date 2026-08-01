@@ -1,7 +1,7 @@
 {
-  "name": "ssstitch",
+  "name": "sssketch",
   "version": "1.0.0",
-  "description": "ssstitch: a music arranger tool for stitching Endlesss rifff exports into a timeline",
+  "description": "sssketch: a music arranger tool for stitching Endlesss rifff exports into a timeline",
   "main": "./out/main/index.js",
   "scripts": {
     "format": "prettier --write .",

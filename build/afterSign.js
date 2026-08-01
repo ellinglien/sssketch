@@ -2,7 +2,7 @@
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 
-// Signs the nested ssstitch-engine.app bundle (the native JUCE audio engine,
+// Signs the nested sssketch-engine.app bundle (the native JUCE audio engine,
 // copied into the outer Electron app's Resources/ dir -- see
 // electron-builder.yml's extraResources) with its own entitlements. Gatekeeper
 // and notarization both require every nested executable/bundle to carry a
@@ -31,7 +31,7 @@ exports.default = async function afterSign(context) {
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
-  const enginePath = path.join(appPath, 'Contents/Resources/native-engine/ssstitch-engine.app')
+  const enginePath = path.join(appPath, 'Contents/Resources/native-engine/sssketch-engine.app')
   const entitlementsPath = path.join(__dirname, 'entitlements.engine.plist')
 
   console.log(`afterSign: signing nested engine bundle at ${enginePath}`)

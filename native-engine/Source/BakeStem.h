@@ -2,7 +2,7 @@
 #pragma once
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Decodes `sourcePath` (any format StemBufferCache can read — WAV, Ogg
      * Vorbis, etc.), circularly rotates it so the sample at `rotationSec`

@@ -7,7 +7,7 @@ import { isVst3Candidate, scanOneCandidate } from './pluginScan'
 
 const realBinaryPath = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+  '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
 )
 
 describe('isVst3Candidate', () => {
@@ -49,7 +49,7 @@ describe('scanOneCandidate', () => {
     // without needing a real plugin that actually hangs (none of this
     // machine's installed plugins are known to hang, only some AU bundles
     // are per PHASE0_FINDINGS.md, and this app only scans VST3 anyway).
-    const dir = mkdtempSync(join(tmpdir(), 'ssstitch-scan-test-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-scan-test-'))
     const fakeBinary = join(dir, 'hang.sh')
     writeFileSync(fakeBinary, '#!/bin/sh\nsleep 30\n', { mode: 0o755 })
     try {

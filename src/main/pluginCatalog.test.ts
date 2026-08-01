@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 
 describe('pluginCatalog', () => {
   beforeEach(() => {
-    userDataDir = mkdtempSync(join(tmpdir(), 'ssstitch-catalog-test-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-catalog-test-'))
   })
 
   afterEach(() => {

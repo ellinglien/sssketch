@@ -3,7 +3,7 @@
 #include "EngineProject.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     /** Renders `project` offline to a 16-bit stereo WAV at `outputPath`, covering
      * `durationBars` bars from position 0, including the project's own master

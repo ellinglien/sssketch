@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     std::vector<PlaybackSegment> computeStemSchedule(
         const RifffInfo& rifff,

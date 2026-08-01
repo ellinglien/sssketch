@@ -4,7 +4,7 @@
 #include <cmath>
 #include <thread>
 
-namespace ssstitch
+namespace sssketch
 {
     PluginChain::PluginChain(int numSlots, Instantiator inst) : slots(numSlots), instantiator(std::move(inst)) {}
 

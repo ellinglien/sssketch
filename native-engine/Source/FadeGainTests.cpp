@@ -1,7 +1,7 @@
 #include "FadeGain.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     class FadeGainTests : public juce::UnitTest
     {

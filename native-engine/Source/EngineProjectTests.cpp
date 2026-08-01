@@ -1,7 +1,7 @@
 #include "EngineProject.h"
 #include <juce_core/juce_core.h>
 
-namespace ssstitch
+namespace sssketch
 {
     class EngineProjectTests : public juce::UnitTest
     {

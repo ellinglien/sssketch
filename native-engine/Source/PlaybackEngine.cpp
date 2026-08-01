@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     PlaybackEngine::PlaybackEngine(StemBufferCache& cache) : bufferCache(cache) {}
 

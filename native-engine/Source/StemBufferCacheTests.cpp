@@ -3,7 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     class StemBufferCacheTests : public juce::UnitTest
     {
@@ -13,7 +13,7 @@ namespace ssstitch
         void runTest() override
         {
             auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                .getChildFile("ssstitch_test_fixture.wav");
+                .getChildFile("sssketch_test_fixture.wav");
 
             beginTest("loads a real WAV file and reports its sample data");
             {
@@ -53,7 +53,7 @@ namespace ssstitch
             beginTest("a second load() for an already-cached path succeeds from cache, without re-reading the file");
             {
                 auto recacheFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                    .getChildFile("ssstitch_test_fixture_recache.wav");
+                    .getChildFile("sssketch_test_fixture_recache.wav");
 
                 juce::WavAudioFormat wavFormat;
                 std::unique_ptr<juce::FileOutputStream> out(recacheFile.createOutputStream());
@@ -87,7 +87,7 @@ namespace ssstitch
             beginTest("loads a real Ogg Vorbis file and reports its sample data");
             {
                 auto oggFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                    .getChildFile("ssstitch_test_fixture.ogg");
+                    .getChildFile("sssketch_test_fixture.ogg");
 
                 juce::OggVorbisAudioFormat oggFormat;
                 std::unique_ptr<juce::FileOutputStream> out(oggFile.createOutputStream());
@@ -134,7 +134,7 @@ namespace ssstitch
                 // switching to the stream-based createReaderFor() overload, which
                 // sniffs content directly and never looks at the filename.
                 auto noExtFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                    .getChildFile("ssstitch_test_fixture_no_extension");
+                    .getChildFile("sssketch_test_fixture_no_extension");
 
                 juce::OggVorbisAudioFormat oggFormat;
                 std::unique_ptr<juce::FileOutputStream> out(noExtFile.createOutputStream());

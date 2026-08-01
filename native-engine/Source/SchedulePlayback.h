@@ -1,7 +1,7 @@
 #pragma once
 #include <vector>
 
-namespace ssstitch
+namespace sssketch
 {
     /** The fields computeStemSchedule needs from a Rifff — see src/shared/schedulePlayback.ts. */
     struct RifffInfo

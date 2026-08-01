@@ -3,7 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <thread>
 
-namespace ssstitch
+namespace sssketch
 {
     namespace
     {

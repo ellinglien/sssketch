@@ -49,7 +49,7 @@ describe('loreWarehouse', () => {
   })
 
   it('warehouseAvailable() is true when a real warehouse.db3 exists at the expected path', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     expect(warehouseAvailable()).toBe(true)
@@ -103,7 +103,7 @@ describe('listJams', () => {
   })
 
   it('lists jams sorted by most recent riff activity, most recent first', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     const jams = listJams('')
@@ -112,7 +112,7 @@ describe('listJams', () => {
   })
 
   it('filters by name, case-insensitively', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     const jams = listJams('techno')
@@ -120,7 +120,7 @@ describe('listJams', () => {
   })
 
   it('a jam with no riffs yet still appears, sorted last (lastRiffTime 0)', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     const jams = listJams('')
@@ -188,7 +188,7 @@ describe('listRiffs', () => {
   })
 
   it('reports stemCount, cachedStemCount, and ownerFraction per riff', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -206,7 +206,7 @@ describe('listRiffs', () => {
   })
 
   it('only returns riffs for the requested jam', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -216,7 +216,7 @@ describe('listRiffs', () => {
   })
 
   it('filters by bpm when provided', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -227,7 +227,7 @@ describe('listRiffs', () => {
   })
 
   it('filters by userName when provided', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -237,7 +237,7 @@ describe('listRiffs', () => {
   })
 
   it('filters to only fully-cached riffs when onlyFullyCached is true', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -249,7 +249,7 @@ describe('listRiffs', () => {
   })
 
   it('scores ownerFraction against targetUser instead of the LORE_USERNAME default when given', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -263,7 +263,7 @@ describe('listRiffs', () => {
   })
 
   it('filters to only riffs containing targetUser when onlyContainsUser is true', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -282,7 +282,7 @@ describe('listRiffs', () => {
   })
 
   it('paginates when a jam has more riffs than fit on one page', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
     const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
     db.exec(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-big', 'Big Jam')`)
@@ -327,7 +327,7 @@ describe('resolveRiff', () => {
   })
 
   it('resolves every populated stem slot with its path, gain, and metadata', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -376,7 +376,7 @@ describe('resolveRiff', () => {
   })
 
   it('defaults a stem missing from GainsJSON to gain 1.0', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -386,7 +386,7 @@ describe('resolveRiff', () => {
   })
 
   it('returns null for a nonexistent RiffCID', () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     expect(resolveRiff('no-such-riff')).toBeNull()
@@ -406,7 +406,7 @@ describe('downloadMissingStems', () => {
   })
 
   it('fetches every uncached stem and writes it to the path resolveStemPath expects', async () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -442,7 +442,7 @@ describe('downloadMissingStems', () => {
   })
 
   it('leaves a stem uncached (and reports it that way) when its fetch fails, without throwing', async () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
@@ -457,7 +457,7 @@ describe('downloadMissingStems', () => {
   })
 
   it('returns null for a nonexistent RiffCID', async () => {
-    root = mkdtempSync(join(tmpdir(), 'ssstitch-lore-test-'))
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     expect(await downloadMissingStems('no-such-riff')).toBeNull()

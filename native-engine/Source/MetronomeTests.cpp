@@ -2,7 +2,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>
 
-namespace ssstitch
+namespace sssketch
 {
     class MetronomeTests : public juce::UnitTest
     {

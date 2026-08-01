@@ -294,7 +294,7 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
       .get(stemCID) as FullStemRow | undefined
     const path = resolveStemPath(riffRow.OwnerJamCID, stemCID)
     // This stem's OWN bpm/length, not the riff's — a stem can be a shorter
-    // loop tiled across a longer riff (the same distinction ssstitch's own
+    // loop tiled across a longer riff (the same distinction sssketch's own
     // Stem.barLength vs Rifff.barLength already makes for drag-and-drop
     // imports). Length16s (the stem's native loop length in sixteenth
     // notes), not the Stems table's own BarLength column — verified against

@@ -1,7 +1,7 @@
 import { initialState, type AppState } from './store'
 import { isSketchEligible } from './selectors'
 
-/** Everything persisted to a .rifffproj file — the full AppState minus
+/** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
  * position/running state aren't part of AppState at all anymore (they live
  * in StoreContext.tsx's own transport state, outside this reducer — see its
@@ -12,7 +12,7 @@ export type PersistedProject = Omit<
   'volumeDragMode' | 'mode' | 'inspectorCollapsed' | 'metronomeEnabled'
 >
 
-/** The shape of a .rifffproj saved before channels replaced trackOrder —
+/** The shape of a .sssketchproj saved before channels replaced trackOrder —
  * accepted by deserializeProject's migration step below, so an old save
  * still opens correctly instead of silently losing every placed rifff's row
  * (channelOrder/channelOf would otherwise just be empty). */

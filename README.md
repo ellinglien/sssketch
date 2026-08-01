@@ -1,4 +1,4 @@
-# ssstitch
+# sssketch
 
 An Electron application with React and TypeScript for stitching Endlesss rifff exports into a timeline.
 

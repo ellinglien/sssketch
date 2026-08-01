@@ -38,7 +38,7 @@ export function listVst3Candidates(): string[] {
 function defaultBinaryPath(): string {
   return join(
     app.getAppPath(),
-    'native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+    'native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
   )
 }
 

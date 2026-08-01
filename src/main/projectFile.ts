@@ -13,7 +13,7 @@ import { dialog, BrowserWindow, app } from 'electron'
  */
 export async function saveProjectAs(win: BrowserWindow, json: string): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
-    filters: [{ name: 'ssstitch Project', extensions: ['rifffproj'] }]
+    filters: [{ name: 'sssketch Project', extensions: ['sssketchproj'] }]
   })
   if (result.canceled || !result.filePath) return null
 
@@ -31,7 +31,7 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
   }
 }
 
-const AUTOSAVE_FILENAME = 'autosave.rifffproj'
+const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
 
 function autosavePath(): string {
   return join(app.getPath('userData'), AUTOSAVE_FILENAME)
@@ -39,7 +39,7 @@ function autosavePath(): string {
 
 /**
  * Silently writes the current project to a fixed, dedicated recovery
- * location — never the user's own named .rifffproj file, and never through
+ * location — never the user's own named .sssketchproj file, and never through
  * a dialog. Purely a crash/forgot-to-save safety net; App.tsx debounces
  * calls to this after real edits, independent of the user's own explicit
  * Save (which goes through saveProjectAs above and clears this instead).
@@ -85,7 +85,7 @@ export function clearAutosave(): void {
 }
 
 /**
- * Opens a file dialog and reads back the selected .rifffproj file. A read failure
+ * Opens a file dialog and reads back the selected .sssketchproj file. A read failure
  * (permission denied, file deleted between selection and read, etc.) is logged and
  * reported as `null` rather than throwing across the IPC boundary.
  */
@@ -93,7 +93,7 @@ export async function openProject(
   win: BrowserWindow
 ): Promise<{ path: string; json: string } | null> {
   const result = await dialog.showOpenDialog(win, {
-    filters: [{ name: 'ssstitch Project', extensions: ['rifffproj'] }],
+    filters: [{ name: 'sssketch Project', extensions: ['sssketchproj'] }],
     properties: ['openFile']
   })
   if (result.canceled || result.filePaths.length === 0) return null
