@@ -45,6 +45,13 @@ namespace ssstitch
         /** Message-thread API. See class doc comment. */
         void updateChannelSet(const std::vector<juce::String>& channelIds);
 
+        /** Message-thread API: forwards the project tempo to every currently
+         * published channel's chain (see PluginChain::setBpm), and remembers
+         * it so a channel created later by updateChannelSet starts with the
+         * current tempo too, instead of defaulting to something stale until
+         * the next explicit setBpm call. */
+        void setBpm(double bpm);
+
         /** Message-thread API: forwards to channelId's own chain. A no-op
          * (onLoaded called with success=false) if channelId isn't currently
          * known -- updateChannelSet should normally have already been
@@ -84,5 +91,6 @@ namespace ssstitch
     private:
         std::atomic<const ChannelChainMap*> published;
         PluginChain::Instantiator instantiator;
+        std::atomic<double> currentBpm { 120.0 };
     };
 }

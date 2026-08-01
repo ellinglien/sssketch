@@ -67,6 +67,57 @@ namespace ssstitch
             void setStateInformation(const void*, int) override {}
         };
 
+        /** Captures whatever bpm its own playhead reports during processBlock,
+         * so tests can verify PluginChain::setBpm() actually reaches a loaded
+         * plugin, and that it stays live (queried fresh each block, not
+         * snapshotted once at load time). */
+        class BpmCapturingTestPlugin : public juce::AudioProcessor
+        {
+        public:
+            const juce::String getName() const override { return "BpmCapturingTestPlugin"; }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override
+            {
+                auto* ph = getPlayHead();
+                if (ph == nullptr)
+                    return;
+                auto position = ph->getPosition();
+                if (position.hasValue() && position->getBpm().hasValue())
+                    lastSeenBpm = *position->getBpm();
+            }
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+            bool hasEditor() const override { return false; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock&) override {}
+            void setStateInformation(const void*, int) override {}
+
+            double lastSeenBpm = 0.0;
+        };
+
+        // outPlugin is set to the constructed instance's raw pointer, so the
+        // test can inspect lastSeenBpm after ownership moves into the chain.
+        PluginChain::Instantiator bpmCaptureInstantiator(BpmCapturingTestPlugin*& outPlugin)
+        {
+            return [&outPlugin](
+                       const juce::String& pluginId, double, int, juce::String& errorOut) -> std::unique_ptr<juce::AudioProcessor>
+            {
+                errorOut = {};
+                if (pluginId.isEmpty())
+                    return nullptr;
+                auto plugin = std::make_unique<BpmCapturingTestPlugin>();
+                outPlugin = plugin.get();
+                return plugin;
+            };
+        }
+
         PluginChain::Instantiator fakeInstantiator(std::map<int, float> gainsBySlot)
         {
             // Captured by value into the returned std::function; slotIndex isn't
@@ -135,6 +186,29 @@ namespace ssstitch
                     chain.process(1, l, r);
                     expect(std::isfinite(l[0]));
                     expect(std::isfinite(r[0]));
+                }
+
+                beginTest("setBpm reaches a loaded plugin's own playhead, live on every block");
+                {
+                    BpmCapturingTestPlugin* raw = nullptr;
+                    PluginChain chain(4, bpmCaptureInstantiator(raw));
+                    chain.setBpm(140.0);
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "any-id", 44100.0, 512, err));
+                    expect(raw != nullptr);
+
+                    float l[1] = { 0.0f };
+                    float r[1] = { 0.0f };
+                    chain.process(1, l, r);
+                    expectWithinAbsoluteError(raw->lastSeenBpm, 140.0, 0.0001);
+
+                    // Changing bpm after load must be reflected on the NEXT
+                    // process() call too -- the playhead is queried live by
+                    // the plugin each block, not snapshotted once at load
+                    // time.
+                    chain.setBpm(90.0);
+                    chain.process(1, l, r);
+                    expectWithinAbsoluteError(raw->lastSeenBpm, 90.0, 0.0001);
                 }
             }
         };

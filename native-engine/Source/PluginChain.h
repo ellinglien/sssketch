@@ -71,6 +71,16 @@ namespace ssstitch
         bool loadPluginSync(
             int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
+        /** Any thread: updates the project tempo every plugin in this chain
+         * sees via its own AudioPlayHead::getPosition() query — e.g. a
+         * tempo-synced delay's note-division times, or a modulation effect's
+         * synced rate. BPM-only: this does NOT track real transport position
+         * or play/pause state (isPlaying is reported unconditionally true,
+         * since process() is only ever called while audio is actually being
+         * rendered, live or export) — see the design spec's "tempo input"
+         * addendum for why that scope was chosen over full playhead sync. */
+        void setBpm(double bpm);
+
         /** Audio-thread API: promotes any slot with a ready pending swap to
          * active; the instance it replaces is handed to a background
          * cleanup thread rather than deleted here (a plugin's destructor
@@ -136,6 +146,28 @@ namespace ssstitch
             std::function<void()> onClosedCallback;
         };
 
+        // One shared playhead per chain (not per slot) -- tempo is a
+        // chain-wide, not per-plugin, concept. setBpm() writes the atomic;
+        // getPosition() reads it -- called by a hosted plugin from inside
+        // its own processBlock(), i.e. potentially the audio thread, so this
+        // must stay lock-free.
+        class BpmPlayHead : public juce::AudioPlayHead
+        {
+        public:
+            void setBpm(double newBpm) { bpm.store(newBpm); }
+
+            juce::Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo info;
+                info.setBpm(bpm.load());
+                info.setIsPlaying(true);
+                return info;
+            }
+
+        private:
+            std::atomic<double> bpm { 120.0 };
+        };
+
         struct Slot
         {
             std::unique_ptr<juce::AudioProcessor> active;
@@ -148,5 +180,6 @@ namespace ssstitch
 
         std::vector<Slot> slots;
         Instantiator instantiator;
+        BpmPlayHead playHead;
     };
 }

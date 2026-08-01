@@ -38,6 +38,7 @@ namespace ssstitch
                 (*next)[channelId] = instantiator
                     ? std::make_shared<PluginChain>(kNumChannelChainSlots, instantiator)
                     : std::make_shared<PluginChain>(kNumChannelChainSlots);
+                (*next)[channelId]->setBpm(currentBpm.load());
             }
         }
 
@@ -54,6 +55,14 @@ namespace ssstitch
         // established convention of never doing that work inline on a
         // thread that could be the audio thread.
         std::thread([old]() { delete old; }).detach();
+    }
+
+    void ChannelChainRegistry::setBpm(double bpm)
+    {
+        currentBpm.store(bpm);
+        const auto* map = published.load();
+        for (auto& [channelId, chain] : *map)
+            chain->setBpm(bpm);
     }
 
     void ChannelChainRegistry::requestLoad(

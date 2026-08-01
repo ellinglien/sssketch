@@ -21,6 +21,8 @@ namespace ssstitch
             delete slot.pending.exchange(nullptr);
     }
 
+    void PluginChain::setBpm(double bpm) { playHead.setBpm(bpm); }
+
     void PluginChain::applyPendingSwaps()
     {
         for (auto& slot : slots)
@@ -32,6 +34,7 @@ namespace ssstitch
                 continue; // defensive: shouldn't happen if pendingReady was true
             auto old = std::move(slot.active);
             slot.active.reset(newInstance);
+            slot.active->setPlayHead(&playHead);
             slot.processChannels = std::max(
                 { 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() });
             if (old != nullptr)
@@ -131,6 +134,8 @@ namespace ssstitch
             return false;
         auto& slot = slots[(size_t) slotIndex];
         slot.active = std::move(instance); // nullptr (empty pluginId) is a valid "no plugin" state
+        if (slot.active != nullptr)
+            slot.active->setPlayHead(&playHead);
         slot.processChannels = slot.active != nullptr
             ? std::max({ 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() })
             : 2;
@@ -142,8 +147,18 @@ namespace ssstitch
         if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return false;
         auto& slot = slots[(size_t) slotIndex];
-        if (slot.active == nullptr || slot.editorWindow != nullptr || !slot.active->hasEditor())
-            return true; // no-op: nothing to open, or already open
+        if (slot.editorWindow != nullptr)
+        {
+            // Already open -- bring it to the front instead of silently doing
+            // nothing, so re-clicking "edit" on a plugin whose window is
+            // sitting behind others (or just lost focus) actually surfaces
+            // it, matching how every other "open/focus this thing" action in
+            // this app behaves.
+            slot.editorWindow->toFront(true);
+            return true;
+        }
+        if (slot.active == nullptr || !slot.active->hasEditor())
+            return true; // no-op: nothing to open
 
         auto* editor = slot.active->createEditorIfNeeded();
         if (editor == nullptr)

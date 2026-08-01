@@ -112,6 +112,7 @@ namespace ssstitch
                         channelIds.push_back(rifff.channelId);
                 }
                 channelChains.updateChannelSet(channelIds);
+                channelChains.setBpm(project.bpm);
             }
             else
             {

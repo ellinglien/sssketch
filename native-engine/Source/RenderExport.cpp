@@ -28,6 +28,7 @@ namespace ssstitch
         // blocking the audio thread on plugin instantiation would cause an
         // audible dropout).
         PluginChain masterChain(kNumMasterChainSlots);
+        masterChain.setBpm(project.bpm);
         for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
         {
             const auto& path = project.masterChain[(size_t) slot].path;
@@ -47,6 +48,7 @@ namespace ssstitch
         for (const auto& chainEntry : project.channelChains)
         {
             auto chain = std::make_shared<PluginChain>(kNumChannelChainSlots);
+            chain->setBpm(project.bpm);
             for (int slot = 0; slot < kNumChannelChainSlots; ++slot)
             {
                 const auto& path = chainEntry.slots[(size_t) slot].path;

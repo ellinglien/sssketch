@@ -62,7 +62,11 @@ namespace ssstitch
         double currentSampleRate() const { return deviceSampleRate; }
         int currentBlockSize() const { return deviceBlockSize; }
 
-        void setBpm(double bpm) { secPerBar = bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
+        void setBpm(double bpm)
+        {
+            secPerBar = bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0;
+            masterChain.setBpm(bpm);
+        }
 
         // 0 (the default) disables wrapping entirely — positionBars advances
         // monotonically forever, same as before this existed. Set from
