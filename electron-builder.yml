@@ -12,6 +12,9 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: native-engine/build/ssstitch_engine_artefacts/ssstitch-engine.app
+    to: native-engine/ssstitch-engine.app
 win:
   executableName: ssstitch
 nsis:
