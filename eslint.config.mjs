@@ -15,6 +15,7 @@ export default defineConfig(
       '**/docs',
       '**/fixtures',
       'native-engine/build',
+      'build',
       '.worktrees'
     ]
   },

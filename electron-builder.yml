@@ -2,6 +2,7 @@ appId: com.ellinglien.ssstitch
 productName: ssstitch
 directories:
   buildResources: build
+afterSign: build/afterSign.js
 files:
   - '!**/.vscode/*'
   - '!src/*'
