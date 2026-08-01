@@ -1,6 +1,15 @@
-import { peaksFromChannel } from '@shared/visuals'
+import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
 
-const cache = new Map<string, Promise<number[]>>()
+interface WaveformAnalysis {
+  peaks: number[]
+  /** Per-bucket zero-crossing-rate brightness (see zcrFromChannel) — same
+   * 128-bucket resolution as peaks, computed from the same decode so a
+   * consumer wanting both (e.g. Waveform.tsx's brightness treatment)
+   * doesn't pay for a second read+decode of the same file. */
+  brightness: number[]
+}
+
+const cache = new Map<string, Promise<WaveformAnalysis>>()
 let sharedContext: AudioContext | null = null
 
 function getContext(): AudioContext {
@@ -8,7 +17,7 @@ function getContext(): AudioContext {
   return sharedContext
 }
 
-export function getPeaks(path: string): Promise<number[]> {
+function getAnalysis(path: string): Promise<WaveformAnalysis> {
   const cached = cache.get(path)
   if (cached) return cached
 
@@ -21,7 +30,8 @@ export function getPeaks(path: string): Promise<number[]> {
       // handing decodeAudioData the raw (possibly oversized) backing buffer.
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       const audioBuffer = await getContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-      return peaksFromChannel(audioBuffer.getChannelData(0), 128)
+      const channel = audioBuffer.getChannelData(0)
+      return { peaks: peaksFromChannel(channel, 128), brightness: zcrFromChannel(channel, 128) }
     } catch (err) {
       // Don't let a transient failure (mid-copy read, permission hiccup, corrupt
       // file) permanently blacklist this path — evict so a future call retries
@@ -33,6 +43,18 @@ export function getPeaks(path: string): Promise<number[]> {
 
   cache.set(path, promise)
   return promise
+}
+
+export function getPeaks(path: string): Promise<number[]> {
+  return getAnalysis(path).then((a) => a.peaks)
+}
+
+/** Per-bucket "how much high-frequency content is here" — see
+ * zcrFromChannel's own doc comment. Used by Waveform.tsx's brightness
+ * treatment to make hi-hats/transients read brighter than sustained bass,
+ * without a second decode of the same file getPeaks already triggered. */
+export function getBrightness(path: string): Promise<number[]> {
+  return getAnalysis(path).then((a) => a.brightness)
 }
 
 export function getAudioContext(): AudioContext {

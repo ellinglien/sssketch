@@ -366,7 +366,7 @@ export function StemWaveformRow({
                   key={left}
                   style={{ position: 'absolute', top: 0, bottom: 0, left, width: tileWidthPx }}
                 >
-                  <Waveform path={stem.path} color={color} opacity={1} />
+                  <Waveform path={stem.path} color={color} opacity={1} showPitchLine />
                 </div>
               ))}
             </div>

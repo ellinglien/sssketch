@@ -76,4 +76,35 @@ describe('peakCache', () => {
     expect(Array.isArray(peaks)).toBe(true)
     expect(decodeAudioDataMock).toHaveBeenCalledTimes(2)
   })
+
+  it('getBrightness shares the same decode as getPeaks for the same path (no second read+decode)', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getPeaks, getBrightness } = await import('./peakCache')
+
+    const [peaks, brightness] = await Promise.all([
+      getPeaks('/some/path.wav'),
+      getBrightness('/some/path.wav')
+    ])
+
+    expect(Array.isArray(peaks)).toBe(true)
+    expect(Array.isArray(brightness)).toBe(true)
+    expect(readAudioFileMock).toHaveBeenCalledTimes(1)
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('getBrightness returns 128 buckets, each within [0, 1]', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getBrightness } = await import('./peakCache')
+    const brightness = await getBrightness('/some/path.wav')
+
+    expect(brightness).toHaveLength(128)
+    for (const v of brightness) {
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
+  })
 })

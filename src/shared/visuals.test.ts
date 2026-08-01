@@ -5,7 +5,11 @@ import {
   positionLabel,
   elapsedLabel,
   linearWave,
+  linearWaveBars,
   polarGlyph,
+  polarPitchLine,
+  linearPitchLine,
+  zcrFromChannel,
   downsample,
   peaksFromChannel
 } from './visuals'
@@ -115,5 +119,112 @@ describe('polarGlyph', () => {
     const path = polarGlyph([0.2, 0.8, 0.4, 0.6], 17, 20, 8)
     expect(path.startsWith('M')).toBe(true)
     expect(path.endsWith('Z')).toBe(true)
+  })
+})
+
+describe('linearWaveBars', () => {
+  it('returns one bar per peak, spanning the full 128-wide box', () => {
+    const bars = linearWaveBars([0.5, 1, 0.25])
+    expect(bars).toHaveLength(3)
+    expect(bars[0].x).toBeCloseTo(0, 5)
+    expect(bars[2].x + bars[2].width).toBeCloseTo(128, 5)
+  })
+
+  it('scales each bar height relative to the peak array’s own max', () => {
+    const bars = linearWaveBars([0.5, 1])
+    // The loudest bucket (1) should be exactly twice the quieter one's height.
+    expect(bars[1].height).toBeCloseTo(bars[0].height * 2, 5)
+  })
+
+  it('centers every bar vertically around y=50', () => {
+    const bars = linearWaveBars([0.4, 0.8])
+    for (const bar of bars) {
+      expect(bar.y + bar.height / 2).toBeCloseTo(50, 5)
+    }
+  })
+
+  it('returns an empty array for empty input', () => {
+    expect(linearWaveBars([])).toEqual([])
+  })
+})
+
+describe('zcrFromChannel', () => {
+  it('reports near-zero crossings for a constant (DC) signal', () => {
+    const samples = new Float32Array(256).fill(0.5)
+    const zcr = zcrFromChannel(samples, 4)
+    for (const v of zcr) expect(v).toBeCloseTo(0, 5)
+  })
+
+  it('reports a high crossing rate for a signal alternating every sample', () => {
+    const samples = new Float32Array(256)
+    for (let i = 0; i < samples.length; i++) samples[i] = i % 2 === 0 ? 1 : -1
+    const zcr = zcrFromChannel(samples, 4)
+    for (const v of zcr) expect(v).toBeGreaterThan(0.9)
+  })
+
+  it('reports a higher crossing rate for a high-frequency bucket than a low one', () => {
+    const sampleRate = 44100
+    const samples = new Float32Array(sampleRate)
+    // First half: a low tone. Second half: a much higher tone.
+    for (let i = 0; i < samples.length / 2; i++) {
+      samples[i] = Math.sin((2 * Math.PI * 80 * i) / sampleRate)
+    }
+    for (let i = samples.length / 2; i < samples.length; i++) {
+      samples[i] = Math.sin((2 * Math.PI * 6000 * i) / sampleRate)
+    }
+    const zcr = zcrFromChannel(samples, 2)
+    expect(zcr[1]).toBeGreaterThan(zcr[0])
+  })
+
+  it('returns `buckets` entries, each within [0, 1]', () => {
+    const samples = new Float32Array(1000).map((_, i) => Math.sin(i))
+    const zcr = zcrFromChannel(samples, 16)
+    expect(zcr).toHaveLength(16)
+    for (const v of zcr) {
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe('polarPitchLine', () => {
+  it('returns an empty string for an all-unpitched contour', () => {
+    expect(polarPitchLine([0, 0, 0], 17, 20, 60, 2000)).toBe('')
+  })
+
+  it('starts a new subpath (M) after a gap, instead of drawing across it', () => {
+    const path = polarPitchLine([220, 0, 440], 17, 20, 60, 2000)
+    const moveCount = (path.match(/M/g) || []).length
+    expect(moveCount).toBe(2) // one M before the gap, one after
+  })
+
+  it('places a higher frequency at a larger radius than a lower one', () => {
+    // Two single-note contours, otherwise identical geometry.
+    const low = polarPitchLine([110], 17, 20, 60, 2000)
+    const high = polarPitchLine([1000], 17, 20, 60, 2000)
+    const radiusOf = (d: string): number => {
+      const [x, y] = d.slice(1).split(',').map(Number)
+      return Math.hypot(x - 50, y - 50)
+    }
+    expect(radiusOf(high)).toBeGreaterThan(radiusOf(low))
+  })
+})
+
+describe('linearPitchLine', () => {
+  it('returns an empty string for an all-unpitched contour', () => {
+    expect(linearPitchLine([0, 0, 0], 60, 2000)).toBe('')
+  })
+
+  it('starts a new subpath (M) after a gap, instead of drawing across it', () => {
+    const path = linearPitchLine([220, 0, 440], 60, 2000)
+    const moveCount = (path.match(/M/g) || []).length
+    expect(moveCount).toBe(2)
+  })
+
+  it('places a higher frequency nearer the top (smaller y) than a lower one', () => {
+    const low = linearPitchLine([110], 60, 2000)
+    const high = linearPitchLine([1000], 60, 2000)
+    const yOf = (d: string): number => Number(d.slice(1).split(',')[1])
+    expect(yOf(high)).toBeLessThan(yOf(low))
   })
 })

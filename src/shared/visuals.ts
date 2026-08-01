@@ -92,6 +92,122 @@ export function polarGlyph(peaks: number[], r0 = 17, amp = 20, points = 16): str
   return d + 'Z'
 }
 
+export interface WaveformBar {
+  x: number
+  width: number
+  y: number
+  height: number
+}
+
+/** Same geometry linearWave draws (128-wide box, centered at y=50, height
+ * scaled relative to the peak array's own max), but returned as one
+ * rectangle per bucket instead of a single filled path — needed wherever a
+ * bucket needs its own fill (e.g. opacity keyed to that bucket's spectral
+ * brightness), which a single <path> can't express. */
+export function linearWaveBars(peaks: number[]): WaveformBar[] {
+  const n = peaks.length
+  if (n === 0) return []
+  const mx = Math.max.apply(null, peaks) || 1
+  const stepWidth = 128 / n
+  return peaks.map((p, i) => {
+    const h = (p / mx) * 45
+    return { x: i * stepWidth, width: stepWidth, y: 50 - h, height: h * 2 }
+  })
+}
+
+/** Cheap zero-crossing-rate brightness proxy, bucketed the same way
+ * peaksFromChannel is — a rough "how much high-frequency content is in
+ * this bucket" without running an FFT: high-frequency content crosses zero
+ * far more often per sample than a sustained bass note does. Each bucket's
+ * value is crossings / (samples in bucket - 1), so it's naturally bounded
+ * to [0, 1] with no separate normalization pass needed. */
+export function zcrFromChannel(samples: Float32Array, buckets = 128): number[] {
+  const out: number[] = []
+  for (let i = 0; i < buckets; i++) {
+    const a = Math.floor((i * samples.length) / buckets)
+    const b = Math.floor(((i + 1) * samples.length) / buckets)
+    let crossings = 0
+    let count = 0
+    let prevSign = 0
+    for (let j = a; j < b; j++) {
+      const sign = samples[j] > 0 ? 1 : samples[j] < 0 ? -1 : 0
+      if (sign !== 0 && prevSign !== 0 && sign !== prevSign) crossings++
+      if (sign !== 0) prevSign = sign
+      count++
+    }
+    out.push(count > 1 ? crossings / (count - 1) : 0)
+  }
+  return out
+}
+
+/** Traces a guessed pitch contour (see pitchContour.ts's computePitchContour
+ * — 0 means "unpitched," not "silence at 0Hz") as a stroke-only path around
+ * a ring, log-frequency mapped to radius within [r0, r0+amp] — the polar
+ * analog of BeatPicker.tsx's own linear melody-contour overlay. Breaks into
+ * a new subpath (M) at every unpitched frame rather than interpolating
+ * across it, same as BeatPicker's: a percussive gap isn't "on" any pitch. */
+export function polarPitchLine(
+  freqHz: readonly number[],
+  r0: number,
+  amp: number,
+  minFreqHz: number,
+  maxFreqHz: number
+): string {
+  const n = freqHz.length
+  if (n === 0) return ''
+  const logMin = Math.log2(minFreqHz)
+  const logMax = Math.log2(maxFreqHz)
+  let d = ''
+  let drawing = false
+  for (let i = 0; i < n; i++) {
+    const f = freqHz[i]
+    if (!(f > 0)) {
+      drawing = false
+      continue
+    }
+    const frac = Math.max(0, Math.min(1, (Math.log2(f) - logMin) / (logMax - logMin)))
+    const r = r0 + frac * amp
+    const angle = (i / n) * TAU - Math.PI / 2
+    const x = (50 + Math.cos(angle) * r).toFixed(1)
+    const y = (50 + Math.sin(angle) * r).toFixed(1)
+    d += drawing ? `L${x},${y}` : `M${x},${y}`
+    drawing = true
+  }
+  return d
+}
+
+/** Linear counterpart to polarPitchLine, in the same 128x100 box
+ * linearWave/linearWaveBars use — higher pitch nearer the top, matching
+ * BeatPicker.tsx's own freqToTopPct convention (and the spectrogram's
+ * low-frequency-at-the-bottom orientation). Kept off the very top/bottom
+ * edge (5-95 instead of 0-100) so an extreme pitch doesn't draw flush
+ * against the waveform lane's border. */
+export function linearPitchLine(
+  freqHz: readonly number[],
+  minFreqHz: number,
+  maxFreqHz: number
+): string {
+  const n = freqHz.length
+  if (n === 0) return ''
+  const logMin = Math.log2(minFreqHz)
+  const logMax = Math.log2(maxFreqHz)
+  let d = ''
+  let drawing = false
+  for (let i = 0; i < n; i++) {
+    const f = freqHz[i]
+    if (!(f > 0)) {
+      drawing = false
+      continue
+    }
+    const frac = Math.max(0, Math.min(1, (Math.log2(f) - logMin) / (logMax - logMin)))
+    const x = ((i / n) * 128).toFixed(1)
+    const y = ((1 - frac) * 90 + 5).toFixed(1)
+    d += drawing ? `L${x},${y}` : `M${x},${y}`
+    drawing = true
+  }
+  return d
+}
+
 /* ——— readouts used across the UI ——— */
 
 export function dbLabel(v: number): string {
