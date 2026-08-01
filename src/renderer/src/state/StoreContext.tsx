@@ -15,6 +15,7 @@ import { createHistoryState, historyReducer } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
+import type { PluginCatalog } from '../../../main/pluginCatalog'
 
 // Playback position/state now live entirely outside the undo-tracked main
 // reducer — see StoreProvider's dispatch below. Previously they were fields
@@ -52,6 +53,19 @@ const MasterChainErrorCtx = createContext<
   [string | null, string | null, string | null, string | null]
 >([null, null, null, null])
 
+const PluginCatalogCtx = createContext<PluginCatalog>({ plugins: [], favouriteIds: [] })
+const PluginScanStateCtx = createContext<{
+  scanning: boolean
+  progress: { done: number; total: number } | null
+}>({
+  scanning: false,
+  progress: null
+})
+const PluginCatalogActionsCtx = createContext<{
+  triggerScan: () => void
+  toggleFavourite: (id: string) => void
+}>({ triggerScan: () => {}, toggleFavourite: () => {} })
+
 export interface HistoryControls {
   undo: () => void
   redo: () => void
@@ -77,6 +91,39 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const [masterChainError, setMasterChainError] = useState<
     [string | null, string | null, string | null, string | null]
   >([null, null, null, null])
+  const [pluginCatalog, setPluginCatalog] = useState<PluginCatalog>({
+    plugins: [],
+    favouriteIds: []
+  })
+  const [scanning, setScanning] = useState(false)
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null)
+
+  useEffect(() => {
+    void window.rifffApi.getPluginCatalog().then(setPluginCatalog)
+  }, [])
+
+  useEffect(() => {
+    return window.rifffApi.onScanProgress((progress) => setScanProgress(progress))
+  }, [])
+
+  const triggerScan = useCallback(() => {
+    setScanning(true)
+    setScanProgress(null)
+    void window.rifffApi.scanPlugins().then((catalog) => {
+      setPluginCatalog(catalog)
+      setScanning(false)
+      setScanProgress(null)
+    })
+  }, [])
+
+  const toggleFavourite = useCallback((id: string) => {
+    void window.rifffApi.togglePluginFavourite(id).then(setPluginCatalog)
+  }, [])
+
+  const pluginCatalogActions = useMemo(
+    () => ({ triggerScan, toggleFavourite }),
+    [triggerScan, toggleFavourite]
+  )
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -289,7 +336,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             <HistoryCtx.Provider value={historyControls}>
               <MasterChainStatusCtx.Provider value={masterChainStatus}>
                 <MasterChainErrorCtx.Provider value={masterChainError}>
-                  {children}
+                  <PluginCatalogCtx.Provider value={pluginCatalog}>
+                    <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
+                      <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                        {children}
+                      </PluginCatalogActionsCtx.Provider>
+                    </PluginScanStateCtx.Provider>
+                  </PluginCatalogCtx.Provider>
                 </MasterChainErrorCtx.Provider>
               </MasterChainStatusCtx.Provider>
             </HistoryCtx.Provider>
@@ -343,4 +396,25 @@ export function useMasterChainError(): [
   string | null
 ] {
   return useContext(MasterChainErrorCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function usePluginCatalog(): PluginCatalog {
+  return useContext(PluginCatalogCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function usePluginScanState(): {
+  scanning: boolean
+  progress: { done: number; total: number } | null
+} {
+  return useContext(PluginScanStateCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function usePluginCatalogActions(): {
+  triggerScan: () => void
+  toggleFavourite: (id: string) => void
+} {
+  return useContext(PluginCatalogActionsCtx)
 }
