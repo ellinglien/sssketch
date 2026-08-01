@@ -29,15 +29,31 @@ afterEach(() => {
   handle = undefined
 })
 
+// Same reasoning as realBinaryPath above, now for defaultBridgeBinaryPath()
+// (also electron-dependent, added alongside the x86_64 bridge feature) --
+// every spawnEngine() call in this file must override this too, or it hits
+// the same "app is undefined outside real Electron" crash defaultBinaryPath()
+// itself would. Deliberately a path that doesn't exist, so these
+// bridge-unrelated tests spawn the engine with no --bridge-binary flag at
+// all -- the simplest, most orthogonal choice for tests that aren't
+// actually about bridging.
+const noBridgeBinaryPath = '/no/such/bridge/binary'
+
 describe('spawnEngine', () => {
   it('spawns the engine, waits for readiness, and returns a connected port', async () => {
-    handle = await spawnEngine({ binaryPathOverride: realBinaryPath })
+    handle = await spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: noBridgeBinaryPath
+    })
     expect(handle.port).toBeGreaterThan(0)
     expect(handle.process.exitCode).toBeNull() // still running
   })
 
   it('stop() terminates the process', async () => {
-    handle = await spawnEngine({ binaryPathOverride: realBinaryPath })
+    handle = await spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: noBridgeBinaryPath
+    })
     const proc = handle.process
     handle.stop()
     await new Promise<void>((resolve) => {
@@ -58,5 +74,28 @@ describe('spawnEngine', () => {
 
   it('rejects if the engine binary does not exist at the resolved path', async () => {
     await expect(spawnEngine({ binaryPathOverride: '/no/such/binary' })).rejects.toThrow()
+  })
+
+  // The bridge binary is a genuinely optional, separate build target (see
+  // native-engine-bridge/ and docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md)
+  // -- these two tests don't assert on the engine's spawned argv directly
+  // (no process-inspection dependency in this codebase for that), just that
+  // the engine still starts up and reports readiness normally either way,
+  // proving the flag-construction logic itself doesn't throw or otherwise
+  // break the spawn.
+  it('still starts normally when a bridge binary exists at the given override path', async () => {
+    handle = await spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: realBinaryPath // reusing the real engine binary as a stand-in "exists" path
+    })
+    expect(handle.port).toBeGreaterThan(0)
+  })
+
+  it('still starts normally when nothing exists at the given bridge binary override path', async () => {
+    handle = await spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: '/definitely/does/not/exist/sssketch-bridge'
+    })
+    expect(handle.port).toBeGreaterThan(0)
   })
 })

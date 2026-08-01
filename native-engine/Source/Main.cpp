@@ -10,6 +10,7 @@
 #include "EngineProject.h"
 #include "RenderExport.h"
 #include "PluginArchitecture.h"
+#include "BridgeClient.h"
 
 // PlaybackEngine, Transport, IpcServer, StemBufferCache, EngineProject, and
 // parseEngineProject all live in namespace sssketch (see their headers) — the
@@ -239,12 +240,17 @@ static int runSpike()
     return (vst3Ok && auOk) ? 0 : 1;
 }
 
-static int runServe(int port)
+static int runServe(int port, const juce::String& bridgeBinaryPath)
 {
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
-    PluginChain masterChain(kNumMasterChainSlots);
-    ChannelChainRegistry channelChains;
+    // Empty bridgeBinaryPath (nothing passed via --bridge-binary, e.g. the
+    // bridge hasn't been built in dev mode yet) means bridging is
+    // unavailable this session -- BridgeClient degrades every method to a
+    // clean "load failed" rather than crashing, see its own doc comment.
+    BridgeClient bridgeClient(bridgeBinaryPath);
+    PluginChain masterChain(kNumMasterChainSlots, &PluginChain::defaultInstantiate, &bridgeClient);
+    ChannelChainRegistry channelChains(nullptr, &bridgeClient);
     Transport transport(engine, masterChain, channelChains);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
@@ -429,7 +435,18 @@ int main(int argc, char* argv[])
         return runSpike();
 
     if (argc > 2 && juce::String(argv[1]) == "--serve")
-        return runServe(juce::String(argv[2]).getIntValue());
+    {
+        juce::String bridgeBinaryPath;
+        for (int i = 3; i < argc - 1; ++i)
+        {
+            if (juce::String(argv[i]) == "--bridge-binary")
+            {
+                bridgeBinaryPath = juce::String(argv[i + 1]);
+                break;
+            }
+        }
+        return runServe(juce::String(argv[2]).getIntValue(), bridgeBinaryPath);
+    }
 
     if (argc > 4 && juce::String(argv[1]) == "--render-test")
         return runRenderTest(juce::String(argv[2]), juce::String(argv[3]), juce::String(argv[4]).getDoubleValue());

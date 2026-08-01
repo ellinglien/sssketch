@@ -4,8 +4,8 @@
 
 namespace sssketch
 {
-    ChannelChainRegistry::ChannelChainRegistry(PluginChain::Instantiator inst)
-        : published(new ChannelChainMap()), instantiator(std::move(inst))
+    ChannelChainRegistry::ChannelChainRegistry(PluginChain::Instantiator inst, BridgeClient* bc)
+        : published(new ChannelChainMap()), instantiator(std::move(inst)), bridgeClient(bc)
     {
     }
 
@@ -36,8 +36,8 @@ namespace sssketch
             else
             {
                 (*next)[channelId] = instantiator
-                    ? std::make_shared<PluginChain>(kNumChannelChainSlots, instantiator)
-                    : std::make_shared<PluginChain>(kNumChannelChainSlots);
+                    ? std::make_shared<PluginChain>(kNumChannelChainSlots, instantiator, bridgeClient)
+                    : std::make_shared<PluginChain>(kNumChannelChainSlots, &PluginChain::defaultInstantiate, bridgeClient);
                 (*next)[channelId]->setBpm(currentBpm.load());
             }
         }

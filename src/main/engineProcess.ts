@@ -12,6 +12,23 @@ export interface EngineHandle {
 export interface SpawnEngineOptions {
   binaryPathOverride?: string
   portOverride?: number
+  bridgeBinaryPathOverride?: string
+}
+
+/** Mirrors defaultBinaryPath()'s own dev-vs-packaged branch exactly, for
+ * the x86_64 bridge helper (see native-engine-bridge/ and
+ * docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md). */
+function defaultBridgeBinaryPath(): string {
+  if (app.isPackaged) {
+    return join(
+      process.resourcesPath,
+      'native-engine-bridge/sssketch-bridge.app/Contents/MacOS/sssketch-bridge'
+    )
+  }
+  return join(
+    app.getAppPath(),
+    'native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app/Contents/MacOS/sssketch-bridge'
+  )
 }
 
 function defaultBinaryPath(): string {
@@ -66,8 +83,19 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
     return Promise.reject(new Error(`native engine binary not found at ${binaryPath}`))
   }
 
+  // The bridge binary is a genuinely optional, separate build target --
+  // only pass --bridge-binary when it actually exists, so bridging stays
+  // optional/degradable in a dev environment where native-engine-bridge/
+  // hasn't been built yet. The engine's own CLI parsing treats a missing
+  // flag identically to bridging simply being unavailable this session.
+  const bridgeBinaryPath = options.bridgeBinaryPathOverride ?? defaultBridgeBinaryPath()
+  const engineArgs = ['--serve', String(port)]
+  if (existsSync(bridgeBinaryPath)) {
+    engineArgs.push('--bridge-binary', bridgeBinaryPath)
+  }
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(binaryPath, ['--serve', String(port)])
+    const proc = spawn(binaryPath, engineArgs)
     let settled = false
     // The readiness line isn't guaranteed to arrive in a single 'data' event —
     // OS pipe buffering can split one logical stderr write across multiple

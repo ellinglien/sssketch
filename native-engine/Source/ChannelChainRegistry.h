@@ -36,7 +36,7 @@ namespace sssketch
     class ChannelChainRegistry
     {
     public:
-        explicit ChannelChainRegistry(PluginChain::Instantiator instantiator = nullptr);
+        explicit ChannelChainRegistry(PluginChain::Instantiator instantiator = nullptr, BridgeClient* bridgeClient = nullptr);
         ~ChannelChainRegistry();
 
         ChannelChainRegistry(const ChannelChainRegistry&) = delete;
@@ -91,6 +91,7 @@ namespace sssketch
     private:
         std::atomic<const ChannelChainMap*> published;
         PluginChain::Instantiator instantiator;
+        BridgeClient* bridgeClient;
         std::atomic<double> currentBpm { 120.0 };
     };
 }

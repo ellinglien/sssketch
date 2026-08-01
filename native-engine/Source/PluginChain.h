@@ -115,10 +115,16 @@ namespace sssketch
          * no window is open for that slot. */
         void closeEditorWindow(int slotIndex);
 
-    private:
+        // Public (not just used as this constructor's own default
+        // argument value) so callers who need to pass a LATER constructor
+        // argument explicitly (e.g. ChannelChainRegistry passing
+        // bridgeClient) can still name the same default instantiator
+        // behavior for this one, rather than needing their own duplicate
+        // implementation.
         static std::unique_ptr<juce::AudioProcessor> defaultInstantiate(
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
+    private:
         // One shared playhead per chain (not per slot) -- tempo is a
         // chain-wide, not per-plugin, concept. setBpm() writes the atomic;
         // getPosition() reads it -- called by a hosted plugin from inside
