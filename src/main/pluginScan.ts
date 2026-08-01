@@ -1,6 +1,6 @@
 // src/main/pluginScan.ts
 import { spawn } from 'node:child_process'
-import { readdirSync } from 'node:fs'
+import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 
@@ -13,7 +13,13 @@ export interface ScannedPlugin {
 }
 
 export type ScanOneResult =
-  { success: true; plugins: ScannedPlugin[] } | { success: false; error: string }
+  | { success: true; plugins: ScannedPlugin[] }
+  // `arch` is only ever present here when the native side could still
+  // determine it despite the scan itself failing (e.g. it could read the
+  // Mach-O header via `file` even though it couldn't dlopen the plugin's
+  // own code to enumerate its types) -- see scanOneCandidate's own bridge
+  // fallback below, which is the reason this needs to be readable at all.
+  | { success: false; error: string; arch?: 'arm64' | 'x86_64' | 'universal' | 'unknown' }
 
 export function isVst3Candidate(filename: string): boolean {
   return filename.toLowerCase().endsWith('.vst3')
@@ -72,26 +78,38 @@ function defaultBinaryPath(): string {
   )
 }
 
+/** Mirrors engineProcess.ts's own defaultBridgeBinaryPath() -- kept as a
+ * separate, independently-resolved function here rather than imported,
+ * matching this file's own existing convention of resolving its engine
+ * binary path locally (defaultBinaryPath above) instead of sharing
+ * engineProcess.ts's. */
+function defaultBridgeBinaryPath(): string {
+  if (app.isPackaged) {
+    return join(
+      process.resourcesPath,
+      'native-engine-bridge/sssketch-bridge.app/Contents/MacOS/sssketch-bridge'
+    )
+  }
+  return join(
+    app.getAppPath(),
+    'native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app/Contents/MacOS/sssketch-bridge'
+  )
+}
+
 export interface ScanOneOptions {
   binaryPathOverride?: string
+  bridgeBinaryPathOverride?: string
   timeoutMs?: number
 }
 
-/** Probes a single candidate plugin path in a fresh, isolated, short-lived
- * subprocess (native-engine's own --scan-one-json mode) with a hard
- * timeout. A hang, crash, or non-zero exit is reported as success:false and
- * never throws -- this function is called once per candidate across a
- * whole-directory scan, and one bad plugin must never take down the rest of
- * the scan. Matches native-engine/PHASE0_FINDINGS.md's own explicit
- * recommendation: "scan each plugin candidate in an isolated subprocess
- * with a timeout." */
-export function scanOneCandidate(
+/** One spawn+timeout+parse cycle against a given binary -- shared by
+ * scanOneCandidate's primary (arm64) attempt and its bridge (x86_64)
+ * retry below, which are otherwise identical in shape. */
+function spawnScanOneJson(
+  binaryPath: string,
   path: string,
-  options: ScanOneOptions = {}
+  timeoutMs: number
 ): Promise<ScanOneResult> {
-  const binaryPath = options.binaryPathOverride ?? defaultBinaryPath()
-  const timeoutMs = options.timeoutMs ?? 10000
-
   return new Promise((resolve) => {
     const proc = spawn(binaryPath, ['--scan-one-json', path])
     let settled = false
@@ -127,4 +145,37 @@ export function scanOneCandidate(
       }
     })
   })
+}
+
+/** Probes a single candidate plugin path in a fresh, isolated, short-lived
+ * subprocess (native-engine's own --scan-one-json mode) with a hard
+ * timeout. A hang, crash, or non-zero exit is reported as success:false and
+ * never throws -- this function is called once per candidate across a
+ * whole-directory scan, and one bad plugin must never take down the rest of
+ * the scan. Matches native-engine/PHASE0_FINDINGS.md's own explicit
+ * recommendation: "scan each plugin candidate in an isolated subprocess
+ * with a timeout."
+ *
+ * The arm64 main engine can't even IDENTIFY an x86_64-only plugin's type
+ * (dlopen-ing foreign-architecture code fails outright, not just
+ * instantiating it) -- when that's exactly what happened (failure with
+ * arch === 'x86_64'), this retries the identical scan through the x86_64
+ * bridge binary instead, which can. See
+ * docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md's
+ * follow-up. A missing/unbuilt bridge binary just means the original
+ * arm64 failure stands -- never a hard error. */
+export async function scanOneCandidate(
+  path: string,
+  options: ScanOneOptions = {}
+): Promise<ScanOneResult> {
+  const binaryPath = options.binaryPathOverride ?? defaultBinaryPath()
+  const timeoutMs = options.timeoutMs ?? 10000
+
+  const result = await spawnScanOneJson(binaryPath, path, timeoutMs)
+  if (result.success || result.arch !== 'x86_64') return result
+
+  const bridgeBinaryPath = options.bridgeBinaryPathOverride ?? defaultBridgeBinaryPath()
+  if (!existsSync(bridgeBinaryPath)) return result
+
+  return spawnScanOneJson(bridgeBinaryPath, path, timeoutMs)
 }

@@ -1,5 +1,6 @@
 // native-engine-bridge/Source/BridgeIpcServer.cpp
 #include "BridgeIpcServer.h"
+#include "PluginScanning.h"
 
 namespace sssketch
 {
@@ -124,16 +125,7 @@ namespace sssketch
             juce::AudioPluginFormatManager formatManager;
             formatManager.addDefaultFormats();
             juce::Array<juce::PluginDescription> found;
-            for (auto* format : formatManager.getFormats())
-            {
-                if (!format->fileMightContainThisPluginType(path))
-                    continue;
-                juce::KnownPluginList knownPlugins;
-                juce::OwnedArray<juce::PluginDescription> typesFound;
-                knownPlugins.scanAndAddFile(path, false, typesFound, *format);
-                for (auto* desc : typesFound)
-                    found.add(*desc);
-            }
+            scanOneFileInto(formatManager, path, found);
 
             juce::String error;
             std::unique_ptr<juce::AudioProcessor> instance;

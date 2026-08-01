@@ -33,6 +33,8 @@ target_sources(sssketch_bridge PRIVATE
   Source/BridgeIpcServer.cpp
   ../native-engine/Source/SharedRingBuffer.cpp
   ../native-engine/Source/SharedAudioChannel.cpp
+  ../native-engine/Source/PluginArchitecture.cpp
+  ../native-engine/Source/PluginScanning.cpp
 )
 
 target_include_directories(sssketch_bridge PRIVATE ../native-engine/Source)

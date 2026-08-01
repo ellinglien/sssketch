@@ -10,6 +10,7 @@
 #include "EngineProject.h"
 #include "RenderExport.h"
 #include "PluginArchitecture.h"
+#include "PluginScanning.h"
 #include "BridgeClient.h"
 
 // PlaybackEngine, Transport, IpcServer, StemBufferCache, EngineProject, and
@@ -34,24 +35,6 @@ static int runUnitTests()
     }
     juce::Logger::writeToLog("All unit tests passed.");
     return 0;
-}
-
-static void scanOneFileInto(
-    juce::AudioPluginFormatManager& formatManager,
-    const juce::String& path,
-    juce::Array<juce::PluginDescription>& found)
-{
-    for (auto* format : formatManager.getFormats())
-    {
-        if (!format->fileMightContainThisPluginType(path))
-            continue;
-
-        juce::KnownPluginList knownPlugins;
-        juce::OwnedArray<juce::PluginDescription> typesFound;
-        knownPlugins.scanAndAddFile(path, false, typesFound, *format);
-        for (auto* desc : typesFound)
-            found.add(*desc);
-    }
 }
 
 // A curated allowlist, not a directory sweep. See PHASE0_FINDINGS.md: scanning
@@ -125,9 +108,18 @@ static int runScanOneJson(const juce::String& path)
     juce::var result;
     if (found.isEmpty())
     {
+        // arch is reported even on failure now -- see
+        // docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md's
+        // follow-up: a failed scan on this (arm64) host can't tell the
+        // caller WHY it failed without this, and "the plugin is x86_64-only,
+        // scan it via the bridge instead" is a real, expected reason this
+        // needs to be distinguishable from "not a real plugin at all" --
+        // see pluginScan.ts's scanOneCandidate, which retries via the
+        // bridge binary specifically when arch === 'x86_64' here.
         juce::DynamicObject::Ptr obj = new juce::DynamicObject();
         obj->setProperty("success", false);
         obj->setProperty("error", "no plugin type found at this path");
+        obj->setProperty("arch", detectPluginArchitecture(path));
         result = juce::var(obj.get());
     }
     else
