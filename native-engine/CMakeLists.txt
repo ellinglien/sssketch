@@ -33,6 +33,8 @@ target_sources(sssketch_engine PRIVATE
   Source/PluginArchitecture.cpp
   Source/SharedRingBuffer.cpp
   Source/SharedRingBufferTests.cpp
+  Source/SharedAudioChannel.cpp
+  Source/SharedAudioChannelTests.cpp
   Source/PluginChain.cpp
   Source/PluginChainTests.cpp
   Source/ChannelChainRegistry.cpp
