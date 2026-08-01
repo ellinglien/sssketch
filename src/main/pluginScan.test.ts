@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isVst3Candidate, scanOneCandidate } from './pluginScan'
+import { isVst3Candidate, isAuCandidate, scanOneCandidate } from './pluginScan'
 
 const realBinaryPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -20,6 +20,19 @@ describe('isVst3Candidate', () => {
     expect(isVst3Candidate('readme.txt')).toBe(false)
     expect(isVst3Candidate('Foo.component')).toBe(false)
     expect(isVst3Candidate('.DS_Store')).toBe(false)
+  })
+})
+
+describe('isAuCandidate', () => {
+  it('accepts .component, case-insensitively', () => {
+    expect(isAuCandidate('Foo.component')).toBe(true)
+    expect(isAuCandidate('Foo.COMPONENT')).toBe(true)
+  })
+
+  it('rejects everything else', () => {
+    expect(isAuCandidate('readme.txt')).toBe(false)
+    expect(isAuCandidate('Foo.vst3')).toBe(false)
+    expect(isAuCandidate('.DS_Store')).toBe(false)
   })
 })
 
@@ -46,9 +59,11 @@ describe('scanOneCandidate', () => {
 
   it('kills a hung probe after the timeout and resolves with success:false', async () => {
     // A fake "binary" that just sleeps -- proves the timeout+kill path works
-    // without needing a real plugin that actually hangs (none of this
-    // machine's installed plugins are known to hang, only some AU bundles
-    // are per PHASE0_FINDINGS.md, and this app only scans VST3 anyway).
+    // without needing a real plugin that actually hangs. Some AU bundles ARE
+    // known to hang a naive full-directory scan (see PHASE0_FINDINGS.md) --
+    // this per-candidate isolated-subprocess-with-timeout architecture is
+    // exactly what makes scanning AU safe despite that (a hang here only
+    // costs one candidate's timeout, never blocks the rest of the scan).
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-scan-test-'))
     const fakeBinary = join(dir, 'hang.sh')
     writeFileSync(fakeBinary, '#!/bin/sh\nsleep 30\n', { mode: 0o755 })

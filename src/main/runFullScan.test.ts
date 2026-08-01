@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('./pluginScan', () => ({
-  listVst3Candidates: () => ['/a.vst3', '/Library/Audio/Plug-Ins/VST3/Solid Bus Comp.vst3'],
+  listPluginCandidates: () => ['/a.vst3', '/Library/Audio/Plug-Ins/VST3/Solid Bus Comp.vst3'],
   scanOneCandidate: async (path: string) => {
     if (path === '/a.vst3') {
       return {

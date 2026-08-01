@@ -18,7 +18,12 @@ export function isVst3Candidate(filename: string): boolean {
   return filename.toLowerCase().endsWith('.vst3')
 }
 
+export function isAuCandidate(filename: string): boolean {
+  return filename.toLowerCase().endsWith('.component')
+}
+
 const VST3_DIRECTORY = '/Library/Audio/Plug-Ins/VST3'
+const AU_DIRECTORY = '/Library/Audio/Plug-Ins/Components'
 
 /** Lists candidate .vst3 bundle paths under the fixed VST3 plugin directory.
  * Pure directory listing -- no plugin code runs, so this carries none of the
@@ -33,6 +38,30 @@ export function listVst3Candidates(): string[] {
     return [] // no VST3 directory on this machine -- not an error, just nothing to scan
   }
   return entries.filter(isVst3Candidate).map((name) => join(VST3_DIRECTORY, name))
+}
+
+/** Lists candidate .component bundle paths under the fixed AU plugin
+ * directory. Same pure-directory-listing reasoning as listVst3Candidates
+ * above -- the real risk (PHASE0_FINDINGS.md documents a real infinite
+ * assertion loop in JUCE's AU scanner against some system-style multi-type
+ * component bundles) only exists once a candidate's plugin code actually
+ * loads, which scanOneCandidate isolates per-candidate with a hard timeout.
+ * That's what makes scanning this directory safe now, unlike the naive
+ * whole-directory sweep PHASE0_FINDINGS.md was written against. */
+export function listAuCandidates(): string[] {
+  let entries: string[]
+  try {
+    entries = readdirSync(AU_DIRECTORY)
+  } catch {
+    return [] // no Components directory on this machine -- not an error, just nothing to scan
+  }
+  return entries.filter(isAuCandidate).map((name) => join(AU_DIRECTORY, name))
+}
+
+/** Every scan candidate across both supported formats -- the single entry
+ * point runFullScan.ts uses. */
+export function listPluginCandidates(): string[] {
+  return [...listVst3Candidates(), ...listAuCandidates()]
 }
 
 function defaultBinaryPath(): string {

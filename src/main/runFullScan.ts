@@ -1,5 +1,5 @@
 // src/main/runFullScan.ts
-import { listVst3Candidates, scanOneCandidate } from './pluginScan'
+import { listPluginCandidates, scanOneCandidate } from './pluginScan'
 import { loadCatalog, writeCatalog, type CatalogEntry, type PluginCatalog } from './pluginCatalog'
 
 export interface ScanProgress {
@@ -23,8 +23,8 @@ const OLD_ALLOWLIST_PATHS = [
   '/Library/Audio/Plug-Ins/VST3/TR5 Sunset Sound Studio Reverb.vst3'
 ]
 
-/** Runs a full VST3 directory scan, one candidate at a time (sequential --
- * see the design spec's rationale: simplest and safest for v1, avoids any
+/** Runs a full VST3 + AU directory scan, one candidate at a time (sequential
+ * -- see the design spec's rationale: simplest and safest for v1, avoids any
  * concurrency interaction with the per-candidate timeout/kill logic).
  * `onProgress` fires after each candidate finishes (success or not), so the
  * caller can push scan-progress over IPC without this module knowing
@@ -34,7 +34,7 @@ const OLD_ALLOWLIST_PATHS = [
 export async function runFullScan(
   onProgress: (progress: ScanProgress) => void
 ): Promise<PluginCatalog> {
-  const candidates = listVst3Candidates()
+  const candidates = listPluginCandidates()
   const previous = loadCatalog()
   const plugins: CatalogEntry[] = []
 
