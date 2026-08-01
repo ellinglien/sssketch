@@ -52,6 +52,16 @@ const api = {
     ipcRenderer.invoke('engine-open-master-plugin-editor', slot),
   engineCloseMasterPluginEditor: (slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-close-master-plugin-editor', slot),
+  engineLoadChannelPlugin: (
+    channelId: string,
+    slot: number,
+    pluginId: string | null,
+    path: string | null
+  ): Promise<void> => ipcRenderer.invoke('engine-load-channel-plugin', channelId, slot, pluginId, path),
+  engineOpenChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>
+    ipcRenderer.invoke('engine-open-channel-plugin-editor', channelId, slot),
+  engineCloseChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>
+    ipcRenderer.invoke('engine-close-channel-plugin-editor', channelId, slot),
   scanPlugins: (): Promise<PluginCatalog> => ipcRenderer.invoke('scan-plugins'),
   getPluginCatalog: (): Promise<PluginCatalog> => ipcRenderer.invoke('get-plugin-catalog'),
   togglePluginFavourite: (id: string): Promise<PluginCatalog> =>
@@ -71,6 +81,22 @@ const api = {
     ): void => callback(payload)
     ipcRenderer.on('master-plugin-loaded', listener)
     return () => ipcRenderer.removeListener('master-plugin-loaded', listener)
+  },
+  onChannelPluginLoaded: (
+    callback: (result: {
+      channelId: string
+      slot: number
+      pluginId: string
+      success: boolean
+      error?: string
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: { channelId: string; slot: number; pluginId: string; success: boolean; error?: string }
+    ): void => callback(payload)
+    ipcRenderer.on('channel-plugin-loaded', listener)
+    return () => ipcRenderer.removeListener('channel-plugin-loaded', listener)
   },
   onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {
     const listener = (_event: unknown, payload: { pos: number }): void => callback(payload.pos)

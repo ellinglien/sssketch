@@ -222,6 +222,21 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('close-master-plugin-editor', { slot })
   })
 
+  ipcMain.handle(
+    'engine-load-channel-plugin',
+    (_event, channelId: string, slot: number, pluginId: string | null, path: string | null) => {
+      playbackEngine?.client.send('load-channel-plugin', { channelId, slot, pluginId, path })
+    }
+  )
+
+  ipcMain.handle('engine-open-channel-plugin-editor', (_event, channelId: string, slot: number) => {
+    playbackEngine?.client.send('open-channel-plugin-editor', { channelId, slot })
+  })
+
+  ipcMain.handle('engine-close-channel-plugin-editor', (_event, channelId: string, slot: number) => {
+    playbackEngine?.client.send('close-channel-plugin-editor', { channelId, slot })
+  })
+
   ipcMain.handle('scan-plugins', async (event) => {
     const catalog = await runFullScan((progress) => {
       event.sender.send('scan-progress', progress)
@@ -271,12 +286,21 @@ app.whenReady().then(async () => {
         }
       })
     }
+    function subscribeToChannelPluginLoaded(): void {
+      engine.client.on('channel-plugin-loaded', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('channel-plugin-loaded', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
     subscribeToMasterPluginLoaded()
+    subscribeToChannelPluginLoaded()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
       subscribeToMasterPluginLoaded()
+      subscribeToChannelPluginLoaded()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }
