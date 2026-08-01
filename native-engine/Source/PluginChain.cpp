@@ -1,24 +1,25 @@
 // native-engine/Source/PluginChain.cpp
 #include "PluginChain.h"
+#include "PluginArchitecture.h"
 #include <algorithm>
 #include <cmath>
 #include <thread>
 
 namespace sssketch
 {
-    PluginChain::PluginChain(int numSlots, Instantiator inst) : slots(numSlots), instantiator(std::move(inst)) {}
+    PluginChain::PluginChain(int numSlots, Instantiator inst, BridgeClient* bc)
+        : slots(numSlots), instantiator(std::move(inst)), bridgeClient(bc) {}
 
     PluginChain::~PluginChain()
     {
-        // Any pending instance that never got promoted is still owned here.
-        // A background load still in flight at destruction time only holds
+        // Any pending load still in flight at destruction time only holds
         // this object's `slots` array by reference and a plain juce::String
         // copy of the plugin id — it finishes harmlessly into a Slot that's
         // about to go away, or the process exits first. Not a concern for
         // this app's actual lifecycle (a short-lived engine process killed
         // by the parent Electron process on quit).
         for (auto& slot : slots)
-            delete slot.pending.exchange(nullptr);
+            delete slot.pending.exchange(nullptr); // PendingLoad's own dtor cleans up localInstance if set
     }
 
     void PluginChain::setBpm(double bpm) { playHead.setBpm(bpm); }
@@ -29,17 +30,30 @@ namespace sssketch
         {
             if (!slot.pendingReady.exchange(false))
                 continue;
-            auto* newInstance = slot.pending.exchange(nullptr);
-            if (newInstance == nullptr)
+            auto* newPending = slot.pending.exchange(nullptr);
+            if (newPending == nullptr)
                 continue; // defensive: shouldn't happen if pendingReady was true
-            auto old = std::move(slot.active);
-            slot.active.reset(newInstance);
-            slot.active->setPlayHead(&playHead);
-            slot.processChannels = std::max(
-                { 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() });
-            if (old != nullptr)
+
+            auto oldActive = std::move(slot.active);
+            slot.active.reset(newPending->localInstance);
+            newPending->localInstance = nullptr; // ownership moved into slot.active -- don't let PendingLoad's dtor double-delete it
+            slot.bridgeSlotId = newPending->bridgeSlotId;
+            delete newPending;
+
+            if (slot.active != nullptr)
             {
-                auto* toDelete = old.release();
+                slot.active->setPlayHead(&playHead);
+                slot.processChannels = std::max(
+                    { 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() });
+            }
+            else
+            {
+                slot.processChannels = 2;
+            }
+
+            if (oldActive != nullptr)
+            {
+                auto* toDelete = oldActive.release();
                 std::thread([toDelete]() { delete toDelete; }).detach();
             }
         }
@@ -50,9 +64,67 @@ namespace sssketch
         juce::MidiBuffer midi;
         for (auto& slot : slots)
         {
-            if (slot.active == nullptr)
+            const bool isBridged = !slot.bridgeSlotId.isEmpty();
+            if (slot.active == nullptr && !isBridged)
                 continue; // empty slot = passthrough, not a break in the chain
 
+            if (isBridged)
+            {
+                auto* channel = bridgeClient != nullptr && bridgeClient->isHealthy()
+                    ? bridgeClient->channelFor(slot.bridgeSlotId)
+                    : nullptr;
+                if (channel == nullptr)
+                {
+                    // Bridge unavailable or this slot's channel is gone --
+                    // see design spec's Error Handling, "bridge process
+                    // dies mid-session": silence this slot's contribution,
+                    // not a passthrough bypass.
+                    std::fill(outL, outL + numSamples, 0.0f);
+                    std::fill(outR, outR + numSamples, 0.0f);
+                    continue;
+                }
+
+                if ((int) slot.bridgeInputScratch.size() != numSamples * 2)
+                {
+                    slot.bridgeInputScratch.resize((size_t) numSamples * 2);
+                    slot.bridgeOutputScratch.resize((size_t) numSamples * 2);
+                }
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    slot.bridgeInputScratch[(size_t) i * 2] = outL[i];
+                    slot.bridgeInputScratch[(size_t) i * 2 + 1] = outR[i];
+                }
+                channel->writeInputAndSignal(slot.bridgeInputScratch.data(), (uint32_t) numSamples);
+
+                std::fill(slot.bridgeOutputScratch.begin(), slot.bridgeOutputScratch.end(), 0.0f);
+                // 5ms timeout -- a starting value from the design spec, not
+                // derived from profiling. At a typical 512-sample block
+                // (~11.6ms at 44.1kHz) this leaves roughly half the
+                // block's period for the rest of this callback's work.
+                const uint32_t got = channel->waitAndReadOutput(
+                    slot.bridgeOutputScratch.data(), (uint32_t) numSamples, 5);
+                if (got < (uint32_t) numSamples)
+                {
+                    // Timed out or got a short block -- silence for this
+                    // block only, per design spec. Self-healing: the next
+                    // block tries again independently, no state changes
+                    // here.
+                    std::fill(outL, outL + numSamples, 0.0f);
+                    std::fill(outR, outR + numSamples, 0.0f);
+                    continue;
+                }
+
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const float l = slot.bridgeOutputScratch[(size_t) i * 2];
+                    const float r = slot.bridgeOutputScratch[(size_t) i * 2 + 1];
+                    outL[i] = std::isfinite(l) ? l : 0.0f;
+                    outR[i] = std::isfinite(r) ? r : 0.0f;
+                }
+                continue;
+            }
+
+            // Existing in-process path, unchanged from before this task:
             if (slot.scratch.getNumSamples() != numSamples || slot.scratch.getNumChannels() != slot.processChannels)
                 slot.scratch.setSize(slot.processChannels, numSamples, false, false, true);
             slot.scratch.clear();
@@ -147,6 +219,18 @@ namespace sssketch
         if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return false;
         auto& slot = slots[(size_t) slotIndex];
+
+        if (!slot.bridgeSlotId.isEmpty())
+        {
+            // Bridged slot -- the actual editor window lives in the bridge
+            // process (see BridgeSlot::openEditor), not here. `active` is
+            // always null for a bridged slot, so without this branch the
+            // no-op check below would silently swallow the request.
+            if (bridgeClient != nullptr)
+                bridgeClient->openEditor(slot.bridgeSlotId);
+            return true;
+        }
+
         if (slot.editorWindow != nullptr)
         {
             // Already open -- bring it to the front instead of silently doing
@@ -180,7 +264,14 @@ namespace sssketch
     {
         if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return;
-        slots[(size_t) slotIndex].editorWindow.reset();
+        auto& slot = slots[(size_t) slotIndex];
+        if (!slot.bridgeSlotId.isEmpty())
+        {
+            if (bridgeClient != nullptr)
+                bridgeClient->closeEditor(slot.bridgeSlotId);
+            return;
+        }
+        slot.editorWindow.reset();
     }
 
     void PluginChain::requestLoad(
@@ -190,6 +281,29 @@ namespace sssketch
         int blockSize,
         std::function<void(bool, const juce::String&)> onLoaded)
     {
+        if (bridgeClient != nullptr && !path.isEmpty() && detectPluginArchitecture(path) == "x86_64")
+        {
+            static std::atomic<int> bridgeSlotCounter { 0 };
+            const auto newBridgeSlotId = "bridge-slot-" + juce::String(bridgeSlotCounter.fetch_add(1));
+            bridgeClient->loadPlugin(newBridgeSlotId, path, sampleRate, blockSize,
+                [this, slotIndex, newBridgeSlotId, onLoaded](bool success, const juce::String& error)
+                {
+                    // Runs on the message thread (BridgeClient's own
+                    // callback contract, mirroring the callAsync path
+                    // below) -- safe to touch `slots` directly.
+                    if (success)
+                    {
+                        auto& slot = slots[(size_t) slotIndex];
+                        auto* newPending = new PendingLoad { nullptr, newBridgeSlotId };
+                        delete slot.pending.exchange(newPending);
+                        slot.pendingReady.store(true);
+                    }
+                    if (onLoaded)
+                        onLoaded(success, error);
+                });
+            return;
+        }
+
         // Deliberately NOT a raw background std::thread (an earlier version
         // of this function used one, mirroring the reverted SendBus design
         // it was ported from). A real crash was found doing exactly that:
@@ -214,8 +328,8 @@ namespace sssketch
 
             if (success)
             {
-                auto* raw = instance.release();
-                delete slot.pending.exchange(raw);
+                auto* newPending = new PendingLoad { instance.release(), {} };
+                delete slot.pending.exchange(newPending);
                 slot.pendingReady.store(true);
             }
 

@@ -1,6 +1,7 @@
 // native-engine/Source/PluginChain.h
 #pragma once
 #include "PluginEditorWindow.h"
+#include "BridgeClient.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
@@ -46,7 +47,7 @@ namespace sssketch
         using Instantiator = std::function<std::unique_ptr<juce::AudioProcessor>(
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)>;
 
-        explicit PluginChain(int numSlots, Instantiator instantiator = &PluginChain::defaultInstantiate);
+        explicit PluginChain(int numSlots, Instantiator instantiator = &PluginChain::defaultInstantiate, BridgeClient* bridgeClient = nullptr);
         ~PluginChain();
 
         PluginChain(const PluginChain&) = delete;
@@ -140,18 +141,50 @@ namespace sssketch
             std::atomic<double> bpm { 120.0 };
         };
 
+        // Bundles what a completed background load hands off to the audio
+        // thread via applyPendingSwaps() -- EITHER a local instance
+        // (bridgeSlotId empty) OR a bridge slot id (localInstance nullptr),
+        // never both. Deleting a PendingLoad that was never applied (e.g.
+        // PluginChain destroyed mid-load) also deletes localInstance if
+        // present -- mirrors the original design's "harmless" in-flight
+        // teardown reasoning (see PluginChain::~PluginChain), just one
+        // level deeper now that there are two kinds of pending state
+        // instead of one.
+        struct PendingLoad
+        {
+            juce::AudioProcessor* localInstance = nullptr;
+            juce::String bridgeSlotId;
+            ~PendingLoad() { delete localInstance; }
+        };
+
         struct Slot
         {
             std::unique_ptr<juce::AudioProcessor> active;
             int processChannels = 2; // max(active's total input, total output) once a plugin is loaded
-            std::atomic<juce::AudioProcessor*> pending { nullptr };
+            std::atomic<PendingLoad*> pending { nullptr };
             std::atomic<bool> pendingReady { false };
             juce::AudioBuffer<float> scratch;
             std::unique_ptr<PluginEditorWindow> editorWindow;
+            // Non-empty when this slot's plugin is running on the x86_64
+            // bridge instead of in-process -- see
+            // docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md.
+            // `active` stays nullptr for a bridged slot. Only ever written
+            // by applyPendingSwaps() (audio thread), matching how `active`
+            // itself is only ever written there too.
+            juce::String bridgeSlotId;
+            // Reused interleaved-stereo scratch for the bridged path,
+            // resized only when numSamples changes -- mirrors `scratch`
+            // above's own resize-only-if-changed pattern, for the exact
+            // same reason: no heap allocation on the audio thread once
+            // warmed up (numSamples is constant for the life of a session
+            // in practice).
+            std::vector<float> bridgeInputScratch;
+            std::vector<float> bridgeOutputScratch;
         };
 
         std::vector<Slot> slots;
         Instantiator instantiator;
         BpmPlayHead playHead;
+        BridgeClient* bridgeClient;
     };
 }
