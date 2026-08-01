@@ -30,7 +30,12 @@ juce_add_gui_app(sssketch_bridge
 
 target_sources(sssketch_bridge PRIVATE
   Source/Main.cpp
+  Source/BridgeIpcServer.cpp
+  ../native-engine/Source/SharedRingBuffer.cpp
+  ../native-engine/Source/SharedAudioChannel.cpp
 )
+
+target_include_directories(sssketch_bridge PRIVATE ../native-engine/Source)
 
 target_compile_definitions(sssketch_bridge PRIVATE
   JUCE_USE_CURL=0
