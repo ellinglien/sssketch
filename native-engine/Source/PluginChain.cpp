@@ -153,18 +153,14 @@ namespace ssstitch
             // nothing, so re-clicking "edit" on a plugin whose window is
             // sitting behind others (or just lost focus) actually surfaces
             // it, matching how every other "open/focus this thing" action in
-            // this app behaves. toFront() alone only reorders windows WITHIN
-            // this process's own layer -- it does nothing to raise them
-            // above whatever OTHER application (namely the Electron ssstitch
-            // app itself) currently has focus, since this engine process
-            // runs as a backgrounded LSUIElement app with no Dock icon of
-            // its own (see native-engine/CMakeLists.txt). Without also
-            // activating the process, the window exists and is "frontmost"
-            // in its own invisible layer but stays visually hidden behind
-            // the Electron app until the user manually finds "ssstitch-
-            // engine" in the Dock/Finder and clicks it -- exactly the bug
-            // report this fixes.
-            juce::Process::makeForegroundProcess();
+            // this app behaves. Reordering alone is sufficient here (unlike
+            // an earlier version of this code, which also tried activating
+            // this whole background process -- see EditorWindow's own
+            // setAlwaysOnTop(true) doc comment for why that turned out to be
+            // both unnecessary and unreliable): the window already stays
+            // pinned above Electron's own window regardless of app
+            // activation state, so this only needs to matter when several
+            // always-on-top editor windows are open at once.
             slot.editorWindow->toFront(true);
             return true;
         }
@@ -177,12 +173,6 @@ namespace ssstitch
 
         slot.editorWindow = std::make_unique<EditorWindow>(
             slot.active->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
-        // Same reasoning as the "already open" branch above -- a brand new
-        // window is constructed with setVisible(true) (see EditorWindow's
-        // own constructor), but that alone doesn't activate this backgrounded
-        // process either, so a FIRST-time "edit" click would have exactly
-        // the same hidden-behind-Electron problem.
-        juce::Process::makeForegroundProcess();
         return true;
     }
 

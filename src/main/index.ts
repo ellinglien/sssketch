@@ -1,6 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { spawn } from 'node:child_process'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
@@ -29,44 +28,6 @@ import {
   downloadMissingStems,
   type RiffFilters
 } from './loreWarehouse'
-
-// The native engine's own bundle identifier (see native-engine/CMakeLists.txt's
-// juce_add_gui_app BUNDLE_ID) -- stable, hardcoded, matches how
-// electron-builder.yml's own appId is hardcoded the same way.
-const ENGINE_BUNDLE_ID = 'com.ellinglien.ssstitch-engine'
-
-// Brings the native engine's own windows (a plugin editor) to the actual
-// foreground -- macOS-only, best-effort. Two other approaches were tried
-// and found unreliable in practice before this one:
-//   1. The engine process activating ITSELF via
-//      juce::Process::makeForegroundProcess() (NSApp
-//      activateIgnoringOtherApps:) -- recent macOS increasingly ignores
-//      unsolicited self-activation from a backgrounded LSUIElement process
-//      with no immediately-preceding direct user interaction with it.
-//   2. `open -a <bundle path>`, requested from Electron (the actual
-//      frontmost, user-interacted-with app at the moment "edit" is
-//      clicked) -- still unreliable, most likely because the engine
-//      process is started via a raw child_process.spawn() of the inner
-//      Mach-O binary (see engineProcess.ts), not through
-//      LSOpenApplication/`open` itself, so Launch Services' own
-//      already-running-instance tracking may not recognize it.
-// This uses NSRunningApplication directly (via osascript's JavaScript-for-
-// Automation bridge) -- the same underlying mechanism macOS itself uses
-// when a user manually clicks an app's Dock/Cmd+Tab entry (confirmed, per
-// the bug report this fixes, as the one thing that DOES bring the window
-// forward). NSRunningApplication enumerates the OS's own live process/app
-// registry rather than depending on launch history, so it finds the engine
-// regardless of how it was started. Plain app activation, not UI scripting
-// -- no Accessibility/Automation permission prompt needed.
-function activateEngineWindow(): void {
-  if (process.platform !== 'darwin') return
-  const script = `
-    ObjC.import('AppKit')
-    const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('${ENGINE_BUNDLE_ID}')
-    if (apps.count > 0) apps.objectAtIndex(0).activateWithOptions($.NSApplicationActivateIgnoringOtherApps)
-  `
-  spawn('osascript', ['-l', 'JavaScript', '-e', script])
-}
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
 // read from the before-quit handler below, which runs in a different
@@ -256,7 +217,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-open-master-plugin-editor', (_event, slot: number) => {
     playbackEngine?.client.send('open-master-plugin-editor', { slot })
-    activateEngineWindow()
   })
 
   ipcMain.handle('engine-close-master-plugin-editor', (_event, slot: number) => {
@@ -272,7 +232,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-open-channel-plugin-editor', (_event, channelId: string, slot: number) => {
     playbackEngine?.client.send('open-channel-plugin-editor', { channelId, slot })
-    activateEngineWindow()
   })
 
   ipcMain.handle(

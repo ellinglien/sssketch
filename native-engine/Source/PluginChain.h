@@ -134,6 +134,18 @@ namespace ssstitch
                 setContentOwned(editor, true);
                 setResizable(editor->isResizable(), false);
                 centreWithSize(getWidth(), getHeight());
+                // Three different cross-process "activate the engine app so
+                // its window comes to the front" mechanisms were tried and
+                // all failed in practice (self-activation via
+                // juce::Process::makeForegroundProcess(), `open -a` from
+                // Electron, NSRunningApplication::activateWithOptions: from
+                // Electron) -- see git history. Sidestepping the whole
+                // problem: pin the window itself above everything at the
+                // window-server level, which the OS enforces directly based
+                // on window level, independent of which app is currently
+                // active. Doesn't depend on any activation mechanism working
+                // at all.
+                setAlwaysOnTop(true);
                 setVisible(true);
             }
             void closeButtonPressed() override
