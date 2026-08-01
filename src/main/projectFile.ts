@@ -2,6 +2,91 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { dialog, BrowserWindow, app } from 'electron'
 
+// Fun, short words for the auto-generated default project name -- kept
+// tasteful and on-theme for a music/creative tool, not an exhaustive
+// dictionary. Deliberately lowercase (matches the date prefix's own
+// lowercase-with-hyphens style) so the whole generated name reads as one
+// consistent pattern.
+const ADJECTIVES = [
+  'groovy',
+  'fuzzy',
+  'velvet',
+  'electric',
+  'hazy',
+  'wobbly',
+  'crispy',
+  'dusty',
+  'neon',
+  'silent',
+  'golden',
+  'feral',
+  'lucid',
+  'moody',
+  'plush',
+  'spare',
+  'tangled',
+  'vivid',
+  'warped',
+  'zesty',
+  'breezy',
+  'chunky',
+  'glassy',
+  'inky',
+  'jagged',
+  'lush',
+  'muted',
+  'radiant',
+  'rusty',
+  'sleepy'
+]
+
+const NOUNS = [
+  'sparrow',
+  'echo',
+  'canyon',
+  'lantern',
+  'orbit',
+  'thicket',
+  'ember',
+  'harbor',
+  'compass',
+  'meadow',
+  'signal',
+  'anchor',
+  'prism',
+  'ridge',
+  'tide',
+  'willow',
+  'beacon',
+  'current',
+  'drift',
+  'ferry',
+  'grove',
+  'hollow',
+  'kestrel',
+  'marsh',
+  'nectar',
+  'otter',
+  'pebble',
+  'quartz',
+  'raven',
+  'summit'
+]
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/** Generates a default project filename (without extension), following the
+ * pattern `YYYY-MM-DD-adjective-noun` -- e.g. "2026-08-01-groovy-sparrow".
+ * `date` is injectable for deterministic tests; defaults to now. */
+export function generateDefaultProjectName(date: Date = new Date()): string {
+  const dateStr = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
+  return `${dateStr}-${adjective}-${noun}`
+}
+
 /**
  * Opens a save dialog and writes `json` to the chosen path. A rejected/failed write
  * (permission denied, disk full, path vanished mid-dialog, etc.) must not surface as an
@@ -13,6 +98,7 @@ import { dialog, BrowserWindow, app } from 'electron'
  */
 export async function saveProjectAs(win: BrowserWindow, json: string): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
+    defaultPath: `${generateDefaultProjectName()}.sssketchproj`,
     filters: [{ name: 'sssketch Project', extensions: ['sssketchproj'] }]
   })
   if (result.canceled || !result.filePath) return null
