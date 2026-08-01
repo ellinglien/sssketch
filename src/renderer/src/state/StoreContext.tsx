@@ -211,7 +211,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const project = await buildEngineProject(state, resolveStretchedForPlayback)
+      const project = await buildEngineProject(state, resolveStretchedForPlayback, pluginCatalog)
       if (!cancelled) {
         await window.rifffApi.engineLoadProject(project)
       }
@@ -244,7 +244,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // stay current); actually LOADING/swapping the plugin binary is a
     // separate, explicit engineLoadMasterPlugin call below instead -- see
     // the SET_MASTER_CHAIN_PLUGIN dispatch-side effect.
-    state.masterChain
+    state.masterChain,
+    // A catalog id only resolves to a real path once the catalog itself has
+    // loaded (or been rescanned) -- without this, a masterChain slot set
+    // before the catalog finished loading would be sent to the engine with
+    // an empty, unresolvable path forever, never re-sent once the real path
+    // became known.
+    pluginCatalog
   ])
 
   useEffect(() => {
@@ -276,9 +282,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           next[slot] = pluginId === null ? 'idle' : 'loading'
           return next
         })
-        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId)
+        const path =
+          pluginId === null
+            ? null
+            : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
+        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path)
       }
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value), never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
   }, [state.masterChain])
 
   // Runs the old-slug-to-catalog-id migration once the scan catalog is

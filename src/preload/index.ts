@@ -43,8 +43,11 @@ const api = {
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   engineSetMetronome: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('engine-set-metronome', enabled),
-  engineLoadMasterPlugin: (slot: number, pluginId: string | null): Promise<void> =>
-    ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId),
+  engineLoadMasterPlugin: (
+    slot: number,
+    pluginId: string | null,
+    path: string | null
+  ): Promise<void> => ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId, path),
   engineOpenMasterPluginEditor: (slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-open-master-plugin-editor', slot),
   engineCloseMasterPluginEditor: (slot: number): Promise<void> =>

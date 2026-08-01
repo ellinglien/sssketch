@@ -105,9 +105,9 @@ export interface AppState {
    * serialize.ts) — always starts off, matching every other "how I'm
    * currently working" toggle in this app. */
   metronomeEnabled: boolean
-  /** masterChain[i] is an allowlist id (see src/shared/masterChainAllowlist.ts)
+  /** masterChain[i] is a scanned plugin catalog id (see src/main/pluginCatalog.ts)
    * or null for an empty slot. Persists normally -- real arrangement data, not
-   * transient UI state. See docs/superpowers/specs/2026-07-31-master-plugin-chain-design.md. */
+   * transient UI state. See docs/superpowers/specs/2026-07-31-plugin-scan-favourites-design.md. */
   masterChain: [string | null, string | null, string | null, string | null]
   rifffs: Record<string, Rifff>
 }

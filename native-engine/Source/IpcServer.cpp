@@ -143,6 +143,7 @@ namespace ssstitch
                 return;
             const int slot = (int) payload.getProperty("slot", -1);
             const auto pluginId = payload.getProperty("pluginId", "").toString();
+            const auto path = payload.getProperty("path", "").toString();
             if (slot < 0 || slot >= kNumMasterChainSlots)
                 return;
 
@@ -160,7 +161,11 @@ namespace ssstitch
             // APIs that assert they're on the main thread), which is also
             // where IpcConnection itself always runs, so sendJson can be
             // called directly here with no further thread-hop needed.
-            masterChain.requestLoad(slot, pluginId, transport.currentSampleRate(), transport.currentBlockSize(),
+            //
+            // pluginId is only carried through to the reply below (the
+            // renderer needs it to know which catalog entry succeeded) --
+            // requestLoad itself only needs a real path to load.
+            masterChain.requestLoad(slot, path, transport.currentSampleRate(), transport.currentBlockSize(),
                 [this, slot, pluginId](bool success, const juce::String& error)
                 {
                     juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();

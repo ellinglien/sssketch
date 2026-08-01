@@ -46,8 +46,12 @@ namespace ssstitch
         if (auto* masterChainArray = masterChainVar.getArray())
         {
             for (int i = 0; i < kNumMasterChainSlots; ++i)
-                project.masterChain[(size_t) i] =
-                    i < masterChainArray->size() ? (*masterChainArray)[i].toString() : juce::String();
+            {
+                if (i >= masterChainArray->size()) continue;
+                const auto& slotVar = (*masterChainArray)[i];
+                project.masterChain[(size_t) i].pluginId = slotVar.getProperty("pluginId", "").toString();
+                project.masterChain[(size_t) i].path = slotVar.getProperty("path", "").toString();
+            }
         }
         // else: leave the default-constructed all-empty masterChain as-is
         // (missing/absent masterChain is not a parse error, matching this

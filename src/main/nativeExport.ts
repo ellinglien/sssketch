@@ -8,6 +8,7 @@ import { stemKey, type ExportedStem } from '@shared/types'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
+import { loadCatalog } from './pluginCatalog'
 
 // Mirrors src/renderer/src/state/selectors.ts's loopLengthBars (re-implemented
 // here rather than imported wholesale, since that module also exports React-
@@ -32,7 +33,7 @@ export function loopLengthBarsFor(state: AppState): number {
  * — this function only handles the export path.
  */
 export async function nativeExport(state: AppState): Promise<Uint8Array> {
-  const project = await buildEngineProject(state, resolveStretchedForExport)
+  const project = await buildEngineProject(state, resolveStretchedForExport, loadCatalog())
   const durationBars = loopLengthBarsFor(state)
 
   const engineHandle = await spawnEngine()
@@ -100,6 +101,7 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
   const results: ExportedStem[] = []
+  const pluginCatalog = loadCatalog()
 
   try {
     await client.connect(engineHandle.port)
@@ -109,7 +111,7 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
       for (const other of targets) soloMute[other.key] = other.key !== target.key
       const soloState: AppState = { ...state, mute: soloMute }
 
-      const project = await buildEngineProject(soloState, resolveStretchedForExport)
+      const project = await buildEngineProject(soloState, resolveStretchedForExport, pluginCatalog)
       const tempPath = join(tmpdir(), `ssstitch-export-${randomUUID()}.wav`)
 
       client.send('load-project', project)

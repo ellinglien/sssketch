@@ -39,11 +39,32 @@ export interface EngineProject {
    * applied right at this wrap point. */
   loopLengthBars: number
   rifffs: EngineRifff[]
-  /** "" (empty string) for an empty slot, matching the native engine's own
-   * wire-format convention (see MasterChainAllowlist.h) -- state.masterChain
-   * uses `null` on the renderer side since that's this codebase's existing
-   * convention for "unset" everywhere else (e.g. Rifff.startBar). */
-  masterChain: [string, string, string, string]
+  /** pluginId "" (empty string) for an empty slot, matching the native
+   * engine's own wire-format convention -- state.masterChain uses `null` on
+   * the renderer side since that's this codebase's existing convention for
+   * "unset" everywhere else (e.g. Rifff.startBar). path is only meaningful
+   * when pluginId is non-empty -- the native engine has no access to
+   * pluginCatalog.json itself (a main-process/renderer concept), so the
+   * renderer resolves a scanned catalog id to its real file path here and
+   * sends both. */
+  masterChain: [
+    EngineMasterChainSlot,
+    EngineMasterChainSlot,
+    EngineMasterChainSlot,
+    EngineMasterChainSlot
+  ]
+}
+
+export interface EngineMasterChainSlot {
+  pluginId: string
+  path: string
+}
+
+/** Minimal shape buildEngineProject needs from the plugin catalog -- callers
+ * pass the real PluginCatalog (src/main/pluginCatalog.ts), this just avoids
+ * a cross-layer import for a type this function barely touches. */
+export interface PluginCatalogForEngineProject {
+  plugins: { id: string; path: string }[]
 }
 
 export interface StretchedStem {
@@ -75,7 +96,8 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
  */
 export async function buildEngineProject(
   state: AppState,
-  resolveStretched: StretchResolver
+  resolveStretched: StretchResolver,
+  pluginCatalog: PluginCatalogForEngineProject
 ): Promise<EngineProject> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   const rifffs: EngineRifff[] = []
@@ -153,11 +175,17 @@ export async function buildEngineProject(
     })
   }
 
+  const masterChain = state.masterChain.map((id) => {
+    if (id === null) return { pluginId: '', path: '' }
+    const entry = pluginCatalog.plugins.find((p) => p.id === id)
+    return { pluginId: id, path: entry?.path ?? '' } // empty path = engine treats as empty/unresolvable
+  }) as EngineProject['masterChain']
+
   return {
     bpm: state.bpm,
     snapDiv: SNAP_DIVS[state.snapIdx],
     loopLengthBars: loopLengthBars(state),
-    masterChain: state.masterChain.map((id) => id ?? '') as [string, string, string, string],
+    masterChain,
     rifffs
   }
 }

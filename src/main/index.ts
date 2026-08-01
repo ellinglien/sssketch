@@ -207,9 +207,12 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-metronome', { enabled })
   })
 
-  ipcMain.handle('engine-load-master-plugin', (_event, slot: number, pluginId: string | null) => {
-    playbackEngine?.client.send('load-master-plugin', { slot, pluginId })
-  })
+  ipcMain.handle(
+    'engine-load-master-plugin',
+    (_event, slot: number, pluginId: string | null, path: string | null) => {
+      playbackEngine?.client.send('load-master-plugin', { slot, pluginId, path })
+    }
+  )
 
   ipcMain.handle('engine-open-master-plugin-editor', (_event, slot: number) => {
     playbackEngine?.client.send('open-master-plugin-editor', { slot })

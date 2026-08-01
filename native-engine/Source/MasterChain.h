@@ -30,14 +30,18 @@ namespace ssstitch
     class MasterChain
     {
     public:
-        /** A plugin id -> live processor instance factory. Production code
-         * uses the default (the real allowlist + AudioPluginFormatManager,
-         * see .cpp); tests inject a fake to exercise the swap/processing
-         * logic without depending on a real installed plugin. An empty
-         * `pluginId` must return nullptr with `errorOut` left empty (not an
-         * error — "no plugin" is a valid, silent/passthrough state). */
+        /** A plugin file path -> live processor instance factory. Production
+         * code uses the default (real AudioPluginFormatManager loading, see
+         * .cpp); tests inject a fake to exercise the swap/processing logic
+         * without depending on a real installed plugin. An empty `path`
+         * must return nullptr with `errorOut` left empty (not an error —
+         * "no plugin" is a valid, silent/passthrough state). There is no
+         * longer a hardcoded allowlist to resolve an id through — the
+         * renderer resolves a scanned catalog id to a real path itself
+         * (native-engine has no access to pluginCatalog.json) and sends the
+         * path directly. */
         using Instantiator = std::function<std::unique_ptr<juce::AudioProcessor>(
-            const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)>;
+            const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)>;
 
         explicit MasterChain(Instantiator instantiator = &MasterChain::defaultInstantiate);
         ~MasterChain();
@@ -45,16 +49,16 @@ namespace ssstitch
         MasterChain(const MasterChain&) = delete;
         MasterChain& operator=(const MasterChain&) = delete;
 
-        /** Message-thread API: kicks off loading `pluginId` (an allowlist
-         * id, or an empty string for "no plugin") onto `slotIndex` on a
-         * background thread. Safe to call again before a previous load for
-         * the same slot finishes — whichever completes last wins (see
-         * .cpp). `onLoaded` runs on that background thread once the load
-         * finishes or fails; callers needing the message thread (e.g. to
-         * send an IPC reply) must hop back to it themselves. */
+        /** Message-thread API: kicks off loading the plugin at `path` (or an
+         * empty string for "no plugin") onto `slotIndex`. Safe to call again
+         * before a previous load for the same slot finishes — whichever
+         * completes last wins (see .cpp). `onLoaded` runs on the message
+         * thread once the load finishes or fails (see requestLoad's own
+         * .cpp doc comment for why instantiation happens there and not on a
+         * raw background thread). */
         void requestLoad(
             int slotIndex,
-            const juce::String& pluginId,
+            const juce::String& path,
             double sampleRate,
             int blockSize,
             std::function<void(bool success, const juce::String& error)> onLoaded);
@@ -63,7 +67,7 @@ namespace ssstitch
          * concurrently reads this slot from an audio thread. Returns false
          * (errorOut set) on failure, leaving the slot unchanged. */
         bool loadPluginSync(
-            int slotIndex, const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut);
+            int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
         /** Audio-thread API: promotes any slot with a ready pending swap to
          * active; the instance it replaces is handed to a background
@@ -99,7 +103,7 @@ namespace ssstitch
 
     private:
         static std::unique_ptr<juce::AudioProcessor> defaultInstantiate(
-            const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut);
+            const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
         // Mirrors the concrete DocumentWindow-hosting-an-AudioProcessorEditor
         // pattern used by JUCE's own AudioPluginHost example (see

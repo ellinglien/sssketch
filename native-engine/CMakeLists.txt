@@ -30,8 +30,6 @@ juce_add_gui_app(ssstitch_engine
 
 target_sources(ssstitch_engine PRIVATE
   Source/Main.cpp
-  Source/PluginScanner.cpp
-  Source/PluginScannerTests.cpp
   Source/MasterChain.cpp
   Source/MasterChainTests.cpp
   Source/SchedulePlayback.cpp

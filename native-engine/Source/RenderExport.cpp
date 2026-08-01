@@ -23,15 +23,15 @@ namespace ssstitch
 
         // Export has no real-time deadline, so plugins are loaded directly
         // and synchronously here rather than via MasterChain::requestLoad's
-        // background-thread hand-off (that machinery exists for live
-        // playback, where blocking the audio thread on plugin instantiation
-        // would cause an audible dropout).
+        // async hand-off (that machinery exists for live playback, where
+        // blocking the audio thread on plugin instantiation would cause an
+        // audible dropout).
         MasterChain masterChain;
         for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
         {
-            const auto& pluginId = project.masterChain[(size_t) slot];
+            const auto& path = project.masterChain[(size_t) slot].path;
             juce::String slotError;
-            if (!masterChain.loadPluginSync(slot, pluginId, sampleRate, blockSize, slotError))
+            if (!masterChain.loadPluginSync(slot, path, sampleRate, blockSize, slotError))
             {
                 errorOut = "master chain slot " + juce::String(slot) + " failed to load: " + slotError;
                 return false;

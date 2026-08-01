@@ -102,15 +102,22 @@ namespace ssstitch
             {
                 const auto json = R"({
                     "bpm": 120, "snapDiv": 16, "rifffs": [],
-                    "masterChain": ["pro-q-3", "", "soothe2", ""]
+                    "masterChain": [
+                        { "pluginId": "VST3-pro-q-3-abc", "path": "/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3" },
+                        { "pluginId": "", "path": "" },
+                        { "pluginId": "VST3-soothe2-def", "path": "/Library/Audio/Plug-Ins/VST3/soothe2.vst3" },
+                        { "pluginId": "", "path": "" }
+                    ]
                 })";
                 EngineProject project;
                 juce::String error;
                 expect(parseEngineProject(json, project, error));
-                expectEquals(project.masterChain[0], juce::String("pro-q-3"));
-                expectEquals(project.masterChain[1], juce::String(""));
-                expectEquals(project.masterChain[2], juce::String("soothe2"));
-                expectEquals(project.masterChain[3], juce::String(""));
+                expectEquals(project.masterChain[0].pluginId, juce::String("VST3-pro-q-3-abc"));
+                expectEquals(project.masterChain[0].path, juce::String("/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3"));
+                expectEquals(project.masterChain[1].pluginId, juce::String(""));
+                expectEquals(project.masterChain[2].pluginId, juce::String("VST3-soothe2-def"));
+                expectEquals(project.masterChain[2].path, juce::String("/Library/Audio/Plug-Ins/VST3/soothe2.vst3"));
+                expectEquals(project.masterChain[3].pluginId, juce::String(""));
             }
 
             beginTest("missing masterChain defaults to all-empty slots");
@@ -120,7 +127,10 @@ namespace ssstitch
                 juce::String error;
                 expect(parseEngineProject(json, project, error));
                 for (const auto& slot : project.masterChain)
-                    expectEquals(slot, juce::String(""));
+                {
+                    expectEquals(slot.pluginId, juce::String(""));
+                    expectEquals(slot.path, juce::String(""));
+                }
             }
         }
     };

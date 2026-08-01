@@ -21,7 +21,15 @@ import type { Rifff } from '../shared/types'
 // dependency chain (via engineProcess.ts's `import { app } from 'electron'`)
 // sees this mock. loopLengthBarsFor below has no electron dependency at all,
 // so the mock has no effect on those existing tests.
-vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
+//
+// getPath is needed too now that nativeExport calls pluginCatalog.ts's
+// loadCatalog() (to resolve a masterChain slot's catalog id to a real file
+// path) -- loadCatalog only ever reads (existsSync + readFileSync, never
+// writes here), so tmpdir() is a safe stand-in: no pluginCatalog.json will
+// exist there, and loadCatalog treats that as "no scan has run yet" (an
+// empty catalog), which is exactly correct for these fixtures, none of
+// which set masterChain.
+vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
 
 import { loopLengthBarsFor, nativeExport } from './nativeExport'
 

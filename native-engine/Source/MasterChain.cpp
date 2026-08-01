@@ -1,6 +1,5 @@
 // native-engine/Source/MasterChain.cpp
 #include "MasterChain.h"
-#include "MasterChainAllowlist.h"
 #include <algorithm>
 #include <cmath>
 #include <thread>
@@ -79,20 +78,16 @@ namespace ssstitch
         }
     }
 
-    static std::unique_ptr<juce::AudioProcessor> instantiateFromAllowlist(
-        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
+    // No allowlist lookup anymore -- `path` is a real file path the renderer
+    // already resolved from the scanned catalog (native-engine has no
+    // access to pluginCatalog.json itself). Loads directly from that path.
+    static std::unique_ptr<juce::AudioProcessor> instantiateFromPath(
+        const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
     {
-        if (pluginId.isEmpty())
+        if (path.isEmpty())
         {
             errorOut = {};
             return nullptr; // "no plugin" is a valid, silent/passthrough state -- not an error
-        }
-
-        const auto* entry = findMasterChainPlugin(pluginId);
-        if (entry == nullptr)
-        {
-            errorOut = "unknown plugin id: " + pluginId;
-            return nullptr;
         }
 
         juce::AudioPluginFormatManager formatManager;
@@ -101,17 +96,17 @@ namespace ssstitch
         juce::Array<juce::PluginDescription> found;
         for (auto* format : formatManager.getFormats())
         {
-            if (!format->fileMightContainThisPluginType(entry->path))
+            if (!format->fileMightContainThisPluginType(path))
                 continue;
             juce::KnownPluginList knownPlugins;
             juce::OwnedArray<juce::PluginDescription> typesFound;
-            knownPlugins.scanAndAddFile(entry->path, false, typesFound, *format);
+            knownPlugins.scanAndAddFile(path, false, typesFound, *format);
             for (auto* desc : typesFound)
                 found.add(*desc);
         }
         if (found.isEmpty())
         {
-            errorOut = "plugin not found at expected path: " + juce::String(entry->path);
+            errorOut = "plugin not found at expected path: " + path;
             return nullptr;
         }
 
@@ -123,15 +118,15 @@ namespace ssstitch
     }
 
     std::unique_ptr<juce::AudioProcessor> MasterChain::defaultInstantiate(
-        const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
+        const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
     {
-        return instantiateFromAllowlist(pluginId, sampleRate, blockSize, errorOut);
+        return instantiateFromPath(path, sampleRate, blockSize, errorOut);
     }
 
     bool MasterChain::loadPluginSync(
-        int slotIndex, const juce::String& pluginId, double sampleRate, int blockSize, juce::String& errorOut)
+        int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
     {
-        auto instance = instantiator(pluginId, sampleRate, blockSize, errorOut);
+        auto instance = instantiator(path, sampleRate, blockSize, errorOut);
         if (!errorOut.isEmpty())
             return false;
         auto& slot = slots[(size_t) slotIndex];
@@ -168,7 +163,7 @@ namespace ssstitch
 
     void MasterChain::requestLoad(
         int slotIndex,
-        const juce::String& pluginId,
+        const juce::String& path,
         double sampleRate,
         int blockSize,
         std::function<void(bool, const juce::String&)> onLoaded)
@@ -188,11 +183,11 @@ namespace ssstitch
         // later message-loop iteration) -- it's off the audio thread, which
         // is the property that actually matters for real-time safety here,
         // just no longer off the message thread too.
-        juce::MessageManager::callAsync([this, slotIndex, pluginId, sampleRate, blockSize, onLoaded]()
+        juce::MessageManager::callAsync([this, slotIndex, path, sampleRate, blockSize, onLoaded]()
         {
             auto& slot = slots[(size_t) slotIndex];
             juce::String error;
-            auto instance = instantiator(pluginId, sampleRate, blockSize, error);
+            auto instance = instantiator(path, sampleRate, blockSize, error);
             const bool success = error.isEmpty();
 
             if (success)

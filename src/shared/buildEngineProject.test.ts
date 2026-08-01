@@ -20,11 +20,13 @@ function stateWith(overrides: Partial<AppState>): AppState {
   return { ...initialState, rifffs: { r1: rifff }, ...overrides }
 }
 
+const emptyCatalog = { plugins: [] }
+
 describe('buildEngineProject', () => {
   it('resolves an unstretched stem to its own path (ratio ~1)', async () => {
     const resolveStretched = vi.fn()
     const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
-    const project = await buildEngineProject(state, resolveStretched)
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
     expect(resolveStretched).not.toHaveBeenCalled()
     expect(project.rifffs).toHaveLength(1)
     expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a.wav')
@@ -35,7 +37,7 @@ describe('buildEngineProject', () => {
       .fn()
       .mockResolvedValue({ path: '/a-stretched.wav', durationSec: 19.2 })
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
-    const project = await buildEngineProject(state, resolveStretched)
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
     expect(resolveStretched).toHaveBeenCalledTimes(1)
     const [calledPath, calledRatio] = resolveStretched.mock.calls[0]
     expect(calledPath).toBe('/a.wav')
@@ -54,7 +56,7 @@ describe('buildEngineProject', () => {
       .fn()
       .mockResolvedValue({ path: '/a-stretched.wav', durationSec: 19.2 })
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
-    const project = await buildEngineProject(state, resolveStretched)
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
     const stem = project.rifffs[0].stems[0]
     // Must be the resolver's reported (stretched) duration, NOT the source
     // stem's own unstretched 12.8s — sending the wrong one here is exactly
@@ -93,7 +95,7 @@ describe('buildEngineProject', () => {
     }
     const resolveStretched = vi.fn().mockResolvedValue({ path: '/stretched.wav', durationSec: 1 })
     const state = stateWith({ bpm: 120, rifffs: { r1: mixedTempoRifff }, stretch: { r1: true } })
-    await buildEngineProject(state, resolveStretched)
+    await buildEngineProject(state, resolveStretched, emptyCatalog)
 
     const calls = resolveStretched.mock.calls
     const aCall = calls.find((c) => c[0] === '/a.wav')
@@ -105,7 +107,7 @@ describe('buildEngineProject', () => {
   it('skips unstretched-path resolution when stretch is explicitly off, even if bpm differs', async () => {
     const resolveStretched = vi.fn()
     const state = stateWith({ bpm: 100, stretch: { r1: false } })
-    const project = await buildEngineProject(state, resolveStretched)
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
     expect(resolveStretched).not.toHaveBeenCalled()
     expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a.wav')
   })
@@ -113,7 +115,7 @@ describe('buildEngineProject', () => {
   it('excludes rifffs not yet placed on the timeline', async () => {
     const unplaced: Rifff = { ...rifff, groupId: 'r2', startBar: undefined }
     const state = stateWith({ bpm: 150, rifffs: { r1: rifff, r2: unplaced } }) // matches rifff.bpm -> ratio 1, no stretch call needed
-    const project = await buildEngineProject(state, vi.fn())
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.rifffs.map((r) => r.groupId)).toEqual(['r1'])
   })
 
@@ -126,7 +128,7 @@ describe('buildEngineProject', () => {
       fadeIn: { r1: 1.5 },
       fadeOut: { r1: 0.5 }
     })
-    const project = await buildEngineProject(state, vi.fn())
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     const stem = project.rifffs[0].stems[0]
     expect(stem.volume).toBe(0.7)
     expect(stem.muted).toBe(true)
@@ -137,14 +139,14 @@ describe('buildEngineProject', () => {
 
   it('always uses -1 as startBarOverride — a stem can no longer diverge from its own rifff (see UNGROUP)', async () => {
     const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
-    const project = await buildEngineProject(state, vi.fn())
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.rifffs[0].stems[0].startBarOverride).toBe(-1)
   })
 
   it('falls back to the original path AND the original durationSec when the resolver rejects, rather than throwing', async () => {
     const resolveStretched = vi.fn().mockRejectedValue(new Error('rubberband binary missing'))
     const state = stateWith({ bpm: 100, stretch: { r1: true } })
-    const project = await buildEngineProject(state, resolveStretched)
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
     const stem = project.rifffs[0].stems[0]
     expect(stem.resolvedPath).toBe('/a.wav')
     // The fallback must be fully consistent: a stem that fell back to its
@@ -155,19 +157,36 @@ describe('buildEngineProject', () => {
 
   it('resolves playedBars via resolvePlayedBars, defaulting to rifff.barLength when unset', async () => {
     const state = stateWith({ bpm: 150 }) // ratio 1, no stretch call needed
-    const project = await buildEngineProject(state, vi.fn())
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.rifffs[0].stems[0].playedBars).toBe(rifff.barLength)
   })
 
   it('reflects a playedBars override', async () => {
     const state = stateWith({ bpm: 150, playedBars: { r1: 16 } })
-    const project = await buildEngineProject(state, vi.fn())
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.rifffs[0].stems[0].playedBars).toBe(16)
   })
 
-  it('includes masterChain in the built project, using "" for an empty slot', async () => {
+  it('resolves a catalog id to its real path, using "" for an empty slot', async () => {
+    const catalog = {
+      plugins: [
+        { id: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' },
+        { id: 'soothe2', path: '/Library/Audio/Plug-Ins/VST3/soothe2.vst3' }
+      ]
+    }
     const state = stateWith({ bpm: 150, masterChain: [null, 'pro-q-3', null, 'soothe2'] })
-    const project = await buildEngineProject(state, vi.fn())
-    expect(project.masterChain).toEqual(['', 'pro-q-3', '', 'soothe2'])
+    const project = await buildEngineProject(state, vi.fn(), catalog)
+    expect(project.masterChain).toEqual([
+      { pluginId: '', path: '' },
+      { pluginId: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' },
+      { pluginId: '', path: '' },
+      { pluginId: 'soothe2', path: '/Library/Audio/Plug-Ins/VST3/soothe2.vst3' }
+    ])
+  })
+
+  it('resolves to an empty path when the catalog id is not found (e.g. plugin no longer scanned)', async () => {
+    const state = stateWith({ bpm: 150, masterChain: ['unknown-id', null, null, null] })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    expect(project.masterChain[0]).toEqual({ pluginId: 'unknown-id', path: '' })
   })
 })

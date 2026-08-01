@@ -44,11 +44,21 @@ namespace ssstitch
         // semantics for setLoopLengthBars.
         double loopLengthBars = 0.0;
         std::vector<EngineRifff> rifffs;
-        // "" (empty string) = no plugin loaded for that slot. Always exactly
-        // kNumMasterChainSlots entries; parseEngineProject fills missing/short
-        // wire-format arrays with empty strings rather than failing, matching
-        // this file's existing lenient-parse convention for other fields.
-        std::array<juce::String, kNumMasterChainSlots> masterChain {};
+        // pluginId is "" (empty) for an empty slot. path is only meaningful
+        // when pluginId is non-empty -- the renderer resolves a scanned
+        // catalog id to its real file path (native-engine has no access to
+        // pluginCatalog.json itself, a main-process/renderer concept) and
+        // sends both, since actually loading a plugin needs a real path.
+        // Always exactly kNumMasterChainSlots entries; parseEngineProject
+        // fills missing/short wire-format arrays with empty slots rather
+        // than failing, matching this file's existing lenient-parse
+        // convention for other fields.
+        struct MasterChainSlot
+        {
+            juce::String pluginId;
+            juce::String path;
+        };
+        std::array<MasterChainSlot, kNumMasterChainSlots> masterChain {};
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.
