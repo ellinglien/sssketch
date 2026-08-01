@@ -276,7 +276,8 @@ static int runServe(int port)
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
     PluginChain masterChain(kNumMasterChainSlots);
-    Transport transport(engine, masterChain);
+    ChannelChainRegistry channelChains;
+    Transport transport(engine, masterChain, channelChains);
     transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud

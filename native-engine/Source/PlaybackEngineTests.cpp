@@ -1,6 +1,7 @@
 // native-engine/Source/PlaybackEngineTests.cpp
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
+#include "ChannelChainRegistry.h"
 #include <juce_core/juce_core.h>
 #include <cmath>
 
@@ -58,8 +59,9 @@ namespace ssstitch
             {
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 for (float s : l) expectEquals(s, 0.0f);
             }
 
@@ -73,13 +75,14 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
                 expect(!engine.isMetronomeEnabled()); // off by default
                 engine.setMetronomeEnabled(true);
                 expect(engine.isMetronomeEnabled());
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 // Sample 0 is exactly the downbeat's own zero-crossing (a
                 // sine starts at 0, not its peak) — sample 1, a moment into
                 // the click's decay envelope, is where "nonzero" actually
@@ -97,10 +100,11 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 for (float s : l) expectEquals(s, 0.0f);
             }
 
@@ -124,10 +128,11 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 // source sample value 0.5 * stem volume 0.5 = 0.25 (no fadeInBars/
                 // fadeOutBars configured). Sampled at index 200 (~4.5ms), past the
                 // always-on ~3ms anti-click fade-in floor (see FadeGain.cpp) — index
@@ -154,9 +159,10 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 for (float s : l) expectEquals(s, 0.0f);
             }
 
@@ -177,9 +183,10 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
                 for (float s : l) expectEquals(s, 0.0f);
             }
 
@@ -209,6 +216,7 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 const double sampleRate = 44100.0;
@@ -223,7 +231,7 @@ namespace ssstitch
                 const double positionBars = blockStartSec / 4.0;
 
                 std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
-                engine.renderBlock(positionBars, sampleRate, numSamples, l.data(), r.data());
+                engine.renderBlock(positionBars, sampleRate, numSamples, l.data(), r.data(), channelChains);
 
                 // First sample: still in tile0, near (but outside the loop-sewing blend
                 // window of) the end of its 4s buffer -> near 1.0.
@@ -261,6 +269,7 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 // tile1 starts at t=4.0s; render at t=4.5s, 1.5s into tile1 (and squarely
@@ -268,7 +277,7 @@ namespace ssstitch
                 // wrongly treated as the first tile).
                 const double positionBars = 4.5 / 4.0;
                 std::vector<float> l(64, 0.0f), r(64, 0.0f);
-                engine.renderBlock(positionBars, 44100.0, 64, l.data(), r.data());
+                engine.renderBlock(positionBars, 44100.0, 64, l.data(), r.data(), channelChains);
 
                 // Expected flat: 0.5 (source) * 1.0 (no fade — this is a repeat, not the
                 // rifff's true first tile) * 1.0 (default volume) = 0.5.
@@ -313,10 +322,11 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
-                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data());
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
 
                 // 0.3 + 0.2 = 0.5, not either fixture's value alone — proves accumulation.
                 // Index 200 (~4.5ms), past the anti-click fade-in floor — see the
@@ -352,17 +362,86 @@ namespace ssstitch
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
                 engine.setProject(project);
 
                 // Segment starts at t=0; render at t=0.5s, i.e. exactly halfway through the
                 // segment -> expected source sample index 11025 of 22050 -> ramp value 0.5.
                 const double positionBars = 0.5 / 4.0;
                 std::vector<float> l(8, 0.0f), r(8, 0.0f);
-                engine.renderBlock(positionBars, 44100.0, 8, l.data(), r.data());
+                engine.renderBlock(positionBars, 44100.0, 8, l.data(), r.data(), channelChains);
 
                 expectWithinAbsoluteError(l[0], 0.5f, 0.02f);
 
                 ramp.deleteFile();
+            }
+
+            beginTest("renderBlock output is unaffected by channel routing when no channel has any plugin loaded");
+            {
+                // Two rifffs on two DIFFERENT channels (today's default shape --
+                // one clip per channel), rendered through the new per-channel
+                // accumulation stage with an empty ChannelChainRegistry (no
+                // plugin loaded anywhere, so every channel is a pure
+                // passthrough). This is the regression check that the Task 4
+                // restructuring (splitting the old single outL/outR
+                // accumulation into per-channel scratch buffers that get
+                // summed back in) didn't break anything: both channels'
+                // stems must still audibly contribute, deterministically,
+                // with no NaN/Inf introduced by the extra indirection.
+                auto toneA = writeFixtureWav("ssstitch_pe_channel_a.wav", 0.3f, 44100);
+                auto toneB = writeFixtureWav("ssstitch_pe_channel_b.wav", 0.2f, 44100);
+
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+
+                EngineRifff rifff1;
+                rifff1.groupId = "r1";
+                rifff1.channelId = "ch-1";
+                rifff1.startBar = 0.0;
+                rifff1.barLength = 1;
+                EngineStem stem1;
+                stem1.resolvedPath = toneA.getFullPathName();
+                stem1.durationSec = 4.0;
+                stem1.barLength = 1;
+                rifff1.stems.push_back(stem1);
+                project.rifffs.push_back(rifff1);
+
+                EngineRifff rifff2;
+                rifff2.groupId = "r2";
+                rifff2.channelId = "ch-2";
+                rifff2.startBar = 0.0;
+                rifff2.barLength = 1;
+                EngineStem stem2;
+                stem2.resolvedPath = toneB.getFullPathName();
+                stem2.durationSec = 4.0;
+                stem2.barLength = 1;
+                rifff2.stems.push_back(stem2);
+                project.rifffs.push_back(rifff2);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains; // nothing loaded -- every channel is a pure passthrough
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+
+                // Same math as "two stems overlapping the same block sum their
+                // contributions" above, just now routed through two separate
+                // channel scratch buffers before being summed back into the
+                // real output -- 0.3 + 0.2 = 0.5 proves both channels' own
+                // accumulation-then-passthrough-then-sum path is intact.
+                expectWithinAbsoluteError(l[200], 0.5f, 0.01f);
+                expectWithinAbsoluteError(r[200], 0.5f, 0.01f);
+                for (int i = 0; i < 512; ++i)
+                {
+                    expect(std::isfinite(l[i]));
+                    expect(std::isfinite(r[i]));
+                }
+
+                toneA.deleteFile();
+                toneB.deleteFile();
             }
 
             fixture.deleteFile();

@@ -60,7 +60,8 @@ namespace ssstitch
                 engine.setProject(project);
 
                 PluginChain masterChain(kNumMasterChainSlots);
-                Transport transport(engine, masterChain);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
                 transport.setBpm(60.0);
                 transport.play(0.0);
 
@@ -118,7 +119,8 @@ namespace ssstitch
                 engine.setProject(project);
 
                 PluginChain masterChain(kNumMasterChainSlots);
-                Transport transport(engine, masterChain);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
                 transport.setBpm(60.0);
                 transport.play(0.0);
 

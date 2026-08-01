@@ -3,6 +3,7 @@
 #include "PlaybackEngine.h"
 #include "StemBufferCache.h"
 #include "PluginChain.h"
+#include "ChannelChainRegistry.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 
@@ -38,6 +39,30 @@ namespace ssstitch
             }
         }
 
+        // Same reasoning as the master chain above -- export builds its own
+        // throwaway per-channel chains synchronously, no ChannelChainRegistry
+        // atomic-swap machinery needed since there's no concurrent audio
+        // thread to protect against during a one-shot offline render.
+        ChannelChainRegistry::ChannelChainMap exportChannelChains;
+        for (const auto& chainEntry : project.channelChains)
+        {
+            auto chain = std::make_shared<PluginChain>(kNumChannelChainSlots);
+            for (int slot = 0; slot < kNumChannelChainSlots; ++slot)
+            {
+                const auto& path = chainEntry.slots[(size_t) slot].path;
+                juce::String slotError;
+                if (!chain->loadPluginSync(slot, path, sampleRate, blockSize, slotError))
+                {
+                    errorOut = "channel \"" + chainEntry.channelId + "\" slot " + juce::String(slot)
+                        + " failed to load: " + slotError;
+                    return false;
+                }
+            }
+            exportChannelChains[chainEntry.channelId] = std::move(chain);
+        }
+        ChannelChainRegistry channelChainRegistry;
+        channelChainRegistry.installForExport(std::move(exportChannelChains));
+
         const double secPerBar = project.bpm > 0.0 ? (60.0 / project.bpm) * 4.0 : 0.0;
         if (secPerBar <= 0.0)
         {
@@ -55,7 +80,7 @@ namespace ssstitch
             const double positionBars = (startSample / sampleRate) / secPerBar;
             auto* l = output.getWritePointer(0, startSample);
             auto* r = output.getWritePointer(1, startSample);
-            engine.renderBlock(positionBars, sampleRate, numSamples, l, r);
+            engine.renderBlock(positionBars, sampleRate, numSamples, l, r, channelChainRegistry);
             masterChain.process(numSamples, l, r);
         }
 

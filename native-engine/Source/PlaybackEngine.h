@@ -2,7 +2,9 @@
 #pragma once
 #include "EngineProject.h"
 #include "StemBufferCache.h"
+#include "ChannelChainRegistry.h"
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <map>
 
 namespace ssstitch
 {
@@ -20,17 +22,22 @@ namespace ssstitch
 
         /** Renders numSamples of stereo output starting at absolute transport
          * position positionBars, into outL/outR (each numSamples long, must be
-         * pre-zeroed by the caller — this function adds into them). Pure/
-         * deterministic: the same project + position + sampleRate + numSamples
-         * always produces the same output, with no hidden state carried between
-         * calls — safe to call repeatedly out of order (as the parity test
-         * does) or from a real-time callback (as a later task does). */
+         * pre-zeroed by the caller — this function adds into them).
+         * channelChains provides each channel's own 2-slot plugin chain (see
+         * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md)
+         * -- a channel with no chain currently published (chainFor returns
+         * nullptr) is a pure passthrough, identical to the pre-this-feature
+         * direct-sum behaviour. Otherwise pure/deterministic given the same
+         * channelChains state: no hidden state carried between calls on
+         * PlaybackEngine's own side — safe to call repeatedly out of order
+         * (as the parity test does) or from a real-time callback. */
         void renderBlock(
             double positionBars,
             double sampleRate,
             int numSamples,
             float* outL,
-            float* outR) const;
+            float* outR,
+            ChannelChainRegistry& channelChains) const;
 
         double secPerBar() const { return currentProject.bpm > 0.0 ? (60.0 / currentProject.bpm) * 4.0 : 0.0; }
 
@@ -53,5 +60,10 @@ namespace ssstitch
         StemBufferCache& bufferCache;
         EngineProject currentProject;
         bool metronomeEnabled = false;
+        // Precomputed once per setProject() call (not per block) -- groups
+        // currentProject.rifffs by channelId. Pointers into currentProject's
+        // OWN vector<EngineRifff>, valid until the next setProject() call
+        // rebuilds both together.
+        std::map<juce::String, std::vector<const EngineRifff*>> channelGroups;
     };
 }

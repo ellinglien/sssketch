@@ -24,7 +24,8 @@ namespace ssstitch
         constexpr double kRepositionFadeSec = 0.012;
     }
 
-    Transport::Transport(PlaybackEngine& e, PluginChain& mc) : engine(e), masterChain(mc) {}
+    Transport::Transport(PlaybackEngine& e, PluginChain& mc, ChannelChainRegistry& cc)
+        : engine(e), masterChain(mc), channelChains(cc) {}
     Transport::~Transport() { closeDevice(); }
 
     bool Transport::openDefaultDevice()
@@ -70,7 +71,7 @@ namespace ssstitch
 
         if (loopBars <= 0.0)
         {
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
             return pos + blockDurationBars;
         }
 
@@ -80,7 +81,7 @@ namespace ssstitch
         if (distToEnd >= blockDurationBars)
         {
             // No wrap within this block.
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR);
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
         }
         else
         {
@@ -93,10 +94,10 @@ namespace ssstitch
             const int splitIndex =
                 std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
             if (splitIndex > 0)
-                engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR);
+                engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
             if (splitIndex < numSamples)
                 engine.renderBlock(0.0, deviceSampleRate, numSamples - splitIndex,
-                                    outL + splitIndex, outR + splitIndex);
+                                    outL + splitIndex, outR + splitIndex, channelChains);
         }
 
         // Declicks the seam by pulling the outgoing lap's last `fadeBars`
@@ -109,7 +110,7 @@ namespace ssstitch
         if (distToEnd < fadeBars + blockDurationBars)
         {
             float anchorL = 0.0f, anchorR = 0.0f;
-            engine.renderBlock(0.0, deviceSampleRate, 1, &anchorL, &anchorR);
+            engine.renderBlock(0.0, deviceSampleRate, 1, &anchorL, &anchorR, channelChains);
             for (int i = 0; i < numSamples; ++i)
             {
                 const double samplePos = pos + (double) i * barsPerSample;
@@ -137,6 +138,7 @@ namespace ssstitch
         // paused/stopped is still promoted promptly once ready, not stuck
         // waiting for the next block that actually renders real audio.
         masterChain.applyPendingSwaps();
+        channelChains.applyPendingSwaps();
 
         if (numOutputChannels < 2 || outputChannelData[0] == nullptr || outputChannelData[1] == nullptr)
             return;

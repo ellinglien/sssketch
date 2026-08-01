@@ -21,6 +21,10 @@ namespace ssstitch
                 // Failure is fine either way — renderBlock skips missing
                 // buffers.
                 bufferCache.load(stem.resolvedPath, stem.durationSec);
+
+        channelGroups.clear();
+        for (const auto& rifff : currentProject.rifffs)
+            channelGroups[rifff.channelId].push_back(&rifff);
     }
 
     void PlaybackEngine::renderBlock(
@@ -28,7 +32,8 @@ namespace ssstitch
         double sampleRate,
         int numSamples,
         float* outL,
-        float* outR) const
+        float* outR,
+        ChannelChainRegistry& channelChains) const
     {
         const double spb = secPerBar();
         if (spb <= 0.0)
@@ -61,8 +66,40 @@ namespace ssstitch
         if (currentProject.rifffs.empty())
             return;
 
-        for (const auto& rifff : currentProject.rifffs)
+        // Per-channel accumulation: each channel's stems sum into their own
+        // scratch buffer first (rebuilt fresh every call, not persisted
+        // across blocks, since numSamples/the exact sub-range varies per
+        // call -- Transport.cpp's own loop-boundary splitting can call
+        // renderBlock more than once per device callback, each into a
+        // different numSamples-sized sub-range of the same outer buffer),
+        // runs through that channel's own plugin chain, then joins the
+        // running master-mix total below -- see
+        // docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md.
+        // A channel with no chain published is a pure passthrough, so this
+        // is byte-identical to the pre-this-feature direct-sum behaviour
+        // whenever no channel has any plugin loaded (the common case).
+        std::vector<std::vector<float>> channelL, channelR;
+        std::vector<juce::String> channelIds;
+        channelL.reserve(channelGroups.size());
+        channelR.reserve(channelGroups.size());
+        channelIds.reserve(channelGroups.size());
+        for (const auto& [channelId, rifffPtrs] : channelGroups)
         {
+            channelL.emplace_back((size_t) numSamples, 0.0f);
+            channelR.emplace_back((size_t) numSamples, 0.0f);
+            channelIds.push_back(channelId);
+        }
+
+        size_t channelIdx = 0;
+        for (const auto& [channelId, rifffPtrs] : channelGroups)
+        {
+            float* chOutL = channelL[channelIdx].data();
+            float* chOutR = channelR[channelIdx].data();
+            ++channelIdx;
+
+            for (const auto* rifffPtr : rifffPtrs)
+            {
+            const auto& rifff = *rifffPtr;
             const FadeConfig fadeConfig { rifff.fadeInBars, rifff.fadeOutBars, spb };
 
             for (const auto& stem : rifff.stems)
@@ -206,10 +243,26 @@ namespace ssstitch
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
-                        outL[i2] += (float) (l * gain);
-                        outR[i2] += (float) (r * gain);
+                        chOutL[i2] += (float) (l * gain);
+                        chOutR[i2] += (float) (r * gain);
                     }
                 }
+            }
+            }
+        }
+
+        // Run each channel's own chain, then add its (now processed) result
+        // into the real output -- a channel with no chain published is a
+        // pure passthrough.
+        for (size_t i = 0; i < channelIds.size(); ++i)
+        {
+            auto* chain = channelChains.chainFor(channelIds[i]);
+            if (chain != nullptr)
+                chain->process(numSamples, channelL[i].data(), channelR[i].data());
+            for (int i2 = 0; i2 < numSamples; ++i2)
+            {
+                outL[i2] += channelL[i][i2];
+                outR[i2] += channelR[i][i2];
             }
         }
     }
