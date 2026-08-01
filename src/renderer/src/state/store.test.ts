@@ -904,7 +904,10 @@ describe('reducer', () => {
 
   describe('channelPlugins cleanup on channel removal', () => {
     it('REMOVE_FROM_TIMELINE deletes channelPlugins for a channel that becomes empty', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, {
         type: 'SET_CHANNEL_CHAIN_PLUGIN',
@@ -919,7 +922,10 @@ describe('reducer', () => {
     })
 
     it('DELETE_RIFFFS deletes channelPlugins for a channel that becomes empty', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, {
         type: 'SET_CHANNEL_CHAIN_PLUGIN',
@@ -933,7 +939,10 @@ describe('reducer', () => {
     })
 
     it('MOVE_TO_CHANNEL deletes channelPlugins for the previous channel once it becomes empty, keeps the destination channel untouched', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r1' }) })
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, {
         type: 'SET_CHANNEL_CHAIN_PLUGIN',

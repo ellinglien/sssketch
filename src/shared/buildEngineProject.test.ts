@@ -189,4 +189,43 @@ describe('buildEngineProject', () => {
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.masterChain[0]).toEqual({ pluginId: 'unknown-id', path: '' })
   })
+
+  it("resolves each rifff's channelId from channelOf", async () => {
+    const state = stateWith({ bpm: 150, channelOf: { r1: 'ch-1' } })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    expect(project.rifffs[0].channelId).toBe('ch-1')
+  })
+
+  it("falls back to the rifff's own groupId when channelOf has no entry for it", async () => {
+    const state = stateWith({ bpm: 150, channelOf: {} })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    expect(project.rifffs[0].channelId).toBe('r1') // rifff's own groupId, per the fixture at the top of this file
+  })
+
+  it('resolves channelPlugins into channelChains, using real catalog paths', async () => {
+    const catalog = {
+      plugins: [{ id: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' }]
+    }
+    const state = stateWith({
+      bpm: 150,
+      channelOf: { r1: 'ch-1' },
+      channelPlugins: { 'ch-1': ['pro-q-3', null] }
+    })
+    const project = await buildEngineProject(state, vi.fn(), catalog)
+    expect(project.channelChains).toEqual([
+      {
+        channelId: 'ch-1',
+        slots: [
+          { pluginId: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' },
+          { pluginId: '', path: '' }
+        ]
+      }
+    ])
+  })
+
+  it('omits a channel from channelChains if it has no plugins loaded', async () => {
+    const state = stateWith({ bpm: 150, channelOf: { r1: 'ch-1' }, channelPlugins: {} })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    expect(project.channelChains).toEqual([])
+  })
 })

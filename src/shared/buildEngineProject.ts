@@ -17,6 +17,7 @@ export interface EngineStem {
 
 export interface EngineRifff {
   groupId: string
+  channelId: string
   startBar: number
   barLength: number
   fadeInBars: number
@@ -53,11 +54,21 @@ export interface EngineProject {
     EngineMasterChainSlot,
     EngineMasterChainSlot
   ]
+  /** One entry per channel with at least one plugin loaded -- a channelId
+   * absent from this array has no channel chain (pure passthrough), same
+   * convention as channelPlugins itself on the renderer side. See
+   * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md. */
+  channelChains: EngineChannelChain[]
 }
 
 export interface EngineMasterChainSlot {
   pluginId: string
   path: string
+}
+
+export interface EngineChannelChain {
+  channelId: string
+  slots: [EngineMasterChainSlot, EngineMasterChainSlot]
 }
 
 /** Minimal shape buildEngineProject needs from the plugin catalog -- callers
@@ -167,6 +178,11 @@ export async function buildEngineProject(
 
     rifffs.push({
       groupId: rifff.groupId,
+      // Same fallback selectors.ts's own channelsInOrder already uses -- a
+      // placed rifff with no explicit channelOf entry (e.g. an old save
+      // from before DAW mode) implicitly owns its own solo channel, named
+      // after its own groupId.
+      channelId: state.channelOf[rifff.groupId] ?? rifff.groupId,
       startBar: rifff.startBar ?? 0,
       barLength: rifff.barLength,
       fadeInBars: state.fadeIn[rifff.groupId] ?? 0,
@@ -181,11 +197,23 @@ export async function buildEngineProject(
     return { pluginId: id, path: entry?.path ?? '' } // empty path = engine treats as empty/unresolvable
   }) as EngineProject['masterChain']
 
+  const channelChains: EngineChannelChain[] = Object.entries(state.channelPlugins)
+    .filter(([, slots]) => slots.some((id) => id !== null))
+    .map(([channelId, slots]) => ({
+      channelId,
+      slots: slots.map((id) => {
+        if (id === null) return { pluginId: '', path: '' }
+        const entry = pluginCatalog.plugins.find((p) => p.id === id)
+        return { pluginId: id, path: entry?.path ?? '' }
+      }) as [EngineMasterChainSlot, EngineMasterChainSlot]
+    }))
+
   return {
     bpm: state.bpm,
     snapDiv: SNAP_DIVS[state.snapIdx],
     loopLengthBars: loopLengthBars(state),
     masterChain,
+    channelChains,
     rifffs
   }
 }
