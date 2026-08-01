@@ -1,0 +1,72 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Needed for electron-builder's github publish provider to create a Release
+# and upload artifacts using the automatically-provided GITHUB_TOKEN, with no
+# separate PAT secret required.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      # JUCE (fetched via CMake's FetchContent, pinned to git tag 8.0.4 in
+      # native-engine/CMakeLists.txt) takes 10-15 minutes to fetch+build from
+      # scratch -- this cache keeps that a one-time cost per JUCE version /
+      # native-engine source change, not a per-release cost.
+      - name: Cache native engine build
+        uses: actions/cache@v4
+        with:
+          path: native-engine/build
+          key: native-engine-${{ runner.os }}-juce-8.0.4-${{ hashFiles('native-engine/CMakeLists.txt', 'native-engine/Source/**') }}
+
+      - name: Build native engine
+        working-directory: native-engine
+        run: |
+          cmake -B build
+          cmake --build build --config Release
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npx vitest run
+
+      # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
+      # itself -- imports into a temporary keychain internally, no manual
+      # `security import`/keychain scripting needed here. CSC_NAME selects
+      # which identity to use (also read directly by build/afterSign.js for
+      # signing the nested engine bundle -- see build/afterSign.js). notarize:
+      # true in electron-builder.yml (only set once real Apple credentials are
+      # in place -- see the implementation plan's Task 11) is what actually
+      # triggers notarization using the APPLE_* vars below.
+      - name: Build, sign, notarize, and publish
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-vite build
+          npx electron-builder --mac --publish always
