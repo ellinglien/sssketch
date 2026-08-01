@@ -41,7 +41,12 @@ export async function runFullScan(
   for (let i = 0; i < candidates.length; i++) {
     const result = await scanOneCandidate(candidates[i])
     if (result.success) {
-      for (const p of result.plugins) {
+      // Instruments (synths/samplers) are excluded from the catalog entirely --
+      // this app hosts effects on stems/channels, never a sound source of its
+      // own, so an instrument plugin would never be usable here anyway. Filtered
+      // at scan time rather than just hidden in the browser, so it never takes
+      // up space in the persisted catalog or a favourites list.
+      for (const p of result.plugins.filter((p) => !p.isInstrument)) {
         plugins.push({
           id: p.identifierString,
           name: p.name,

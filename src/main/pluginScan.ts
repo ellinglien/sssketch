@@ -9,6 +9,7 @@ export interface ScannedPlugin {
   manufacturer: string
   identifierString: string
   arch: 'arm64' | 'x86_64' | 'universal' | 'unknown'
+  isInstrument: boolean
 }
 
 export type ScanOneResult =

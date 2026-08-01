@@ -173,6 +173,7 @@ static int runScanOneJson(const juce::String& path)
             p->setProperty("manufacturer", desc.manufacturerName);
             p->setProperty("identifierString", desc.createIdentifierString());
             p->setProperty("arch", arch);
+            p->setProperty("isInstrument", desc.isInstrument);
             plugins.add(juce::var(p.get()));
         }
         juce::DynamicObject::Ptr obj = new juce::DynamicObject();
