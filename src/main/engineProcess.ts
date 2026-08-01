@@ -15,13 +15,23 @@ export interface SpawnEngineOptions {
 }
 
 function defaultBinaryPath(): string {
+  // Packaged mode: the engine bundle ships as an extraResources copy (see
+  // electron-builder.yml) under the app's own Resources directory, at a path
+  // matching what that config copies it to.
+  if (app.isPackaged) {
+    return join(
+      process.resourcesPath,
+      'native-engine/ssstitch-engine.app/Contents/MacOS/ssstitch-engine'
+    )
+  }
+
   // Dev-mode only — see this plan's scope note on packaging. app.getAppPath()
   // is the Electron app's root directory; native-engine/ lives alongside src/
   // at the repo root in dev mode.
   //
   // Path changed when native-engine's CMake target switched from
   // juce_add_console_app to juce_add_gui_app (needed for real plugin editor
-  // windows, see MasterChain::openEditorWindow) — a GUI app target builds a
+  // windows, see PluginChain::openEditorWindow) — a GUI app target builds a
   // real .app bundle on macOS instead of a bare Mach-O binary, and (for this
   // JUCE version/generator combo, at least) drops the per-config "Debug/"
   // subdirectory the console-app target used to have. spawn() still just
