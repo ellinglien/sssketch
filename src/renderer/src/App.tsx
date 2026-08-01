@@ -563,6 +563,55 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
+  // Holding Option/Alt forces envelope drag mode on for as long as it's held,
+  // then restores whatever volumeDragMode was before the key went down —
+  // "restore" rather than "always turn off" so this composes correctly with
+  // the V-key toggle above (holding Option while V-mode is already on is a
+  // no-op either way; releasing it never fights an already-on V toggle).
+  // SET_VOLUME_DRAG_MODE (not the TOGGLE action) is used deliberately here —
+  // see its own doc comment in store.ts. e.repeat guards against the OS's
+  // own key-repeat re-firing keydown continuously while held, which would
+  // otherwise capture "true" as the previous value on the second repeat
+  // instead of the real pre-hold value. The window blur listener is a safety
+  // net for alt-tabbing (or any focus loss) away while Option is held, since
+  // that can lose the keyup event entirely and would otherwise leave
+  // envelope mode stuck on.
+  const volumeDragModeRef = useRef(state.volumeDragMode)
+  useEffect(() => {
+    volumeDragModeRef.current = state.volumeDragMode
+  }, [state.volumeDragMode])
+
+  useEffect(() => {
+    const holding = { current: false }
+    const previousValue = { current: false }
+
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Alt' || e.repeat) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      holding.current = true
+      previousValue.current = volumeDragModeRef.current
+      dispatch({ type: 'SET_VOLUME_DRAG_MODE', enabled: true })
+    }
+    function release(): void {
+      if (!holding.current) return
+      holding.current = false
+      dispatch({ type: 'SET_VOLUME_DRAG_MODE', enabled: previousValue.current })
+    }
+    function handleKeyUp(e: KeyboardEvent): void {
+      if (e.key !== 'Alt') return
+      release()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', release)
+    }
+  }, [dispatch])
+
   // Tab cycles the arranger mode, Ableton-style: normal -> compact -> sketch
   // -> normal, skipping sketch when isSketchEligible(state) is false (see
   // nextArrangerMode). Skipped while focus is in a text input — Tab's native

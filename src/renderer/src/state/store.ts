@@ -193,6 +193,7 @@ export type Action =
   | { type: 'RENAME_STEM'; groupId: string; slot: number; name: string }
   | { type: 'TOGGLE_EXPAND'; groupId: string }
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
+  | { type: 'SET_VOLUME_DRAG_MODE'; enabled: boolean }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_METRONOME' }
@@ -721,6 +722,15 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_VOLUME_DRAG_MODE':
       return { ...state, volumeDragMode: !state.volumeDragMode }
+
+    // Explicit-set counterpart to TOGGLE_VOLUME_DRAG_MODE above — used by
+    // the Option-key hold gesture (App.tsx), which needs to force a known
+    // value (true while held, then restore to whatever it was before the
+    // key went down) rather than blindly toggle, since a toggle-based
+    // approach can't correctly "restore to normal" if a hold's keydown/keyup
+    // pair races with the V-key's own toggle.
+    case 'SET_VOLUME_DRAG_MODE':
+      return { ...state, volumeDragMode: action.enabled }
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }
