@@ -32,7 +32,8 @@ import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import { stemKey } from '@shared/types'
+import { stemKey, type Rifff } from '@shared/types'
+import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 function barForClientX(clientX: number, container: HTMLDivElement, ppb: number): number {
   const rect = container.getBoundingClientRect()
@@ -415,9 +416,15 @@ function Frame(): React.JSX.Element {
     setPickerIsNewImport(true)
   }
 
-  function handleLoreImported(groupIds: string[]): void {
+  function handleLoreImported(groupIds: string[], rifffs?: Rifff[]): void {
     if (groupIds.length === 0) return
-    setPickerGroupId(groupIds[0])
+    // Default to whichever imported rifff looks easiest to pick a downbeat
+    // against (see reOneScoring.ts) rather than just "whatever imported
+    // first" — the existing batch prev/next nav in BeatPicker still lets the
+    // user override this for any other rifff in the batch.
+    const defaultGroupId =
+      rifffs && rifffs.length > 1 ? (pickBestRifffForReOne(rifffs) ?? groupIds[0]) : groupIds[0]
+    setPickerGroupId(defaultGroupId)
     setPickerBatchGroupIds(groupIds)
     setPickerIsNewImport(true)
   }

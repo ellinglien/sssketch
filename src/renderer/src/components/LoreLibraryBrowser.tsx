@@ -13,7 +13,7 @@ import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
-import { stemKey } from '@shared/types'
+import { stemKey, type Rifff } from '@shared/types'
 import { formatBpm } from '@shared/format'
 
 /** Continuous brightness ramp from dark gray (0% ownership) to white (100%
@@ -114,8 +114,13 @@ export function LoreLibraryBrowser({
   /** Called once import(s) succeed with every newly-created groupId (one for
    * a single import, several for a batch) — lets the caller drive downbeat
    * correction (open BeatPicker for the first one, propagate its picked
-   * offset to the rest) the same way drag-and-drop import already does. */
-  onImported: (groupIds: string[]) => void
+   * offset to the rest) the same way drag-and-drop import already does.
+   * `rifffs` (batch import only) carries the actual imported Rifff data
+   * alongside the ids, so the caller can pick a better default than "first
+   * imported" (see reOneScoring.ts) without reading back through
+   * `state.rifffs`, which wouldn't yet reflect this batch's dispatches at
+   * the point onImported fires (React hasn't re-rendered yet). */
+  onImported: (groupIds: string[], rifffs?: Rifff[]) => void
 }): React.JSX.Element {
   const [available, setAvailable] = useState<boolean | null>(null)
   const [jamFilter, setJamFilter] = useState('')
@@ -225,7 +230,10 @@ export function LoreLibraryBrowser({
    * time just left the original incomplete tile sitting there and created
    * an unrelated duplicate alongside it, with no way back to a single
    * complete one. */
-  function importResolvedRiff(riffCID: string, resolved: LoreResolvedRiff): string | null {
+  function importResolvedRiff(
+    riffCID: string,
+    resolved: LoreResolvedRiff
+  ): { groupId: string; rifff: Rifff } | null {
     const cachedStems = resolved.stems.filter((s) => s.path !== null)
     const existingGroupId = importedRiffGroupIds.get(riffCID)
     const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
@@ -246,7 +254,7 @@ export function LoreLibraryBrowser({
         durationSec: s.durationSec, // this stem's own bpm/bar-length, not the riff's — see resolveRiff
         barLength: s.barLength
       }))
-    if (existing && newStems.length === 0) return existing.groupId // already fully up to date
+    if (existing && newStems.length === 0) return { groupId: existing.groupId, rifff: existing } // already fully up to date
 
     const groupId = existing?.groupId ?? crypto.randomUUID()
     const rifff = existing
@@ -284,7 +292,7 @@ export function LoreLibraryBrowser({
     classifyStems({ ...rifff, stems: newStems }, dispatch).catch((err) => {
       console.error('LoreLibraryBrowser: failed to classify stem types:', err)
     })
-    return groupId
+    return { groupId, rifff }
   }
 
   /** Patches just this one riff's cachedStemCount in the already-loaded
@@ -374,8 +382,8 @@ export function LoreLibraryBrowser({
   async function handleImport(): Promise<void> {
     if (!resolvedRiff || !selectedRiffCID) return
     const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
-    const groupId = importResolvedRiff(selectedRiffCID, toImport)
-    if (groupId) onImported([groupId])
+    const result = importResolvedRiff(selectedRiffCID, toImport)
+    if (result) onImported([result.groupId])
   }
 
   /** Batch import for shift/cmd-click multi-selection. The anchor riff
@@ -389,6 +397,7 @@ export function LoreLibraryBrowser({
    * own auto-download-missing-stems pass, same as the single-import path. */
   async function handleImportSelected(): Promise<void> {
     const groupIds: string[] = []
+    const rifffs: Rifff[] = []
     for (const riffCID of selectedRiffCIDs) {
       try {
         const resolved =
@@ -397,8 +406,11 @@ export function LoreLibraryBrowser({
             : await window.rifffApi.loreResolveRiff(riffCID)
         if (resolved) {
           const toImport = await ensureStemsDownloaded(riffCID, resolved)
-          const groupId = importResolvedRiff(riffCID, toImport)
-          if (groupId) groupIds.push(groupId)
+          const result = importResolvedRiff(riffCID, toImport)
+          if (result) {
+            groupIds.push(result.groupId)
+            rifffs.push(result.rifff)
+          }
         }
       } catch (err) {
         console.error(
@@ -407,7 +419,7 @@ export function LoreLibraryBrowser({
         )
       }
     }
-    if (groupIds.length > 0) onImported(groupIds)
+    if (groupIds.length > 0) onImported(groupIds, rifffs)
   }
 
   /** Standard file-browser multi-select convention: plain click selects
