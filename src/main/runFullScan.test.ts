@@ -72,7 +72,7 @@ describe('runFullScan', () => {
     const { writeCatalog } = await import('./pluginCatalog')
     writeCatalog({
       plugins: [
-        { id: 'id-gone', name: 'Gone', manufacturer: 'M', path: '/gone.vst3', arch: 'arm64' }
+        { id: 'id-gone', name: 'Gone', manufacturer: 'M', path: '/gone.vst3', arch: 'arm64', mtimeMs: 1000 }
       ],
       favouriteIds: ['id-gone']
     })

@@ -9,6 +9,7 @@ export interface CatalogEntry {
   manufacturer: string
   path: string
   arch: 'arm64' | 'x86_64' | 'universal' | 'unknown'
+  mtimeMs: number // candidate bundle's own mtime at scan time -- see getMtimeMs (pluginScan.ts)
 }
 
 export interface PluginCatalog {
