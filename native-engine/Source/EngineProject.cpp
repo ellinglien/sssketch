@@ -120,6 +120,9 @@ namespace sssketch
                         stem.startBarOverride = getDouble(stemVar, "startBarOverride", -1.0);
                         stem.volume = getDouble(stemVar, "volume", 1.0);
                         stem.muted = getBool(stemVar, "muted", false);
+                        stem.oneShot = getBool(stemVar, "oneShot", false);
+                        stem.trimStartSec = getDouble(stemVar, "trimStartSec", 0.0);
+                        stem.trimEndSec = getDouble(stemVar, "trimEndSec", -1.0);
                         rifff.stems.push_back(std::move(stem));
                     }
                 }

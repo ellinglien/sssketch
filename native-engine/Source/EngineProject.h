@@ -23,6 +23,15 @@ namespace sssketch
         double startBarOverride = -1.0; // -1.0 = use the rifff's own startBar
         double volume = 1.0;
         bool muted = false;
+        // See docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
+        // When true, PlaybackEngine::renderBlock's one-shot branch is used
+        // instead of the normal tile/resample path -- trimStartSec/trimEndSec
+        // are only meaningful in that branch.
+        bool oneShot = false;
+        double trimStartSec = 0.0;
+        // -1.0 = unset (play to the stem's own natural durationSec) -- same
+        // sentinel convention as startBarOverride above.
+        double trimEndSec = -1.0;
     };
 
     struct EngineRifff

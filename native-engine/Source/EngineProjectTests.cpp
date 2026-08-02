@@ -50,6 +50,61 @@ namespace sssketch
                 expectWithinAbsoluteError(project.rifffs[0].stems[0].volume, 0.9, 1.0e-9);
             }
 
+            beginTest("parses a one-shot stem's oneShot/trim fields");
+            {
+                const juce::String json = R"(
+                {
+                  "bpm": 120.0,
+                  "snapDiv": 16.0,
+                  "rifffs": [
+                    {
+                      "groupId": "r1",
+                      "startBar": 4.0,
+                      "barLength": 8,
+                      "fadeInBars": 0.0,
+                      "fadeOutBars": 0.0,
+                      "stems": [
+                        {
+                          "stemKey": "r1:1",
+                          "resolvedPath": "/tmp/kick.wav",
+                          "durationSec": 0.6,
+                          "barLength": 8,
+                          "offsetSteps": 0.0,
+                          "startBarOverride": -1.0,
+                          "volume": 1.0,
+                          "muted": false,
+                          "oneShot": true,
+                          "trimStartSec": 0.1,
+                          "trimEndSec": 0.5
+                        }
+                      ]
+                    }
+                  ]
+                }
+                )";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expect(project.rifffs[0].stems[0].oneShot);
+                expectWithinAbsoluteError(project.rifffs[0].stems[0].trimStartSec, 0.1, 1.0e-9);
+                expectWithinAbsoluteError(project.rifffs[0].stems[0].trimEndSec, 0.5, 1.0e-9);
+            }
+
+            beginTest("defaults oneShot to false and trimEndSec to -1 when omitted");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm": 120.0, "snapDiv": 16.0, "rifffs": [{"groupId": "r1", "startBar": 0.0,
+                       "barLength": 8, "fadeInBars": 0.0, "fadeOutBars": 0.0, "stems": [
+                       {"stemKey": "r1:1", "resolvedPath": "/tmp/a.wav", "durationSec": 1.0,
+                        "barLength": 8, "offsetSteps": 0.0, "startBarOverride": -1.0,
+                        "volume": 1.0, "muted": false}]}]})",
+                    project, error));
+                expect(!project.rifffs[0].stems[0].oneShot);
+                expectWithinAbsoluteError(project.rifffs[0].stems[0].trimEndSec, -1.0, 1.0e-9);
+            }
+
             beginTest("parses an empty project (no rifffs placed yet)");
             {
                 EngineProject project;
