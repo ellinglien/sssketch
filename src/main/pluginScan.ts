@@ -1,6 +1,6 @@
 // src/main/pluginScan.ts
 import { spawn } from 'node:child_process'
-import { readdirSync, existsSync } from 'node:fs'
+import { readdirSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 
@@ -69,6 +69,20 @@ export function listAuCandidates(): string[] {
  * point runFullScan.ts uses. */
 export function listPluginCandidates(): string[] {
   return [...listVst3Candidates(), ...listAuCandidates()]
+}
+
+/** A candidate bundle's own mtime, in milliseconds -- `null` on any stat
+ * failure (doesn't exist, permission error, race condition against
+ * listPluginCandidates' own directory listing). Never throws. Used by
+ * runFullScan.ts to skip re-scanning a candidate whose bundle hasn't
+ * changed since the last scan -- see
+ * docs/superpowers/specs/2026-08-02-plugin-rescan-caching-design.md. */
+export function getMtimeMs(path: string): number | null {
+  try {
+    return statSync(path).mtimeMs
+  } catch {
+    return null
+  }
 }
 
 function defaultBinaryPath(): string {

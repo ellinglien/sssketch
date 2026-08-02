@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isVst3Candidate, isAuCandidate, scanOneCandidate } from './pluginScan'
+import { isVst3Candidate, isAuCandidate, scanOneCandidate, getMtimeMs } from './pluginScan'
 
 const realBinaryPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -38,6 +38,25 @@ describe('isAuCandidate', () => {
     expect(isAuCandidate('readme.txt')).toBe(false)
     expect(isAuCandidate('Foo.vst3')).toBe(false)
     expect(isAuCandidate('.DS_Store')).toBe(false)
+  })
+})
+
+describe('getMtimeMs', () => {
+  it('returns the mtime (in ms) of a file that exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-mtime-test-'))
+    try {
+      const path = join(dir, 'fake.vst3')
+      writeFileSync(path, 'x')
+      const mtimeMs = getMtimeMs(path)
+      expect(mtimeMs).not.toBeNull()
+      expect(mtimeMs).toBeGreaterThan(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a path that does not exist', () => {
+    expect(getMtimeMs('/no/such/plugin.vst3')).toBeNull()
   })
 })
 
