@@ -716,6 +716,97 @@ describe('reducer', () => {
     })
   })
 
+  function makeOneShotRifff(overrides: Partial<Rifff> = {}): Rifff {
+    return {
+      groupId: 'r1',
+      name: 'kick',
+      bpm: 120,
+      barLength: 1,
+      folderPath: '/x/kick.wav',
+      stems: [
+        {
+          slot: 1,
+          author: '',
+          name: 'kick',
+          type: 'fx',
+          path: '/x/kick.wav',
+          durationSec: 0.6,
+          barLength: 1,
+          oneShot: true
+        }
+      ],
+      ...overrides
+    }
+  }
+
+  describe('SET_ONE_SHOT_TRIM', () => {
+    it('sets trimStartSec/trimEndSec on the stem and startBar on the rifff', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeOneShotRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, {
+        type: 'SET_ONE_SHOT_TRIM',
+        groupId: 'r1',
+        trimStartSec: 0.1,
+        trimEndSec: 0.4,
+        startBar: 2
+      })
+      const stem = state.rifffs.r1.stems[0]
+      expect(stem.trimStartSec).toBe(0.1)
+      expect(stem.trimEndSec).toBe(0.4)
+      expect(state.rifffs.r1.startBar).toBe(2)
+    })
+
+    it('clamps a negative startBar to 0', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeOneShotRifff() })
+      state = reducer(state, {
+        type: 'SET_ONE_SHOT_TRIM',
+        groupId: 'r1',
+        trimStartSec: 0,
+        trimEndSec: 0.5,
+        startBar: -3
+      })
+      expect(state.rifffs.r1.startBar).toBe(0)
+    })
+  })
+
+  describe('SET_ONE_SHOT_STRETCHED', () => {
+    it("replaces the stem's path/durationSec, clears any prior trim, and updates startBar", () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeOneShotRifff({
+          stems: [
+            {
+              slot: 1,
+              author: '',
+              name: 'kick',
+              type: 'fx',
+              path: '/x/kick.wav',
+              durationSec: 0.6,
+              barLength: 1,
+              oneShot: true,
+              trimStartSec: 0.1,
+              trimEndSec: 0.4
+            }
+          ]
+        })
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+      state = reducer(state, {
+        type: 'SET_ONE_SHOT_STRETCHED',
+        groupId: 'r1',
+        path: '/x/kick-stretched.wav',
+        durationSec: 0.9,
+        startBar: 3
+      })
+      const stem = state.rifffs.r1.stems[0]
+      expect(stem.path).toBe('/x/kick-stretched.wav')
+      expect(stem.durationSec).toBe(0.9)
+      expect(stem.trimStartSec).toBeUndefined()
+      expect(stem.trimEndSec).toBeUndefined()
+      expect(state.rifffs.r1.startBar).toBe(3)
+    })
+  })
+
   describe('SET_GROUP_MUTE', () => {
     it('mutes every stem in the rifff at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
@@ -810,6 +901,111 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r2:1']).toBeUndefined()
       expect(state.mute['r2:6']).toBeUndefined()
+    })
+  })
+
+  describe('SET_CHANNEL_MUTE', () => {
+    it('mutes every rifff currently assigned to the channel, even across several rifffs sharing one channel', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 4,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r2:1']).toBe(true)
+    })
+
+    it('does not affect a rifff on a different channel', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 0,
+        channelId: 'chan-b'
+      })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r2:1']).toBeUndefined()
+    })
+  })
+
+  describe('SOLO_CHANNEL', () => {
+    it('unmutes every rifff on this channel and mutes every rifff on every other channel', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r3' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 4,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r3',
+        startBar: 0,
+        channelId: 'chan-b'
+      })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mute['r3:1']).toBe(true)
+    })
+
+    it('toggles back to fully unmuted when dispatched again for the already-soloed channel', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 0,
+        channelId: 'chan-b'
+      })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r2:1']).toBe(false)
     })
   })
 

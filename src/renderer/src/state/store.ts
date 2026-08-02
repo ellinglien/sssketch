@@ -165,6 +165,20 @@ export type Action =
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'RESIZE_LEFT'; groupId: string; bars: number; startBar: number }
+  | {
+      type: 'SET_ONE_SHOT_TRIM'
+      groupId: string
+      trimStartSec: number
+      trimEndSec: number
+      startBar: number
+    }
+  | {
+      type: 'SET_ONE_SHOT_STRETCHED'
+      groupId: string
+      path: string
+      durationSec: number
+      startBar: number
+    }
   | { type: 'SET_FADE_IN'; groupId: string; bars: number }
   | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | {
@@ -184,6 +198,8 @@ export type Action =
   | { type: 'TOGGLE_MUTE'; stemKey: string }
   | { type: 'SET_GROUP_MUTE'; groupId: string; muted: boolean }
   | { type: 'SOLO_GROUP'; groupId: string }
+  | { type: 'SET_CHANNEL_MUTE'; channelId: string; muted: boolean }
+  | { type: 'SOLO_CHANNEL'; channelId: string }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNGROUP'; groupId: string }
@@ -363,6 +379,51 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs: {
           ...state.rifffs,
           [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
+        }
+      }
+    }
+
+    case 'SET_ONE_SHOT_TRIM': {
+      const rifff = state.rifffs[action.groupId]
+      const stem = rifff.stems[0]
+      return {
+        ...state,
+        rifffs: {
+          ...state.rifffs,
+          [action.groupId]: {
+            ...rifff,
+            startBar: Math.max(0, action.startBar),
+            stems: [{ ...stem, trimStartSec: action.trimStartSec, trimEndSec: action.trimEndSec }]
+          }
+        }
+      }
+    }
+
+    // Fired once rubberband's offline render resolves (see the ctrl+drag
+    // stretch flow in CollapsedRifffRow.tsx) -- replaces the stem's own
+    // audio, clearing any prior trim (the drag that produced this new
+    // duration already represents the desired final length; a stale trim
+    // from before the stretch has no coherent meaning against it).
+    case 'SET_ONE_SHOT_STRETCHED': {
+      const rifff = state.rifffs[action.groupId]
+      const stem = rifff.stems[0]
+      return {
+        ...state,
+        rifffs: {
+          ...state.rifffs,
+          [action.groupId]: {
+            ...rifff,
+            startBar: Math.max(0, action.startBar),
+            stems: [
+              {
+                ...stem,
+                path: action.path,
+                durationSec: action.durationSec,
+                trimStartSec: undefined,
+                trimEndSec: undefined
+              }
+            ]
+          }
         }
       }
     }
@@ -568,6 +629,44 @@ export function reducer(state: AppState, action: Action): AppState {
           mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
             ? false
             : rifff.groupId !== action.groupId
+        }
+      }
+      return { ...state, mute }
+    }
+
+    // Channel-level counterpart to SET_GROUP_MUTE/SOLO_GROUP above, for the
+    // ChannelRow's own M/S buttons (DAW mode: a channel can host several
+    // rifffs sharing one row) — mutes/solos every rifff currently assigned
+    // to this channel together, same channelOf lookup channelsInOrder uses.
+    case 'SET_CHANNEL_MUTE': {
+      const rifffs = Object.values(state.rifffs).filter(
+        (r) =>
+          r.startBar !== undefined && (state.channelOf[r.groupId] ?? r.groupId) === action.channelId
+      )
+      const mute = { ...state.mute }
+      for (const rifff of rifffs) {
+        for (const stem of rifff.stems) {
+          mute[stemKey(rifff.groupId, stem.slot)] = action.muted
+        }
+      }
+      return { ...state, mute }
+    }
+
+    case 'SOLO_CHANNEL': {
+      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+      const channelOfRifff = (r: Rifff): string => state.channelOf[r.groupId] ?? r.groupId
+      const alreadySoloed = rifffList.every((rifff) =>
+        rifff.stems.every((stem) => {
+          const expectedMuted = channelOfRifff(rifff) !== action.channelId
+          return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
+        })
+      )
+      const mute = { ...state.mute }
+      for (const rifff of rifffList) {
+        for (const stem of rifff.stems) {
+          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
+            ? false
+            : channelOfRifff(rifff) !== action.channelId
         }
       }
       return { ...state, mute }
