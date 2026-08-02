@@ -65,15 +65,29 @@ export function SketchStrip(): React.JSX.Element {
     return state.playedBars[rifff.groupId] ?? rifff.barLength
   }
 
-  // Nearest gap between tiles, by clientX — tiles are uniform width + a
-  // fixed gap, so this is direct arithmetic against the container's own
-  // left edge rather than needing per-tile getBoundingClientRect calls.
-  function insertionIndexForClientX(clientX: number): number {
+  // Nearest gap between tiles, by clientX/clientY — tiles are uniform width
+  // + a fixed gap, so this is direct arithmetic against the container's own
+  // top-left corner rather than needing per-tile getBoundingClientRect
+  // calls. The container wraps tiles onto multiple rows once they overflow
+  // its width (flexWrap:'wrap', below), so this has to account for that —
+  // an earlier version only ever looked at clientX, treating every row as a
+  // continuation of row 1's own column count, which meant landing anywhere
+  // in row 2 required dragging far enough right to satisfy row 1's full
+  // width first. itemsPerRow re-derives how many tiles the container's
+  // CURRENT width actually fits per row (flex-wrap doesn't expose that
+  // number directly), matching the same padding/gap the container's own
+  // style below uses.
+  function insertionIndexForClientPoint(clientX: number, clientY: number): number {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return sequence.length
-    const relativeX = clientX - rect.left
     const slot = TILE_SIZE + TILE_GAP
-    return Math.max(0, Math.min(sequence.length, Math.round(relativeX / slot)))
+    const padding = 24
+    const itemsPerRow = Math.max(1, Math.floor((rect.width - padding * 2 + TILE_GAP) / slot))
+    const relativeX = clientX - rect.left - padding
+    const relativeY = clientY - rect.top - padding
+    const row = Math.max(0, Math.floor(relativeY / slot))
+    const col = Math.max(0, Math.min(itemsPerRow, Math.round(relativeX / slot)))
+    return Math.max(0, Math.min(sequence.length, row * itemsPerRow + col))
   }
 
   // Removes one or more tiles and re-packs whatever remains, in one
@@ -277,12 +291,12 @@ export function SketchStrip(): React.JSX.Element {
       ref={containerRef}
       onDragOver={(e) => {
         e.preventDefault()
-        setDropIndex(insertionIndexForClientX(e.clientX))
+        setDropIndex(insertionIndexForClientPoint(e.clientX, e.clientY))
       }}
       onDragLeave={() => setDropIndex(null)}
       onDrop={(e) => {
         e.preventDefault()
-        const index = insertionIndexForClientX(e.clientX)
+        const index = insertionIndexForClientPoint(e.clientX, e.clientY)
         setDropIndex(null)
 
         // Places (or, if already placed elsewhere, pastes an independent
