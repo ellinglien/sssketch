@@ -31,15 +31,18 @@ Add this test to `src/main/loreWarehouse.test.ts`'s existing `describe('listRiff
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    // jam-techno has 2 riffs (riff-1, riff-2) -- a limit of 1 should return
-    // exactly 1 and report hasMore correctly against THAT limit, not the
-    // default RIFF_PAGE_SIZE.
+    // jam-techno has 2 riffs (riff-1, riff-2) -- a limit of 1 constrains the
+    // fetch to exactly 1 row, and correctly reports hasMore against THAT
+    // limit (not the default RIFF_PAGE_SIZE).
     const page1 = listRiffs('jam-techno', { limit: 1 })
     expect(page1.riffs).toHaveLength(1)
     expect(page1.hasMore).toBe(true)
     expect(page1.nextOffset).toBe(1)
 
-    const page2 = listRiffs('jam-techno', { limit: 1, offset: page1.nextOffset })
+    // Second page asks for more than remains (limit 5, only 1 riff left) --
+    // unambiguously proves hasMore goes false once a page returns fewer
+    // rows than its OWN limit, not just fewer than RIFF_PAGE_SIZE.
+    const page2 = listRiffs('jam-techno', { limit: 5, offset: page1.nextOffset })
     expect(page2.riffs).toHaveLength(1)
     expect(page2.hasMore).toBe(false)
   })
