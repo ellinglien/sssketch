@@ -28,7 +28,7 @@ import type { Rifff } from '@shared/types'
  * declared size field lives in that header; the audio payload itself is never
  * touched.
  */
-function readWavHeaderBytes(path: string): Uint8Array {
+export function readWavHeaderBytes(path: string): Uint8Array {
   const size = statSync(path).size
   const headerSize = Math.min(size, 4096) // fmt/data chunk headers land well within this
   const fd = openSync(path, 'r')
@@ -41,7 +41,7 @@ function readWavHeaderBytes(path: string): Uint8Array {
   }
 }
 
-function libraryRoot(): string {
+export function libraryRoot(): string {
   return join(homedir(), 'Music', 'sssketch Library')
 }
 
