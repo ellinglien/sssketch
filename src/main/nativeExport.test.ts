@@ -78,7 +78,12 @@ describe('loopLengthBarsFor', () => {
 /** A 16-bit mono WAV of a constant sample value, repeated for numSamples. Not
  * an actual tone (no frequency) — deliberately simple so the reference math
  * below is just "the constant, scaled by volume" with nothing else to model. */
-function writeConstantWav(path: string, value: number, numSamples: number, sampleRate = 44100): void {
+function writeConstantWav(
+  path: string,
+  value: number,
+  numSamples: number,
+  sampleRate = 44100
+): void {
   const dataSize = numSamples * 2
   const buf = Buffer.alloc(44 + dataSize)
   buf.write('RIFF', 0)
@@ -164,7 +169,17 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
         barLength: 1,
         folderPath: '/x',
         startBar: 0,
-        stems: [{ slot: 1, author: 'e', name: 'a', type: 'fx', path: stemAPath, durationSec: 4, barLength: 1 }]
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemAPath,
+            durationSec: 4,
+            barLength: 1
+          }
+        ]
       }
       const rifffB: Rifff = {
         groupId: 'r2',
@@ -173,7 +188,17 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
         barLength: 1,
         folderPath: '/x',
         startBar: 0,
-        stems: [{ slot: 1, author: 'e', name: 'b', type: 'fx', path: stemBPath, durationSec: 4, barLength: 1 }]
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'b',
+            type: 'fx',
+            path: stemBPath,
+            durationSec: 4,
+            barLength: 1
+          }
+        ]
       }
       const state: AppState = {
         ...initialState,
@@ -199,7 +224,11 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
       const b16 = Math.round(volB * 32767)
       const segmentDurationSec = numSamples / sampleRate
 
-      const nativeBuf = Buffer.from(nativeBytes.buffer, nativeBytes.byteOffset, nativeBytes.byteLength)
+      const nativeBuf = Buffer.from(
+        nativeBytes.buffer,
+        nativeBytes.byteOffset,
+        nativeBytes.byteLength
+      )
       const nativeDataStart = findDataChunkOffset(nativeBuf)
       // Native output is stereo (interleaved L/R, 4 bytes per frame);
       // compare the left channel only against the mono reference.
