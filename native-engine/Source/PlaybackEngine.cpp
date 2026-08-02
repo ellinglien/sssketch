@@ -25,6 +25,17 @@ namespace sssketch
         channelGroups.clear();
         for (const auto& rifff : currentProject.rifffs)
             channelGroups[rifff.channelId].push_back(&rifff);
+
+        // Rebuild the render scratch space to match the new channel set --
+        // off the real-time thread (see renderBlock's own comment on why
+        // this lives here, not there). Inner per-numSamples buffers are left
+        // empty; renderBlock sizes those lazily on first use.
+        scratchChannelL.assign(channelGroups.size(), {});
+        scratchChannelR.assign(channelGroups.size(), {});
+        scratchChannelIds.clear();
+        scratchChannelIds.reserve(channelGroups.size());
+        for (const auto& [channelId, rifffPtrs] : channelGroups)
+            scratchChannelIds.push_back(channelId);
     }
 
     void PlaybackEngine::renderBlock(
@@ -78,16 +89,23 @@ namespace sssketch
         // A channel with no chain published is a pure passthrough, so this
         // is byte-identical to the pre-this-feature direct-sum behaviour
         // whenever no channel has any plugin loaded (the common case).
-        std::vector<std::vector<float>> channelL, channelR;
-        std::vector<juce::String> channelIds;
-        channelL.reserve(channelGroups.size());
-        channelR.reserve(channelGroups.size());
-        channelIds.reserve(channelGroups.size());
-        for (const auto& [channelId, rifffPtrs] : channelGroups)
+        // Reused across calls (see the scratchChannelL/R/Ids member doc
+        // comment) -- only reallocates when numSamples itself changes from
+        // the previous call, which is rare; the common case is a fixed-size
+        // resize() no-op followed by a plain zero-fill, no heap traffic at
+        // all on this real-time callback.
+        auto& channelL = scratchChannelL;
+        auto& channelR = scratchChannelR;
+        auto& channelIds = scratchChannelIds;
+        for (size_t i = 0; i < channelL.size(); ++i)
         {
-            channelL.emplace_back((size_t) numSamples, 0.0f);
-            channelR.emplace_back((size_t) numSamples, 0.0f);
-            channelIds.push_back(channelId);
+            if (channelL[i].size() != (size_t) numSamples)
+            {
+                channelL[i].resize((size_t) numSamples);
+                channelR[i].resize((size_t) numSamples);
+            }
+            std::fill(channelL[i].begin(), channelL[i].end(), 0.0f);
+            std::fill(channelR[i].begin(), channelR[i].end(), 0.0f);
         }
 
         size_t channelIdx = 0;
@@ -114,6 +132,55 @@ namespace sssketch
                 const auto entry = bufferCache.getEntry(stem.resolvedPath);
                 if (entry.buffer == nullptr)
                     continue;
+
+                if (stem.oneShot)
+                {
+                    // Never tiled, never resampled to project tempo -- see
+                    // docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
+                    // The trigger TIME is still bar-locked (fires in sync with
+                    // the rest of the arrangement, re-times itself if project
+                    // bpm later changes) -- only the sample-read RATE is fixed
+                    // at 1:1 against wall-clock time, unlike the resampled tile
+                    // loop below.
+                    const double start = stem.startBarOverride >= 0.0 ? stem.startBarOverride : rifff.startBar;
+                    const double triggerSec = start * spb;
+                    const double trimStart = std::max(0.0, stem.trimStartSec);
+                    const double trimEnd = stem.trimEndSec >= 0.0
+                        ? std::min(stem.trimEndSec, stem.durationSec)
+                        : stem.durationSec;
+                    if (trimEnd <= trimStart)
+                        continue;
+                    const double segStartSec = triggerSec;
+                    const double segEndSec = triggerSec + (trimEnd - trimStart);
+                    if (segEndSec <= blockStartSec || segStartSec >= blockEndSec)
+                        continue;
+
+                    // fadeConfig is already in scope from this rifff's own
+                    // declaration above the stem loop -- a one-shot is always
+                    // exactly one segment, so isFirstSegment/isLastSegment are
+                    // both unconditionally true here.
+                    auto fadePoints = buildFadePoints(
+                        segStartSec, segEndSec - segStartSec, true, true, true, fadeConfig);
+
+                    for (int i2 = 0; i2 < numSamples; ++i2)
+                    {
+                        const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
+                        if (sampleTimeSec < segStartSec || sampleTimeSec >= segEndSec)
+                            continue;
+                        const double sourceTimeSec = trimStart + (sampleTimeSec - segStartSec);
+                        const int srcSample = (int) std::llround(sourceTimeSec * entry.sampleRate);
+                        if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
+                            continue;
+                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * stem.volume;
+                        const int numCh = entry.buffer->getNumChannels();
+                        const float l = entry.buffer->getSample(0, srcSample);
+                        const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
+                        chOutL[i2] += (float) (l * gain);
+                        chOutR[i2] += (float) (r * gain);
+                    }
+                    continue; // handled -- skip the tile-loop path below entirely
+                }
+
                 if (stem.barLength <= 0)
                     continue;
 

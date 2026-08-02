@@ -444,6 +444,127 @@ namespace sssketch
                 toneB.deleteFile();
             }
 
+            beginTest("a one-shot stem plays once, never tiled, even when the rifff's bound would imply many tiles");
+            {
+                auto oneShotFixture = writeFixtureWav("sssketch_pe_oneshot_fixture.wav", 0.8f, 4410); // 0.1s @44100Hz
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 8; // a normal (non-one-shot) stem this short would tile many times across 8 bars
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = oneShotFixture.getFullPathName();
+                stem.durationSec = 0.1;
+                // Deliberately much shorter than rifff.barLength (8) -- without
+                // the oneShot branch, this would tile 8 times across the rifff,
+                // once every stem.barLength*spb = 1*4 = 4 seconds, which is
+                // exactly what the second assertion below checks isn't happening.
+                stem.barLength = 1;
+                stem.oneShot = true;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                // First block: covers the one-shot's own 0.1s window -- expect real audio.
+                std::vector<float> l1(4410, 0.0f), r1(4410, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 4410, l1.data(), r1.data(), channelChains);
+                expect(std::abs(l1[200]) > 0.0f);
+
+                // Second block: bar 4 (16s in) -- well past where a LOOPED version of
+                // this same short stem would have tiled/repeated throughout the
+                // rifff's 8-bar span, but still within that declared barLength (so a
+                // non-one-shot stem would legitimately still be playing there).
+                std::vector<float> l2(512, 0.0f), r2(512, 0.0f);
+                engine.renderBlock(4.0, 44100.0, 512, l2.data(), r2.data(), channelChains);
+                for (float s : l2) expectEquals(s, 0.0f);
+
+                oneShotFixture.deleteFile();
+            }
+
+            beginTest("a one-shot stem's playback rate is unaffected by project bpm (no resampling)");
+            {
+                auto rampFixture = writeRampFixtureWav("sssketch_pe_oneshot_ramp.wav", 44100); // 1s ramp @44100Hz
+
+                auto renderAtBpm = [&](double bpm) {
+                    EngineProject project;
+                    project.bpm = bpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "r1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 8;
+                    EngineStem stem;
+                    stem.stemKey = "r1:1";
+                    stem.resolvedPath = rampFixture.getFullPathName();
+                    stem.durationSec = 1.0;
+                    stem.barLength = 8;
+                    stem.oneShot = true;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(project);
+                    std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                    engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                    return l;
+                };
+
+                auto slow = renderAtBpm(60.0);
+                auto fast = renderAtBpm(240.0);
+                // Same trigger position (startBar 0.0 is t=0 regardless of bpm) and
+                // same output sample rate -- a one-shot's own source-read position at
+                // a given sample index must be identical either way, since bpm must
+                // never affect its playback rate (unlike a normal, resampled stem).
+                expectWithinAbsoluteError(slow[300], fast[300], 1.0e-6f);
+
+                rampFixture.deleteFile();
+            }
+
+            beginTest("trimStartSec/trimEndSec are respected -- audio outside the trimmed window is silent");
+            {
+                auto trimFixture = writeFixtureWav("sssketch_pe_oneshot_trim.wav", 0.8f, 44100); // 1s @44100Hz
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 8;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = trimFixture.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 8;
+                stem.oneShot = true;
+                stem.trimStartSec = 0.1; // skip the first 4410 samples
+                stem.trimEndSec = 0.3;   // stop after 0.2s of played audio (8820 samples)
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                std::vector<float> l(11025, 0.0f), r(11025, 0.0f); // 0.25s -- covers the trimmed window plus margin
+                engine.renderBlock(0.0, 44100.0, 11025, l.data(), r.data(), channelChains);
+                // Segment plays from wall-clock 0 to 0.2s (trimEnd - trimStart), i.e.
+                // samples [0, 8820) -- silent from 8820 onward.
+                expect(std::abs(l[4000]) > 0.0f);   // well within the trimmed window
+                expectEquals(l[10000], 0.0f);       // past trimEnd - trimStart -- trimmed off
+
+                trimFixture.deleteFile();
+            }
+
             fixture.deleteFile();
         }
     };
