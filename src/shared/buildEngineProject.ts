@@ -13,6 +13,9 @@ export interface EngineStem {
   startBarOverride: number // -1 means "use the rifff's own startBar"
   volume: number
   muted: boolean
+  oneShot: boolean
+  trimStartSec: number
+  trimEndSec: number // -1 means "play to the stem's own natural durationSec"
 }
 
 export interface EngineRifff {
@@ -136,7 +139,12 @@ export async function buildEngineProject(
       // declared bpm and were being stretched by the wrong ratio.
       const secPerBarAtProjectTempo = (60 / state.bpm) * 4
       const stemNativeSecPerBar = stem.durationSec / stem.barLength
-      const ratio = stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
+      // A one-shot's own durationSec/barLength are cosmetic (see Stem's own
+      // doc comment) -- computing a ratio from them here would be
+      // meaningless and would wrongly trigger a real tempo-stretch resolve
+      // call for every one-shot. Always ratio 1 (native path, no resolve)
+      // regardless of stretchOn/project bpm.
+      const ratio = stem.oneShot ? 1 : stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
 
       let resolved: StretchedStem = { path: stem.path, durationSec: stem.durationSec }
       if (Math.abs(ratio - 1) >= 0.001) {
@@ -172,7 +180,10 @@ export async function buildEngineProject(
         offsetSteps,
         startBarOverride: -1,
         volume: state.vol[key] ?? 1,
-        muted: state.mute[key] ?? false
+        muted: state.mute[key] ?? false,
+        oneShot: stem.oneShot ?? false,
+        trimStartSec: stem.trimStartSec ?? 0,
+        trimEndSec: stem.trimEndSec ?? -1
       })
     }
 

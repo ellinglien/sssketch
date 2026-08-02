@@ -32,6 +32,37 @@ describe('buildEngineProject', () => {
     expect(project.rifffs[0].stems[0].resolvedPath).toBe('/a.wav')
   })
 
+  it("carries a one-shot stem's oneShot/trim fields onto the wire, defaulting trimEndSec to -1 when unset", async () => {
+    const resolveStretched = vi.fn()
+    const oneShotRifff: Rifff = {
+      groupId: 'r1',
+      name: 'kick',
+      bpm: 150,
+      barLength: 8,
+      folderPath: '/tmp/kick.wav',
+      startBar: 4,
+      stems: [
+        {
+          slot: 1,
+          author: '',
+          name: 'kick',
+          type: 'fx',
+          path: '/kick.wav',
+          durationSec: 0.6,
+          barLength: 8,
+          oneShot: true,
+          trimStartSec: 0.1
+        }
+      ]
+    }
+    const state = stateWith({ bpm: 150, rifffs: { r1: oneShotRifff } })
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
+    const stem = project.rifffs[0].stems[0]
+    expect(stem.oneShot).toBe(true)
+    expect(stem.trimStartSec).toBeCloseTo(0.1)
+    expect(stem.trimEndSec).toBe(-1)
+  })
+
   it('resolves a stretched stem via the provided resolver when stretch is on and bpm differs', async () => {
     const resolveStretched = vi
       .fn()
