@@ -366,12 +366,17 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [pluginCatalog, state.masterChain])
 
   useEffect(() => {
-    return window.rifffApi.onMasterPluginLoaded(({ slot, success, error }) => {
+    return window.rifffApi.onMasterPluginLoaded(({ slot, pluginId, success, error }) => {
       if (!success)
         console.error(`StoreContext: master chain slot ${slot} failed to load plugin: ${error}`)
       setMasterChainStatus((s) => {
         const next = [...s] as typeof s
-        next[slot] = success ? 'loaded' : 'error'
+        // pluginId is empty for an unload request (see engineLoadMasterPlugin's
+        // null-path convention) -- a successful UNLOAD must land on 'idle', not
+        // 'loaded', or clearing a slot (including the auto-clear below, after a
+        // failed load) leaves the status dot bright and Edit clickable for a
+        // slot that's actually empty.
+        next[slot] = success ? (pluginId ? 'loaded' : 'idle') : 'error'
         return next
       })
       setMasterChainError((s) => {
@@ -399,36 +404,41 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [])
 
   useEffect(() => {
-    return window.rifffApi.onChannelPluginLoaded(({ channelId, slot, success, error }) => {
-      if (!success)
-        console.error(
-          `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
-        )
-      setChannelChainStatus((s) => {
-        const existing =
-          s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
-        const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
-        next[slot] = success ? 'loaded' : 'error'
-        return { ...s, [channelId]: next }
-      })
-      setChannelChainError((s) => {
-        const existing = s[channelId] ?? ([null, null] as [string | null, string | null])
-        const next = [...existing] as [string | null, string | null]
-        next[slot] = success ? null : (error ?? 'unknown error')
-        return { ...s, [channelId]: next }
-      })
-      if (!success) {
-        // Same reasoning as the master chain's own equivalent cleanup above
-        // -- a failed load must not leave channelPlugins[channelId][slot]
-        // pointing at the plugin id that just failed.
-        rawDispatch({
-          type: 'SET_CHANNEL_CHAIN_PLUGIN',
-          channelId,
-          slot: slot as 0 | 1,
-          pluginId: null
+    return window.rifffApi.onChannelPluginLoaded(
+      ({ channelId, slot, pluginId, success, error }) => {
+        if (!success)
+          console.error(
+            `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
+          )
+        setChannelChainStatus((s) => {
+          const existing =
+            s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
+          const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
+          // See onMasterPluginLoaded's own comment -- same fix, same bug: an
+          // empty pluginId means this reply is for an unload, not a real load,
+          // so a successful one must land on 'idle', not 'loaded'.
+          next[slot] = success ? (pluginId ? 'loaded' : 'idle') : 'error'
+          return { ...s, [channelId]: next }
         })
+        setChannelChainError((s) => {
+          const existing = s[channelId] ?? ([null, null] as [string | null, string | null])
+          const next = [...existing] as [string | null, string | null]
+          next[slot] = success ? null : (error ?? 'unknown error')
+          return { ...s, [channelId]: next }
+        })
+        if (!success) {
+          // Same reasoning as the master chain's own equivalent cleanup above
+          // -- a failed load must not leave channelPlugins[channelId][slot]
+          // pointing at the plugin id that just failed.
+          rawDispatch({
+            type: 'SET_CHANNEL_CHAIN_PLUGIN',
+            channelId,
+            slot: slot as 0 | 1,
+            pluginId: null
+          })
+        }
       }
-    })
+    )
   }, [])
 
   useEffect(() => {
