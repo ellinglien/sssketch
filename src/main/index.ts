@@ -107,6 +107,18 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+// Dev (`npm run dev`) and a packaged build both default to the exact same
+// userData path (~/Library/Application Support/sssketch, from package.json's
+// productName) -- Chromium's own profile-singleton lock means running both
+// at once causes whichever one launches second to fail to fully start (no
+// window, or a silent early exit), independent of anything Electron's own
+// app.requestSingleInstanceLock() API would control. Must run before
+// whenReady() -- Chromium locks the profile directory during its own
+// startup, before the 'ready' event fires.
+if (is.dev) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
