@@ -4,11 +4,10 @@ export const MIN_ZOOM_MULTIPLIER = 0.25
 export const MAX_ZOOM_MULTIPLIER = 4
 export const DEFAULT_ZOOM_MULTIPLIER = 1
 
-// Tuned by feel -- roughly a doubling in multiplier per ~70 units of wheel
-// delta, which on a typical trackpad/mouse wheel reads as "a few brisk
-// scroll ticks to go from min to max zoom," not an imperceptible creep or
-// an overshoot-prone jump.
-const ZOOM_WHEEL_SENSITIVITY = 0.01
+// Tuned by feel -- lower than an earlier pass, which felt jumpy rather than
+// smooth (each tick's step was too large). Roughly a doubling in multiplier
+// per ~115 units of wheel delta now.
+const ZOOM_WHEEL_SENSITIVITY = 0.006
 
 export function clampZoomMultiplier(multiplier: number): number {
   return Math.max(MIN_ZOOM_MULTIPLIER, Math.min(MAX_ZOOM_MULTIPLIER, multiplier))

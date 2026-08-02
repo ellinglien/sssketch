@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -760,12 +761,14 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [history])
 
-  // Cmd/Ctrl+0 resets zoom to its default level -- the standard "reset
-  // zoom" convention across creative and browser apps. Skipped while focus
-  // is in a text input, same pattern as every other global shortcut here.
+  // Cmd+0 resets zoom to its default level -- the standard "reset zoom"
+  // convention across creative and browser apps. Cmd only, matching the
+  // wheel-zoom trigger's own modifier (see handleTimelineWheel's comment).
+  // Skipped while focus is in a text input, same pattern as every other
+  // global shortcut here.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== '0') return
+      if (!e.metaKey || e.key !== '0') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
@@ -822,7 +825,11 @@ function Frame(): React.JSX.Element {
   } | null>(null)
 
   function handleTimelineWheel(e: WheelEvent<HTMLDivElement>): void {
-    if (!(e.metaKey || e.ctrlKey)) return
+    // Cmd only, not Ctrl -- Ctrl+scroll triggering too was reported flaky
+    // on macOS trackpads (matching the same class of Ctrl-key quirk already
+    // documented for one-shot resize's stretch modifier), and there's no
+    // Windows build of this app to justify a Ctrl fallback anyway.
+    if (!e.metaKey) return
     // Axis-locks the gesture: a mostly-horizontal trackpad swipe done while
     // the modifier happens to be held falls through as a normal pan instead
     // of jittering the zoom level from incidental deltaY noise -- only a
@@ -844,7 +851,12 @@ function Frame(): React.JSX.Element {
     })
   }
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect -- this must apply before the browser
+  // paints the frame where the content already resized to the new ppb, or
+  // that frame briefly shows un-anchored (content shifted, scroll not yet
+  // corrected) before snapping into place on the next one. Was a plain
+  // useEffect originally; reported as visible jank on every wheel tick.
+  useLayoutEffect(() => {
     const anchor = pendingZoomAnchorRef.current
     const container = scrollContainerRef.current
     if (!anchor || !container) return
