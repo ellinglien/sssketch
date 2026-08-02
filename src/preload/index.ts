@@ -131,11 +131,16 @@ const api = {
       targetUser?: string
       onlyContainsUser?: boolean
       offset?: number
+      limit?: number
     }
   ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
     ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
   loreResolveRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
     ipcRenderer.invoke('lore-resolve-riff', riffCID),
+  loreResolveRiffWithContext: (
+    riffCID: string
+  ): Promise<{ jamCID: string; offset: number; matchedRiffCID: string } | null> =>
+    ipcRenderer.invoke('lore-resolve-riff-with-context', riffCID),
   loreDownloadMissingStems: (riffCID: string): Promise<LoreResolvedRiff | null> =>
     ipcRenderer.invoke('lore-download-missing-stems', riffCID)
 }

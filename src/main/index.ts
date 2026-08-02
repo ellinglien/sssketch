@@ -26,6 +26,7 @@ import {
   listJams,
   listRiffs,
   resolveRiff,
+  resolveRiffWithContext,
   downloadMissingStems,
   type RiffFilters
 } from './loreWarehouse'
@@ -150,6 +151,10 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('lore-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
+
+  ipcMain.handle('lore-resolve-riff-with-context', (_event, riffCID: string) =>
+    resolveRiffWithContext(riffCID)
+  )
 
   ipcMain.handle('lore-download-missing-stems', (_event, riffCID: string) =>
     downloadMissingStems(riffCID)
