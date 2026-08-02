@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
 }))
 
 const { getMtimeMsMock } = vi.hoisted(() => ({
-  getMtimeMsMock: vi.fn((_path: string): number | null => null)
+  getMtimeMsMock: vi.fn((): number | null => null)
 }))
 
 vi.mock('./pluginScan', () => ({
