@@ -1,12 +1,10 @@
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch, useZoom } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
-import { CompactRifffBlock } from './CompactRifffBlock'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { clipGeometry } from '../state/selectors'
-import { PPB, COMPACT_PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 
@@ -37,22 +35,7 @@ export function RifffBlockRow({
   const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
   const expanded = !!state.exp[groupId] && !isOneShot
   const color = identityColor(rifff)
-  const compact = state.mode === 'compact'
-
-  // Compact mode's own collapsed view (CompactRifffBlock) only covers the
-  // "everything mixed into one thin row" case — expanding still needs the
-  // full per-stem StemWaveformRow breakdown to actually mute/drag/resize
-  // individual stems, same as Normal mode. Only the collapsed branch
-  // bypasses this component's own name-bar/expand machinery below; once
-  // expanded, compact mode falls through to the exact same structure Normal
-  // mode uses, just at Compact's own horizontal scale (ppb below) so an
-  // expanded rifff's stems stay aligned with everything else in the compact
-  // timeline instead of quietly reverting to Normal mode's wider spacing.
-  if (compact && !expanded) {
-    return <CompactRifffBlock groupId={groupId} onOpenContextMenu={onOpenContextMenu} />
-  }
-
-  const ppb = compact ? COMPACT_PPB : PPB
+  const ppb = useZoom()
   const geo = clipGeometry(state, groupId, ppb)
 
   return (

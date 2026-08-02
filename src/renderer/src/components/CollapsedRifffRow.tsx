@@ -1,12 +1,11 @@
 import { useState } from 'react'
-import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
+import { useAppState, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import { MIN_PLAYED_BARS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { PPB } from './Ruler'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { useShiftHeld } from './useShiftHeld'
 import {
@@ -99,6 +98,10 @@ export function CollapsedRifffRow({
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
+  // Shadows the name every existing PPB reference in this file already
+  // uses -- see zoomMath.ts/useZoom's own doc comments for what this value
+  // actually is (base PPB * the current zoom multiplier).
+  const PPB = useZoom()
   const rifff = state.rifffs[groupId]
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
