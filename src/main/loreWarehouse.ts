@@ -105,6 +105,10 @@ export interface RiffFilters {
    * riffs (some of Elling's real jams have 20,000+) doesn't have to load or
    * render them all at once. */
   offset?: number
+  /** How many riffs to fetch, defaulting to RIFF_PAGE_SIZE when unset --
+   * normal jam browsing never sets this; the riff-ID jump feature uses a
+   * smaller value to fetch a tight centered window instead of a full page. */
+  limit?: number
 }
 
 export interface RiffPage {
@@ -147,6 +151,7 @@ const RIFF_PAGE_SIZE = 200
 export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
   const db = getWarehouseDb()
   const offset = filters.offset ?? 0
+  const limit = filters.limit ?? RIFF_PAGE_SIZE
   if (!db) return { riffs: [], hasMore: false, nextOffset: offset }
 
   const conditions = ['OwnerJamCID = ?']
@@ -177,7 +182,7 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
        ORDER BY CreationTime DESC
        LIMIT ? OFFSET ?`
     )
-    .all(...params, RIFF_PAGE_SIZE, offset) as RiffRow[]
+    .all(...params, limit, offset) as RiffRow[]
 
   // Batch-resolve every referenced StemCID's creator in one query, rather than
   // one query per stem — up to 8 stems x 200 riffs would otherwise be 1600
@@ -227,11 +232,13 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
 
   return {
     riffs,
-    // Computed from the raw page (rows.length), not the onlyFullyCached-
-    // filtered summaries — otherwise a page where every riff happens to be
+    // Computed from the raw page (rows.length) against the LIMIT actually
+    // used, not the onlyFullyCached-filtered summaries and not a hardcoded
+    // RIFF_PAGE_SIZE -- otherwise a page where every riff happens to be
     // filtered out would look like "no more data" even though later pages
-    // might have plenty.
-    hasMore: rows.length === RIFF_PAGE_SIZE,
+    // might have plenty, and a custom smaller `limit` would never report
+    // hasMore correctly.
+    hasMore: rows.length === limit,
     nextOffset: offset + rows.length
   }
 }
@@ -331,6 +338,64 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
     bpm: riffRow.BPMrnd,
     barLength: riffRow.BarLength,
     stems
+  }
+}
+
+export interface RiffContextResult {
+  jamCID: string
+  /** Offset to pass to listRiffs(jamCID, { offset }) to fetch a ~20-riff
+   * page centered on the target riff (10 before, 10 after -- clamped to 0
+   * for a riff near the very start of the jam). */
+  offset: number
+  /** The riffCID actually matched -- identical to the input except when the
+   * typo-tolerant fallback below kicked in, so the caller can highlight the
+   * right row even if the pasted ID had a case/whitespace mismatch. */
+  matchedRiffCID: string
+}
+
+const RIFF_CONTEXT_WINDOW_BEFORE = 10
+
+/** Resolves which jam a riffCID belongs to and an offset centered on it,
+ * for "jump straight to this riff" lookups -- unlike resolveRiff, this
+ * doesn't fetch stem data; the caller re-uses the existing listRiffs(jamCID,
+ * { offset }) to actually fetch the surrounding page, exactly like normal
+ * jam browsing already does.
+ *
+ * The local warehouse is a flat cache: a riff's row is either fully present
+ * or it isn't in the database at all -- there's no separate index of
+ * "riffs known to exist but not synced" to fall back on. The one real
+ * exception is user error, so a failed exact match retries once, trimmed
+ * and case-insensitive, before giving up. Returns null (never throws) if
+ * neither matches, or if the warehouse itself is unavailable. */
+export function resolveRiffWithContext(riffCID: string): RiffContextResult | null {
+  const db = getWarehouseDb()
+  if (!db) return null
+
+  const trimmed = riffCID.trim()
+  const exactRow = db
+    .prepare(`SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ?`)
+    .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined
+  const row =
+    exactRow ??
+    (db
+      .prepare(`SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ? COLLATE NOCASE`)
+      .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined)
+  if (!row) return null
+
+  // Rank in the jam's most-recent-first ordering (listRiffs' own
+  // `ORDER BY CreationTime DESC`, unchanged) -- how many riffs in this jam
+  // are newer than this one. Riffs sharing the exact same unix-second
+  // CreationTime have no stable secondary sort in listRiffs either; this is
+  // an accepted, pre-existing simplification (see the design spec) that can
+  // land the window a few positions off-center in that rare case.
+  const { rank } = db
+    .prepare(`SELECT COUNT(*) as rank FROM Riffs WHERE OwnerJamCID = ? AND CreationTime > ?`)
+    .get(row.OwnerJamCID, row.CreationTime) as { rank: number }
+
+  return {
+    jamCID: row.OwnerJamCID,
+    offset: Math.max(0, rank - RIFF_CONTEXT_WINDOW_BEFORE),
+    matchedRiffCID: row.RiffCID
   }
 }
 

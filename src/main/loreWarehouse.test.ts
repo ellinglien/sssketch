@@ -10,6 +10,7 @@ import {
   listJams,
   listRiffs,
   resolveRiff,
+  resolveRiffWithContext,
   downloadMissingStems
 } from './loreWarehouse'
 import { stemDownloadUrl } from '@shared/loreLibrary'
@@ -318,6 +319,28 @@ describe('listRiffs', () => {
     setWarehouseRootForTests('/no/such/path')
     expect(listRiffs('jam-techno', {}).riffs).toEqual([])
   })
+
+  it('respects a custom limit, for callers that want a smaller page than RIFF_PAGE_SIZE', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    // jam-techno has 2 riffs (riff-1, riff-2) -- a limit of 1 constrains the
+    // fetch to exactly 1 row, and correctly reports hasMore against THAT
+    // limit (not the default RIFF_PAGE_SIZE).
+    const page1 = listRiffs('jam-techno', { limit: 1 })
+    expect(page1.riffs).toHaveLength(1)
+    expect(page1.hasMore).toBe(true)
+    expect(page1.nextOffset).toBe(1)
+
+    // Second page asks for more than remains (limit 5, only 1 riff left) --
+    // unambiguously proves hasMore goes false once a page returns fewer
+    // rows than its OWN limit, not just fewer than RIFF_PAGE_SIZE.
+    const page2 = listRiffs('jam-techno', { limit: 5, offset: page1.nextOffset })
+    expect(page2.riffs).toHaveLength(1)
+    expect(page2.hasMore).toBe(false)
+  })
 })
 
 describe('resolveRiff', () => {
@@ -395,6 +418,74 @@ describe('resolveRiff', () => {
   it('returns null when the warehouse is unavailable, rather than throwing', () => {
     setWarehouseRootForTests('/no/such/path')
     expect(resolveRiff('riff-1')).toBeNull()
+  })
+})
+
+describe('resolveRiffWithContext', () => {
+  let root: string
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+  })
+
+  it('resolves the jam and an offset centered on the riff, for a riff in the middle of a jam', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createFixtureWarehouse(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-big', 'Big Jam')`)
+    const insert = db.prepare(
+      'INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName) VALUES (?,?,?,?,?,?)'
+    )
+    // 41 riffs, CreationTime 0..40 -- riff-20 sits at rank 20 (20 riffs
+    // newer than it: CreationTime 21..40), so offset should be 20-10=10.
+    for (let i = 0; i <= 40; i++) {
+      insert.run(`riff-${i}`, 'jam-big', i, 130, 8, 'elling')
+    }
+    db.close()
+    setWarehouseRootForTests(root)
+
+    const result = resolveRiffWithContext('riff-20')
+    expect(result).not.toBeNull()
+    expect(result!.jamCID).toBe('jam-big')
+    expect(result!.matchedRiffCID).toBe('riff-20')
+    expect(result!.offset).toBe(10)
+  })
+
+  it('clamps the offset to 0 for a riff at (or near) the very start of a jam', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setWarehouseRootForTests(root)
+
+    // riff-2 (CreationTime 2000) is the NEWEST riff in jam-techno -- rank 0,
+    // offset would be 0-10 = -10, clamped to 0.
+    const result = resolveRiffWithContext('riff-2')
+    expect(result).not.toBeNull()
+    expect(result!.jamCID).toBe('jam-techno')
+    expect(result!.offset).toBe(0)
+  })
+
+  it('matches case-insensitively and trims whitespace, as a typo-tolerant fallback', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setWarehouseRootForTests(root)
+
+    const result = resolveRiffWithContext('  RIFF-1  ')
+    expect(result).not.toBeNull()
+    // The MATCHED (real) riffCID is returned, not the mistyped input, so
+    // the caller can highlight the actual row.
+    expect(result!.matchedRiffCID).toBe('riff-1')
+    expect(result!.jamCID).toBe('jam-techno')
+  })
+
+  it('returns null for a riffCID with no match at all, exact or fallback', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setWarehouseRootForTests(root)
+    expect(resolveRiffWithContext('no-such-riff')).toBeNull()
+  })
+
+  it('returns null when the warehouse is unavailable, rather than throwing', () => {
+    setWarehouseRootForTests('/no/such/path')
+    expect(resolveRiffWithContext('riff-1')).toBeNull()
   })
 })
 
