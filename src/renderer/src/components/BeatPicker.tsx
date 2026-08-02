@@ -519,14 +519,20 @@ export function BeatPicker({
     markDownbeatRef.current = () => {
       if (!isFreePlaying || !rifff || !stem) return
       // Spans the whole rifff, not just the identity stem's own duration —
-      // same reasoning as peaks/totalBeats above.
-      const beatsInLoop = rifff.barLength * 4
+      // same reasoning as peaks/totalBeats above. Matches the click grid's
+      // own resolution (see Task 1's subdivisionsPerBeat) so tapping along
+      // and clicking a gridline stay consistent with each other -- see
+      // docs/superpowers/specs/2026-08-02-beatpicker-grid-resolution-design.md.
+      const snapDivNow = SNAP_DIVS[state.snapIdx]
+      const subdivisionsPerBeatNow = snapDivNow / 4
+      const subdivisionsInLoop = rifff.barLength * 4 * subdivisionsPerBeatNow
       const riffDurationSec = (stem.durationSec / stem.barLength) * rifff.barLength
       const elapsed = getAudioContext().currentTime - freeStartTimeRef.current
       const elapsedInLoop = elapsed % riffDurationSec
-      const secPerBeatNative = riffDurationSec / beatsInLoop
-      const beatIndex = Math.round(elapsedInLoop / secPerBeatNative) % beatsInLoop
-      const steps = offsetStepsForBeatIndex(beatIndex, SNAP_DIVS[state.snapIdx])
+      const secPerSubdivision = riffDurationSec / subdivisionsInLoop
+      const subdivisionIndex = Math.round(elapsedInLoop / secPerSubdivision) % subdivisionsInLoop
+      const beatIndex = subdivisionIndex / subdivisionsPerBeatNow
+      const steps = offsetStepsForBeatIndex(beatIndex, snapDivNow)
       dispatch({
         type: 'SET_OFFSET_STEPS',
         key: groupId,
