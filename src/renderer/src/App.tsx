@@ -221,6 +221,34 @@ function Timeline({
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
+  // Matches Ruler's own width exactly (both derive from the same bar count
+  // and ppb) -- without an explicit width here, this div (and therefore
+  // every ChannelRow inside it, since none of them are flex/grid items)
+  // is only ever as wide as its CONTAINING block, because every clip inside
+  // a ChannelRow is positioned via position:absolute and so contributes
+  // nothing to normal-flow sizing. That left each ChannelRow's sticky m/s/fx
+  // button stack (position:sticky; right:0) pinned to a containing block no
+  // wider than the viewport's own un-zoomed width -- correct at ppb's
+  // default scale where content rarely exceeded the viewport, but visibly
+  // wrong once zooming in made the real scrollable content much wider than
+  // that: the buttons stuck at the edge of the (too-narrow) row box instead
+  // of tracking the actual visible viewport, appearing to "jump left" over
+  // whatever clip happened to sit near that stale boundary. Setting this
+  // width explicitly (redundant with Ruler's own width, but that's fine --
+  // it's the source of truth for "how wide is the whole timeline") gives
+  // every child the correct wide containing block, so sticky tracks the
+  // real viewport edge exactly like Ruler's own horizontal scroll already
+  // does correctly.
+  //
+  // minWidth:'100%' alongside the explicit width (rather than just the
+  // explicit width alone) keeps this filling the full viewport on a short
+  // project too -- min-width always wins over a smaller width per CSS,
+  // effectively Math.max(timelineWidthPx, viewport width) -- so the
+  // background click-to-scrub area and the ghost rows below the last
+  // channel still stretch to fill the visible arranger exactly as before,
+  // rather than leaving a dead gap once a short project's real content
+  // width is narrower than the viewport.
+  const timelineWidthPx = (loopLengthBars(state) + TRAILING_BLANK_BARS) * ppb
 
   return (
     <div
@@ -230,7 +258,7 @@ function Timeline({
       onDrop={handleDrop}
       onContextMenu={handleContextMenu}
       onClick={handleBackgroundClick}
-      style={{ position: 'relative' }}
+      style={{ position: 'relative', width: timelineWidthPx, minWidth: '100%' }}
     >
       <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
       {channels.map((channel) => (
@@ -867,6 +895,16 @@ function Frame(): React.JSX.Element {
       anchor.oldPpb,
       ppb
     )
+    // Chromium has a known issue where position:sticky descendants (the
+    // channel row's m/s/fx button stack) don't recompute their on-screen
+    // offset when scrollLeft is set from JS in the same frame their
+    // container's content is resizing, as opposed to a native user scroll --
+    // they visibly freeze at a stale position instead of tracking the
+    // container's right edge. Reading offsetHeight forces a synchronous
+    // layout flush, which nudges Chromium into recomputing sticky offsets
+    // immediately rather than leaving them stale until some unrelated
+    // repaint happens to touch them.
+    void container.offsetHeight
   }, [ppb])
 
   // Sets the cursor at the document level (not just on the pan overlay div
