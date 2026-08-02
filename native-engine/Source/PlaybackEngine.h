@@ -65,5 +65,21 @@ namespace sssketch
         // OWN vector<EngineRifff>, valid until the next setProject() call
         // rebuilds both together.
         std::map<juce::String, std::vector<const EngineRifff*>> channelGroups;
+
+        // Per-channel accumulation scratch for renderBlock() -- one entry per
+        // channelGroups entry, in the same order. Sized/populated once per
+        // setProject() (not per block); renderBlock() only resizes an inner
+        // buffer when numSamples itself changes (rare -- Transport.cpp's
+        // loop-boundary splitting), and just zeroes it (std::fill, no
+        // allocation) otherwise. `mutable` since renderBlock() is const but
+        // still needs to write into this reused scratch space -- same
+        // "logically const, physically caching" reasoning as any const
+        // method backed by an internal cache. Never touched concurrently:
+        // a single PlaybackEngine instance is driven by exactly one thread
+        // at a time (either the real-time audio thread during playback, or
+        // RenderExport's own offline thread, which always uses its own
+        // fresh instance -- see renderBlock's doc comment).
+        mutable std::vector<std::vector<float>> scratchChannelL, scratchChannelR;
+        mutable std::vector<juce::String> scratchChannelIds;
     };
 }
