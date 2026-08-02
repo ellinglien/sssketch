@@ -22,5 +22,14 @@ if [ -z "$APP_PATH" ]; then
   exit 1
 fi
 
+# `open` on an app that's already running just refocuses the EXISTING
+# process instead of launching a new one -- so a rebuild while the app is
+# still open would silently keep showing the old code with no visible sign
+# anything went wrong. Force-quitting first (not a graceful quit -- this is
+# a dev-iteration tool, not asking the running instance to save anything)
+# guarantees `open` always starts a genuinely fresh process on the new build.
+pkill -9 -f "$APP_PATH/Contents/MacOS/sssketch" 2>/dev/null || true
+sleep 1
+
 echo "==> Launching $APP_PATH"
 open "$APP_PATH"
