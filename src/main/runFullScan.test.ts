@@ -13,10 +13,7 @@ const { getMtimeMsMock } = vi.hoisted(() => ({
   // Typed to match the real getMtimeMs(path: string) signature in
   // pluginScan.ts -- callers below need to branch on `path` when setting a
   // per-candidate mtime via mockImplementation.
-  getMtimeMsMock: vi.fn((path: string): number | null => {
-    void path
-    return null
-  })
+  getMtimeMsMock: vi.fn<(path: string) => number | null>(() => null)
 }))
 
 vi.mock('./pluginScan', () => ({
@@ -158,6 +155,7 @@ describe('runFullScan', () => {
       // call history, not the implementation, so an unrestored override
       // here would otherwise leak into every later test in this file.
       const originalImpl = vi.mocked(scanOneCandidate).getMockImplementation()
+      if (!originalImpl) throw new Error('scanOneCandidate mock has no default implementation')
       vi.mocked(scanOneCandidate).mockImplementation(async (path: string) => {
         scanCalls.push(path)
         return { success: true, plugins: [] }
@@ -178,7 +176,7 @@ describe('runFullScan', () => {
           mtimeMs: 5000
         })
       } finally {
-        vi.mocked(scanOneCandidate).mockImplementation(originalImpl!)
+        vi.mocked(scanOneCandidate).mockImplementation(originalImpl)
       }
     })
 
