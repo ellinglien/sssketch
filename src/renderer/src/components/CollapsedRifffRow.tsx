@@ -20,6 +20,14 @@ import {
 } from './envelope'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import {
+  trimRightEdge,
+  trimLeftEdge,
+  targetDurationForRightEdgeStretch,
+  targetDurationForLeftEdgeStretch,
+  stretchRatioForTargetDuration,
+  oneShotWidthBars
+} from './oneShotResize'
 
 /** Tiles one stem's waveform across the collapsed block's width, repeating
  * every stemBarLength bars — that STEM's own native loop length, which can
@@ -94,6 +102,9 @@ export function CollapsedRifffRow({
   const rifff = state.rifffs[groupId]
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
+  const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
+  const oneShotStem = isOneShot ? firstStem : null
+  const secPerBar = (60 / state.bpm) * 4
   const volumeDragMode = state.volumeDragMode
   // One button for the whole group rather than exposing each stem's own mute
   // individually (unlike the expanded view) — collapsing already hides
@@ -122,6 +133,13 @@ export function CollapsedRifffRow({
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
+  // One-shot-only live drag preview -- separate from dragPlayedBars/
+  // dragLeftResize above, which a one-shot never uses (its resize handles
+  // are unsnapped seconds-based trim/stretch, not bar-snapped playedBars).
+  const [oneShotDragPreview, setOneShotDragPreview] = useState<{
+    durationSec: number
+    startBar: number
+  } | null>(null)
 
   // Right-click anywhere on the block toggles the whole group's mute —
   // moved off plain click, same as StemWaveformRow's identical change, since
@@ -151,10 +169,18 @@ export function CollapsedRifffRow({
   // left-resize preview can recompute leftPx from a new start bar while
   // preserving it — see StemWaveformRow's identical pattern.
   const nudgeOffsetPx = geo.leftPx - baseStartBar * PPB
-  const displayedStartBar = dragLeftResize?.startBar ?? baseStartBar
+  const oneShotCommittedDurationSec =
+    oneShotStem != null
+      ? (oneShotStem.trimEndSec ?? oneShotStem.durationSec) - (oneShotStem.trimStartSec ?? 0)
+      : 0
+  const displayedStartBar = isOneShot
+    ? (oneShotDragPreview?.startBar ?? baseStartBar)
+    : (dragLeftResize?.startBar ?? baseStartBar)
   const leftPx = displayedStartBar * PPB + nudgeOffsetPx
-  const widthPx =
-    dragPlayedBars !== null
+  const widthPx = isOneShot
+    ? oneShotWidthBars(oneShotDragPreview?.durationSec ?? oneShotCommittedDurationSec, state.bpm) *
+      PPB
+    : dragPlayedBars !== null
       ? dragPlayedBars * PPB
       : dragLeftResize !== null
         ? dragLeftResize.playedBars * PPB
@@ -222,6 +248,132 @@ export function CollapsedRifffRow({
           })
         }
         setDragLeftResize(null)
+      }
+    )
+  }
+
+  function handleOneShotRightEdgeStart(e: React.MouseEvent): void {
+    if (!oneShotStem) return
+    const isStretch = e.ctrlKey
+    const trimStartSec = oneShotStem.trimStartSec ?? 0
+    const committedTrimEndSec = oneShotStem.trimEndSec ?? oneShotStem.durationSec
+    const nativeDurationSec = oneShotStem.durationSec
+    let finalDurationSec = committedTrimEndSec - trimStartSec
+    let finalTrimEndSec = committedTrimEndSec
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const deltaSec = (deltaX / PPB) * secPerBar
+        if (isStretch) {
+          finalDurationSec = targetDurationForRightEdgeStretch(nativeDurationSec, deltaSec)
+        } else {
+          finalTrimEndSec = trimRightEdge(
+            committedTrimEndSec,
+            deltaSec,
+            trimStartSec,
+            nativeDurationSec
+          )
+          finalDurationSec = finalTrimEndSec - trimStartSec
+        }
+        setOneShotDragPreview({ durationSec: finalDurationSec, startBar: baseStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          if (isStretch) {
+            const ratio = stretchRatioForTargetDuration(nativeDurationSec, finalDurationSec)
+            void window.rifffApi
+              .renderStretched(oneShotStem.path, ratio)
+              .then((result) => {
+                dispatch({
+                  type: 'SET_ONE_SHOT_STRETCHED',
+                  groupId,
+                  path: result.path,
+                  durationSec: result.durationSec,
+                  startBar: baseStartBar
+                })
+              })
+              .catch((err) => {
+                // Fails safely -- no dispatch, so the clip's trim/stretch
+                // state is left exactly as it was before this drag. Same
+                // "fails safely, no partial state" precedent as the
+                // existing bake-stem error path.
+                console.error('One-shot ctrl-drag stretch failed:', err)
+              })
+          } else {
+            dispatch({
+              type: 'SET_ONE_SHOT_TRIM',
+              groupId,
+              trimStartSec,
+              trimEndSec: finalTrimEndSec,
+              startBar: baseStartBar
+            })
+          }
+        }
+        setOneShotDragPreview(null)
+      }
+    )
+  }
+
+  function handleOneShotLeftEdgeStart(e: React.MouseEvent): void {
+    if (!oneShotStem) return
+    const isStretch = e.ctrlKey
+    const committedTrimStartSec = oneShotStem.trimStartSec ?? 0
+    const trimEndSec = oneShotStem.trimEndSec ?? oneShotStem.durationSec
+    const committedDurationSec = trimEndSec - committedTrimStartSec
+    const nativeDurationSec = oneShotStem.durationSec
+    const startPosBar = baseStartBar
+    let finalDurationSec = committedDurationSec
+    let finalTrimStartSec = committedTrimStartSec
+    let finalStartBar = startPosBar
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const deltaSec = (deltaX / PPB) * secPerBar
+        if (isStretch) {
+          finalDurationSec = targetDurationForLeftEdgeStretch(nativeDurationSec, deltaSec)
+        } else {
+          finalTrimStartSec = trimLeftEdge(committedTrimStartSec, deltaSec, trimEndSec)
+          finalDurationSec = trimEndSec - finalTrimStartSec
+        }
+        // The right edge (end-of-playback point) must stay fixed in
+        // absolute time -- startBar shifts by exactly the change in
+        // duration, so only the visible LEFT edge appears to move. This is
+        // the exact anchor invariant the manual walkthrough's step 8 checks.
+        finalStartBar = Math.max(
+          0,
+          startPosBar + oneShotWidthBars(committedDurationSec - finalDurationSec, state.bpm)
+        )
+        setOneShotDragPreview({ durationSec: finalDurationSec, startBar: finalStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          if (isStretch) {
+            const ratio = stretchRatioForTargetDuration(nativeDurationSec, finalDurationSec)
+            void window.rifffApi
+              .renderStretched(oneShotStem.path, ratio)
+              .then((result) => {
+                dispatch({
+                  type: 'SET_ONE_SHOT_STRETCHED',
+                  groupId,
+                  path: result.path,
+                  durationSec: result.durationSec,
+                  startBar: finalStartBar
+                })
+              })
+              .catch((err) => {
+                console.error('One-shot ctrl-drag stretch failed:', err)
+              })
+          } else {
+            dispatch({
+              type: 'SET_ONE_SHOT_TRIM',
+              groupId,
+              trimStartSec: finalTrimStartSec,
+              trimEndSec,
+              startBar: finalStartBar
+            })
+          }
+        }
+        setOneShotDragPreview(null)
       }
     )
   }
@@ -391,9 +543,11 @@ export function CollapsedRifffRow({
               stopPropagation, which blocks this block's own native drag
               from initiating on the same mousedown. */}
           <div
-            onMouseDown={handleLeftResizeStart}
+            onMouseDown={isOneShot ? handleOneShotLeftEdgeStart : handleLeftResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
-            title={`${displayedPlayedBars} bars`}
+            title={
+              isOneShot ? 'drag to trim · ctrl+drag to stretch' : `${displayedPlayedBars} bars`
+            }
             style={{
               position: 'absolute',
               top: 0,
@@ -407,9 +561,11 @@ export function CollapsedRifffRow({
             }}
           />
           <div
-            onMouseDown={handleResizeStart}
+            onMouseDown={isOneShot ? handleOneShotRightEdgeStart : handleResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
-            title={`${displayedPlayedBars} bars`}
+            title={
+              isOneShot ? 'drag to trim · ctrl+drag to stretch' : `${displayedPlayedBars} bars`
+            }
             style={{
               position: 'absolute',
               top: 0,
