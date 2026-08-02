@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
+import { friendlyRiffName } from '@shared/friendlyRiffName'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -261,7 +262,7 @@ export function LoreLibraryBrowser({
       ? { ...existing, stems: [...existing.stems, ...newStems] }
       : {
           groupId,
-          name: `LORE riff ${riffCID.slice(0, 8)}`,
+          name: friendlyRiffName(riffCID),
           bpm: resolved.bpm,
           barLength: resolved.barLength,
           // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
