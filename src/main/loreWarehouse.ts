@@ -378,7 +378,9 @@ export function resolveRiffWithContext(riffCID: string): RiffContextResult | nul
   const row =
     exactRow ??
     (db
-      .prepare(`SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ? COLLATE NOCASE`)
+      .prepare(
+        `SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ? COLLATE NOCASE`
+      )
       .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined)
   if (!row) return null
 
