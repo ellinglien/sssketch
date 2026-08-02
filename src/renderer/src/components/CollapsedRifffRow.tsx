@@ -254,7 +254,14 @@ export function CollapsedRifffRow({
 
   function handleOneShotRightEdgeStart(e: React.MouseEvent): void {
     if (!oneShotStem) return
-    const isStretch = e.ctrlKey
+    // Only the primary button starts a resize -- without this, macOS's own
+    // long-standing "Control-click = secondary click" system convention
+    // meant a Control+click here could arrive as a button-2 mousedown
+    // rather than a button-0 mousedown with ctrlKey set, making plain drag
+    // and "ctrl+drag" indistinguishable in practice. altKey (Option) has no
+    // such OS-level override, so it's used for stretch instead of ctrlKey.
+    if (e.button !== 0) return
+    const isStretch = e.altKey
     const trimStartSec = oneShotStem.trimStartSec ?? 0
     const committedTrimEndSec = oneShotStem.trimEndSec ?? oneShotStem.durationSec
     const nativeDurationSec = oneShotStem.durationSec
@@ -316,7 +323,10 @@ export function CollapsedRifffRow({
 
   function handleOneShotLeftEdgeStart(e: React.MouseEvent): void {
     if (!oneShotStem) return
-    const isStretch = e.ctrlKey
+    // See handleOneShotRightEdgeStart's own comment -- same button/modifier
+    // reasoning, mirrored here.
+    if (e.button !== 0) return
+    const isStretch = e.altKey
     const committedTrimStartSec = oneShotStem.trimStartSec ?? 0
     const trimEndSec = oneShotStem.trimEndSec ?? oneShotStem.durationSec
     const committedDurationSec = trimEndSec - committedTrimStartSec
@@ -546,7 +556,7 @@ export function CollapsedRifffRow({
             onMouseDown={isOneShot ? handleOneShotLeftEdgeStart : handleLeftResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
             title={
-              isOneShot ? 'drag to trim · ctrl+drag to stretch' : `${displayedPlayedBars} bars`
+              isOneShot ? 'drag to trim · option+drag to stretch' : `${displayedPlayedBars} bars`
             }
             style={{
               position: 'absolute',
@@ -564,7 +574,7 @@ export function CollapsedRifffRow({
             onMouseDown={isOneShot ? handleOneShotRightEdgeStart : handleResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
             title={
-              isOneShot ? 'drag to trim · ctrl+drag to stretch' : `${displayedPlayedBars} bars`
+              isOneShot ? 'drag to trim · option+drag to stretch' : `${displayedPlayedBars} bars`
             }
             style={{
               position: 'absolute',
