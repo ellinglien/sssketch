@@ -28,6 +28,10 @@ juce_add_gui_app(sssketch_engine
   PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
 )
 
+# PRIVATE so this only applies to our own Source/*.cpp -- not JUCE's own
+# (much larger, third-party) codebase, which would otherwise drown this out.
+target_compile_options(sssketch_engine PRIVATE -Wall -Wextra)
+
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
   Source/PluginArchitecture.cpp

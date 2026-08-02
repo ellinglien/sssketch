@@ -28,6 +28,10 @@ juce_add_gui_app(sssketch_bridge
   PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
 )
 
+# See native-engine/CMakeLists.txt's own identical addition -- PRIVATE so
+# this only applies to our own sources, not JUCE's.
+target_compile_options(sssketch_bridge PRIVATE -Wall -Wextra)
+
 target_sources(sssketch_bridge PRIVATE
   Source/Main.cpp
   Source/BridgeIpcServer.cpp

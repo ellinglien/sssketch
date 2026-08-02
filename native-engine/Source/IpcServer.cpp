@@ -39,8 +39,8 @@ namespace sssketch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc, ChannelChainRegistry& cc)
-        : engine(e), transport(t), bufferCache(c), masterChain(mc), channelChains(cc)
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
+        : engine(e), transport(t), masterChain(mc), channelChains(cc)
     {
     }
 
@@ -287,13 +287,13 @@ namespace sssketch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, StemBufferCache& c, PluginChain& mc, ChannelChainRegistry& cc)
-        : engine(e), transport(t), bufferCache(c), masterChain(mc), channelChains(cc)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
+        : engine(e), transport(t), masterChain(mc), channelChains(cc)
     {
     }
 
     juce::InterprocessConnection* IpcServer::createConnectionObject()
     {
-        return new IpcConnection(engine, transport, bufferCache, masterChain, channelChains);
+        return new IpcConnection(engine, transport, masterChain, channelChains);
     }
 }

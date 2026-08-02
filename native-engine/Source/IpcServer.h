@@ -19,8 +19,8 @@ namespace sssketch
     class IpcConnection : public juce::InterprocessConnection, private juce::Timer
     {
     public:
-        IpcConnection(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache,
-            PluginChain& masterChain, ChannelChainRegistry& channelChains);
+        IpcConnection(PlaybackEngine& engine, Transport& transport, PluginChain& masterChain,
+            ChannelChainRegistry& channelChains);
         ~IpcConnection() override;
 
         void connectionMade() override;
@@ -33,7 +33,6 @@ namespace sssketch
 
         PlaybackEngine& engine;
         Transport& transport;
-        StemBufferCache& bufferCache;
         PluginChain& masterChain;
         ChannelChainRegistry& channelChains;
     };
@@ -41,15 +40,14 @@ namespace sssketch
     class IpcServer : public juce::InterprocessConnectionServer
     {
     public:
-        IpcServer(PlaybackEngine& engine, Transport& transport, StemBufferCache& bufferCache,
-            PluginChain& masterChain, ChannelChainRegistry& channelChains);
+        IpcServer(PlaybackEngine& engine, Transport& transport, PluginChain& masterChain,
+            ChannelChainRegistry& channelChains);
 
         juce::InterprocessConnection* createConnectionObject() override;
 
     private:
         PlaybackEngine& engine;
         Transport& transport;
-        StemBufferCache& bufferCache;
         PluginChain& masterChain;
         ChannelChainRegistry& channelChains;
     };
