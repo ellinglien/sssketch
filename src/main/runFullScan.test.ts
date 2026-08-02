@@ -9,6 +9,10 @@ vi.mock('electron', () => ({
   app: { getPath: () => userDataDir }
 }))
 
+const { getMtimeMsMock } = vi.hoisted(() => ({
+  getMtimeMsMock: vi.fn((_path: string): number | null => null)
+}))
+
 vi.mock('./pluginScan', () => ({
   listPluginCandidates: () => [
     '/a.vst3',
@@ -56,12 +60,14 @@ vi.mock('./pluginScan', () => ({
         }
       ]
     }
-  }
+  },
+  getMtimeMs: getMtimeMsMock
 }))
 
 describe('runFullScan', () => {
   beforeEach(() => {
     userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-fullscan-test-'))
+    getMtimeMsMock.mockReset().mockImplementation(() => null)
   })
 
   afterEach(() => {
