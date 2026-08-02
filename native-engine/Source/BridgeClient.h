@@ -23,7 +23,7 @@ namespace sssketch
      * methods on the SharedAudioChannel channelFor() returns, not on
      * BridgeClient itself, so the audio thread's hot path never touches
      * BridgeClient's own control-plane bookkeeping. */
-    class BridgeClient : public juce::InterprocessConnection
+    class BridgeClient : public juce::InterprocessConnection, private juce::Timer
     {
     public:
         /** `bridgeBinaryPath` is resolved by Electron (dev vs packaged,
@@ -84,6 +84,12 @@ namespace sssketch
         void sendJson(const juce::var& payload);
         void publishChannels(std::function<void(std::unordered_map<juce::String, std::unique_ptr<SharedAudioChannel>>&)> mutator);
 
+        /** Fires every 500ms (see the constructor) to fail out any pending
+         * load that's been waiting too long -- see timerCallback()'s own
+         * doc comment for why this exists at all: a real, observed gap,
+         * not a hypothetical one. */
+        void timerCallback() override;
+
         juce::String bridgeBinaryPath;
         std::unique_ptr<juce::ChildProcess> bridgeProcess;
         std::atomic<bool> connected { false };
@@ -91,6 +97,16 @@ namespace sssketch
         using ChannelMap = std::unordered_map<juce::String, std::unique_ptr<SharedAudioChannel>>;
         std::atomic<const ChannelMap*> publishedChannels;
 
-        std::unordered_map<juce::String, std::function<void(bool, const juce::String&)>> pendingLoads;
+        /** A load's own onLoaded callback, plus when it was issued (via
+         * juce::Time::getMillisecondCounterHiRes(), same clock
+         * SharedAudioChannel's own timeout logic already uses) --
+         * timerCallback() uses the latter to fail out anything that's been
+         * pending too long. */
+        struct PendingLoad
+        {
+            std::function<void(bool, const juce::String&)> callback;
+            double startTimeMs = 0.0;
+        };
+        std::unordered_map<juce::String, PendingLoad> pendingLoads;
     };
 }

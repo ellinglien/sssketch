@@ -11,13 +11,29 @@ namespace sssketch
     // nothing to collide with in practice.
     static constexpr int kBridgeControlPort = 45890;
 
+    // How long loadPlugin() waits for the bridge's own "bridge-plugin-loaded"
+    // reply before giving up. Real gap this fixes: the bridge handles
+    // load-bridge-plugin synchronously on its one message-handling thread
+    // (BridgeIpcConnection::messageReceived -> formatManager.createPluginInstance)
+    // -- a plugin whose own instantiation blocks (a real, observed risk for
+    // exactly the legacy/iLok-gated plugins this bridge exists to host) previously
+    // left the slot's onLoaded callback never called at all: permanently
+    // "loading" in the UI, Edit never enabling, with no error and no recovery.
+    // 15s is generous relative to any normal plugin's real instantiation time
+    // (including ensureRunning()'s own up-to-5s spawn+connect retry) while still
+    // being short enough that a genuinely stuck plugin resolves to a clear error
+    // instead of an indefinite hang.
+    static constexpr double kBridgePluginLoadTimeoutMs = 15000.0;
+
     BridgeClient::BridgeClient(juce::String path)
         : bridgeBinaryPath(std::move(path)), publishedChannels(new ChannelMap())
     {
+        startTimer(500);
     }
 
     BridgeClient::~BridgeClient()
     {
+        stopTimer();
         if (connected.load())
         {
             juce::DynamicObject::Ptr obj = new juce::DynamicObject();
@@ -130,7 +146,7 @@ namespace sssketch
         // window here, just an ordinary startup ramp before the bridge's
         // own audio thread (BridgeSlot::run) starts producing output.
         publishChannels([&](ChannelMap& map) { map[slotId] = std::move(channel); });
-        pendingLoads[slotId] = std::move(onLoaded);
+        pendingLoads[slotId] = { std::move(onLoaded), juce::Time::getMillisecondCounterHiRes() };
 
         juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
         payloadObj->setProperty("slotId", slotId);
@@ -208,13 +224,52 @@ namespace sssketch
             auto it = pendingLoads.find(slotId);
             if (it != pendingLoads.end())
             {
-                auto callback = std::move(it->second);
+                auto callback = std::move(it->second.callback);
                 pendingLoads.erase(it);
                 if (!success)
                     unloadPlugin(slotId); // clean up the channel published speculatively in loadPlugin
                 if (callback)
                     callback(success, error);
             }
+        }
+    }
+
+    void BridgeClient::timerCallback()
+    {
+        if (pendingLoads.empty())
+            return;
+
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        std::vector<juce::String> timedOut;
+        for (const auto& [slotId, pending] : pendingLoads)
+            if (now - pending.startTimeMs >= kBridgePluginLoadTimeoutMs)
+                timedOut.push_back(slotId);
+
+        if (timedOut.empty())
+            return;
+
+        // A hung load means the bridge's own message-handling thread is
+        // very likely wedged for good on whatever plugin caused it (it
+        // handles load-bridge-plugin synchronously) -- every OTHER pending
+        // or future load on this same bridge process would time out
+        // identically otherwise. Killing it here lets the next
+        // ensureRunning() spawn a fresh one, so a single bad plugin
+        // degrades to "that one load failed," not "bridging is now broken
+        // for the rest of the session."
+        if (bridgeProcess != nullptr)
+            bridgeProcess->kill();
+        disconnect();
+
+        for (const auto& slotId : timedOut)
+        {
+            auto it = pendingLoads.find(slotId);
+            if (it == pendingLoads.end())
+                continue;
+            auto callback = std::move(it->second.callback);
+            pendingLoads.erase(it);
+            unloadPlugin(slotId); // clean up the channel published speculatively in loadPlugin
+            if (callback)
+                callback(false, "bridge plugin load timed out");
         }
     }
 }
