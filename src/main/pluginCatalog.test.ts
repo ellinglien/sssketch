@@ -47,7 +47,9 @@ describe('pluginCatalog', () => {
   it('toggleFavourite adds an id not already favourited, removes one that is', async () => {
     const { writeCatalog, toggleFavourite, loadCatalog } = await import('./pluginCatalog')
     writeCatalog({
-      plugins: [{ id: 'x', name: 'A', manufacturer: 'M', path: '/a.vst3', arch: 'arm64', mtimeMs: 1000 }],
+      plugins: [
+        { id: 'x', name: 'A', manufacturer: 'M', path: '/a.vst3', arch: 'arm64', mtimeMs: 1000 }
+      ],
       favouriteIds: []
     })
     toggleFavourite('x')
