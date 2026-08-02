@@ -53,10 +53,14 @@ let isQuitting = false
 function createWindow(): BrowserWindow {
   // Create the browser window.
   const win = new BrowserWindow({
-    width: 1440,
-    height: 960,
-    minWidth: 900,
-    minHeight: 600,
+    // 1512x982 -- the current MacBook Pro's own logical resolution
+    // (14"/16", ratio ~1.54:1), not an arbitrary round number -- so
+    // fullscreening the app fills the actual screen shape instead of
+    // leaving bars on the sides the way the previous 3:2 (1.5) guess did.
+    width: 1512,
+    height: 982,
+    minWidth: 945,
+    minHeight: 614,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -71,8 +75,8 @@ function createWindow(): BrowserWindow {
   win.on('ready-to-show', () => {
     win.show()
 
-    // The default (1440x960) and minimum (900x600) sizes above are both a
-    // 3:2 ratio -- that's the layout's intended shape. Without a lock,
+    // The default (1512x982) and minimum (945x614) sizes above are both the
+    // same ~1.54:1 ratio -- that's the layout's intended shape. Without a lock,
     // dragging the window to an off-ratio size (very wide+short, or
     // narrow+tall) makes the app's panels feel cramped or leaves dead
     // space. Locking the aspect ratio means an edge or corner drag resizes
@@ -84,7 +88,7 @@ function createWindow(): BrowserWindow {
     // known Electron/macOS gotcha, not a hypothetical one: confirmed here
     // by the constraint not holding in practice when this was called
     // pre-show).
-    win.setAspectRatio(1440 / 960)
+    win.setAspectRatio(1512 / 982)
   })
 
   win.webContents.setWindowOpenHandler((details) => {

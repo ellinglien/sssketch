@@ -382,7 +382,7 @@ const AUTOSAVE_DEBOUNCE_MS = 4000
 // Matches index.ts's own default BrowserWindow width -- see Frame's
 // frameScale doc comment for why this is the one reference number the
 // whole proportional-scaling scheme is built from.
-const REFERENCE_WINDOW_WIDTH = 1440
+const REFERENCE_WINDOW_WIDTH = 1512
 
 function Frame(): React.JSX.Element {
   const state = useAppState()
@@ -392,7 +392,7 @@ function Frame(): React.JSX.Element {
   const pos = usePos()
 
   // .ra-frame (global.css) is a fixed-size "design canvas" (matching the
-  // app's default 1440x960 window, see index.ts) that gets uniformly
+  // app's default 1512x982 window, see index.ts) that gets uniformly
   // scaled via CSS transform to match the CURRENT window size, rather than
   // reflowing its fixed-pixel children (panel widths, fonts, buttons)
   // independently -- that keeps every part of the UI in the same

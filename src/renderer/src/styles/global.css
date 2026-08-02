@@ -108,16 +108,16 @@ textarea {
 
 .ra-frame {
   /* Fixed "design canvas" size -- an 8px gutter inset from the app's
-     default 1440x960 window (see index.ts) on every side, same 3:2 ratio
-     as the window itself. App.tsx's Frame component applies a CSS
-     transform:scale() on top of this based on the CURRENT window size, so
-     every fixed-pixel child (panel widths, fonts, buttons) shrinks/grows
+     default 1512x982 window (see index.ts, the current MacBook Pro's own
+     logical resolution) on every side. App.tsx's Frame component applies a
+     CSS transform:scale() on top of this based on the CURRENT window size,
+     so every fixed-pixel child (panel widths, fonts, buttons) shrinks/grows
      together in the same proportion rather than reflowing independently.
      A plain vh-relative height doesn't work here: it would keep tracking
      the ALREADY-shrunk real viewport on top of the transform's OWN scale
      factor, shrinking twice. */
-  width: 1424px;
-  height: 949px;
+  width: 1496px;
+  height: 966px;
   position: absolute;
   top: 50%;
   left: 50%;
