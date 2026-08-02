@@ -32,7 +32,12 @@ import type { PluginCatalog } from '../../../main/pluginCatalog'
 // re-render on those changes; everything else only re-renders on a real
 // arrangement edit.
 export type TransportAction =
-  { type: 'PLAY' } | { type: 'PAUSE' } | { type: 'STOP' } | { type: 'SET_POS'; pos: number }
+  | { type: 'PLAY' }
+  | { type: 'PAUSE' }
+  | { type: 'STOP' }
+  | { type: 'SET_POS'; pos: number }
+  | { type: 'SET_ZOOM'; multiplier: number }
+  | { type: 'RESET_ZOOM' }
 
 export type DispatchableAction = Action | TransportAction
 
@@ -40,6 +45,14 @@ const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
+// Effective pixels-per-bar (base PPB * the current zoom multiplier) --
+// consumers read this instead of importing the old hardcoded PPB constant
+// directly, so the whole timeline zooms together. Separate context (not
+// folded into AppState) for the same reason PosCtx/PlayingCtx are separate:
+// zoom changes on every scroll tick, and only the handful of components
+// that actually render at a bar<->pixel scale need to re-render when it
+// changes.
+const ZoomCtx = createContext<number>(24)
 
 export type MasterChainSlotStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
@@ -106,6 +119,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const state = history.present
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
+  // View-only (not undo-tracked, not persisted -- see ArrangerMode's own
+  // "Not persisted" doc comment in store.ts for the same reasoning): resets
+  // to 1 on every app launch. 24 is the base PPB (Ruler.tsx); effective PPB
+  // is BASE_PPB * zoomMultiplier, computed once below rather than at every
+  // call site.
+  const [zoomMultiplier, setZoomMultiplier] = useState(1)
   const [masterChainStatus, setMasterChainStatus] = useState<
     [MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus, MasterChainSlotStatus]
   >(['idle', 'idle', 'idle', 'idle'])
@@ -175,6 +194,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         return
       case 'SET_POS':
         setPos(action.pos)
+        return
+      case 'SET_ZOOM':
+        setZoomMultiplier(action.multiplier)
+        return
+      case 'RESET_ZOOM':
+        setZoomMultiplier(1)
         return
       case 'LOAD_STATE':
         setPlaying(false)
@@ -476,23 +501,25 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       <DispatchCtx.Provider value={dispatch}>
         <PosCtx.Provider value={pos}>
           <PlayingCtx.Provider value={playing}>
-            <HistoryCtx.Provider value={historyControls}>
-              <MasterChainStatusCtx.Provider value={masterChainStatus}>
-                <MasterChainErrorCtx.Provider value={masterChainError}>
-                  <ChannelChainStatusCtx.Provider value={channelChainStatus}>
-                    <ChannelChainErrorCtx.Provider value={channelChainError}>
-                      <PluginCatalogCtx.Provider value={pluginCatalog}>
-                        <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
-                          <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                            {children}
-                          </PluginCatalogActionsCtx.Provider>
-                        </PluginScanStateCtx.Provider>
-                      </PluginCatalogCtx.Provider>
-                    </ChannelChainErrorCtx.Provider>
-                  </ChannelChainStatusCtx.Provider>
-                </MasterChainErrorCtx.Provider>
-              </MasterChainStatusCtx.Provider>
-            </HistoryCtx.Provider>
+            <ZoomCtx.Provider value={24 * zoomMultiplier}>
+              <HistoryCtx.Provider value={historyControls}>
+                <MasterChainStatusCtx.Provider value={masterChainStatus}>
+                  <MasterChainErrorCtx.Provider value={masterChainError}>
+                    <ChannelChainStatusCtx.Provider value={channelChainStatus}>
+                      <ChannelChainErrorCtx.Provider value={channelChainError}>
+                        <PluginCatalogCtx.Provider value={pluginCatalog}>
+                          <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
+                            <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                              {children}
+                            </PluginCatalogActionsCtx.Provider>
+                          </PluginScanStateCtx.Provider>
+                        </PluginCatalogCtx.Provider>
+                      </ChannelChainErrorCtx.Provider>
+                    </ChannelChainStatusCtx.Provider>
+                  </MasterChainErrorCtx.Provider>
+                </MasterChainStatusCtx.Provider>
+              </HistoryCtx.Provider>
+            </ZoomCtx.Provider>
           </PlayingCtx.Provider>
         </PosCtx.Provider>
       </DispatchCtx.Provider>
@@ -518,6 +545,11 @@ export function usePos(): number {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function usePlaying(): boolean {
   return useContext(PlayingCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useZoom(): number {
+  return useContext(ZoomCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
