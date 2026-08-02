@@ -141,6 +141,21 @@ export function LoreLibraryBrowser({
   // some rows from a page.
   const nextOffsetRef = useRef(0)
   const [selectedRiffCID, setSelectedRiffCID] = useState<string | null>(null)
+  const [riffIdInput, setRiffIdInput] = useState('')
+  const [riffIdNotFound, setRiffIdNotFound] = useState(false)
+  // Set by handleGoToRiffId, consumed by the riff-fetch effect below once
+  // the centered page for this jump has loaded -- see that effect's own
+  // comment for why this can't just be done inline in handleGoToRiffId
+  // itself (the render-time jam-change reset a few lines up would wipe out
+  // an immediately-set selectedRiffCID before the fetch even starts).
+  const [pendingJump, setPendingJump] = useState<{ offset: number; matchedRiffCID: string } | null>(
+    null
+  )
+  // Per-riff DOM node refs, populated by each riff circle's own ref callback
+  // below -- lets handleGoToRiffId's target scroll into view once its page
+  // has loaded, the same way a normal click never needs to (the user is
+  // already looking at whatever they clicked).
+  const riffNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [bpmFilter, setBpmFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
@@ -423,6 +438,35 @@ export function LoreLibraryBrowser({
     if (groupIds.length > 0) onImported(groupIds, rifffs)
   }
 
+  function handleGoToRiffId(): void {
+    const id = riffIdInput.trim()
+    if (id === '') return
+    setRiffIdNotFound(false)
+    window.rifffApi
+      .loreResolveRiffWithContext(id)
+      .then((result) => {
+        if (!result) {
+          setRiffIdNotFound(true)
+          return
+        }
+        // Clears every filter (not loreUsername -- that's a persistent
+        // identity setting, not a filter scope) so nothing hides the
+        // centered window this jump is about to fetch.
+        setDateFromFilter('')
+        setDateToFilter('')
+        setBpmFilter('')
+        setUserNameFilter('')
+        setOnlyFullyCached(false)
+        setOnlyContainsMe(false)
+        setPendingJump({ offset: result.offset, matchedRiffCID: result.matchedRiffCID })
+        setSelectedJamCID(result.jamCID)
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreResolveRiffWithContext() failed:', err)
+        setRiffIdNotFound(true)
+      })
+  }
+
   /** Standard file-browser multi-select convention: plain click selects
    * just this one riff (and becomes the new anchor/preview); shift-click
    * extends a contiguous range from the current anchor to this riff, based
@@ -502,9 +546,19 @@ export function LoreLibraryBrowser({
     }
   }, [available, jamFilter])
 
+  // Matches loreWarehouse.ts's RIFF_CONTEXT_WINDOW_BEFORE * 2 (10 before, 10
+  // after) -- kept as a separate constant here rather than imported since
+  // the renderer can't import from src/main/* (Node-only modules).
+  const RIFF_ID_JUMP_WINDOW_SIZE = 20
+
   // Shared by the initial-page effect below and handleLoadMore — both need
-  // the exact same filters, just a different offset.
-  function buildRiffFilters(offset: number): {
+  // the exact same filters, just a different offset. `limit` is only ever
+  // passed by a riff-ID jump (see handleGoToRiffId) -- normal browsing
+  // leaves it unset and gets the backend's own default full page.
+  function buildRiffFilters(
+    offset: number,
+    limit?: number
+  ): {
     dateFrom?: number
     dateTo?: number
     bpm?: number
@@ -513,6 +567,7 @@ export function LoreLibraryBrowser({
     targetUser?: string
     onlyContainsUser?: boolean
     offset?: number
+    limit?: number
   } {
     const filters: ReturnType<typeof buildRiffFilters> = {}
     if (dateFromFilter !== '') {
@@ -530,6 +585,7 @@ export function LoreLibraryBrowser({
     if (loreUsername.trim() !== '') filters.targetUser = loreUsername.trim()
     if (onlyContainsMe) filters.onlyContainsUser = true
     if (offset > 0) filters.offset = offset
+    if (limit !== undefined) filters.limit = limit
     return filters
   }
 
@@ -541,13 +597,33 @@ export function LoreLibraryBrowser({
     // below), so even a theoretical stale value would never be visible.
     if (!selectedJamCID) return
     let cancelled = false
+    // Captured once at the start of this effect run -- if handleGoToRiffId
+    // set this for the jam we're now fetching, land on it once the page
+    // loads; a later, unrelated jam-filter change re-runs this effect with
+    // pendingJump already null again, so it goes back to the normal
+    // offset-0/full-page behavior automatically.
+    const jump = pendingJump
     window.rifffApi
-      .loreListRiffs(selectedJamCID, buildRiffFilters(0))
+      .loreListRiffs(
+        selectedJamCID,
+        buildRiffFilters(jump?.offset ?? 0, jump ? RIFF_ID_JUMP_WINDOW_SIZE : undefined)
+      )
       .then((result) => {
         if (cancelled) return
         setRiffs(result.riffs)
         setHasMoreRiffs(result.hasMore)
         nextOffsetRef.current = result.nextOffset
+        if (jump) {
+          setPendingJump(null)
+          setSelectedRiffCID(jump.matchedRiffCID)
+          setSelectedRiffCIDs(new Set([jump.matchedRiffCID]))
+          // Deferred one frame so the grid has actually re-rendered with
+          // this page's riffs (and their ref callbacks have run) before
+          // scrollIntoView looks the node up.
+          requestAnimationFrame(() => {
+            riffNodeRefs.current.get(jump.matchedRiffCID)?.scrollIntoView({ block: 'center' })
+          })
+        }
       })
       .catch((err) => {
         console.error('LoreLibraryBrowser: loreListRiffs() failed:', err)
@@ -555,7 +631,7 @@ export function LoreLibraryBrowser({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildRiffFilters closes over these same deps; listing both would be redundant and buildRiffFilters itself isn't stable across renders
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildRiffFilters closes over these same deps; listing both would be redundant and buildRiffFilters itself isn't stable across renders. pendingJump is read via the `jump` local, not listed, so a later handleGoToRiffId call (which also sets selectedJamCID) still re-triggers this effect through that dependency.
   }, [
     selectedJamCID,
     dateFromFilter,
@@ -723,6 +799,52 @@ export function LoreLibraryBrowser({
                   padding: '0 6px'
                 }}
               />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="text"
+                    value={riffIdInput}
+                    onChange={(e) => {
+                      setRiffIdInput(e.target.value)
+                      setRiffIdNotFound(false)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleGoToRiffId()
+                    }}
+                    placeholder="go to riff ID..."
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      padding: '0 6px'
+                    }}
+                  />
+                  <button
+                    onClick={handleGoToRiffId}
+                    style={{
+                      height: 24,
+                      padding: '0 8px',
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    go
+                  </button>
+                </div>
+                {riffIdNotFound && (
+                  <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>
+                    not found in local warehouse
+                  </span>
+                )}
+              </div>
               <div style={{ overflowY: 'auto', flex: 1 }}>
                 {jams.map((jam) => (
                   <button
@@ -925,6 +1047,10 @@ export function LoreLibraryBrowser({
                               {tempoGroup.riffs.map((riff) => (
                                 <div
                                   key={riff.riffCID}
+                                  ref={(el) => {
+                                    if (el) riffNodeRefs.current.set(riff.riffCID, el)
+                                    else riffNodeRefs.current.delete(riff.riffCID)
+                                  }}
                                   style={{ position: 'relative', width: 18, height: 18 }}
                                 >
                                   <button
