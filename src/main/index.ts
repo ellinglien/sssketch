@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
+import { importOneShot } from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -67,16 +68,23 @@ function createWindow(): BrowserWindow {
 
   mainWindow = win
 
-  // The default (1440x960) and minimum (900x600) sizes above are both a 3:2
-  // ratio -- that's the layout's intended shape. Without a lock, dragging
-  // the window to an off-ratio size (very wide+short, or narrow+tall) makes
-  // the app's panels feel cramped or leaves dead space. Locking the aspect
-  // ratio means a corner drag resizes proportionately, the same way holding
-  // shift does for an image.
-  win.setAspectRatio(1440 / 960)
-
   win.on('ready-to-show', () => {
     win.show()
+
+    // The default (1440x960) and minimum (900x600) sizes above are both a
+    // 3:2 ratio -- that's the layout's intended shape. Without a lock,
+    // dragging the window to an off-ratio size (very wide+short, or
+    // narrow+tall) makes the app's panels feel cramped or leaves dead
+    // space. Locking the aspect ratio means an edge or corner drag resizes
+    // proportionately, the same way holding shift does for an image.
+    //
+    // Called here, after show() -- not right after construction -- because
+    // on macOS setAspectRatio can silently fail to stick if the native
+    // window hasn't actually been mapped/shown by the OS yet (a real,
+    // known Electron/macOS gotcha, not a hypothetical one: confirmed here
+    // by the constraint not holding in practice when this was called
+    // pre-show).
+    win.setAspectRatio(1440 / 960)
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -111,6 +119,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('import-rifff', (_event, paths: string[]) => {
     return importRifff(paths)
+  })
+
+  ipcMain.handle('import-one-shot', (_event, path: string) => {
+    return importOneShot(path)
   })
 
   ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())

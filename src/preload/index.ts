@@ -7,6 +7,8 @@ import type { PluginCatalog } from '../main/pluginCatalog'
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-rifff', paths),
+  importOneShot: (path: string): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-one-shot', path),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
