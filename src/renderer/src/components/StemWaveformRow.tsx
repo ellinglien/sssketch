@@ -7,7 +7,6 @@ import { sqrtGain } from '@shared/mixGain'
 import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { PPB } from './Ruler'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { useShiftHeld } from './useShiftHeld'
@@ -26,16 +25,15 @@ export const ROW_HEIGHT = 44
 export function StemWaveformRow({
   groupId,
   slot,
-  ppb = PPB
+  ppb
 }: {
   groupId: string
   slot: number
-  /** Horizontal scale — defaults to Normal mode's own PPB, but Compact
-   * mode's expanded-stem view (see RifffBlockRow) passes COMPACT_PPB
-   * instead, so an expanded rifff's stems stay aligned with the rest of
-   * that compact timeline (Ruler, other clips) instead of quietly reverting
-   * to Normal mode's much wider spacing underneath it. */
-  ppb?: number
+  /** Horizontal scale, in pixels-per-bar -- the caller's own zoom-reactive
+   * value (see RifffBlockRow, App.tsx's Timeline), threaded through rather
+   * than read directly so every stem row in the arranger always agrees
+   * with the Ruler/Playhead/clip blocks around it. */
+  ppb: number
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()

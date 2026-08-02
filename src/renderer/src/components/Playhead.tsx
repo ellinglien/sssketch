@@ -1,7 +1,6 @@
 import { usePos } from '../state/StoreContext'
-import { PPB } from './Ruler'
 
-export function Playhead({ ppb = PPB }: { ppb?: number } = {}): React.JSX.Element {
+export function Playhead({ ppb }: { ppb: number }): React.JSX.Element {
   const pos = usePos()
   return (
     <div
