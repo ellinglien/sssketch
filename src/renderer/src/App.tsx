@@ -813,7 +813,7 @@ function Frame(): React.JSX.Element {
 
   return (
     <div className="ra-viewport">
-      <div className="ra-frame" style={{ transform: `scale(${frameScale})` }}>
+      <div className="ra-frame" style={{ transform: `translate(-50%, -50%) scale(${frameScale})` }}>
         <div
           style={{
             display: 'flex',

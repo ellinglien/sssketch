@@ -84,15 +84,48 @@ textarea {
   font-family: inherit;
 }
 
+/* Fills the real window and anchors .ra-frame's centering point within it.
+   Deliberately NOT flexbox centering -- justify-content/align-items:center
+   on a child whose OWN unscaled layout box is larger than the viewport (at
+   small window sizes, before the transform:scale() below shrinks it
+   visually) is a real, documented Chromium quirk: centering math done
+   against an overflowing flex item doesn't always split the overflow
+   symmetrically, producing exactly the "gap on one axis, not the other"
+   effect this was fixing a report of. position:relative + .ra-frame's own
+   absolute top/left:50% + a translate(-50%,-50%) baked into the same
+   transform as the scale (see App.tsx's Frame component) sidesteps flex
+   layout entirely -- pure percentage-of-container math, immune to that
+   class of overflow-centering bug. overflow:hidden still needed: .ra-frame's
+   unscaled footprint still extends past the viewport at small sizes, and
+   without this that registers as page overflow (scrollbars) even though
+   nothing is actually visually cut off once the transform is applied. */
+.ra-viewport {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
 .ra-frame {
-  width: 1300px;
-  /* Bounded to the viewport (minus the same 32px margin top and bottom),
-     not auto-height-to-content — the timeline's own scroll container below
-     needs a determinate height to stretch into, or its horizontal
-     scrollbar ends up sitting right after however many rows happen to be
-     placed instead of pinned to the bottom of the visible frame. */
-  height: calc(100vh - 64px);
-  margin: 32px auto;
+  /* Fixed "design canvas" size -- an 8px gutter inset from the app's
+     default 1440x960 window (see index.ts) on every side, same 3:2 ratio
+     as the window itself. App.tsx's Frame component applies a CSS
+     transform:scale() on top of this based on the CURRENT window size, so
+     every fixed-pixel child (panel widths, fonts, buttons) shrinks/grows
+     together in the same proportion rather than reflowing independently.
+     A plain vh-relative height doesn't work here: it would keep tracking
+     the ALREADY-shrunk real viewport on top of the transform's OWN scale
+     factor, shrinking twice. */
+  width: 1424px;
+  height: 949px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  /* translate(-50%,-50%) (baked into the same inline transform as the JS
+     scale -- see App.tsx) shifts back by exactly half of THIS box's own
+     unscaled width/height, landing its center precisely on the viewport's
+     center regardless of window size -- then scale() shrinks/grows it
+     around that same center point (the default transform-origin). */
   display: flex;
   flex-direction: column;
   background: var(--ra-bg-frame);
