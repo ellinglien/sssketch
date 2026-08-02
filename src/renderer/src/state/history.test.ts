@@ -63,10 +63,10 @@ describe('historyReducer', () => {
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
     const pastLengthAfterRealEdit = h.past.length
     h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
-    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'compact' })
+    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'sketch' })
     expect(h.past).toHaveLength(pastLengthAfterRealEdit)
     expect(h.present.volumeDragMode).toBe(true)
-    expect(h.present.mode).toBe('compact')
+    expect(h.present.mode).toBe('sketch')
   })
 
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {

@@ -23,7 +23,6 @@ import { zoomMultiplierForWheelDelta, scrollLeftForZoomChange } from './componen
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ChannelRow } from './components/ChannelRow'
-import { COMPACT_ROW_HEIGHT } from './components/CompactRifffBlock'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
@@ -216,7 +215,7 @@ function Timeline({
     return <SketchStrip />
   }
 
-  const ghostRowHeight = state.mode === 'compact' ? COMPACT_ROW_HEIGHT : GHOST_ROW_HEIGHT
+  const ghostRowHeight = GHOST_ROW_HEIGHT
 
   return (
     <div

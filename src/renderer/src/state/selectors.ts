@@ -25,13 +25,9 @@ export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
  * One channel per STEM while a rifff is expanded (matches each stem's own
  * TOGGLE_MUTE), or one channel for the WHOLE GROUP while collapsed (matches
  * CollapsedRifffRow's own SET_GROUP_MUTE) — mirroring exactly which mute
- * control that row actually exposes. Compact mode's own COLLAPSED state
- * (CompactRifffBlock) has no mixing affordances at all (a pure positional
- * overview), but an EXPANDED rifff — reachable in both Normal and Compact
- * mode now, see RifffBlockRow — renders the exact same StemWaveformRow per
- * stem either way, so it gets channels here too. Sketch mode's tiles
- * deliberately expose no mute/volume/fade at all (see the sketch mode
- * spec), so that's the only mode excluded.
+ * control that row actually exposes. Sketch mode's tiles deliberately
+ * expose no mute/volume/fade at all (see the sketch mode spec), so that's
+ * the only mode excluded.
  *
  * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
  * a collapsed group's single row — callers distinguish the two via
@@ -52,11 +48,7 @@ export function channelMuteLetters(state: AppState): Record<string, string> {
         out[stemKey(rifff.groupId, stem.slot)] = MUTE_SHORTCUT_KEYS[i]
         i++
       }
-    } else if (state.mode === 'normal') {
-      // Compact mode's own collapsed view (CompactRifffBlock) has no mute
-      // badge to show this letter on — skip it there rather than spend a
-      // scarce shortcut slot on a rifff that can't display it. Only Normal
-      // mode's CollapsedRifffRow has a collapsed-row badge.
+    } else {
       out[rifff.groupId] = MUTE_SHORTCUT_KEYS[i]
       i++
     }
@@ -166,18 +158,12 @@ export function isSketchEligible(state: AppState): boolean {
   return true
 }
 
-const ARRANGER_MODE_ORDER: ArrangerMode[] = ['normal', 'compact', 'sketch']
-
 /** What Tab / the TransportBar's mode button should switch to next —
- * normal -> compact -> sketch -> normal, skipping 'sketch' entirely (landing
- * on 'normal' instead) when isSketchEligible(state) is false, so the toggle
- * never lands on a mode it can't actually show. */
+ * normal <-> sketch, staying on 'normal' when isSketchEligible(state) is
+ * false, so the toggle never lands on a mode it can't actually show. */
 export function nextArrangerMode(state: AppState): ArrangerMode {
-  const next = ARRANGER_MODE_ORDER[(ARRANGER_MODE_ORDER.indexOf(state.mode) + 1) % 3]
-  if (next === 'sketch' && !isSketchEligible(state)) {
-    return ARRANGER_MODE_ORDER[(ARRANGER_MODE_ORDER.indexOf(next) + 1) % 3]
-  }
-  return next
+  if (state.mode === 'sketch') return 'normal'
+  return isSketchEligible(state) ? 'sketch' : 'normal'
 }
 
 /** Which placed rifff's [startBar, startBar + playedBars) range contains

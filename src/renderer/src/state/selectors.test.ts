@@ -73,18 +73,6 @@ describe('channelMuteLetters', () => {
     expect(letters.r11).toBeUndefined()
   })
 
-  it('returns no channels for a COLLAPSED rifff in compact mode — CompactRifffBlock has no mute badge to show one on', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = { ...state, mode: 'compact' }
-    expect(channelMuteLetters(state)).toEqual({})
-  })
-
-  it('DOES assign per-stem channels for an EXPANDED rifff in compact mode — it renders the same StemWaveformRow as Normal mode', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = { ...state, mode: 'compact', exp: { r1: true } }
-    expect(channelMuteLetters(state)).toEqual({ 'r1:1': 'q' })
-  })
-
   it('returns no channels at all in sketch mode either', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = { ...state, mode: 'sketch' }
@@ -368,22 +356,20 @@ describe('isSketchEligible', () => {
 })
 
 describe('nextArrangerMode', () => {
-  it('cycles normal -> compact -> sketch -> normal when sketch-eligible', () => {
+  it('toggles normal <-> sketch when sketch-eligible', () => {
     const state = { ...initialState, mode: 'normal' as const } // empty timeline: trivially eligible
-    expect(nextArrangerMode(state)).toBe('compact')
-    expect(nextArrangerMode({ ...state, mode: 'compact' })).toBe('sketch')
+    expect(nextArrangerMode(state)).toBe('sketch')
     expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('normal')
   })
 
-  it('skips sketch when the arrangement is not eligible', () => {
+  it('stays on normal when the arrangement is not sketch-eligible', () => {
     let state = reducer(initialState, {
       type: 'ADD_TO_SHELF',
       rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
-    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('compact')
-    expect(nextArrangerMode({ ...state, mode: 'compact' })).toBe('normal') // sketch skipped
+    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('normal')
   })
 })
 

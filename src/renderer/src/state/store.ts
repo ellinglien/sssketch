@@ -39,7 +39,7 @@ function placeOnTimeline(state: AppState, groupId: string, startBar: number): Ap
   }
 }
 
-export type ArrangerMode = 'normal' | 'compact' | 'sketch'
+export type ArrangerMode = 'normal' | 'sketch'
 
 export interface AppState {
   bpm: number
@@ -87,13 +87,11 @@ export interface AppState {
    * by the V key — see App.tsx's Frame component. Not persisted (see serialize.ts). */
   volumeDragMode: boolean
   /** Global arrangement-wide view mode. 'normal' is today's per-rifff
-   * collapsed/expanded rendering. 'compact' replaces every rifff's row with
-   * a small fixed-size tile at its real timeline position
-   * (CompactRifffBlock). 'sketch' replaces the whole Timeline with a single
-   * gapless sequence strip (SketchStrip) — only reachable when
-   * isSketchEligible(state) (see selectors.ts). Cycled by the Tab key,
-   * Ableton-style, via selectors.ts's nextArrangerMode — see App.tsx's
-   * Frame component. Not persisted (see serialize.ts). */
+   * collapsed/expanded rendering. 'sketch' replaces the whole Timeline with
+   * a single gapless sequence strip (SketchStrip) — only reachable when
+   * isSketchEligible(state) (see selectors.ts). Cycled by the Tab key via
+   * selectors.ts's nextArrangerMode — see App.tsx's Frame component. Not
+   * persisted (see serialize.ts). */
   mode: ArrangerMode
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
@@ -599,7 +597,7 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
-    // compact, sketch) — mutes every stem in every OTHER PLACED rifff and
+    // sketch) — mutes every stem in every OTHER PLACED rifff and
     // unmutes every stem in this one. A second SOLO_GROUP for the SAME
     // groupId while it's already the only unmuted one toggles back to fully
     // unmuted, rather than needing a separate "un-solo" action or having to

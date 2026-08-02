@@ -116,8 +116,6 @@ export function RifffBlockRow({
           <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} ppb={ppb} />
         ))
       ) : (
-        // Only reachable in Normal mode — compact mode's own collapsed
-        // state already returned via CompactRifffBlock above.
         <CollapsedRifffRow groupId={groupId} selected={selected} />
       )}
 

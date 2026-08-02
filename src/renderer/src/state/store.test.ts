@@ -451,10 +451,10 @@ describe('reducer', () => {
 
   describe('SET_ARRANGER_MODE', () => {
     it('sets the mode field directly', () => {
-      let state = reducer(initialState, { type: 'SET_ARRANGER_MODE', mode: 'compact' })
-      expect(state.mode).toBe('compact')
-      state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'sketch' })
+      let state = reducer(initialState, { type: 'SET_ARRANGER_MODE', mode: 'sketch' })
       expect(state.mode).toBe('sketch')
+      state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'normal' })
+      expect(state.mode).toBe('normal')
     })
   })
 

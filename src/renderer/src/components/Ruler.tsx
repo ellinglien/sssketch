@@ -3,16 +3,6 @@ import { startPointerDrag } from './dragUtils'
 
 const PPB = 24
 
-// Compact mode's own, much denser horizontal scale — deliberately a
-// separate constant (not a shrunk row height on the same PPB Normal mode
-// uses) so far more bars fit in the same viewport width, matching "compact
-// horizontally too, not just vertically." Every bar<->pixel conversion the
-// timeline uses (Ruler's own ticks, clipGeometry, drag/drop position math)
-// has to agree on which scale is active, so this is threaded through
-// wherever state.mode is checked rather than hardcoded — see Timeline in
-// App.tsx for the single place that decides which one applies.
-const COMPACT_PPB = 2
-
 export function Ruler({
   bars: barCount,
   ppb = PPB
@@ -80,4 +70,4 @@ export function Ruler({
   )
 }
 
-export { PPB, COMPACT_PPB }
+export { PPB }
