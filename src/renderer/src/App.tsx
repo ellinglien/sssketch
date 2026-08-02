@@ -78,6 +78,17 @@ function Timeline({
   // the shared PPB everywhere.
   const ppb = state.mode === 'compact' ? COMPACT_PPB : PPB
 
+  // channelsInOrder rebuilds a Map plus fresh arrays every call -- Timeline
+  // re-renders on every dispatch (useAppState subscribes to the whole
+  // AppState), so without this it was doing that rebuild on every mute
+  // toggle, volume drag tick, plugin selection, etc., not just the state
+  // changes that actually affect channel membership/order.
+  const channels = useMemo(
+    () => channelsInOrder(state),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally narrowed to the only fields channelsInOrder actually reads; depending on `state` itself would recompute on every dispatch (a new object every time), defeating the point
+    [state.rifffs, state.channelOf, state.channelOrder]
+  )
+
   // Click anywhere in the arranger that isn't a clip (a stem waveform
   // already scrubs via its own click handler, computing basically the same
   // position — this just covers everywhere else: ghost rows, the empty
@@ -110,7 +121,10 @@ function Timeline({
   // channel the drop landed on (a real ChannelRow), or undefined (the
   // Timeline container's own fallback: a ghost row, or any other background
   // space) meaning "give this clip its own brand new channel."
-  function resolveDrop(e: DragEvent<HTMLDivElement>, targetChannelId: string | undefined): void {
+  async function resolveDrop(
+    e: DragEvent<HTMLDivElement>,
+    targetChannelId: string | undefined
+  ): Promise<void> {
     e.preventDefault()
     e.stopPropagation()
     setDropBar(null)
@@ -137,7 +151,27 @@ function Timeline({
     }
 
     const groupId = e.dataTransfer.getData('text/rifff-group-id')
-    if (!groupId) return
+    if (!groupId) {
+      // A real Finder drop, not an internal rifff drag -- each dropped file
+      // becomes its own independent one-shot. Sharing targetChannelId (if
+      // any) means several files dropped together on an existing
+      // ChannelRow all land on that same channel; dropping on empty/ghost
+      // space instead calls crypto.randomUUID() fresh per file, giving
+      // each its own new channel -- same rule already used for a single
+      // internal-drag drop above, just applied per file. See
+      // docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
+      const files = Array.from(e.dataTransfer.files)
+      if (files.length === 0) return
+      for (const file of files) {
+        const path = window.rifffApi.getPathForFile(file)
+        const rifff = await window.rifffApi.importOneShot(path)
+        if (!rifff) continue
+        dispatch({ type: 'ADD_TO_SHELF', rifff })
+        const channelId = targetChannelId ?? crypto.randomUUID()
+        dispatch({ type: 'MOVE_TO_CHANNEL', groupId: rifff.groupId, startBar, channelId })
+      }
+      return
+    }
     // Cmd/Ctrl held at drop = duplicate rather than move: same
     // pasteRifffAction already used for "drag an already-placed shelf item
     // to a new spot" above, leaving the original exactly where it was and
@@ -156,13 +190,13 @@ function Timeline({
   // ghost rows, or any other background space. Always resolves to "give
   // this clip a brand new channel" (targetChannelId undefined).
   function handleDrop(e: DragEvent<HTMLDivElement>): void {
-    resolveDrop(e, undefined)
+    void resolveDrop(e, undefined)
   }
 
   // Passed to every ChannelRow — a drop that lands there always means
   // "reassign to (or land initially on) THIS channel."
   function handleDropOnChannel(e: DragEvent<HTMLDivElement>, channelId: string): void {
-    resolveDrop(e, channelId)
+    void resolveDrop(e, channelId)
   }
 
   function handleContextMenu(e: MouseEvent<HTMLDivElement>): void {
@@ -190,7 +224,7 @@ function Timeline({
       style={{ position: 'relative' }}
     >
       <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
-      {channelsInOrder(state).map((channel) => (
+      {channels.map((channel) => (
         <ChannelRow
           key={channel.channelId}
           channelId={channel.channelId}
@@ -345,12 +379,40 @@ function ProjectMenu(): React.JSX.Element {
 // against with a separate max-interval ceiling.
 const AUTOSAVE_DEBOUNCE_MS = 4000
 
+// Matches index.ts's own default BrowserWindow width -- see Frame's
+// frameScale doc comment for why this is the one reference number the
+// whole proportional-scaling scheme is built from.
+const REFERENCE_WINDOW_WIDTH = 1440
+
 function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const history = useHistory()
   const playing = usePlaying()
   const pos = usePos()
+
+  // .ra-frame (global.css) is a fixed-size "design canvas" (matching the
+  // app's default 1440x960 window, see index.ts) that gets uniformly
+  // scaled via CSS transform to match the CURRENT window size, rather than
+  // reflowing its fixed-pixel children (panel widths, fonts, buttons)
+  // independently -- that keeps every part of the UI in the same
+  // proportion to every other part at any window size, so shrinking
+  // towards the window's minimum makes everything smaller together
+  // instead of letting fixed-width chrome (e.g. the 308px Inspector) eat a
+  // disproportionate share of a now-much-smaller timeline area.
+  //
+  // Derived from window.innerWidth alone, not innerHeight -- innerWidth
+  // has no OS chrome to account for (a title bar only adds height), and
+  // the window's own aspect ratio is already locked 3:2 (index.ts's
+  // setAspectRatio), so width and height always change in lockstep.
+  const [frameScale, setFrameScale] = useState(() => window.innerWidth / REFERENCE_WINDOW_WIDTH)
+  useEffect(() => {
+    function handleResize(): void {
+      setFrameScale(window.innerWidth / REFERENCE_WINDOW_WIDTH)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   // Once, on mount: offer to restore a crash-recovery snapshot from a
   // previous session that never got explicitly saved (see projectFile.ts's
@@ -750,27 +812,28 @@ function Frame(): React.JSX.Element {
   }
 
   return (
-    <div className="ra-frame">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          borderBottom: '1px solid var(--ra-border-soft)'
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <Titlebar
-            rifffCount={Object.keys(state.rifffs).length}
-            stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
-          />
+    <div className="ra-viewport">
+      <div className="ra-frame" style={{ transform: `scale(${frameScale})` }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            borderBottom: '1px solid var(--ra-border-soft)'
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <Titlebar
+              rifffCount={Object.keys(state.rifffs).length}
+              stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
+            />
+          </div>
+          <div style={{ paddingRight: 14 }}>
+            <ProjectMenu />
+          </div>
         </div>
-        <div style={{ paddingRight: 14 }}>
-          <ProjectMenu />
-        </div>
-      </div>
-      <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
-      <TransportBar />
-      {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
+        <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
+        <TransportBar />
+        {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
           TransportBar rows above take their own natural heights — the row's
           own children then stretch to fill THAT (flex row's default
@@ -778,117 +841,118 @@ function Frame(): React.JSX.Element {
           horizontal scrollbar to the bottom of the visible frame regardless
           of how many rows are actually placed, instead of it sitting right
           after however much content happens to exist. */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        {/* minWidth:0 lets this flex item shrink below its content's intrinsic
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+          {/* minWidth:0 lets this flex item shrink below its content's intrinsic
             width, which is what allows overflow-x:auto to actually kick in
             instead of the row silently stretching .ra-frame's fixed width. */}
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-          <div ref={scrollContainerRef} style={{ height: '100%', overflowX: 'auto' }}>
-            <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
+          <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+            <div ref={scrollContainerRef} style={{ height: '100%', overflowX: 'auto' }}>
+              <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
+            </div>
+            {handModeHeld && (
+              <div
+                onMouseDown={handlePanMouseDown}
+                title="drag to pan (release M to exit)"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  cursor: panning ? 'grabbing' : 'grab',
+                  zIndex: 10
+                }}
+              />
+            )}
           </div>
-          {handModeHeld && (
-            <div
-              onMouseDown={handlePanMouseDown}
-              title="drag to pan (release M to exit)"
-              style={{
-                position: 'absolute',
-                inset: 0,
-                cursor: panning ? 'grabbing' : 'grab',
-                zIndex: 10
-              }}
-            />
-          )}
-        </div>
-        {/* Drawer handle — same subtle-strip visual language as the stem
+          {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click
             instead of drag. Always present, on either side of the drawer, so
             there's a consistent single place to grab regardless of the
             Inspector's current state. */}
-        <button
-          onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
-          aria-label="Toggle inspector panel"
-          title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
-          style={{
-            flex: 'none',
-            width: 10,
-            border: 'none',
-            borderLeft: '1px solid var(--ra-border)',
-            background: 'var(--ra-text)',
-            opacity: 0.12,
-            cursor: 'pointer'
-          }}
-        />
-        {/* Inspector itself stays a fixed 308px wide (its own inner layout
+          <button
+            onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
+            aria-label="Toggle inspector panel"
+            title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
+            style={{
+              flex: 'none',
+              width: 10,
+              border: 'none',
+              borderLeft: '1px solid var(--ra-border)',
+              background: 'var(--ra-text)',
+              opacity: 0.12,
+              cursor: 'pointer'
+            }}
+          />
+          {/* Inspector itself stays a fixed 308px wide (its own inner layout
             doesn't reflow during the slide) — this wrapper is what actually
             animates, clipping it via overflow:hidden rather than
             mounting/unmounting, so collapsing/expanding reads as a drawer
             sliding shut rather than a hard cut. */}
-        <div
-          style={{
-            width: state.inspectorCollapsed ? 0 : 308,
-            flex: 'none',
-            // overflowX stays hidden for the slide animation (clips the
-            // fixed-width Inspector while this wrapper's own width
-            // transitions); overflowY is now 'auto' rather than hidden too
-            // — the frame no longer grows to fit tall content (see
-            // .ra-frame's own bounded height), so without this, Inspector
-            // content past the available height would just be invisibly
-            // clipped instead of scrollable.
-            overflowX: 'hidden',
-            overflowY: 'auto',
-            transition: 'width 150ms ease'
-          }}
-        >
-          <Inspector onOpenBeatPicker={handleOpenBeatPickerForEdit} />
+          <div
+            style={{
+              width: state.inspectorCollapsed ? 0 : 308,
+              flex: 'none',
+              // overflowX stays hidden for the slide animation (clips the
+              // fixed-width Inspector while this wrapper's own width
+              // transitions); overflowY is now 'auto' rather than hidden too
+              // — the frame no longer grows to fit tall content (see
+              // .ra-frame's own bounded height), so without this, Inspector
+              // content past the available height would just be invisibly
+              // clipped instead of scrollable.
+              overflowX: 'hidden',
+              overflowY: 'auto',
+              transition: 'width 150ms ease'
+            }}
+          >
+            <Inspector onOpenBeatPicker={handleOpenBeatPickerForEdit} />
+          </div>
         </div>
+        {pickerGroupId && state.rifffs[pickerGroupId] && (
+          <BeatPicker
+            groupId={pickerGroupId}
+            isNewImport={pickerIsNewImport}
+            batchGroupIds={pickerBatchGroupIds.length > 1 ? pickerBatchGroupIds : undefined}
+            onNavigate={setPickerGroupId}
+            onClose={() => {
+              // A batch import means "I picked everything I wanted, now let's
+              // arrange" — close the library along with the picker so it
+              // doesn't linger in the way. A single import means "I'm
+              // browsing one at a time" — leave the library open (it never
+              // auto-closes on its own) so the next pick is right there.
+              const wasBatchImport = pickerBatchGroupIds.length > 1
+              setPickerGroupId(null)
+              setPickerBatchGroupIds([])
+              if (wasBatchImport) setLoreLibraryOpen(false)
+            }}
+            onBaked={(steps) => {
+              const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
+              for (const siblingGroupId of siblingGroupIds) {
+                const siblingRifff = state.rifffs[siblingGroupId]
+                if (!siblingRifff) continue
+                void bakeStems(
+                  dispatch,
+                  siblingGroupId,
+                  steps,
+                  SNAP_DIVS[state.snapIdx],
+                  siblingRifff.stems
+                )
+              }
+            }}
+          />
+        )}
+        {loreLibraryOpen && (
+          <LoreLibraryBrowser
+            onClose={() => setLoreLibraryOpen(false)}
+            onImported={handleLoreImported}
+          />
+        )}
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={contextMenu.items}
+            onClose={() => setContextMenu(null)}
+          />
+        )}
       </div>
-      {pickerGroupId && state.rifffs[pickerGroupId] && (
-        <BeatPicker
-          groupId={pickerGroupId}
-          isNewImport={pickerIsNewImport}
-          batchGroupIds={pickerBatchGroupIds.length > 1 ? pickerBatchGroupIds : undefined}
-          onNavigate={setPickerGroupId}
-          onClose={() => {
-            // A batch import means "I picked everything I wanted, now let's
-            // arrange" — close the library along with the picker so it
-            // doesn't linger in the way. A single import means "I'm
-            // browsing one at a time" — leave the library open (it never
-            // auto-closes on its own) so the next pick is right there.
-            const wasBatchImport = pickerBatchGroupIds.length > 1
-            setPickerGroupId(null)
-            setPickerBatchGroupIds([])
-            if (wasBatchImport) setLoreLibraryOpen(false)
-          }}
-          onBaked={(steps) => {
-            const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
-            for (const siblingGroupId of siblingGroupIds) {
-              const siblingRifff = state.rifffs[siblingGroupId]
-              if (!siblingRifff) continue
-              void bakeStems(
-                dispatch,
-                siblingGroupId,
-                steps,
-                SNAP_DIVS[state.snapIdx],
-                siblingRifff.stems
-              )
-            }
-          }}
-        />
-      )}
-      {loreLibraryOpen && (
-        <LoreLibraryBrowser
-          onClose={() => setLoreLibraryOpen(false)}
-          onImported={handleLoreImported}
-        />
-      )}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          items={contextMenu.items}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
     </div>
   )
 }
