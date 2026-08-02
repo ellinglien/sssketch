@@ -41,7 +41,12 @@ const selectStyle: React.CSSProperties = {
   background: 'var(--ra-bg-row)',
   border: '1px solid var(--ra-border)',
   borderRadius: 2,
-  color: 'var(--ra-text)'
+  color: 'var(--ra-text)',
+  // A flex item's default min-width is its content's intrinsic width, not 0
+  // -- without this, a long plugin name (e.g. "SAUSAGEFATTENER") stops this
+  // select from shrinking, overflowing the row and pushing the status dot
+  // and edit button past the panel's own right padding.
+  minWidth: 0
 }
 
 export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JSX.Element {

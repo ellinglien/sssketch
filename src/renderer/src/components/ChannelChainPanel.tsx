@@ -37,7 +37,9 @@ const selectStyle: React.CSSProperties = {
   background: 'var(--ra-bg-row)',
   border: '1px solid var(--ra-border)',
   borderRadius: 2,
-  color: 'var(--ra-text)'
+  color: 'var(--ra-text)',
+  // See MasterChainPanel.tsx's own selectStyle comment -- same fix, same bug.
+  minWidth: 0
 }
 
 /** 2-slot version of MasterChainPanel, scoped to one channel's own plugin
