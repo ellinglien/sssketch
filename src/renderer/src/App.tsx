@@ -19,7 +19,11 @@ import {
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
-import { zoomMultiplierForWheelDelta, scrollLeftForZoomChange } from './components/zoomMath'
+import {
+  zoomMultiplierForWheelDelta,
+  scrollLeftForZoomChange,
+  isVerticalDominant
+} from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ChannelRow } from './components/ChannelRow'
@@ -819,6 +823,11 @@ function Frame(): React.JSX.Element {
 
   function handleTimelineWheel(e: WheelEvent<HTMLDivElement>): void {
     if (!(e.metaKey || e.ctrlKey)) return
+    // Axis-locks the gesture: a mostly-horizontal trackpad swipe done while
+    // the modifier happens to be held falls through as a normal pan instead
+    // of jittering the zoom level from incidental deltaY noise -- only a
+    // gesture that's actually more vertical than horizontal drives zoom.
+    if (!isVerticalDominant(e.deltaX, e.deltaY)) return
     e.preventDefault()
     const container = scrollContainerRef.current
     if (!container) return

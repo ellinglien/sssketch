@@ -14,6 +14,18 @@ export function clampZoomMultiplier(multiplier: number): number {
   return Math.max(MIN_ZOOM_MULTIPLIER, Math.min(MAX_ZOOM_MULTIPLIER, multiplier))
 }
 
+/** Axis-locks a wheel gesture to whichever direction actually dominates it --
+ * true when the vertical component is the bigger one, meaning this event
+ * should drive zoom. A trackpad gesture is rarely perfectly axis-aligned, so
+ * without this, a mostly-horizontal pan swipe done while the zoom modifier
+ * happens to be held would jitter the zoom level from incidental deltaY
+ * noise instead of just panning; the caller skips zoom (and its own
+ * preventDefault) entirely when this is false, letting the gesture fall
+ * through as a normal horizontal pan instead. */
+export function isVerticalDominant(deltaX: number, deltaY: number): boolean {
+  return Math.abs(deltaY) > Math.abs(deltaX)
+}
+
 /** Ableton-style: a negative deltaY (scrolling up/away from you) zooms in
  * (multiplier increases); a positive deltaY (scrolling down/toward you)
  * zooms out. */

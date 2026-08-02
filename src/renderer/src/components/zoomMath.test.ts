@@ -5,7 +5,8 @@ import {
   DEFAULT_ZOOM_MULTIPLIER,
   clampZoomMultiplier,
   zoomMultiplierForWheelDelta,
-  scrollLeftForZoomChange
+  scrollLeftForZoomChange,
+  isVerticalDominant
 } from './zoomMath'
 
 describe('clampZoomMultiplier', () => {
@@ -62,5 +63,24 @@ describe('scrollLeftForZoomChange', () => {
     // go negative; must clamp to 0.
     const result = scrollLeftForZoomChange(0, 5, 48, 6)
     expect(result).toBe(0)
+  })
+})
+
+describe('isVerticalDominant', () => {
+  it('is true when the vertical delta is larger', () => {
+    expect(isVerticalDominant(2, 10)).toBe(true)
+  })
+
+  it('is false when the horizontal delta is larger', () => {
+    expect(isVerticalDominant(10, 2)).toBe(false)
+  })
+
+  it('is false for a perfect tie (ambiguous gesture defaults to pan, not zoom)', () => {
+    expect(isVerticalDominant(5, 5)).toBe(false)
+  })
+
+  it('ignores sign, only compares magnitude', () => {
+    expect(isVerticalDominant(-2, -10)).toBe(true)
+    expect(isVerticalDominant(-10, -2)).toBe(false)
   })
 })
