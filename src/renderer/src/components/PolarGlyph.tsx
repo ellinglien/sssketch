@@ -86,13 +86,28 @@ export function PolarGlyph({
     }
   }, [stems])
 
+  // Real bug this fixes: r0 used to grow by a flat 2.5 per stem with no
+  // ceiling, so a many-stem rifff (this app's rifffs commonly carry 8-16)
+  // pushed later stems' outer band radius well past the viewBox's own
+  // r=50 boundary, drawing spiky waveform peaks that poke visibly outside
+  // the glyph's own circular frame. RING_BUDGET spreads every stem's r0
+  // across a FIXED total span regardless of how many stems there are
+  // (ringStep shrinks as stem count grows, rather than r0 growing without
+  // bound), and OUTER_MARGIN keeps the tallest possible peak (r0 + amp)
+  // comfortably inside r=50 -- both together guarantee every ring stays
+  // inside the frame no matter the stem count.
+  const RING_BUDGET = 3
+  const OUTER_MARGIN = 42 // stays inside the r=50 viewBox with visible breathing room
+  const amp = 22 // unity stand-in, volume wiring lands in Task 14; also shrunk from 25 per design feedback
+  const baseR0 = OUTER_MARGIN - amp - RING_BUDGET
+  const ringStep = stems.length > 1 ? RING_BUDGET / (stems.length - 1) : 0
+
   const glyphs = stems
     .filter((stem) => !failedPaths.has(stem.path))
     .map((stem, i) => {
       const data = glyphDataByPath[stem.path]
       if (!data) return null
-      const r0 = 17 + i * 2.5
-      const amp = 25 // unity stand-in, volume wiring lands in Task 14
+      const r0 = baseR0 + i * ringStep
       const color = typeColorVar(stem.type)
       const bandPaths = [
         { arr: data.bass, r0, amp: amp * 0.5, opacity: 0.6 },
