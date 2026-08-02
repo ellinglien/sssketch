@@ -10,7 +10,13 @@ vi.mock('electron', () => ({
 }))
 
 const { getMtimeMsMock } = vi.hoisted(() => ({
-  getMtimeMsMock: vi.fn((): number | null => null)
+  // Typed to match the real getMtimeMs(path: string) signature in
+  // pluginScan.ts -- callers below need to branch on `path` when setting a
+  // per-candidate mtime via mockImplementation.
+  getMtimeMsMock: vi.fn((path: string): number | null => {
+    void path
+    return null
+  })
 }))
 
 vi.mock('./pluginScan', () => ({
@@ -19,7 +25,7 @@ vi.mock('./pluginScan', () => ({
     '/Library/Audio/Plug-Ins/VST3/Solid Bus Comp.vst3',
     '/instrument.vst3'
   ],
-  scanOneCandidate: async (path: string) => {
+  scanOneCandidate: vi.fn(async (path: string) => {
     if (path === '/a.vst3') {
       return {
         success: true,
@@ -60,14 +66,16 @@ vi.mock('./pluginScan', () => ({
         }
       ]
     }
-  },
+  }),
   getMtimeMs: getMtimeMsMock
 }))
 
 describe('runFullScan', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-fullscan-test-'))
     getMtimeMsMock.mockReset().mockImplementation(() => null)
+    const { scanOneCandidate } = await import('./pluginScan')
+    vi.mocked(scanOneCandidate).mockClear()
   })
 
   afterEach(() => {
@@ -123,5 +131,121 @@ describe('runFullScan', () => {
       { done: 2, total: 3 },
       { done: 3, total: 3 }
     ])
+  })
+
+  describe('caching by mtime', () => {
+    it('reuses a previous entry without rescanning when the bundle mtime is unchanged', async () => {
+      const { writeCatalog } = await import('./pluginCatalog')
+      writeCatalog({
+        plugins: [
+          {
+            id: 'id-a',
+            name: 'A (cached)',
+            manufacturer: 'M (cached)',
+            path: '/a.vst3',
+            arch: 'arm64',
+            mtimeMs: 5000
+          }
+        ],
+        favouriteIds: []
+      })
+      getMtimeMsMock.mockImplementation((path: string) => (path === '/a.vst3' ? 5000 : null))
+
+      const scanCalls: string[] = []
+      const { scanOneCandidate } = await import('./pluginScan')
+      // Capture the shared mock's original implementation so it can be
+      // restored after this test -- mockClear() in beforeEach only clears
+      // call history, not the implementation, so an unrestored override
+      // here would otherwise leak into every later test in this file.
+      const originalImpl = vi.mocked(scanOneCandidate).getMockImplementation()
+      vi.mocked(scanOneCandidate).mockImplementation(async (path: string) => {
+        scanCalls.push(path)
+        return { success: true, plugins: [] }
+      })
+
+      try {
+        const { runFullScan } = await import('./runFullScan')
+        const catalog = await runFullScan(() => {})
+
+        expect(scanCalls).not.toContain('/a.vst3')
+        const cachedEntry = catalog.plugins.find((p) => p.id === 'id-a')
+        expect(cachedEntry).toEqual({
+          id: 'id-a',
+          name: 'A (cached)',
+          manufacturer: 'M (cached)',
+          path: '/a.vst3',
+          arch: 'arm64',
+          mtimeMs: 5000
+        })
+      } finally {
+        vi.mocked(scanOneCandidate).mockImplementation(originalImpl!)
+      }
+    })
+
+    it('rescans a candidate whose mtime differs from its stored value', async () => {
+      const { writeCatalog } = await import('./pluginCatalog')
+      writeCatalog({
+        plugins: [
+          {
+            id: 'id-a-old',
+            name: 'A (stale)',
+            manufacturer: 'M',
+            path: '/a.vst3',
+            arch: 'arm64',
+            mtimeMs: 1111
+          }
+        ],
+        favouriteIds: []
+      })
+      // Stored mtime was 1111; this scan sees 2222 -- a real change.
+      getMtimeMsMock.mockImplementation((path: string) => (path === '/a.vst3' ? 2222 : null))
+
+      const { runFullScan } = await import('./runFullScan')
+      const catalog = await runFullScan(() => {})
+
+      // scanOneCandidate's default mock (from the top-level vi.mock) returns
+      // id-a for '/a.vst3' -- if caching incorrectly kicked in, we'd see
+      // 'id-a-old' instead.
+      expect(catalog.plugins.map((p) => p.id)).toContain('id-a')
+      expect(catalog.plugins.map((p) => p.id)).not.toContain('id-a-old')
+      const rescannedEntry = catalog.plugins.find((p) => p.id === 'id-a')
+      expect(rescannedEntry?.mtimeMs).toBe(2222)
+    })
+
+    it('scans a candidate with no previous catalog entry normally', async () => {
+      // No writeCatalog call -- previous catalog is empty, so every
+      // candidate is "new." getMtimeMsMock's default (from beforeEach)
+      // already returns null for everything.
+      const { runFullScan } = await import('./runFullScan')
+      const catalog = await runFullScan(() => {})
+      expect(catalog.plugins.map((p) => p.id).sort()).toEqual(['id-a', 'id-sbc'])
+    })
+
+    it('reports progress once per candidate even when some are cached', async () => {
+      const { writeCatalog } = await import('./pluginCatalog')
+      writeCatalog({
+        plugins: [
+          {
+            id: 'id-a',
+            name: 'A',
+            manufacturer: 'M',
+            path: '/a.vst3',
+            arch: 'arm64',
+            mtimeMs: 5000
+          }
+        ],
+        favouriteIds: []
+      })
+      getMtimeMsMock.mockImplementation((path: string) => (path === '/a.vst3' ? 5000 : null))
+
+      const { runFullScan } = await import('./runFullScan')
+      const progressCalls: unknown[] = []
+      await runFullScan((p) => progressCalls.push(p))
+      expect(progressCalls).toEqual([
+        { done: 1, total: 3 },
+        { done: 2, total: 3 },
+        { done: 3, total: 3 }
+      ])
+    })
   })
 })
