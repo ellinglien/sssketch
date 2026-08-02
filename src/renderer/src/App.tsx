@@ -1,15 +1,25 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+  type WheelEvent
+} from 'react'
 import {
   StoreProvider,
   useAppState,
   useDispatch,
   useHistory,
   usePlaying,
-  usePos
+  usePos,
+  useZoom
 } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
-import { Ruler, PPB, COMPACT_PPB } from './components/Ruler'
+import { Ruler, PPB } from './components/Ruler'
+import { zoomMultiplierForWheelDelta, scrollLeftForZoomChange } from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ChannelRow } from './components/ChannelRow'
@@ -71,12 +81,7 @@ function Timeline({
   const dispatch = useDispatch()
   const playing = usePlaying()
   const [dropBar, setDropBar] = useState<number | null>(null)
-  // Compact mode uses its own, much denser horizontal scale (see Ruler.tsx)
-  // — every bar<->pixel conversion below has to agree on which one is
-  // active, so this is threaded through drag/drop math and into the Ruler/
-  // Playhead/drop-indicator this component renders, rather than assuming
-  // the shared PPB everywhere.
-  const ppb = state.mode === 'compact' ? COMPACT_PPB : PPB
+  const ppb = useZoom()
 
   // channelsInOrder rebuilds a Map plus fresh arrays every call -- Timeline
   // re-renders on every dispatch (useAppState subscribes to the whole
@@ -390,6 +395,7 @@ function Frame(): React.JSX.Element {
   const history = useHistory()
   const playing = usePlaying()
   const pos = usePos()
+  const ppb = useZoom()
 
   // .ra-frame (global.css) is a fixed-size "design canvas" (matching the
   // app's default 1512x982 window, see index.ts) that gets uniformly
@@ -751,6 +757,21 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [history])
 
+  // Cmd/Ctrl+0 resets zoom to its default level -- the standard "reset
+  // zoom" convention across creative and browser apps. Skipped while focus
+  // is in a text input, same pattern as every other global shortcut here.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== '0') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      dispatch({ type: 'RESET_ZOOM' })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [dispatch])
+
   // Sketch mode only: while playing, the Inspector automatically shows
   // whichever rifff currently contains the playhead — no manual click
   // needed to follow along. Scoped to sketch mode specifically because it's
@@ -784,6 +805,49 @@ function Frame(): React.JSX.Element {
   const handModeHeld = useHandModeHeld()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [panning, setPanning] = useState(false)
+
+  // Captured by handleTimelineWheel, consumed by the effect below once the
+  // zoom multiplier actually changes and the DOM has re-rendered at the new
+  // scale -- setting scrollLeft synchronously in the same handler that
+  // dispatches the zoom change would compute against the OLD (pre-re-render)
+  // scrollWidth and could get silently clamped by the browser before React
+  // ever grows the content to the new width.
+  const pendingZoomAnchorRef = useRef<{
+    cursorXInContainer: number
+    oldScrollLeft: number
+    oldPpb: number
+  } | null>(null)
+
+  function handleTimelineWheel(e: WheelEvent<HTMLDivElement>): void {
+    if (!(e.metaKey || e.ctrlKey)) return
+    e.preventDefault()
+    const container = scrollContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    pendingZoomAnchorRef.current = {
+      cursorXInContainer: e.clientX - rect.left,
+      oldScrollLeft: container.scrollLeft,
+      oldPpb: ppb
+    }
+    const currentMultiplier = ppb / PPB
+    dispatch({
+      type: 'SET_ZOOM',
+      multiplier: zoomMultiplierForWheelDelta(currentMultiplier, e.deltaY)
+    })
+  }
+
+  useEffect(() => {
+    const anchor = pendingZoomAnchorRef.current
+    const container = scrollContainerRef.current
+    if (!anchor || !container) return
+    pendingZoomAnchorRef.current = null
+    container.scrollLeft = scrollLeftForZoomChange(
+      anchor.oldScrollLeft,
+      anchor.cursorXInContainer,
+      anchor.oldPpb,
+      ppb
+    )
+  }, [ppb])
 
   // Sets the cursor at the document level (not just on the pan overlay div
   // below) so pressing M shows the hand immediately no matter where the
@@ -846,7 +910,11 @@ function Frame(): React.JSX.Element {
             width, which is what allows overflow-x:auto to actually kick in
             instead of the row silently stretching .ra-frame's fixed width. */}
           <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-            <div ref={scrollContainerRef} style={{ height: '100%', overflowX: 'auto' }}>
+            <div
+              ref={scrollContainerRef}
+              onWheel={handleTimelineWheel}
+              style={{ height: '100%', overflowX: 'auto' }}
+            >
               <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
             </div>
             {handModeHeld && (
