@@ -579,7 +579,21 @@ export function BeatPicker({
   // whenever the identity stem is shorter than the rifff (e.g. a 4-bar drum
   // loop identity stem in a 16-bar rifff).
   const totalBeats = rifff.barLength * 4
-  const currentBeat = Math.round((-currentSteps * 4) / snapDiv)
+  // How many clickable grid positions make up one quarter-note beat, driven
+  // by the same global snap-grid setting the transport bar's "snap 1/N"
+  // button controls (SNAP_DIVS = [4, 8, 16, 32], always a multiple of 4) --
+  // see docs/superpowers/specs/2026-08-02-beatpicker-grid-resolution-design.md.
+  // 1 at snapDiv=4 (today's quarter-note-only grid), up to 8 at snapDiv=32.
+  const subdivisionsPerBeat = snapDiv / 4
+  const totalSubdivisions = totalBeats * subdivisionsPerBeat
+  // One offsetSteps unit IS one subdivision by definition (both are exactly
+  // 1/snapDiv of a bar), so recovering which subdivision is currently picked
+  // needs no scaling -- just sign-flip and round defensively.
+  const currentSubdivisionIndex = Math.round(-currentSteps)
+  // Fractional quarter-note-equivalent value for display (e.g. 3.5) --
+  // separate from currentSubdivisionIndex, which is what the grid's
+  // highlight comparison below actually uses.
+  const currentBeat = currentSubdivisionIndex / subdivisionsPerBeat
   const LANE_HEIGHT = 68
   const LANE_GAP = 3
   const lanesHeight = stemSpectrograms?.length
