@@ -136,9 +136,15 @@ export function CollapsedRifffRow({
   // One-shot-only live drag preview -- separate from dragPlayedBars/
   // dragLeftResize above, which a one-shot never uses (its resize handles
   // are unsnapped seconds-based trim/stretch, not bar-snapped playedBars).
+  // trimStartSec/isStretch feed the waveform's own crop-vs-scale rendering
+  // below -- trimming must crop a fixed-scale waveform (the audio didn't
+  // change speed), while stretching should visibly scale it (a preview of
+  // the real re-render that commits on release).
   const [oneShotDragPreview, setOneShotDragPreview] = useState<{
     durationSec: number
     startBar: number
+    trimStartSec: number
+    isStretch: boolean
   } | null>(null)
 
   // Right-click anywhere on the block toggles the whole group's mute —
@@ -185,6 +191,25 @@ export function CollapsedRifffRow({
       : dragLeftResize !== null
         ? dragLeftResize.playedBars * PPB
         : geo.widthPx
+
+  // One-shot waveform geometry: trimming must CROP a fixed-scale waveform
+  // (the audio's own duration/speed hasn't changed, only how much of it
+  // plays), never rescale it -- rescaling is what made a trim drag visually
+  // read as "stretching" even though the underlying crop was correct. A
+  // live stretch preview is the one case that SHOULD visibly scale (a
+  // preview of the real re-render that commits on release), so it uses the
+  // live target duration as its own "native" width instead of the stem's
+  // actual (not-yet-changed) one, with no trim offset (stretch always
+  // discards trim on commit -- see SET_ONE_SHOT_STRETCHED).
+  const oneShotIsStretchDragging = oneShotDragPreview?.isStretch ?? false
+  const oneShotWaveformNativeSec = oneShotIsStretchDragging
+    ? (oneShotDragPreview?.durationSec ?? oneShotStem?.durationSec ?? 0)
+    : (oneShotStem?.durationSec ?? 0)
+  const oneShotWaveformNativeWidthPx = oneShotWidthBars(oneShotWaveformNativeSec, state.bpm) * PPB
+  const oneShotWaveformTrimStartSec = oneShotIsStretchDragging
+    ? 0
+    : (oneShotDragPreview?.trimStartSec ?? oneShotStem?.trimStartSec ?? 0)
+  const oneShotWaveformTrimStartPx = oneShotWidthBars(oneShotWaveformTrimStartSec, state.bpm) * PPB
 
   const fadeIn = state.fadeIn[groupId] ?? 0
   const fadeOut = state.fadeOut[groupId] ?? 0
@@ -282,7 +307,12 @@ export function CollapsedRifffRow({
           )
           finalDurationSec = finalTrimEndSec - trimStartSec
         }
-        setOneShotDragPreview({ durationSec: finalDurationSec, startBar: baseStartBar })
+        setOneShotDragPreview({
+          durationSec: finalDurationSec,
+          startBar: baseStartBar,
+          trimStartSec,
+          isStretch
+        })
       },
       (moved) => {
         if (moved) {
@@ -353,7 +383,16 @@ export function CollapsedRifffRow({
           0,
           startPosBar + oneShotWidthBars(committedDurationSec - finalDurationSec, state.bpm)
         )
-        setOneShotDragPreview({ durationSec: finalDurationSec, startBar: finalStartBar })
+        setOneShotDragPreview({
+          durationSec: finalDurationSec,
+          startBar: finalStartBar,
+          // Stretch always discards trim on commit (see SET_ONE_SHOT_STRETCHED),
+          // so a live stretch preview's trimStartSec is irrelevant -- the
+          // renderer below forces trimStartPx to 0 whenever isStretch is
+          // true regardless of what's passed here.
+          trimStartSec: isStretch ? committedTrimStartSec : finalTrimStartSec,
+          isStretch
+        })
       },
       (moved) => {
         if (moved) {
@@ -510,19 +549,37 @@ export function CollapsedRifffRow({
               clipPath: volumeDragMode ? `path("${envelopePath}")` : undefined
             }}
           >
-            {rifff.stems
-              .filter((stem) => !state.mute[stemKey(groupId, stem.slot)])
-              .map((stem) => (
-                <CollapsedTiles
-                  key={stem.slot}
-                  path={stem.path}
-                  color={typeColorVar(stem.type)}
-                  opacity={0.55}
-                  widthPx={widthPx}
-                  stemBarLength={stem.barLength}
-                  playedBars={displayedPlayedBars}
-                />
-              ))}
+            {isOneShot && oneShotStem
+              ? !state.mute[stemKey(groupId, oneShotStem.slot)] && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: -oneShotWaveformTrimStartPx,
+                      width: oneShotWaveformNativeWidthPx
+                    }}
+                  >
+                    <Waveform
+                      path={oneShotStem.path}
+                      color={typeColorVar(oneShotStem.type)}
+                      opacity={0.55}
+                    />
+                  </div>
+                )
+              : rifff.stems
+                  .filter((stem) => !state.mute[stemKey(groupId, stem.slot)])
+                  .map((stem) => (
+                    <CollapsedTiles
+                      key={stem.slot}
+                      path={stem.path}
+                      color={typeColorVar(stem.type)}
+                      opacity={0.55}
+                      widthPx={widthPx}
+                      stemBarLength={stem.barLength}
+                      playedBars={displayedPlayedBars}
+                    />
+                  ))}
           </div>
 
           {/* Thin white line tracing the envelope curve itself — only shown
