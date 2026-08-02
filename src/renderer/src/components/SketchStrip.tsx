@@ -222,7 +222,7 @@ export function SketchStrip(): React.JSX.Element {
   // Right-click-drag sets how many bars this tile plays before the sequence
   // advances — replaces an earlier click-to-open-a-list popup, which felt
   // like more UI than this deserved. Dragging steps through the SAME short
-  // preset list barOptions() already offers (1/2/4/8/16 plus this rifff's
+  // preset list barOptions() already offers (1/2/3/4/6/8/12/16 plus this rifff's
   // own natural/current length) rather than a fine linear ramp, since that
   // list is already the deliberately-small "don't overwhelm" set. Committed
   // only on release (see effectiveBars/dragBarsFor's own doc comment) —
@@ -469,14 +469,16 @@ export function SketchStrip(): React.JSX.Element {
   )
 }
 
-/** A short, deliberately limited set of common bar counts (powers of two) —
- * every full option-by-option list (1..64) felt overwhelming for what's
- * usually a quick "make it shorter/longer" choice. The rifff's own natural
- * (untrimmed) length and whatever it's currently set to are always folded
- * in too, even when neither is a power of two, so neither ever silently
- * disappears from the list just because it isn't one of the presets. */
+/** A short, deliberately limited set of common bar counts (powers of two,
+ * plus 3/6/12 for triplet-feel and 3/4-derived phrase lengths that a
+ * pure power-of-two list can't reach) — every full option-by-option list
+ * (1..64) felt overwhelming for what's usually a quick "make it
+ * shorter/longer" choice. The rifff's own natural (untrimmed) length and
+ * whatever it's currently set to are always folded in too, even when
+ * neither is one of these presets, so neither ever silently disappears
+ * from the list just because it isn't one of the presets. */
 function barOptions(naturalBars: number, currentBars: number): number[] {
-  const options = new Set([1, 2, 4, 8, 16])
+  const options = new Set([1, 2, 3, 4, 6, 8, 12, 16])
   options.add(Math.max(1, Math.round(naturalBars)))
   options.add(Math.max(1, Math.round(currentBars)))
   return [...options].sort((a, b) => a - b)
