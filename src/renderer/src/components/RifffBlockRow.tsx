@@ -27,7 +27,15 @@ export function RifffBlockRow({
   const dispatch = useDispatch()
   const rifff = state.rifffs[groupId]
   const selected = state.sel === groupId
-  const expanded = !!state.exp[groupId]
+  // A one-shot always has exactly one stem (enforced by importOneShot) --
+  // there's nothing extra an expanded per-stem view would show that
+  // CollapsedRifffRow doesn't already, and CollapsedRifffRow is the only
+  // place the one-shot-aware trim/stretch resize handles are wired (see
+  // oneShotResize.ts) -- StemWaveformRow's own handles are still the
+  // bar-snapped playedBars/RESIZE_LEFT ones, which would be wrong for a
+  // one-shot.
+  const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
+  const expanded = !!state.exp[groupId] && !isOneShot
   const color = identityColor(rifff)
   const compact = state.mode === 'compact'
 

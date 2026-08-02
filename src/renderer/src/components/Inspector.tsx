@@ -50,6 +50,7 @@ export function Inspector({
   const rifff = state.rifffs[groupId]
   const color = typeColorVar(rifff.stems[0]?.type ?? 'fx')
   const stretchOn = state.stretch[groupId] ?? true
+  const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
   const ratio = stretchRatio(state, groupId)
   const groupOffsetKey = groupId
   const groupOffsetSteps = state.off[groupId] ?? 0
@@ -131,45 +132,46 @@ export function Inspector({
         </>
       )}
 
-      {section(
-        <>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginTop: 8
-            }}
-          >
-            <div>
-              <span style={{ fontSize: 19, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
-              <span style={{ margin: '0 6px' }}>→</span>
-              <span style={{ fontSize: 19, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
-            </div>
-            <button
-              onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}
+      {!isOneShot &&
+        section(
+          <>
+            <div
               style={{
-                height: 22,
-                borderRadius: 0,
-                padding: '0 8px',
-                fontSize: 10,
-                background: stretchOn && ratio !== 1 ? 'var(--ra-stretch-on-bg)' : 'transparent',
-                border: `1px solid ${stretchOn && ratio !== 1 ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                color: stretchOn && ratio !== 1 ? 'var(--ra-stretch-on)' : 'var(--ra-text-3)'
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginTop: 8
               }}
             >
-              {stretchOn ? 'stretch on' : 'native'}
-            </button>
-          </div>
-          <div style={{ marginTop: 6, fontSize: 10, color: 'var(--ra-text-2)' }}>
-            {ratio === 1
-              ? 'native tempo — nothing to stretch.'
-              : stretchOn
-                ? `stretched ${(ratio * 100).toFixed(1)}% to fit the project grid. pitch preserved.`
-                : 'playing at source tempo — will drift against the grid.'}
-          </div>
-        </>
-      )}
+              <div>
+                <span style={{ fontSize: 19, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
+                <span style={{ margin: '0 6px' }}>→</span>
+                <span style={{ fontSize: 19, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
+              </div>
+              <button
+                onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}
+                style={{
+                  height: 22,
+                  borderRadius: 0,
+                  padding: '0 8px',
+                  fontSize: 10,
+                  background: stretchOn && ratio !== 1 ? 'var(--ra-stretch-on-bg)' : 'transparent',
+                  border: `1px solid ${stretchOn && ratio !== 1 ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                  color: stretchOn && ratio !== 1 ? 'var(--ra-stretch-on)' : 'var(--ra-text-3)'
+                }}
+              >
+                {stretchOn ? 'stretch on' : 'native'}
+              </button>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--ra-text-2)' }}>
+              {ratio === 1
+                ? 'native tempo — nothing to stretch.'
+                : stretchOn
+                  ? `stretched ${(ratio * 100).toFixed(1)}% to fit the project grid. pitch preserved.`
+                  : 'playing at source tempo — will drift against the grid.'}
+            </div>
+          </>
+        )}
 
       {section(
         <>
