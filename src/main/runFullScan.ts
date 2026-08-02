@@ -1,5 +1,5 @@
 // src/main/runFullScan.ts
-import { listPluginCandidates, scanOneCandidate } from './pluginScan'
+import { listPluginCandidates, scanOneCandidate, getMtimeMs } from './pluginScan'
 import { loadCatalog, writeCatalog, type CatalogEntry, type PluginCatalog } from './pluginCatalog'
 
 export interface ScanProgress {
@@ -23,37 +23,72 @@ const OLD_ALLOWLIST_PATHS = [
   '/Library/Audio/Plug-Ins/VST3/TR5 Sunset Sound Studio Reverb.vst3'
 ]
 
+/** Groups a catalog's entries by their bundle path -- a single bundle can
+ * yield multiple entries (e.g. a multi-plugin VST3 bundle), so this is a
+ * 1:many lookup, not 1:1. */
+function groupByPath(entries: CatalogEntry[]): Map<string, CatalogEntry[]> {
+  const map = new Map<string, CatalogEntry[]>()
+  for (const entry of entries) {
+    const list = map.get(entry.path) ?? []
+    list.push(entry)
+    map.set(entry.path, list)
+  }
+  return map
+}
+
 /** Runs a full VST3 + AU directory scan, one candidate at a time (sequential
  * -- see the design spec's rationale: simplest and safest for v1, avoids any
  * concurrency interaction with the per-candidate timeout/kill logic).
- * `onProgress` fires after each candidate finishes (success or not), so the
- * caller can push scan-progress over IPC without this module knowing
+ * `onProgress` fires after each candidate finishes (success, cached, or not),
+ * so the caller can push scan-progress over IPC without this module knowing
  * anything about IPC itself. Existing favourites are preserved for any
  * plugin id still found in this scan -- a scan is additive, never
- * destructive (see design spec's error-handling section). */
+ * destructive (see design spec's error-handling section).
+ *
+ * A candidate whose bundle mtime exactly matches every previously-scanned
+ * entry at that path is reused without calling scanOneCandidate at all --
+ * see docs/superpowers/specs/2026-08-02-plugin-rescan-caching-design.md.
+ * getMtimeMs never throws; a stat failure (race condition, permissions)
+ * just means this candidate can't be cache-matched and falls through to a
+ * normal scan, same as if it had no previous entry at all. */
 export async function runFullScan(
   onProgress: (progress: ScanProgress) => void
 ): Promise<PluginCatalog> {
   const candidates = listPluginCandidates()
   const previous = loadCatalog()
+  const previousByPath = groupByPath(previous.plugins)
   const plugins: CatalogEntry[] = []
 
   for (let i = 0; i < candidates.length; i++) {
-    const result = await scanOneCandidate(candidates[i])
-    if (result.success) {
-      // Instruments (synths/samplers) are excluded from the catalog entirely --
-      // this app hosts effects on stems/channels, never a sound source of its
-      // own, so an instrument plugin would never be usable here anyway. Filtered
-      // at scan time rather than just hidden in the browser, so it never takes
-      // up space in the persisted catalog or a favourites list.
-      for (const p of result.plugins.filter((p) => !p.isInstrument)) {
-        plugins.push({
-          id: p.identifierString,
-          name: p.name,
-          manufacturer: p.manufacturer,
-          path: candidates[i],
-          arch: p.arch
-        })
+    const path = candidates[i]
+    const mtimeMs = getMtimeMs(path)
+    const cached = mtimeMs !== null ? previousByPath.get(path) : undefined
+    const isUnchanged = cached !== undefined && cached.every((e) => e.mtimeMs === mtimeMs)
+
+    if (isUnchanged) {
+      plugins.push(...cached)
+    } else {
+      const result = await scanOneCandidate(path)
+      if (result.success) {
+        // Instruments (synths/samplers) are excluded from the catalog entirely --
+        // this app hosts effects on stems/channels, never a sound source of its
+        // own, so an instrument plugin would never be usable here anyway. Filtered
+        // at scan time rather than just hidden in the browser, so it never takes
+        // up space in the persisted catalog or a favourites list.
+        for (const p of result.plugins.filter((p) => !p.isInstrument)) {
+          plugins.push({
+            id: p.identifierString,
+            name: p.name,
+            manufacturer: p.manufacturer,
+            path,
+            arch: p.arch,
+            // 0 is a deliberate sentinel for "couldn't stat this time either" --
+            // it will essentially never match a real future mtime, so this
+            // candidate simply gets rescanned again next time too, rather than
+            // silently caching against a wrong/missing value.
+            mtimeMs: mtimeMs ?? 0
+          })
+        }
       }
     }
     onProgress({ done: i + 1, total: candidates.length })
