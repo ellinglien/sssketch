@@ -1011,24 +1011,24 @@ export function BeatPicker({
                   </span>
                 </div>
               ))}
-              {Array.from({ length: totalBeats }, (_, i) => i).map((beatIndex) => (
+              {Array.from({ length: totalSubdivisions }, (_, i) => i).map((i) => (
                 <button
-                  key={beatIndex}
-                  onClick={() => pickBeat(beatIndex)}
-                  title={`beat ${beatIndex + 1}`}
+                  key={i}
+                  onClick={() => pickBeat(i / subdivisionsPerBeat)}
+                  title={`beat ${i / subdivisionsPerBeat + 1}`}
                   style={{
                     position: 'absolute',
                     top: 0,
                     bottom: 0,
-                    left: `${(beatIndex / totalBeats) * 100}%`,
-                    width: `${100 / totalBeats}%`,
+                    left: `${(i / totalSubdivisions) * 100}%`,
+                    width: `${100 / totalSubdivisions}%`,
                     border: 'none',
                     borderLeft:
-                      beatIndex % 4 === 0
+                      i % snapDiv === 0
                         ? '1px solid var(--ra-border-strong)'
                         : '1px solid var(--ra-grid-minor)',
                     background:
-                      beatIndex === currentBeat
+                      i === currentSubdivisionIndex
                         ? 'color-mix(in srgb, var(--ra-text) 18%, transparent)'
                         : 'transparent',
                     cursor: 'pointer'
