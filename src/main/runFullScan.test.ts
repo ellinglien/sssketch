@@ -217,6 +217,13 @@ describe('runFullScan', () => {
       const { runFullScan } = await import('./runFullScan')
       const catalog = await runFullScan(() => {})
       expect(catalog.plugins.map((p) => p.id).sort()).toEqual(['id-a', 'id-sbc'])
+      // getMtimeMs returned null for every candidate here (stat "failed"),
+      // so every freshly-scanned entry falls back to the 0 sentinel rather
+      // than an undefined/missing mtimeMs -- see runFullScan.ts's mtimeMs
+      // ?? 0 comment for why 0 is deliberate, not just "whatever's handy."
+      for (const plugin of catalog.plugins) {
+        expect(plugin.mtimeMs).toBe(0)
+      }
     })
 
     it('reports progress once per candidate even when some are cached', async () => {
