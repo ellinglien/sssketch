@@ -4,7 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
-import { importOneShot } from './importOneShot'
+import { importOneShot, importRecordedTake } from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -154,6 +154,10 @@ app.whenReady().then(async () => {
     return importOneShot(path)
   })
 
+  ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number, barLength: number) => {
+    return importRecordedTake(path, bpm, barLength)
+  })
+
   ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
 
   ipcMain.handle('lore-list-jams', (_event, filterText: string) => listJams(filterText))
@@ -257,11 +261,6 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
-  // TEMPORARY stub -- returns an empty list until a later task wires this to
-  // a real "list-input-devices" reply from the native engine. Lets the
-  // renderer-side dropdown be built and typechecked against a real IPC
-  // round-trip shape now, without depending on the native engine work
-  // landing first.
   ipcMain.handle('engine-list-input-devices', async (): Promise<string[]> => {
     if (!playbackEngine) return []
     try {
@@ -276,6 +275,46 @@ app.whenReady().then(async () => {
       return []
     }
   })
+
+  ipcMain.handle(
+    'engine-arm-recording',
+    async (
+      _event,
+      channelId: string,
+      deviceName: string,
+      startBar: number,
+      endBar: number
+    ): Promise<{ success: boolean; error?: string }> => {
+      if (!playbackEngine) return { success: false, error: 'engine not running' }
+      try {
+        return (await playbackEngine.client.sendAndAwaitType(
+          'arm-recording',
+          { channelId, deviceName, startBar, endBar },
+          'arm-recording-result'
+        )) as { success: boolean; error?: string }
+      } catch (err) {
+        console.error('engine-arm-recording: failed:', err)
+        return { success: false, error: String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-disarm-recording',
+    async (): Promise<{ committed: boolean; path?: string; error?: string }> => {
+      if (!playbackEngine) return { committed: false }
+      try {
+        return (await playbackEngine.client.sendAndAwaitType(
+          'disarm-recording',
+          undefined,
+          'disarm-recording-result'
+        )) as { committed: boolean; path?: string; error?: string }
+      } catch (err) {
+        console.error('engine-disarm-recording: failed:', err)
+        return { committed: false, error: String(err) }
+      }
+    }
+  )
 
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
     playbackEngine?.client.send('set-metronome', { enabled })

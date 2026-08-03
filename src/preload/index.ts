@@ -9,6 +9,8 @@ const api = {
     ipcRenderer.invoke('import-rifff', paths),
   importOneShot: (path: string): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-one-shot', path),
+  importRecordedTake: (path: string, bpm: number, barLength: number): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-recorded-take', path, bpm, barLength),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
@@ -44,6 +46,15 @@ const api = {
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   engineListInputDevices: (): Promise<string[]> => ipcRenderer.invoke('engine-list-input-devices'),
+  engineArmRecording: (
+    channelId: string,
+    deviceName: string,
+    startBar: number,
+    endBar: number
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('engine-arm-recording', channelId, deviceName, startBar, endBar),
+  engineDisarmRecording: (): Promise<{ committed: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke('engine-disarm-recording'),
   engineSetMetronome: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('engine-set-metronome', enabled),
   engineLoadMasterPlugin: (

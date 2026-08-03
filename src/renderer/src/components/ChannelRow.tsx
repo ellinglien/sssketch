@@ -3,7 +3,7 @@ import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
-import { useAppSelector, useDispatch } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
@@ -54,6 +54,10 @@ function ChannelRowImpl({
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
+  const bpm = useAppSelector((s) => s.bpm)
+  const channelOf = useAppSelector((s) => s.channelOf)
+  const loopRegion = useAppSelector((s) => s.loopRegion)
+  const playing = usePlaying()
 
   const allMuted = useMemo(
     () =>
@@ -129,6 +133,56 @@ function ChannelRowImpl({
     cursor: canArm ? 'pointer' : 'not-allowed'
   }
 
+  async function handleToggleArm(): Promise<void> {
+    if (isArmed) {
+      const result = await window.rifffApi.engineDisarmRecording()
+      dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
+      if (result.committed && result.path) {
+        const rifff = await window.rifffApi.importRecordedTake(
+          result.path,
+          bpm,
+          (loopRegion?.endBar ?? 0) - (loopRegion?.startBar ?? 0)
+        )
+        if (rifff) {
+          dispatch({ type: 'ADD_TO_SHELF', rifff })
+          // Replace any previous take on this channel -- see the design
+          // doc's own "Retake behavior" section. Find the existing placed
+          // rifff (if any) on this channel by scanning rifffsMap/channelOf.
+          const previousTakeGroupId = Object.keys(rifffsMap).find(
+            (id) => rifffsMap[id].startBar !== undefined && channelOf[id] === channelId
+          )
+          if (previousTakeGroupId)
+            dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: previousTakeGroupId })
+          dispatch({
+            type: 'MOVE_TO_CHANNEL',
+            groupId: rifff.groupId,
+            startBar: loopRegion?.startBar ?? 0,
+            channelId
+          })
+        }
+      } else if (result.error) {
+        window.alert(`Recording failed: ${result.error}`)
+      }
+    } else {
+      if (!selectedInputDevice || !loopRegion) return
+      const result = await window.rifffApi.engineArmRecording(
+        channelId,
+        selectedInputDevice,
+        loopRegion.startBar,
+        loopRegion.endBar
+      )
+      if (result.success) {
+        dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
+        if (!playing) {
+          dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
+          dispatch({ type: 'PLAY' })
+        }
+      } else {
+        window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
+      }
+    }
+  }
+
   return (
     <div
       data-channel-id={channelId}
@@ -183,11 +237,7 @@ function ChannelRowImpl({
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                dispatch(
-                  isArmed
-                    ? { type: 'DISARM_RECORDING_CHANNEL' }
-                    : { type: 'ARM_RECORDING_CHANNEL', channelId }
-                )
+                void handleToggleArm()
               }}
               disabled={!canArm}
               aria-label={

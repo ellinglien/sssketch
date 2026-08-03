@@ -14,6 +14,66 @@ import type { Rifff } from '@shared/types'
  * null (never throws) for anything that isn't a readable .wav, matching
  * importRifff's own "can't build a rifff -> return null" convention.
  */
+/**
+ * Imports a recorded loop take (see docs/superpowers/specs/2026-08-03-loop-recording-design.md)
+ * -- shares importOneShot's file-copy-into-library-folder and
+ * WAV-duration-reading internals, but differs in exactly one respect: the
+ * resulting stem is NOT oneShot. A loop recording should tile/stretch/loop
+ * like any other rifff, at the project's own bpm and the loop region's
+ * own bar length, not play once and stop.
+ */
+export function importRecordedTake(path: string, bpm: number, barLength: number): Rifff | null {
+  if (!path.toLowerCase().endsWith('.wav')) return null
+
+  let destDir: string | undefined
+  try {
+    if (!statSync(path).isFile()) return null
+
+    const durationSec = readWavDurationSeconds(readWavHeaderBytes(path))
+    if (durationSec <= 0) return null
+
+    const groupId = randomUUID()
+    destDir = join(libraryRoot(), groupId)
+    mkdirSync(destDir, { recursive: true })
+    const destPath = join(destDir, basename(path))
+    copyFileSync(path, destPath)
+
+    const displayName = `recording ${new Date().toLocaleTimeString()}`
+    return {
+      groupId,
+      name: displayName,
+      bpm,
+      barLength,
+      folderPath: path,
+      stems: [
+        {
+          slot: 1,
+          author: '',
+          name: displayName,
+          type: 'audioIn',
+          path: destPath,
+          durationSec,
+          barLength
+        }
+      ]
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`importRecordedTake: failed to import ${path}: ${message}`)
+    if (destDir) {
+      try {
+        rmSync(destDir, { recursive: true, force: true })
+      } catch (cleanupErr) {
+        console.error(
+          `importRecordedTake: failed to clean up partial import at ${destDir}:`,
+          cleanupErr
+        )
+      }
+    }
+    return null
+  }
+}
+
 export function importOneShot(path: string): Rifff | null {
   if (!path.toLowerCase().endsWith('.wav')) return null
 

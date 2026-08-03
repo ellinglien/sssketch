@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { encodeWavPCM16 } from '@shared/encodeWav'
-import { importOneShot } from './importOneShot'
+import { importOneShot, importRecordedTake } from './importOneShot'
 
 function writeTestWav(dir: string, name: string, seconds: number, sampleRate = 44100): string {
   const numSamples = Math.round(seconds * sampleRate)
@@ -45,5 +45,26 @@ describe('importOneShot', () => {
 
   it('returns null for a path that does not exist, without throwing', () => {
     expect(importOneShot('/no/such/file.wav')).toBeNull()
+  })
+})
+
+describe('importRecordedTake', () => {
+  it('imports a recorded WAV as a non-one-shot stem at the given bpm/barLength', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 0.3)
+      const result = importRecordedTake(testWavPath, 140, 8)
+      expect(result).not.toBeNull()
+      expect(result!.bpm).toBe(140)
+      expect(result!.barLength).toBe(8)
+      expect(result!.stems[0].oneShot).toBeUndefined()
+      expect(result!.stems[0].barLength).toBe(8)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a non-wav path', () => {
+    expect(importRecordedTake('/tmp/not-a-wav.mp3', 120, 4)).toBeNull()
   })
 })
