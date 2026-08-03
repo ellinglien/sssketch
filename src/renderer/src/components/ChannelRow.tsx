@@ -114,6 +114,21 @@ function ChannelRowImpl({
     color: 'var(--ra-text-2)'
   }
 
+  // Arming is blocked without a selected input device (nothing to record
+  // from); disarming is always allowed regardless.
+  const canArm = isArmed || !!selectedInputDevice
+
+  // Same "filled red = active/attention-grabbing state" treatment the mute
+  // button already uses, reusing this app's own audio-in accent color.
+  const recordButtonStyle: React.CSSProperties = {
+    ...baseButtonStyle,
+    background: isArmed ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
+    border: `1px solid ${isArmed ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
+    color: isArmed ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
+    opacity: canArm ? 1 : 0.3,
+    cursor: canArm ? 'pointer' : 'not-allowed'
+  }
+
   return (
     <div
       data-channel-id={channelId}
@@ -174,8 +189,10 @@ function ChannelRowImpl({
                     : { type: 'ARM_RECORDING_CHANNEL', channelId }
                 )
               }}
-              disabled={!isArmed && !selectedInputDevice}
-              aria-label={`arm channel ${channelId} for recording`}
+              disabled={!canArm}
+              aria-label={
+                isArmed ? `disarm channel ${channelId}` : `arm channel ${channelId} for recording`
+              }
               title={
                 selectedInputDevice
                   ? isArmed
@@ -183,14 +200,7 @@ function ChannelRowImpl({
                     : 'arm for recording'
                   : 'select an input device first'
               }
-              style={{
-                ...baseButtonStyle,
-                background: isArmed ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-                border: `1px solid ${isArmed ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
-                color: isArmed ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
-                opacity: !isArmed && !selectedInputDevice ? 0.3 : 1,
-                cursor: !isArmed && !selectedInputDevice ? 'not-allowed' : 'pointer'
-              }}
+              style={recordButtonStyle}
             >
               r
             </button>

@@ -1072,23 +1072,31 @@ function Frame(): React.JSX.Element {
           </div>
         </div>
         <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
-        <button
-          onClick={() =>
-            dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
-          }
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            color: 'var(--ra-text)',
-            background: 'var(--ra-bg-row-active)',
-            border: '1px solid var(--ra-border-strong)',
-            padding: '5px 10px',
-            cursor: 'pointer',
-            textTransform: 'lowercase'
-          }}
-        >
-          + rec channel
-        </button>
+        {/* .ra-frame is a flex column with the default align-items:stretch --
+            without this wrapper, a bare button dropped in as a direct sibling
+            of Shelf/TransportBar would stretch to the frame's full width
+            instead of sizing to its own content. The wrapper also gives the
+            input-device dropdown (added alongside this button in a later
+            task) a natural place to sit in the same row. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() =>
+              dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
+            }
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 10,
+              color: 'var(--ra-text)',
+              background: 'var(--ra-bg-row-active)',
+              border: '1px solid var(--ra-border-strong)',
+              padding: '5px 10px',
+              cursor: 'pointer',
+              textTransform: 'lowercase'
+            }}
+          >
+            + rec channel
+          </button>
+        </div>
         <TransportBar />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
