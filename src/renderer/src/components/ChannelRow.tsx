@@ -487,9 +487,14 @@ function ChannelRowImpl({
               feedback asking this to read more like "the waveforms
               elsewhere." No brightness modulation (that's the zero-
               crossing-rate "spectrographic" layer Waveform.tsx also draws --
-              explicitly not wanted here) and no pitch line -- flat opacity,
-              this app's real-audio-in accent color, still no glow (an
-              earlier, separate, explicit design decision). */}
+              explicitly not wanted here) and no pitch line -- still no glow
+              (an earlier, separate, explicit design decision). Full opacity,
+              not Waveform.tsx's usual 0.75 -- per feedback, this should read
+              brighter than an ordinary clip's own waveform while actively
+              armed, matching RifffBlockRow's clip-title text (same
+              typeColorVar('audioIn') color, rendered at full strength with
+              no dimming), so a live recording draws the eye rather than
+              blending in with already-red, already-committed clips. */}
           <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
             {linearWaveBars(capturePeaks).map((bar, i) => (
               <rect
@@ -499,7 +504,6 @@ function ChannelRowImpl({
                 width={bar.width}
                 height={bar.height}
                 fill={typeColorVar('audioIn')}
-                opacity={0.75}
                 shapeRendering="crispEdges"
               />
             ))}
