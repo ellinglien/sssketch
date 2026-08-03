@@ -51,6 +51,9 @@ function ChannelRowImpl({
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const mute = useAppSelector((s) => s.mute)
   const rifffsMap = useAppSelector((s) => s.rifffs)
+  const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
+  const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
+  const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
 
   const allMuted = useMemo(
     () =>
@@ -161,6 +164,37 @@ function ChannelRowImpl({
           >
             fx
           </button>
+          {isRecordingChannel && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                dispatch(
+                  isArmed
+                    ? { type: 'DISARM_RECORDING_CHANNEL' }
+                    : { type: 'ARM_RECORDING_CHANNEL', channelId }
+                )
+              }}
+              disabled={!isArmed && !selectedInputDevice}
+              aria-label={`arm channel ${channelId} for recording`}
+              title={
+                selectedInputDevice
+                  ? isArmed
+                    ? 'disarm recording'
+                    : 'arm for recording'
+                  : 'select an input device first'
+              }
+              style={{
+                ...baseButtonStyle,
+                background: isArmed ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
+                border: `1px solid ${isArmed ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
+                color: isArmed ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
+                opacity: !isArmed && !selectedInputDevice ? 0.3 : 1,
+                cursor: !isArmed && !selectedInputDevice ? 'not-allowed' : 'pointer'
+              }}
+            >
+              r
+            </button>
+          )}
         </div>
       </div>
       {rifffs.map((rifff) => (

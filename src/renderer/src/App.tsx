@@ -1072,6 +1072,23 @@ function Frame(): React.JSX.Element {
           </div>
         </div>
         <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
+        <button
+          onClick={() =>
+            dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
+          }
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            color: 'var(--ra-text)',
+            background: 'var(--ra-bg-row-active)',
+            border: '1px solid var(--ra-border-strong)',
+            padding: '5px 10px',
+            cursor: 'pointer',
+            textTransform: 'lowercase'
+          }}
+        >
+          + rec channel
+        </button>
         <TransportBar />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
