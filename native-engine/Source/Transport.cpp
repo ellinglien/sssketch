@@ -127,13 +127,21 @@ namespace sssketch
         }
 
         // pos is normally kept within [loopStart, loopEnd) by this
-        // function's own wrap below, so distToEnd is usually positive here
-        // -- except right after a recording loop first becomes active (or
-        // after a manual seek) while pos is still outside those bounds, in
-        // which case distToEnd comes out small/negative and the split
-        // logic below clamps straight to a full wrap next block, snapping
-        // playback into the loop within one block rather than needing any
-        // special-cased catch-up path.
+        // function's own wrap below -- except right after a loop first
+        // becomes active, its bounds change (e.g. the user drags the
+        // region while playing), or a manual seek lands outside them.
+        // Snap straight to loopStart in that case rather than either
+        // playing straight through unwrapped until pos happens to reach
+        // loopEnd from below (pos < loopStart), or racing arbitrarily far
+        // past loopEnd before the split-index clamp below catches it
+        // (pos >= loopEnd) -- both were confusing in practice ("I moved
+        // the loop but playback just... didn't," reported during manual
+        // testing): a loop that's active should always mean "play from
+        // here," immediately, not "eventually get wrapped into once
+        // reached."
+        if (pos < loopStart || pos >= loopEnd)
+            pos = loopStart;
+
         const double distToEnd = loopEnd - pos;
         if (distToEnd >= blockDurationBars)
         {

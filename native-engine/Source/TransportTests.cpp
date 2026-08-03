@@ -211,6 +211,71 @@ namespace sssketch
                 tone.deleteFile();
             }
 
+            beginTest("playback snaps straight to the recording loop's start when position "
+                      "starts outside its bounds, in both directions -- regression test for a "
+                      "real bug found during manual testing: dragging the loop's start edge "
+                      "while position hadn't reached it yet just let playback pass straight "
+                      "through, never entering the loop until it happened to reach the OLD "
+                      "loopEnd from below");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_snap.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 120.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+
+                const int numSamples = 512;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+
+                // Case 1: position starts BEFORE loopStart.
+                {
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(120.0); // secPerBar = 2.0
+                    transport.setRecordingLoop(2.0, 3.0); // loop is bars [2, 3)
+                    transport.play(0.0); // well before loopStart
+
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                    const double posAfterFirstBlock = transport.currentPositionBars();
+                    // Old behavior: still ~0 (or barely advanced), climbing
+                    // linearly toward 2.0 rather than being there already.
+                    expect(posAfterFirstBlock >= 2.0);
+                    expect(posAfterFirstBlock < 3.0);
+                }
+
+                // Case 2: position starts AFTER loopEnd.
+                {
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(120.0);
+                    transport.setRecordingLoop(2.0, 3.0);
+                    transport.play(10.0); // well past loopEnd
+
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                    const double posAfterFirstBlock = transport.currentPositionBars();
+                    expect(posAfterFirstBlock >= 2.0);
+                    expect(posAfterFirstBlock < 3.0);
+                }
+
+                tone.deleteFile();
+            }
+
             beginTest("project loopLengthBars wrapping is unaffected when no recording loop "
                       "is active -- regression check alongside the fix above");
             {
