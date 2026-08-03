@@ -1,15 +1,14 @@
 import { useState } from 'react'
-import { useDispatch, useAppState, usePlaying } from '../state/StoreContext'
-import { MIN_PLAYED_BARS } from '../state/store'
+import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
+import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
-import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
+import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
-import { useShiftHeld } from './useShiftHeld'
 import {
   FADE_MAX,
   FADE_DRAG_SLOWDOWN,
@@ -35,25 +34,26 @@ export function StemWaveformRow({
    * with the Ruler/Playhead/clip blocks around it. */
   ppb: number
 }): React.JSX.Element {
-  const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
-  const rifff = state.rifffs[groupId]
+  const key = stemKey(groupId, slot)
+  // Each field read individually via useAppSelector, not one broad
+  // useAppState() call -- see
+  // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+  const rifff = useAppSelector((s) => s.rifffs[groupId])
+  const muted = useAppSelector((s) => !!s.mute[key])
+  const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
+  const volume = useAppSelector((s) => s.vol[key] ?? 1)
+  const fadeIn = useAppSelector((s) => s.fadeIn[groupId] ?? 0)
+  const fadeOut = useAppSelector((s) => s.fadeOut[groupId] ?? 0)
+  const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
+  const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const snapIdx = useAppSelector((s) => s.snapIdx)
+  const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
+  const bpm = useAppSelector((s) => s.bpm)
   const stem = rifff.stems.find((s) => s.slot === slot)!
   const color = typeColorVar(stem.type)
-  const key = stemKey(groupId, slot)
   const playedBarsKey = groupId
-  const muted = !!state.mute[key]
-  const volumeDragMode = state.volumeDragMode
-  const volume = state.vol[key] ?? 1
-  const fadeIn = state.fadeIn[groupId] ?? 0
-  const fadeOut = state.fadeOut[groupId] ?? 0
-  // Every visible channel gets a shortcut now, not just the selected
-  // rifff's own stems — see channelMuteLetters' doc comment and the
-  // Shift+letter handler in App.tsx's Frame.
-  const shiftHeld = useShiftHeld()
-  const muteLetter = channelMuteLetters(state)[key]
-  const showMuteShortcut = shiftHeld && !!muteLetter
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragLeftResize, setDragLeftResize] = useState<{
@@ -81,13 +81,23 @@ export function StemWaveformRow({
     dispatch({ type: 'TOGGLE_MUTE', stemKey: key })
   }
 
-  const resolvedPlayedBars = resolvePlayedBars(state, groupId)
+  const resolvedPlayedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifff.barLength)
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
-  const stemGeo = clipGeometry(state, groupId, ppb)
+  const stemGeo = clipGeometryFromFields({
+    startBar: rifff.startBar ?? 0,
+    offsetSteps,
+    snapDiv: SNAP_DIVS[snapIdx],
+    playedBarsOverride,
+    rifffBarLength: rifff.barLength,
+    stretchOn,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
+    ppb
+  })
   const baseStartBar = rifff.startBar ?? 0
   // The sub-bar nudge offset (off[]) baked into stemGeo.leftPx, isolated so a
   // left-resize preview can recompute leftPx from a new start bar while
@@ -550,45 +560,6 @@ export function StemWaveformRow({
             </div>
           )}
         </div>
-
-        {/* Mute-shortcut channel badge — sticky (not positioned against the
-            clip's own leftPx, which can easily be scrolled off-screen) so it
-            stays pinned to the left edge of the visible timeline viewport
-            regardless of horizontal scroll or where this stem's clip
-            actually starts. Shown only while Shift is held. Clickable
-            itself now (not just a visual hint) — right-click-anywhere on the
-            waveform (handleWaveformContextMenu above) still works too.
-            Max-contrast black/white rather than the app's usual off-black/
-            off-white tokens, and inverted between mute states, so the
-            letter stays legible and doubles as a mute-state cue on its own. */}
-        {showMuteShortcut && (
-          <button
-            onClick={() => dispatch({ type: 'TOGGLE_MUTE', stemKey: key })}
-            title={`shift+${muteLetter} to mute`}
-            style={{
-              position: 'sticky',
-              left: 6,
-              top: 0,
-              marginTop: (ROW_HEIGHT - 18) / 2,
-              width: 18,
-              height: 18,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: 'none',
-              padding: 0,
-              background: muted ? '#fff' : '#000',
-              color: muted ? '#000' : '#fff',
-              fontSize: 12,
-              fontWeight: 700,
-              lineHeight: 1,
-              cursor: 'pointer',
-              zIndex: 6
-            }}
-          >
-            {muteLetter!.toUpperCase()}
-          </button>
-        )}
       </div>
     </div>
   )
