@@ -1,13 +1,12 @@
 import { useState } from 'react'
-import { useAppState, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
-import { MIN_PLAYED_BARS } from '../state/store'
+import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
+import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
-import { clipGeometry, resolvePlayedBars, channelMuteLetters } from '../state/selectors'
+import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
-import { useShiftHeld } from './useShiftHeld'
 import {
   FADE_MAX,
   FADE_DRAG_SLOWDOWN,
@@ -35,7 +34,7 @@ import {
  * tiling formula exactly (`widthPx * (stem.barLength / playedBars)`) rather
  * than a simplified `barLength * PPB`, which was wrong on two counts: it
  * used the rifff's overall barLength instead of the stem's own, and it
- * silently assumed stretch is always on (ignoring the rifff.bpm/state.bpm
+ * silently assumed stretch is always on (ignoring the rifff.bpm/bpm
  * scaling baked into widthPx when it's off). */
 function CollapsedTiles({
   path,
@@ -95,20 +94,28 @@ export function CollapsedRifffRow({
   groupId: string
   selected: boolean
 }): React.JSX.Element {
-  const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
   // Shadows the name every existing PPB reference in this file already
   // uses -- see zoomMath.ts/useZoom's own doc comments for what this value
   // actually is (base PPB * the current zoom multiplier).
   const PPB = useZoom()
-  const rifff = state.rifffs[groupId]
+  // Each field read individually via useAppSelector, not one broad
+  // useAppState() call -- see
+  // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+  // `mute` is read as the whole map (not per-stem) because allMuted below
+  // needs every one of this rifff's own stems' mute values together --
+  // still narrower than before, since this only re-renders on a mute
+  // change now, not on every dispatch.
+  const rifff = useAppSelector((s) => s.rifffs[groupId])
+  const bpm = useAppSelector((s) => s.bpm)
+  const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
+  const mute = useAppSelector((s) => s.mute)
   const firstStem = rifff.stems[0]
   const color = typeColorVar(firstStem?.type ?? 'fx')
   const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
   const oneShotStem = isOneShot ? firstStem : null
-  const secPerBar = (60 / state.bpm) * 4
-  const volumeDragMode = state.volumeDragMode
+  const secPerBar = (60 / bpm) * 4
   // One button for the whole group rather than exposing each stem's own mute
   // individually (unlike the expanded view) — collapsing already hides
   // per-stem detail, so "all muted" / "not all muted" is the only distinction
@@ -116,17 +123,13 @@ export function CollapsedRifffRow({
   // unmuted (clicking mutes everything); hollow = the whole group is
   // already muted (clicking unmutes everything) — same filled-means-active
   // convention as every other mute dot in this app.
-  const allMuted = rifff.stems.every((stem) => state.mute[stemKey(groupId, stem.slot)])
-  // Whole-group channel — see channelMuteLetters' doc comment.
-  const shiftHeld = useShiftHeld()
-  const muteLetter = channelMuteLetters(state)[groupId]
-  const showMuteShortcut = shiftHeld && !!muteLetter
+  const allMuted = rifff.stems.every((stem) => mute[stemKey(groupId, stem.slot)])
   // Representative volume for the envelope's own drag-start/display value —
   // same "first stem stands in for the group" convention as the geometry
   // below. Actually adjusting the envelope dispatches SET_GROUP_VOLUME,
   // which sets every stem to the same value in one atomic edit, so this
   // representative value becomes exactly correct the moment it's touched.
-  const volume = state.vol[stemKey(groupId, firstStem.slot)] ?? 1
+  const volume = useAppSelector((s) => s.vol[stemKey(groupId, firstStem.slot)] ?? 1)
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
   const [dragLeftResize, setDragLeftResize] = useState<{
@@ -169,11 +172,25 @@ export function CollapsedRifffRow({
   // there's exactly one shared position/width for the whole rifff to show
   // here, same value every stem's own row would use if expanded instead.
   const playedBarsKey = groupId
-  const resolvedPlayedBars = resolvePlayedBars(state, groupId)
+  const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
+  const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const snapIdx = useAppSelector((s) => s.snapIdx)
+  const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
+  const resolvedPlayedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifff.barLength)
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const baseStartBar = rifff.startBar ?? 0
 
-  const geo = clipGeometry(state, groupId, PPB)
+  const geo = clipGeometryFromFields({
+    startBar: baseStartBar,
+    offsetSteps,
+    snapDiv: SNAP_DIVS[snapIdx],
+    playedBarsOverride,
+    rifffBarLength: rifff.barLength,
+    stretchOn,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
+    ppb: PPB
+  })
   // Sub-bar nudge offset (off[]) baked into geo.leftPx, isolated so a
   // left-resize preview can recompute leftPx from a new start bar while
   // preserving it — see StemWaveformRow's identical pattern.
@@ -187,8 +204,7 @@ export function CollapsedRifffRow({
     : (dragLeftResize?.startBar ?? baseStartBar)
   const leftPx = displayedStartBar * PPB + nudgeOffsetPx
   const widthPx = isOneShot
-    ? oneShotWidthBars(oneShotDragPreview?.durationSec ?? oneShotCommittedDurationSec, state.bpm) *
-      PPB
+    ? oneShotWidthBars(oneShotDragPreview?.durationSec ?? oneShotCommittedDurationSec, bpm) * PPB
     : dragPlayedBars !== null
       ? dragPlayedBars * PPB
       : dragLeftResize !== null
@@ -208,14 +224,14 @@ export function CollapsedRifffRow({
   const oneShotWaveformNativeSec = oneShotIsStretchDragging
     ? (oneShotDragPreview?.durationSec ?? oneShotStem?.durationSec ?? 0)
     : (oneShotStem?.durationSec ?? 0)
-  const oneShotWaveformNativeWidthPx = oneShotWidthBars(oneShotWaveformNativeSec, state.bpm) * PPB
+  const oneShotWaveformNativeWidthPx = oneShotWidthBars(oneShotWaveformNativeSec, bpm) * PPB
   const oneShotWaveformTrimStartSec = oneShotIsStretchDragging
     ? 0
     : (oneShotDragPreview?.trimStartSec ?? oneShotStem?.trimStartSec ?? 0)
-  const oneShotWaveformTrimStartPx = oneShotWidthBars(oneShotWaveformTrimStartSec, state.bpm) * PPB
+  const oneShotWaveformTrimStartPx = oneShotWidthBars(oneShotWaveformTrimStartSec, bpm) * PPB
 
-  const fadeIn = state.fadeIn[groupId] ?? 0
-  const fadeOut = state.fadeOut[groupId] ?? 0
+  const fadeIn = useAppSelector((s) => s.fadeIn[groupId] ?? 0)
+  const fadeOut = useAppSelector((s) => s.fadeOut[groupId] ?? 0)
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
@@ -384,7 +400,7 @@ export function CollapsedRifffRow({
         // the exact anchor invariant the manual walkthrough's step 8 checks.
         finalStartBar = Math.max(
           0,
-          startPosBar + oneShotWidthBars(committedDurationSec - finalDurationSec, state.bpm)
+          startPosBar + oneShotWidthBars(committedDurationSec - finalDurationSec, bpm)
         )
         setOneShotDragPreview({
           durationSec: finalDurationSec,
@@ -553,7 +569,7 @@ export function CollapsedRifffRow({
             }}
           >
             {isOneShot && oneShotStem
-              ? !state.mute[stemKey(groupId, oneShotStem.slot)] && (
+              ? !mute[stemKey(groupId, oneShotStem.slot)] && (
                   <div
                     style={{
                       position: 'absolute',
@@ -571,7 +587,7 @@ export function CollapsedRifffRow({
                   </div>
                 )
               : rifff.stems
-                  .filter((stem) => !state.mute[stemKey(groupId, stem.slot)])
+                  .filter((stem) => !mute[stemKey(groupId, stem.slot)])
                   .map((stem) => (
                     <CollapsedTiles
                       key={stem.slot}
@@ -740,40 +756,6 @@ export function CollapsedRifffRow({
             </div>
           )}
         </div>
-
-        {/* Mute-shortcut channel badge — sticky to the left edge of the
-            visible timeline viewport, same as StemWaveformRow's identical
-            badge (see its doc comment for why sticky, not leftPx-relative).
-            One badge for the whole group, matching this row's own single
-            mute control (SET_GROUP_MUTE, not a per-stem TOGGLE_MUTE). */}
-        {showMuteShortcut && (
-          <button
-            onClick={() => dispatch({ type: 'SET_GROUP_MUTE', groupId, muted: !allMuted })}
-            title={`shift+${muteLetter} to mute group`}
-            style={{
-              position: 'sticky',
-              left: 6,
-              top: 0,
-              marginTop: (ROW_HEIGHT - 18) / 2,
-              width: 18,
-              height: 18,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: 'none',
-              padding: 0,
-              background: allMuted ? '#fff' : '#000',
-              color: allMuted ? '#000' : '#fff',
-              fontSize: 12,
-              fontWeight: 700,
-              lineHeight: 1,
-              cursor: 'pointer',
-              zIndex: 6
-            }}
-          >
-            {muteLetter!.toUpperCase()}
-          </button>
-        )}
       </div>
     </div>
   )
