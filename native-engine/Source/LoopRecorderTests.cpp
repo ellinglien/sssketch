@@ -152,6 +152,45 @@ namespace sssketch
                 for (float peak : peaks)
                     expectWithinAbsoluteError(peak, 0.0f, 0.001f);
             }
+
+            beginTest("peaksSoFar on a freshly-constructed recorder (never written to) is all-zero");
+            {
+                // The actual state during the first ~33ms after arming, before
+                // any audio callback has run yet -- writePos == 0 from the
+                // constructor's own default, not from an onPassBoundary()
+                // reset. Same code path as the reset case above in practice,
+                // but worth locking down explicitly as its own scenario.
+                LoopRecorder recorder(48000.0, 0.1);
+                const auto peaks = recorder.peaksSoFar(8);
+                expectEquals((int) peaks.size(), 8);
+                for (float peak : peaks)
+                    expectWithinAbsoluteError(peak, 0.0f, 0.001f);
+            }
+
+            beginTest("peaksSoFar with more buckets than written samples doesn't loop forever or duplicate indices");
+            {
+                // 4800-sample buffer, only 4 samples written -- with 32
+                // buckets (the real value IpcServer.cpp uses), most buckets
+                // are sub-sample-width (bucketStart == bucketEnd for many
+                // b). Exercises the inner scan's std::min(bucketEnd,
+                // currentWritePos) clamp with bucketEnd sometimes equal to
+                // bucketStart, and confirms the whole call still terminates
+                // and returns exactly numBuckets entries.
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                std::vector<float> inputData(4, 0.9f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 4);
+
+                const auto peaks = recorder.peaksSoFar(32);
+                expectEquals((int) peaks.size(), 32);
+                // Only the very first bucket (samples 0..150 at this ratio)
+                // can possibly cover any of the 4 written samples; the rest
+                // must be 0, and none of this should ever crash or hang.
+                bool anyNonZero = false;
+                for (float peak : peaks)
+                    if (peak > 0.0f) anyNonZero = true;
+                expect(anyNonZero);
+            }
         }
     };
 

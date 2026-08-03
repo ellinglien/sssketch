@@ -2,6 +2,7 @@
 #pragma once
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -15,12 +16,26 @@ namespace sssketch
      * pass-boundary detection lives entirely in Transport's own per-block
      * loop-wrap math rather than anything IPC-driven.
      *
-     * Not thread-safe in general, but every method here is only ever
-     * called from the audio thread (Transport::audioDeviceIOCallbackWithContext
-     * and the renderLoopAware wrap-check it drives) -- there is no
-     * message-thread access to an active LoopRecorder instance's mutable
-     * state, matching how PlaybackEngine::renderBlock itself is only ever
-     * called from that same one thread. */
+     * Not thread-safe in general -- writeBlock/onPassBoundary/isFull/
+     * hasCompletedPass/writeToWavFile are only ever called from the audio
+     * thread (Transport::audioDeviceIOCallbackWithContext and the
+     * renderLoopAware wrap-check it drives) or, for hasCompletedPass/
+     * writeToWavFile, from the message thread only after the recorder has
+     * already been detached from Transport (see IpcServer.cpp's
+     * disarm-recording handler). The one deliberate exception is
+     * peaksSoFar(), which IS called from the message thread
+     * (IpcConnection::timerCallback) concurrently with the audio thread
+     * still actively writing -- that's the entire point of live capture-
+     * level feedback while armed. writePos is std::atomic specifically to
+     * make that one cross-thread read safe: the audio thread publishes it
+     * (release) only after the samples up to that index are written, and
+     * peaksSoFar acquires it before reading the buffer, so it never reads
+     * past what's actually been written -- same handoff pattern Transport
+     * itself uses for every other field that crosses this boundary (see
+     * Transport.h). buffer's underlying storage is fixed-size for the
+     * object's whole lifetime (allocated once in the constructor, never
+     * resized), so there's no reallocation race to worry about on top of
+     * the index one. */
     class LoopRecorder
     {
     public:
@@ -57,7 +72,7 @@ namespace sssketch
          * pass. Sample count only ever advances via real writeBlock()
          * calls, which happen every callback regardless of play state, so
          * this can only ever cross the threshold once per bufferful. */
-        bool isFull() const { return writePos >= buffer.getNumSamples(); }
+        bool isFull() const { return writePos.load() >= buffer.getNumSamples(); }
 
         /** True once at least one full pass has completed since
          * construction (or since the buffer was last reset by a prior
@@ -89,7 +104,7 @@ namespace sssketch
     private:
         double sampleRate;
         juce::AudioBuffer<float> buffer;
-        int writePos = 0;
+        std::atomic<int> writePos { 0 };
         bool completedPass = false;
     };
 }
