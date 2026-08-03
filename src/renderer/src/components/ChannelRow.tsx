@@ -118,9 +118,24 @@ function ChannelRowImpl({
     color: 'var(--ra-text-2)'
   }
 
+  // Guards handleToggleArm against a rapid double-click re-entering it
+  // mid-flight -- canArm/isArmed alone don't cover this, since both stay
+  // in their PRE-click state for the whole duration of the async IPC
+  // round-trip (and, on disarm, the file-copy afterward), not just a
+  // sub-frame window. A second click during that window would otherwise
+  // re-enter the same branch with a stale isArmed closure and fire a
+  // second concurrent engine call. Real state (not a ref) deliberately --
+  // this also disables/dims the button visually while in flight, not just
+  // preventing the second call silently. A couple of extra re-renders of
+  // this one row for a rare, deliberate user click doesn't undermine this
+  // component's own React.memo/fine-grained-selector work, which is about
+  // avoiding re-renders from UNRELATED dispatches elsewhere, not from a
+  // row's own direct interaction with itself.
+  const [togglingArm, setTogglingArm] = useState(false)
   // Arming is blocked without a selected input device (nothing to record
-  // from); disarming is always allowed regardless.
-  const canArm = isArmed || !!selectedInputDevice
+  // from) or mid-toggle; disarming is always allowed regardless of device,
+  // but still blocked mid-toggle.
+  const canArm = !togglingArm && (isArmed || !!selectedInputDevice)
 
   // Same "filled red = active/attention-grabbing state" treatment the mute
   // button already uses, reusing this app's own audio-in accent color.
@@ -134,52 +149,66 @@ function ChannelRowImpl({
   }
 
   async function handleToggleArm(): Promise<void> {
-    if (isArmed) {
-      const result = await window.rifffApi.engineDisarmRecording()
-      dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
-      if (result.committed && result.path) {
-        const rifff = await window.rifffApi.importRecordedTake(
-          result.path,
-          bpm,
-          (loopRegion?.endBar ?? 0) - (loopRegion?.startBar ?? 0)
-        )
-        if (rifff) {
-          dispatch({ type: 'ADD_TO_SHELF', rifff })
-          // Replace any previous take on this channel -- see the design
-          // doc's own "Retake behavior" section. Find the existing placed
-          // rifff (if any) on this channel by scanning rifffsMap/channelOf.
-          const previousTakeGroupId = Object.keys(rifffsMap).find(
-            (id) => rifffsMap[id].startBar !== undefined && channelOf[id] === channelId
+    if (togglingArm) return
+    setTogglingArm(true)
+    try {
+      if (isArmed) {
+        const result = await window.rifffApi.engineDisarmRecording()
+        dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
+        if (result.committed && result.path) {
+          const rifff = await window.rifffApi.importRecordedTake(
+            result.path,
+            bpm,
+            (loopRegion?.endBar ?? 0) - (loopRegion?.startBar ?? 0)
           )
-          if (previousTakeGroupId)
-            dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: previousTakeGroupId })
-          dispatch({
-            type: 'MOVE_TO_CHANNEL',
-            groupId: rifff.groupId,
-            startBar: loopRegion?.startBar ?? 0,
-            channelId
-          })
-        }
-      } else if (result.error) {
-        window.alert(`Recording failed: ${result.error}`)
-      }
-    } else {
-      if (!selectedInputDevice || !loopRegion) return
-      const result = await window.rifffApi.engineArmRecording(
-        channelId,
-        selectedInputDevice,
-        loopRegion.startBar,
-        loopRegion.endBar
-      )
-      if (result.success) {
-        dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
-        if (!playing) {
-          dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
-          dispatch({ type: 'PLAY' })
+          if (rifff) {
+            dispatch({ type: 'ADD_TO_SHELF', rifff })
+            // Replace any previous take on this channel -- see the design
+            // doc's own "Retake behavior" section. Find the existing placed
+            // rifff (if any) on this channel by scanning rifffsMap/channelOf.
+            const previousTakeGroupId = Object.keys(rifffsMap).find(
+              (id) => rifffsMap[id].startBar !== undefined && channelOf[id] === channelId
+            )
+            if (previousTakeGroupId)
+              dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: previousTakeGroupId })
+            dispatch({
+              type: 'MOVE_TO_CHANNEL',
+              groupId: rifff.groupId,
+              startBar: loopRegion?.startBar ?? 0,
+              channelId
+            })
+          }
+        } else if (result.error) {
+          window.alert(`Recording failed: ${result.error}`)
         }
       } else {
-        window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
+        if (!selectedInputDevice || !loopRegion) return
+        const result = await window.rifffApi.engineArmRecording(
+          channelId,
+          selectedInputDevice,
+          loopRegion.startBar,
+          loopRegion.endBar
+        )
+        if (result.success) {
+          dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
+          if (!playing) {
+            dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
+            dispatch({ type: 'PLAY' })
+          }
+        } else {
+          window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
+        }
       }
+    } catch (err) {
+      // Defense in depth -- every IPC call this function makes is expected
+      // to always resolve rather than reject (see their own main-process
+      // handlers' try/catch), but if that invariant is ever broken, fail
+      // visibly instead of leaving an unhandled rejection and a channel
+      // stuck mid-toggle with no user-facing feedback.
+      console.error('ChannelRow: arm/disarm toggle failed:', err)
+      window.alert(`Recording action failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setTogglingArm(false)
     }
   }
 
