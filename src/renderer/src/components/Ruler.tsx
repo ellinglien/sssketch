@@ -150,6 +150,17 @@ export function Ruler({
       }}
       title="click to scrub · drag to set loop region · cmd+drag to scrub"
       style={{
+        position: 'sticky',
+        top: 0,
+        // Above ChannelRow's own sticky m/s/fx/r button stack (zIndex 5)
+        // and the live capture overlay, so the ruler stays drawn on top
+        // of channel content scrolling underneath it rather than getting
+        // covered. Only a top offset is set (no left/right) -- App.tsx's
+        // scroll container shares one element for both axes, so this
+        // pins the ruler vertically while it still scrolls normally
+        // WITH the timeline horizontally, keeping its bar ticks in sync
+        // with the channels below exactly as before.
+        zIndex: 10,
         height: 24,
         background: 'var(--ra-bg-rail)',
         borderBottom: '1px solid var(--ra-border)',
