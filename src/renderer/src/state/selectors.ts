@@ -1,61 +1,6 @@
 import { stemKey, type Rifff, type Stem } from '@shared/types'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
-/** Top-row QWERTY keys, in order — the Shift+letter mute shortcuts assign
- * one to each currently-visible mute channel, top-to-bottom. Comfortably
- * covers more channels than typically fit on screen at once; a channel
- * beyond this length just doesn't get a shortcut, rather than
- * wrapping/reusing a key. */
-export const MUTE_SHORTCUT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'] as const
-
-/**
- * Assigns each currently-visible mute "channel" a Shift+letter shortcut,
- * walking placed rifffs top-to-bottom in the same order they render (see
- * placedRifffsInOrder) — the single source of truth for both the keyboard
- * handler (App.tsx's Frame) and the on-screen letter shown on each channel's
- * mute badge while Shift is held, so the two can never drift apart.
- *
- * Global across every visible row now, not reset per rifff — letting every
- * placed rifff's stems reuse the same q/w/e/... keys made Shift+letter only
- * usable for the SELECTED rifff (any other rifff's "q" would be ambiguous
- * with the selected one's). A shared, per-row numbering means every visible
- * channel gets its own unique key instead, and Shift+letter works
- * regardless of what's selected.
- *
- * One channel per STEM while a rifff is expanded (matches each stem's own
- * TOGGLE_MUTE), or one channel for the WHOLE GROUP while collapsed (matches
- * CollapsedRifffRow's own SET_GROUP_MUTE) — mirroring exactly which mute
- * control that row actually exposes. Sketch mode's tiles deliberately
- * expose no mute/volume/fade at all (see the sketch mode spec), so that's
- * the only mode excluded.
- *
- * Keyed by stemKey(groupId, slot) for an expanded row, or bare groupId for
- * a collapsed group's single row — callers distinguish the two via
- * state.exp[groupId]. Walks rifff.stems in its own array order, NOT
- * sorted by slot — RifffBlockRow renders StemWaveformRow in that same array
- * order, and matching it is the whole point (each badge should read
- * top-to-bottom exactly as the rows do on screen).
- */
-export function channelMuteLetters(state: AppState): Record<string, string> {
-  const out: Record<string, string> = {}
-  if (state.mode === 'sketch') return out
-  let i = 0
-  for (const rifff of placedRifffsInOrder(state)) {
-    if (i >= MUTE_SHORTCUT_KEYS.length) break
-    if (state.exp[rifff.groupId]) {
-      for (const stem of rifff.stems) {
-        if (i >= MUTE_SHORTCUT_KEYS.length) break
-        out[stemKey(rifff.groupId, stem.slot)] = MUTE_SHORTCUT_KEYS[i]
-        i++
-      }
-    } else {
-      out[rifff.groupId] = MUTE_SHORTCUT_KEYS[i]
-      i++
-    }
-  }
-  return out
-}
-
 /** The played-bars override/fallback logic on its own, so a caller that
  * already has these two fields via individual selectors (see
  * useAppSelector, StoreContext.tsx) doesn't need a full AppState just to
@@ -123,9 +68,9 @@ export function channelsInOrder(state: AppState): Channel[] {
 /** Every placed rifff, flattened out of channelsInOrder — channel by
  * channel, top to bottom, then each channel's own clips in their array
  * order. Every OTHER selector that just wants "all placed rifffs, in
- * render order" (channelMuteLetters, isSketchEligible, loopLengthBars,
- * groupIdAtPosition) keeps working unchanged against this, with no
- * awareness of channels needed at their level at all. */
+ * render order" (isSketchEligible, loopLengthBars, groupIdAtPosition)
+ * keeps working unchanged against this, with no awareness of channels
+ * needed at their level at all. */
 export function placedRifffsInOrder(state: AppState): Rifff[] {
   return channelsInOrder(state).flatMap((channel) => channel.rifffs)
 }
@@ -194,49 +139,73 @@ export function groupIdAtPosition(state: AppState, pos: number): string | null {
   return null
 }
 
-/** A clip's screen position/width. Uses resolvePlayedBars (which reflects
- * an active playedBars resize override) rather than raw rifff.barLength, so
- * a resized clip's rendered width actually matches its resize — this used
- * to only use rifff.barLength unconditionally, a real bug that stemGeometry
- * (now folded in here, since per-stem geometry divergence no longer exists
- * — see UNGROUP) used to work around for the expanded per-stem view only. */
-/** clipGeometry's own formula, parameterized by individual fields instead
- * of a full AppState -- see resolvedPlayedBarsFromFields's doc comment
- * for why. clipGeometry below is now a thin wrapper around this. */
-export function clipGeometryFromFields(
-  startBar: number,
-  offsetSteps: number,
-  snapDiv: number,
-  playedBarsOverride: number | undefined,
-  rifffBarLength: number,
-  stretchOn: boolean,
-  rifffBpm: number,
-  stateBpm: number,
+/** Fields clipGeometryFromFields needs -- an options object rather than a
+ * long positional parameter list deliberately, matching this codebase's own
+ * convention for functions like this (computeBandEnergy/computePitchContour/
+ * computeStemSchedule in src/shared/ all take an opts object). Several of
+ * these are same-typed and adjacent (three bare numbers up front, rifffBpm/
+ * stateBpm next to each other later) -- exactly the shape where a positional
+ * transposition would silently typecheck and produce a wrong-but-plausible
+ * result, which is a real risk here specifically (the bpm-ratio direction is
+ * already easy to get backwards, see clipGeometryFromFields's own comment). */
+export interface ClipGeometryFields {
+  startBar: number
+  offsetSteps: number
+  snapDiv: number
+  playedBarsOverride: number | undefined
+  rifffBarLength: number
+  stretchOn: boolean
+  rifffBpm: number
+  stateBpm: number
   ppb: number
-): ClipGeometry {
+}
+
+/** clipGeometry's own formula, parameterized by individual fields instead
+ * of a full AppState -- so a caller that already has these fields via
+ * individual selectors (see useAppSelector, StoreContext.tsx) doesn't need
+ * a full AppState just to call it. clipGeometry below is now a thin wrapper
+ * around this. */
+export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry {
+  const {
+    startBar,
+    offsetSteps,
+    snapDiv,
+    playedBarsOverride,
+    rifffBarLength,
+    stretchOn,
+    rifffBpm,
+    stateBpm,
+    ppb
+  } = fields
   const offsetPx = (offsetSteps * ppb) / snapDiv
   const playedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifffBarLength)
   const shownBars = stretchOn ? playedBars : playedBars * (rifffBpm / stateBpm)
   return { leftPx: startBar * ppb + offsetPx, widthPx: shownBars * ppb }
 }
 
+/** A clip's screen position/width. Uses resolvePlayedBars (which reflects
+ * an active playedBars resize override) rather than raw rifff.barLength, so
+ * a resized clip's rendered width actually matches its resize — this used
+ * to only use rifff.barLength unconditionally, a real bug that stemGeometry
+ * (now folded in here, since per-stem geometry divergence no longer exists
+ * — see UNGROUP) used to work around for the expanded per-stem view only. */
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
   const offsetSteps = state.off[groupId] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const stretchOn = state.stretch[groupId] ?? true
-  return clipGeometryFromFields(
-    start,
+  return clipGeometryFromFields({
+    startBar: start,
     offsetSteps,
     snapDiv,
-    state.playedBars[groupId],
-    rifff.barLength,
+    playedBarsOverride: state.playedBars[groupId],
+    rifffBarLength: rifff.barLength,
     stretchOn,
-    rifff.bpm,
-    state.bpm,
+    rifffBpm: rifff.bpm,
+    stateBpm: state.bpm,
     ppb
-  )
+  })
 }
 
 const DEFAULT_LOOP_BARS = 32

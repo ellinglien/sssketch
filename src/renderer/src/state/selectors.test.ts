@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer, type AppState } from './store'
+import { initialState, reducer } from './store'
 import {
   resolvePlayedBars,
   resolvedPlayedBarsFromFields,
@@ -13,7 +13,6 @@ import {
   pasteStemAction,
   placedRifffsInOrder,
   channelsInOrder,
-  channelMuteLetters,
   isSketchEligible,
   nextArrangerMode,
   groupIdAtPosition
@@ -31,56 +30,6 @@ const rifff: Rifff = {
     { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
   ]
 }
-
-describe('channelMuteLetters', () => {
-  it("assigns one channel per stem, in stems-array order (matching RifffBlockRow's own render order), while a rifff is expanded", () => {
-    const stems: Stem[] = [
-      { slot: 6, author: 'e', name: 'b', type: 'fx', path: '/b.wav', durationSec: 1, barLength: 8 },
-      { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
-    ]
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: { ...rifff, stems } })
-    state = { ...state, mode: 'normal', exp: { r1: true } }
-    expect(channelMuteLetters(state)).toEqual({ 'r1:6': 'q', 'r1:1': 'w' })
-  })
-
-  it('assigns a single whole-group channel while a rifff is collapsed', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = { ...state, mode: 'normal' }
-    expect(channelMuteLetters(state)).toEqual({ r1: 'q' })
-  })
-
-  it('numbers channels globally across every placed rifff, not reset per rifff', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: 'r2' } })
-    state = { ...state, mode: 'normal' }
-    // Both collapsed (default): r1 gets one channel, r2 gets the next.
-    expect(channelMuteLetters(state)).toEqual({ r1: 'q', r2: 'w' })
-  })
-
-  it('excludes rifffs still sitting in the shelf, unplaced', () => {
-    const unplaced: Rifff = { ...rifff, startBar: undefined }
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
-    state = { ...state, mode: 'normal' }
-    expect(channelMuteLetters(state)).toEqual({})
-  })
-
-  it('leaves channels beyond the 10-key row without a shortcut', () => {
-    let state: AppState = { ...initialState, mode: 'normal' }
-    for (let i = 0; i < 12; i++) {
-      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: `r${i}` } })
-    }
-    const letters = channelMuteLetters(state)
-    expect(Object.keys(letters)).toHaveLength(10)
-    expect(letters.r10).toBeUndefined()
-    expect(letters.r11).toBeUndefined()
-  })
-
-  it('returns no channels at all in sketch mode either', () => {
-    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = { ...state, mode: 'sketch' }
-    expect(channelMuteLetters(state)).toEqual({})
-  })
-})
 
 describe('resolvedPlayedBarsFromFields', () => {
   it('returns the override when one is set', () => {
@@ -116,24 +65,64 @@ describe('stretchRatio', () => {
 
 describe('clipGeometryFromFields', () => {
   it('matches clipGeometry exactly for a plain, unstretched-off, no-offset clip', () => {
-    const bars = clipGeometryFromFields(4, 0, 4, undefined, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars).toEqual({ leftPx: 96, widthPx: 192 })
   })
 
   it('applies the sub-bar nudge offset', () => {
     // offsetSteps=-8 at snapDiv=4 is -2 bars -> leftPx shifts by -2*24=-48
-    const bars = clipGeometryFromFields(4, -8, 4, undefined, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: -8,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars.leftPx).toBe(96 - 48)
   })
 
   it('scales widthPx by the bpm ratio when stretch is off', () => {
     // stretch off: shownBars = playedBars * (rifffBpm/stateBpm) = 8 * (150/100) = 12
-    const bars = clipGeometryFromFields(0, 0, 4, undefined, 8, false, 150, 100, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 0,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: false,
+      rifffBpm: 150,
+      stateBpm: 100,
+      ppb: 24
+    })
     expect(bars.widthPx).toBe(12 * 24)
   })
 
   it('uses the playedBars override over the rifff bar length', () => {
-    const bars = clipGeometryFromFields(0, 0, 4, 16, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 0,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: 16,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars.widthPx).toBe(16 * 24)
   })
 })
