@@ -3,6 +3,7 @@
 #include "PlaybackEngine.h"
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
+#include "LoopRecorder.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
 
@@ -62,11 +63,29 @@ namespace sssketch
         double currentSampleRate() const { return deviceSampleRate; }
         int currentBlockSize() const { return deviceBlockSize; }
 
-        void setBpm(double bpm)
+        /** Every input device name CoreAudio currently reports for the
+         * active device type -- used by the renderer's input-device
+         * dropdown (list-input-devices IPC). Empty if no device type is
+         * open yet (shouldn't happen once openDefaultDevice() has
+         * succeeded, but defensive rather than assuming). */
+        juce::StringArray availableInputDeviceNames() const;
+
+        void setBpm(double bpmValue)
         {
-            secPerBar = bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0;
-            masterChain.setBpm(bpm);
+            bpm = bpmValue;
+            secPerBar = bpmValue > 0.0 ? (60.0 / bpmValue) * 4.0 : 0.0;
+            masterChain.setBpm(bpmValue);
         }
+
+        double currentBpm() const { return bpm; }
+
+        /** Switches the currently-open device's input side to the named
+         * device, keeping the existing output device unchanged. Returns
+         * an empty string on success, or a human-readable error (e.g. the
+         * device no longer exists, or offers no input channels) --
+         * mirrors openDefaultDevice()'s own "empty string vs. an error
+         * message" convention rather than throwing. */
+        juce::String setRecordingInputDevice(const juce::String& deviceName);
 
         // 0 (the default) disables wrapping entirely — positionBars advances
         // monotonically forever, same as before this existed. Set from
@@ -76,6 +95,33 @@ namespace sssketch
         // poll and round-trip a correcting set-position over IPC. See
         // LoopBoundaryFade.h for the declick fade applied right at the wrap.
         void setLoopLengthBars(double bars) { loopLengthBars.store(bars); }
+
+        // A second, independent loop region -- the recording loop set by
+        // arm-recording (IPC), completely separate from the project's own
+        // loopLengthBars above (both can be active at once; a short
+        // recording loop inside a much longer overall arrangement is the
+        // normal case). endBar <= startBar disables it. Message-thread-only
+        // call (from IpcConnection::messageReceived), consumed by the audio
+        // thread's own renderLoopAware -- both fields are atomics for that
+        // handoff, same pattern as loopLengthBars itself.
+        void setRecordingLoop(double startBar, double endBar)
+        {
+            recordingLoopStartBar.store(startBar);
+            recordingLoopEndBar.store(endBar);
+        }
+
+        // Attaches/detaches the recorder that should receive live input
+        // samples and pass-boundary notifications while a recording loop
+        // is active. nullptr means "nothing armed" -- the audio thread
+        // checks this every block and skips all recording-related work
+        // when null, so the unarmed case costs one extra pointer check per
+        // block. Message-thread-only call (arm-recording/disarm-recording);
+        // the pointer itself is std::atomic for that handoff, matching how
+        // every other cross-thread flag in this class already works. The
+        // caller (IpcConnection) owns the LoopRecorder instance's actual
+        // lifetime -- Transport only ever reads through this pointer, never
+        // deletes it.
+        void setLoopRecorder(LoopRecorder* recorder) { loopRecorder.store(recorder); }
 
         // juce::AudioIODeviceCallback
         void audioDeviceIOCallbackWithContext(
@@ -104,6 +150,9 @@ namespace sssketch
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
+        std::atomic<double> recordingLoopStartBar { 0.0 };
+        std::atomic<double> recordingLoopEndBar { 0.0 }; // <= start = disabled
+        std::atomic<LoopRecorder*> loopRecorder { nullptr }; // nullptr = nothing armed
         std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
         // `playing` stays true for the entire duration of a halt fade (only
         // finalization, once the fade completes, sets it false) — so it
@@ -120,6 +169,7 @@ namespace sssketch
         bool repositioning = false;
         bool repositionFadingIn = false;
         double repositionElapsedSec = 0.0;
+        double bpm = 120.0;
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;

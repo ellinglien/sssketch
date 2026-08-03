@@ -142,6 +142,84 @@ namespace sssketch
             const double pos = payload.isObject() ? (double) payload.getProperty("pos", 0.0) : 0.0;
             transport.setPosition(pos);
         }
+        else if (type == "list-input-devices")
+        {
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            juce::Array<juce::var> namesVar;
+            for (const auto& name : transport.availableInputDeviceNames())
+                namesVar.add(name);
+            payloadObj->setProperty("devices", namesVar);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "input-devices-list");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "arm-recording")
+        {
+            if (!payload.isObject())
+                return;
+            const auto channelId = payload.getProperty("channelId", "").toString();
+            const auto deviceName = payload.getProperty("deviceName", "").toString();
+            const double startBar = (double) payload.getProperty("startBar", 0.0);
+            const double endBar = (double) payload.getProperty("endBar", 0.0);
+
+            const auto error = transport.setRecordingInputDevice(deviceName);
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            if (error.isNotEmpty() || endBar <= startBar || transport.currentBpm() <= 0.0)
+            {
+                payloadObj->setProperty("success", false);
+                payloadObj->setProperty(
+                    "error", error.isNotEmpty() ? error : juce::String("invalid loop region"));
+            }
+            else
+            {
+                const double secPerBarNow = (60.0 / transport.currentBpm()) * 4.0;
+                const double loopLengthSeconds = (endBar - startBar) * secPerBarNow;
+                armedChannelId = channelId;
+                armedRecorder = std::make_unique<LoopRecorder>(transport.currentSampleRate(), loopLengthSeconds);
+                transport.setRecordingLoop(startBar, endBar);
+                transport.setLoopRecorder(armedRecorder.get());
+                payloadObj->setProperty("success", true);
+            }
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "arm-recording-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "disarm-recording")
+        {
+            transport.setLoopRecorder(nullptr);
+            transport.setRecordingLoop(0.0, 0.0);
+
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            if (armedRecorder && armedRecorder->hasCompletedPass())
+            {
+                const auto outputPath = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("sssketch-recording-" + juce::Uuid().toString() + ".wav")
+                    .getFullPathName();
+                if (armedRecorder->writeToWavFile(outputPath))
+                {
+                    payloadObj->setProperty("committed", true);
+                    payloadObj->setProperty("path", outputPath);
+                }
+                else
+                {
+                    payloadObj->setProperty("committed", false);
+                    payloadObj->setProperty("error", "failed to write recording to disk");
+                }
+            }
+            else
+            {
+                payloadObj->setProperty("committed", false);
+            }
+            armedRecorder.reset();
+            armedChannelId = {};
+
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "disarm-recording-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "set-metronome")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);

@@ -30,7 +30,15 @@ namespace sssketch
 
     bool Transport::openDefaultDevice()
     {
-        auto error = deviceManager.initialiseWithDefaultDevices(0, 2);
+        // Requests 1 input channel now (was 0) -- harmless when nothing is
+        // ever armed (the extra channel just goes unread, same cost as
+        // before this feature existed), and means an input device is
+        // already open and ready the moment arm-recording actually needs
+        // one, rather than requiring a device reopen mid-session (which
+        // would glitch/interrupt playback on the output side too, since
+        // JUCE reopens the whole device, not just the input half, when
+        // input channel count changes on an already-open device).
+        auto error = deviceManager.initialiseWithDefaultDevices(1, 2);
         if (error.isNotEmpty())
         {
             juce::Logger::writeToLog("Transport: failed to open audio device: " + error);
@@ -38,6 +46,23 @@ namespace sssketch
         }
         deviceManager.addAudioCallback(this);
         return true;
+    }
+
+    juce::StringArray Transport::availableInputDeviceNames() const
+    {
+        auto* type = deviceManager.getCurrentDeviceTypeObject();
+        if (type == nullptr) return {};
+        return type->getDeviceNames(true); // true = input names
+    }
+
+    juce::String Transport::setRecordingInputDevice(const juce::String& deviceName)
+    {
+        auto setup = deviceManager.getAudioDeviceSetup();
+        setup.inputDeviceName = deviceName;
+        setup.useDefaultInputChannels = false;
+        setup.inputChannels = juce::BigInteger();
+        setup.inputChannels.setBit(0); // request just channel 0 -- LoopRecorder downmixes whatever it's given, but there's no reason to request more than one channel already
+        return deviceManager.setAudioDeviceSetup(setup, true);
     }
 
     void Transport::closeDevice()
@@ -129,7 +154,7 @@ namespace sssketch
     }
 
     void Transport::audioDeviceIOCallbackWithContext(
-        const float* const* /*inputChannelData*/, int /*numInputChannels*/,
+        const float* const* inputChannelData, int numInputChannels,
         float* const* outputChannelData, int numOutputChannels,
         int numSamples, const juce::AudioIODeviceCallbackContext&)
     {
@@ -147,6 +172,38 @@ namespace sssketch
         auto* outR = outputChannelData[1];
         juce::FloatVectorOperations::clear(outL, numSamples);
         juce::FloatVectorOperations::clear(outR, numSamples);
+
+        // Recording capture: independent of play/pause/halt-fade state
+        // below entirely -- you can arm and record while transport
+        // playback itself is paused/stopped just as validly as while
+        // playing (Frame's own ARM_RECORDING_CHANNEL handler in the
+        // renderer starts playback automatically when arming, but nothing
+        // here should assume that always holds true, e.g. if the user
+        // manually pauses mid-take). recordingLoopEndBar > start is the
+        // "is a recording loop active" check throughout.
+        if (auto* recorder = loopRecorder.load())
+        {
+            const double recStart = recordingLoopStartBar.load();
+            const double recEnd = recordingLoopEndBar.load();
+            if (recEnd > recStart && secPerBar > 0.0)
+            {
+                recorder->writeBlock(inputChannelData, numInputChannels, 0, numSamples);
+
+                // Same distToEnd/blockDurationBars wrap-detection math
+                // renderLoopAware uses for loopLengthBars below, applied a
+                // second time against the recording loop's own bounds --
+                // deliberately not shared/refactored into one helper this
+                // pass, to keep this task's diff small and reviewable;
+                // worth unifying later if a third independent loop concept
+                // ever shows up.
+                const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
+                const double blockDurationBars = numSamples * barsPerSample;
+                const double posInLoop = std::fmod(positionBars.load() - recStart, recEnd - recStart);
+                const double distToEnd = (recEnd - recStart) - (posInLoop < 0.0 ? posInLoop + (recEnd - recStart) : posInLoop);
+                if (distToEnd < blockDurationBars)
+                    recorder->onPassBoundary();
+            }
+        }
 
         if (playRequested.exchange(false))
         {

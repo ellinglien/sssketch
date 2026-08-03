@@ -7,6 +7,7 @@
 #include "BakeStem.h"
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
+#include "LoopRecorder.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 
@@ -35,6 +36,14 @@ namespace sssketch
         Transport& transport;
         PluginChain& masterChain;
         ChannelChainRegistry& channelChains;
+        // Owns whichever LoopRecorder is currently armed (nullptr = none) --
+        // IpcConnection creates/destroys the instance itself in response to
+        // arm-recording/disarm-recording, and hands Transport a raw
+        // observing pointer via setLoopRecorder (see arm/disarm handling in
+        // messageReceived). One at a time, matching this feature's own
+        // "at most one armed channel" scope.
+        std::unique_ptr<LoopRecorder> armedRecorder;
+        juce::String armedChannelId;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer
