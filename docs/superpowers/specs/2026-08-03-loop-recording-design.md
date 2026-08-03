@@ -137,13 +137,23 @@ armedChannelId: string | null
 `channelOrder`, and adds it to `recordingChannelIds` — deliberately NOT tied
 to any clip (unlike every other channel, which only exists as long as
 `channelOf` points at least one clip at it — see `channelHasAnyClip` in
-`selectors.ts`). A recording channel with nothing recorded onto it yet still
+`store.ts`). A recording channel with nothing recorded onto it yet still
 needs to exist and render as an empty row with its own arm button, so its
-lifecycle is intentionally independent of clip membership. Deleting the
-channel (a new "remove recording channel" context action, since the existing
-"a channel disappears once its last clip leaves" cleanup doesn't apply here)
-removes it from `channelOrder` and `recordingChannelIds` together, and
-disarms it first if it was armed.
+lifecycle is intentionally independent of clip membership.
+
+This means the three existing reducer cases that already call
+`channelHasAnyClip` to decide "did this channel just become empty, evict it
+from `channelOrder`" (`REMOVE_FROM_TIMELINE`, `MOVE_TO_CHANNEL`'s
+previous-channel cleanup, `DELETE_RIFFFS`) all need one additional
+condition: don't evict if `recordingChannelIds[channelId]` is set. Without
+it, deleting the clip that happens to be a recording channel's current take
+(a completely ordinary "remove this clip" action, nothing recording-specific
+about it) would silently delete the whole recording channel out from under
+the user, since it would then have zero clips. Deleting the channel itself
+is a separate, new "remove recording channel" action, which removes it from
+`channelOrder` and `recordingChannelIds` together and disarms it first if it
+was armed — the only path that should ever make a recording channel's row
+disappear.
 
 **Arming:** `ChannelRow`'s existing sticky m/s/fx button stack (App.tsx's
 `Timeline`/`ChannelRow.tsx`) gains a fourth "r" button, rendered only when
@@ -158,44 +168,69 @@ hitting play first.
 
 ### Capture mechanic
 
-Confirmed by reading `StoreContext.tsx`: loop wrap-around is entirely
-**renderer**-driven today, not something the engine enforces internally —
-"the native transport counts up monotonically forever with no concept of
-loop length (that's a renderer-only concept, computed from rifffs)"
-(verbatim from its own `onEnginePositionUpdate` comment). The renderer
-watches each 30Hz position tick and calls `engineSetPosition(wrapped)` once
-`pos` exceeds `loopLengthBars`. This feature's loop region reuses that exact
-mechanism rather than inventing engine-side looping: while `armedChannelId`
-is set, the same tick handler wraps against `loopRegion.endBar` instead of
-(as well as) `loopLengthBars`, seeking back to `loopRegion.startBar`.
+**Correction from an earlier draft of this doc:** the original version of
+this section assumed loop wrap-around was renderer-driven, based on a
+comment in `StoreContext.tsx`'s `onEnginePositionUpdate` describing the
+native transport as having "no concept of loop length." That comment is
+stale — confirmed by actually reading `Transport.h`/`Transport.cpp`: the
+engine already does sample-accurate, in-thread loop wrapping today
+(`Transport::setLoopLengthBars`, consumed by `renderLoopAware`, which
+splits a render across the wrap point and applies its own declick fade at
+the seam, all on the audio thread, driven by `EngineProject.loopLengthBars`
+at load-project time — see `IpcServer.cpp`'s `"load-project"` handler). The
+renderer's own wrap-detection code is leftover from before this existed and
+no longer meaningfully fires; not this feature's problem to clean up, but
+important to know it's not the real mechanism. This is a better foundation
+than the original draft assumed, and simplifies the design below
+considerably — in particular, **manual scrubbing does not need to be
+disabled while armed**, which the earlier draft required as a workaround
+for an ambiguity that turns out not to exist.
 
-That renderer-issued `engineSetPosition` call, when it happens while armed,
-**is** the pass-boundary signal — but reusing `set-position` for this
-directly would also misfire on an ordinary manual scrub landing to seek
-back near the loop start while armed. To keep those unambiguous, arming
-disables manual scrub/seek entirely (background click, Ruler click/drag,
-clip click-to-scrub all no-op while `armedChannelId` is set) — recording is
-a committed, transport-locked state for its duration, matching how e.g. a
-plugin editor window or an in-progress export already narrow what's
-interactive rather than trying to make every interaction meaningful during
-every mode. With manual seeks ruled out, every `set-position` received
-while armed unambiguously means "a pass just completed" — the engine's new
-`LoopRecorder` (see below) treats it exactly that way: finalize whatever's
-in the capture buffer as "a completed pass," then start writing the next
-one fresh. The buffer itself is sized to exactly one pass
+The recording loop region is a second, independent instance of exactly this
+same native mechanism, not a reuse of `loopLengthBars` itself (which stays
+"the whole project's own wrap point," untouched). `Transport` gains:
+
+```cpp
+// Transport.h
+void setRecordingLoop(double startBar, double endBar); // endBar <= startBar disables it
+```
+
+`arm-recording` (IPC, see below) calls this with `loopRegion`'s bounds
+(converted from bars to seconds internally the same way
+`setLoopLengthBars`/`renderLoopAware` already work in bars against
+`secPerBar`); `disarm-recording` calls it with `(0, 0)` to disable. Whether
+or not this recording loop is active is completely independent of whether
+the project's own `loopLengthBars` wrap is active — both can be set at
+once (a short recording loop inside a much longer overall arrangement is
+the normal case), and `renderLoopAware` needs to account for both wrap
+points falling within the same block, not just one.
+
+While a recording loop is active, `Transport`'s audio-thread callback
+already recomputes `pos + blockDurationBars` every block and detects
+whether that crosses `loopBars` (see `renderLoopAware`'s own
+`distToEnd`/`blockDurationBars` math) — the exact same per-block check,
+parameterized on the recording loop's own bounds instead, is what tells a
+new `LoopRecorder` instance "a pass just completed" natively, sample-
+accurately, with **no IPC round-trip involved at all** and no ambiguity
+with a manual seek (a manual `set-position` while armed just moves the
+read/write position like it always does; it was never actually a
+meaningful uncertainty once loop-wrap detection lives entirely in the audio
+thread's own per-block math rather than in a renderer-observed tick).
+`LoopRecorder` owns a buffer sized to exactly one pass
 (`(endBar - startBar) * secPerBar * sampleRate`, where `secPerBar =
 (60 / bpm) * 4` — the same 4/4 bars-to-seconds conversion
-`buildEngineProject.ts` already uses for stretch-ratio math) — every new
-pass overwrites it from the start; there is exactly one buffer, never a
+`buildEngineProject.ts` already uses for stretch-ratio math, and the same
+value `Transport::setBpm` already derives and stores); every new pass
+overwrites it from the start — there is exactly one buffer, never a
 growing history.
 
 Disarming (`DISARM_RECORDING_CHANNEL`/`engineDisarmRecording()`) commits
 whichever pass most recently **completed**. A pass in progress at the
 moment of disarming is discarded — nothing partial ever gets committed, and
-if the loop hasn't completed even one full pass yet, disarming produces no
-clip at all. `LoopRecorder` tracks "has a `set-position`-triggered pass
-boundary happened since the buffer was last reset" as a plain bool, checked
-at disarm time.
+if the recording loop hasn't completed even one full pass yet, disarming
+produces no clip at all. `LoopRecorder` tracks "has at least one full pass
+completed since the buffer was last reset" as a plain bool, flipped by the
+same per-block wrap-crossing check above and read at disarm time.
 
 **Retake behavior:** each successful commit **replaces** whatever clip
 previously existed on that recording channel — matching directly the
@@ -251,31 +286,35 @@ than any new transfer format:
 
 ### Native engine changes
 
-Confirmed by reading `Transport.cpp`: `audioDeviceIOCallback`'s
-`inputChannelData`/`numInputChannels` parameters are currently unused
-entirely — there is no input-capture code anywhere in the engine today. This
-needs:
+Confirmed by reading `Transport.cpp`:
+`audioDeviceIOCallbackWithContext`'s `inputChannelData`/`numInputChannels`
+parameters are currently unused entirely (`/*inputChannelData*/`,
+`/*numInputChannels*/` — deliberately unnamed) — there is no input-capture
+code anywhere in the engine today. This needs:
 
 1. `AudioDeviceManager` initialised with at least 1 input channel requested
-   (currently output-only, per its own setup), and re-opened with the
-   specific named device from `arm-recording`'s `deviceName` at arm time
-   (`AudioDeviceManager::setAudioDeviceSetup`, keeping the existing output
-   device unchanged, just adding/switching the input side) — falls back
-   gracefully (no crash, arm simply fails with an error surfaced the same
-   way a failed plugin load already does) if the named device has vanished
-   since `list-input-devices` was last fetched (unplugged between listing
-   and arming) or offers no input channels.
-2. A new `LoopRecorder` class (new file, `native-engine/Source/`) owning the
-   one-pass capture buffer and the WAV-writing-on-commit step (via JUCE's
-   `AudioFormatWriter`, same API `RenderExport.cpp` already uses for its own
-   WAV output). `Transport::audioDeviceIOCallback` feeds it live input
-   samples only while something is armed; a nullptr/no-op `LoopRecorder`
-   reference otherwise, so the unarmed case costs nothing extra per block.
-   The existing `set-position` handler (`IpcServer.cpp`'s `"set-position"`
-   case) gains one new line when a `LoopRecorder` is currently armed: treat
-   the incoming seek as a pass boundary (finalize the buffer as a completed
-   pass, reset it, keep capturing) rather than only moving the transport's
-   read position, which is all it does today.
+   (`openDefaultDevice`'s `initialiseWithDefaultDevices(0, 2)` call
+   requests 0 input/2 output today — becomes `initialiseWithDefaultDevices(1, 2)`
+   or a subsequent `setAudioDeviceSetup` call once a specific device is
+   picked at arm time, keeping the existing output side unchanged) — falls
+   back gracefully (no crash, arm simply fails with an error surfaced the
+   same way a failed plugin load already does) if the named device has
+   vanished since `list-input-devices` was last fetched (unplugged between
+   listing and arming) or offers no input channels.
+2. A new `LoopRecorder` class (new file, `native-engine/Source/`) owning
+   the one-pass capture buffer, the WAV-writing-on-commit step (via JUCE's
+   `AudioFormatWriter`, same API `RenderExport.cpp` already uses for its
+   own WAV output), and the "has a full pass completed" bool. `Transport`
+   gains a `LoopRecorder*` (nullptr when nothing's armed) and the new
+   `setRecordingLoop(startBar, endBar)` method described above.
+   `audioDeviceIOCallbackWithContext` feeds `inputChannelData` to the
+   recorder only while it's non-null, and `renderLoopAware`'s own
+   wrap-detection math (already computing whether the current block
+   crosses a loop boundary, today only for `loopLengthBars`) runs the same
+   check a second time against the recording loop's bounds when a
+   `LoopRecorder` is attached, calling into it exactly at the crossing
+   point to finalize/reset the pass. The unarmed case (`LoopRecorder*` is
+   nullptr) costs one extra pointer check per block, nothing more.
 3. New IPC message types (`IpcServer.cpp`, alongside the existing
    kebab-case set): `list-input-devices` (no params; replies with the
    current input device name list), `arm-recording` (`channelId`,
