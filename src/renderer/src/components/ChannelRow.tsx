@@ -309,6 +309,21 @@ function ChannelRowImpl({
               r
             </button>
           )}
+          {isRecordingChannel && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                if (window.confirm('Remove this recording channel?')) {
+                  dispatch({ type: 'REMOVE_RECORDING_CHANNEL', channelId })
+                }
+              }}
+              aria-label={`remove recording channel ${channelId}`}
+              title="remove recording channel"
+              style={{ ...baseButtonStyle, color: 'var(--ra-text-2)' }}
+            >
+              x
+            </button>
+          )}
         </div>
       </div>
       {isArmed && loopRegion && (
