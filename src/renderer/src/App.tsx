@@ -1115,7 +1115,16 @@ function Frame(): React.JSX.Element {
                 : undefined
             }
             onFocus={() => {
-              if (availableInputDevices.length === 0 && !fetchingInputDevicesRef.current) {
+              // Re-fetches on every focus, not just while the list is still
+              // empty -- a device (e.g. a loopback driver) can be
+              // installed/started after the app launched, and the engine's
+              // own scanForDevices() call (see Transport::
+              // availableInputDeviceNames) is cheap enough to redo each
+              // time rather than only ever trusting a stale first fetch.
+              // fetchingInputDevicesRef still guards against a second
+              // concurrent request if focus fires again before this one
+              // resolves.
+              if (!fetchingInputDevicesRef.current) {
                 fetchingInputDevicesRef.current = true
                 void window.rifffApi
                   .engineListInputDevices()

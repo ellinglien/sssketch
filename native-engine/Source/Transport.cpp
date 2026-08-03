@@ -52,6 +52,14 @@ namespace sssketch
     {
         auto* type = deviceManager.getCurrentDeviceTypeObject();
         if (type == nullptr) return {};
+        // getDeviceNames() alone reads from JUCE's internal cache, populated
+        // once by scanForDevices() at device-manager init -- a loopback
+        // driver installed/started after the engine launched wouldn't show
+        // up without this. Message-thread-only call (list-input-devices),
+        // and cheap enough (a fraction of a millisecond, OS device
+        // enumeration) to redo on every request rather than trying to cache
+        // + invalidate it ourselves.
+        type->scanForDevices();
         return type->getDeviceNames(true); // true = input names
     }
 
