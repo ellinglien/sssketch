@@ -1,10 +1,11 @@
-import { useAppState, useDispatch, useZoom } from '../state/StoreContext'
+import { useAppSelector, useDispatch, useZoom } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
-import { clipGeometry } from '../state/selectors'
+import { clipGeometryFromFields } from '../state/selectors'
+import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 
@@ -21,10 +22,18 @@ export function RifffBlockRow({
   groupId: string
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
 }): React.JSX.Element {
-  const state = useAppState()
   const dispatch = useDispatch()
-  const rifff = state.rifffs[groupId]
-  const selected = state.sel === groupId
+  // Each field read individually via useAppSelector, not one broad
+  // useAppState() call -- see
+  // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+  const rifff = useAppSelector((s) => s.rifffs[groupId])
+  const selected = useAppSelector((s) => s.sel === groupId)
+  const expandedFlag = useAppSelector((s) => !!s.exp[groupId])
+  const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const snapIdx = useAppSelector((s) => s.snapIdx)
+  const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
+  const bpm = useAppSelector((s) => s.bpm)
+  const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   // A one-shot always has exactly one stem (enforced by importOneShot) --
   // there's nothing extra an expanded per-stem view would show that
   // CollapsedRifffRow doesn't already, and CollapsedRifffRow is the only
@@ -33,10 +42,20 @@ export function RifffBlockRow({
   // bar-snapped playedBars/RESIZE_LEFT ones, which would be wrong for a
   // one-shot.
   const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
-  const expanded = !!state.exp[groupId] && !isOneShot
+  const expanded = expandedFlag && !isOneShot
   const color = identityColor(rifff)
   const ppb = useZoom()
-  const geo = clipGeometry(state, groupId, ppb)
+  const geo = clipGeometryFromFields({
+    startBar: rifff.startBar ?? 0,
+    offsetSteps,
+    snapDiv: SNAP_DIVS[snapIdx],
+    playedBarsOverride,
+    rifffBarLength: rifff.barLength,
+    stretchOn,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
+    ppb
+  })
 
   return (
     <div style={{ position: 'relative', borderBottom: '1px solid var(--ra-border-soft)' }}>
