@@ -70,21 +70,25 @@ namespace sssketch
         setup.useDefaultInputChannels = false;
         setup.inputChannels = juce::BigInteger();
         setup.inputChannels.setBit(0); // request just channel 0 -- LoopRecorder downmixes whatever it's given, but there's no reason to request more than one channel already
-        // Deliberately clearing sampleRate to 0 (not carrying over whatever
-        // rate the PREVIOUS setup happened to have, e.g. 44100 from
-        // initialiseWithDefaultDevices' own default at startup) -- found
-        // during manual testing: recording via a loopback device fed by a
-        // 48kHz source produced crackly/glitchy audio, because
-        // AudioDeviceManager::chooseBestSampleRate() honors an explicitly
-        // requested rate as long as it's SOMETHING the new device's driver
-        // technically supports, even when it doesn't match what's actually
-        // being fed into it -- forcing the OS/driver into real-time sample-
-        // rate conversion on a virtual loopback device, exactly the kind of
-        // thing that sounds like this. 0 tells JUCE to auto-choose based on
-        // the newly-opened device's own actual native rate instead (see
-        // chooseBestSampleRate's fallback to currentAudioDevice->
-        // getCurrentSampleRate() when no rate > 0 is requested).
+        // Deliberately clearing sampleRate AND bufferSize to 0/0 (not
+        // carrying over whatever the PREVIOUS setup happened to have, e.g.
+        // 44100/some-default from initialiseWithDefaultDevices' own
+        // default at startup) -- found during manual testing: recording
+        // via a loopback device produced crackly/glitchy audio.
+        // AudioDeviceManager::chooseBestSampleRate()/chooseBestBufferSize()
+        // both honor an explicitly requested value as long as it's
+        // SOMETHING the new device's driver technically lists as
+        // supported, even when it doesn't match what the source is
+        // actually feeding it -- forcing the OS/driver into real-time
+        // conversion/resync on a virtual loopback device, exactly the kind
+        // of thing that sounds like this. 0 tells JUCE to auto-choose
+        // based on the newly-opened device's own actual native rate/
+        // default buffer size instead (chooseBestSampleRate falls back to
+        // currentAudioDevice->getCurrentSampleRate(), chooseBestBufferSize
+        // to currentAudioDevice->getDefaultBufferSize(), both only when no
+        // explicit value > 0 was requested).
         setup.sampleRate = 0;
+        setup.bufferSize = 0;
         return deviceManager.setAudioDeviceSetup(setup, true);
     }
 
