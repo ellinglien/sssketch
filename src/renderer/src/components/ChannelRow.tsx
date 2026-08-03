@@ -3,6 +3,7 @@ import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { linearWaveBars } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
+import { markManualSeek } from '../state/manualSeek'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
@@ -235,9 +236,24 @@ function ChannelRowImpl({
         if (result.success) {
           armedLoopRegionRef.current = loopRegion
           dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
+          // Always seek to the loop's own start, whether or not playback
+          // was already running -- found during manual testing: capture
+          // starts the instant the engine attaches the recorder (whatever
+          // position that happens to be at), but the committed clip is
+          // always PLACED at loopRegion.startBar. Those only agree if
+          // arming genuinely starts monitoring/capturing from that exact
+          // bar every time; the old "only seek if not already playing"
+          // logic left position wherever an already-running transport
+          // happened to be, so recorded content and where it landed on
+          // the timeline could be arbitrarily misaligned. Mirrors Ruler
+          // seekTo's own "dispatch SET_POS, and if already playing also
+          // push the seek to the engine directly" pattern.
+          dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
           if (!playing) {
-            dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
             dispatch({ type: 'PLAY' })
+          } else {
+            markManualSeek()
+            void window.rifffApi.engineSetPosition(loopRegion.startBar)
           }
         } else {
           window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
