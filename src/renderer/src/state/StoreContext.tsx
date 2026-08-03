@@ -170,6 +170,16 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // single top-level parent, mounted once) and the only thing read here is
   // `state`, itself just-computed via useReducer above -- there is no other
   // writer, so this can't race.
+  //
+  // This safety argument depends on StoreProvider's render body actually
+  // running every time `state` changes -- true today (no compiler involved,
+  // just plain React), but NOT guaranteed if this project ever enables the
+  // real React Compiler (there's no babel-plugin-react-compiler here now --
+  // this lint rule is a forward-looking static check, not evidence one is
+  // running). The compiler's auto-memoization could bail out of re-invoking
+  // this render body on an update it judges output-equivalent, silently
+  // desyncing the mirror from useAppSelector reads. Re-audit this line
+  // specifically before adopting the compiler.
   // eslint-disable-next-line react-hooks/globals -- see comment above
   currentState = state
   useEffect(() => {
