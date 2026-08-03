@@ -11,6 +11,7 @@ import {
   type ReactNode
 } from 'react'
 import { initialState, type Action, type AppState } from './store'
+import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
 import { createHistoryState, historyReducer } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -40,6 +41,35 @@ export type TransportAction =
   | { type: 'RESET_ZOOM' }
 
 export type DispatchableAction = Action | TransportAction
+
+// A passive mirror of the reducer's own state (history.present, below),
+// letting components subscribe to specific fields via useAppSelector
+// instead of the whole AppState via useAppState()/StateCtx -- see
+// docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+// This does NOT change the reducer/dispatch/undo pipeline in any way; it
+// only observes its output. StoreProvider keeps this in sync (see its own
+// render body below) -- nothing else should ever call __setStateForTest,
+// which exists purely so this bridge's own tests don't need a real React
+// render to exercise it.
+let currentState: AppState = initialState
+const stateListeners = new Set<() => void>()
+
+// eslint-disable-next-line react-refresh/only-export-components -- store bridge function, not a component
+export function subscribeToState(listener: () => void): () => void {
+  stateListeners.add(listener)
+  return () => stateListeners.delete(listener)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- store bridge function, not a component
+export function getStateSnapshot(): AppState {
+  return currentState
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- test-only helper, not a component
+export function __setStateForTest(state: AppState): void {
+  currentState = state
+  for (const listener of stateListeners) listener()
+}
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
@@ -117,6 +147,34 @@ const HistoryCtx = createContext<HistoryControls>({
 export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [history, rawDispatch] = useReducer(historyReducer, initialState, createHistoryState)
   const state = history.present
+  // Keeps the store bridge (subscribeToState/getStateSnapshot, above) in
+  // sync with this render's state, synchronously -- safe because React
+  // always finishes a parent's own render before rendering its children,
+  // so any useAppSelector call in a descendant sees this value by the time
+  // it runs, within the same render pass. Notifying subscribers (so THEIR
+  // OWN re-renders happen) has to wait for the effect below instead --
+  // you can't synchronously trigger another component's re-render
+  // mid-render.
+  //
+  // Deliberate exception, not an oversight: react-hooks' compiler-purity
+  // check flags any reassignment of a module-level variable during render
+  // (the same restriction that pushed stateRef/playingRef just below onto a
+  // ref+effect instead). That workaround doesn't apply here: stateRef/
+  // playingRef are only ever read later, from an async engine callback, so a
+  // render's assignment landing a tick late (post-commit, via effect) is
+  // harmless. This mirror is read DURING render, by a descendant's
+  // useAppSelector call in the very same pass -- deferring the write to an
+  // effect would mean any component mounting in that pass reads stale
+  // initialState instead of the real current state until the next update.
+  // StoreProvider is the sole owner of this assignment (it is the app's
+  // single top-level parent, mounted once) and the only thing read here is
+  // `state`, itself just-computed via useReducer above -- there is no other
+  // writer, so this can't race.
+  // eslint-disable-next-line react-hooks/globals -- see comment above
+  currentState = state
+  useEffect(() => {
+    for (const listener of stateListeners) listener()
+  }, [state])
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
   // View-only (not undo-tracked, not persisted -- see ArrangerMode's own
@@ -530,6 +588,29 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useAppState(): AppState {
   return useContext(StateCtx)
+}
+
+/** Subscribes to one specific slice of AppState instead of the whole
+ * object -- only re-renders the calling component when THIS selector's
+ * result actually changes (per isEqual, default reference equality), not
+ * on every dispatch anywhere in the app. See useAppState() above for the
+ * broad-read alternative, still the right tool for components whose
+ * render cost doesn't multiply by project size (Inspector, Shelf,
+ * TransportBar, etc.) -- this hook is for the ones that do (ChannelRow,
+ * RifffBlockRow, StemWaveformRow, CollapsedRifffRow). See
+ * docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md. */
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useAppSelector<T>(
+  selector: (state: AppState) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is
+): T {
+  return useSyncExternalStoreWithSelector(
+    subscribeToState,
+    getStateSnapshot,
+    getStateSnapshot,
+    selector,
+    isEqual
+  )
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
