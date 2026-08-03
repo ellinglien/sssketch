@@ -132,6 +132,15 @@ namespace sssketch
             for (float peak : armedRecorder->peaksSoFar(64))
                 peaksVar.add(peak);
             capPayload->setProperty("peaksSoFar", peaksVar);
+            // Lets the renderer size the live overlay to match how long
+            // the take has actually grown to, rather than the recording
+            // loop region's own fixed bounds -- capture length is no
+            // longer tied to the loop region at all (see LoopRecorder's
+            // own doc comment), so a fixed-width overlay would otherwise
+            // have to squish an ever-growing recording into the same
+            // fixed pixel span, visually "shrinking" everything already
+            // drawn every time more gets captured.
+            capPayload->setProperty("elapsedSeconds", armedRecorder->elapsedSeconds());
             juce::DynamicObject::Ptr capObj = new juce::DynamicObject();
             capObj->setProperty("type", "capture-level-update");
             capObj->setProperty("payload", juce::var(capPayload.get()));

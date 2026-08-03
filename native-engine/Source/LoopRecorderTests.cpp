@@ -35,6 +35,23 @@ namespace sssketch
                 expect(recorder.hasAnyAudio());
             }
 
+            beginTest("elapsedSeconds() is 0 for a freshly-constructed recorder and reflects "
+                      "however much has actually been captured -- lets the renderer size the "
+                      "live overlay to match the take's own real, growing length rather than "
+                      "the recording loop region's fixed bounds");
+            {
+                LoopRecorder recorder(48000.0);
+                expectWithinAbsoluteError(recorder.elapsedSeconds(), 0.0, 0.0001);
+
+                std::vector<float> inputData(24000, 0.5f); // 0.5s at 48kHz
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 24000);
+                expectWithinAbsoluteError(recorder.elapsedSeconds(), 0.5, 0.0001);
+
+                recorder.writeBlock(channels, 1, 0, 24000); // another 0.5s, appended
+                expectWithinAbsoluteError(recorder.elapsedSeconds(), 1.0, 0.0001);
+            }
+
             beginTest("writeBlock across multiple calls appends rather than overwrites, "
                       "simulating several audio callbacks in a row during one take");
             {

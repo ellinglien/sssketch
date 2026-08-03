@@ -134,12 +134,12 @@ const api = {
   // stay consistent with every other engine-originated push already bridged
   // here.
   onCaptureLevelUpdate: (
-    callback: (channelId: string, peaksSoFar: number[]) => void
+    callback: (channelId: string, peaksSoFar: number[], elapsedSeconds: number) => void
   ): (() => void) => {
     const listener = (
       _event: unknown,
-      payload: { channelId: string; peaksSoFar: number[] }
-    ): void => callback(payload.channelId, payload.peaksSoFar)
+      payload: { channelId: string; peaksSoFar: number[]; elapsedSeconds: number }
+    ): void => callback(payload.channelId, payload.peaksSoFar, payload.elapsedSeconds)
     ipcRenderer.on('engine-capture-level-update', listener)
     return () => ipcRenderer.removeListener('engine-capture-level-update', listener)
   },

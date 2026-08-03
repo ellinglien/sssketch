@@ -69,6 +69,17 @@ namespace sssketch
          * requirement). */
         bool hasAnyAudio() const { return writePos.load(std::memory_order_acquire) > 0; }
 
+        /** How much real time has been captured so far, in seconds --
+         * lets the renderer size the live overlay to match how long the
+         * take has actually grown to (see IpcServer.cpp's
+         * capture-level-update push), rather than the recording loop
+         * region's own fixed bounds, which no longer constrain capture
+         * length at all (see this class's own doc comment). */
+        double elapsedSeconds() const
+        {
+            return (double) writePos.load(std::memory_order_acquire) / sampleRate;
+        }
+
         /** Per-bucket peak amplitude across whatever's been captured so
          * far this session (0 buckets/empty result if nothing's been
          * written yet) -- numBuckets fixed, small (the renderer just
