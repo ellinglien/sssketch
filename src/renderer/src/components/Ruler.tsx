@@ -76,11 +76,16 @@ export function Ruler({
   function handleLoopDragStart(e: React.MouseEvent<HTMLDivElement>): void {
     if (e.button !== 0) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const startBar = Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
+    // Whole-bar snap, matching App.tsx's own barForClientX (what a clip
+    // drop snaps to) -- unlike handleScrubStart's deliberately free/
+    // unsnapped positioning above, a loop region drawn to record into
+    // should land on the same grid the rest of the arranger uses, not an
+    // arbitrary sub-bar float.
+    const startBar = Math.max(0, Math.round(toLogicalX(e.clientX - rect.left, frameScale) / ppb))
     startPointerDrag(
       e,
       (deltaX) => {
-        const dragEndBar = Math.max(0, startBar + toLogicalX(deltaX, frameScale) / ppb)
+        const dragEndBar = Math.max(0, Math.round(startBar + toLogicalX(deltaX, frameScale) / ppb))
         const lo = Math.min(startBar, dragEndBar)
         const hi = Math.max(startBar, dragEndBar)
         onSetLoopRegion({ startBar: lo, endBar: hi })
@@ -113,7 +118,11 @@ export function Ruler({
     const fixedBar = edge === 'start' ? loopRegion.endBar : loopRegion.startBar
     const draggedStartBar = edge === 'start' ? loopRegion.startBar : loopRegion.endBar
     startPointerDrag(e, (deltaX) => {
-      const draggedBar = Math.max(0, draggedStartBar + toLogicalX(deltaX, frameScale) / ppb)
+      // Same whole-bar snap as handleLoopDragStart above.
+      const draggedBar = Math.max(
+        0,
+        Math.round(draggedStartBar + toLogicalX(deltaX, frameScale) / ppb)
+      )
       const lo = Math.min(fixedBar, draggedBar)
       const hi = Math.max(fixedBar, draggedBar)
       onSetLoopRegion({ startBar: lo, endBar: hi })
