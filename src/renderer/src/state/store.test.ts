@@ -1241,6 +1241,36 @@ describe('reducer', () => {
       const next = reducer(armed, { type: 'REMOVE_RECORDING_CHANNEL', channelId: 'rec-1' })
       expect(next.armedChannelId).toBeNull()
     })
+
+    it('un-places (but does not delete) a committed take still parked on the channel', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const rifff = { ...makeRifff({ groupId: 'g1' }), startBar: 0 }
+      const withTake: AppState = {
+        ...withChannel,
+        rifffs: { g1: rifff },
+        channelOf: { g1: 'rec-1' }
+      }
+      const next = reducer(withTake, { type: 'REMOVE_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.channelOf.g1).toBeUndefined()
+      expect(next.rifffs.g1).toBeDefined()
+      expect(next.rifffs.g1.startBar).toBeUndefined()
+    })
+
+    it('cleans up channelPlugins for the removed channel', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const withPlugins: AppState = {
+        ...withChannel,
+        channelPlugins: { 'rec-1': [null, null] }
+      }
+      const next = reducer(withPlugins, { type: 'REMOVE_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.channelPlugins['rec-1']).toBeUndefined()
+    })
   })
 
   describe('a recording channel survives REMOVE_FROM_TIMELINE emptying it', () => {

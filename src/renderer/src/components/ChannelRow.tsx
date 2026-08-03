@@ -231,9 +231,22 @@ function ChannelRowImpl({
     if (isArmed) {
       setTogglingArm(true)
       try {
-        await window.rifffApi.engineDisarmRecording()
+        const result = await window.rifffApi.engineDisarmRecording()
+        if (result.error) {
+          // Still remove the channel below (the user already confirmed a
+          // destructive action) but say so -- silently continuing here
+          // would defeat the entire point of disarming first: the engine
+          // may still be actively recording into a channel nothing in the
+          // UI references anymore.
+          window.alert(
+            `Channel removed, but the engine may still be recording (disarm failed: ${result.error}). Restart if audio behaves oddly.`
+          )
+        }
       } catch (err) {
         console.error('ChannelRow: failed to disarm before removing channel:', err)
+        window.alert(
+          `Channel removed, but the engine may still be recording (disarm failed: ${err instanceof Error ? err.message : String(err)}). Restart if audio behaves oddly.`
+        )
       } finally {
         setTogglingArm(false)
       }
