@@ -69,6 +69,20 @@ describe('historyReducer', () => {
     expect(h.present.mode).toBe('sketch')
   })
 
+  it('does not push history for SET_AVAILABLE_INPUT_DEVICES', () => {
+    // A pure IPC-fetch side effect (App.tsx's input-device dropdown
+    // re-fetches on every focus while the list is still empty) -- without
+    // this, a machine with no input devices would push a fresh checkpoint
+    // on every single dropdown focus, eating undo-stack slack for nothing
+    // the user would ever want to undo.
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const pastLengthAfterRealEdit = h.past.length
+    h = historyReducer(h, { type: 'SET_AVAILABLE_INPUT_DEVICES', devices: ['mic'] })
+    expect(h.past).toHaveLength(pastLengthAfterRealEdit)
+    expect(h.present.availableInputDevices).toEqual(['mic'])
+  })
+
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
@@ -86,6 +100,32 @@ describe('historyReducer', () => {
     expect(h.past).toHaveLength(0)
     expect(h.future).toHaveLength(0)
     expect(historyReducer(h, { type: 'UNDO' })).toBe(h) // nothing to undo into
+  })
+
+  it('undo/redo never changes armedChannelId, even across a checkpoint that captured a stale value', () => {
+    // Regression test: ARM/DISARM_RECORDING_CHANNEL are transient (no
+    // checkpoint of their own), but armedChannelId is an ordinary AppState
+    // field, so it still rides along inside whatever the NEXT real edit's
+    // checkpoint happens to capture. Left unhandled, undoing back past
+    // that checkpoint would silently re-arm a stale channel the engine
+    // isn't actually capturing into anymore -- see history.ts's own
+    // comment on this fix for the full failure scenario (a disarm click
+    // would then misattribute the REAL armed channel's committed audio
+    // onto the wrong channel's row, since disarm-recording takes no
+    // channelId parameter).
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ARM_RECORDING_CHANNEL', channelId: 'A' }) // transient
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints armedChannelId: 'A'
+    h = historyReducer(h, { type: 'ARM_RECORDING_CHANNEL', channelId: 'B' }) // transient, overwrites present only
+    expect(h.present.armedChannelId).toBe('B')
+
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.bpm).toBe(80) // the real edit was undone
+    expect(h.present.armedChannelId).toBe('B') // but armedChannelId must NOT revert to the stale 'A'
+
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.bpm).toBe(100)
+    expect(h.present.armedChannelId).toBe('B') // still not reverted by redo either
   })
 
   it('caps history length rather than growing unboundedly', () => {

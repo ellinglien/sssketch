@@ -548,6 +548,7 @@ function Frame(): React.JSX.Element {
   const setBusy = useBusy()
   const availableInputDevices = useAppSelector((s) => s.availableInputDevices)
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
+  const isAnyChannelArmed = useAppSelector((s) => s.armedChannelId !== null)
   // Guards the input-device dropdown's lazy fetch against firing twice --
   // availableInputDevices.length === 0 alone isn't enough, since React
   // state hasn't updated yet if the dropdown is focused a second time
@@ -1107,6 +1108,12 @@ function Frame(): React.JSX.Element {
           </button>
           <select
             value={selectedInputDevice ?? ''}
+            disabled={isAnyChannelArmed}
+            title={
+              isAnyChannelArmed
+                ? 'disarm the current recording before changing the input device'
+                : undefined
+            }
             onFocus={() => {
               if (availableInputDevices.length === 0 && !fetchingInputDevicesRef.current) {
                 fetchingInputDevicesRef.current = true
@@ -1132,7 +1139,8 @@ function Frame(): React.JSX.Element {
               color: 'var(--ra-text)',
               background: 'var(--ra-bg-row-active)',
               border: '1px solid var(--ra-border)',
-              padding: '5px 8px'
+              padding: '5px 8px',
+              cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer'
             }}
           >
             <option value="">

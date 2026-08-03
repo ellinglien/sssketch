@@ -27,7 +27,12 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'TOGGLE_INSPECTOR_COLLAPSED',
   'TOGGLE_METRONOME',
   'ARM_RECORDING_CHANNEL',
-  'DISARM_RECORDING_CHANNEL'
+  'DISARM_RECORDING_CHANNEL',
+  // A pure IPC-fetch side effect (App.tsx's input-device dropdown re-fetches
+  // on every focus while the list is still empty), not a user edit worth an
+  // undo checkpoint -- same "how I'm currently working" category as
+  // volumeDragMode/metronomeEnabled above, not the arrangement itself.
+  'SET_AVAILABLE_INPUT_DEVICES'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {
@@ -40,7 +45,24 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     const previous = state.past[state.past.length - 1]
     return {
       past: state.past.slice(0, -1),
-      present: previous,
+      // armedChannelId rides along inside every pushed snapshot (it's an
+      // ordinary AppState field, read via useAppSelector), but ARM/
+      // DISARM_RECORDING_CHANNEL being transient only stops THEIR OWN
+      // dispatches from being pushed -- any later, ordinary tracked action
+      // still snapshots whatever armedChannelId happened to be at that
+      // moment. Left alone, undoing back past such a snapshot would
+      // silently re-arm a channel that isn't what the engine is actually
+      // capturing into -- and since disarm-recording takes no channelId
+      // parameter (it just disarms whatever the engine's one recorder
+      // slot currently is), a subsequent disarm click would then commit
+      // the REAL armed channel's audio onto the WRONG (stale-armed)
+      // channel's row. Pinning this field to the current value across
+      // undo/redo keeps it truthful to the engine's real state, matching
+      // why PLAY/PAUSE/SET_POS were pulled out of this reducer entirely
+      // (see this file's own header comment) -- armedChannelId is the
+      // same category of "live now" state, just harder to fully extract
+      // since ChannelRow reads it as ordinary AppState.
+      present: { ...previous, armedChannelId: state.present.armedChannelId },
       future: [state.present, ...state.future]
     }
   }
@@ -50,7 +72,7 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     const [next, ...rest] = state.future
     return {
       past: [...state.past, state.present],
-      present: next,
+      present: { ...next, armedChannelId: state.present.armedChannelId },
       future: rest
     }
   }

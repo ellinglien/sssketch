@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
+import type { LoopRegion } from '../state/store'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
@@ -139,6 +140,16 @@ function ChannelRowImpl({
   // but still blocked mid-toggle.
   const canArm = !togglingArm && (isArmed || !!selectedInputDevice)
 
+  // Snapshot of loopRegion as it was AT ARM TIME -- the engine bakes the
+  // real recorded duration from whatever startBar/endBar were in effect
+  // when arm-recording was sent (see IpcServer.cpp's loopLengthSeconds
+  // calculation), but nothing prevents the user from dragging a new loop
+  // region on the Ruler while a channel is armed. Reading the live
+  // loopRegion selector at commit time would desync the resulting
+  // Rifff.barLength from the audio's own actual measured durationSec.
+  // Committing always uses this ref, not the live value.
+  const armedLoopRegionRef = useRef<LoopRegion>(null)
+
   // Same "filled red = active/attention-grabbing state" treatment the mute
   // button already uses, reusing this app's own audio-in accent color.
   const recordButtonStyle: React.CSSProperties = {
@@ -155,13 +166,14 @@ function ChannelRowImpl({
     setTogglingArm(true)
     try {
       if (isArmed) {
+        const armedRegion = armedLoopRegionRef.current
         const result = await window.rifffApi.engineDisarmRecording()
         dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
         if (result.committed && result.path) {
           const rifff = await window.rifffApi.importRecordedTake(
             result.path,
             bpm,
-            (loopRegion?.endBar ?? 0) - (loopRegion?.startBar ?? 0)
+            (armedRegion?.endBar ?? 0) - (armedRegion?.startBar ?? 0)
           )
           if (rifff) {
             dispatch({ type: 'ADD_TO_SHELF', rifff })
@@ -176,7 +188,7 @@ function ChannelRowImpl({
             dispatch({
               type: 'MOVE_TO_CHANNEL',
               groupId: rifff.groupId,
-              startBar: loopRegion?.startBar ?? 0,
+              startBar: armedRegion?.startBar ?? 0,
               channelId
             })
           }
@@ -192,6 +204,7 @@ function ChannelRowImpl({
           loopRegion.endBar
         )
         if (result.success) {
+          armedLoopRegionRef.current = loopRegion
           dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
           if (!playing) {
             dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
