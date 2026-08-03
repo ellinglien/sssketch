@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer } from './store'
+import { initialState, reducer, type AppState } from './store'
 import type { Rifff } from '@shared/types'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
@@ -1180,6 +1180,74 @@ describe('reducer', () => {
       })
       const cleared = reducer(withRegion, { type: 'SET_LOOP_REGION', region: null })
       expect(cleared.loopRegion).toBeNull()
+    })
+  })
+
+  describe('ADD_RECORDING_CHANNEL', () => {
+    it('creates a new channel id, marked as a recording channel', () => {
+      const next = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.channelOrder).toContain('rec-1')
+      expect(next.recordingChannelIds['rec-1']).toBe(true)
+    })
+  })
+
+  describe('REMOVE_RECORDING_CHANNEL', () => {
+    it('removes the channel from channelOrder and recordingChannelIds', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const next = reducer(withChannel, { type: 'REMOVE_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.channelOrder).not.toContain('rec-1')
+      expect(next.recordingChannelIds['rec-1']).toBeUndefined()
+    })
+
+    it('disarms the channel first if it was armed', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const armed = reducer(withChannel, { type: 'ARM_RECORDING_CHANNEL', channelId: 'rec-1' })
+      const next = reducer(armed, { type: 'REMOVE_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.armedChannelId).toBeNull()
+    })
+  })
+
+  describe('a recording channel survives REMOVE_FROM_TIMELINE emptying it', () => {
+    it('does not evict a recording channel from channelOrder just because its last clip left', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const rifff = { ...makeRifff({ groupId: 'g1' }), startBar: 0 }
+      const withClip: AppState = {
+        ...withChannel,
+        rifffs: { g1: rifff },
+        channelOf: { g1: 'rec-1' }
+      }
+      const next = reducer(withClip, { type: 'REMOVE_FROM_TIMELINE', groupId: 'g1' })
+      expect(next.channelOrder).toContain('rec-1')
+    })
+  })
+
+  describe('ARM_RECORDING_CHANNEL / DISARM_RECORDING_CHANNEL', () => {
+    it('arms the given channel', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const next = reducer(withChannel, { type: 'ARM_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(next.armedChannelId).toBe('rec-1')
+    })
+
+    it('disarms back to null', () => {
+      const withChannel = reducer(initialState, {
+        type: 'ADD_RECORDING_CHANNEL',
+        channelId: 'rec-1'
+      })
+      const armed = reducer(withChannel, { type: 'ARM_RECORDING_CHANNEL', channelId: 'rec-1' })
+      const next = reducer(armed, { type: 'DISARM_RECORDING_CHANNEL' })
+      expect(next.armedChannelId).toBeNull()
     })
   })
 })

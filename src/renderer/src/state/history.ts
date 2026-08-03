@@ -25,7 +25,9 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'SET_VOLUME_DRAG_MODE',
   'SET_ARRANGER_MODE',
   'TOGGLE_INSPECTOR_COLLAPSED',
-  'TOGGLE_METRONOME'
+  'TOGGLE_METRONOME',
+  'ARM_RECORDING_CHANNEL',
+  'DISARM_RECORDING_CHANNEL'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

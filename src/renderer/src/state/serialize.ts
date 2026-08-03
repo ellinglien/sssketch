@@ -9,7 +9,7 @@ import { isSketchEligible } from './selectors'
  * there used to be. */
 export type PersistedProject = Omit<
   AppState,
-  'volumeDragMode' | 'mode' | 'inspectorCollapsed' | 'metronomeEnabled'
+  'volumeDragMode' | 'mode' | 'inspectorCollapsed' | 'metronomeEnabled' | 'armedChannelId'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -28,7 +28,8 @@ export function serializeProject(state: AppState): string {
   // ignoreRestSiblings isn't enabled project-wide, so the extracted-but-unused
   // bindings need an explicit disable.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { volumeDragMode, mode, inspectorCollapsed, metronomeEnabled, ...rest } = state
+  const { volumeDragMode, mode, inspectorCollapsed, metronomeEnabled, armedChannelId, ...rest } =
+    state
   return JSON.stringify(rest, null, 2)
 }
 

@@ -125,6 +125,18 @@ export interface AppState {
    * arrangement data, not a transient UI mode. See
    * docs/superpowers/specs/2026-08-03-loop-recording-design.md. */
   loopRegion: LoopRegion
+  /** Channels created via "+ rec channel" -- everywhere else, a channel
+   * with no entry here is a normal one. Unlike every other channel (which
+   * only exists as long as channelOf points a clip at it -- see
+   * channelHasAnyClip), a recording channel's lifecycle is independent of
+   * clip membership: it can sit empty, waiting to be armed. See
+   * docs/superpowers/specs/2026-08-03-loop-recording-design.md. */
+  recordingChannelIds: Record<string, true>
+  /** Which recording channel, if any, is currently armed and capturing.
+   * At most one at a time. Not persisted -- armed state shouldn't survive
+   * a save/reload, matching volumeDragMode's own "how I'm currently
+   * working" convention. */
+  armedChannelId: string | null
   rifffs: Record<string, Rifff>
 }
 
@@ -143,6 +155,8 @@ export const initialState: AppState = {
   channelOf: {},
   exp: {},
   loopRegion: null,
+  recordingChannelIds: {},
+  armedChannelId: null,
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
@@ -224,6 +238,10 @@ export type Action =
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
   | { type: 'SET_LOOP_REGION'; region: LoopRegion }
+  | { type: 'ADD_RECORDING_CHANNEL'; channelId: string }
+  | { type: 'REMOVE_RECORDING_CHANNEL'; channelId: string }
+  | { type: 'ARM_RECORDING_CHANNEL'; channelId: string }
+  | { type: 'DISARM_RECORDING_CHANNEL' }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -289,7 +307,8 @@ export function reducer(state: AppState, action: Action): AppState {
       if (
         previousChannelId !== undefined &&
         previousChannelId !== action.channelId &&
-        !channelHasAnyClip(channelOf, previousChannelId)
+        !channelHasAnyClip(channelOf, previousChannelId) &&
+        !state.recordingChannelIds[previousChannelId]
       ) {
         channelOrder = channelOrder.filter((id) => id !== previousChannelId)
         if (previousChannelId in channelPlugins) {
@@ -453,7 +472,9 @@ export function reducer(state: AppState, action: Action): AppState {
       const channelOf = { ...state.channelOf }
       delete channelOf[action.groupId]
       const channelBecameEmpty =
-        previousChannelId !== undefined && !channelHasAnyClip(channelOf, previousChannelId)
+        previousChannelId !== undefined &&
+        !channelHasAnyClip(channelOf, previousChannelId) &&
+        !state.recordingChannelIds[previousChannelId]
       const channelOrder = channelBecameEmpty
         ? state.channelOrder.filter((id) => id !== previousChannelId)
         : state.channelOrder
@@ -501,7 +522,9 @@ export function reducer(state: AppState, action: Action): AppState {
         return next
       }
       const channelOf = omitGroups(state.channelOf)
-      const channelOrder = state.channelOrder.filter((id) => channelHasAnyClip(channelOf, id))
+      const channelOrder = state.channelOrder.filter(
+        (id) => channelHasAnyClip(channelOf, id) || state.recordingChannelIds[id]
+      )
       const channelPlugins = { ...state.channelPlugins }
       for (const channelId of Object.keys(channelPlugins)) {
         if (!channelHasAnyClip(channelOf, channelId)) delete channelPlugins[channelId]
@@ -864,6 +887,30 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_LOOP_REGION':
       return { ...state, loopRegion: action.region }
+
+    case 'ADD_RECORDING_CHANNEL':
+      return {
+        ...state,
+        channelOrder: [...state.channelOrder, action.channelId],
+        recordingChannelIds: { ...state.recordingChannelIds, [action.channelId]: true }
+      }
+
+    case 'REMOVE_RECORDING_CHANNEL': {
+      const recordingChannelIds = { ...state.recordingChannelIds }
+      delete recordingChannelIds[action.channelId]
+      return {
+        ...state,
+        channelOrder: state.channelOrder.filter((id) => id !== action.channelId),
+        recordingChannelIds,
+        armedChannelId: state.armedChannelId === action.channelId ? null : state.armedChannelId
+      }
+    }
+
+    case 'ARM_RECORDING_CHANNEL':
+      return { ...state, armedChannelId: action.channelId }
+
+    case 'DISARM_RECORDING_CHANNEL':
+      return { ...state, armedChannelId: null }
 
     case 'LOAD_STATE':
       return action.state
