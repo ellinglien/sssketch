@@ -2,7 +2,6 @@ import { useDispatch, usePlaying } from '../state/StoreContext'
 import { startPointerDrag } from './dragUtils'
 import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
-import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { LoopRegion } from '../state/store'
 
 const PPB = 24
@@ -62,17 +61,34 @@ export function Ruler({
   // handler never also fires underneath them). Mirrors handleScrubStart's
   // own real-pixel-to-bar conversion exactly, including the frameScale
   // correction -- see its own comment for why that matters.
-  function handleLoopDragStart(e: ReactMouseEvent<HTMLDivElement>): void {
+  //
+  // Falls back to a plain scrub if the mouse never actually moved (a bare
+  // click, not a drag) -- startPointerDrag's onEnd(moved) tells us this.
+  // Without that fallback, a plain click on the ruler (the single most
+  // common way to jump the playhead somewhere) would silently do nothing
+  // at all now that plain-drag's default meaning changed to "set loop
+  // region" instead of "scrub."
+  //
+  // No upper clamp on the resulting bar (unlike seekTo's Math.min(barCount, ...))
+  // -- deliberate, not an oversight: the loop region is independent of
+  // barCount/loopLengthBars (the whole project's own length) and can
+  // legitimately extend past it, per its own doc comment in store.ts.
+  function handleLoopDragStart(e: React.MouseEvent<HTMLDivElement>): void {
     if (e.button !== 0) return
     const rect = e.currentTarget.getBoundingClientRect()
     const startBar = Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
-    let dragEndBar = startBar
-    startPointerDrag(e, (deltaX) => {
-      dragEndBar = Math.max(0, startBar + toLogicalX(deltaX, frameScale) / ppb)
-      const lo = Math.min(startBar, dragEndBar)
-      const hi = Math.max(startBar, dragEndBar)
-      onSetLoopRegion({ startBar: lo, endBar: hi })
-    })
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const dragEndBar = Math.max(0, startBar + toLogicalX(deltaX, frameScale) / ppb)
+        const lo = Math.min(startBar, dragEndBar)
+        const hi = Math.max(startBar, dragEndBar)
+        onSetLoopRegion({ startBar: lo, endBar: hi })
+      },
+      (moved) => {
+        if (!moved) seekTo(startBar)
+      }
+    )
   }
 
   // Dragging either edge of an already-set region adjusts just that edge --
@@ -80,8 +96,16 @@ export function Ruler({
   // way). `edge`'s own fixed endpoint (the one NOT being dragged) stays
   // put; the dragged edge tracks the cursor, swapping which one is
   // "startBar" vs "endBar" if the user drags one edge past the other.
+  //
+  // Known limitation, not a bug: if the region is ever collapsed to zero
+  // width (both edges at the same bar), both edge handles below end up at
+  // the identical on-screen position, and the later-in-DOM-order one (the
+  // "end" handle) wins every hit-test in the overlap -- there's no way to
+  // grab "start" again until "end" is dragged back out to create some
+  // separation. Not worth extra hit-testing complexity to fix pre-emptively
+  // for an edge case that requires deliberately collapsing the region.
   function handleLoopEdgeDragStart(
-    e: ReactMouseEvent<HTMLDivElement>,
+    e: React.MouseEvent<HTMLDivElement>,
     edge: 'start' | 'end'
   ): void {
     e.stopPropagation()
@@ -99,15 +123,23 @@ export function Ruler({
   return (
     <div
       onMouseDown={(e) => {
-        // Only start a fresh loop-region drag on a plain click (no
-        // modifier) -- Cmd is already the hand-pan modifier elsewhere in
-        // this app (App.tsx), and this ruler has no pan behavior of its
-        // own to conflict with, but keeping the same "plain click only"
-        // discipline here avoids ever having to disambiguate the two later.
-        if (!e.metaKey) handleLoopDragStart(e)
-        handleScrubStart(e)
+        // Cmd+drag scrubs (matching this app's existing "Cmd = the
+        // special navigation/setup modifier" convention -- see App.tsx's
+        // Cmd+drag timeline pan and Cmd+scroll zoom); a plain drag sets
+        // the loop region instead. These must be mutually exclusive, not
+        // both firing on the same mousedown -- an earlier version called
+        // both handlers unconditionally, and since startPointerDrag
+        // registers its own independent mousemove/mouseup listeners per
+        // call with no shared mutex, that meant every plain drag was
+        // simultaneously scrubbing the playhead AND sweeping a loop
+        // region at once.
+        if (e.metaKey) {
+          handleScrubStart(e)
+        } else {
+          handleLoopDragStart(e)
+        }
       }}
-      title="click or drag to scrub"
+      title="click to scrub · drag to set loop region · cmd+drag to scrub"
       style={{
         height: 24,
         background: 'var(--ra-bg-rail)',
