@@ -259,28 +259,70 @@ A `describe('clipGeometry', ...)` block already exists in this file. Add the new
 ```ts
 describe('clipGeometryFromFields', () => {
   it('matches clipGeometry exactly for a plain, unstretched-off, no-offset clip', () => {
-    const bars = clipGeometryFromFields(4, 0, 4, undefined, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars).toEqual({ leftPx: 96, widthPx: 192 })
   })
 
   it('applies the sub-bar nudge offset', () => {
     // offsetSteps=-8 at snapDiv=4 is -2 bars -> leftPx shifts by -2*24=-48
-    const bars = clipGeometryFromFields(4, -8, 4, undefined, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: -8,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars.leftPx).toBe(96 - 48)
   })
 
   it('scales widthPx by the bpm ratio when stretch is off', () => {
     // stretch off: shownBars = playedBars * (rifffBpm/stateBpm) = 8 * (150/100) = 12
-    const bars = clipGeometryFromFields(0, 0, 4, undefined, 8, false, 150, 100, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 0,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      rifffBarLength: 8,
+      stretchOn: false,
+      rifffBpm: 150,
+      stateBpm: 100,
+      ppb: 24
+    })
     expect(bars.widthPx).toBe(12 * 24)
   })
 
   it('uses the playedBars override over the rifff bar length', () => {
-    const bars = clipGeometryFromFields(0, 0, 4, 16, 8, true, 150, 150, 24)
+    const bars = clipGeometryFromFields({
+      startBar: 0,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: 16,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
     expect(bars.widthPx).toBe(16 * 24)
   })
 })
 ```
+
+> **Note (added after this task was first executed):** code review on the first implementation flagged two real issues, both since fixed and reflected in this plan text: (1) `clipGeometryFromFields` originally took 9 positional parameters — several same-typed and adjacent, a real transposition risk — converted to an options object (`ClipGeometryFields`), matching this codebase's own convention (`computeBandEnergy`/`computePitchContour`/`computeStemSchedule` in `src/shared/` all take an opts object); (2) `clipGeometry`'s own doc comment had drifted onto `clipGeometryFromFields` instead. Both are already corrected below.
 
 Add `resolvedPlayedBarsFromFields` and `clipGeometryFromFields` to the existing `from './selectors'` import at the top of the test file.
 
@@ -340,43 +382,73 @@ export function clipGeometry(state: AppState, groupId: string, ppb: number): Cli
 Replace with:
 
 ```ts
-/** clipGeometry's own formula, parameterized by individual fields instead
- * of a full AppState -- see resolvedPlayedBarsFromFields's doc comment
- * for why. clipGeometry below is now a thin wrapper around this. */
-export function clipGeometryFromFields(
-  startBar: number,
-  offsetSteps: number,
-  snapDiv: number,
-  playedBarsOverride: number | undefined,
-  rifffBarLength: number,
-  stretchOn: boolean,
-  rifffBpm: number,
-  stateBpm: number,
+/** Fields clipGeometryFromFields needs -- an options object rather than a
+ * long positional parameter list deliberately, matching this codebase's own
+ * convention for functions like this (computeBandEnergy/computePitchContour/
+ * computeStemSchedule in src/shared/ all take an opts object). Several of
+ * these are same-typed and adjacent (three bare numbers up front, rifffBpm/
+ * stateBpm next to each other later) -- exactly the shape where a positional
+ * transposition would silently typecheck and produce a wrong-but-plausible
+ * result, which is a real risk here specifically (the bpm-ratio direction is
+ * already easy to get backwards, see clipGeometryFromFields's own comment). */
+export interface ClipGeometryFields {
+  startBar: number
+  offsetSteps: number
+  snapDiv: number
+  playedBarsOverride: number | undefined
+  rifffBarLength: number
+  stretchOn: boolean
+  rifffBpm: number
+  stateBpm: number
   ppb: number
-): ClipGeometry {
+}
+
+/** clipGeometry's own formula, parameterized by individual fields instead
+ * of a full AppState -- so a caller that already has these fields via
+ * individual selectors (see useAppSelector, StoreContext.tsx) doesn't need
+ * a full AppState just to call it. clipGeometry below is now a thin wrapper
+ * around this. */
+export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry {
+  const {
+    startBar,
+    offsetSteps,
+    snapDiv,
+    playedBarsOverride,
+    rifffBarLength,
+    stretchOn,
+    rifffBpm,
+    stateBpm,
+    ppb
+  } = fields
   const offsetPx = (offsetSteps * ppb) / snapDiv
   const playedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifffBarLength)
   const shownBars = stretchOn ? playedBars : playedBars * (rifffBpm / stateBpm)
   return { leftPx: startBar * ppb + offsetPx, widthPx: shownBars * ppb }
 }
 
+/** A clip's screen position/width. Uses resolvePlayedBars (which reflects
+ * an active playedBars resize override) rather than raw rifff.barLength, so
+ * a resized clip's rendered width actually matches its resize — this used
+ * to only use rifff.barLength unconditionally, a real bug that stemGeometry
+ * (now folded in here, since per-stem geometry divergence no longer exists
+ * — see UNGROUP) used to work around for the expanded per-stem view only. */
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
   const offsetSteps = state.off[groupId] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const stretchOn = state.stretch[groupId] ?? true
-  return clipGeometryFromFields(
-    start,
+  return clipGeometryFromFields({
+    startBar: start,
     offsetSteps,
     snapDiv,
-    state.playedBars[groupId],
-    rifff.barLength,
+    playedBarsOverride: state.playedBars[groupId],
+    rifffBarLength: rifff.barLength,
     stretchOn,
-    rifff.bpm,
-    state.bpm,
+    rifffBpm: rifff.bpm,
+    stateBpm: state.bpm,
     ppb
-  )
+  })
 }
 ```
 
@@ -482,17 +554,17 @@ Replace with:
   const expanded = expandedFlag && !isOneShot
   const color = identityColor(rifff)
   const ppb = useZoom()
-  const geo = clipGeometryFromFields(
-    rifff.startBar ?? 0,
+  const geo = clipGeometryFromFields({
+    startBar: rifff.startBar ?? 0,
     offsetSteps,
-    SNAP_DIVS[snapIdx],
+    snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
-    rifff.barLength,
+    rifffBarLength: rifff.barLength,
     stretchOn,
-    rifff.bpm,
-    bpm,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
     ppb
-  )
+  })
 ```
 
 - [ ] **Step 3: Typecheck and lint**
@@ -709,17 +781,17 @@ Replace with:
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
-  const stemGeo = clipGeometryFromFields(
-    rifff.startBar ?? 0,
+  const stemGeo = clipGeometryFromFields({
+    startBar: rifff.startBar ?? 0,
     offsetSteps,
-    SNAP_DIVS[snapIdx],
+    snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
-    rifff.barLength,
+    rifffBarLength: rifff.barLength,
     stretchOn,
-    rifff.bpm,
-    bpm,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
     ppb
-  )
+  })
   const baseStartBar = rifff.startBar ?? 0
 ```
 
@@ -883,17 +955,17 @@ Replace with:
   const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
   const baseStartBar = rifff.startBar ?? 0
 
-  const geo = clipGeometryFromFields(
-    baseStartBar,
+  const geo = clipGeometryFromFields({
+    startBar: baseStartBar,
     offsetSteps,
-    SNAP_DIVS[snapIdx],
+    snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
-    rifff.barLength,
+    rifffBarLength: rifff.barLength,
     stretchOn,
-    rifff.bpm,
-    bpm,
-    PPB
-  )
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
+    ppb: PPB
+  })
 ```
 
 - [ ] **Step 4: Update the remaining `state.bpm` usages (one-shot width calculations)**
