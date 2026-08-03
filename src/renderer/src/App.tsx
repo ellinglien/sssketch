@@ -548,6 +548,13 @@ function Frame(): React.JSX.Element {
   const setBusy = useBusy()
   const availableInputDevices = useAppSelector((s) => s.availableInputDevices)
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
+  // Guards the input-device dropdown's lazy fetch against firing twice --
+  // availableInputDevices.length === 0 alone isn't enough, since React
+  // state hasn't updated yet if the dropdown is focused a second time
+  // before the first fetch resolves. Same "ref set synchronously before an
+  // async call starts" idiom LoreLibraryBrowser.tsx's own handleLoadMore
+  // uses for the identical class of problem.
+  const fetchingInputDevicesRef = useRef(false)
   const history = useHistory()
   const playing = usePlaying()
   const ppb = useZoom()
@@ -1101,10 +1108,19 @@ function Frame(): React.JSX.Element {
           <select
             value={selectedInputDevice ?? ''}
             onFocus={() => {
-              if (availableInputDevices.length === 0) {
-                void window.rifffApi.engineListInputDevices().then((devices) => {
-                  dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
-                })
+              if (availableInputDevices.length === 0 && !fetchingInputDevicesRef.current) {
+                fetchingInputDevicesRef.current = true
+                void window.rifffApi
+                  .engineListInputDevices()
+                  .then((devices) => {
+                    dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
+                  })
+                  .catch((err) => {
+                    console.error('Frame: failed to list input devices:', err)
+                  })
+                  .finally(() => {
+                    fetchingInputDevicesRef.current = false
+                  })
               }
             }}
             onChange={(e) =>
