@@ -1280,4 +1280,22 @@ describe('reducer', () => {
       expect(next.armedChannelId).toBeNull()
     })
   })
+
+  describe('SET_AVAILABLE_INPUT_DEVICES / SET_SELECTED_INPUT_DEVICE', () => {
+    it('stores the device list', () => {
+      const next = reducer(initialState, {
+        type: 'SET_AVAILABLE_INPUT_DEVICES',
+        devices: ['BlackHole 2ch', 'MacBook Pro Microphone']
+      })
+      expect(next.availableInputDevices).toEqual(['BlackHole 2ch', 'MacBook Pro Microphone'])
+    })
+
+    it('stores the selected device', () => {
+      const next = reducer(initialState, {
+        type: 'SET_SELECTED_INPUT_DEVICE',
+        device: 'BlackHole 2ch'
+      })
+      expect(next.selectedInputDevice).toBe('BlackHole 2ch')
+    })
+  })
 })

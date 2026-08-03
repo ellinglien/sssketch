@@ -62,6 +62,18 @@ function createWindow(): BrowserWindow {
     height: 982,
     minWidth: 945,
     minHeight: 614,
+    // Locked at the default size for now -- proportional scaling
+    // (App.tsx's FrameScaleContext/.ra-frame transform:scale()) has been a
+    // repeat source of subtly-wrong cursor/click math at non-default window
+    // sizes (several bugs already root-caused and fixed this way, but the
+    // underlying scaling mechanism itself keeps being the thing that makes
+    // them possible in the first place). Disabling resize removes the
+    // whole class of "window isn't exactly 1512px wide" bugs outright.
+    // fullscreenable:false too -- entering fullscreen changes the window's
+    // effective size the same way a manual resize does, so it needs the
+    // same lock. Revisit if proportional scaling comes back.
+    resizable: false,
+    fullscreenable: false,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -243,6 +255,26 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('engine-set-position', (_event, pos: number) => {
     playbackEngine?.client.send('set-position', { pos })
+  })
+
+  // TEMPORARY stub -- returns an empty list until a later task wires this to
+  // a real "list-input-devices" reply from the native engine. Lets the
+  // renderer-side dropdown be built and typechecked against a real IPC
+  // round-trip shape now, without depending on the native engine work
+  // landing first.
+  ipcMain.handle('engine-list-input-devices', async (): Promise<string[]> => {
+    if (!playbackEngine) return []
+    try {
+      const result = (await playbackEngine.client.sendAndAwaitType(
+        'list-input-devices',
+        undefined,
+        'input-devices-list'
+      )) as { devices: string[] }
+      return result.devices
+    } catch (err) {
+      console.error('engine-list-input-devices: failed:', err)
+      return []
+    }
   })
 
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {

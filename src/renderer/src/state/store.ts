@@ -137,6 +137,14 @@ export interface AppState {
    * a save/reload, matching volumeDragMode's own "how I'm currently
    * working" convention. */
   armedChannelId: string | null
+  /** Populated once from a list-input-devices IPC round-trip when the
+   * input device dropdown first opens -- not fetched proactively on every
+   * app launch. Not persisted -- devices can change between sessions. */
+  availableInputDevices: string[]
+  /** Which of availableInputDevices to record from -- null means "not
+   * chosen yet" (arming is disabled until something is selected). Not
+   * persisted, same reasoning as availableInputDevices itself. */
+  selectedInputDevice: string | null
   rifffs: Record<string, Rifff>
 }
 
@@ -157,6 +165,8 @@ export const initialState: AppState = {
   loopRegion: null,
   recordingChannelIds: {},
   armedChannelId: null,
+  availableInputDevices: [],
+  selectedInputDevice: null,
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
@@ -242,6 +252,8 @@ export type Action =
   | { type: 'REMOVE_RECORDING_CHANNEL'; channelId: string }
   | { type: 'ARM_RECORDING_CHANNEL'; channelId: string }
   | { type: 'DISARM_RECORDING_CHANNEL' }
+  | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
+  | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -912,6 +924,12 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'DISARM_RECORDING_CHANNEL':
       return { ...state, armedChannelId: null }
+
+    case 'SET_AVAILABLE_INPUT_DEVICES':
+      return { ...state, availableInputDevices: action.devices }
+
+    case 'SET_SELECTED_INPUT_DEVICE':
+      return { ...state, selectedInputDevice: action.device }
 
     case 'LOAD_STATE':
       return action.state

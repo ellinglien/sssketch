@@ -9,7 +9,13 @@ import { isSketchEligible } from './selectors'
  * there used to be. */
 export type PersistedProject = Omit<
   AppState,
-  'volumeDragMode' | 'mode' | 'inspectorCollapsed' | 'metronomeEnabled' | 'armedChannelId'
+  | 'volumeDragMode'
+  | 'mode'
+  | 'inspectorCollapsed'
+  | 'metronomeEnabled'
+  | 'armedChannelId'
+  | 'availableInputDevices'
+  | 'selectedInputDevice'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -27,9 +33,18 @@ export function serializeProject(state: AppState): string {
   // Rest destructure is how we drop the transient UI-mode fields;
   // ignoreRestSiblings isn't enabled project-wide, so the extracted-but-unused
   // bindings need an explicit disable.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { volumeDragMode, mode, inspectorCollapsed, metronomeEnabled, armedChannelId, ...rest } =
-    state
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  const {
+    volumeDragMode,
+    mode,
+    inspectorCollapsed,
+    metronomeEnabled,
+    armedChannelId,
+    availableInputDevices,
+    selectedInputDevice,
+    ...rest
+  } = state
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   return JSON.stringify(rest, null, 2)
 }
 
