@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,6 +11,7 @@ import {
 } from 'react'
 import {
   StoreProvider,
+  useAppSelector,
   useAppState,
   useDispatch,
   useHistory,
@@ -33,12 +35,16 @@ import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
+import { BusyOverlay } from './components/BusyOverlay'
+import { BusyProvider, useBusy } from './state/BusyContext'
+import { FrameScaleProvider, useFrameScale, toLogicalX } from './state/FrameScaleContext'
 import { serializeProject, deserializeProject } from './state/serialize'
+import { warmStemCaches } from './audio/warmStemCaches'
+import { markManualSeek } from './state/manualSeek'
 import {
   loopLengthBars,
   pasteRifffAction,
   channelsInOrder,
-  channelMuteLetters,
   nextArrangerMode,
   groupIdAtPosition
 } from './state/selectors'
@@ -46,12 +52,21 @@ import { initialState, SNAP_DIVS } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import { stemKey, type Rifff } from '@shared/types'
+import type { Rifff } from '@shared/types'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
-function barForClientX(clientX: number, container: HTMLDivElement, ppb: number): number {
+function barForClientX(
+  clientX: number,
+  container: HTMLDivElement,
+  ppb: number,
+  frameScale: number
+): number {
   const rect = container.getBoundingClientRect()
-  const xInTimeline = clientX - rect.left
+  // getBoundingClientRect()/clientX report real screen pixels, but ppb is
+  // defined in logical, pre-scale pixels -- see FrameScaleContext's own doc
+  // comment. Without dividing out frameScale first, this drifts off target
+  // the moment the window isn't at its default size.
+  const xInTimeline = toLogicalX(clientX - rect.left, frameScale)
   return Math.max(0, Math.round(xInTimeline / ppb))
 }
 
@@ -76,16 +91,42 @@ const TRAILING_BLANK_BARS = 4
 
 function Timeline({
   onOpenClipMenu,
-  onOpenPasteMenu
+  onOpenPasteMenu,
+  onBackgroundMouseDown
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenPasteMenu: (x: number, y: number, bar: number) => void
+  /** Fires for every mousedown anywhere in the timeline's content area,
+   * including on a clip — the caller (Frame) is the one that checks
+   * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
+   * surface to decide whether this specific mousedown should start a
+   * Cmd+drag pan (only true for a plain background mousedown, never one
+   * that lands on a clip, which has its own separate Cmd+drag-to-duplicate
+   * via native HTML5 drag). */
+  onBackgroundMouseDown: (e: MouseEvent<HTMLDivElement>) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
   const [dropBar, setDropBar] = useState<number | null>(null)
   const ppb = useZoom()
+  const frameScale = useFrameScale()
+  const loopRegion = useAppSelector((s) => s.loopRegion)
+  // Lets resolveDrop/handleDropOnChannel below read the LATEST state at
+  // call time without closing over the reactive `state` variable itself --
+  // that's what makes it possible to wrap them in useCallback with a
+  // stable identity (deps that don't change on every dispatch), which in
+  // turn is what lets React.memo(ChannelRow) actually skip re-rendering a
+  // channel untouched by a given dispatch. Closing over `state` directly
+  // would make useCallback's reference change every render anyway (a new
+  // `state` object every dispatch), defeating the point -- same "read
+  // latest via ref, not via reactive closure" pattern StoreContext.tsx's
+  // own stateRef already uses for the same reason (there, for engine
+  // callbacks; here, for a memoized child's props).
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
 
   // channelsInOrder rebuilds a Map plus fresh arrays every call -- Timeline
   // re-renders on every dispatch (useAppState subscribes to the whole
@@ -110,14 +151,26 @@ function Timeline({
   // drag, on a 5px resize handle).
   function handleBackgroundClick(e: MouseEvent<HTMLDivElement>): void {
     const rect = e.currentTarget.getBoundingClientRect()
-    const bar = Math.max(0, (e.clientX - rect.left) / ppb)
+    // getBoundingClientRect()/clientX report real screen pixels, but ppb is
+    // defined in logical, pre-scale pixels -- see FrameScaleContext's own
+    // doc comment. Without dividing out frameScale first, this drifts off
+    // target the moment the window isn't at its default size.
+    const bar = Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
     dispatch({ type: 'SET_POS', pos: bar })
-    if (playing) void window.rifffApi.engineSetPosition(bar)
+    if (playing) {
+      markManualSeek()
+      void window.rifffApi.engineSetPosition(bar)
+    }
   }
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget, ppb), getGrabOffsetBars()))
+    setDropBar(
+      applyGrabOffset(
+        barForClientX(e.clientX, e.currentTarget, ppb, frameScale),
+        getGrabOffsetBars()
+      )
+    )
     // Cmd/Ctrl-drag duplicates a placed clip instead of moving it (see
     // handleDrop's text/rifff-group-id branch) — this just gives the OS its
     // own native "copy" cursor treatment (a green + badge on macOS) while
@@ -130,69 +183,75 @@ function Timeline({
   // channel the drop landed on (a real ChannelRow), or undefined (the
   // Timeline container's own fallback: a ghost row, or any other background
   // space) meaning "give this clip its own brand new channel."
-  async function resolveDrop(
-    e: DragEvent<HTMLDivElement>,
-    targetChannelId: string | undefined
-  ): Promise<void> {
-    e.preventDefault()
-    e.stopPropagation()
-    setDropBar(null)
-    const startBar = applyGrabOffset(
-      barForClientX(e.clientX, e.currentTarget, ppb),
-      getGrabOffsetBars()
-    )
+  //
+  // Wrapped in useCallback, reading state via stateRef.current rather than
+  // closing over the reactive `state` variable -- see stateRef's own doc
+  // comment above for why (this is what lets handleDropOnChannel below stay
+  // referentially stable, which React.memo(ChannelRow) depends on).
+  const resolveDrop = useCallback(
+    async (e: DragEvent<HTMLDivElement>, targetChannelId: string | undefined): Promise<void> => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDropBar(null)
+      const state = stateRef.current
+      const startBar = applyGrabOffset(
+        barForClientX(e.clientX, e.currentTarget, ppb, frameScale),
+        getGrabOffsetBars()
+      )
 
-    // From the shelf — either the rifff's first-ever placement, or (if it's
-    // already placed elsewhere) an independent copy, never a reposition of an
-    // existing clip (that's 'text/rifff-group-id', below).
-    const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
-    if (shelfSourceId) {
-      const source = state.rifffs[shelfSourceId]
-      if (!source) return
-      if (source.startBar === undefined) {
-        const channelId = targetChannelId ?? crypto.randomUUID()
-        dispatch({ type: 'MOVE_TO_CHANNEL', groupId: shelfSourceId, startBar, channelId })
-      } else {
-        const action = pasteRifffAction(state, shelfSourceId, startBar)
+      // From the shelf — either the rifff's first-ever placement, or (if it's
+      // already placed elsewhere) an independent copy, never a reposition of an
+      // existing clip (that's 'text/rifff-group-id', below).
+      const shelfSourceId = e.dataTransfer.getData('text/rifff-shelf-source-id')
+      if (shelfSourceId) {
+        const source = state.rifffs[shelfSourceId]
+        if (!source) return
+        if (source.startBar === undefined) {
+          const channelId = targetChannelId ?? crypto.randomUUID()
+          dispatch({ type: 'MOVE_TO_CHANNEL', groupId: shelfSourceId, startBar, channelId })
+        } else {
+          const action = pasteRifffAction(state, shelfSourceId, startBar)
+          if (action) dispatch(action)
+        }
+        return
+      }
+
+      const groupId = e.dataTransfer.getData('text/rifff-group-id')
+      if (!groupId) {
+        // A real Finder drop, not an internal rifff drag -- each dropped file
+        // becomes its own independent one-shot. Sharing targetChannelId (if
+        // any) means several files dropped together on an existing
+        // ChannelRow all land on that same channel; dropping on empty/ghost
+        // space instead calls crypto.randomUUID() fresh per file, giving
+        // each its own new channel -- same rule already used for a single
+        // internal-drag drop above, just applied per file. See
+        // docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
+        const files = Array.from(e.dataTransfer.files)
+        if (files.length === 0) return
+        for (const file of files) {
+          const path = window.rifffApi.getPathForFile(file)
+          const rifff = await window.rifffApi.importOneShot(path)
+          if (!rifff) continue
+          dispatch({ type: 'ADD_TO_SHELF', rifff })
+          const channelId = targetChannelId ?? crypto.randomUUID()
+          dispatch({ type: 'MOVE_TO_CHANNEL', groupId: rifff.groupId, startBar, channelId })
+        }
+        return
+      }
+      // Cmd/Ctrl held at drop = duplicate rather than move: same
+      // pasteRifffAction already used for "drag an already-placed shelf item
+      // to a new spot" above, leaving the original exactly where it was and
+      // dropping an independent copy at the new position instead.
+      if (e.metaKey || e.ctrlKey) {
+        const action = pasteRifffAction(state, groupId, startBar)
         if (action) dispatch(action)
+        return
       }
-      return
-    }
-
-    const groupId = e.dataTransfer.getData('text/rifff-group-id')
-    if (!groupId) {
-      // A real Finder drop, not an internal rifff drag -- each dropped file
-      // becomes its own independent one-shot. Sharing targetChannelId (if
-      // any) means several files dropped together on an existing
-      // ChannelRow all land on that same channel; dropping on empty/ghost
-      // space instead calls crypto.randomUUID() fresh per file, giving
-      // each its own new channel -- same rule already used for a single
-      // internal-drag drop above, just applied per file. See
-      // docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
-      const files = Array.from(e.dataTransfer.files)
-      if (files.length === 0) return
-      for (const file of files) {
-        const path = window.rifffApi.getPathForFile(file)
-        const rifff = await window.rifffApi.importOneShot(path)
-        if (!rifff) continue
-        dispatch({ type: 'ADD_TO_SHELF', rifff })
-        const channelId = targetChannelId ?? crypto.randomUUID()
-        dispatch({ type: 'MOVE_TO_CHANNEL', groupId: rifff.groupId, startBar, channelId })
-      }
-      return
-    }
-    // Cmd/Ctrl held at drop = duplicate rather than move: same
-    // pasteRifffAction already used for "drag an already-placed shelf item
-    // to a new spot" above, leaving the original exactly where it was and
-    // dropping an independent copy at the new position instead.
-    if (e.metaKey || e.ctrlKey) {
-      const action = pasteRifffAction(state, groupId, startBar)
-      if (action) dispatch(action)
-      return
-    }
-    const channelId = targetChannelId ?? state.channelOf[groupId] ?? crypto.randomUUID()
-    dispatch({ type: 'MOVE_TO_CHANNEL', groupId, startBar, channelId })
-  }
+      const channelId = targetChannelId ?? state.channelOf[groupId] ?? crypto.randomUUID()
+      dispatch({ type: 'MOVE_TO_CHANNEL', groupId, startBar, channelId })
+    },
+    [ppb, frameScale, dispatch]
+  )
 
   // The Timeline container's own catch-all — fires for anything a specific
   // ChannelRow's own onDrop (below) didn't already stop propagation for:
@@ -203,17 +262,27 @@ function Timeline({
   }
 
   // Passed to every ChannelRow — a drop that lands there always means
-  // "reassign to (or land initially on) THIS channel."
-  function handleDropOnChannel(e: DragEvent<HTMLDivElement>, channelId: string): void {
-    void resolveDrop(e, channelId)
-  }
+  // "reassign to (or land initially on) THIS channel." Wrapped in
+  // useCallback (depending only on the already-stable resolveDrop) so this
+  // stays referentially stable across renders too -- see resolveDrop's own
+  // doc comment for why that matters.
+  const handleDropOnChannel = useCallback(
+    (e: DragEvent<HTMLDivElement>, channelId: string) => {
+      void resolveDrop(e, channelId)
+    },
+    [resolveDrop]
+  )
 
   function handleContextMenu(e: MouseEvent<HTMLDivElement>): void {
     // Only reached for empty timeline space — RifffBlockRow's clip stops
     // propagation before this bubbles up, so a right-click on an actual clip
     // never also triggers the paste menu.
     e.preventDefault()
-    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget, ppb))
+    onOpenPasteMenu(
+      e.clientX,
+      e.clientY,
+      barForClientX(e.clientX, e.currentTarget, ppb, frameScale)
+    )
   }
 
   if (state.mode === 'sketch') {
@@ -258,9 +327,15 @@ function Timeline({
       onDrop={handleDrop}
       onContextMenu={handleContextMenu}
       onClick={handleBackgroundClick}
+      onMouseDown={onBackgroundMouseDown}
       style={{ position: 'relative', width: timelineWidthPx, minWidth: '100%' }}
     >
-      <Ruler bars={loopLengthBars(state) + TRAILING_BLANK_BARS} ppb={ppb} />
+      <Ruler
+        bars={loopLengthBars(state) + TRAILING_BLANK_BARS}
+        ppb={ppb}
+        loopRegion={loopRegion}
+        onSetLoopRegion={(region) => dispatch({ type: 'SET_LOOP_REGION', region })}
+      />
       {channels.map((channel) => (
         <ChannelRow
           key={channel.channelId}
@@ -301,6 +376,7 @@ function Timeline({
 function ProjectMenu(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const setBusy = useBusy()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
 
@@ -323,13 +399,24 @@ function ProjectMenu(): React.JSX.Element {
   }
 
   async function handleOpen(): Promise<void> {
+    setBusy('opening project…')
     try {
       const result = await window.rifffApi.openProject()
       if (!result) return
       const loaded = deserializeProject(JSON.parse(result.json))
+      // Pre-warm every stem's analysis caches BEFORE dispatching LOAD_STATE
+      // -- otherwise the timeline/sketch strip renders immediately with
+      // blank waveforms/radial glyphs that visibly pop in one at a time as
+      // each mounted component's own decode happens to finish. Waiting here
+      // means the busy overlay covers that whole "still processing" window
+      // instead of just the file read.
+      setBusy('loading waveforms…')
+      await warmStemCaches(loaded)
       dispatch({ type: 'LOAD_STATE', state: loaded })
     } catch (err) {
       console.error('ProjectMenu: failed to open project:', err)
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -416,18 +503,64 @@ function ProjectMenu(): React.JSX.Element {
 // against with a separate max-interval ceiling.
 const AUTOSAVE_DEBOUNCE_MS = 4000
 
-// Matches index.ts's own default BrowserWindow width -- see Frame's
-// frameScale doc comment for why this is the one reference number the
-// whole proportional-scaling scheme is built from.
-const REFERENCE_WINDOW_WIDTH = 1512
+/** Sketch mode only: while playing, the Inspector automatically shows
+ * whichever rifff currently contains the playhead — no manual click
+ * needed to follow along. Scoped to sketch mode specifically because it's
+ * the only mode where "the currently playing rifff" is unambiguous
+ * (Normal/Compact can have several playing across different rows at
+ * once). Only dispatches SELECT when the playing rifff actually
+ * CHANGES (a transition into a new one) — not on every ~30Hz position
+ * tick — so a manual click on a different tile mid-playback sticks in
+ * the Inspector until the next real transition, instead of snapping back
+ * within the next tick.
+ *
+ * Its own component, not inline in Frame — usePos() updates ~30 times a
+ * second during playback, and Frame renders the entire timeline (every
+ * channel/clip/stem, none of which are memoized). Calling usePos() inside
+ * Frame itself subscribed that whole render to every position tick, even
+ * in Normal mode where this effect is a no-op — a real, measured cause of
+ * sluggish visuals during playback on any project with a nontrivial clip
+ * count. Isolating the subscription here means only this invisible
+ * component (cheap: no DOM, no children) re-renders on each tick instead. */
+function SketchModeAutoFollow(): null {
+  const state = useAppState()
+  const dispatch = useDispatch()
+  const playing = usePlaying()
+  const pos = usePos()
+  const autoFollowedGroupIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (state.mode !== 'sketch' || !playing) {
+      autoFollowedGroupIdRef.current = null
+      return
+    }
+    const current = groupIdAtPosition(state, pos)
+    if (current && current !== autoFollowedGroupIdRef.current) {
+      autoFollowedGroupIdRef.current = current
+      dispatch({ type: 'SELECT', groupId: current })
+    }
+  }, [state, playing, pos, dispatch])
+  return null
+}
 
 function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const setBusy = useBusy()
   const history = useHistory()
   const playing = usePlaying()
-  const pos = usePos()
   const ppb = useZoom()
+  // Lets openClipMenu below read the LATEST state at call time (a context
+  // menu is a discrete, rare user action, not a hot path) without closing
+  // over the reactive `state` variable -- that's what makes it possible to
+  // wrap it in useCallback with a stable identity, which is what lets
+  // React.memo(ChannelRow) (fed this via Timeline's onOpenClipMenu prop)
+  // actually skip re-rendering a channel untouched by a given dispatch.
+  // Same pattern as Timeline's own stateRef, see its doc comment for why
+  // closing over `state` directly would defeat the point.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
 
   // .ra-frame (global.css) is a fixed-size "design canvas" (matching the
   // app's default 1512x982 window, see index.ts) that gets uniformly
@@ -437,20 +570,12 @@ function Frame(): React.JSX.Element {
   // proportion to every other part at any window size, so shrinking
   // towards the window's minimum makes everything smaller together
   // instead of letting fixed-width chrome (e.g. the 308px Inspector) eat a
-  // disproportionate share of a now-much-smaller timeline area.
-  //
-  // Derived from window.innerWidth alone, not innerHeight -- innerWidth
-  // has no OS chrome to account for (a title bar only adds height), and
-  // the window's own aspect ratio is already locked 3:2 (index.ts's
-  // setAspectRatio), so width and height always change in lockstep.
-  const [frameScale, setFrameScale] = useState(() => window.innerWidth / REFERENCE_WINDOW_WIDTH)
-  useEffect(() => {
-    function handleResize(): void {
-      setFrameScale(window.innerWidth / REFERENCE_WINDOW_WIDTH)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  // disproportionate share of a now-much-smaller timeline area. See
+  // FrameScaleContext for the state/resize-listener itself (shared with
+  // every component that needs to convert a real screen pixel into a
+  // logical one), and its own doc comment for the broader "this is why raw
+  // pixel math silently drifts off target after a resize" story.
+  const frameScale = useFrameScale()
 
   // Once, on mount: offer to restore a crash-recovery snapshot from a
   // previous session that never got explicitly saved (see projectFile.ts's
@@ -463,11 +588,17 @@ function Frame(): React.JSX.Element {
       const json = await window.rifffApi.loadAutosave()
       if (!json) return
       if (window.confirm('Recover unsaved work from a previous session?')) {
-        dispatch({ type: 'LOAD_STATE', state: deserializeProject(JSON.parse(json)) })
+        const loaded = deserializeProject(JSON.parse(json))
+        // Same pre-warm as ProjectMenu's handleOpen -- see its own doc
+        // comment for why this happens before LOAD_STATE, not after.
+        setBusy('loading waveforms…')
+        await warmStemCaches(loaded)
+        dispatch({ type: 'LOAD_STATE', state: loaded })
+        setBusy(null)
       }
       void window.rifffApi.clearAutosave()
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch is stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch/setBusy are stable
   }, [])
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
@@ -544,50 +675,62 @@ function Frame(): React.JSX.Element {
   // deleted is just silently ignored).
   const [clipboard, setClipboard] = useState<string | null>(null)
 
-  function openClipMenu(x: number, y: number, groupId: string): void {
-    const rifff = state.rifffs[groupId]
-    if (!rifff) return
-    // A rifff can be left with a live but never-actually-baked downbeat
-    // correction — the main case being a LORE-sourced stem picked before
-    // bakeOffset.ts could bake those at all (see its own doc comment).
-    // Playback already accounts for it correctly (SchedulePlayback wraps
-    // the offset), so this is a "clean up, not fix" action — only offered
-    // when there's actually something to re-bake.
-    const hasUnbakedOffset = (state.off[groupId] ?? 0) !== 0
-    setContextMenu({
-      x,
-      y,
-      items: [
-        { label: 'copy', onClick: () => setClipboard(groupId) },
-        {
-          label: 'duplicate',
-          onClick: () => {
-            const action = pasteRifffAction(state, groupId, (rifff.startBar ?? 0) + rifff.barLength)
-            if (action) dispatch(action)
-          }
-        },
-        // Meaningless for an already-single-stem rifff — nothing to split.
-        ...(rifff.stems.length > 1
-          ? [{ label: 'ungroup', onClick: () => dispatch({ type: 'UNGROUP', groupId }) }]
-          : []),
-        ...(hasUnbakedOffset
-          ? [
-              {
-                label: 're-bake downbeat',
-                onClick: () => {
-                  void rebakeRifff(dispatch, state, groupId)
+  // Wrapped in useCallback, reading state via stateRef.current rather than
+  // closing over the reactive `state` variable -- see stateRef's own doc
+  // comment above for why (this is what lets Timeline's onOpenClipMenu prop
+  // stay referentially stable, which React.memo(ChannelRow) depends on).
+  const openClipMenu = useCallback(
+    (x: number, y: number, groupId: string): void => {
+      const state = stateRef.current
+      const rifff = state.rifffs[groupId]
+      if (!rifff) return
+      // A rifff can be left with a live but never-actually-baked downbeat
+      // correction — the main case being a LORE-sourced stem picked before
+      // bakeOffset.ts could bake those at all (see its own doc comment).
+      // Playback already accounts for it correctly (SchedulePlayback wraps
+      // the offset), so this is a "clean up, not fix" action — only offered
+      // when there's actually something to re-bake.
+      const hasUnbakedOffset = (state.off[groupId] ?? 0) !== 0
+      setContextMenu({
+        x,
+        y,
+        items: [
+          { label: 'copy', onClick: () => setClipboard(groupId) },
+          {
+            label: 'duplicate',
+            onClick: () => {
+              const action = pasteRifffAction(
+                state,
+                groupId,
+                (rifff.startBar ?? 0) + rifff.barLength
+              )
+              if (action) dispatch(action)
+            }
+          },
+          // Meaningless for an already-single-stem rifff — nothing to split.
+          ...(rifff.stems.length > 1
+            ? [{ label: 'ungroup', onClick: () => dispatch({ type: 'UNGROUP', groupId }) }]
+            : []),
+          ...(hasUnbakedOffset
+            ? [
+                {
+                  label: 're-bake downbeat',
+                  onClick: () => {
+                    void rebakeRifff(dispatch, state, groupId)
+                  }
                 }
-              }
-            ]
-          : []),
-        {
-          label: 'delete',
-          danger: true,
-          onClick: () => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
-        }
-      ]
-    })
-  }
+              ]
+            : []),
+          {
+            label: 'delete',
+            danger: true,
+            onClick: () => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
+          }
+        ]
+      })
+    },
+    [dispatch]
+  )
 
   function openPasteMenu(x: number, y: number, bar: number): void {
     if (!clipboard || !state.rifffs[clipboard]) return
@@ -736,39 +879,6 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [state, dispatch])
 
-  // Shift+<qwerty letter> mutes/unmutes any currently-visible channel — see
-  // channelMuteLetters' doc comment for the matching on-screen letter shown
-  // on each channel's mute badge while Shift is held (StemWaveformRow,
-  // CollapsedRifffRow). Global across every visible row now, not scoped to
-  // the selected rifff — channelMuteLetters already guarantees unique
-  // letters across all of them, so there's no more ambiguity to avoid.
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (!e.shiftKey) return
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      const letters = channelMuteLetters(state)
-      const pressedKey = e.key.toLowerCase()
-      const channelKey = Object.keys(letters).find((k) => letters[k] === pressedKey)
-      if (!channelKey) return
-      e.preventDefault()
-      // A bare groupId (no ':') is a collapsed row's whole-group channel;
-      // otherwise it's stemKey(groupId, slot) for one expanded stem — see
-      // channelMuteLetters' doc comment on how the two are told apart.
-      const sepIndex = channelKey.lastIndexOf(':')
-      if (sepIndex === -1) {
-        const rifff = state.rifffs[channelKey]
-        if (!rifff) return
-        const allMuted = rifff.stems.every((s) => state.mute[stemKey(channelKey, s.slot)])
-        dispatch({ type: 'SET_GROUP_MUTE', groupId: channelKey, muted: !allMuted })
-      } else {
-        dispatch({ type: 'TOGGLE_MUTE', stemKey: channelKey })
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state, dispatch])
-
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
   // mid-typing in the tempo field should edit the field's text, not the arrangement.
@@ -806,36 +916,8 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
-  // Sketch mode only: while playing, the Inspector automatically shows
-  // whichever rifff currently contains the playhead — no manual click
-  // needed to follow along. Scoped to sketch mode specifically because it's
-  // the only mode where "the currently playing rifff" is unambiguous
-  // (Normal/Compact can have several playing across different rows at
-  // once). Only dispatches SELECT when the playing rifff actually
-  // CHANGES (a transition into a new one) — not on every ~30Hz position
-  // tick — so a manual click on a different tile mid-playback sticks in
-  // the Inspector until the next real transition, instead of snapping back
-  // within the next tick.
-  const autoFollowedGroupIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (state.mode !== 'sketch' || !playing) {
-      autoFollowedGroupIdRef.current = null
-      return
-    }
-    const current = groupIdAtPosition(state, pos)
-    if (current && current !== autoFollowedGroupIdRef.current) {
-      autoFollowedGroupIdRef.current = current
-      dispatch({ type: 'SELECT', groupId: current })
-    }
-  }, [state, playing, pos, dispatch])
-
-  // Hold H to pan the arranger view by dragging anywhere in it, rather than
-  // having to grab the scrollbar directly. The overlay below sits on top of
-  // Timeline while held, capturing the drag itself so none of Timeline's own
-  // click/drag interactions (select, move clip, resize...) fire underneath
-  // it — cheaper than teaching every interactive element inside Timeline/
-  // RifffBlockRow/SketchStrip/CompactRifffBlock to ignore mousedown while
-  // hand mode is active.
+  // Hold Cmd to pan the arranger view by dragging anywhere in it, rather
+  // than having to grab the scrollbar directly.
   const handModeHeld = useHandModeHeld()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [panning, setPanning] = useState(false)
@@ -868,7 +950,12 @@ function Frame(): React.JSX.Element {
     if (!container) return
     const rect = container.getBoundingClientRect()
     pendingZoomAnchorRef.current = {
-      cursorXInContainer: e.clientX - rect.left,
+      // getBoundingClientRect()/clientX report real screen pixels, but
+      // container.scrollLeft (combined with this below, in
+      // scrollLeftForZoomChange) is logical -- see FrameScaleContext's own
+      // doc comment. Converting here keeps the anchor calc in one
+      // consistent (logical) unit throughout.
+      cursorXInContainer: toLogicalX(e.clientX - rect.left, frameScale),
       oldScrollLeft: container.scrollLeft,
       oldPpb: ppb
     }
@@ -907,10 +994,11 @@ function Frame(): React.JSX.Element {
     void container.offsetHeight
   }, [ppb])
 
-  // Sets the cursor at the document level (not just on the pan overlay div
-  // below) so pressing M shows the hand immediately no matter where the
-  // mouse already happens to be sitting — the overlay's own `cursor` style
-  // only takes effect once the mouse actually enters the arranger area.
+  // Sets the cursor at the document level so holding Cmd shows the hand
+  // immediately no matter where the mouse already happens to be sitting —
+  // matches Cmd's other role as the zoom modifier (Cmd+scroll), so holding
+  // it always reads as "viewport navigation" regardless of which specific
+  // gesture follows.
   useEffect(() => {
     if (!handModeHeld) return
     document.body.style.cursor = panning ? 'grabbing' : 'grab'
@@ -919,15 +1007,44 @@ function Frame(): React.JSX.Element {
     }
   }, [handModeHeld, panning])
 
+  // Only starts a pan when the mousedown is Cmd-held and doesn't land on an
+  // actual clip surface -- a clip's own Cmd+drag means "duplicate this
+  // clip" (native HTML5 drag, handled entirely separately) and must never
+  // be intercepted by this. Originally checked `e.target === e.currentTarget`,
+  // but that was far too strict: ChannelRow's own row wrapper, RifffBlockRow's
+  // own wrapper, and the ghost rows all sit between the timeline's background
+  // div and empty (non-clip) space within a channel row, so almost every
+  // mousedown on genuinely empty space had some intervening div as its
+  // target and silently failed this check -- panning only ever worked when
+  // clicking pixels with literally nothing rendered between them and
+  // Timeline's own div. The `[data-rifff-clip]` marker (on RifffBlockRow's
+  // name bar and the actual clip-body surface in StemWaveformRow/
+  // CollapsedRifffRow) is what those components render pixels for; anything
+  // else bubbling up here is background, panned regardless of which
+  // wrapper div happens to sit in between.
+  // Pans freely in both directions -- unlike the wheel-driven zoom gesture
+  // above, which axis-locks to decide zoom-vs-pan, a Cmd+drag is
+  // unambiguously "pan" already (that's the whole gesture), so there's
+  // nothing to axis-lock here; only the wheel case needs isVerticalDominant.
   function handlePanMouseDown(e: MouseEvent<HTMLDivElement>): void {
+    if (!e.metaKey) return
+    if ((e.target as HTMLElement).closest('[data-rifff-clip]')) return
     const container = scrollContainerRef.current
     if (!container) return
     const startScrollLeft = container.scrollLeft
+    const startScrollTop = container.scrollTop
     setPanning(true)
     startPointerDrag(
       e,
-      (deltaX) => {
-        container.scrollLeft = startScrollLeft - deltaX
+      (deltaX, deltaY) => {
+        // startPointerDrag's deltaX/deltaY are real screen pixels (from
+        // native mousemove clientX/clientY), but scrollLeft/scrollTop are
+        // logical -- see FrameScaleContext's own doc comment. Without
+        // dividing out frameScale first, the view pans faster or slower
+        // than the actual cursor movement the moment the window isn't at
+        // its default size.
+        container.scrollLeft = startScrollLeft - toLogicalX(deltaX, frameScale)
+        container.scrollTop = startScrollTop - toLogicalX(deltaY, frameScale)
       },
       () => setPanning(false)
     )
@@ -935,6 +1052,7 @@ function Frame(): React.JSX.Element {
 
   return (
     <div className="ra-viewport">
+      <SketchModeAutoFollow />
       <div className="ra-frame" style={{ transform: `translate(-50%, -50%) scale(${frameScale})` }}>
         <div
           style={{
@@ -971,22 +1089,14 @@ function Frame(): React.JSX.Element {
             <div
               ref={scrollContainerRef}
               onWheel={handleTimelineWheel}
-              style={{ height: '100%', overflowX: 'auto' }}
+              style={{ height: '100%', overflowX: 'auto', overflowY: 'auto' }}
             >
-              <Timeline onOpenClipMenu={openClipMenu} onOpenPasteMenu={openPasteMenu} />
-            </div>
-            {handModeHeld && (
-              <div
-                onMouseDown={handlePanMouseDown}
-                title="drag to pan (release M to exit)"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  cursor: panning ? 'grabbing' : 'grab',
-                  zIndex: 10
-                }}
+              <Timeline
+                onOpenClipMenu={openClipMenu}
+                onOpenPasteMenu={openPasteMenu}
+                onBackgroundMouseDown={handlePanMouseDown}
               />
-            )}
+            </div>
           </div>
           {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click
@@ -1085,8 +1195,13 @@ function Frame(): React.JSX.Element {
 
 export default function App(): React.JSX.Element {
   return (
-    <StoreProvider>
-      <Frame />
-    </StoreProvider>
+    <FrameScaleProvider>
+      <StoreProvider>
+        <BusyProvider>
+          <Frame />
+          <BusyOverlay />
+        </BusyProvider>
+      </StoreProvider>
+    </FrameScaleProvider>
   )
 }
