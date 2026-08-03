@@ -45,6 +45,36 @@ namespace sssketch
                 expect(recorder.hasCompletedPass());
             }
 
+            // Regression test for a real bug found in code review: Transport
+            // used to derive the pass-boundary trigger from its own position
+            // clock, which freezes while paused (recording capture runs
+            // regardless of play state). A pause landing inside the trigger
+            // window meant onPassBoundary() re-fired on every single
+            // callback for as long as the pause lasted -- repeatedly wiping
+            // the buffer instead of ever completing a pass. Fixed by driving
+            // the trigger off isFull() (accumulated write count) instead,
+            // which this test exercises directly: once a pass completes and
+            // resets the write position, checking isFull() again with no new
+            // writes in between (simulating however many further callbacks
+            // happen while paused, each contributing nothing new) must stay
+            // false -- it should never re-trip on its own.
+            beginTest("isFull() does not re-trigger without new writes after a pass completes");
+            {
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                std::vector<float> inputData(4800, 0.5f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 4800);
+                expect(recorder.isFull());
+                recorder.onPassBoundary();
+                expect(recorder.hasCompletedPass());
+                // Simulate several more audio callbacks with no new samples
+                // written (as would happen while paused) -- isFull() must
+                // stay false throughout, not flip back to true on its own.
+                expect(!recorder.isFull());
+                expect(!recorder.isFull());
+                expect(!recorder.isFull());
+            }
+
             beginTest("each new pass overwrites the buffer from the start");
             {
                 LoopRecorder recorder(48000.0, 0.1);
