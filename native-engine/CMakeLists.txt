@@ -67,6 +67,8 @@ target_sources(sssketch_engine PRIVATE
   Source/RenderExport.cpp
   Source/BakeStem.cpp
   Source/BakeStemTests.cpp
+  Source/LoopRecorder.cpp
+  Source/LoopRecorderTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE
