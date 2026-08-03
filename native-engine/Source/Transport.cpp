@@ -181,26 +181,28 @@ namespace sssketch
         // here should assume that always holds true, e.g. if the user
         // manually pauses mid-take). recordingLoopEndBar > start is the
         // "is a recording loop active" check throughout.
+        //
+        // Pass-boundary detection is driven by LoopRecorder's own
+        // isFull() (a plain accumulated-sample-count check), NOT by
+        // comparing positionBars against the loop's bar range the way
+        // renderLoopAware does for loopLengthBars below -- positionBars
+        // is the TRANSPORT's clock, which deliberately stays frozen while
+        // paused/stopped (recording capture keeps running regardless, per
+        // the comment above). Deriving the boundary from position instead
+        // of accumulated write count would re-fire onPassBoundary() on
+        // EVERY callback for as long as a pause happened to land inside
+        // the trigger window, repeatedly wiping the buffer instead of
+        // ever completing a pass -- isFull() only ever crosses its
+        // threshold once per bufferful, since onPassBoundary() itself
+        // resets the write position straight back to 0.
         if (auto* recorder = loopRecorder.load())
         {
             const double recStart = recordingLoopStartBar.load();
             const double recEnd = recordingLoopEndBar.load();
-            if (recEnd > recStart && secPerBar > 0.0)
+            if (recEnd > recStart)
             {
                 recorder->writeBlock(inputChannelData, numInputChannels, 0, numSamples);
-
-                // Same distToEnd/blockDurationBars wrap-detection math
-                // renderLoopAware uses for loopLengthBars below, applied a
-                // second time against the recording loop's own bounds --
-                // deliberately not shared/refactored into one helper this
-                // pass, to keep this task's diff small and reviewable;
-                // worth unifying later if a third independent loop concept
-                // ever shows up.
-                const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
-                const double blockDurationBars = numSamples * barsPerSample;
-                const double posInLoop = std::fmod(positionBars.load() - recStart, recEnd - recStart);
-                const double distToEnd = (recEnd - recStart) - (posInLoop < 0.0 ? posInLoop + (recEnd - recStart) : posInLoop);
-                if (distToEnd < blockDurationBars)
+                if (recorder->isFull())
                     recorder->onPassBoundary();
             }
         }

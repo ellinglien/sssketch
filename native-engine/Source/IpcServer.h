@@ -31,6 +31,10 @@ namespace sssketch
     private:
         void sendJson(const juce::var& payload);
         void timerCallback() override; // pushes position-update while playing
+        // Shared by the destructor and connectionLost() -- either can run
+        // while a recording is still armed. See its own doc comment (.cpp)
+        // for why this deliberately leaks rather than frees synchronously.
+        void detachArmedRecorderOnTeardown();
 
         PlaybackEngine& engine;
         Transport& transport;
@@ -44,6 +48,14 @@ namespace sssketch
         // "at most one armed channel" scope.
         std::unique_ptr<LoopRecorder> armedRecorder;
         juce::String armedChannelId;
+        // Holds whatever armedRecorder pointed at just before the most
+        // recent disarm/re-arm, kept alive one extra cycle rather than
+        // freed immediately -- see messageReceived's disarm-recording/
+        // arm-recording handling for why. Overwritten (freeing the
+        // PREVIOUS previousRecorder, always safely by then) on each
+        // subsequent disarm/re-arm; never read, purely a deferred-deletion
+        // holding spot.
+        std::unique_ptr<LoopRecorder> previousRecorder;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer

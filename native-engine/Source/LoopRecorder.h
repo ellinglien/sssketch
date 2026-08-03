@@ -42,6 +42,22 @@ namespace sssketch
          * write position to 0 for the next one. */
         void onPassBoundary();
 
+        /** True once writeBlock() calls have filled the buffer completely
+         * since the last onPassBoundary() reset -- purely a count of
+         * samples actually written, independent of the transport's own
+         * position clock. Transport calls onPassBoundary() based on this,
+         * not on its own bars/position math: recording capture runs
+         * "independent of play/pause" (see Transport.cpp's own comment at
+         * the call site), so positionBars can sit frozen indefinitely
+         * while paused -- deriving the boundary from position rather than
+         * from actual accumulated write count would fire repeatedly, once
+         * per callback, for as long as a pause happened to land inside the
+         * trigger window, corrupting the capture instead of completing one
+         * pass. Sample count only ever advances via real writeBlock()
+         * calls, which happen every callback regardless of play state, so
+         * this can only ever cross the threshold once per bufferful. */
+        bool isFull() const { return writePos >= buffer.getNumSamples(); }
+
         /** True once at least one full pass has completed since
          * construction (or since the buffer was last reset by a prior
          * onPassBoundary() call) -- checked at disarm time to decide

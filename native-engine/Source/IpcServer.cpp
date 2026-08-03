@@ -47,6 +47,7 @@ namespace sssketch
     IpcConnection::~IpcConnection()
     {
         stopTimer();
+        detachArmedRecorderOnTeardown();
         // InterprocessConnection's destructor requires derived classes to have
         // already called disconnect() — without this, pending messages can still
         // be delivered to this object's (now partially destroyed) vtable, and the
@@ -54,6 +55,30 @@ namespace sssketch
         // plan's sample code; added because the base class header and .cpp both
         // document this as a hard requirement, not an optional cleanup step.
         disconnect();
+    }
+
+    // Detaches an armed recorder from Transport at connection teardown
+    // (destructor or connectionLost -- either can run while a recording is
+    // still armed, e.g. the client quits or crashes mid-take). Unlike a
+    // normal arm-recording/disarm-recording cycle, there is no "next
+    // cycle" here to safely defer the real free to (see
+    // previousRecorder's own doc comment for that mechanism) -- this
+    // object is going away right now. Detaching the raw pointer first
+    // still matters (stops the audio thread from being handed this
+    // pointer on its NEXT callback), but deliberately leaks the
+    // LoopRecorder itself (release(), not reset()) rather than freeing it
+    // synchronously -- a small, rare, bounded leak (one loop pass's worth
+    // of a mono float buffer, only when a recording happens to be armed
+    // at the exact moment a connection is lost) is a far better trade
+    // than risking a real audio-thread use-after-free crash in this
+    // codebase's single highest-blast-radius file (see this repo's own
+    // CLAUDE.md on the native engine).
+    void IpcConnection::detachArmedRecorderOnTeardown()
+    {
+        if (!armedRecorder) return;
+        transport.setLoopRecorder(nullptr);
+        transport.setRecordingLoop(0.0, 0.0);
+        armedRecorder.release();
     }
 
     void IpcConnection::connectionMade()
@@ -66,6 +91,7 @@ namespace sssketch
         juce::Logger::writeToLog("IpcConnection: client disconnected");
         stopTimer();
         transport.stop();
+        detachArmedRecorderOnTeardown();
     }
 
     void IpcConnection::sendJson(const juce::var& payload)
@@ -175,6 +201,21 @@ namespace sssketch
             {
                 const double secPerBarNow = (60.0 / transport.currentBpm()) * 4.0;
                 const double loopLengthSeconds = (endBar - startBar) * secPerBarNow;
+                // Detach whatever's currently referenced by Transport FIRST,
+                // and move any previously-armed recorder into
+                // previousRecorder rather than letting armedRecorder's
+                // reassignment below destroy it in place -- a re-arm
+                // without an intervening disarm would otherwise free the
+                // old LoopRecorder while the audio thread could still be
+                // mid-callback with Transport's (not-yet-updated) raw
+                // pointer to it, a real use-after-free window. Deferring
+                // the actual free to the NEXT disarm/re-arm (see
+                // previousRecorder's own doc comment) gives the audio
+                // thread ample time -- several callbacks, each a few
+                // milliseconds -- to have already observed the
+                // just-stored nullptr before anything is actually freed.
+                transport.setLoopRecorder(nullptr);
+                previousRecorder = std::move(armedRecorder);
                 armedChannelId = channelId;
                 armedRecorder = std::make_unique<LoopRecorder>(transport.currentSampleRate(), loopLengthSeconds);
                 transport.setRecordingLoop(startBar, endBar);
@@ -212,7 +253,13 @@ namespace sssketch
             {
                 payloadObj->setProperty("committed", false);
             }
-            armedRecorder.reset();
+            // Deferred free, not an immediate reset() -- see
+            // previousRecorder's own doc comment and arm-recording's
+            // identical handling above for why: the audio thread may
+            // still be mid-callback with Transport's raw pointer to this
+            // object for a brief window right after setLoopRecorder(nullptr)
+            // above, so freeing it here in place would race that.
+            previousRecorder = std::move(armedRecorder);
             armedChannelId = {};
 
             juce::DynamicObject::Ptr obj = new juce::DynamicObject();
