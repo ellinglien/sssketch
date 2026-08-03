@@ -304,6 +304,48 @@ function ChannelRowImpl({
     }
   }, [isArmed, channelId])
 
+  // Live-updates the engine's recording loop bounds when the user resizes
+  // loopRegion while this channel is already armed -- found during manual
+  // testing that dragging the loop region mid-recording was silently
+  // ignored until the user stopped and restarted. Re-sends arm-recording
+  // with the new bounds, reusing the exact same lifecycle-safe swap the
+  // engine already does for an ordinary re-arm-without-disarm (detach the
+  // old LoopRecorder, defer-free it, construct a fresh one sized for the
+  // new region, re-attach -- see IpcServer.cpp's arm-recording handler) --
+  // no new native code needed, this just calls that same path again.
+  // Debounced rather than firing on every drag-move tick (SET_LOOP_REGION
+  // dispatches on every mousemove): re-arming discards whatever's been
+  // captured in the current pass so far, so doing that dozens of times a
+  // second mid-drag would be wasteful and could visibly stutter the live
+  // waveform. Settles ~300ms after the last change instead, i.e. once the
+  // user pauses or releases.
+  useEffect(() => {
+    if (!isArmed || !selectedInputDevice || !loopRegion) return
+    const armedRegion = armedLoopRegionRef.current
+    if (
+      armedRegion &&
+      armedRegion.startBar === loopRegion.startBar &&
+      armedRegion.endBar === loopRegion.endBar
+    ) {
+      return // no actual change since the last (re-)arm
+    }
+    const timeoutId = window.setTimeout(() => {
+      void window.rifffApi
+        .engineArmRecording(channelId, selectedInputDevice, loopRegion.startBar, loopRegion.endBar)
+        .then((result) => {
+          if (result.success) {
+            armedLoopRegionRef.current = loopRegion
+          } else {
+            console.error('ChannelRow: failed to update armed recording loop bounds:', result.error)
+          }
+        })
+        .catch((err) => {
+          console.error('ChannelRow: failed to update armed recording loop bounds:', err)
+        })
+    }, 300)
+    return () => window.clearTimeout(timeoutId)
+  }, [isArmed, selectedInputDevice, loopRegion, channelId])
+
   return (
     <div
       data-channel-id={channelId}
@@ -399,7 +441,22 @@ function ChannelRowImpl({
           )}
         </div>
       </div>
+      {rifffs.map((rifff) => (
+        <RifffBlockRow
+          key={rifff.groupId}
+          groupId={rifff.groupId}
+          onOpenContextMenu={onOpenContextMenu}
+        />
+      ))}
       {isArmed && loopRegion && (
+        // Rendered AFTER rifffs.map above, not before -- both are plain
+        // position:absolute siblings with no explicit z-index, so DOM
+        // order alone decides paint order. Placed earlier, this overlay
+        // was invisible any time a recording channel already had a clip
+        // on it (the normal retake case): RifffBlockRow's own opaque
+        // background painted straight over it. pointerEvents: none means
+        // sitting on top here still can't block clicking the clip
+        // underneath.
         <div
           style={{
             position: 'absolute',
@@ -418,7 +475,8 @@ function ChannelRowImpl({
             <div
               key={i}
               style={{
-                width: 3,
+                flex: '1 1 0',
+                minWidth: 1,
                 height: `${Math.max(4, peak * 100)}%`,
                 background: peak > 0 ? typeColorVar('audioIn') : 'var(--ra-border)'
               }}
@@ -426,13 +484,6 @@ function ChannelRowImpl({
           ))}
         </div>
       )}
-      {rifffs.map((rifff) => (
-        <RifffBlockRow
-          key={rifff.groupId}
-          groupId={rifff.groupId}
-          onOpenContextMenu={onOpenContextMenu}
-        />
-      ))}
       {chainPanelOpen && (
         <ChannelChainPanel channelId={channelId} onClose={() => setChainPanelOpen(false)} />
       )}

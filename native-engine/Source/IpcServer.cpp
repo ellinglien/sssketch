@@ -122,7 +122,14 @@ namespace sssketch
             juce::DynamicObject::Ptr capPayload = new juce::DynamicObject();
             capPayload->setProperty("channelId", armedChannelId);
             juce::Array<juce::var> peaksVar;
-            for (float peak : armedRecorder->peaksSoFar(32))
+            // 64, not the original 32 -- bumped per feedback during manual
+            // testing asking for finer resolution, closer to (but less
+            // detailed than) the real waveform views elsewhere, which use
+            // peaksFromChannel's own 128-bucket default (see
+            // @shared/visuals.ts). Kept below that rather than matching it
+            // exactly -- this is a coarse "building up" indicator sampled
+            // live every ~33ms, not a one-shot full-file decode.
+            for (float peak : armedRecorder->peaksSoFar(64))
                 peaksVar.add(peak);
             capPayload->setProperty("peaksSoFar", peaksVar);
             juce::DynamicObject::Ptr capObj = new juce::DynamicObject();
