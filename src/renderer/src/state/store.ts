@@ -116,6 +116,12 @@ export interface AppState {
    * in REMOVE_FROM_TIMELINE, DELETE_RIFFFS, and MOVE_TO_CHANNEL -- never a
    * separate pass. */
   channelPlugins: Record<string, [string | null, string | null]>
+  /** The loop-recording region, in bars — null until the user first drags
+   * one out on the Ruler. Independent of loopLengthBars (the whole
+   * project's own wrap point, computed from placed clips) -- this can be
+   * shorter, longer, or positioned anywhere. See
+   * docs/superpowers/specs/2026-08-03-loop-recording-design.md. */
+  loopRegion: { startBar: number; endBar: number } | null
   rifffs: Record<string, Rifff>
 }
 
@@ -133,6 +139,7 @@ export const initialState: AppState = {
   channelOrder: [],
   channelOf: {},
   exp: {},
+  loopRegion: null,
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
@@ -213,6 +220,7 @@ export type Action =
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
+  | { type: 'SET_LOOP_REGION'; region: { startBar: number; endBar: number } | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -850,6 +858,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_INSPECTOR_COLLAPSED':
       return { ...state, inspectorCollapsed: !state.inspectorCollapsed }
+
+    case 'SET_LOOP_REGION':
+      return { ...state, loopRegion: action.region }
 
     case 'LOAD_STATE':
       return action.state

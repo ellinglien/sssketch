@@ -1163,4 +1163,23 @@ describe('reducer', () => {
       expect(state.channelPlugins['other-channel']).toEqual(['soothe2', null])
     })
   })
+
+  describe('SET_LOOP_REGION', () => {
+    it('sets the loop region', () => {
+      const next = reducer(initialState, {
+        type: 'SET_LOOP_REGION',
+        region: { startBar: 4, endBar: 12 }
+      })
+      expect(next.loopRegion).toEqual({ startBar: 4, endBar: 12 })
+    })
+
+    it('clears the loop region when given null', () => {
+      const withRegion = reducer(initialState, {
+        type: 'SET_LOOP_REGION',
+        region: { startBar: 4, endBar: 12 }
+      })
+      const cleared = reducer(withRegion, { type: 'SET_LOOP_REGION', region: null })
+      expect(cleared.loopRegion).toBeNull()
+    })
+  })
 })
