@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { initialState, reducer, type AppState } from './store'
 import {
   resolvePlayedBars,
+  resolvedPlayedBarsFromFields,
   clipGeometry,
+  clipGeometryFromFields,
   stretchRatio,
   loopLengthBars,
   offsetStepsForBeatIndex,
@@ -80,6 +82,16 @@ describe('channelMuteLetters', () => {
   })
 })
 
+describe('resolvedPlayedBarsFromFields', () => {
+  it('returns the override when one is set', () => {
+    expect(resolvedPlayedBarsFromFields(12, 8)).toBe(12)
+  })
+
+  it('falls back to the rifff bar length when no override is set', () => {
+    expect(resolvedPlayedBarsFromFields(undefined, 8)).toBe(8)
+  })
+})
+
 describe('resolvePlayedBars', () => {
   it('falls back to rifff.barLength when unset', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
@@ -99,6 +111,30 @@ describe('stretchRatio', () => {
   it('is projectBpm / rifffBpm', () => {
     const state = { ...reducer(initialState, { type: 'ADD_TO_SHELF', rifff }), bpm: 75 }
     expect(stretchRatio(state, 'r1')).toBeCloseTo(0.5, 10)
+  })
+})
+
+describe('clipGeometryFromFields', () => {
+  it('matches clipGeometry exactly for a plain, unstretched-off, no-offset clip', () => {
+    const bars = clipGeometryFromFields(4, 0, 4, undefined, 8, true, 150, 150, 24)
+    expect(bars).toEqual({ leftPx: 96, widthPx: 192 })
+  })
+
+  it('applies the sub-bar nudge offset', () => {
+    // offsetSteps=-8 at snapDiv=4 is -2 bars -> leftPx shifts by -2*24=-48
+    const bars = clipGeometryFromFields(4, -8, 4, undefined, 8, true, 150, 150, 24)
+    expect(bars.leftPx).toBe(96 - 48)
+  })
+
+  it('scales widthPx by the bpm ratio when stretch is off', () => {
+    // stretch off: shownBars = playedBars * (rifffBpm/stateBpm) = 8 * (150/100) = 12
+    const bars = clipGeometryFromFields(0, 0, 4, undefined, 8, false, 150, 100, 24)
+    expect(bars.widthPx).toBe(12 * 24)
+  })
+
+  it('uses the playedBars override over the rifff bar length', () => {
+    const bars = clipGeometryFromFields(0, 0, 4, 16, 8, true, 150, 150, 24)
+    expect(bars.widthPx).toBe(16 * 24)
   })
 })
 

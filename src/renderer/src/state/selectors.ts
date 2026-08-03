@@ -56,12 +56,24 @@ export function channelMuteLetters(state: AppState): Record<string, string> {
   return out
 }
 
+/** The played-bars override/fallback logic on its own, so a caller that
+ * already has these two fields via individual selectors (see
+ * useAppSelector, StoreContext.tsx) doesn't need a full AppState just to
+ * call resolvePlayedBars. resolvePlayedBars below is now a thin wrapper
+ * around this. */
+export function resolvedPlayedBarsFromFields(
+  playedBarsOverride: number | undefined,
+  rifffBarLength: number
+): number {
+  return playedBarsOverride ?? rifffBarLength
+}
+
 /** A clip's own played length, in bars — the tiling loop's bound. Falls
  * back to rifff.barLength (today's implicit behavior) when no resize
  * override has been set. */
 export function resolvePlayedBars(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
-  return state.playedBars[groupId] ?? rifff.barLength
+  return resolvedPlayedBarsFromFields(state.playedBars[groupId], rifff.barLength)
 }
 
 export function stretchRatio(state: AppState, groupId: string): number {
@@ -188,16 +200,43 @@ export function groupIdAtPosition(state: AppState, pos: number): string | null {
  * to only use rifff.barLength unconditionally, a real bug that stemGeometry
  * (now folded in here, since per-stem geometry divergence no longer exists
  * — see UNGROUP) used to work around for the expanded per-stem view only. */
+/** clipGeometry's own formula, parameterized by individual fields instead
+ * of a full AppState -- see resolvedPlayedBarsFromFields's doc comment
+ * for why. clipGeometry below is now a thin wrapper around this. */
+export function clipGeometryFromFields(
+  startBar: number,
+  offsetSteps: number,
+  snapDiv: number,
+  playedBarsOverride: number | undefined,
+  rifffBarLength: number,
+  stretchOn: boolean,
+  rifffBpm: number,
+  stateBpm: number,
+  ppb: number
+): ClipGeometry {
+  const offsetPx = (offsetSteps * ppb) / snapDiv
+  const playedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifffBarLength)
+  const shownBars = stretchOn ? playedBars : playedBars * (rifffBpm / stateBpm)
+  return { leftPx: startBar * ppb + offsetPx, widthPx: shownBars * ppb }
+}
+
 export function clipGeometry(state: AppState, groupId: string, ppb: number): ClipGeometry {
   const rifff = state.rifffs[groupId]
   const start = rifff.startBar ?? 0
   const offsetSteps = state.off[groupId] ?? 0
   const snapDiv = SNAP_DIVS[state.snapIdx]
-  const offsetPx = (offsetSteps * ppb) / snapDiv
-  const playedBars = resolvePlayedBars(state, groupId)
   const stretchOn = state.stretch[groupId] ?? true
-  const shownBars = stretchOn ? playedBars : playedBars * (rifff.bpm / state.bpm)
-  return { leftPx: start * ppb + offsetPx, widthPx: shownBars * ppb }
+  return clipGeometryFromFields(
+    start,
+    offsetSteps,
+    snapDiv,
+    state.playedBars[groupId],
+    rifff.barLength,
+    stretchOn,
+    rifff.bpm,
+    state.bpm,
+    ppb
+  )
 }
 
 const DEFAULT_LOOP_BARS = 32
