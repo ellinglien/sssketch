@@ -246,8 +246,6 @@ namespace sssketch
             }
             else
             {
-                const double secPerBarNow = (60.0 / transport.currentBpm()) * 4.0;
-                const double loopLengthSeconds = (endBar - startBar) * secPerBarNow;
                 // Detach whatever's currently referenced by Transport FIRST,
                 // and move any previously-armed recorder into
                 // previousRecorder rather than letting armedRecorder's
@@ -264,7 +262,11 @@ namespace sssketch
                 transport.setLoopRecorder(nullptr);
                 previousRecorder = std::move(armedRecorder);
                 armedChannelId = channelId;
-                armedRecorder = std::make_unique<LoopRecorder>(transport.currentSampleRate(), loopLengthSeconds);
+                // No longer sized to the loop region's own length -- see
+                // LoopRecorder's own doc comment: a take's length is
+                // whatever arm-to-disarm turns out to be, not tied to
+                // completing a loop pass.
+                armedRecorder = std::make_unique<LoopRecorder>(transport.currentSampleRate());
                 transport.setRecordingLoop(startBar, endBar);
                 transport.setLoopRecorder(armedRecorder.get());
                 payloadObj->setProperty("success", true);
@@ -285,7 +287,7 @@ namespace sssketch
             transport.setLoopRecorder(nullptr);
 
             juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
-            if (armedRecorder && armedRecorder->hasCompletedPass())
+            if (armedRecorder && armedRecorder->hasAnyAudio())
             {
                 const auto outputPath = juce::File::getSpecialLocation(juce::File::tempDirectory)
                     .getChildFile("sssketch-recording-" + juce::Uuid().toString() + ".wav")

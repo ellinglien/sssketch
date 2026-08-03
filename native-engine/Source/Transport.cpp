@@ -121,11 +121,11 @@ namespace sssketch
         // loopLengthBars, since it's always the tighter, nested loop the
         // user is actively jamming/recording within (a short recording
         // loop inside a much longer overall arrangement is the normal
-        // case). Pass-boundary detection for LoopRecorder itself stays
-        // wired to LoopRecorder::isFull() (accumulated write count, NOT
-        // this position wrap -- see the pause-safety comment at this
-        // method's own call site above), so this only affects what's
-        // audible/visible, never what gets captured.
+        // case). Purely a playback/audible concern -- LoopRecorder itself
+        // has no pass-boundary concept at all anymore (capture just runs
+        // continuously from arm to disarm, independent of this wrap; see
+        // LoopRecorder's own doc comment), so nothing here affects what
+        // gets captured.
         const double recStart = recordingLoopStartBar.load();
         const double recEnd = recordingLoopEndBar.load();
         const bool recordingLoopActive = recEnd > recStart;
@@ -237,29 +237,20 @@ namespace sssketch
         // manually pauses mid-take). recordingLoopEndBar > start is the
         // "is a recording loop active" check throughout.
         //
-        // Pass-boundary detection is driven by LoopRecorder's own
-        // isFull() (a plain accumulated-sample-count check), NOT by
-        // comparing positionBars against the loop's bar range the way
-        // renderLoopAware does for loopLengthBars below -- positionBars
-        // is the TRANSPORT's clock, which deliberately stays frozen while
-        // paused/stopped (recording capture keeps running regardless, per
-        // the comment above). Deriving the boundary from position instead
-        // of accumulated write count would re-fire onPassBoundary() on
-        // EVERY callback for as long as a pause happened to land inside
-        // the trigger window, repeatedly wiping the buffer instead of
-        // ever completing a pass -- isFull() only ever crosses its
-        // threshold once per bufferful, since onPassBoundary() itself
-        // resets the write position straight back to 0.
+        // Unconditional writeBlock() for as long as a recorder is armed --
+        // no pass-boundary/completion concept anymore (see LoopRecorder's
+        // own doc comment): a take's length is simply arm-to-disarm,
+        // whatever that turns out to be, not tied to the loop region's own
+        // length. The loop region here still only gates whether capture
+        // happens at all (armed with no valid region set shouldn't be
+        // reachable via the renderer, but this stays a defensive check),
+        // not how long it can run for.
         if (auto* recorder = loopRecorder.load())
         {
             const double recStart = recordingLoopStartBar.load();
             const double recEnd = recordingLoopEndBar.load();
             if (recEnd > recStart)
-            {
                 recorder->writeBlock(inputChannelData, numInputChannels, 0, numSamples);
-                if (recorder->isFull())
-                    recorder->onPassBoundary();
-            }
         }
 
         if (playRequested.exchange(false))

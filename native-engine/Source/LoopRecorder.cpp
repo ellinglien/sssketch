@@ -5,19 +5,24 @@
 
 namespace sssketch
 {
-    LoopRecorder::LoopRecorder(double sr, double loopLengthSeconds)
+    namespace
+    {
+        // Generous ceiling for a single take, independent of the recording
+        // loop region's own length now that capture isn't tied to
+        // completing a loop pass at all -- see this class's own doc
+        // comment. 10 minutes at typical sample rates is comfortably more
+        // than any realistic "jam a take, disarm" session, while still
+        // keeping the upfront allocation modest (mono float32 at 48kHz:
+        // 10 * 60 * 48000 * 4 bytes =~ 115MB).
+        constexpr double kMaxRecordingSeconds = 600.0;
+    }
+
+    LoopRecorder::LoopRecorder(double sr)
         : sampleRate(sr)
     {
-        const int numSamples = std::max(1, (int) std::lround(loopLengthSeconds * sampleRate));
+        const int numSamples = std::max(1, (int) std::lround(kMaxRecordingSeconds * sampleRate));
         buffer.setSize(1, numSamples);
         buffer.clear();
-        // Pre-sized identically to buffer, right here in the constructor
-        // (never touched again except by onPassBoundary()'s same-size
-        // copy assignment) -- see this member's own doc comment in
-        // LoopRecorder.h for why the audio thread must never be the one
-        // to first-allocate it.
-        lastCompletedBuffer.setSize(1, numSamples);
-        lastCompletedBuffer.clear();
     }
 
     void LoopRecorder::writeBlock(const float* const* inputChannelData, int numInputChannels,
@@ -30,7 +35,7 @@ namespace sssketch
         for (int i = 0; i < numSamples; ++i)
         {
             const int destIndex = startPos + i;
-            if (destIndex >= bufferSamples) break; // shouldn't happen if Transport's own wrap math is correct; defensive, not a silent overwrite past the buffer's own bounds
+            if (destIndex >= bufferSamples) break; // hit the generous ceiling -- stop capturing rather than overflow; not expected in normal use
             // Mono downmix -- average every input channel JUCE gave us.
             // Loopback devices are commonly stereo (2ch), a mic commonly
             // mono (1ch); averaging handles both without a separate path.
@@ -47,118 +52,21 @@ namespace sssketch
         writePos.store(std::min(startPos + numSamples, bufferSamples), std::memory_order_release);
     }
 
-    void LoopRecorder::onPassBoundary()
-    {
-        // Snapshot BEFORE clear() wipes buffer -- this is the fix for a
-        // real bug found during manual testing: hasCompletedPass() used to
-        // just be a flag, set true here and never reset, while
-        // writeToWavFile() read directly from `buffer` -- which, by the
-        // time a LATER pass had started overwriting it, no longer held the
-        // completed pass's audio at all. Disarming mid-way through a
-        // second pass would silently commit that second, still-in-progress
-        // pass's partial/mostly-silent content while completedPass still
-        // (correctly, per its own true meaning) said "yes there's a
-        // completed pass" -- just not the one actually in `buffer`
-        // anymore. lastCompletedBuffer now holds the ACTUAL completed
-        // pass's audio, decoupled from whatever's currently being
-        // (re-)recorded into `buffer`, matching the design's own stated
-        // "commits whichever pass most recently completed" contract for
-        // real. Same-size copy assignment (both buffers are pre-sized
-        // identically in the constructor), so this never (re)allocates
-        // here on the audio thread.
-        //
-        // Narrows, doesn't worsen, the pre-existing disarm-teardown race
-        // documented at this file's own call site and in IpcServer.cpp's
-        // disarm-recording handler: writeToWavFile() (message thread) now
-        // reads lastCompletedBuffer instead of buffer, so a stale audio-
-        // thread callback that only calls writeBlock() during that brief
-        // post-detach window (the common case) no longer races the
-        // message-thread read at all -- writeBlock() never touches
-        // lastCompletedBuffer. The race only reappears in the rarer case
-        // where a pass boundary happens to land in that exact stale
-        // callback (this assignment running concurrently with a
-        // writeToWavFile() read) -- a strict subset of the old exposure,
-        // not a new one.
-        if (writePos.load(std::memory_order_relaxed) >= buffer.getNumSamples())
-        {
-            lastCompletedBuffer = buffer;
-            // Release store, published only AFTER the copy above completes
-            // -- peaksSoFar()'s acquire-load of hasCompletedPass() (message
-            // thread) is what makes its lastCompletedBuffer fallback
-            // genuinely race-free, not just narrowed: it can never observe
-            // "true" before the copy it depends on is actually done.
-            completedPass.store(true, std::memory_order_release);
-        }
-        // Publish the reset BEFORE clearing the buffer, not after -- a
-        // concurrent peaksSoFar() call that lands during clear() must see
-        // writePos already at 0 so its own bucketStart(0) >=
-        // currentWritePos(0) check makes it skip all buffer reads entirely,
-        // rather than reading the still-full old writePos and scanning the
-        // whole buffer while clear()'s plain (non-atomic) stores are
-        // actively zeroing it underneath. This removes the deterministic,
-        // every-single-pass version of that race; it isn't airtight against
-        // the most adversarial reordering the C++ abstract machine allows
-        // (a fully rigorous fix would need a generation counter or
-        // double-buffering, overkill for a cosmetic live meter whose worst
-        // failure mode is a garbled frame in a bar graph) -- accepted the
-        // same way this codebase already accepts other small, bounded,
-        // real-time-favoring risks elsewhere in this class (see
-        // IpcServer.cpp's detachArmedRecorderOnTeardown() doc comment for
-        // the same reasoning applied to a different tradeoff).
-        writePos.store(0, std::memory_order_release);
-        buffer.clear();
-    }
-
     std::vector<float> LoopRecorder::peaksSoFar(int numBuckets) const
     {
         std::vector<float> result(numBuckets, 0.0f);
-        const int totalSamples = buffer.getNumSamples();
-        const auto* liveData = buffer.getReadPointer(0);
-        // Acquire load, paired with writeBlock/onPassBoundary's release
-        // stores above -- snapshotting once up front (rather than
-        // re-reading the atomic on every loop iteration) guarantees every
-        // bucket below is judged against the same write position, so the
-        // buffer indices this function reads are always <= what the audio
-        // thread had actually finished writing at the moment of this load.
+        const auto* data = buffer.getReadPointer(0);
+        // Acquire load, paired with writeBlock's release store above.
         const int currentWritePos = writePos.load(std::memory_order_acquire);
-        // Also acquire (not the plain relaxed a same-thread read would
-        // need) -- see this class's own doc comment: this is what makes
-        // reading lastCompletedBuffer below genuinely safe, not merely
-        // narrowed, by establishing happens-before with the copy that
-        // filled it in onPassBoundary().
-        const bool hasPrevious = hasCompletedPass();
-        const auto* lastData = hasPrevious ? lastCompletedBuffer.getReadPointer(0) : nullptr;
+        if (currentWritePos <= 0) return result;
         for (int b = 0; b < numBuckets; ++b)
         {
-            const int bucketStart = (int) ((double) b / numBuckets * totalSamples);
-            const int bucketEnd = (int) ((double) (b + 1) / numBuckets * totalSamples);
-            if (bucketStart < currentWritePos)
-            {
-                // Already re-recorded this pass -- report the fresh, live
-                // value (what's actually in `buffer` here now).
-                float peak = 0.0f;
-                for (int i = bucketStart; i < std::min(bucketEnd, currentWritePos); ++i)
-                    peak = std::max(peak, std::abs(liveData[i]));
-                result[b] = peak;
-            }
-            else if (hasPrevious)
-            {
-                // Not yet reached by this pass -- this is exactly what
-                // writeToWavFile() would commit for this stretch if
-                // disarmed right now (see its own doc comment), so show
-                // THAT instead of reporting silence for content that
-                // hasn't actually been overwritten. This is what makes a
-                // new pass read as "smoothly replacing the old one left to
-                // right" rather than "the waveform blanks out and rebuilds
-                // from nothing every lap."
-                float peak = 0.0f;
-                for (int i = bucketStart; i < bucketEnd; ++i)
-                    peak = std::max(peak, std::abs(lastData[i]));
-                result[b] = peak;
-            }
-            // else: no previous pass exists yet (still the very first
-            // pass) -- nothing meaningful to show for unreached buckets,
-            // stays 0.
+            const int bucketStart = (int) ((double) b / numBuckets * currentWritePos);
+            const int bucketEnd = (int) ((double) (b + 1) / numBuckets * currentWritePos);
+            float peak = 0.0f;
+            for (int i = bucketStart; i < bucketEnd; ++i)
+                peak = std::max(peak, std::abs(data[i]));
+            result[b] = peak;
         }
         return result;
     }
@@ -177,7 +85,12 @@ namespace sssketch
         if (writer == nullptr) return false;
         out.release(); // writer now owns the stream, matching RenderExport.cpp's own ownership handoff
 
-        writer->writeFromAudioSampleBuffer(lastCompletedBuffer, 0, lastCompletedBuffer.getNumSamples());
+        // Only what's actually been captured (writePos samples), not the
+        // full pre-allocated ceiling -- the whole point of this class's
+        // redesign is that a take's own real duration is whatever was
+        // actually recorded, not some fixed length.
+        const int samplesToWrite = writePos.load(std::memory_order_acquire);
+        writer->writeFromAudioSampleBuffer(buffer, 0, samplesToWrite);
         return true;
     }
 }
