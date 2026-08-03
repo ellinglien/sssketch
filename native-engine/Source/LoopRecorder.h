@@ -35,7 +35,13 @@ namespace sssketch
      * Transport.h). buffer's underlying storage is fixed-size for the
      * object's whole lifetime (allocated once in the constructor, never
      * resized), so there's no reallocation race to worry about on top of
-     * the index one. */
+     * the index one. During writeBlock() this is airtight. During
+     * onPassBoundary()'s buffer.clear(), it's deliberately narrowed rather
+     * than eliminated (see that method's own doc comment) -- a fully
+     * rigorous fix would need a generation counter or double-buffering,
+     * more machinery than a cosmetic live meter warrants; the accepted
+     * residual risk is a vanishingly narrow, real-hardware-only window,
+     * not the deterministic every-pass race that existed before. */
     class LoopRecorder
     {
     public:

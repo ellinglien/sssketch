@@ -43,12 +43,24 @@ namespace sssketch
     void LoopRecorder::onPassBoundary()
     {
         completedPass = writePos.load(std::memory_order_relaxed) >= buffer.getNumSamples();
-        buffer.clear();
-        // Reset published only after clear() completes, same release
-        // reasoning as writeBlock's store above -- a concurrent peaksSoFar
-        // call must never observe writePos == 0 while the buffer still
-        // holds the previous pass's stale samples.
+        // Publish the reset BEFORE clearing the buffer, not after -- a
+        // concurrent peaksSoFar() call that lands during clear() must see
+        // writePos already at 0 so its own bucketStart(0) >=
+        // currentWritePos(0) check makes it skip all buffer reads entirely,
+        // rather than reading the still-full old writePos and scanning the
+        // whole buffer while clear()'s plain (non-atomic) stores are
+        // actively zeroing it underneath. This removes the deterministic,
+        // every-single-pass version of that race; it isn't airtight against
+        // the most adversarial reordering the C++ abstract machine allows
+        // (a fully rigorous fix would need a generation counter or
+        // double-buffering, overkill for a cosmetic live meter whose worst
+        // failure mode is a garbled frame in a bar graph) -- accepted the
+        // same way this codebase already accepts other small, bounded,
+        // real-time-favoring risks elsewhere in this class (see
+        // IpcServer.cpp's detachArmedRecorderOnTeardown() doc comment for
+        // the same reasoning applied to a different tradeoff).
         writePos.store(0, std::memory_order_release);
+        buffer.clear();
     }
 
     std::vector<float> LoopRecorder::peaksSoFar(int numBuckets) const
