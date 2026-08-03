@@ -168,17 +168,51 @@ namespace sssketch
                     expectWithinAbsoluteError(peaks[(size_t) b], 0.0f, 0.001f);
             }
 
-            beginTest("peaksSoFar resets to all-zero after onPassBoundary starts a fresh pass");
+            beginTest("peaksSoFar falls back to the last completed pass for buckets a fresh "
+                      "pass hasn't reached yet, rather than reporting silence -- this is what "
+                      "makes a new pass read as smoothly replacing the old one left to right, "
+                      "requested during manual testing, since that's genuinely what would "
+                      "commit for that stretch if disarmed right now");
             {
                 LoopRecorder recorder(48000.0, 0.1); // 4800 samples
                 std::vector<float> inputData(4800, 0.6f);
                 const float* channels[] = { inputData.data() };
                 recorder.writeBlock(channels, 1, 0, 4800);
-                recorder.onPassBoundary(); // writePos resets to 0, buffer cleared
+                recorder.onPassBoundary(); // writePos resets to 0, buffer cleared, pass 1 snapshotted
+
+                // No new writes yet this pass -- every bucket should fall
+                // back to pass 1's value (0.6), not read as silence.
+                const auto peaksBeforeAnyNewWrite = recorder.peaksSoFar(8);
+                for (float peak : peaksBeforeAnyNewWrite)
+                    expectWithinAbsoluteError(peak, 0.6f, 0.001f);
+
+                // Half the buffer re-recorded this pass at a different,
+                // clearly distinguishable value (0.2) -- the re-recorded
+                // half should show the FRESH value, the not-yet-reached
+                // half should still show pass 1's value (0.6), not 0.
+                std::vector<float> secondPass(2400, 0.2f);
+                const float* secondChannels[] = { secondPass.data() };
+                recorder.writeBlock(secondChannels, 1, 0, 2400);
+                const auto peaksHalfway = recorder.peaksSoFar(8);
+                for (int b = 0; b < 4; ++b)
+                    expectWithinAbsoluteError(peaksHalfway[(size_t) b], 0.2f, 0.01f);
+                for (int b = 4; b < 8; ++b)
+                    expectWithinAbsoluteError(peaksHalfway[(size_t) b], 0.6f, 0.01f);
+            }
+
+            beginTest("peaksSoFar still reports silence for unwritten buckets when there is "
+                      "no previous completed pass to fall back to");
+            {
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                std::vector<float> inputData(2400, 0.6f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 2400); // partial first pass, never completed
 
                 const auto peaks = recorder.peaksSoFar(8);
-                for (float peak : peaks)
-                    expectWithinAbsoluteError(peak, 0.0f, 0.001f);
+                for (int b = 0; b < 4; ++b)
+                    expectWithinAbsoluteError(peaks[(size_t) b], 0.6f, 0.01f);
+                for (int b = 4; b < 8; ++b)
+                    expectWithinAbsoluteError(peaks[(size_t) b], 0.0f, 0.001f);
             }
 
             beginTest("peaksSoFar on a freshly-constructed recorder (never written to) is all-zero");

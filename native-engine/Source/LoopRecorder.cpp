@@ -82,7 +82,12 @@ namespace sssketch
         if (writePos.load(std::memory_order_relaxed) >= buffer.getNumSamples())
         {
             lastCompletedBuffer = buffer;
-            completedPass = true;
+            // Release store, published only AFTER the copy above completes
+            // -- peaksSoFar()'s acquire-load of hasCompletedPass() (message
+            // thread) is what makes its lastCompletedBuffer fallback
+            // genuinely race-free, not just narrowed: it can never observe
+            // "true" before the copy it depends on is actually done.
+            completedPass.store(true, std::memory_order_release);
         }
         // Publish the reset BEFORE clearing the buffer, not after -- a
         // concurrent peaksSoFar() call that lands during clear() must see
@@ -108,7 +113,7 @@ namespace sssketch
     {
         std::vector<float> result(numBuckets, 0.0f);
         const int totalSamples = buffer.getNumSamples();
-        const auto* data = buffer.getReadPointer(0);
+        const auto* liveData = buffer.getReadPointer(0);
         // Acquire load, paired with writeBlock/onPassBoundary's release
         // stores above -- snapshotting once up front (rather than
         // re-reading the atomic on every loop iteration) guarantees every
@@ -116,15 +121,44 @@ namespace sssketch
         // buffer indices this function reads are always <= what the audio
         // thread had actually finished writing at the moment of this load.
         const int currentWritePos = writePos.load(std::memory_order_acquire);
+        // Also acquire (not the plain relaxed a same-thread read would
+        // need) -- see this class's own doc comment: this is what makes
+        // reading lastCompletedBuffer below genuinely safe, not merely
+        // narrowed, by establishing happens-before with the copy that
+        // filled it in onPassBoundary().
+        const bool hasPrevious = hasCompletedPass();
+        const auto* lastData = hasPrevious ? lastCompletedBuffer.getReadPointer(0) : nullptr;
         for (int b = 0; b < numBuckets; ++b)
         {
             const int bucketStart = (int) ((double) b / numBuckets * totalSamples);
             const int bucketEnd = (int) ((double) (b + 1) / numBuckets * totalSamples);
-            if (bucketStart >= currentWritePos) break; // this bucket and every later one is still unwritten this pass
-            float peak = 0.0f;
-            for (int i = bucketStart; i < std::min(bucketEnd, currentWritePos); ++i)
-                peak = std::max(peak, std::abs(data[i]));
-            result[b] = peak;
+            if (bucketStart < currentWritePos)
+            {
+                // Already re-recorded this pass -- report the fresh, live
+                // value (what's actually in `buffer` here now).
+                float peak = 0.0f;
+                for (int i = bucketStart; i < std::min(bucketEnd, currentWritePos); ++i)
+                    peak = std::max(peak, std::abs(liveData[i]));
+                result[b] = peak;
+            }
+            else if (hasPrevious)
+            {
+                // Not yet reached by this pass -- this is exactly what
+                // writeToWavFile() would commit for this stretch if
+                // disarmed right now (see its own doc comment), so show
+                // THAT instead of reporting silence for content that
+                // hasn't actually been overwritten. This is what makes a
+                // new pass read as "smoothly replacing the old one left to
+                // right" rather than "the waveform blanks out and rebuilds
+                // from nothing every lap."
+                float peak = 0.0f;
+                for (int i = bucketStart; i < bucketEnd; ++i)
+                    peak = std::max(peak, std::abs(lastData[i]));
+                result[b] = peak;
+            }
+            // else: no previous pass exists yet (still the very first
+            // pass) -- nothing meaningful to show for unreached buckets,
+            // stays 0.
         }
         return result;
     }

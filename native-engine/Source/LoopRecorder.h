@@ -16,32 +16,47 @@ namespace sssketch
      * pass-boundary detection lives entirely in Transport's own per-block
      * loop-wrap math rather than anything IPC-driven.
      *
-     * Not thread-safe in general -- writeBlock/onPassBoundary/isFull/
-     * hasCompletedPass/writeToWavFile are only ever called from the audio
-     * thread (Transport::audioDeviceIOCallbackWithContext and the
-     * renderLoopAware wrap-check it drives) or, for hasCompletedPass/
-     * writeToWavFile, from the message thread only after the recorder has
-     * already been detached from Transport (see IpcServer.cpp's
-     * disarm-recording handler). The one deliberate exception is
-     * peaksSoFar(), which IS called from the message thread
-     * (IpcConnection::timerCallback) concurrently with the audio thread
-     * still actively writing -- that's the entire point of live capture-
-     * level feedback while armed. writePos is std::atomic specifically to
-     * make that one cross-thread read safe: the audio thread publishes it
-     * (release) only after the samples up to that index are written, and
-     * peaksSoFar acquires it before reading the buffer, so it never reads
-     * past what's actually been written -- same handoff pattern Transport
+     * Not thread-safe in general -- writeBlock/onPassBoundary/isFull are
+     * only ever called from the audio thread
+     * (Transport::audioDeviceIOCallbackWithContext and the renderLoopAware
+     * wrap-check it drives); writeToWavFile is only ever called from the
+     * message thread after the recorder has already been detached from
+     * Transport (see IpcServer.cpp's disarm-recording handler). The
+     * deliberate exceptions are hasCompletedPass()/peaksSoFar(), which ARE
+     * called from the message thread (IpcConnection::timerCallback)
+     * concurrently with the audio thread still actively writing -- that's
+     * the entire point of live capture-level feedback while armed.
+     * writePos and completedPass are both std::atomic specifically to
+     * make those cross-thread reads safe, same handoff pattern Transport
      * itself uses for every other field that crosses this boundary (see
-     * Transport.h). buffer's underlying storage is fixed-size for the
-     * object's whole lifetime (allocated once in the constructor, never
-     * resized), so there's no reallocation race to worry about on top of
-     * the index one. During writeBlock() this is airtight. During
-     * onPassBoundary()'s buffer.clear(), it's deliberately narrowed rather
-     * than eliminated (see that method's own doc comment) -- a fully
-     * rigorous fix would need a generation counter or double-buffering,
-     * more machinery than a cosmetic live meter warrants; the accepted
-     * residual risk is a vanishingly narrow, real-hardware-only window,
-     * not the deterministic every-pass race that existed before. */
+     * Transport.h): the audio thread publishes writePos (release) only
+     * after the samples up to that index are written, so peaksSoFar's
+     * acquire-load never reads buffer past what's actually been written;
+     * it publishes completedPass (release) only after lastCompletedBuffer
+     * has been fully copied in onPassBoundary(), so peaksSoFar's
+     * acquire-load of hasCompletedPass() never reads lastCompletedBuffer
+     * before THAT copy is complete -- eliminates the first-observation
+     * race outright. What it does NOT close: if a LATER onPassBoundary()
+     * call (a second completed pass) lands on the audio thread while
+     * peaksSoFar()'s own read loop is still iterating over
+     * lastCompletedBuffer from the FIRST one, that later call's
+     * `lastCompletedBuffer = buffer` is a plain, non-atomic overwrite
+     * racing the read -- same category of accepted risk as the
+     * buffer.clear() note below, just a narrower window (peaksSoFar's own
+     * loop, not a whole callback) and needing two full passes to complete
+     * back-to-back inside one ~33ms poll interval to even be reachable.
+     * buffer's and lastCompletedBuffer's underlying storage are both
+     * fixed-size for the object's whole lifetime (allocated once in the
+     * constructor, never resized), so there's no reallocation race on top
+     * of either index/flag one. During writeBlock() the buffer read is
+     * airtight. During onPassBoundary()'s buffer.clear(), it's
+     * deliberately narrowed rather than eliminated (see that method's own
+     * doc comment) -- a fully rigorous fix for either of these residual
+     * windows would need a generation counter or double-buffering, more
+     * machinery than a cosmetic live meter warrants; the accepted
+     * residual risk in both cases is a vanishingly narrow, real-hardware-
+     * only window, not the deterministic every-pass race that existed
+     * before this class's own history of fixes. */
     class LoopRecorder
     {
     public:
@@ -87,17 +102,32 @@ namespace sssketch
          * object's lifetime (there's always SOME completed pass sitting in
          * lastCompletedBuffer from that point on, even while a newer,
          * still-in-progress pass is busy overwriting buffer). Checked at
-         * disarm time to decide whether there's anything to commit. */
-        bool hasCompletedPass() const { return completedPass; }
+         * disarm time to decide whether there's anything to commit, and
+         * (as of peaksSoFar()'s own live-preview fallback below) also read
+         * from the message thread WHILE still armed -- acquire/release
+         * paired with onPassBoundary()'s store, same handoff pattern as
+         * writePos below. */
+        bool hasCompletedPass() const { return completedPass.load(std::memory_order_acquire); }
 
-        /** Per-bucket peak amplitude across however much of the buffer has
-         * been written so far this pass (0 for buckets past the current
-         * write position) -- numBuckets fixed, small (the renderer just
-         * needs enough resolution for a coarse "building up" bar graph,
-         * not a full waveform). Same "downsample into N buckets" idea as
+        /** Per-bucket peak amplitude reflecting what would actually get
+         * committed if disarmed RIGHT NOW: buckets already re-recorded
+         * this pass (bucketStart < current write position) read from the
+         * live `buffer`; buckets not yet reached this pass fall back to
+         * lastCompletedBuffer -- the previous pass, which is genuinely
+         * what commit would use for that portion (see writeToWavFile) --
+         * rather than reporting 0/silence for content that hasn't
+         * actually been overwritten yet. Only falls back once
+         * hasCompletedPass() is true; with no previous pass at all, those
+         * buckets stay 0 (nothing to show). This is what makes looping
+         * read as "the new pass smoothly replaces the old one, left to
+         * right" instead of "the waveform blanks out and rebuilds from
+         * nothing every lap" -- requested during manual testing.
+         * numBuckets fixed, small (the renderer just needs enough
+         * resolution for a coarse "building up" bar graph, not a full
+         * waveform). Same "downsample into N buckets" idea as
          * @shared/visuals' peaksFromChannel on the renderer side, kept
-         * separately here since this is a live, partially-filled buffer
-         * being sampled every 33ms, not a one-shot full-file decode. */
+         * separately here since this is live, partially-filled data being
+         * sampled every 33ms, not a one-shot full-file decode. */
         std::vector<float> peaksSoFar(int numBuckets) const;
 
         /** Writes lastCompletedBuffer -- the most recently COMPLETED pass,
@@ -125,6 +155,6 @@ namespace sssketch
         // same-size-to-same-size and never reallocates on the audio thread.
         juce::AudioBuffer<float> lastCompletedBuffer;
         std::atomic<int> writePos { 0 };
-        bool completedPass = false;
+        std::atomic<bool> completedPass { false };
     };
 }
