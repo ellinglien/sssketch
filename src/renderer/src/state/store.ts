@@ -527,7 +527,8 @@ export function reducer(state: AppState, action: Action): AppState {
       )
       const channelPlugins = { ...state.channelPlugins }
       for (const channelId of Object.keys(channelPlugins)) {
-        if (!channelHasAnyClip(channelOf, channelId)) delete channelPlugins[channelId]
+        if (!channelHasAnyClip(channelOf, channelId) && !state.recordingChannelIds[channelId])
+          delete channelPlugins[channelId]
       }
       return {
         ...state,

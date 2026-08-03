@@ -1162,6 +1162,36 @@ describe('reducer', () => {
       expect(state.channelPlugins['r1']).toBeUndefined()
       expect(state.channelPlugins['other-channel']).toEqual(['soothe2', null])
     })
+
+    // channelPlugins' own doc comment states it's "deleted in lockstep with
+    // channelOrder's own cleanup ... never a separate pass" -- a recording
+    // channel is exempt from that cleanup in channelOrder (see "a recording
+    // channel survives..." below), so its channelPlugins must be exempt the
+    // same way, or the two silently fall out of lockstep the moment a
+    // recording channel's last clip is deleted this way.
+    it('DELETE_RIFFFS keeps channelPlugins for a recording channel that becomes empty', () => {
+      let state = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'rec-1'
+      })
+      state = reducer(state, {
+        type: 'SET_CHANNEL_CHAIN_PLUGIN',
+        channelId: 'rec-1',
+        slot: 0,
+        pluginId: 'pro-q-3'
+      })
+
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.channelOrder).toContain('rec-1')
+      expect(state.channelPlugins['rec-1']).toEqual(['pro-q-3', null])
+    })
   })
 
   describe('SET_LOOP_REGION', () => {
