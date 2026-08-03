@@ -16,6 +16,7 @@ import { createHistoryState, historyReducer } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
+import { isWithinManualSeekGrace } from './manualSeek'
 import type { PluginCatalog } from '../../../main/pluginCatalog'
 
 // Playback position/state now live entirely outside the undo-tracked main
@@ -542,6 +543,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // nonzero SET_POS right after STOP just reset pos to 0, and a quick
       // Stop-then-Play could then resume from that stale position instead.
       if (!playingRef.current) return
+      // Same "straggler tick already in flight" issue, for a manual seek
+      // instead of a stop: a tick computed from the OLD position can still
+      // be in flight over IPC when a click/drag-to-scrub dispatches the new
+      // position locally, arriving just after and visibly flickering the
+      // playhead back to the pre-seek spot for a frame. See manualSeek.ts's
+      // own doc comment.
+      if (isWithinManualSeekGrace()) return
       const loopBars = loopLengthBars(stateRef.current)
       if (pos >= loopBars) {
         // Loop wrap-around: the native transport counts up monotonically

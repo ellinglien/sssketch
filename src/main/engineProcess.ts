@@ -113,6 +113,15 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
     }, 5000)
 
     proc.stderr?.on('data', (chunk: Buffer) => {
+      // TEMP DIAGNOSTIC -- forward everything the engine logs to stderr,
+      // not just up to the readiness line. Before this, any error the
+      // engine logs AFTER reporting readiness (e.g. a failed audio device
+      // open on the first play command) was silently discarded -- this
+      // handler returned early once `settled` and never looked at the
+      // chunk again. Investigating a real "no audio, no errors visible"
+      // report; this is what's needed to actually see what the engine
+      // says once real playback is attempted.
+      console.log('[engine-stderr]', chunk.toString())
       if (settled) return
       stderrBuffer += chunk.toString()
       if (stderrBuffer.includes(`serving on 127.0.0.1:${port}`)) {
@@ -126,6 +135,12 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
           }
         })
       }
+    })
+
+    // TEMP DIAGNOSTIC -- stdout wasn't captured at all before; forwarding it
+    // too in case the engine logs anything relevant there instead of stderr.
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      console.log('[engine-stdout]', chunk.toString())
     })
 
     proc.once('error', (err) => {

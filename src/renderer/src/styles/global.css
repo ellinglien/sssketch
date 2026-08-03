@@ -32,6 +32,24 @@ body {
   font-size: var(--ra-fs-11);
   color: var(--ra-text);
   -webkit-font-smoothing: antialiased;
+  /* This is a click-and-drag arranger, not a document -- dragging a fader,
+     a resize handle, or the playhead across other text (bar counts, stem
+     names, tempo readouts) shouldn't leave a blue text selection behind,
+     the way it does on an ordinary web page. Every drag interaction in this
+     app already has its own dedicated handling (startPointerDrag, native
+     HTML5 drag-and-drop), so there's nothing selection would ever be
+     useful for outside an actual text input. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Real text inputs are the one exception -- editing/selecting the value
+   you're actively typing (tempo, riff ID search, project name, etc.) still
+   needs to work normally, inheriting body's user-select:none otherwise. */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* App-wide scrollbar styling — the OS default (light, rounded, chrome-y)

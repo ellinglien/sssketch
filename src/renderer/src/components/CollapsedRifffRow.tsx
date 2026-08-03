@@ -18,6 +18,8 @@ import {
 } from './envelope'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
+import { markManualSeek } from '../state/manualSeek'
 import {
   trimRightEdge,
   trimLeftEdge,
@@ -100,6 +102,7 @@ export function CollapsedRifffRow({
   // uses -- see zoomMath.ts/useZoom's own doc comments for what this value
   // actually is (base PPB * the current zoom multiplier).
   const PPB = useZoom()
+  const frameScale = useFrameScale()
   // Each field read individually via useAppSelector, not one broad
   // useAppState() call -- see
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
@@ -492,10 +495,17 @@ export function CollapsedRifffRow({
   function handleScrubClick(e: React.MouseEvent): void {
     if (volumeDragMode) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const bar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
+    // getBoundingClientRect()/clientX report real screen pixels, but leftPx
+    // and PPB are both logical, pre-scale pixels -- see FrameScaleContext's
+    // own doc comment. Dividing the raw real pixel offset by frameScale
+    // first recovers its logical equivalent before combining it with leftPx.
+    const bar = Math.max(0, leftPx / PPB + toLogicalX(e.clientX - rect.left, frameScale) / PPB)
     dispatch({ type: 'SELECT', groupId })
     dispatch({ type: 'SET_POS', pos: bar })
-    if (playing) void window.rifffApi.engineSetPosition(bar)
+    if (playing) {
+      markManualSeek()
+      void window.rifffApi.engineSetPosition(bar)
+    }
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -518,6 +528,7 @@ export function CollapsedRifffRow({
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
+          data-rifff-clip
           draggable
           onDragStart={(e) => {
             suppressNextSyntheticClick()
@@ -527,7 +538,12 @@ export function CollapsedRifffRow({
             // itself" independently would be confusing with nothing on
             // screen to show which stem moved.
             e.dataTransfer.setData('text/rifff-group-id', groupId)
-            const mouseBar = mouseBarFromDragEvent(e)
+            // Must pass this file's own local PPB (the zoom-adjusted shadow,
+            // see its own doc comment above), not some other value -- a
+            // previous version of this call omitted the argument entirely
+            // and silently used a fixed default-zoom constant instead,
+            // ignoring the real current zoom level.
+            const mouseBar = mouseBarFromDragEvent(e, PPB, frameScale)
             if (mouseBar !== null) {
               setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
             }
@@ -627,7 +643,14 @@ export function CollapsedRifffRow({
               representative first stem/group here instead of a specific
               slot. startPointerDrag already calls preventDefault/
               stopPropagation, which blocks this block's own native drag
-              from initiating on the same mousedown. */}
+              from initiating on the same mousedown.
+
+              The mousedown-catching box (16px) is wider than the visible
+              tinted strip (5px) -- see StemWaveformRow's own identical fix
+              for why (a hit target the same size as the visible affordance
+              was too easy to miss and grab the whole-clip move/scrub
+              surface instead). Extra width extends INWARD from the clip's
+              true edge only. */}
           <div
             onMouseDown={isOneShot ? handleOneShotLeftEdgeStart : handleLeftResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -639,13 +662,24 @@ export function CollapsedRifffRow({
               top: 0,
               bottom: 0,
               left: 0,
-              width: 5,
+              width: 16,
               cursor: 'ew-resize',
-              background: 'var(--ra-text)',
-              opacity: 0.12,
               zIndex: 3
             }}
-          />
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: 0,
+                width: 5,
+                background: 'var(--ra-text)',
+                opacity: 0.12,
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
           <div
             onMouseDown={isOneShot ? handleOneShotRightEdgeStart : handleResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -657,20 +691,46 @@ export function CollapsedRifffRow({
               top: 0,
               bottom: 0,
               right: 0,
-              width: 5,
+              width: 16,
               cursor: 'ew-resize',
-              background: 'var(--ra-text)',
-              opacity: 0.12,
               zIndex: 3
             }}
-          />
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                right: 0,
+                width: 5,
+                background: 'var(--ra-text)',
+                opacity: 0.12,
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
 
-          {/* Fade-in/fade-out knee handles — always active regardless of
-              envelope/volumeDragMode, same as StemWaveformRow's own (fade is
-              a separate, dedicated small target, not gated by the mode
-              switch the way the broad volume drag surface below is).
-              onContextMenu stopPropagation so right-clicking here doesn't
-              also bubble up and toggle the group mute. */}
+          {/* Fade-in/fade-out knee handles. onContextMenu stopPropagation so
+              right-clicking here doesn't also bubble up and toggle the
+              group mute.
+
+              The actual mousedown-catching box (14x14) is deliberately much
+              bigger than the visible 7x7 dot -- see StemWaveformRow's own
+              identical fix for why (at default settings these sit almost
+              exactly on top of the resize handles' own corner, and a hit
+              target the same size as the dot was too easy to miss by a
+              pixel and grab the resize handle instead). Centered the same
+              way via translate(-50%,-50%), so it only grows the invisible
+              margin around the dot, never shifting its visual position.
+
+              pointerEvents flips to 'none' outside envelope mode
+              (volumeDragMode) -- see StemWaveformRow's own identical fix for
+              why (this used to stay grabbable at all times, which meant its
+              hit box competed with the resize handles' for the same
+              top-of-clip space even when fade wasn't what was being
+              adjusted, making resize noticeably less reliable near the top
+              of the clip). The visual dot is unaffected, only its own
+              interactivity is gated. */}
           <div
             onMouseDown={handleFadeInStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -680,14 +740,26 @@ export function CollapsedRifffRow({
               left: fiEnd,
               top: plateauY,
               transform: 'translate(-50%, -50%)',
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--ra-text)',
+              width: 14,
+              height: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               cursor: 'pointer',
-              zIndex: 4
+              zIndex: 4,
+              pointerEvents: volumeDragMode ? 'auto' : 'none'
             }}
-          />
+          >
+            <div
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
           <div
             onMouseDown={handleFadeOutStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -697,14 +769,26 @@ export function CollapsedRifffRow({
               left: foStart,
               top: plateauY,
               transform: 'translate(-50%, -50%)',
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--ra-text)',
+              width: 14,
+              height: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               cursor: 'pointer',
-              zIndex: 4
+              zIndex: 4,
+              pointerEvents: volumeDragMode ? 'auto' : 'none'
             }}
-          />
+          >
+            <div
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on, repurposing the same open area that

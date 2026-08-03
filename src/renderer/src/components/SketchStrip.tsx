@@ -4,6 +4,7 @@ import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
+import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -179,6 +180,7 @@ export function SketchStrip(): React.JSX.Element {
     if (playing && pos >= targetPos && pos < targetPos + effectiveBars(rifff)) return
     dispatch({ type: 'SET_POS', pos: targetPos })
     if (playing) {
+      markManualSeek()
       void window.rifffApi.engineSetPosition(targetPos)
     } else {
       dispatch({ type: 'PLAY' })
@@ -218,7 +220,10 @@ export function SketchStrip(): React.JSX.Element {
       const fraction = ((rawFraction % 1) + 1) % 1
       const bar = start + fraction * bars
       dispatch({ type: 'SET_POS', pos: bar })
-      if (playing) void window.rifffApi.engineSetPosition(bar)
+      if (playing) {
+        markManualSeek()
+        void window.rifffApi.engineSetPosition(bar)
+      }
     }
 
     seekToClientPoint(startClientX, startClientY)

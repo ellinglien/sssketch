@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { RifffBlockRow } from './RifffBlockRow'
@@ -30,7 +30,7 @@ import { useAppSelector, useDispatch } from '../state/StoreContext'
  * via an absolutely-positioned child, a standard "zero-size sticky anchor"
  * technique for pinning an overlay to a scrolling viewport's edge without
  * disturbing surrounding layout. */
-export function ChannelRow({
+function ChannelRowImpl({
   channelId,
   rifffs,
   onOpenContextMenu,
@@ -176,3 +176,15 @@ export function ChannelRow({
     </div>
   )
 }
+
+// Memoized because Timeline (its parent) re-renders on every dispatch --
+// without this, ChannelRow would re-render on every mute toggle/volume
+// drag/fade tweak project-wide regardless of its own useAppSelector calls
+// above, since React always re-invokes a non-memoized child's render
+// function when its parent re-renders. This only pays off because all of
+// Timeline's props to ChannelRow are now referentially stable across
+// unrelated dispatches: `rifffs` comes from Timeline's own memoized
+// `channels` array, and `onOpenContextMenu`/`onDropOnChannel` are both
+// useCallback-wrapped (see App.tsx's stateRef comments for how they stay
+// stable). See docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+export const ChannelRow = memo(ChannelRowImpl)

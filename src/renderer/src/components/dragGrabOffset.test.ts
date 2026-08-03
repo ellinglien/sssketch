@@ -66,32 +66,62 @@ describe('dragGrabOffset storage', () => {
 describe('mouseBarFromDragEvent', () => {
   it('returns null when there is no [data-timeline] ancestor', () => {
     const target = { closest: () => null }
-    const result = mouseBarFromDragEvent({
-      currentTarget: target as unknown as EventTarget,
-      clientX: 300
-    })
+    const result = mouseBarFromDragEvent(
+      {
+        currentTarget: target as unknown as EventTarget,
+        clientX: 300
+      },
+      24,
+      1
+    )
     expect(result).toBeNull()
   })
 
   it('computes the bar position relative to the timeline origin', () => {
-    // PPB=24 (Ruler.tsx) — timeline's own left edge at 0, so a click at
-    // clientX=240 is (240-0)/24 = 10 bars in.
+    // ppb=24, frameScale=1 (default window size) — timeline's own left edge
+    // at 0, so a click at clientX=240 is (240-0)/1/24 = 10 bars in.
     const timeline = { getBoundingClientRect: () => ({ left: 0 }) }
     const target = { closest: () => timeline }
-    const result = mouseBarFromDragEvent({
-      currentTarget: target as unknown as EventTarget,
-      clientX: 240
-    })
+    const result = mouseBarFromDragEvent(
+      {
+        currentTarget: target as unknown as EventTarget,
+        clientX: 240
+      },
+      24,
+      1
+    )
     expect(result).toBe(10)
   })
 
   it('clamps to 0 rather than going negative', () => {
     const timeline = { getBoundingClientRect: () => ({ left: 0 }) }
     const target = { closest: () => timeline }
-    const result = mouseBarFromDragEvent({
-      currentTarget: target as unknown as EventTarget,
-      clientX: 0
-    })
+    const result = mouseBarFromDragEvent(
+      {
+        currentTarget: target as unknown as EventTarget,
+        clientX: 0
+      },
+      24,
+      1
+    )
     expect(result).toBe(0)
+  })
+
+  it('divides out frameScale before converting to bars', () => {
+    // Window at 2x its default size (frameScale=2): a real on-screen click
+    // 480px from the timeline's left edge corresponds to only 240 LOGICAL
+    // px (480/2), i.e. 10 bars at ppb=24 -- not 20, which is what you'd get
+    // dividing the raw real pixel distance straight by ppb.
+    const timeline = { getBoundingClientRect: () => ({ left: 0 }) }
+    const target = { closest: () => timeline }
+    const result = mouseBarFromDragEvent(
+      {
+        currentTarget: target as unknown as EventTarget,
+        clientX: 480
+      },
+      24,
+      2
+    )
+    expect(result).toBe(10)
   })
 })

@@ -1,4 +1,4 @@
-import { PPB } from './Ruler'
+import { toLogicalX } from '../state/FrameScaleContext'
 
 // Pure: where within the clip (in bars) it was grabbed, given the mouse's own
 // bar position and the clip's start bar, both at drag-start.
@@ -48,16 +48,29 @@ export function getGrabOffsetBars(): number {
  * waveform body), so this "find the [data-timeline] ancestor and convert
  * clientX to a bar position" math exists in exactly one place. Returns null
  * if there's no [data-timeline] ancestor to measure against — shouldn't
- * happen in practice, every drag source here is rendered inside Timeline. */
+ * happen in practice, every drag source here is rendered inside Timeline.
+ *
+ * Both `ppb` and `frameScale` are required, not defaulted — this function
+ * used to default `ppb` to a fixed constant, and one caller (CollapsedRifffRow)
+ * relied on that default by omitting the argument entirely, silently ignoring
+ * the real current zoom level (only correct at the default zoom) until it was
+ * caught by a real "drop lands in the wrong place" report. Requiring both
+ * explicitly means a missing one is a compile error, not a silent wrong
+ * answer. `frameScale` corrects for the fact that `clientX`/getBoundingClientRect
+ * report real screen pixels, while `ppb` is defined in logical, pre-scale
+ * pixels (see FrameScaleContext's own doc comment for the full picture) --
+ * without it, this drifts off target the moment the window isn't at its
+ * default size. */
 export function mouseBarFromDragEvent(
   e: {
     currentTarget: EventTarget
     clientX: number
   },
-  ppb: number = PPB
+  ppb: number,
+  frameScale: number
 ): number | null {
   const target = e.currentTarget as HTMLElement
   const rect = target.closest('[data-timeline]')?.getBoundingClientRect()
   if (!rect) return null
-  return Math.max(0, (e.clientX - rect.left) / ppb)
+  return Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
 }

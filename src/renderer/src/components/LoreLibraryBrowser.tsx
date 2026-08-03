@@ -11,6 +11,7 @@ import {
   unregisterActivePreview
 } from '../audio/previewLoop'
 import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
+import { useBusy } from '../state/BusyContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
@@ -219,6 +220,7 @@ export function LoreLibraryBrowser({
   const playing = usePlaying()
   const dispatch = useDispatch()
   const state = useAppState()
+  const setBusy = useBusy()
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
@@ -397,9 +399,14 @@ export function LoreLibraryBrowser({
 
   async function handleImport(): Promise<void> {
     if (!resolvedRiff || !selectedRiffCID) return
-    const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
-    const result = importResolvedRiff(selectedRiffCID, toImport)
-    if (result) onImported([result.groupId])
+    setBusy('importing rifff…')
+    try {
+      const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
+      const result = importResolvedRiff(selectedRiffCID, toImport)
+      if (result) onImported([result.groupId])
+    } finally {
+      setBusy(null)
+    }
   }
 
   /** Batch import for shift/cmd-click multi-selection. The anchor riff
@@ -412,30 +419,35 @@ export function LoreLibraryBrowser({
    * per-stem try/catch elsewhere in this component). Each riff also gets its
    * own auto-download-missing-stems pass, same as the single-import path. */
   async function handleImportSelected(): Promise<void> {
-    const groupIds: string[] = []
-    const rifffs: Rifff[] = []
-    for (const riffCID of selectedRiffCIDs) {
-      try {
-        const resolved =
-          riffCID === selectedRiffCID && resolvedRiff
-            ? resolvedRiff
-            : await window.rifffApi.loreResolveRiff(riffCID)
-        if (resolved) {
-          const toImport = await ensureStemsDownloaded(riffCID, resolved)
-          const result = importResolvedRiff(riffCID, toImport)
-          if (result) {
-            groupIds.push(result.groupId)
-            rifffs.push(result.rifff)
+    setBusy('importing rifffs…')
+    try {
+      const groupIds: string[] = []
+      const rifffs: Rifff[] = []
+      for (const riffCID of selectedRiffCIDs) {
+        try {
+          const resolved =
+            riffCID === selectedRiffCID && resolvedRiff
+              ? resolvedRiff
+              : await window.rifffApi.loreResolveRiff(riffCID)
+          if (resolved) {
+            const toImport = await ensureStemsDownloaded(riffCID, resolved)
+            const result = importResolvedRiff(riffCID, toImport)
+            if (result) {
+              groupIds.push(result.groupId)
+              rifffs.push(result.rifff)
+            }
           }
+        } catch (err) {
+          console.error(
+            `LoreLibraryBrowser: failed to import riff ${riffCID} during batch import:`,
+            err
+          )
         }
-      } catch (err) {
-        console.error(
-          `LoreLibraryBrowser: failed to import riff ${riffCID} during batch import:`,
-          err
-        )
       }
+      if (groupIds.length > 0) onImported(groupIds, rifffs)
+    } finally {
+      setBusy(null)
     }
-    if (groupIds.length > 0) onImported(groupIds, rifffs)
   }
 
   function handleGoToRiffId(): void {
@@ -1147,8 +1159,11 @@ export function LoreLibraryBrowser({
                       {resolvedRiff.stems.some((s) => s.path === null) && (
                         <button
                           onClick={() => {
-                            if (selectedRiffCID)
-                              void ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
+                            if (!selectedRiffCID) return
+                            setBusy('downloading stems…')
+                            void ensureStemsDownloaded(selectedRiffCID, resolvedRiff).finally(() =>
+                              setBusy(null)
+                            )
                           }}
                           disabled={downloadingRiffCID !== null}
                           title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"

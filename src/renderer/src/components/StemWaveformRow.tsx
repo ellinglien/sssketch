@@ -9,6 +9,8 @@ import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import { useFrameScale } from '../state/FrameScaleContext'
+import { markManualSeek } from '../state/manualSeek'
 import {
   FADE_MAX,
   FADE_DRAG_SLOWDOWN,
@@ -36,6 +38,7 @@ export function StemWaveformRow({
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
+  const frameScale = useFrameScale()
   const key = stemKey(groupId, slot)
   // Each field read individually via useAppSelector, not one broad
   // useAppState() call -- see
@@ -269,10 +272,30 @@ export function StemWaveformRow({
   function handleScrubClick(e: React.MouseEvent): void {
     if (volumeDragMode) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const bar = Math.max(0, leftPx / ppb + (e.clientX - rect.left) / ppb)
+    // Fraction of the element's own MEASURED width, not a raw clientX pixel
+    // delta divided by ppb -- getBoundingClientRect()/clientX report real
+    // rendered screen pixels, which only equal ppb's logical pixels 1:1 when
+    // nothing between this element and the viewport is scaled. The whole
+    // app is wrapped in a transform: scale(frameScale) (App.tsx's Frame
+    // component, matching the current window size against a fixed design
+    // canvas), so raw pixel deltas are routinely off by frameScale. The
+    // fraction is scale-invariant, so multiplying it by this clip's own
+    // ACTUAL rendered bar-span sidesteps the mismatch entirely.
+    //
+    // That bar-span is widthPx/ppb, NOT displayedPlayedBars -- they only
+    // agree when stretch is on. With stretch off, clipGeometry renders at
+    // shownBars = playedBars * (rifff.bpm / bpm), a different value than
+    // displayedPlayedBars (which is always the played-bars count, never
+    // tempo-adjusted) -- using the wrong one here silently used the wrong
+    // bar-span for any un-stretched stem, still landing off target.
+    const fraction = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0
+    const bar = Math.max(0, leftPx / ppb + fraction * (widthPx / ppb))
     dispatch({ type: 'SELECT', groupId })
     dispatch({ type: 'SET_POS', pos: bar })
-    if (playing) void window.rifffApi.engineSetPosition(bar)
+    if (playing) {
+      markManualSeek()
+      void window.rifffApi.engineSetPosition(bar)
+    }
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -305,7 +328,7 @@ export function StemWaveformRow({
   function handleWaveformDragStart(e: React.DragEvent): void {
     suppressNextSyntheticClick()
     e.dataTransfer.setData('text/rifff-group-id', groupId)
-    const mouseBar = mouseBarFromDragEvent(e, ppb)
+    const mouseBar = mouseBarFromDragEvent(e, ppb, frameScale)
     if (mouseBar !== null) {
       setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
     }
@@ -315,6 +338,7 @@ export function StemWaveformRow({
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
+          data-rifff-clip
           draggable
           onDragStart={handleWaveformDragStart}
           onContextMenu={handleWaveformContextMenu}
@@ -433,7 +457,18 @@ export function StemWaveformRow({
               (see dragUtils.startPointerDrag) so a long drag can't flood undo
               history. onContextMenu stopPropagation so right-clicking here
               (e.g. to cancel a resize) doesn't also bubble up and toggle
-              mute. */}
+              mute.
+
+              The mousedown-catching box (16px) is wider than the visible
+              tinted strip (5px) -- a hit target exactly as wide as the
+              visible affordance was easy to miss by a couple of pixels and
+              grab the whole-clip move/scrub surface underneath instead
+              (reported as "resize handles are hard to find, defaults to
+              grab mode"). The extra width extends INWARD from the clip's
+              true edge, not outward -- outward would encroach on whatever's
+              immediately to the left/right (another clip, or empty space
+              that should still pan/scrub), which isn't this handle's to
+              claim. */}
           <div
             onMouseDown={handleLeftResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -443,13 +478,24 @@ export function StemWaveformRow({
               top: 0,
               bottom: 0,
               left: 0,
-              width: 5,
+              width: 16,
               cursor: 'ew-resize',
-              background: 'var(--ra-text)',
-              opacity: 0.12,
               zIndex: 3
             }}
-          />
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: 0,
+                width: 5,
+                background: 'var(--ra-text)',
+                opacity: 0.12,
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
           <div
             onMouseDown={handleResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -459,20 +505,54 @@ export function StemWaveformRow({
               top: 0,
               bottom: 0,
               right: 0,
-              width: 5,
+              width: 16,
               cursor: 'ew-resize',
-              background: 'var(--ra-text)',
-              opacity: 0.12,
               zIndex: 3
             }}
-          />
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                right: 0,
+                width: 5,
+                background: 'var(--ra-text)',
+                opacity: 0.12,
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
 
           {/* Fade-in/fade-out knee handles: small dots at the envelope curve's
               plateau corners, draggable to adjust fadeIn/fadeOut. Positioned
               via the same envelopeKnees() helper buildEnvelopePath itself
               uses, so the dots can never visually drift off the curve they
               sit on. onContextMenu stopPropagation, same reason as the
-              resize handles above. */}
+              resize handles above.
+
+              The actual mousedown-catching box (14x14) is deliberately much
+              bigger than the visible 7x7 dot -- at default settings (no
+              fade, near-full volume) these sit almost exactly on top of the
+              resize handles' own corner, which span the full row height; a
+              hit target the same size as the dot itself was too easy to
+              miss by a pixel and grab the resize handle underneath instead
+              (reported as "can't grab the fade dots, it just resizes the
+              clip"). Centered the same way via translate(-50%,-50%), so it
+              only grows the invisible margin around the dot, never shifting
+              the dot's own visual position.
+
+              pointerEvents flips to 'none' outside envelope mode (volumeDragMode)
+              -- the dot used to stay grabbable at all times, which meant its own
+              hit box (bigger than the visible dot, right above) competed with the
+              resize handles' for the same top-of-clip real estate even when fade
+              wasn't the thing being adjusted, making resize noticeably less
+              reliable specifically near the top of the clip. Outside envelope
+              mode there's nothing here to drag anyway (fadeIn/fadeOut are only
+              meant to be adjusted in that mode), so letting clicks pass straight
+              through to the resize handle/scrub surface underneath is strictly
+              better than shadowing them. The visual dot itself is unaffected --
+              still drawn at all times, only its own interactivity is gated. */}
           <div
             onMouseDown={handleFadeInStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -482,14 +562,26 @@ export function StemWaveformRow({
               left: fiEnd,
               top: plateauY,
               transform: 'translate(-50%, -50%)',
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--ra-text)',
+              width: 14,
+              height: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               cursor: 'pointer',
-              zIndex: 4
+              zIndex: 4,
+              pointerEvents: volumeDragMode ? 'auto' : 'none'
             }}
-          />
+          >
+            <div
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
           <div
             onMouseDown={handleFadeOutStart}
             onContextMenu={(e) => e.stopPropagation()}
@@ -499,14 +591,26 @@ export function StemWaveformRow({
               left: foStart,
               top: plateauY,
               transform: 'translate(-50%, -50%)',
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--ra-text)',
+              width: 14,
+              height: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               cursor: 'pointer',
-              zIndex: 4
+              zIndex: 4,
+              pointerEvents: volumeDragMode ? 'auto' : 'none'
             }}
-          />
+          >
+            <div
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on (see the V-key toggle in App.tsx/TransportBar),
