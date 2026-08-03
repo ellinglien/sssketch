@@ -7,6 +7,20 @@ import { ChannelChainPanel } from './ChannelChainPanel'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import { typeColorVar } from '../theme/typeColor'
 
+// A recording channel with zero clips yet renders no RifffBlockRow at all,
+// so nothing establishes this row's flow height -- it would otherwise
+// collapse to 0px (RifffBlockRow.tsx's own NAME_BAR_HEIGHT spacer is what
+// normally does that job). Beyond just looking wrong, this silently broke
+// the live capture-level overlay below: its `top: 0, bottom: 0` fill
+// collapses to a real 0px box inside a 0px-tall parent, so the bars were
+// rendering (capturePeaks really was updating) but were invisible the
+// entire time a channel was armed -- a real bug found during manual
+// testing. Matches a single-stem clip's own footprint (RifffBlockRow's
+// NAME_BAR_HEIGHT=18 + StemWaveformRow's ROW_HEIGHT=44) so an empty
+// recording channel doesn't look jarringly different in size once a take
+// lands on it.
+const EMPTY_CHANNEL_MIN_HEIGHT = 62
+
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
  * unchanged visually) or several sharing the row, each still positioned by
@@ -294,7 +308,10 @@ function ChannelRowImpl({
     <div
       data-channel-id={channelId}
       onDrop={(e) => onDropOnChannel(e, channelId)}
-      style={{ position: 'relative' }}
+      style={{
+        position: 'relative',
+        minHeight: rifffs.length === 0 ? EMPTY_CHANNEL_MIN_HEIGHT : undefined
+      }}
     >
       <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 5 }}>
         <div
