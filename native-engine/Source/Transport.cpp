@@ -70,6 +70,21 @@ namespace sssketch
         setup.useDefaultInputChannels = false;
         setup.inputChannels = juce::BigInteger();
         setup.inputChannels.setBit(0); // request just channel 0 -- LoopRecorder downmixes whatever it's given, but there's no reason to request more than one channel already
+        // Deliberately clearing sampleRate to 0 (not carrying over whatever
+        // rate the PREVIOUS setup happened to have, e.g. 44100 from
+        // initialiseWithDefaultDevices' own default at startup) -- found
+        // during manual testing: recording via a loopback device fed by a
+        // 48kHz source produced crackly/glitchy audio, because
+        // AudioDeviceManager::chooseBestSampleRate() honors an explicitly
+        // requested rate as long as it's SOMETHING the new device's driver
+        // technically supports, even when it doesn't match what's actually
+        // being fed into it -- forcing the OS/driver into real-time sample-
+        // rate conversion on a virtual loopback device, exactly the kind of
+        // thing that sounds like this. 0 tells JUCE to auto-choose based on
+        // the newly-opened device's own actual native rate instead (see
+        // chooseBestSampleRate's fallback to currentAudioDevice->
+        // getCurrentSampleRate() when no rate > 0 is requested).
+        setup.sampleRate = 0;
         return deviceManager.setAudioDeviceSetup(setup, true);
     }
 
