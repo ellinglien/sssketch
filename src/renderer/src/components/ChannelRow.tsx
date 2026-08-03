@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { linearWaveBars } from '@shared/visuals'
@@ -7,7 +7,6 @@ import { markManualSeek } from '../state/manualSeek'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
-import { typeColorVar } from '../theme/typeColor'
 
 // A recording channel with zero clips yet renders no RifffBlockRow at all,
 // so nothing establishes this row's flow height -- it would otherwise
@@ -156,16 +155,18 @@ function ChannelRowImpl({
   // but still blocked mid-toggle.
   const canArm = !togglingArm && (isArmed || !!selectedInputDevice)
 
-  // Snapshot of loopRegion as it was AT ARM TIME -- used only to decide
-  // where the committed take lands on the timeline (MOVE_TO_CHANNEL's
+  // Snapshot of loopRegion as it was AT ARM TIME -- used to decide where
+  // the committed take lands on the timeline (MOVE_TO_CHANNEL's
   // startBar), not its length: barLength is now derived from the audio's
   // own real captured duration (see importRecordedTake's doc comment),
   // independent of the loop region entirely, so a resize mid-recording no
-  // longer needs any special handling here. Still reads the ARMED
-  // snapshot rather than the live loopRegion selector for placement,
-  // since "where recording started" should stay fixed even if the user
-  // drags the region elsewhere before disarming.
-  const armedLoopRegionRef = useRef<LoopRegion>(null)
+  // longer needs any special handling here. Also drives the live capture
+  // overlay's own left-edge position below (real state, not a ref --
+  // React doesn't allow reading a ref's .current during render). Still
+  // the ARMED snapshot rather than the live loopRegion selector, since
+  // "where recording started" should stay fixed even if the user drags
+  // the region elsewhere before disarming.
+  const [armedLoopRegion, setArmedLoopRegion] = useState<LoopRegion>(null)
 
   // Same "filled red = active/attention-grabbing state" treatment the mute
   // button already uses, reusing this app's own audio-in accent color.
@@ -183,7 +184,7 @@ function ChannelRowImpl({
     setTogglingArm(true)
     try {
       if (isArmed) {
-        const armedRegion = armedLoopRegionRef.current
+        const armedRegion = armedLoopRegion
         const result = await window.rifffApi.engineDisarmRecording()
         dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
         if (result.committed && result.path) {
@@ -234,7 +235,7 @@ function ChannelRowImpl({
           loopRegion.endBar
         )
         if (result.success) {
-          armedLoopRegionRef.current = loopRegion
+          setArmedLoopRegion(loopRegion)
           dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
           // Always seek to the loop's own start, whether or not playback
           // was already running -- found during manual testing: capture
@@ -319,11 +320,25 @@ function ChannelRowImpl({
   // sitting there) since the engine only pushes capture-level-update while
   // some channel is actually armed (see IpcServer.cpp's timerCallback).
   const [capturePeaks, setCapturePeaks] = useState<number[]>([])
+  // How much has actually been captured so far, in seconds -- drives the
+  // overlay's own WIDTH below. Capture length is no longer tied to the
+  // loop region at all (see LoopRecorder's own doc comment on the native
+  // side), so sizing the overlay to loopRegion's fixed bounds would
+  // squish an ever-growing recording into the same fixed pixel span,
+  // visually "shrinking" everything already drawn every time more gets
+  // captured -- exactly the bug reported during manual testing ("the wave
+  // shrinks and moves").
+  const [captureElapsedSeconds, setCaptureElapsedSeconds] = useState(0)
   useEffect(() => {
     if (!isArmed) return
-    const unsubscribe = window.rifffApi.onCaptureLevelUpdate((updateChannelId, peaks) => {
-      if (updateChannelId === channelId) setCapturePeaks(peaks)
-    })
+    const unsubscribe = window.rifffApi.onCaptureLevelUpdate(
+      (updateChannelId, peaks, elapsedSeconds) => {
+        if (updateChannelId === channelId) {
+          setCapturePeaks(peaks)
+          setCaptureElapsedSeconds(elapsedSeconds)
+        }
+      }
+    )
     // Reset lives in the cleanup, not the setup body -- calling setState
     // synchronously in an effect's setup trips react-hooks/set-state-in-effect
     // (see BeatPicker.tsx's identical reasoning on its own preview-stop
@@ -332,6 +347,7 @@ function ChannelRowImpl({
     return () => {
       unsubscribe()
       setCapturePeaks([])
+      setCaptureElapsedSeconds(0)
     }
   }, [isArmed, channelId])
 
@@ -437,7 +453,7 @@ function ChannelRowImpl({
           onOpenContextMenu={onOpenContextMenu}
         />
       ))}
-      {isArmed && loopRegion && (
+      {isArmed && armedLoopRegion && (
         // Rendered AFTER rifffs.map above, not before -- both are plain
         // position:absolute siblings with no explicit z-index, so DOM
         // order alone decides paint order. Placed earlier, this overlay
@@ -446,11 +462,26 @@ function ChannelRowImpl({
         // background painted straight over it. pointerEvents: none means
         // sitting on top here still can't block clicking the clip
         // underneath.
+        //
+        // Positioned at armedLoopRegion's startBar (where capture
+        // ACTUALLY started, matching MOVE_TO_CHANNEL's own placement at
+        // disarm -- see that state's own doc comment), not the live
+        // loopRegion selector -- capture length is no longer tied to the
+        // loop region at all, so this needs to track "where and how much
+        // has actually been recorded," not "the loop's own box." Width is
+        // captureElapsedSeconds converted to bars and back to pixels,
+        // growing in real time as the take grows -- sizing this to the
+        // loop region's own fixed width instead (the previous approach)
+        // squished an ever-longer recording into the same fixed span,
+        // visually shrinking/rescaling everything already drawn every
+        // time more got captured. Math.max(2, ...) keeps it from
+        // collapsing to 0px in the first instant after arming, before the
+        // first capture-level-update has arrived.
         <div
           style={{
             position: 'absolute',
-            left: loopRegion.startBar * ppb,
-            width: (loopRegion.endBar - loopRegion.startBar) * ppb,
+            left: armedLoopRegion.startBar * ppb,
+            width: Math.max(2, (captureElapsedSeconds / ((60 / bpm) * 4)) * ppb),
             top: 0,
             bottom: 0,
             pointerEvents: 'none'
@@ -463,13 +494,13 @@ function ChannelRowImpl({
               elsewhere." No brightness modulation (that's the zero-
               crossing-rate "spectrographic" layer Waveform.tsx also draws --
               explicitly not wanted here) and no pitch line -- still no glow
-              (an earlier, separate, explicit design decision). Full opacity,
-              not Waveform.tsx's usual 0.75 -- per feedback, this should read
-              brighter than an ordinary clip's own waveform while actively
-              armed, matching RifffBlockRow's clip-title text (same
-              typeColorVar('audioIn') color, rendered at full strength with
-              no dimming), so a live recording draws the eye rather than
-              blending in with already-red, already-committed clips. */}
+              (an earlier, separate, explicit design decision). Full
+              opacity, not Waveform.tsx's usual 0.75. Uses the dedicated
+              --ra-recording-live purple, not typeColorVar('audioIn') (the
+              committed clip's own red) -- per feedback, this should stand
+              out from every other color already on screen while actively
+              recording, not just read as a brighter version of the same
+              red every other audio-in clip already uses. */}
           <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
             {linearWaveBars(capturePeaks).map((bar, i) => (
               <rect
@@ -478,7 +509,7 @@ function ChannelRowImpl({
                 y={bar.y}
                 width={bar.width}
                 height={bar.height}
-                fill={typeColorVar('audioIn')}
+                fill="var(--ra-recording-live)"
                 shapeRendering="crispEdges"
               />
             ))}

@@ -63,6 +63,12 @@
   --ra-mute-on-ink:    #1a0a0a;
   --ra-stretch-on:     #ededed;
   --ra-stretch-on-bg:  #161616;
+  /* Live capture-in-progress waveform (ChannelRow's armed-channel overlay)
+   * -- deliberately distinct from --ra-type-audio-in (the committed clip's
+   * own red), per feedback during manual testing asking for it to stand
+   * out from every other color already on screen while actively
+   * recording, rather than blending in with audio-in's own red. */
+  --ra-recording-live: #8f7dd4;
 
   /* ——— type ——— */
   --ra-font: "Silkscreen", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
