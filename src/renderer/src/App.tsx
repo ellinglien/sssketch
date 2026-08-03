@@ -81,6 +81,33 @@ function barForClientX(
 const GHOST_ROW_COUNT = 3
 const GHOST_ROW_HEIGHT = 44
 
+// Persisted per-machine (same pattern as LoreLibraryBrowser's own
+// loreUsername), not part of the project file -- selectedInputDevice/
+// availableInputDevices are deliberately excluded from PersistedProject
+// (see serialize.ts), since a device name is a fact about the machine
+// running the app, not the arrangement itself. Restored once devices are
+// actually fetched (only then do we know whether the stored name is
+// still a real, currently-available device), not on app mount.
+const INPUT_DEVICE_STORAGE_KEY = 'sssketch:selectedInputDevice'
+
+function loadStoredInputDevice(): string | null {
+  try {
+    return localStorage.getItem(INPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeSelectedInputDevice(device: string | null): void {
+  try {
+    if (device) localStorage.setItem(INPUT_DEVICE_STORAGE_KEY, device)
+    else localStorage.removeItem(INPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    // localStorage unavailable (e.g. private mode) -- the setting just
+    // won't survive a restart, not worth surfacing as an error.
+  }
+}
+
 // Always-present trailing empty bars past the arrangement's actual loop end —
 // horizontal counterpart to GHOST_ROW_COUNT above. Display-only: added to
 // loopLengthBars(state) just for the Ruler's rendered width, never to
@@ -1130,6 +1157,18 @@ function Frame(): React.JSX.Element {
                   .engineListInputDevices()
                   .then((devices) => {
                     dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
+                    // Restore the last-picked device once we actually know
+                    // it's still real -- only meaningful the first time
+                    // (selectedInputDevice is still null), and only if it's
+                    // genuinely present in this fetch's device list (a
+                    // loopback driver from a previous session might not be
+                    // installed/running anymore).
+                    if (!selectedInputDevice) {
+                      const stored = loadStoredInputDevice()
+                      if (stored && devices.includes(stored)) {
+                        dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device: stored })
+                      }
+                    }
                   })
                   .catch((err) => {
                     console.error('Frame: failed to list input devices:', err)
@@ -1139,9 +1178,11 @@ function Frame(): React.JSX.Element {
                   })
               }
             }}
-            onChange={(e) =>
-              dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device: e.target.value || null })
-            }
+            onChange={(e) => {
+              const device = e.target.value || null
+              dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device })
+              storeSelectedInputDevice(device)
+            }}
             style={{
               fontFamily: 'inherit',
               fontSize: 10,
