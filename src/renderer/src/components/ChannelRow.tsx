@@ -214,6 +214,33 @@ function ChannelRowImpl({
     }
   }
 
+  // Removing an armed channel needs to disarm the engine side first --
+  // REMOVE_RECORDING_CHANNEL is a pure renderer-state action with no engine
+  // call of its own, and the engine's armedRecorder has no other way to
+  // learn its target channel is gone. Without this, the engine keeps
+  // capturing into a LoopRecorder for a channelId that no longer exists
+  // anywhere in the UI until something else happens to arm (and thus
+  // clobber it via previousRecorder's deferred free -- see IpcServer.cpp).
+  // Discards whatever take result comes back rather than importing it: the
+  // user explicitly chose to delete this channel, not commit a take to it.
+  // Shares togglingArm with handleToggleArm above so the two can't race
+  // each other (e.g. removing mid-arm/disarm, or double-clicking remove).
+  async function handleRemoveRecordingChannel(): Promise<void> {
+    if (togglingArm) return
+    if (!window.confirm('Remove this recording channel?')) return
+    if (isArmed) {
+      setTogglingArm(true)
+      try {
+        await window.rifffApi.engineDisarmRecording()
+      } catch (err) {
+        console.error('ChannelRow: failed to disarm before removing channel:', err)
+      } finally {
+        setTogglingArm(false)
+      }
+    }
+    dispatch({ type: 'REMOVE_RECORDING_CHANNEL', channelId })
+  }
+
   // Live "building up" waveform feedback while this channel is armed -- see
   // docs/superpowers/specs/2026-08-03-loop-recording-design.md's "Live
   // capture feedback" section. Subscribes only while armed (unsubscribes and
@@ -313,13 +340,16 @@ function ChannelRowImpl({
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                if (window.confirm('Remove this recording channel?')) {
-                  dispatch({ type: 'REMOVE_RECORDING_CHANNEL', channelId })
-                }
+                void handleRemoveRecordingChannel()
               }}
+              disabled={togglingArm}
               aria-label={`remove recording channel ${channelId}`}
               title="remove recording channel"
-              style={{ ...baseButtonStyle, color: 'var(--ra-text-2)' }}
+              style={{
+                ...baseButtonStyle,
+                color: 'var(--ra-text-2)',
+                cursor: togglingArm ? 'not-allowed' : 'pointer'
+              }}
             >
               x
             </button>

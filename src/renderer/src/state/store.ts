@@ -911,10 +911,34 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'REMOVE_RECORDING_CHANNEL': {
       const recordingChannelIds = { ...state.recordingChannelIds }
       delete recordingChannelIds[action.channelId]
+      // Un-place (not delete) any clip still on this channel, mirroring
+      // REMOVE_FROM_TIMELINE's own treatment of a channel that's about to
+      // disappear -- a committed take landing here is the normal case (see
+      // ChannelRow's handleToggleArm commit flow), so removing the channel
+      // it's parked on must not silently orphan it: invisible in the UI
+      // (channelOf would point at a channelId no longer in channelOrder)
+      // but still present in rifffsMap, with unclear serialization/export
+      // behavior.
+      const channelOf = { ...state.channelOf }
+      const rifffs = { ...state.rifffs }
+      for (const groupId of Object.keys(channelOf)) {
+        if (channelOf[groupId] === action.channelId) {
+          delete channelOf[groupId]
+          rifffs[groupId] = { ...rifffs[groupId], startBar: undefined }
+        }
+      }
+      let channelPlugins = state.channelPlugins
+      if (action.channelId in channelPlugins) {
+        channelPlugins = { ...channelPlugins }
+        delete channelPlugins[action.channelId]
+      }
       return {
         ...state,
         channelOrder: state.channelOrder.filter((id) => id !== action.channelId),
         recordingChannelIds,
+        channelOf,
+        rifffs,
+        channelPlugins,
         armedChannelId: state.armedChannelId === action.channelId ? null : state.armedChannelId
       }
     }
