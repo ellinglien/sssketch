@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
+import { linearWaveBars } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
@@ -464,24 +465,32 @@ function ChannelRowImpl({
             width: (loopRegion.endBar - loopRegion.startBar) * ppb,
             top: 0,
             bottom: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            padding: '0 2px',
             pointerEvents: 'none'
           }}
         >
-          {capturePeaks.map((peak, i) => (
-            <div
-              key={i}
-              style={{
-                flex: '1 1 0',
-                minWidth: 1,
-                height: `${Math.max(4, peak * 100)}%`,
-                background: peak > 0 ? typeColorVar('audioIn') : 'var(--ra-border)'
-              }}
-            />
-          ))}
+          {/* Same linearWaveBars geometry Waveform.tsx uses for every other
+              clip's waveform (centered bars in a 128x100 viewBox, edge to
+              edge, crisp edges) -- not a from-scratch bar-graph look, per
+              feedback asking this to read more like "the waveforms
+              elsewhere." No brightness modulation (that's the zero-
+              crossing-rate "spectrographic" layer Waveform.tsx also draws --
+              explicitly not wanted here) and no pitch line -- flat opacity,
+              this app's real-audio-in accent color, still no glow (an
+              earlier, separate, explicit design decision). */}
+          <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
+            {linearWaveBars(capturePeaks).map((bar, i) => (
+              <rect
+                key={i}
+                x={bar.x}
+                y={bar.y}
+                width={bar.width}
+                height={bar.height}
+                fill={typeColorVar('audioIn')}
+                opacity={0.75}
+                shapeRendering="crispEdges"
+              />
+            ))}
+          </svg>
         </div>
       )}
       {chainPanelOpen && (
