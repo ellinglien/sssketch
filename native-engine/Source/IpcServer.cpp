@@ -196,6 +196,25 @@ namespace sssketch
             const double pos = payload.isObject() ? (double) payload.getProperty("pos", 0.0) : 0.0;
             transport.setPosition(pos);
         }
+        else if (type == "set-loop-region")
+        {
+            // Drives Transport's playback wrap directly from the
+            // renderer's own loopRegion, independent of arm/disarm --
+            // per feedback during manual testing, the loop should apply
+            // "at all times" once a region is drawn, not only while a
+            // channel happens to be armed. arm-recording/disarm-recording
+            // still touch these same bounds too (arm-recording to pick up
+            // whatever's current at that exact moment even if this
+            // message's own round-trip hasn't landed yet; disarm-recording
+            // deliberately no longer clears them -- see its own comment),
+            // but this is the live path that fires on every drag tick.
+            // endBar <= startBar (0/0 when loopRegion is null) disables
+            // wrapping, same convention as setRecordingLoop everywhere
+            // else.
+            const double startBar = payload.isObject() ? (double) payload.getProperty("startBar", 0.0) : 0.0;
+            const double endBar = payload.isObject() ? (double) payload.getProperty("endBar", 0.0) : 0.0;
+            transport.setRecordingLoop(startBar, endBar);
+        }
         else if (type == "list-input-devices")
         {
             juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
@@ -257,8 +276,13 @@ namespace sssketch
         }
         else if (type == "disarm-recording")
         {
+            // Detaches the CAPTURE buffer only -- deliberately does NOT
+            // call transport.setRecordingLoop(0.0, 0.0) anymore. Playback
+            // looping is no longer tied to arm state (see set-loop-region
+            // above): disarming should stop RECORDING, not stop the loop
+            // itself, which the renderer's own loopRegion continues to
+            // drive independently for as long as one is set.
             transport.setLoopRecorder(nullptr);
-            transport.setRecordingLoop(0.0, 0.0);
 
             juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
             if (armedRecorder && armedRecorder->hasCompletedPass())

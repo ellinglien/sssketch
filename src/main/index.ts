@@ -261,6 +261,10 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
+  ipcMain.handle('engine-set-loop-region', (_event, startBar: number, endBar: number) => {
+    playbackEngine?.client.send('set-loop-region', { startBar, endBar })
+  })
+
   ipcMain.handle('engine-list-input-devices', async (): Promise<string[]> => {
     if (!playbackEngine) return []
     try {

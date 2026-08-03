@@ -45,6 +45,8 @@ const api = {
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
+  engineSetLoopRegion: (startBar: number, endBar: number): Promise<void> =>
+    ipcRenderer.invoke('engine-set-loop-region', startBar, endBar),
   engineListInputDevices: (): Promise<string[]> => ipcRenderer.invoke('engine-list-input-devices'),
   engineArmRecording: (
     channelId: string,

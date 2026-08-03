@@ -384,6 +384,24 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     void window.rifffApi.engineSetMetronome(state.metronomeEnabled)
   }, [state.metronomeEnabled])
 
+  // Drives Transport's playback wrap directly from loopRegion, live, on
+  // every change -- independent of whether any channel is armed (see
+  // IpcServer.cpp's set-loop-region handler for the full rationale: per
+  // manual-testing feedback, the loop should apply "at all times" once a
+  // region is drawn, not only while recording). Cheap (an atomic store on
+  // the engine side, no buffer reconstruction), so unlike ChannelRow's own
+  // debounced re-arm-on-resize (which DOES need to rebuild the capture
+  // buffer, and is genuinely disruptive to do on every drag tick), this
+  // fires immediately on every drag-move, keeping playback tracking the
+  // drag in real time. endBar<=startBar (0/0 when loopRegion is null)
+  // disables wrapping.
+  useEffect(() => {
+    void window.rifffApi.engineSetLoopRegion(
+      state.loopRegion?.startBar ?? 0,
+      state.loopRegion?.endBar ?? 0
+    )
+  }, [state.loopRegion])
+
   // Diffs against the previous masterChain on every change so only the ONE
   // slot that actually changed gets reloaded -- an unrelated arrangement
   // edit elsewhere must never accidentally trigger a plugin reload/swap
