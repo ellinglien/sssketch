@@ -22,7 +22,7 @@ function createFixtureWarehouse(root: string): void {
     CREATE TABLE "Jams" ("JamCID" TEXT NOT NULL UNIQUE, "PublicName" TEXT NOT NULL, PRIMARY KEY("JamCID"));
     CREATE TABLE "Riffs" (
       "RiffCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreationTime" INTEGER,
-      "BPMrnd" REAL, "BarLength" INTEGER, "UserName" TEXT,
+      "BPMrnd" REAL, "BarLength" INTEGER, "UserName" TEXT, "Root" INTEGER, "Scale" INTEGER,
       "StemCID_1" TEXT, "StemCID_2" TEXT, "StemCID_3" TEXT, "StemCID_4" TEXT,
       "StemCID_5" TEXT, "StemCID_6" TEXT, "StemCID_7" TEXT, "StemCID_8" TEXT,
       "GainsJSON" TEXT, PRIMARY KEY("RiffCID")
@@ -72,7 +72,7 @@ function createSeededFixtureWarehouse(root: string): void {
     CREATE TABLE "Jams" ("JamCID" TEXT NOT NULL UNIQUE, "PublicName" TEXT NOT NULL, PRIMARY KEY("JamCID"));
     CREATE TABLE "Riffs" (
       "RiffCID" TEXT NOT NULL UNIQUE, "OwnerJamCID" TEXT NOT NULL, "CreationTime" INTEGER,
-      "BPMrnd" REAL, "BarLength" INTEGER, "UserName" TEXT,
+      "BPMrnd" REAL, "BarLength" INTEGER, "UserName" TEXT, "Root" INTEGER, "Scale" INTEGER,
       "StemCID_1" TEXT, "StemCID_2" TEXT, "StemCID_3" TEXT, "StemCID_4" TEXT,
       "StemCID_5" TEXT, "StemCID_6" TEXT, "StemCID_7" TEXT, "StemCID_8" TEXT,
       "GainsJSON" TEXT, PRIMARY KEY("RiffCID")
@@ -413,6 +413,38 @@ describe('resolveRiff', () => {
     createSeededFixtureWarehouse(root)
     setWarehouseRootForTests(root)
     expect(resolveRiff('no-such-riff')).toBeNull()
+  })
+
+  it(
+    "resolves Root/Scale to a readable key name -- traced from OUROVEON's own " +
+      'core.constants.h, not guessed (Root 4 = E, Scale 5 = Minor (Aeolian))',
+    () => {
+      root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+      createSeededFixtureWarehouse(root)
+      const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+      db.prepare(
+        `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, Root, Scale)
+       VALUES ('riff-keyed', 'jam-techno', 2000, 89.9, 4, 'elling', 4, 5)`
+      ).run()
+      db.close()
+      setWarehouseRootForTests(root)
+
+      const resolved = resolveRiff('riff-keyed')
+      expect(resolved!.key).toBe('E Minor (Aeolian)')
+    }
+  )
+
+  it('leaves key undefined for a riff with no Root/Scale set, rather than a bogus string', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    // riff-1 (from createFixtureWarehouse's own seed data) never set Root/
+    // Scale -- both are NULL, the normal case for riffs predating this
+    // metadata being tracked at all.
+    const resolved = resolveRiff('riff-1')
+    expect(resolved!.key).toBeUndefined()
   })
 
   it('returns null when the warehouse is unavailable, rather than throwing', () => {

@@ -246,6 +246,55 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
 interface FullRiffRow extends RiffRow {
   OwnerJamCID: string
   GainsJSON: string | null
+  Root: number | null
+  Scale: number | null
+}
+
+// Traced directly from OUROVEON's own source (endlesss/core.constants.h,
+// cRootNames/cScaleNames), not guessed -- same "verify against the real
+// reference client" standard this file already applies to instrumentMask
+// below. Root is a 12-tone chromatic index; OUROVEON's own naming
+// deliberately favors flats over sharps for the black keys (Db, Eb, F#,
+// Ab, Bb -- not a typo, that's genuinely the reference client's own
+// spelling choice, kept verbatim rather than "fixed" to an enharmonic
+// sharps-only convention). Scale is a 0-17 index covering the 7 diatonic
+// modes plus pentatonic/blues/whole-tone/chromatic scales Endlesss also
+// supports. "Major (Ionian)"/"Minor (Aeolian)" get their common pop name
+// alongside the mode name; every other entry is OUROVEON's own exact
+// string, used verbatim.
+const LORE_ROOT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'] as const
+
+const LORE_SCALE_NAMES = [
+  'Major (Ionian)',
+  'Dorian',
+  'Phrygian',
+  'Lydian',
+  'Mixolydian',
+  'Minor (Aeolian)',
+  'Locrian',
+  'Minor Pentatonic',
+  'Major Pentatonic',
+  'Suspended Pent.',
+  'Blues Minor Pent.',
+  'Blues Major Pent.',
+  'Harmonic Minor',
+  'Melodic Minor',
+  'Double Harmonic',
+  'Blues',
+  'Whole Tone',
+  'Chromatic'
+] as const
+
+/** Resolves a riff's Root/Scale columns to a display string like "E Minor
+ * (Aeolian)" -- returns undefined for anything out of the known range
+ * (including null, which the warehouse uses for riffs predating this
+ * metadata being tracked) rather than guessing or showing a raw number. */
+function resolveKeyName(root: number | null, scale: number | null): string | undefined {
+  if (root === null || scale === null) return undefined
+  const rootName = LORE_ROOT_NAMES[root]
+  const scaleName = LORE_SCALE_NAMES[scale]
+  if (!rootName || !scaleName) return undefined
+  return `${rootName} ${scaleName}`
 }
 
 interface FullStemRow {
@@ -266,7 +315,7 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
 
   const riffRow = db
     .prepare(
-      `SELECT RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, GainsJSON,
+      `SELECT RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, GainsJSON, Root, Scale,
               StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8
        FROM Riffs WHERE RiffCID = ?`
     )
@@ -337,6 +386,7 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
     riffCID: riffRow.RiffCID,
     bpm: riffRow.BPMrnd,
     barLength: riffRow.BarLength,
+    key: resolveKeyName(riffRow.Root, riffRow.Scale),
     stems
   }
 }

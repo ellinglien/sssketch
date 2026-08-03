@@ -96,12 +96,22 @@ export function Inspector({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <PolarGlyph stems={rifff.stems} identityColor={color} size={34} />
-            <EditableText
-              value={rifff.name}
-              onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
-              title="click to rename"
-              style={{ flex: 1, fontSize: 14, fontWeight: 700 }}
-            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <EditableText
+                value={rifff.name}
+                onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
+                title="click to rename"
+                style={{ fontSize: 14, fontWeight: 700 }}
+              />
+              {/* Only ever populated for LORE-sourced riffs (see Rifff.key's
+                  own doc comment) -- absent for one-shots, recordings,
+                  folder drag-and-drops, anything without that provenance. */}
+              {rifff.key && (
+                <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginTop: 2 }}>
+                  {rifff.key}
+                </div>
+              )}
+            </div>
           </div>
           <div
             onClick={async () => {

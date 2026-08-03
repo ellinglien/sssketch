@@ -48,6 +48,10 @@ export interface LoreResolvedRiff {
   riffCID: string
   bpm: number
   barLength: number
+  /** e.g. "E Minor (Aeolian)" -- resolved from the warehouse's own Root/
+   * Scale columns (see loreWarehouse.ts's resolveKeyName). Undefined for
+   * riffs predating this metadata, not every riff has it. */
+  key?: string
   stems: LoreResolvedStem[]
 }
 

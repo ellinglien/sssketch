@@ -276,12 +276,18 @@ export function LoreLibraryBrowser({
 
     const groupId = existing?.groupId ?? crypto.randomUUID()
     const rifff = existing
-      ? { ...existing, stems: [...existing.stems, ...newStems] }
+      ? // key ?? existing.key: a riff imported before this field existed
+        // (or before the warehouse row happened to have Root/Scale set)
+        // still picks it up on a later re-import/update, rather than
+        // staying permanently key-less just because the FIRST import
+        // predates this feature.
+        { ...existing, key: resolved.key ?? existing.key, stems: [...existing.stems, ...newStems] }
       : {
           groupId,
           name: friendlyRiffName(riffCID),
           bpm: resolved.bpm,
           barLength: resolved.barLength,
+          key: resolved.key,
           // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
           // import. Inspector.tsx's existing "re-import from folder" link displays
           // this field as-is; an empty string would render as a bare "/", so use a

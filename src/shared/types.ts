@@ -56,6 +56,12 @@ export interface Rifff {
   stems: Stem[]
   /** undefined until dragged from the shelf onto the timeline */
   startBar?: number
+  /** e.g. "E Minor (Aeolian)" -- only ever populated for riffs imported
+   * from the LORE library (see LoreLibraryBrowser.tsx's importResolvedRiff),
+   * which is the only import path with access to this metadata at all.
+   * Purely informational (Inspector display); nothing in playback/
+   * tiling/stretch reads it. */
+  key?: string
 }
 
 export function stemKey(groupId: string, slot: number): string {
