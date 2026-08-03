@@ -546,6 +546,8 @@ function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const setBusy = useBusy()
+  const availableInputDevices = useAppSelector((s) => s.availableInputDevices)
+  const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
   const history = useHistory()
   const playing = usePlaying()
   const ppb = useZoom()
@@ -1096,6 +1098,38 @@ function Frame(): React.JSX.Element {
           >
             + rec channel
           </button>
+          <select
+            value={selectedInputDevice ?? ''}
+            onFocus={() => {
+              if (availableInputDevices.length === 0) {
+                void window.rifffApi.engineListInputDevices().then((devices) => {
+                  dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
+                })
+              }
+            }}
+            onChange={(e) =>
+              dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device: e.target.value || null })
+            }
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 10,
+              color: 'var(--ra-text)',
+              background: 'var(--ra-bg-row-active)',
+              border: '1px solid var(--ra-border)',
+              padding: '5px 8px'
+            }}
+          >
+            <option value="">
+              {availableInputDevices.length === 0
+                ? 'no input devices found'
+                : 'select input device...'}
+            </option>
+            {availableInputDevices.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         </div>
         <TransportBar />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
