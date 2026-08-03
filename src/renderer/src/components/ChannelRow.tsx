@@ -3,7 +3,7 @@ import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
-import { useAppState, useDispatch } from '../state/StoreContext'
+import { useAppSelector, useDispatch } from '../state/StoreContext'
 
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
@@ -42,14 +42,21 @@ export function ChannelRow({
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
 }): React.JSX.Element {
   const [chainPanelOpen, setChainPanelOpen] = useState(false)
-  const state = useAppState()
   const dispatch = useDispatch()
+  // Read as whole maps, not per-key -- the solo check below genuinely needs
+  // every rifff/mute entry in the project, not just this channel's own. This
+  // still helps: this component now only re-renders when mute state or the
+  // rifffs map actually changes, not on every dispatch anywhere (a volume
+  // drag, fade adjustment, tempo change, etc. no longer touches it). See
+  // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
+  const mute = useAppSelector((s) => s.mute)
+  const rifffsMap = useAppSelector((s) => s.rifffs)
 
   const allMuted = useMemo(
     () =>
       rifffs.length > 0 &&
-      rifffs.every((r) => r.stems.every((s) => state.mute[stemKey(r.groupId, s.slot)])),
-    [rifffs, state.mute]
+      rifffs.every((r) => r.stems.every((s) => mute[stemKey(r.groupId, s.slot)])),
+    [rifffs, mute]
   )
 
   // Mirrors SOLO_GROUP/SOLO_CHANNEL's own "alreadySoloed" definition in
@@ -60,17 +67,15 @@ export function ChannelRow({
   //
   // Scans EVERY rifff in the whole project, not just this channel's own --
   // memoized so that scan only re-runs when mute state or the project's own
-  // rifff set actually changes, not on every unrelated render (this
-  // component's own useAppState() subscription means it re-renders on every
-  // dispatch, e.g. a volume drag or plugin selection elsewhere).
+  // rifff set actually changes.
   const soloed = useMemo(() => {
     const channelGroupIds = new Set(rifffs.map((r) => r.groupId))
-    return Object.values(state.rifffs).every((r) => {
+    return Object.values(rifffsMap).every((r) => {
       if (r.startBar === undefined) return true
       const inThisChannel = channelGroupIds.has(r.groupId)
-      return r.stems.every((s) => !!state.mute[stemKey(r.groupId, s.slot)] === !inThisChannel)
+      return r.stems.every((s) => !!mute[stemKey(r.groupId, s.slot)] === !inThisChannel)
     })
-  }, [rifffs, state.rifffs, state.mute])
+  }, [rifffs, rifffsMap, mute])
 
   const baseButtonStyle: React.CSSProperties = {
     fontSize: 9,
