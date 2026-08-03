@@ -49,22 +49,38 @@ describe('importOneShot', () => {
 })
 
 describe('importRecordedTake', () => {
-  it('imports a recorded WAV as a non-one-shot stem at the given bpm/barLength', () => {
+  it("imports a recorded WAV as a non-one-shot stem, deriving barLength from the audio's own real duration", () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
     try {
-      const testWavPath = writeTestWav(dir, 'take.wav', 0.3)
-      const result = importRecordedTake(testWavPath, 140, 8)
+      // bpm 120 -> secPerBar = (60/120)*4 = 2s -- a 4-second take is
+      // exactly 2 bars, so barLength should come out deterministically
+      // rather than needing a fuzzy/approximate assertion.
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
+      const result = importRecordedTake(testWavPath, 120)
       expect(result).not.toBeNull()
-      expect(result!.bpm).toBe(140)
-      expect(result!.barLength).toBe(8)
+      expect(result!.bpm).toBe(120)
+      expect(result!.barLength).toBe(2)
       expect(result!.stems[0].oneShot).toBeUndefined()
-      expect(result!.stems[0].barLength).toBe(8)
+      expect(result!.stems[0].barLength).toBe(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rounds barLength to the nearest whole bar rather than leaving a fractional one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
+    try {
+      // secPerBar at 120bpm = 2s -- 4.6s is 2.3 bars, rounds to 2.
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.6)
+      const result = importRecordedTake(testWavPath, 120)
+      expect(result).not.toBeNull()
+      expect(result!.barLength).toBe(2)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
   it('returns null for a non-wav path', () => {
-    expect(importRecordedTake('/tmp/not-a-wav.mp3', 120, 4)).toBeNull()
+    expect(importRecordedTake('/tmp/not-a-wav.mp3', 120)).toBeNull()
   })
 })

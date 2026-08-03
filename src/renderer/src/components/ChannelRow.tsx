@@ -155,14 +155,15 @@ function ChannelRowImpl({
   // but still blocked mid-toggle.
   const canArm = !togglingArm && (isArmed || !!selectedInputDevice)
 
-  // Snapshot of loopRegion as it was AT ARM TIME -- the engine bakes the
-  // real recorded duration from whatever startBar/endBar were in effect
-  // when arm-recording was sent (see IpcServer.cpp's loopLengthSeconds
-  // calculation), but nothing prevents the user from dragging a new loop
-  // region on the Ruler while a channel is armed. Reading the live
-  // loopRegion selector at commit time would desync the resulting
-  // Rifff.barLength from the audio's own actual measured durationSec.
-  // Committing always uses this ref, not the live value.
+  // Snapshot of loopRegion as it was AT ARM TIME -- used only to decide
+  // where the committed take lands on the timeline (MOVE_TO_CHANNEL's
+  // startBar), not its length: barLength is now derived from the audio's
+  // own real captured duration (see importRecordedTake's doc comment),
+  // independent of the loop region entirely, so a resize mid-recording no
+  // longer needs any special handling here. Still reads the ARMED
+  // snapshot rather than the live loopRegion selector for placement,
+  // since "where recording started" should stay fixed even if the user
+  // drags the region elsewhere before disarming.
   const armedLoopRegionRef = useRef<LoopRegion>(null)
 
   // Same "filled red = active/attention-grabbing state" treatment the mute
@@ -185,11 +186,12 @@ function ChannelRowImpl({
         const result = await window.rifffApi.engineDisarmRecording()
         dispatch({ type: 'DISARM_RECORDING_CHANNEL' })
         if (result.committed && result.path) {
-          const rifff = await window.rifffApi.importRecordedTake(
-            result.path,
-            bpm,
-            (armedRegion?.endBar ?? 0) - (armedRegion?.startBar ?? 0)
-          )
+          // barLength is no longer derived from the loop region here --
+          // importRecordedTake computes it from the audio's own real
+          // captured duration instead (see its own doc comment): capture
+          // is arm-to-disarm, whatever length that turns out to be, not
+          // tied to the loop region's length.
+          const rifff = await window.rifffApi.importRecordedTake(result.path, bpm)
           if (rifff) {
             dispatch({ type: 'ADD_TO_SHELF', rifff })
             // Replace any previous take on this channel -- see the design
@@ -210,18 +212,17 @@ function ChannelRowImpl({
         } else if (result.error) {
           window.alert(`Recording failed: ${result.error}`)
         } else {
-          // committed: false with no error -- the loop never completed one
-          // full pass before disarm (per the design's own "if the
-          // recording loop hasn't completed even one full pass yet,
-          // disarming produces no clip at all" rule). Whatever was already
-          // on this channel is untouched (correct -- nothing to replace
-          // it with), but silently doing nothing here was genuinely
-          // confusing during manual testing: an old take just sitting
-          // there, revealed once the live overlay disappears, read as "it
-          // recorded the wrong thing" rather than "it recorded nothing."
-          window.alert(
-            'Nothing recorded -- the loop needs to complete at least one full pass before disarming.'
-          )
+          // committed: false with no error -- no minimum-length
+          // requirement anymore (LoopRecorder.hasAnyAudio() just checks
+          // whether anything was captured at all), so this only happens
+          // if the channel was armed and disarmed with zero actual audio
+          // captured in between. Whatever was already on this channel is
+          // untouched (correct -- nothing to replace it with), but
+          // silently doing nothing here was genuinely confusing during
+          // manual testing: an old take just sitting there, revealed once
+          // the live overlay disappears, read as "it recorded the wrong
+          // thing" rather than "it recorded nothing."
+          window.alert('Nothing recorded.')
         }
       } else {
         if (!selectedInputDevice || !loopRegion) return
@@ -317,48 +318,6 @@ function ChannelRowImpl({
       setCapturePeaks([])
     }
   }, [isArmed, channelId])
-
-  // Live-updates the engine's recording loop bounds when the user resizes
-  // loopRegion while this channel is already armed -- found during manual
-  // testing that dragging the loop region mid-recording was silently
-  // ignored until the user stopped and restarted. Re-sends arm-recording
-  // with the new bounds, reusing the exact same lifecycle-safe swap the
-  // engine already does for an ordinary re-arm-without-disarm (detach the
-  // old LoopRecorder, defer-free it, construct a fresh one sized for the
-  // new region, re-attach -- see IpcServer.cpp's arm-recording handler) --
-  // no new native code needed, this just calls that same path again.
-  // Debounced rather than firing on every drag-move tick (SET_LOOP_REGION
-  // dispatches on every mousemove): re-arming discards whatever's been
-  // captured in the current pass so far, so doing that dozens of times a
-  // second mid-drag would be wasteful and could visibly stutter the live
-  // waveform. Settles ~300ms after the last change instead, i.e. once the
-  // user pauses or releases.
-  useEffect(() => {
-    if (!isArmed || !selectedInputDevice || !loopRegion) return
-    const armedRegion = armedLoopRegionRef.current
-    if (
-      armedRegion &&
-      armedRegion.startBar === loopRegion.startBar &&
-      armedRegion.endBar === loopRegion.endBar
-    ) {
-      return // no actual change since the last (re-)arm
-    }
-    const timeoutId = window.setTimeout(() => {
-      void window.rifffApi
-        .engineArmRecording(channelId, selectedInputDevice, loopRegion.startBar, loopRegion.endBar)
-        .then((result) => {
-          if (result.success) {
-            armedLoopRegionRef.current = loopRegion
-          } else {
-            console.error('ChannelRow: failed to update armed recording loop bounds:', result.error)
-          }
-        })
-        .catch((err) => {
-          console.error('ChannelRow: failed to update armed recording loop bounds:', err)
-        })
-    }, 300)
-    return () => window.clearTimeout(timeoutId)
-  }, [isArmed, selectedInputDevice, loopRegion, channelId])
 
   return (
     <div

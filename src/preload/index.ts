@@ -9,8 +9,8 @@ const api = {
     ipcRenderer.invoke('import-rifff', paths),
   importOneShot: (path: string): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-one-shot', path),
-  importRecordedTake: (path: string, bpm: number, barLength: number): Promise<Rifff | null> =>
-    ipcRenderer.invoke('import-recorded-take', path, bpm, barLength),
+  importRecordedTake: (path: string, bpm: number): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-recorded-take', path, bpm),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is

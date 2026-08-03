@@ -91,16 +91,28 @@ export function importOneShot(path: string): Rifff | null {
 }
 
 /**
- * Imports a recorded loop take (see docs/superpowers/specs/2026-08-03-loop-recording-design.md)
+ * Imports a recorded take (see docs/superpowers/specs/2026-08-03-loop-recording-design.md)
  * -- shares importOneShot's copyIntoLibrary step above, but differs in
- * exactly one respect: the resulting stem is NOT oneShot. A loop recording
- * should tile/stretch/loop like any other rifff, at the project's own bpm
- * and the loop region's own bar length, not play once and stop.
+ * exactly one respect: the resulting stem is NOT oneShot. A recorded take
+ * should tile/stretch/loop like any other rifff, not play once and stop.
+ *
+ * barLength is derived from the audio's own real captured duration
+ * (durationSec, measured off the actual WAV file), not the loop region's
+ * length -- recording is no longer tied to completing a loop pass (see
+ * LoopRecorder.h's own doc comment on the native side), so a take's real
+ * duration can be shorter or longer than whatever the loop region happened
+ * to be at the time. Rounds to the nearest whole bar rather than leaving a
+ * fractional one -- this app's bar-based tiling/placement elsewhere assumes
+ * whole bars, and a take is very unlikely to have been recorded for an
+ * exact, un-rounded number of bars in the first place.
  */
-export function importRecordedTake(path: string, bpm: number, barLength: number): Rifff | null {
+export function importRecordedTake(path: string, bpm: number): Rifff | null {
   const copied = copyIntoLibrary(path, 'importRecordedTake')
   if (!copied) return null
   const { groupId, destPath, durationSec } = copied
+
+  const secPerBar = (60 / bpm) * 4
+  const barLength = Math.max(1, Math.round(durationSec / secPerBar))
 
   const displayName = `recording ${new Date().toLocaleTimeString()}`
   return {

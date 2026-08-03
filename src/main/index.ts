@@ -154,8 +154,8 @@ app.whenReady().then(async () => {
     return importOneShot(path)
   })
 
-  ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number, barLength: number) => {
-    return importRecordedTake(path, bpm, barLength)
+  ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number) => {
+    return importRecordedTake(path, bpm)
   })
 
   ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
