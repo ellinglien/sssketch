@@ -98,7 +98,25 @@ namespace sssketch
 
     double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR) const
     {
-        const double loopBars = loopLengthBars.load();
+        // A recording loop, when active, is a second independent instance
+        // of this exact same wrap mechanism (see
+        // docs/superpowers/specs/2026-08-03-loop-recording-design.md's
+        // "recording loop region" section) -- its own [start, end) bounds
+        // take over the wrap window entirely rather than combining with
+        // loopLengthBars, since it's always the tighter, nested loop the
+        // user is actively jamming/recording within (a short recording
+        // loop inside a much longer overall arrangement is the normal
+        // case). Pass-boundary detection for LoopRecorder itself stays
+        // wired to LoopRecorder::isFull() (accumulated write count, NOT
+        // this position wrap -- see the pause-safety comment at this
+        // method's own call site above), so this only affects what's
+        // audible/visible, never what gets captured.
+        const double recStart = recordingLoopStartBar.load();
+        const double recEnd = recordingLoopEndBar.load();
+        const bool recordingLoopActive = recEnd > recStart;
+        const double loopStart = recordingLoopActive ? recStart : 0.0;
+        const double loopEnd = recordingLoopActive ? recEnd : loopLengthBars.load();
+        const double loopBars = loopEnd - loopStart;
         const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
         const double blockDurationBars = numSamples * barsPerSample;
 
@@ -108,9 +126,15 @@ namespace sssketch
             return pos + blockDurationBars;
         }
 
-        // pos is always kept within [0, loopBars) by this function's own
-        // wrap below, so distToEnd is always positive here.
-        const double distToEnd = loopBars - pos;
+        // pos is normally kept within [loopStart, loopEnd) by this
+        // function's own wrap below, so distToEnd is usually positive here
+        // -- except right after a recording loop first becomes active (or
+        // after a manual seek) while pos is still outside those bounds, in
+        // which case distToEnd comes out small/negative and the split
+        // logic below clamps straight to a full wrap next block, snapping
+        // playback into the loop within one block rather than needing any
+        // special-cased catch-up path.
+        const double distToEnd = loopEnd - pos;
         if (distToEnd >= blockDurationBars)
         {
             // No wrap within this block.
@@ -120,16 +144,16 @@ namespace sssketch
         {
             // The wrap falls partway through this block -- render each side
             // from its own correct (and, for the incoming side, correctly
-            // wrapped-to-0) position rather than letting a single render run
-            // unclamped past the loop's own end, which would just find
-            // nothing placed there and render silence for what should be
-            // the start of the next lap.
+            // wrapped-to-loopStart) position rather than letting a single
+            // render run unclamped past the loop's own end, which would
+            // just find nothing placed there and render silence for what
+            // should be the start of the next lap.
             const int splitIndex =
                 std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
             if (splitIndex > 0)
                 engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
             if (splitIndex < numSamples)
-                engine.renderBlock(0.0, deviceSampleRate, numSamples - splitIndex,
+                engine.renderBlock(loopStart, deviceSampleRate, numSamples - splitIndex,
                                     outL + splitIndex, outR + splitIndex, channelChains);
         }
 
@@ -143,13 +167,13 @@ namespace sssketch
         if (distToEnd < fadeBars + blockDurationBars)
         {
             float anchorL = 0.0f, anchorR = 0.0f;
-            engine.renderBlock(0.0, deviceSampleRate, 1, &anchorL, &anchorR, channelChains);
+            engine.renderBlock(loopStart, deviceSampleRate, 1, &anchorL, &anchorR, channelChains);
             for (int i = 0; i < numSamples; ++i)
             {
                 const double samplePos = pos + (double) i * barsPerSample;
-                if (samplePos >= loopBars)
+                if (samplePos >= loopEnd)
                     break; // only the outgoing tail gets pulled toward the anchor
-                const double distFromEnd = loopBars - samplePos;
+                const double distFromEnd = loopEnd - samplePos;
                 const float coeff = loopSeamBlendCoeff(distFromEnd, fadeBars);
                 if (coeff <= 0.0f)
                     continue;
@@ -158,7 +182,7 @@ namespace sssketch
             }
         }
 
-        return std::fmod(pos + blockDurationBars, loopBars);
+        return loopStart + std::fmod(pos - loopStart + blockDurationBars, loopBars);
     }
 
     void Transport::audioDeviceIOCallbackWithContext(
