@@ -59,9 +59,11 @@ namespace sssketch
         void writeBlock(const float* const* inputChannelData, int numInputChannels, int startSample, int numSamples);
 
         /** Called by Transport exactly when its own loop-wrap math detects
-         * the recording loop boundary was crossed this block -- finalizes
-         * whatever's in the buffer as "a completed pass" and resets the
-         * write position to 0 for the next one. */
+         * the recording loop boundary was crossed this block -- snapshots
+         * the just-finished pass into lastCompletedBuffer (see its own doc
+         * comment for why a separate copy is needed, not just a flag),
+         * then resets the write position to 0 and clears buffer for the
+         * next one. */
         void onPassBoundary();
 
         /** True once writeBlock() calls have filled the buffer completely
@@ -80,10 +82,12 @@ namespace sssketch
          * this can only ever cross the threshold once per bufferful. */
         bool isFull() const { return writePos.load() >= buffer.getNumSamples(); }
 
-        /** True once at least one full pass has completed since
-         * construction (or since the buffer was last reset by a prior
-         * onPassBoundary() call) -- checked at disarm time to decide
-         * whether there's anything to commit. */
+        /** True once at least one full pass has ever completed since
+         * construction -- once true, stays true for the rest of this
+         * object's lifetime (there's always SOME completed pass sitting in
+         * lastCompletedBuffer from that point on, even while a newer,
+         * still-in-progress pass is busy overwriting buffer). Checked at
+         * disarm time to decide whether there's anything to commit. */
         bool hasCompletedPass() const { return completedPass; }
 
         /** Per-bucket peak amplitude across however much of the buffer has
@@ -96,20 +100,30 @@ namespace sssketch
          * being sampled every 33ms, not a one-shot full-file decode. */
         std::vector<float> peaksSoFar(int numBuckets) const;
 
-        /** Writes the current buffer contents to a 16-bit mono WAV file at
-         * the given path. Returns false (and leaves outputPath untouched)
-         * on failure -- mirrors RenderExport.cpp's own
+        /** Writes lastCompletedBuffer -- the most recently COMPLETED pass,
+         * not whatever buffer currently holds -- to a 16-bit mono WAV file
+         * at the given path. Returns false (and leaves outputPath
+         * untouched) on failure -- mirrors RenderExport.cpp's own
          * WavAudioFormat::createWriterFor error-handling convention (null
          * writer = failure, no exception). Meaningful to call regardless
          * of hasCompletedPass() (the caller is expected to check that
-         * first and skip calling this at all if there's nothing to
-         * commit -- this method itself doesn't re-check, so it always
-         * writes whatever the buffer currently holds if asked). */
+         * first and skip calling this at all if there's nothing to commit
+         * -- this method itself doesn't re-check; if no pass has ever
+         * completed, lastCompletedBuffer is still just silence from the
+         * constructor, so calling this anyway isn't unsafe, just
+         * pointless). */
         bool writeToWavFile(const juce::String& outputPath) const;
 
     private:
         double sampleRate;
         juce::AudioBuffer<float> buffer;
+        // Snapshot of the most recently COMPLETED pass, decoupled from
+        // `buffer` (which keeps getting overwritten by whatever pass is
+        // CURRENTLY in progress) -- see onPassBoundary()'s own comment for
+        // why this exists. Pre-sized identically to `buffer` in the
+        // constructor so the copy assignment in onPassBoundary() is always
+        // same-size-to-same-size and never reallocates on the audio thread.
+        juce::AudioBuffer<float> lastCompletedBuffer;
         std::atomic<int> writePos { 0 };
         bool completedPass = false;
     };

@@ -75,22 +75,53 @@ namespace sssketch
                 expect(!recorder.isFull());
             }
 
-            beginTest("each new pass overwrites the buffer from the start");
+            beginTest("writeToWavFile commits a single completed pass's full audio");
+            {
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                std::vector<float> inputData(4800, 0.6f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 4800);
+                recorder.onPassBoundary();
+                expect(recorder.hasCompletedPass());
+
+                juce::File tmp = juce::File::createTempFile(".wav");
+                expect(recorder.writeToWavFile(tmp.getFullPathName()));
+
+                StemBufferCache cache;
+                expect(cache.load(tmp.getFullPathName()));
+                auto* readBack = cache.get(tmp.getFullPathName());
+                expect(readBack != nullptr);
+                expectEquals(readBack->getNumSamples(), 4800);
+                expectWithinAbsoluteError(readBack->getSample(0, 0), 0.6f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(0, 4600), 0.6f, 0.01f);
+
+                tmp.deleteFile();
+            }
+
+            beginTest("disarming mid-way through a second pass commits the FIRST pass's "
+                      "complete audio, not the second pass's partial/silent content -- "
+                      "regression test for a real bug found during manual testing: "
+                      "writeToWavFile used to read directly from the live `buffer`, which a "
+                      "second pass had already started overwriting by the time of a mid-pass "
+                      "disarm, even though hasCompletedPass() (correctly) still said there was "
+                      "a completed pass -- just not the one actually still sitting in `buffer`");
             {
                 LoopRecorder recorder(48000.0, 0.1);
                 std::vector<float> firstPass(4800, 0.5f);
                 const float* firstChannels[] = { firstPass.data() };
                 recorder.writeBlock(firstChannels, 1, 0, 4800);
                 recorder.onPassBoundary();
+                expect(recorder.hasCompletedPass());
 
                 std::vector<float> secondPass(4800, 0.25f);
                 const float* secondChannels[] = { secondPass.data() };
                 recorder.writeBlock(secondChannels, 1, 0, 2000); // only partway through the second pass
+                expect(recorder.hasCompletedPass()); // still true -- pass 1 is still the last COMPLETED one
+
                 // Write the committed WAV NOW (simulating a disarm mid-second-pass)
-                // and confirm it reflects the FIRST pass's value, not a mix of both --
-                // onPassBoundary's own buffer.clear() must have actually wiped the
-                // first pass's data, not left it underneath the second pass's partial
-                // overwrite.
+                // and confirm it reflects the FIRST pass's complete value throughout
+                // -- the second, still-in-progress pass's partial 0.25 write must be
+                // completely absent from what gets committed.
                 juce::File tmp = juce::File::createTempFile(".wav");
                 expect(recorder.writeToWavFile(tmp.getFullPathName()));
 
@@ -107,17 +138,14 @@ namespace sssketch
                 auto* readBack = cache.get(tmp.getFullPathName());
                 expect(readBack != nullptr);
                 expectEquals(readBack->getNumSamples(), 4800);
-                // First 2000 samples: only the second pass wrote here (0.25), but
-                // clear() wiped the first pass's 0.5 first, so this region equals
-                // the second pass's value, not some blend of the two.
-                expectWithinAbsoluteError(readBack->getSample(0, 0), 0.25f, 0.01f);
-                expectWithinAbsoluteError(readBack->getSample(0, 1999), 0.25f, 0.01f);
-                // Everything past what the second (partial) pass wrote (but
-                // still well clear of the tail blend window) must be silence
-                // from clear() -- specifically NOT the first pass's 0.5 still
-                // sitting there underneath.
-                expectWithinAbsoluteError(readBack->getSample(0, 2000), 0.0f, 0.01f);
-                expectWithinAbsoluteError(readBack->getSample(0, 4600), 0.0f, 0.01f);
+                // Every sample checked here must be the FIRST pass's value (0.5),
+                // including the region the second (partial, discarded) pass wrote
+                // over in the live `buffer` -- proof this reads from
+                // lastCompletedBuffer, not `buffer` itself.
+                expectWithinAbsoluteError(readBack->getSample(0, 0), 0.5f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(0, 1999), 0.5f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(0, 2000), 0.5f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(0, 4600), 0.5f, 0.01f);
 
                 tmp.deleteFile();
             }

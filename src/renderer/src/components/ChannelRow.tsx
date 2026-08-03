@@ -209,6 +209,19 @@ function ChannelRowImpl({
           }
         } else if (result.error) {
           window.alert(`Recording failed: ${result.error}`)
+        } else {
+          // committed: false with no error -- the loop never completed one
+          // full pass before disarm (per the design's own "if the
+          // recording loop hasn't completed even one full pass yet,
+          // disarming produces no clip at all" rule). Whatever was already
+          // on this channel is untouched (correct -- nothing to replace
+          // it with), but silently doing nothing here was genuinely
+          // confusing during manual testing: an old take just sitting
+          // there, revealed once the live overlay disappears, read as "it
+          // recorded the wrong thing" rather than "it recorded nothing."
+          window.alert(
+            'Nothing recorded -- the loop needs to complete at least one full pass before disarming.'
+          )
         }
       } else {
         if (!selectedInputDevice || !loopRegion) return

@@ -11,6 +11,13 @@ namespace sssketch
         const int numSamples = std::max(1, (int) std::lround(loopLengthSeconds * sampleRate));
         buffer.setSize(1, numSamples);
         buffer.clear();
+        // Pre-sized identically to buffer, right here in the constructor
+        // (never touched again except by onPassBoundary()'s same-size
+        // copy assignment) -- see this member's own doc comment in
+        // LoopRecorder.h for why the audio thread must never be the one
+        // to first-allocate it.
+        lastCompletedBuffer.setSize(1, numSamples);
+        lastCompletedBuffer.clear();
     }
 
     void LoopRecorder::writeBlock(const float* const* inputChannelData, int numInputChannels,
@@ -42,7 +49,41 @@ namespace sssketch
 
     void LoopRecorder::onPassBoundary()
     {
-        completedPass = writePos.load(std::memory_order_relaxed) >= buffer.getNumSamples();
+        // Snapshot BEFORE clear() wipes buffer -- this is the fix for a
+        // real bug found during manual testing: hasCompletedPass() used to
+        // just be a flag, set true here and never reset, while
+        // writeToWavFile() read directly from `buffer` -- which, by the
+        // time a LATER pass had started overwriting it, no longer held the
+        // completed pass's audio at all. Disarming mid-way through a
+        // second pass would silently commit that second, still-in-progress
+        // pass's partial/mostly-silent content while completedPass still
+        // (correctly, per its own true meaning) said "yes there's a
+        // completed pass" -- just not the one actually in `buffer`
+        // anymore. lastCompletedBuffer now holds the ACTUAL completed
+        // pass's audio, decoupled from whatever's currently being
+        // (re-)recorded into `buffer`, matching the design's own stated
+        // "commits whichever pass most recently completed" contract for
+        // real. Same-size copy assignment (both buffers are pre-sized
+        // identically in the constructor), so this never (re)allocates
+        // here on the audio thread.
+        //
+        // Narrows, doesn't worsen, the pre-existing disarm-teardown race
+        // documented at this file's own call site and in IpcServer.cpp's
+        // disarm-recording handler: writeToWavFile() (message thread) now
+        // reads lastCompletedBuffer instead of buffer, so a stale audio-
+        // thread callback that only calls writeBlock() during that brief
+        // post-detach window (the common case) no longer races the
+        // message-thread read at all -- writeBlock() never touches
+        // lastCompletedBuffer. The race only reappears in the rarer case
+        // where a pass boundary happens to land in that exact stale
+        // callback (this assignment running concurrently with a
+        // writeToWavFile() read) -- a strict subset of the old exposure,
+        // not a new one.
+        if (writePos.load(std::memory_order_relaxed) >= buffer.getNumSamples())
+        {
+            lastCompletedBuffer = buffer;
+            completedPass = true;
+        }
         // Publish the reset BEFORE clearing the buffer, not after -- a
         // concurrent peaksSoFar() call that lands during clear() must see
         // writePos already at 0 so its own bucketStart(0) >=
@@ -102,7 +143,7 @@ namespace sssketch
         if (writer == nullptr) return false;
         out.release(); // writer now owns the stream, matching RenderExport.cpp's own ownership handoff
 
-        writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+        writer->writeFromAudioSampleBuffer(lastCompletedBuffer, 0, lastCompletedBuffer.getNumSamples());
         return true;
     }
 }
