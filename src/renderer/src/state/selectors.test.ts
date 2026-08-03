@@ -261,6 +261,32 @@ describe('channelsInOrder', () => {
     expect(channels[0].channelId).toBe('r1')
     expect(channels[0].rifffs.map((r) => r.groupId)).toEqual(['r1', 'r2'])
   })
+
+  it('includes a recording channel with no clips yet, with an empty rifffs array', () => {
+    const state = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+    const channels = channelsInOrder(state)
+    expect(channels).toHaveLength(1)
+    expect(channels[0].channelId).toBe('rec-1')
+    expect(channels[0].rifffs).toEqual([])
+  })
+
+  it('keeps a recording channel visible after its only clip is removed from the timeline', () => {
+    let state = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+    const unplaced: Rifff = { ...rifff, startBar: undefined }
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, {
+      type: 'MOVE_TO_CHANNEL',
+      groupId: 'r1',
+      startBar: 0,
+      channelId: 'rec-1'
+    })
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    const channels = channelsInOrder(state)
+    expect(channels).toHaveLength(1)
+    expect(channels[0].channelId).toBe('rec-1')
+    expect(channels[0].rifffs).toEqual([])
+  })
 })
 
 describe('isSketchEligible', () => {

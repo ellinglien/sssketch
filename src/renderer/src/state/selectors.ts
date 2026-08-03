@@ -44,7 +44,19 @@ export interface Channel {
  * placed rifff with no channelOf entry at all falls back to its own groupId
  * as an implicit solo channel (matching PLACE_ON_TIMELINE's own "own groupId
  * as channel id" default elsewhere) rather than silently vanishing from the
- * arranger. */
+ * arranger.
+ *
+ * Recording channels (state.recordingChannelIds) are also always included,
+ * even with zero clips -- per
+ * docs/superpowers/specs/2026-08-03-loop-recording-design.md, "a recording
+ * channel with nothing recorded onto it yet still needs to exist and
+ * render as an empty row with its own arm button," and the same is true
+ * again any time its clip gets deleted/moved off later (recordingChannelIds
+ * is exempted from the usual "evict when empty" cleanup elsewhere in the
+ * reducer specifically so this channel survives that). Contributes an
+ * empty rifffs array in that case, which flatMaps to nothing extra in
+ * placedRifffsInOrder below -- safe for every other consumer of this
+ * selector, which only ever cares about placed clips. */
 export function channelsInOrder(state: AppState): Channel[] {
   const byChannel = new Map<string, Rifff[]>()
   for (const rifff of Object.values(state.rifffs)) {
@@ -54,7 +66,9 @@ export function channelsInOrder(state: AppState): Channel[] {
     if (list) list.push(rifff)
     else byChannel.set(channelId, [rifff])
   }
-  const ordered = state.channelOrder.filter((id) => byChannel.has(id))
+  const ordered = state.channelOrder.filter(
+    (id) => byChannel.has(id) || state.recordingChannelIds[id]
+  )
   const seen = new Set(ordered)
   for (const channelId of byChannel.keys()) {
     if (!seen.has(channelId)) {
@@ -62,7 +76,7 @@ export function channelsInOrder(state: AppState): Channel[] {
       seen.add(channelId)
     }
   }
-  return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId)! }))
+  return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId) ?? [] }))
 }
 
 /** Every placed rifff, flattened out of channelsInOrder — channel by
