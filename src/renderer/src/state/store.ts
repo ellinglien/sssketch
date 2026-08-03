@@ -41,6 +41,8 @@ function placeOnTimeline(state: AppState, groupId: string, startBar: number): Ap
 
 export type ArrangerMode = 'normal' | 'sketch'
 
+export type LoopRegion = { startBar: number; endBar: number } | null
+
 export interface AppState {
   bpm: number
   snapIdx: 0 | 1 | 2 | 3
@@ -119,9 +121,10 @@ export interface AppState {
   /** The loop-recording region, in bars — null until the user first drags
    * one out on the Ruler. Independent of loopLengthBars (the whole
    * project's own wrap point, computed from placed clips) -- this can be
-   * shorter, longer, or positioned anywhere. See
+   * shorter, longer, or positioned anywhere. Persists normally -- real
+   * arrangement data, not a transient UI mode. See
    * docs/superpowers/specs/2026-08-03-loop-recording-design.md. */
-  loopRegion: { startBar: number; endBar: number } | null
+  loopRegion: LoopRegion
   rifffs: Record<string, Rifff>
 }
 
@@ -220,7 +223,7 @@ export type Action =
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
-  | { type: 'SET_LOOP_REGION'; region: { startBar: number; endBar: number } | null }
+  | { type: 'SET_LOOP_REGION'; region: LoopRegion }
   | { type: 'LOAD_STATE'; state: AppState }
 
 export function reducer(state: AppState, action: Action): AppState {
