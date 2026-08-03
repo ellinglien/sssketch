@@ -121,6 +121,37 @@ namespace sssketch
 
                 tmp.deleteFile();
             }
+
+            beginTest("peaksSoFar reflects only what's been written, zero past writePos");
+            {
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                // Write exactly the first half (2400 of 4800 samples) at a known
+                // non-zero amplitude -- half the buckets should read back that
+                // amplitude, the other half (past writePos) must stay 0.
+                std::vector<float> inputData(2400, 0.6f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 2400);
+
+                const auto peaks = recorder.peaksSoFar(8); // 600 samples/bucket; 4 buckets written
+                expectEquals((int) peaks.size(), 8);
+                for (int b = 0; b < 4; ++b)
+                    expectWithinAbsoluteError(peaks[(size_t) b], 0.6f, 0.01f);
+                for (int b = 4; b < 8; ++b)
+                    expectWithinAbsoluteError(peaks[(size_t) b], 0.0f, 0.001f);
+            }
+
+            beginTest("peaksSoFar resets to all-zero after onPassBoundary starts a fresh pass");
+            {
+                LoopRecorder recorder(48000.0, 0.1); // 4800 samples
+                std::vector<float> inputData(4800, 0.6f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 4800);
+                recorder.onPassBoundary(); // writePos resets to 0, buffer cleared
+
+                const auto peaks = recorder.peaksSoFar(8);
+                for (float peak : peaks)
+                    expectWithinAbsoluteError(peak, 0.0f, 0.001f);
+            }
         }
     };
 

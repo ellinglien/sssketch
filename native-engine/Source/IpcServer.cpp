@@ -109,6 +109,27 @@ namespace sssketch
         payload->setProperty("pos", transport.currentPositionBars());
         obj->setProperty("payload", juce::var(payload.get()));
         sendJson(juce::var(obj.get()));
+
+        // Piggybacks on the same 30Hz timer rather than a second one -- see
+        // this method's own doc comment on why one shared cadence is enough
+        // for both pushes. Only fires while a recording is actually armed
+        // (armedRecorder is only non-null between arm-recording and the next
+        // disarm-recording/re-arm/teardown -- see its own doc comment in
+        // IpcServer.h), so an idle/non-recording client never receives this
+        // message type at all.
+        if (armedRecorder)
+        {
+            juce::DynamicObject::Ptr capPayload = new juce::DynamicObject();
+            capPayload->setProperty("channelId", armedChannelId);
+            juce::Array<juce::var> peaksVar;
+            for (float peak : armedRecorder->peaksSoFar(32))
+                peaksVar.add(peak);
+            capPayload->setProperty("peaksSoFar", peaksVar);
+            juce::DynamicObject::Ptr capObj = new juce::DynamicObject();
+            capObj->setProperty("type", "capture-level-update");
+            capObj->setProperty("payload", juce::var(capPayload.get()));
+            sendJson(juce::var(capObj.get()));
+        }
     }
 
     void IpcConnection::messageReceived(const juce::MemoryBlock& message)

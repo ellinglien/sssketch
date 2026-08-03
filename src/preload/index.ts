@@ -124,6 +124,23 @@ const api = {
     ipcRenderer.on('engine-position-update', listener)
     return () => ipcRenderer.removeListener('engine-position-update', listener)
   },
+  // Channel name follows the same 'engine-' prefix convention as
+  // onEnginePositionUpdate/onEngineRestarted above (main/index.ts's
+  // subscribeToCaptureLevelUpdates forwards IpcServer's "capture-level-update"
+  // engine push onto this renderer-facing 'engine-capture-level-update'
+  // channel) -- deliberately NOT the bare 'capture-level-update' string, to
+  // stay consistent with every other engine-originated push already bridged
+  // here.
+  onCaptureLevelUpdate: (
+    callback: (channelId: string, peaksSoFar: number[]) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: { channelId: string; peaksSoFar: number[] }
+    ): void => callback(payload.channelId, payload.peaksSoFar)
+    ipcRenderer.on('engine-capture-level-update', listener)
+    return () => ipcRenderer.removeListener('engine-capture-level-update', listener)
+  },
   onEngineRestarted: (callback: () => void): (() => void) => {
     const listener = (): void => callback()
     ipcRenderer.on('engine-restarted', listener)

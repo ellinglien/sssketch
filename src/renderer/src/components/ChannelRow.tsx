@@ -1,9 +1,10 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { RifffBlockRow } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
-import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
+import { typeColorVar } from '../theme/typeColor'
 
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
@@ -58,6 +59,7 @@ function ChannelRowImpl({
   const channelOf = useAppSelector((s) => s.channelOf)
   const loopRegion = useAppSelector((s) => s.loopRegion)
   const playing = usePlaying()
+  const ppb = useZoom()
 
   const allMuted = useMemo(
     () =>
@@ -212,6 +214,29 @@ function ChannelRowImpl({
     }
   }
 
+  // Live "building up" waveform feedback while this channel is armed -- see
+  // docs/superpowers/specs/2026-08-03-loop-recording-design.md's "Live
+  // capture feedback" section. Subscribes only while armed (unsubscribes and
+  // clears immediately on disarm, rather than leaving a stale bar graph
+  // sitting there) since the engine only pushes capture-level-update while
+  // some channel is actually armed (see IpcServer.cpp's timerCallback).
+  const [capturePeaks, setCapturePeaks] = useState<number[]>([])
+  useEffect(() => {
+    if (!isArmed) return
+    const unsubscribe = window.rifffApi.onCaptureLevelUpdate((updateChannelId, peaks) => {
+      if (updateChannelId === channelId) setCapturePeaks(peaks)
+    })
+    // Reset lives in the cleanup, not the setup body -- calling setState
+    // synchronously in an effect's setup trips react-hooks/set-state-in-effect
+    // (see BeatPicker.tsx's identical reasoning on its own preview-stop
+    // effect). Cleanup fires both when isArmed flips back to false and on
+    // unmount, so the bar graph never lingers stale after a disarm.
+    return () => {
+      unsubscribe()
+      setCapturePeaks([])
+    }
+  }, [isArmed, channelId])
+
   return (
     <div
       data-channel-id={channelId}
@@ -286,6 +311,33 @@ function ChannelRowImpl({
           )}
         </div>
       </div>
+      {isArmed && loopRegion && (
+        <div
+          style={{
+            position: 'absolute',
+            left: loopRegion.startBar * ppb,
+            width: (loopRegion.endBar - loopRegion.startBar) * ppb,
+            top: 0,
+            bottom: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            padding: '0 2px',
+            pointerEvents: 'none'
+          }}
+        >
+          {capturePeaks.map((peak, i) => (
+            <div
+              key={i}
+              style={{
+                width: 3,
+                height: `${Math.max(4, peak * 100)}%`,
+                background: peak > 0 ? typeColorVar('audioIn') : 'var(--ra-border)'
+              }}
+            />
+          ))}
+        </div>
+      )}
       {rifffs.map((rifff) => (
         <RifffBlockRow
           key={rifff.groupId}

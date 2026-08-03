@@ -422,14 +422,27 @@ app.whenReady().then(async () => {
         }
       })
     }
+    // Mirrors subscribeToPositionUpdates exactly -- same "re-subscribe on
+    // every crash-recovery respawn" requirement applies here too (see that
+    // function's own doc comment above), since this push rides the same
+    // per-connection 30Hz timer in IpcServer.cpp.
+    function subscribeToCaptureLevelUpdates(): void {
+      engine.client.on('capture-level-update', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-capture-level-update', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
     subscribeToMasterPluginLoaded()
     subscribeToChannelPluginLoaded()
+    subscribeToCaptureLevelUpdates()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
       subscribeToMasterPluginLoaded()
       subscribeToChannelPluginLoaded()
+      subscribeToCaptureLevelUpdates()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }

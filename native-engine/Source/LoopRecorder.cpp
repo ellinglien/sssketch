@@ -1,5 +1,7 @@
 // native-engine/Source/LoopRecorder.cpp
 #include "LoopRecorder.h"
+#include <algorithm>
+#include <cmath>
 
 namespace sssketch
 {
@@ -38,6 +40,24 @@ namespace sssketch
         completedPass = writePos >= buffer.getNumSamples();
         writePos = 0;
         buffer.clear();
+    }
+
+    std::vector<float> LoopRecorder::peaksSoFar(int numBuckets) const
+    {
+        std::vector<float> result(numBuckets, 0.0f);
+        const int totalSamples = buffer.getNumSamples();
+        const auto* data = buffer.getReadPointer(0);
+        for (int b = 0; b < numBuckets; ++b)
+        {
+            const int bucketStart = (int) ((double) b / numBuckets * totalSamples);
+            const int bucketEnd = (int) ((double) (b + 1) / numBuckets * totalSamples);
+            if (bucketStart >= writePos) break; // this bucket and every later one is still unwritten this pass
+            float peak = 0.0f;
+            for (int i = bucketStart; i < std::min(bucketEnd, writePos); ++i)
+                peak = std::max(peak, std::abs(data[i]));
+            result[b] = peak;
+        }
+        return result;
     }
 
     bool LoopRecorder::writeToWavFile(const juce::String& outputPath) const

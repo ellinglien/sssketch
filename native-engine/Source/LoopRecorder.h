@@ -3,6 +3,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
+#include <vector>
 
 namespace sssketch
 {
@@ -63,6 +64,16 @@ namespace sssketch
          * onPassBoundary() call) -- checked at disarm time to decide
          * whether there's anything to commit. */
         bool hasCompletedPass() const { return completedPass; }
+
+        /** Per-bucket peak amplitude across however much of the buffer has
+         * been written so far this pass (0 for buckets past the current
+         * write position) -- numBuckets fixed, small (the renderer just
+         * needs enough resolution for a coarse "building up" bar graph,
+         * not a full waveform). Same "downsample into N buckets" idea as
+         * @shared/visuals' peaksFromChannel on the renderer side, kept
+         * separately here since this is a live, partially-filled buffer
+         * being sampled every 33ms, not a one-shot full-file decode. */
+        std::vector<float> peaksSoFar(int numBuckets) const;
 
         /** Writes the current buffer contents to a 16-bit mono WAV file at
          * the given path. Returns false (and leaves outputPath untouched)
