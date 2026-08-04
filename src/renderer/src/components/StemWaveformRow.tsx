@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
@@ -63,11 +62,16 @@ export function StemWaveformRow({
   const color = stemColorVar(stem)
   const playedBarsKey = groupId
 
-  const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
-  const [dragLeftCropBars, setDragLeftCropBars] = useState<number | null>(null)
-  const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
-  const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
-  const [dragVolume, setDragVolume] = useState<number | null>(null)
+  // Shared, store-backed live preview -- NOT local useState -- so every
+  // StemWaveformRow instance sharing this groupId (every stem in the same
+  // expanded rifff) sees the SAME in-progress value while ANY one of them
+  // is being dragged, not just the row actually under the mouse. See
+  // docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
+  const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
+  const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
+  const dragFadeIn = useAppSelector((s) => s.dragFadeIn[groupId] ?? null)
+  const dragFadeOut = useAppSelector((s) => s.dragFadeOut[groupId] ?? null)
+  const dragVolume = useAppSelector((s) => s.dragVol[key] ?? null)
 
   // Right-click anywhere on the waveform toggles mute — moved off plain
   // click (which now does nothing at this level) since an accidental click
@@ -164,13 +168,12 @@ export function StemWaveformRow({
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
-    // Captured in a plain closure variable rather than read back out of
-    // dragPlayedBars state in onEnd: StrictMode double-invokes setState
-    // updater FUNCTIONS in dev to catch impure updaters, so a dispatch
-    // placed inside a `setDragPlayedBars((current) => ...)` callback would
-    // fire twice per drag-release. Dispatching directly in onEnd, from a
-    // value tracked outside React state, sidesteps that entirely — see
-    // dragUtils.ts's own doc comment for the general rule this follows.
+    // Captured in a plain closure variable, not read back out of store state
+    // in onEnd -- same reasoning as before this preview moved into the
+    // store: onMove/onEnd both fire outside React's render cycle, so a
+    // value threaded through the closure is simpler and cheaper than a
+    // round-trip through useAppSelector, and avoids a one-render-late read
+    // if onEnd fired before the dispatch above it had a chance to commit.
     let finalPlayedBars = startPlayedBars
     startPointerDrag(
       e,
@@ -181,13 +184,23 @@ export function StemWaveformRow({
         // another repeat, not fine sub-bar precision), and it keeps the tiled
         // waveform below landing on clean tile boundaries most of the time.
         finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / ppb))
-        setDragPlayedBars(finalPlayedBars)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'playedBars',
+          key: playedBarsKey,
+          value: finalPlayedBars
+        })
       },
       (moved) => {
         if (moved) {
           dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
         }
-        setDragPlayedBars(null)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'playedBars',
+          key: playedBarsKey,
+          value: undefined
+        })
       }
     )
   }
@@ -212,24 +225,29 @@ export function StemWaveformRow({
           -startPosBar,
           Math.min(startPlayedBars - MIN_PLAYED_BARS, requestedLeftCropBars)
         )
-        setDragLeftCropBars(finalLeftCropBars)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'leftCropBars',
+          key: groupId,
+          value: finalLeftCropBars
+        })
       },
       (moved) => {
         if (moved) {
           dispatch({ type: 'SET_LEFT_CROP_BARS', groupId, bars: finalLeftCropBars })
         }
-        setDragLeftCropBars(null)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'leftCropBars',
+          key: groupId,
+          value: undefined
+        })
       }
     )
   }
 
   function handleFadeInStart(e: React.MouseEvent): void {
     const startFadeIn = fadeIn
-    // Tracked in a plain closure variable, NOT read back out of dragFadeIn
-    // state inside onEnd — see dragUtils.ts's doc comment for why a dispatch
-    // can never live inside a setState updater function (StrictMode
-    // double-invokes those in dev, already caused a real bug in the resize
-    // handler above — don't reintroduce it here).
     let finalFadeIn = startFadeIn
     startPointerDrag(
       e,
@@ -238,11 +256,11 @@ export function StemWaveformRow({
           0,
           Math.min(FADE_MAX, startFadeIn + deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
-        setDragFadeIn(finalFadeIn)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
-        setDragFadeIn(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
       }
     )
   }
@@ -262,11 +280,11 @@ export function StemWaveformRow({
           0,
           Math.min(FADE_MAX, startFadeOut - deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
-        setDragFadeOut(finalFadeOut)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
-        setDragFadeOut(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
       }
     )
   }
@@ -308,21 +326,17 @@ export function StemWaveformRow({
 
   function handleVolumeStart(e: React.MouseEvent): void {
     const startVolume = volume
-    // Same closure-variable pattern as the handlers above: finalVolume is
-    // tracked outside React state and dispatched directly in onEnd's body,
-    // never from inside a setDragVolume updater function — see dragUtils.ts's
-    // doc comment for why.
     let finalVolume = startVolume
     startPointerDrag(
       e,
       // Up (negative deltaY) increases volume — hence the subtraction.
       (_dx, deltaY) => {
         finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
-        setDragVolume(finalVolume)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: finalVolume })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
-        setDragVolume(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: undefined })
       }
     )
   }
