@@ -179,8 +179,10 @@ export function StemWaveformRow({
   function handleLeftResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
     const startPosBar = baseStartBar
+    const startOffsetSteps = offsetSteps
     let finalPlayedBars = startPlayedBars
     let finalStartBar = startPosBar
+    let finalOffsetSteps = startOffsetSteps
     startPointerDrag(
       e,
       (deltaX) => {
@@ -199,6 +201,14 @@ export function StemWaveformRow({
         )
         finalPlayedBars = startPlayedBars + grow
         finalStartBar = startPosBar - grow
+        // The loop's own phase shifts by the OPPOSITE delta startBar just
+        // moved by (startBar moved by -grow, so offsetBars moves by +grow),
+        // keeping startBar+offsetBars invariant -- the exact condition for
+        // "the same absolute bar position keeps showing the same loop
+        // content" instead of the pattern restarting from its own beginning
+        // at the new boundary. See docs/superpowers/specs/
+        // 2026-08-04-tiled-clip-crop-trim-design.md for the full derivation.
+        finalOffsetSteps = startOffsetSteps + grow * SNAP_DIVS[snapIdx]
         setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
       },
       (moved) => {
@@ -207,7 +217,8 @@ export function StemWaveformRow({
             type: 'RESIZE_LEFT',
             groupId,
             bars: finalPlayedBars,
-            startBar: finalStartBar
+            startBar: finalStartBar,
+            offsetSteps: finalOffsetSteps
           })
         }
         setDragLeftResize(null)

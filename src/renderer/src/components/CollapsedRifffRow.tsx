@@ -271,8 +271,10 @@ export function CollapsedRifffRow({
   function handleLeftResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
     const startPosBar = baseStartBar
+    const startOffsetSteps = offsetSteps
     let finalPlayedBars = startPlayedBars
     let finalStartBar = startPosBar
+    let finalOffsetSteps = startOffsetSteps
     startPointerDrag(
       e,
       (deltaX) => {
@@ -283,6 +285,14 @@ export function CollapsedRifffRow({
         )
         finalPlayedBars = startPlayedBars + grow
         finalStartBar = startPosBar - grow
+        // The loop's own phase shifts by the OPPOSITE delta startBar just
+        // moved by (startBar moved by -grow, so offsetBars moves by +grow),
+        // keeping startBar+offsetBars invariant -- see
+        // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md
+        // (same fix as StemWaveformRow.tsx's own handleLeftResizeStart --
+        // this component has its own separate copy of this handler for the
+        // collapsed/summary view of a tiled clip).
+        finalOffsetSteps = startOffsetSteps + grow * SNAP_DIVS[snapIdx]
         setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
       },
       (moved) => {
@@ -291,7 +301,8 @@ export function CollapsedRifffRow({
             type: 'RESIZE_LEFT',
             groupId,
             bars: finalPlayedBars,
-            startBar: finalStartBar
+            startBar: finalStartBar,
+            offsetSteps: finalOffsetSteps
           })
         }
         setDragLeftResize(null)
