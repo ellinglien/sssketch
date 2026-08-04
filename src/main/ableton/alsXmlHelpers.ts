@@ -86,7 +86,8 @@ export function renumberIds(node: AlsNode, nextId: () => number): void {
   }
   for (const key of Object.keys(node)) {
     if (key === ':@') continue
-    const children = node[key] as AlsNode[]
+    const children = node[key]
+    if (!Array.isArray(children)) continue
     for (const child of children) renumberIds(child, nextId)
   }
 }

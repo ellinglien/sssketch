@@ -29,6 +29,9 @@ describe('parseAls / serializeAls round trip', () => {
     const root = findChild(reparsed, 'Root')!
     const tracks = findChild(childArray(root, 'Root'), 'Tracks')!
     expect(findAllChildren(childArray(tracks, 'Tracks'), 'AudioTrack')).toHaveLength(2)
+
+    const firstTrack = findChild(childArray(tracks, 'Tracks'), 'AudioTrack')!
+    expect(attrs(firstTrack)['@_Id']).toBe('1')
   })
 })
 
@@ -95,5 +98,12 @@ describe('renumberIds', () => {
     const leaf = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Leaf')!
     renumberIds(leaf, () => 5)
     expect(attrs(leaf)['@_Id']).toBeUndefined()
+  })
+
+  it('does not recurse into text-node string values', () => {
+    const doc = parseAls('<Root><Leaf Id="1">some text</Leaf></Root>')
+    const leaf = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Leaf')!
+    expect(() => renumberIds(leaf, () => 5)).not.toThrow()
+    expect(attrs(leaf)['@_Id']).toBe('5')
   })
 })
