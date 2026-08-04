@@ -66,22 +66,39 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
+/** Tags whose own `@_Id` is a POSITIONAL index with real meaning to Ableton,
+ * not a generic object-identity pointer -- renumbering it breaks something,
+ * unlike most other Ids in this document (see renumberIds's own doc
+ * comment). `TrackSendHolder`'s `Id` is confirmed the hard way: it
+ * correlates 1:1, by ordinal position, with the Set's actual return tracks
+ * (the reference template's own two `TrackSendHolder`s are `Id="0"`/`"1"`,
+ * matching its two `ReturnTrack`s exactly) -- renumbering it to some large
+ * fresh value made a real exported file fail to open in Ableton with
+ * *"Track has more send knobs than set has return tracks"*. If another tag
+ * turns out to have the same problem, add it here rather than reworking
+ * the whole renumbering strategy -- this document's Id semantics are
+ * undocumented and only knowable empirically, one confirmed case at a
+ * time. */
+const POSITIONAL_ID_TAGS = new Set(['TrackSendHolder'])
+
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId`. Necessary because cloning a template track via cloneNode also
- * duplicates every internal automation-target/pointee/clip-slot Id it
- * contains -- the reference template's own single canonical AudioTrack has
- * 69 of them. Confirmed empirically (see the design spec) that the original,
- * real, Ableton-produced reference file already reuses small Id values
- * across unrelated elements without apparent problems, so this is defensive
- * rather than a fix for a confirmed bug -- but it's free, and matches the
- * spirit of the template's own NextPointeeId field (Ableton's own "next
- * safe Id to hand out" counter).
+ * `nextId`, EXCEPT on a tag listed in POSITIONAL_ID_TAGS. Necessary because
+ * cloning a template track via cloneNode also duplicates every internal
+ * automation-target/pointee/clip-slot Id it contains -- the reference
+ * template's own single canonical AudioTrack has 69 of them. Confirmed
+ * empirically (see the design spec) that the original, real,
+ * Ableton-produced reference file already reuses small Id values across
+ * many unrelated elements without apparent problems, so renumbering most of
+ * them is defensive rather than a fix for a confirmed bug -- but
+ * `TrackSendHolder` is a real, confirmed exception (see
+ * POSITIONAL_ID_TAGS's own doc comment), not a hypothetical one.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
+  const tag = Object.keys(node).find((key) => key !== ':@')
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
-  if (nodeAttrs && '@_Id' in nodeAttrs) {
+  if (nodeAttrs && '@_Id' in nodeAttrs && !(tag && POSITIONAL_ID_TAGS.has(tag))) {
     nodeAttrs['@_Id'] = String(nextId())
   }
   for (const key of Object.keys(node)) {

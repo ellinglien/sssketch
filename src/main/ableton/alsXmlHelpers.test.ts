@@ -106,4 +106,34 @@ describe('renumberIds', () => {
     expect(() => renumberIds(leaf, () => 5)).not.toThrow()
     expect(attrs(leaf)['@_Id']).toBe('5')
   })
+
+  it('leaves TrackSendHolder Ids untouched, since they are a positional index correlating to return-track count, not a generic identity Id', () => {
+    // Regression test: renumbering TrackSendHolder's Id made a real
+    // exported file fail to open in Ableton with "Track has more send
+    // knobs than set has return tracks" -- confirmed against real
+    // Ableton, not a guess.
+    const doc = parseAls(
+      '<Root><Sends><TrackSendHolder Id="0" /><TrackSendHolder Id="1" /></Sends></Root>'
+    )
+    const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
+    let counter = 100
+    renumberIds(sends, () => counter++)
+
+    const holders = findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder')
+    expect(holders.map((n) => attrs(n)['@_Id'])).toEqual(['0', '1'])
+  })
+
+  it('still renumbers a TrackSendHolder nested inside an otherwise-renumbered subtree', () => {
+    const doc = parseAls(
+      '<Root><Outer Id="1"><Sends><TrackSendHolder Id="0" /></Sends></Outer></Root>'
+    )
+    const outer = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Outer')!
+    let counter = 100
+    renumberIds(outer, () => counter++)
+
+    expect(attrs(outer)['@_Id']).toBe('100') // Outer itself still renumbered
+    const sends = findChild(childArray(outer, 'Outer'), 'Sends')!
+    const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
+    expect(attrs(holder)['@_Id']).toBe('0') // but TrackSendHolder is skipped
+  })
 })
