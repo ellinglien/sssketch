@@ -1884,5 +1884,21 @@ CLAUDE.md's own testing-conventions section). With the freshly-relaunched dev ap
 8. General stability check: drag several handles rapidly, back and forth, for 10-20 seconds
    continuously, both while playing and stopped. Confirm no crash, no audio glitch/dropout beyond
    what's expected from just moving a fader quickly, and no console errors.
+9. **Re-render cost check** (added after Task 2's code review flagged this as worth verifying
+   empirically, not fixed preemptively): every `SET_DRAG_PREVIEW` dispatch changes the reducer's
+   state identity, so components still reading it via the broad `useAppState()` hook (`Inspector`,
+   `Shelf`, `TransportBar`, `MasterChainPanel`, `ChannelChainPanel`, `LoreLibraryBrowser`,
+   `BeatPicker`, `SketchStrip`) re-render on every mousemove of a drag, not just the dragged row.
+   This is consistent with `useAppSelector`'s own doc comment in `StoreContext.tsx` — broad
+   re-renders are the accepted design for components whose cost doesn't scale with project size —
+   but it's still worth confirming in practice for a sustained, fast drag rather than assuming it
+   away. With the Inspector panel open and showing a rifff with several stems (a moderately
+   expensive render), do a fast, sustained volume drag (5+ seconds, moving quickly back and forth)
+   and watch for visible stutter in the Inspector itself or in the dragged fader's own
+   responsiveness. If it's smooth, no further action needed. If there's visible jank, that's a
+   trigger to extract drag-preview state into its own dedicated store outside the undo-tracked
+   reducer, mirroring how `pos`/`playing` were already split out for the same reason (see
+   `StoreContext.tsx`'s own module doc comment on that split) — report back rather than fixing it
+   silently, since that would be a real scope addition to this plan.
 
 Report back what you see.
