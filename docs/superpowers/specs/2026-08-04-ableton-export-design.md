@@ -124,7 +124,11 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
    4`. Clip `Time` (arrangement position) = `rifff.startBar * 4`.
 3. **Loop window**: `leftCropBars`/`playedBars` (`state.leftCrop[groupId] ?? 0`,
    `resolvePlayedBars(state, groupId)`) map onto `<Loop>`: `LoopStart = leftCropBars*4`,
-   `LoopEnd = (leftCropBars+playedBars)*4`, `LoopOn=true`. One-shot stems (`stem.oneShot`)
+   `LoopEnd = playedBars*4` — `playedBars` is already an absolute end-boundary measured from
+   the clip's own start, not a length to add on top of the crop (confirmed against
+   `selectors.ts`'s own `clipGeometryFromFields`: `visibleBars = playedBars - leftCropBars`,
+   and the `[startBar, startBar + playedBars)` range comment on `groupIdAtPosition`) — and
+   `LoopOn=true`. One-shot stems (`stem.oneShot`)
    get `LoopOn=false` instead, placed once — matching their existing no-crop/-extend
    treatment elsewhere in sssketch. Confirmed against the reference file: `LoopStart`/
    `LoopEnd` still define the played region within the source sample even when
