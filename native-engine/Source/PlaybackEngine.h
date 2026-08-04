@@ -6,6 +6,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
 #include <map>
+#include <memory>
 
 namespace sssketch
 {
@@ -13,7 +14,6 @@ namespace sssketch
     {
     public:
         explicit PlaybackEngine(StemBufferCache& bufferCache);
-        ~PlaybackEngine();
 
         PlaybackEngine(const PlaybackEngine&) = delete;
         PlaybackEngine& operator=(const PlaybackEngine&) = delete;
@@ -23,13 +23,17 @@ namespace sssketch
          * scheduling) — a stem whose file fails to load is silently skipped
          * during rendering, not fatal to the whole project, matching
          * AudioEngine.ts's per-stem try/catch. Builds a brand-new
-         * ProjectSnapshot and publishes it via one atomic pointer exchange —
+         * ProjectSnapshot and publishes it via std::atomic_store_explicit --
          * see ProjectSnapshot's own doc comment for why. Safe to call at
          * high frequency (e.g. live volume dragging during playback, see
          * docs/superpowers/specs/2026-08-04-live-drag-preview-design.md) --
          * this used to be a plain, unsynchronized member reassignment racing
          * against the real-time audio thread's own concurrent read, flagged
-         * but never fixed in native-engine/PHASE3_FINDINGS.md. */
+         * but never fixed in native-engine/PHASE3_FINDINGS.md. A first
+         * attempt at fixing it (raw atomic<T*> + a detached thread deleting
+         * the superseded snapshot, mirroring ChannelChainRegistry's own
+         * pattern) turned out to still be unsafe under sustained load --
+         * see published's own doc comment for why shared_ptr replaced it. */
         void setProject(const EngineProject& project);
 
         /** Renders numSamples of stereo output starting at absolute transport
@@ -70,7 +74,10 @@ namespace sssketch
          * entirely, at the cost of one non-real-time-thread copy per export
          * request (cheap -- this is metadata, not audio; stem audio lives
          * in StemBufferCache, not inside EngineProject itself). */
-        EngineProject currentProjectForExport() const { return published.load()->project; }
+        EngineProject currentProjectForExport() const
+        {
+            return std::atomic_load_explicit(&published, std::memory_order_acquire)->project;
+        }
 
         /** Toggled by the 'set-metronome' IPC message — off by default, so a
          * freshly-constructed engine (including RenderExport's own, offline)
@@ -88,13 +95,13 @@ namespace sssketch
          * (scratchChannelL/R/Ids) into one immutable-once-published unit --
          * these can't be independently atomic-swapped without reintroducing
          * a race between the two swaps landing at different times. Mirrors
-         * ChannelChainRegistry's own published-map pattern exactly (see
-         * ChannelChainRegistry.h's class doc comment): setProject() builds a
-         * whole new ProjectSnapshot on the heap and publishes it with one
-         * atomic exchange; renderBlock() loads the current pointer once, at
-         * the top of the call, and reads everything through it for the rest
-         * of that one call -- never touches a shared mutable field
-         * directly. */
+         * ChannelChainRegistry's own published-map pattern in spirit
+         * (setProject() builds a whole new ProjectSnapshot on the heap and
+         * publishes it in one atomic operation; renderBlock() loads the
+         * current snapshot once, at the top of the call, and reads
+         * everything through it for the rest of that one call -- never
+         * touches a shared mutable field directly) but NOT in reclamation
+         * mechanism -- see published's own doc comment below for why. */
         struct ProjectSnapshot
         {
             EngineProject project;
@@ -121,7 +128,30 @@ namespace sssketch
         };
 
         StemBufferCache& bufferCache;
-        std::atomic<const ProjectSnapshot*> published;
+
+        // Owning, reference-counted pointer to the currently-live snapshot --
+        // NOT std::atomic<const ProjectSnapshot*> (an earlier version of this
+        // class used exactly that, paired with a detached std::thread doing
+        // `delete old` on whatever the exchange returned). That scheme
+        // relied on a scheduling heuristic ("the audio thread has certainly
+        // moved on by the time the detached thread actually runs") that a
+        // concurrent setProject()/renderBlock() stress test
+        // (PlaybackEngineTests.cpp) proved FALSE under sustained load --
+        // reliably reproducible EXC_BAD_ACCESS, the delete thread winning
+        // the race against a renderBlock() call still reading the snapshot
+        // being freed. A plain std::shared_ptr, accessed only via the
+        // std::atomic_load_explicit/atomic_store_explicit free functions
+        // (C++11; NOT std::atomic<std::shared_ptr<T>>, the C++20 built-in
+        // atomic specialization -- unavailable in this project's libc++,
+        // confirmed by a direct compile check: it requires the held type to
+        // be trivially copyable, which shared_ptr never is), is genuinely
+        // correct regardless of timing: std::atomic_load_explicit hands the
+        // calling thread its OWN reference-counted copy, so the object
+        // physically cannot be freed while renderBlock() (or anything else)
+        // still holds that copy, no matter how many times or how fast
+        // setProject() replaces `published` on another thread meanwhile.
+        std::shared_ptr<const ProjectSnapshot> published;
+
         bool metronomeEnabled = false;
     };
 }

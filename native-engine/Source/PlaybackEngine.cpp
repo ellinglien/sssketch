@@ -4,7 +4,6 @@
 #include "Metronome.h"
 #include <algorithm>
 #include <cmath>
-#include <thread>
 
 namespace sssketch
 {
@@ -21,26 +20,28 @@ namespace sssketch
     }
 
     PlaybackEngine::PlaybackEngine(StemBufferCache& cache)
-        : bufferCache(cache), published(new ProjectSnapshot())
+        : bufferCache(cache), published(std::make_shared<const ProjectSnapshot>())
     {
         // Published to a freshly-constructed, empty snapshot immediately --
         // renderBlock()/currentProjectForExport() must never see a null
         // pointer, including before setProject() is ever called (see the
         // "silence when no project is set" test, which relies on exactly
-        // this: an empty project.rifffs, not a null snapshot).
+        // this: an empty project.rifffs, not a null snapshot). No
+        // user-declared destructor needed any more -- published is a plain
+        // std::shared_ptr now, so its own destructor (releasing whatever
+        // snapshot is currently held, freeing it if this was the last
+        // reference) already does exactly the right thing.
     }
-
-    PlaybackEngine::~PlaybackEngine() { delete published.load(); }
 
     double PlaybackEngine::secPerBar() const
     {
-        const auto* snap = published.load(std::memory_order_acquire);
+        const auto snap = std::atomic_load_explicit(&published, std::memory_order_acquire);
         return secPerBarFor(snap->project.bpm);
     }
 
     void PlaybackEngine::setProject(const EngineProject& project)
     {
-        auto* next = new ProjectSnapshot();
+        auto next = std::make_shared<ProjectSnapshot>();
         next->project = project;
         for (auto& rifff : next->project.rifffs)
             for (auto& stem : rifff.stems)
@@ -65,25 +66,21 @@ namespace sssketch
         for (const auto& [channelId, rifffPtrs] : next->channelGroups)
             next->scratchChannelIds.push_back(channelId);
 
-        const auto* old = published.exchange(next, std::memory_order_acq_rel);
-        // Detached, not deleted inline -- the audio thread may still be
-        // mid-renderBlock() on `old` at the exact instant of this exchange;
-        // by the time this detached thread actually runs, the audio
-        // thread's own bounded, fast real-time execution has certainly
-        // already moved on to the newly-published snapshot. Copied verbatim
-        // from ChannelChainRegistry.cpp's own identical handoff -- a
-        // scheduling heuristic, not a proven happens-before relationship,
-        // but the same one already accepted and shipped for that class's
-        // own real-time handoff in this exact codebase. Code review on this
-        // task flagged that this path is about to go from low frequency to
-        // drag-frequency (many calls/sec, see docs/superpowers/specs/
-        // 2026-08-04-live-drag-preview-design.md) -- worth reconsidering
-        // (a generation-counter handshake, or a small fixed pool instead of
-        // malloc/delete per call) if that frequency increase ever turns out
-        // to matter in practice; not done preemptively here since it would
-        // diverge from the established, already-proven pattern this is
-        // deliberately mirroring, for a risk that's still only theoretical.
-        std::thread([old]() { delete old; }).detach();
+        // Publishes the new snapshot and releases this function's own
+        // reference to the old one in a single atomic operation. Whatever
+        // OTHER references to the old snapshot still exist -- most notably,
+        // whatever std::shared_ptr copy renderBlock() might currently be
+        // holding as its own local `snap`, mid-call, on the real-time audio
+        // thread -- keep it alive exactly as long as they need it; it's
+        // only actually freed once every last reference is released,
+        // wherever and whenever that happens to be. This replaced an
+        // earlier raw atomic<T*> + detached-thread-delete scheme (see git
+        // history) that instead relied on a scheduling heuristic ("the
+        // audio thread has certainly moved on by the time the detached
+        // thread runs") -- a concurrent setProject()/renderBlock() stress
+        // test (PlaybackEngineTests.cpp) proved that heuristic false under
+        // sustained load, reliably reproducing a real use-after-free.
+        std::atomic_store_explicit(&published, std::shared_ptr<const ProjectSnapshot>(std::move(next)), std::memory_order_release);
     }
 
     void PlaybackEngine::renderBlock(
@@ -94,11 +91,17 @@ namespace sssketch
         float* outR,
         ChannelChainRegistry& channelChains) const
     {
-        // Loaded ONCE, here, and read through for the rest of this call --
-        // not via secPerBar() (which does its own independent load) or any
-        // other second load, which could observe a DIFFERENT snapshot than
-        // this one if a setProject() call landed in between the two loads.
-        const auto* snap = published.load(std::memory_order_acquire);
+        // Loaded ONCE, here, as this thread's own reference-counted copy,
+        // and read through for the rest of this call -- not via secPerBar()
+        // (which does its own independent load) or any other second load,
+        // which could observe a DIFFERENT snapshot than this one if a
+        // setProject() call landed in between the two loads. Holding this
+        // shared_ptr for the duration of the call is also what makes this
+        // safe against setProject() concurrently replacing (and, once
+        // nothing else references it, freeing) `published` on another
+        // thread arbitrarily many times while this call is still running --
+        // see published's own doc comment in PlaybackEngine.h.
+        const auto snap = std::atomic_load_explicit(&published, std::memory_order_acquire);
         if (snap == nullptr)
             return;
 

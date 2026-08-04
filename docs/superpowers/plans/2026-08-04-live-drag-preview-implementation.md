@@ -1376,6 +1376,28 @@ git commit -m "Harden PlaybackEngine's project handoff with an atomically-publis
 
 ---
 
+**Correction, discovered while implementing Task 5 below:** Task 4's original design (a raw
+`std::atomic<const ProjectSnapshot*>` published, superseded snapshots freed via a detached
+`std::thread([old]() { delete old; }).detach()`, mirroring `ChannelChainRegistry`'s existing
+pattern) turned out to still be unsafe. The stress test below caught it immediately and
+reliably: 5/5 runs crashed with `EXC_BAD_ACCESS` inside `renderBlock()`, the detached delete
+thread winning the race against a still-in-progress read under this test's sustained load. The
+"the audio thread has certainly moved on by the time the detached thread runs" reasoning — a
+scheduling heuristic, not a proven happens-before relationship — was empirically false. Fixed by
+replacing the raw atomic pointer + detached-delete scheme with a plain
+`std::shared_ptr<const ProjectSnapshot> published`, accessed only via the `std::atomic_load_
+explicit`/`std::atomic_store_explicit` free functions (C++11; **not** `std::atomic<std::shared_
+ptr<T>>`, the C++20 built-in specialization — confirmed unavailable in this project's libc++ via
+a direct compile check, since it requires the held type to be trivially copyable). `renderBlock()`
+now holds its own reference-counted copy for the duration of each call, so the referenced
+`ProjectSnapshot` physically cannot be freed while still in use, regardless of how many times or
+how fast `setProject()` replaces `published` on another thread meanwhile — correct by
+construction, not by timing luck. Re-ran the stress test 5/5 clean after the fix. See
+`PlaybackEngine.h`'s `published` field doc comment for the full rationale. This superseded
+diff was applied directly (not through a fresh Task 4 implementer dispatch, given the severity
+and that the exact fix was already fully designed) and re-passed through code review before
+Task 5 continued.
+
 ### Task 5: Native — concurrent `setProject`/`renderBlock` stress test
 
 **Files:**

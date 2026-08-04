@@ -3,8 +3,10 @@
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
 #include <juce_core/juce_core.h>
+#include <atomic>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 namespace sssketch
 {
@@ -735,6 +737,74 @@ namespace sssketch
                 expectEquals(l[10000], 0.0f);       // past trimEnd - trimStart -- trimmed off
 
                 trimFixture.deleteFile();
+            }
+
+            beginTest("concurrent setProject() and renderBlock() calls do not crash");
+            {
+                // Regression test for the PlaybackEngine::currentProject/
+                // channelGroups race documented in PHASE3_FINDINGS.md --
+                // setProject() used to reassign a plain member while
+                // renderBlock() read it directly on another thread with no
+                // synchronization at all. This exercises the exact
+                // concurrent-access pattern the live-volume/fade-drag
+                // feature depends on being safe, for real, under sustained
+                // load -- the previous code had no mechanism to survive
+                // this at all. See this file's own header comment on why
+                // this isn't a strict TDD red/green test.
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+
+                EngineProject project;
+                project.bpm = 120.0;
+                project.snapDiv = 16.0;
+
+                std::atomic<bool> stop { false };
+                std::thread setProjectThread([&]() {
+                    int volumeToggle = 0;
+                    while (!stop.load())
+                    {
+                        EngineRifff rifff;
+                        rifff.startBar = 0.0;
+                        rifff.barLength = 4;
+                        EngineStem stem;
+                        // Never actually decoded -- see StemBufferCache::load's
+                        // own doc comment, a missing file is a normal, harmless
+                        // case (renderBlock just skips it). Keeps this test
+                        // fast and independent of any audio fixture.
+                        stem.resolvedPath = "/nonexistent.wav";
+                        stem.durationSec = 4.0;
+                        stem.barLength = 4;
+                        stem.playedBars = 4.0;
+                        stem.volume = (volumeToggle++ % 2 == 0) ? 0.3 : 0.9;
+                        rifff.stems.push_back(stem);
+
+                        EngineProject next = project;
+                        next.rifffs.push_back(rifff);
+                        engine.setProject(next);
+                    }
+                });
+
+                std::thread renderThread([&]() {
+                    std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                    double positionBars = 0.0;
+                    const double secPerBar = (60.0 / project.bpm) * 4.0;
+                    for (int i = 0; i < 20000; ++i)
+                    {
+                        l.assign(512, 0.0f);
+                        r.assign(512, 0.0f);
+                        engine.renderBlock(positionBars, 44100.0, 512, l.data(), r.data(), channelChains);
+                        positionBars += (512.0 / 44100.0) / secPerBar;
+                    }
+                });
+
+                renderThread.join();
+                stop = true;
+                setProjectThread.join();
+
+                // Reaching here at all -- no crash, no hang -- is the actual
+                // assertion.
+                expect(true);
             }
 
             fixture.deleteFile();
