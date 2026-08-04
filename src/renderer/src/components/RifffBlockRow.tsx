@@ -31,6 +31,7 @@ export function RifffBlockRow({
   const selected = useAppSelector((s) => s.sel === groupId)
   const expandedFlag = useAppSelector((s) => !!s.exp[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
   const snapIdx = useAppSelector((s) => s.snapIdx)
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const bpm = useAppSelector((s) => s.bpm)
@@ -52,6 +53,7 @@ export function RifffBlockRow({
     offsetSteps,
     snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
+    leftCropBars,
     rifffBarLength: rifff.barLength,
     stretchOn,
     rifffBpm: rifff.bpm,
