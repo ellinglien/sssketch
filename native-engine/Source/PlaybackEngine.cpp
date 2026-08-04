@@ -105,6 +105,18 @@ namespace sssketch
         if (snap == nullptr)
             return;
 
+        // Single, genuinely lock-free check -- see hasAnyOverride()'s own
+        // doc comment -- letting the two call sites below skip
+        // liveParamOverrides.fadeInFor()/fadeOutFor()/volumeFor() (each of
+        // which carries a small but real mutex-based cost, see
+        // LiveParamOverrides.h's own doc comment) entirely during ordinary
+        // playback, when nothing is actively being dragged. Read ONCE per
+        // block, not per-rifff or per-stem, since it can't change mid-block
+        // (this is the only thread that ever calls renderBlock() at a
+        // time, and no other code on this same thread could race a write
+        // in between).
+        const bool hasLiveOverrides = liveParamOverrides.hasAnyOverride();
+
         const double spb = secPerBarFor(snap->project.bpm);
         if (spb <= 0.0)
             return;
@@ -183,8 +195,12 @@ namespace sssketch
             // comment. Falls back to the committed value when no drag is
             // currently touching this rifff's own fades.
             const FadeConfig fadeConfig {
-                liveParamOverrides.fadeInFor(rifff.groupId).value_or(rifff.fadeInBars),
-                liveParamOverrides.fadeOutFor(rifff.groupId).value_or(rifff.fadeOutBars),
+                hasLiveOverrides
+                    ? liveParamOverrides.fadeInFor(rifff.groupId).value_or(rifff.fadeInBars)
+                    : rifff.fadeInBars,
+                hasLiveOverrides
+                    ? liveParamOverrides.fadeOutFor(rifff.groupId).value_or(rifff.fadeOutBars)
+                    : rifff.fadeOutBars,
                 spb
             };
 
@@ -199,7 +215,9 @@ namespace sssketch
                 // fully-silent one (committed volume 0) audible again --
                 // this MUST be resolved before the skip check below, not
                 // after.
-                const double effectiveVolume = liveParamOverrides.volumeFor(stem.stemKey).value_or(stem.volume);
+                const double effectiveVolume = hasLiveOverrides
+                    ? liveParamOverrides.volumeFor(stem.stemKey).value_or(stem.volume)
+                    : stem.volume;
                 if (stem.muted || effectiveVolume <= 0.0)
                     continue;
                 // Single combined lookup — get() + sampleRateFor() separately

@@ -16,15 +16,27 @@ namespace sssketch
 
     void LiveParamOverrides::setOverride(
         std::shared_ptr<const OverrideMap>& published,
+        std::atomic<int>& overrideCount,
         const juce::String& key,
         std::optional<float> value)
     {
         const auto current = std::atomic_load_explicit(&published, std::memory_order_acquire);
         auto next = std::make_shared<OverrideMap>(*current);
+        const bool existedBefore = next->find(key) != next->end();
         if (value.has_value())
             (*next)[key] = *value;
         else
             next->erase(key);
+        const bool existsAfter = value.has_value();
+        // Only touches the shared counter on an actual presence
+        // transition (added or removed), not on every call -- e.g.
+        // updating an already-overridden key's value to a new float
+        // doesn't change whether it's "overridden," just what it's
+        // overridden to.
+        if (existsAfter && !existedBefore)
+            overrideCount.fetch_add(1, std::memory_order_relaxed);
+        else if (!existsAfter && existedBefore)
+            overrideCount.fetch_sub(1, std::memory_order_relaxed);
         std::atomic_store_explicit(
             &published, std::shared_ptr<const OverrideMap>(std::move(next)), std::memory_order_release);
     }
@@ -42,17 +54,17 @@ namespace sssketch
 
     void LiveParamOverrides::setVolumeOverride(const juce::String& stemKey, std::optional<float> value)
     {
-        setOverride(volumeOverrides, stemKey, value);
+        setOverride(volumeOverrides, overrideCount, stemKey, value);
     }
 
     void LiveParamOverrides::setFadeInOverride(const juce::String& groupId, std::optional<float> value)
     {
-        setOverride(fadeInOverrides, groupId, value);
+        setOverride(fadeInOverrides, overrideCount, groupId, value);
     }
 
     void LiveParamOverrides::setFadeOutOverride(const juce::String& groupId, std::optional<float> value)
     {
-        setOverride(fadeOutOverrides, groupId, value);
+        setOverride(fadeOutOverrides, overrideCount, groupId, value);
     }
 
     void LiveParamOverrides::clearAll()
@@ -70,6 +82,7 @@ namespace sssketch
             &fadeInOverrides, std::make_shared<const OverrideMap>(), std::memory_order_release);
         std::atomic_store_explicit(
             &fadeOutOverrides, std::make_shared<const OverrideMap>(), std::memory_order_release);
+        overrideCount.store(0, std::memory_order_release);
     }
 
     std::optional<float> LiveParamOverrides::volumeFor(const juce::String& stemKey) const

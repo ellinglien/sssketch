@@ -109,11 +109,18 @@ namespace sssketch
         std::optional<float> fadeInFor(const juce::String& groupId) const;
         std::optional<float> fadeOutFor(const juce::String& groupId) const;
 
+        /** Audio-thread API: a single, genuinely lock-free check for whether ANY
+         * override is currently set, across all three fields. Intended to let
+         * renderBlock() skip volumeFor()/fadeInFor()/fadeOutFor() -- and their
+         * mutex-based cost -- entirely when nothing is being dragged. */
+        bool hasAnyOverride() const { return overrideCount.load(std::memory_order_acquire) > 0; }
+
     private:
         using OverrideMap = std::unordered_map<juce::String, float>;
 
         static void setOverride(
             std::shared_ptr<const OverrideMap>& published,
+            std::atomic<int>& overrideCount,
             const juce::String& key,
             std::optional<float> value);
         static std::optional<float> overrideFor(
@@ -123,5 +130,17 @@ namespace sssketch
         std::shared_ptr<const OverrideMap> volumeOverrides;
         std::shared_ptr<const OverrideMap> fadeInOverrides;
         std::shared_ptr<const OverrideMap> fadeOutOverrides;
+
+        // Genuinely lock-free (plain std::atomic<int>, NOT the shared_ptr-based
+        // maps above) running count of how many keys are currently overridden,
+        // summed across all three maps -- incremented/decremented by setOverride()
+        // whenever a key transitions into/out of existence, reset to 0 by
+        // clearAll(). Lets hasAnyOverride() answer "is anything overridden right
+        // now" with a single, cheap, non-blocking load, so renderBlock() can skip
+        // volumeFor()/fadeInFor()/fadeOutFor() -- and the mutex-based cost each
+        // one carries, see their own doc comment -- entirely during ordinary
+        // playback, when nothing is actively being dragged (the overwhelming
+        // majority of the time).
+        std::atomic<int> overrideCount { 0 };
     };
 }
