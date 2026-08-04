@@ -13,6 +13,10 @@
 // graph would require changes disproportionate to a one-off script).
 
 import { deflateSync } from 'node:zlib'
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const CANVAS_BASE = 1024
 const BG_COLOR = [0x0a, 0x0a, 0x0a] as const // #0a0a0a, matches --ra-bg-frame
@@ -167,4 +171,59 @@ export function encodeIco(entries: { size: number; png: Buffer }[]): Buffer {
   }
 
   return Buffer.concat([header, ...dirEntries, ...imageDatas])
+}
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(__dirname, '..')
+
+function pngAt(size: number): Buffer {
+  return encodePng(size, size, renderIconRgba(size))
+}
+
+function main(): void {
+  // resources/icon.png (dev-mode BrowserWindow icon, see src/main/index.ts)
+  // and build/icon.png (electron-builder's linux icon source) -- both
+  // 512x512, matching the existing placeholder files' own size.
+  const png512 = pngAt(512)
+  writeFileSync(resolve(repoRoot, 'resources/icon.png'), png512)
+  writeFileSync(resolve(repoRoot, 'build/icon.png'), png512)
+
+  // build/icon.icns (mac icon source), built via the macOS-native
+  // iconutil from a temporary .iconset directory -- iconutil is the only
+  // reliable way to produce a valid multi-resolution .icns container
+  // short of hand-rolling that format too.
+  const iconsetDir = resolve(repoRoot, 'build/AppIcon.iconset')
+  if (existsSync(iconsetDir)) rmSync(iconsetDir, { recursive: true })
+  mkdirSync(iconsetDir)
+  const icnsSizes: [string, number][] = [
+    ['icon_16x16.png', 16],
+    ['icon_16x16@2x.png', 32],
+    ['icon_32x32.png', 32],
+    ['icon_32x32@2x.png', 64],
+    ['icon_128x128.png', 128],
+    ['icon_128x128@2x.png', 256],
+    ['icon_256x256.png', 256],
+    ['icon_256x256@2x.png', 512],
+    ['icon_512x512.png', 512],
+    ['icon_512x512@2x.png', 1024]
+  ]
+  for (const [name, size] of icnsSizes) {
+    writeFileSync(resolve(iconsetDir, name), pngAt(size))
+  }
+  execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', resolve(repoRoot, 'build/icon.icns')])
+  rmSync(iconsetDir, { recursive: true })
+
+  // build/icon.ico (windows icon source) -- standard sizes covering
+  // taskbar through large Explorer icon views.
+  const icoSizes = [16, 32, 48, 256]
+  writeFileSync(
+    resolve(repoRoot, 'build/icon.ico'),
+    encodeIco(icoSizes.map((size) => ({ size, png: pngAt(size) })))
+  )
+
+  console.log('Wrote resources/icon.png, build/icon.png, build/icon.icns, build/icon.ico')
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
 }
