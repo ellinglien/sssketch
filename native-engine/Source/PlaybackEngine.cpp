@@ -220,7 +220,15 @@ namespace sssketch
                 // can be negative (extend-left, revealing tiles before the
                 // original anchor) just as playedBars can already exceed
                 // rifff.barLength (extend-right).
-                const double lowerBound = stem.leftCropBars;
+                // Falls back to 0.0 (no crop) for a non-finite value (NaN/Infinity --
+                // e.g. an oversized number in a hand-edited or corrupted project file)
+                // rather than flowing straight into the tile-index arithmetic below,
+                // where a float->int cast on a non-finite double is undefined behaviour
+                // and could turn this real-time audio callback into a runaway loop.
+                // upperBound already gets the same protection for free via its `>= 0.0`
+                // ternary (NaN/-Infinity both fail that comparison and fall through to
+                // the already-bounded rifff.barLength).
+                const double lowerBound = std::isfinite(stem.leftCropBars) ? stem.leftCropBars : 0.0;
                 const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
                 if (upperBound <= lowerBound)
                     continue;

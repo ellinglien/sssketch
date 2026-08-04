@@ -4,6 +4,7 @@
 #include "ChannelChainRegistry.h"
 #include <juce_core/juce_core.h>
 #include <cmath>
+#include <limits>
 
 namespace sssketch
 {
@@ -372,6 +373,47 @@ namespace sssketch
                 // somehow tried to read it).
                 engine.renderBlock(0.0, sampleRate, numSamples, l.data(), r.data(), channelChains);
                 expect(l[0] == 0.0f);
+            }
+
+            beginTest("a non-finite leftCropBars falls back to no crop instead of corrupting tile math");
+            {
+                // A NaN or Infinity leftCropBars (e.g. from an oversized number in a
+                // hand-edited or corrupted project file) must not flow into the
+                // float->int tile-index cast, which is undefined behaviour on a
+                // non-finite input and could turn this real-time callback into a
+                // runaway loop. Confirms it instead falls back to 0.0 (no crop) and
+                // renders exactly like an explicit leftCropBars=0.0 would.
+                const int rampSamples = 176400;
+                auto ramp = writeRampFixtureWav("sssketch_pe_nonfinite_leftcrop_ramp.wav", rampSamples);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.resolvedPath = ramp.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.leftCropBars = std::numeric_limits<double>::quiet_NaN();
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                const double sampleRate = 44100.0;
+                const int numSamples = 4;
+                std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
+                // Renders promptly (no hang/crash) and starts right at the ramp's own
+                // beginning, exactly as leftCropBars=0.0 would.
+                engine.renderBlock(0.0, sampleRate, numSamples, l.data(), r.data(), channelChains);
+                expect(l[0] >= 0.0f && l[0] < 0.05f);
+
+                ramp.deleteFile();
             }
 
             beginTest("a later repeat of a looping stem does not get a spurious fade-in");
