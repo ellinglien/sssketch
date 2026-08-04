@@ -1945,3 +1945,30 @@ to this plan's actual goal, but it's the same latent class of bug and worth a de
 channel-plugin churn frequency ever increases, or proactively as its own small follow-up.
 
 Report back what you see.
+
+## Manual walkthrough results (2026-08-04)
+
+Sibling-live-sync (items 1, 6) and the volume/fade values themselves genuinely updating live
+during playback (items 2-5) all confirmed working correctly. Left-crop persistence (item 7)
+confirmed as expected behavior, not a bug (the "reload" used was a full Electron window
+refresh, discarding unsaved state -- not a save/reload round-trip).
+
+**Items 3, 5, 8, and 10 confirmed the deferred risk from Task 5/7's own code review was real,
+not just theoretical:** live volume/fade dragging during playback causes genuine, audible audio
+glitching, and dragging/placing clips shows visible UI stutter. Root cause: every live update
+still goes through the SAME mechanism a discrete, occasional edit uses --
+`buildEngineProject` + a full `engineLoadProject` reload, rebuilding the native engine's entire
+scheduling state from scratch -- rather than a lightweight, targeted "update this one value"
+path. Throttled to at most once per animation frame, that's still up to ~60 full project
+reloads/second during a fast drag, on both the renderer (full JSON serialize) and native
+(full `EngineProject` copy + `channelGroups`/scratch-buffer rebuild) sides. This is the real
+bottleneck, not waveform rendering detail/resolution (which was considered and ruled out).
+
+**This plan's own 8 tasks are complete and correctly built** -- the shared drag-preview state,
+the native thread-safety hardening, and the throttled push are all functioning exactly as
+designed. What the walkthrough revealed is that the mechanism the LAST task (7) throttles
+still isn't lightweight enough for genuinely live audio use, at the frequency a real drag
+produces. Follow-up work (a dedicated, targeted "live parameter update" IPC path, bypassing
+full project reload for volume/fade specifically) is being scoped as its own
+brainstorm/spec/plan cycle rather than folded into this one, given its scope and that it
+touches native real-time audio code again.
