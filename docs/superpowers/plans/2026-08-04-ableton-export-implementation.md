@@ -159,61 +159,6 @@ describe('renumberIds', () => {
     expect(attrs(leaf)['@_Id']).toBe('5')
   })
 
-  it('leaves TrackSendHolder Ids untouched, since they are a positional index correlating to return-track count, not a generic identity Id', () => {
-    // Regression test: renumbering TrackSendHolder's Id made a real
-    // exported file fail to open in Ableton with "Track has more send
-    // knobs than set has return tracks" -- confirmed against real
-    // Ableton, not a guess.
-    const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0" /><TrackSendHolder Id="1" /></Sends></Root>'
-    )
-    const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 100
-    renumberIds(sends, () => counter++)
-
-    const holders = findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder')
-    expect(holders.map((n) => attrs(n)['@_Id'])).toEqual(['0', '1'])
-  })
-
-  it("leaves a TrackSendHolder's OWN nested Ids untouched too, not just its own outer Id", () => {
-    // Regression test: a first attempt at this fix only protected
-    // TrackSendHolder's own Id, but still recursed into (and renumbered)
-    // its children -- the AutomationTarget/ModulationTarget Ids inside each
-    // Send, which are the actual "send knob" parameters. That still
-    // produced the exact same real Ableton "more send knobs than return
-    // tracks" error until the WHOLE subtree was left alone.
-    const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /></Send></TrackSendHolder></Sends></Root>'
-    )
-    const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 100
-    renumberIds(sends, () => counter++)
-
-    const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
-    const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194')
-  })
-
-  it("still renumbers a TrackSendHolder's siblings and ancestors in an otherwise-renumbered subtree", () => {
-    const doc = parseAls(
-      '<Root><Outer Id="1"><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /></Send></TrackSendHolder></Sends><Other Id="2" /></Outer></Root>'
-    )
-    const outer = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Outer')!
-    let counter = 100
-    renumberIds(outer, () => counter++)
-
-    expect(attrs(outer)['@_Id']).toBe('100') // Outer itself still renumbered
-    const other = findChild(childArray(outer, 'Outer'), 'Other')!
-    expect(attrs(other)['@_Id']).toBe('101') // a plain sibling still renumbered
-
-    const sends = findChild(childArray(outer, 'Outer'), 'Sends')!
-    const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
-    expect(attrs(holder)['@_Id']).toBe('0') // TrackSendHolder itself skipped
-    const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194') // and everything nested inside it too
-  })
 })
 ```
 
@@ -294,45 +239,32 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
-/** Tags whose ENTIRE subtree -- not just their own `@_Id` -- must be left
- * completely untouched by renumbering, because it contains positional Ids
- * with real meaning to Ableton, not generic object-identity pointers
- * (unlike most other Ids in this document -- see renumberIds's own doc
- * comment). `TrackSendHolder` is confirmed the hard way, in two rounds:
- * first its OWN `Id` (correlates 1:1, by ordinal position, with the Set's
- * actual return tracks -- the reference template's own two
- * `TrackSendHolder`s are `Id="0"`/`"1"`, matching its two `ReturnTrack`s
- * exactly), then its NESTED `AutomationTarget`/`ModulationTarget` Ids too
- * (the actual "send knob" parameters) -- an initial fix that only protected
- * `TrackSendHolder`'s own Id while still recursing into (and renumbering)
- * its children was NOT enough; the exact same *"Track has more send knobs
- * than set has return tracks"* error persisted until the whole subtree was
- * left alone. If another tag turns out to have the same problem, add it
- * here rather than reworking the whole renumbering strategy -- this
- * document's Id semantics are undocumented and only knowable empirically,
- * one confirmed case at a time. */
-const FROZEN_SUBTREE_TAGS = new Set(['TrackSendHolder'])
-
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId` -- EXCEPT that a tag listed in FROZEN_SUBTREE_TAGS, and
- * everything nested inside it, is left completely untouched (`return`s
- * immediately, before touching this node's own Id or recursing into its
- * children at all). Necessary because cloning a template track via
- * cloneNode also duplicates every internal automation-target/pointee/
- * clip-slot Id it contains -- the reference template's own single canonical
- * AudioTrack has 69 of them. Confirmed empirically (see the design spec)
- * that the original, real, Ableton-produced reference file already reuses
- * small Id values across many unrelated elements without apparent problems,
- * so renumbering most of them is defensive rather than a fix for a
- * confirmed bug -- but `TrackSendHolder` is a real, confirmed exception
- * (see FROZEN_SUBTREE_TAGS's own doc comment), not a hypothetical one.
+ * `nextId`. Necessary because cloning a template track via cloneNode also
+ * duplicates every internal automation-target/pointee/clip-slot Id it
+ * contains -- the reference template's own single canonical AudioTrack has
+ * 69 of them. Confirmed empirically (see the design spec) that the original,
+ * real, Ableton-produced reference file already reuses small Id values
+ * across unrelated elements without apparent problems, so this is defensive
+ * rather than a fix for a confirmed bug -- but it's free, and matches the
+ * spirit of the template's own NextPointeeId field (Ableton's own "next
+ * safe Id to hand out" counter).
+ *
+ * One real exception was found and fixed differently, not here:
+ * `<TrackSendHolder>` (a track's per-return-track send knob) turned out to
+ * be genuinely unsafe to touch in EITHER direction -- renumbering it (or
+ * its own nested Ids) produces *"Track has more send knobs than set has
+ * return tracks"*, but leaving it frozen produces *"non-unique Pointee
+ * IDs"* once the same frozen subtree gets duplicated across many cloned
+ * tracks. Since sssketch has no concept of "send level to a return track"
+ * at all, the actual fix is to never carry this substructure into a cloned
+ * track in the first place -- see buildAlsXml.ts's own handling of
+ * `<Sends>` on each clone -- rather than teach this generic helper about
+ * one specific tag's own idiosyncratic Id rules.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
-  const tag = Object.keys(node).find((key) => key !== ':@')
-  if (tag && FROZEN_SUBTREE_TAGS.has(tag)) return
-
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
   if (nodeAttrs && '@_Id' in nodeAttrs) {
     nodeAttrs['@_Id'] = String(nextId())
@@ -349,7 +281,7 @@ export function renumberIds(node: AlsNode, nextId: () => number): void {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/alsXmlHelpers.test.ts`
-Expected: PASS (11 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1341,6 +1273,36 @@ function computeLoopWindow(
   }
 }
 
+/**
+ * Empties every `<TrackSendHolder>` out of a cloned track's own `<Sends>`
+ * (found at `<trackTag> > DeviceChain > Mixer > Sends`), leaving the
+ * `<Sends>` element itself present but childless. sssketch has no concept
+ * of "send level to a return track" at all, so this substructure only
+ * exists in a cloned track because it was copied verbatim from the
+ * canonical template -- and it turned out to be actively unsafe to carry
+ * over as-is. Two real, confirmed Ableton load failures came from trying
+ * to preserve it: renumbering TrackSendHolder's own Id (or its nested
+ * AutomationTarget/ModulationTarget "send knob" Ids) produces "Track
+ * has more send knobs than set has return tracks", while leaving it
+ * completely frozen (so every clone shares the identical nested Ids)
+ * produces "non-unique Pointee IDs" once that frozen subtree gets
+ * duplicated across many cloned tracks. Since there's no sssketch data
+ * this substructure could even represent, removing its contents entirely
+ * sidesteps the whole class of bugs rather than trying to find the one
+ * narrow renumbering scheme Ableton's undocumented Pointee/send-knob
+ * validation actually wants. ReturnTracks are never cloned (see
+ * buildAlsXml's own returnTracks handling) so their own real Sends stay
+ * completely untouched -- this only ever runs on a track this export
+ * itself generated.
+ */
+function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
+  sends['Sends'] = []
+}
+
 function buildStemTrack(
   canonicalAudioTrack: AlsNode,
   nextId: () => number,
@@ -1355,6 +1317,7 @@ function buildStemTrack(
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
+  clearSends(track, 'AudioTrack')
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
@@ -1471,6 +1434,7 @@ export function buildAlsXml(
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
+    clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupName = earliestRifff(rifffs).name
     const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
@@ -1543,7 +1507,7 @@ export function buildAlsXml(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/buildAlsXml.test.ts`
-Expected: PASS (20 tests)
+Expected: PASS (21 tests)
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 

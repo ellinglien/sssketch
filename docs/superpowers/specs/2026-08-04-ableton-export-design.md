@@ -126,6 +126,12 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
    corrupt and cannot be loaded. (NextPointeeId is too low: 22290 must be bigger than
    1001899)"*. Ableton validates this field is `>=` every `Id` actually used anywhere in the
    document before it will open the file at all — it's not just a hint, it's enforced.
+   **Also empty every cloned track's own `<Sends>`** (`<AudioTrack>`/`<GroupTrack>` >
+   `DeviceChain` > `Mixer` > `Sends`, leaving the `<Sends>` element present but with zero
+   `<TrackSendHolder>` children) — sssketch has no concept of "send level to a return track"
+   at all, and this substructure turned out to be actively unsafe to carry over from the
+   canonical template as-is (see "Known risks" below for the two real failure modes this
+   avoids). `<ReturnTrack>`s are never cloned, so their own real Sends are untouched.
 2. **Bar → beat**: sssketch bars are always 4 beats (implicit 4/4 throughout). `beats = bars *
    4`.
 3. **The copied audio file is short — only `stem.barLength` bars long, not `playedBars` bars.**
@@ -272,29 +278,43 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   handling above, not guessing.
 - **Ableton Live 12 only** — confirmed as the user's actual version, not just the test file's
   origin. Live 11 compatibility is untested and out of scope.
-- **Id renumbering had three real, confirmed failure modes on first real-world use — all fixed,
-  but the underlying uncertainty (which of this undocumented format's many small Ids are safe
-  to renumber) is inherently empirical, not something a code review can fully close out.**
+- **Id renumbering and the `<Sends>`/`<TrackSendHolder>` substructure took four real,
+  confirmed rounds to get right on first real-world use — all now resolved, but the process is
+  worth recording since it's a good illustration of how empirical this undocumented format's
+  constraints are.**
   (1) The Set-level `<NextPointeeId>` element must be `>=` every `Id` used anywhere in the
   document, or Ableton refuses to open the file at all (*"document is corrupt... NextPointeeId
-  is too low"*) — fixed by writing the renumbering counter's final value into it.
+  is too low"*) — fixed by writing the renumbering counter's final value into it. This fix
+  stood; nothing since has touched it.
   (2) `<TrackSendHolder>`'s own `Id` is a positional index correlating 1:1 with the Set's
   return tracks (its two `Id="0"`/`"1"` instances in the reference template exactly match its
   two `ReturnTrack`s) — renumbering it broke that correlation and produced *"Track has more
-  send knobs than set has return tracks."*
-  (3) An **incomplete** first fix for (2) — excluding only `TrackSendHolder`'s own `Id` while
-  still recursing into (and renumbering) its children — produced the *exact same* error, because
+  send knobs than set has return tracks."* First attempted fix: exclude only
+  `TrackSendHolder`'s own `Id` from renumbering, still recurse into (and renumber) its
+  children.
+  (3) That fix was incomplete — it produced the *exact same* "more send knobs" error, because
   the real "send knob" the message refers to is the `<AutomationTarget>`/`<ModulationTarget>`
-  nested inside each `<TrackSendHolder>`'s own `<Send>`, not the holder's outer `Id`. The
-  complete fix freezes `TrackSendHolder`'s **entire subtree** — no Id renumbering, no recursion
-  into it at all (see `alsXmlHelpers.ts`'s `FROZEN_SUBTREE_TAGS`, formerly named
-  `POSITIONAL_ID_TAGS` before this fix revealed "positional Id" wasn't the full story — it's
-  really "this whole subtree is a fixed, self-referential structure that must be copied
-  verbatim"). If a *fourth* such failure shows up during further testing, the fix is the same
-  shape: identify which tag's subtree is fixed/self-referential, add it to
-  `FROZEN_SUBTREE_TAGS`, don't rework the whole renumbering strategy speculatively — but also
-  don't assume the fix is "just exclude this one Id" without verifying the *whole* subtree
-  the way (2)'s incomplete first attempt didn't.
+  nested inside each `<TrackSendHolder>`'s own `<Send>`, not the holder's outer `Id`. Second
+  attempted fix: freeze `TrackSendHolder`'s entire subtree instead — no renumbering, no
+  recursion into it at all.
+  (4) That traded one bug for another: freezing the subtree means every cloned track now
+  shares the *identical* nested `AutomationTarget`/`ModulationTarget` Ids, and once that
+  frozen subtree gets duplicated across dozens of cloned tracks, Ableton correctly flags it as
+  *"non-unique Pointee IDs."* **Final fix, and the one actually shipped**: stop trying to
+  preserve this substructure across clones at all. sssketch has no concept of "send level to a
+  return track" anywhere in its own data model — the whole `<Sends>` block only exists in a
+  cloned track because it was copied verbatim from the canonical template. Every cloned
+  `<AudioTrack>`/`<GroupTrack>`'s own `<Sends>` is now emptied of its `<TrackSendHolder>`
+  children entirely (see `buildAlsXml.ts`'s `clearSends`), sidestepping the whole class of bugs
+  rather than continuing to search for the one narrow renumbering scheme Ableton's
+  undocumented Pointee/send-knob validation actually wants. `<ReturnTrack>`s are never cloned,
+  so their own real Sends are completely unaffected. Verified via a full document-wide
+  Id-uniqueness check (not just spot-checking the previously-broken area) before shipping.
+  `alsXmlHelpers.ts`'s `renumberIds` is back to its original, simple, fully-unconditional form
+  — no tag-based exceptions of any kind remain in it. If a fifth such failure shows up
+  somewhere else in the document, the lesson from this whole sequence is: check first whether
+  the substructure represents anything sssketch's own model actually needs to carry over at
+  all — if it doesn't, removing it beats trying to selectively preserve/renumber it.
 - **Loop-cycle wrap approximation for a cropped, tiled stem**: when `leftCropBars` is nonzero,
   the "Track/clip mapping algorithm" section's `LoopStart = wrappedLeftCropBars*4, LoopEnd =
   stem.barLength*4` gives each loop CYCLE a shorter span than a full tile

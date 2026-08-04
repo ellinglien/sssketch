@@ -547,6 +547,42 @@ describe('buildAlsXml', () => {
     expect(nextPointeeId).toBeGreaterThan(maxId)
   })
 
+  it("empties Sends on cloned AudioTrack/GroupTrack instances, leaving ReturnTracks' own Sends untouched", () => {
+    // Regression test for two real, confirmed Ableton load failures found
+    // trying to PRESERVE this substructure across clones: renumbering
+    // TrackSendHolder produced "Track has more send knobs than set has
+    // return tracks"; freezing it (so every clone shares identical nested
+    // Ids) produced "non-unique Pointee IDs" once duplicated across many
+    // tracks. sssketch has no concept of send-to-return-track at all, so
+    // the fix is to just not carry this substructure into cloned tracks.
+    const rifff1 = drumsRifff()
+    const rifff2: Rifff = { ...drumsRifff(), groupId: 'rifff-2', startBar: 16 }
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff1, 'rifff-2': rifff2 },
+      channelOrder: ['rifff-1', 'rifff-2'],
+      channelOf: { 'rifff-1': 'rifff-1', 'rifff-2': 'rifff-2' }
+    })
+    const stemFileNames = new Map([
+      ['rifff-1:0', 'a.wav'],
+      ['rifff-2:0', 'b.wav']
+    ])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+
+    for (const audioTrack of findAllChildren(tracks, 'AudioTrack')) {
+      expect(sendHolderCount(audioTrack, 'AudioTrack')).toBe(0)
+    }
+    for (const groupTrack of findAllChildren(tracks, 'GroupTrack')) {
+      expect(sendHolderCount(groupTrack, 'GroupTrack')).toBe(0)
+    }
+    // ReturnTracks were never cloned/touched -- their own real Sends (2
+    // TrackSendHolders each, per the reference template) survive as-is.
+    for (const returnTrack of findAllChildren(tracks, 'ReturnTrack')) {
+      expect(sendHolderCount(returnTrack, 'ReturnTrack')).toBe(2)
+    }
+  })
+
   it('sets the Set-level tempo from state.bpm', () => {
     const state = emptyAppState({ bpm: 135.5 })
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map())
@@ -613,4 +649,15 @@ function findAudioClip(audioTrack: ReturnType<typeof findChild>): AlsNode {
   const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
   const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
   return findChild(childArray(events, 'Events'), 'AudioClip')!
+}
+
+// Navigates <trackTag> > DeviceChain > Mixer > Sends and counts its
+// TrackSendHolder children -- shared by AudioTrack/GroupTrack/ReturnTrack,
+// which all share this same shape.
+function sendHolderCount(track: AlsNode, trackTag: string): number {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
+  return findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder').length
 }

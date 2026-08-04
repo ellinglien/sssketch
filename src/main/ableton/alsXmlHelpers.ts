@@ -66,45 +66,32 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
-/** Tags whose ENTIRE subtree -- not just their own `@_Id` -- must be left
- * completely untouched by renumbering, because it contains positional Ids
- * with real meaning to Ableton, not generic object-identity pointers
- * (unlike most other Ids in this document -- see renumberIds's own doc
- * comment). `TrackSendHolder` is confirmed the hard way, in two rounds:
- * first its OWN `Id` (correlates 1:1, by ordinal position, with the Set's
- * actual return tracks -- the reference template's own two
- * `TrackSendHolder`s are `Id="0"`/`"1"`, matching its two `ReturnTrack`s
- * exactly), then its NESTED `AutomationTarget`/`ModulationTarget` Ids too
- * (the actual "send knob" parameters) -- an initial fix that only protected
- * `TrackSendHolder`'s own Id while still recursing into (and renumbering)
- * its children was NOT enough; the exact same *"Track has more send knobs
- * than set has return tracks"* error persisted until the whole subtree was
- * left alone. If another tag turns out to have the same problem, add it
- * here rather than reworking the whole renumbering strategy -- this
- * document's Id semantics are undocumented and only knowable empirically,
- * one confirmed case at a time. */
-const FROZEN_SUBTREE_TAGS = new Set(['TrackSendHolder'])
-
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId` -- EXCEPT that a tag listed in FROZEN_SUBTREE_TAGS, and
- * everything nested inside it, is left completely untouched (`return`s
- * immediately, before touching this node's own Id or recursing into its
- * children at all). Necessary because cloning a template track via
- * cloneNode also duplicates every internal automation-target/pointee/
- * clip-slot Id it contains -- the reference template's own single canonical
- * AudioTrack has 69 of them. Confirmed empirically (see the design spec)
- * that the original, real, Ableton-produced reference file already reuses
- * small Id values across many unrelated elements without apparent problems,
- * so renumbering most of them is defensive rather than a fix for a
- * confirmed bug -- but `TrackSendHolder` is a real, confirmed exception
- * (see FROZEN_SUBTREE_TAGS's own doc comment), not a hypothetical one.
+ * `nextId`. Necessary because cloning a template track via cloneNode also
+ * duplicates every internal automation-target/pointee/clip-slot Id it
+ * contains -- the reference template's own single canonical AudioTrack has
+ * 69 of them. Confirmed empirically (see the design spec) that the original,
+ * real, Ableton-produced reference file already reuses small Id values
+ * across unrelated elements without apparent problems, so this is defensive
+ * rather than a fix for a confirmed bug -- but it's free, and matches the
+ * spirit of the template's own NextPointeeId field (Ableton's own "next
+ * safe Id to hand out" counter).
+ *
+ * One real exception was found and fixed differently, not here:
+ * `<TrackSendHolder>` (a track's per-return-track send knob) turned out to
+ * be genuinely unsafe to touch in EITHER direction -- renumbering it (or
+ * its own nested Ids) produces *"Track has more send knobs than set has
+ * return tracks"*, but leaving it frozen produces *"non-unique Pointee
+ * IDs"* once the same frozen subtree gets duplicated across many cloned
+ * tracks. Since sssketch has no concept of "send level to a return track"
+ * at all, the actual fix is to never carry this substructure into a cloned
+ * track in the first place -- see buildAlsXml.ts's own handling of
+ * `<Sends>` on each clone -- rather than teach this generic helper about
+ * one specific tag's own idiosyncratic Id rules.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
-  const tag = Object.keys(node).find((key) => key !== ':@')
-  if (tag && FROZEN_SUBTREE_TAGS.has(tag)) return
-
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
   if (nodeAttrs && '@_Id' in nodeAttrs) {
     nodeAttrs['@_Id'] = String(nextId())
