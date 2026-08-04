@@ -170,6 +170,21 @@ namespace sssketch
                 transport.setBpm(project.bpm);
                 transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
+                // The ENTIRE mechanism by which a live override (set via
+                // set-live-param, above) eventually gets cleared -- no
+                // explicit "clear" message is ever sent by the renderer's
+                // own drag handlers, deliberately: the override holds the
+                // exact final dragged value until precisely this point, so
+                // by the time it's cleared here the fresh snapshot just
+                // published one line up already agrees with it, making the
+                // handoff inaudible. See LiveParamOverrides.h's own doc
+                // comment for the fuller reasoning. Not a joint atomic
+                // transaction with setProject() above -- there's a
+                // theoretical nanosecond-to-microsecond window where
+                // renderBlock() could observe the new snapshot with a still-
+                // stale override, practically negligible at that timescale
+                // and correct for the intended drag-commit handoff either
+                // way.
                 engine.liveOverrides().clearAll();
 
                 std::vector<juce::String> channelIds;
@@ -231,18 +246,26 @@ namespace sssketch
         else if (type == "set-live-param")
         {
             // Bypasses EngineProject/setProject() entirely -- see
-            // LiveParamOverrides.h's own doc comment for why. `value < 0`
-            // means "clear this key," matching this wire format's existing
-            // sentinel convention for "unset" numeric fields (e.g.
+            // LiveParamOverrides.h's own doc comment for why. A negative
+            // `value` clears this key, matching this wire format's
+            // existing sentinel convention for "unset" numeric fields (e.g.
             // EngineStem::startBarOverride/trimEndSec both use -1 the same
-            // way) rather than encoding a separate JSON null case.
+            // way). Also treats an EXPLICIT JSON null the same as clearing
+            // -- juce::var::getProperty's own default only applies when the
+            // key is absent, not when it's present but null (a present
+            // null is itself a "void" var, not the -1.0 default), so
+            // without this check a caller sending `value: null` (the wire
+            // contract documented in this feature's own design doc) would
+            // silently produce an override of 0.0 instead of clearing.
             if (payload.isObject())
             {
                 const auto field = payload.getProperty("field", "").toString();
                 const auto key = payload.getProperty("key", "").toString();
-                const double rawValue = (double) payload.getProperty("value", -1.0);
+                const auto rawValueVar = payload.getProperty("value", -1.0);
                 const std::optional<float> value =
-                    rawValue < 0.0 ? std::nullopt : std::optional<float>((float) rawValue);
+                    (rawValueVar.isVoid() || rawValueVar.isUndefined() || (double) rawValueVar < 0.0)
+                        ? std::nullopt
+                        : std::optional<float>((float) rawValueVar);
                 if (field == "volume")
                     engine.liveOverrides().setVolumeOverride(key, value);
                 else if (field == "fadeIn")
