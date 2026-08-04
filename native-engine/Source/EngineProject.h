@@ -19,6 +19,7 @@ namespace sssketch
         // is only ever observed by code that constructs an EngineStem directly
         // without going through JSON parsing (e.g. unit tests).
         double playedBars = -1.0; // this stem's own tiling bound
+        double leftCropBars = 0.0; // bars cropped from this stem's own LEFT edge; 0 = no crop
         double offsetSteps = 0.0;
         double startBarOverride = -1.0; // -1.0 = use the rifff's own startBar
         double volume = 1.0;

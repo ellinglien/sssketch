@@ -9,6 +9,7 @@ export interface EngineStem {
   durationSec: number
   barLength: number
   playedBars: number
+  leftCropBars: number
   offsetSteps: number
   startBarOverride: number // -1 means "use the rifff's own startBar"
   volume: number
@@ -177,6 +178,7 @@ export async function buildEngineProject(
         durationSec: resolved.durationSec,
         barLength: stem.barLength,
         playedBars: resolvePlayedBars(state, rifff.groupId),
+        leftCropBars: state.leftCrop[rifff.groupId] ?? 0,
         offsetSteps,
         startBarOverride: -1,
         volume: state.vol[key] ?? 1,

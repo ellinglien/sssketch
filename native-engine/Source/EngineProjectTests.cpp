@@ -249,6 +249,31 @@ namespace sssketch
                 expect(parseEngineProject(json, project, error));
                 expect(project.channelChains.empty());
             }
+
+            beginTest("parses leftCropBars from the wire format, defaulting to 0.0 when omitted");
+            {
+                const juce::String json = R"({
+                    "bpm": 120.0,
+                    "snapDiv": 16.0,
+                    "rifffs": [{
+                        "groupId": "r1",
+                        "channelId": "c1",
+                        "startBar": 0.0,
+                        "barLength": 4,
+                        "stems": [
+                            { "stemKey": "s1", "resolvedPath": "/a.wav", "durationSec": 8.0,
+                              "barLength": 4, "leftCropBars": 1.5 },
+                            { "stemKey": "s2", "resolvedPath": "/b.wav", "durationSec": 8.0,
+                              "barLength": 4 }
+                        ]
+                    }]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectWithinAbsoluteError(project.rifffs[0].stems[0].leftCropBars, 1.5, 0.0001);
+                expectWithinAbsoluteError(project.rifffs[0].stems[1].leftCropBars, 0.0, 0.0001);
+            }
         }
     };
 
