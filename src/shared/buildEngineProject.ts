@@ -183,9 +183,10 @@ export async function buildEngineProject(
         startBarOverride: -1,
         // Prefers an in-progress drag preview over the committed value --
         // see docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
-        // StoreContext.tsx's engine-sync effect re-runs this on every
-        // dragVol change during an active volume drag, so playback hears
-        // the change live rather than only once, on release.
+        // Once StoreContext.tsx's engine-sync effect also depends on
+        // dragVol (a separate, later change), re-running this function on
+        // every dragVol change during an active volume drag is what lets
+        // playback hear the change live rather than only once, on release.
         volume: state.dragVol[key] ?? state.vol[key] ?? 1,
         muted: state.mute[key] ?? false,
         oneShot: stem.oneShot ?? false,

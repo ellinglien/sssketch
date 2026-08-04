@@ -199,6 +199,27 @@ describe('buildEngineProject', () => {
     expect(project.rifffs[0].fadeOutBars).toBe(0.5)
   })
 
+  it('a drag-preview value of exactly 0 (fader dragged to silence) is not skipped in favor of the committed value', async () => {
+    // Regression guard for `??` (preserves 0) vs `||` (would incorrectly
+    // fall through to the committed value on 0) -- easy typo given how
+    // visually similar the two operators are in this "prefer this, else
+    // fall back" shape.
+    const state = stateWith({
+      bpm: 150,
+      vol: { 'r1:1': 0.7 },
+      fadeIn: { r1: 1.5 },
+      fadeOut: { r1: 0.5 },
+      dragVol: { 'r1:1': 0 },
+      dragFadeIn: { r1: 0 },
+      dragFadeOut: { r1: 0 }
+    })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    const stem = project.rifffs[0].stems[0]
+    expect(stem.volume).toBe(0)
+    expect(project.rifffs[0].fadeInBars).toBe(0)
+    expect(project.rifffs[0].fadeOutBars).toBe(0)
+  })
+
   it('always uses -1 as startBarOverride — a stem can no longer diverge from its own rifff (see UNGROUP)', async () => {
     const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
