@@ -27,16 +27,6 @@ import {
 const WARP_MODE_BEATS = 0
 const WARP_MODE_COMPLEX_PRO = 5
 
-// Counter for renumberIds, shared across every clone made during one
-// buildAlsXml call so no two cloned elements anywhere in the output collide
-// -- starts far above anything the template itself uses (its own Ids top
-// out in the tens of thousands; see alsXmlHelpers.ts's renumberIds doc
-// comment for why this is defensive, not a fix for a confirmed bug).
-function makeIdAllocator(): () => number {
-  let next = 1_000_000
-  return () => next++
-}
-
 // Mirrors src/renderer/src/state/selectors.ts's resolvePlayedBars
 // (re-implemented here rather than imported wholesale, matching
 // nativeExport.ts's own loopLengthBarsFor precedent -- selectors.ts also
@@ -334,7 +324,16 @@ export function buildAlsXml(
   const canonicalGroupTrack = findChild(tracks, 'GroupTrack')!
   const returnTracks = findAllChildren(tracks, 'ReturnTrack')
 
-  const nextId = makeIdAllocator()
+  // A plain closure over an outer-scope counter (not a separate
+  // makeIdAllocator helper) specifically so nextIdValue can be read back
+  // after every clone/renumber is done, below -- Ableton's own
+  // <NextPointeeId> element must be updated to reflect the highest Id this
+  // export actually allocated, or Ableton refuses to open the file at all
+  // (confirmed via a real "document is corrupt... NextPointeeId is too
+  // low" error, not a guess). Starts far above anything the template
+  // itself uses (its own Ids top out in the tens of thousands).
+  let nextIdValue = 1_000_000
+  const nextId = (): number => nextIdValue++
   const outTracks: AlsNode[] = [...returnTracks]
 
   const byChannel = placedRifffsByChannel(state)
@@ -377,6 +376,16 @@ export function buildAlsXml(
   }
 
   tracksNode['Tracks'] = outTracks
+
+  // Ableton validates NextPointeeId >= every Id actually used anywhere in
+  // the document before it will open a Set -- confirmed the hard way (a
+  // real "document is corrupt... NextPointeeId is too low" error), not
+  // assumed. nextIdValue is already one past the highest Id allocated
+  // above (every setter increments it before handing out a value), which
+  // is exactly the field's own semantics ("next Id available to hand
+  // out").
+  const nextPointeeIdNode = findChild(liveSetChildren, 'NextPointeeId')!
+  setAttr(nextPointeeIdNode, '@_Value', String(nextIdValue))
 
   // Set-level tempo.
   const mainTrack = findChild(liveSetChildren, 'MainTrack')!

@@ -509,6 +509,44 @@ describe('buildAlsXml', () => {
     expect(findAllChildren(tracks, 'GroupTrack')).toHaveLength(0)
   })
 
+  it('sets NextPointeeId above every Id actually used, so Ableton will open the file', () => {
+    // Regression test: Ableton validates NextPointeeId >= every Id used
+    // anywhere in the document before it will open a Set -- confirmed via
+    // a real "document is corrupt... NextPointeeId is too low" error on
+    // the first real export, not a guess. A multi-channel, multi-stem
+    // scenario exercises plenty of Id allocation (each cloned track's own
+    // ~69 internal automation-target/pointee Ids, per alsXmlHelpers.ts's
+    // renumberIds doc comment).
+    const rifff1 = drumsRifff()
+    const rifff2: Rifff = { ...drumsRifff(), groupId: 'rifff-2', startBar: 16 }
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff1, 'rifff-2': rifff2 },
+      channelOrder: ['rifff-1', 'rifff-2'],
+      channelOf: { 'rifff-1': 'rifff-1', 'rifff-2': 'rifff-2' }
+    })
+    const stemFileNames = new Map([
+      ['rifff-1:0', 'a.wav'],
+      ['rifff-2:0', 'b.wav']
+    ])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { liveSetChildren, tracks } = tracksOf(xml)
+    const nextPointeeId = Number(attrs(findChild(liveSetChildren, 'NextPointeeId')!)['@_Value'])
+
+    let maxId = 0
+    function collectMaxId(node: AlsNode): void {
+      const nodeAttrs = attrs(node)
+      if ('@_Id' in nodeAttrs) maxId = Math.max(maxId, Number(nodeAttrs['@_Id']))
+      for (const key of Object.keys(node)) {
+        if (key === ':@') continue
+        for (const child of childArray(node, key)) collectMaxId(child)
+      }
+    }
+    for (const track of tracks) collectMaxId(track)
+
+    expect(nextPointeeId).toBeGreaterThan(maxId)
+  })
+
   it('sets the Set-level tempo from state.bpm', () => {
     const state = emptyAppState({ bpm: 135.5 })
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map())

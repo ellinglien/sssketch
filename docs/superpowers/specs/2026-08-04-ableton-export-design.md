@@ -119,7 +119,13 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
 
 1. Clone the canonical `<AudioTrack>` node, assign a fresh unique `Id` (a counter starting
    above the template's own IDs), name it `<rifff.name> - <stem.name>` via the nested
-   `<Name><EffectiveName Value="..."/></Name>` shape.
+   `<Name><EffectiveName Value="..."/></Name>` shape. **After every clone/renumber is done,
+   the counter's final value must be written into the Set-level `<NextPointeeId>` element**
+   (a sibling of `<Tracks>`, near the top of `<LiveSet>`) — confirmed the hard way (not a
+   guess): the very first real Ableton load of an export produced *"The document ... is
+   corrupt and cannot be loaded. (NextPointeeId is too low: 22290 must be bigger than
+   1001899)"*. Ableton validates this field is `>=` every `Id` actually used anywhere in the
+   document before it will open the file at all — it's not just a hint, it's enforced.
 2. **Bar → beat**: sssketch bars are always 4 beats (implicit 4/4 throughout). `beats = bars *
    4`.
 3. **The copied audio file is short — only `stem.barLength` bars long, not `playedBars` bars.**

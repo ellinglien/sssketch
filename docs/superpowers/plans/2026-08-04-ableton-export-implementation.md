@@ -925,6 +925,44 @@ describe('buildAlsXml', () => {
     expect(findAllChildren(tracks, 'GroupTrack')).toHaveLength(0)
   })
 
+  it('sets NextPointeeId above every Id actually used, so Ableton will open the file', () => {
+    // Regression test: Ableton validates NextPointeeId >= every Id used
+    // anywhere in the document before it will open a Set -- confirmed via
+    // a real "document is corrupt... NextPointeeId is too low" error on
+    // the first real export, not a guess. A multi-channel, multi-stem
+    // scenario exercises plenty of Id allocation (each cloned track's own
+    // ~69 internal automation-target/pointee Ids, per alsXmlHelpers.ts's
+    // renumberIds doc comment).
+    const rifff1 = drumsRifff()
+    const rifff2: Rifff = { ...drumsRifff(), groupId: 'rifff-2', startBar: 16 }
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff1, 'rifff-2': rifff2 },
+      channelOrder: ['rifff-1', 'rifff-2'],
+      channelOf: { 'rifff-1': 'rifff-1', 'rifff-2': 'rifff-2' }
+    })
+    const stemFileNames = new Map([
+      ['rifff-1:0', 'a.wav'],
+      ['rifff-2:0', 'b.wav']
+    ])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { liveSetChildren, tracks } = tracksOf(xml)
+    const nextPointeeId = Number(attrs(findChild(liveSetChildren, 'NextPointeeId')!)['@_Value'])
+
+    let maxId = 0
+    function collectMaxId(node: AlsNode): void {
+      const nodeAttrs = attrs(node)
+      if ('@_Id' in nodeAttrs) maxId = Math.max(maxId, Number(nodeAttrs['@_Id']))
+      for (const key of Object.keys(node)) {
+        if (key === ':@') continue
+        for (const child of childArray(node, key)) collectMaxId(child)
+      }
+    }
+    for (const track of tracks) collectMaxId(track)
+
+    expect(nextPointeeId).toBeGreaterThan(maxId)
+  })
+
   it('sets the Set-level tempo from state.bpm', () => {
     const state = emptyAppState({ bpm: 135.5 })
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map())
@@ -1026,15 +1064,6 @@ import {
 const WARP_MODE_BEATS = 0
 const WARP_MODE_COMPLEX_PRO = 5
 
-// Counter for renumberIds, shared across every clone made during one
-// buildAlsXml call so no two cloned elements anywhere in the output collide
-// -- starts far above anything the template itself uses (its own Ids top
-// out in the tens of thousands; see alsXmlHelpers.ts's renumberIds doc
-// comment for why this is defensive, not a fix for a confirmed bug).
-function makeIdAllocator(): () => number {
-  let next = 1_000_000
-  return () => next++
-}
 
 // Mirrors src/renderer/src/state/selectors.ts's resolvePlayedBars
 // (re-implemented here rather than imported wholesale, matching
@@ -1334,7 +1363,16 @@ export function buildAlsXml(
   const canonicalGroupTrack = findChild(tracks, 'GroupTrack')!
   const returnTracks = findAllChildren(tracks, 'ReturnTrack')
 
-  const nextId = makeIdAllocator()
+  // A plain closure over an outer-scope counter (not a separate
+  // makeIdAllocator helper) specifically so nextIdValue can be read back
+  // after every clone/renumber is done, below -- Ableton's own
+  // <NextPointeeId> element must be updated to reflect the highest Id this
+  // export actually allocated, or Ableton refuses to open the file at all
+  // (confirmed via a real "document is corrupt... NextPointeeId is too
+  // low" error, not a guess). Starts far above anything the template
+  // itself uses (its own Ids top out in the tens of thousands).
+  let nextIdValue = 1_000_000
+  const nextId = (): number => nextIdValue++
   const outTracks: AlsNode[] = [...returnTracks]
 
   const byChannel = placedRifffsByChannel(state)
@@ -1378,6 +1416,16 @@ export function buildAlsXml(
 
   tracksNode['Tracks'] = outTracks
 
+  // Ableton validates NextPointeeId >= every Id actually used anywhere in
+  // the document before it will open a Set -- confirmed the hard way (a
+  // real "document is corrupt... NextPointeeId is too low" error), not
+  // assumed. nextIdValue is already one past the highest Id allocated
+  // above (every setter increments it before handing out a value), which
+  // is exactly the field's own semantics ("next Id available to hand
+  // out").
+  const nextPointeeIdNode = findChild(liveSetChildren, 'NextPointeeId')!
+  setAttr(nextPointeeIdNode, '@_Value', String(nextIdValue))
+
   // Set-level tempo.
   const mainTrack = findChild(liveSetChildren, 'MainTrack')!
   const mtDeviceChain = findChild(childArray(mainTrack, 'MainTrack'), 'DeviceChain')!
@@ -1406,7 +1454,7 @@ export function buildAlsXml(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/buildAlsXml.test.ts`
-Expected: PASS (19 tests)
+Expected: PASS (20 tests)
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 
