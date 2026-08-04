@@ -89,8 +89,22 @@ namespace sssketch
 
         /** Audio-thread API: std::nullopt means "no override, use the
          * committed value." One atomic load + one hash lookup each, never
-         * blocks (mirrors PlaybackEngine's own atomic_load_explicit
-         * usage), never allocates. */
+         * allocates. NOT lock-free, though, despite the "atomic" name --
+         * this project's actual libc++ implements
+         * atomic_load_explicit/atomic_store_explicit for shared_ptr via a
+         * real (if very short) mutex from a small hashed pool, confirmed
+         * directly against the shipped headers, not assumed
+         * (atomic_is_lock_free<shared_ptr<T>> is hardcoded false there).
+         * Called from renderBlock() -- so now once per stem, twice per
+         * rifff, on EVERY block for the entire lifetime of playback, not
+         * just while something is actively being dragged. Accepted for the
+         * same reason PlaybackEngine's own `published` field's identical
+         * tradeoff was: the critical section is a single pointer-pair swap
+         * plus a refcount adjustment -- microseconds at most, several
+         * orders of magnitude under a single audio block's own ~10ms
+         * budget even when genuinely contended. See PlaybackEngine.h's own
+         * `published` field doc comment for the fuller reasoning and what
+         * to reconsider if this ever proves to matter in practice. */
         std::optional<float> volumeFor(const juce::String& stemKey) const;
         std::optional<float> fadeInFor(const juce::String& groupId) const;
         std::optional<float> fadeOutFor(const juce::String& groupId) const;
