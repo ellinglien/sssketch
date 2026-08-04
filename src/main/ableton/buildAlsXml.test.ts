@@ -169,8 +169,31 @@ describe('buildAlsXml', () => {
     )
   })
 
-  it('maps leftCrop/playedBars onto the loop window with LoopOn true for a normal (non-one-shot) stem', () => {
-    const rifff = drumsRifff()
+  it('shifts Time by leftCropBars and shrinks CurrentEnd, for a cropped non-one-shot stem', () => {
+    // The copied audio file is only stem.barLength (4) bars long -- sssketch's own engine
+    // reaches playedBars (6) bars by tiling that short file, so this export relies on
+    // Ableton's own LoopOn=true tiling to do the same, rather than enumerating repeats.
+    const rifff = drumsRifff() // startBar: 8, barLength: 4
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' },
+      leftCrop: { 'rifff-1': 1 },
+      playedBars: { 'rifff-1': 6 }
+    })
+    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+
+    expect(attrs(clip)['@_Time']).toBe('36') // (startBar=8 + leftCropBars=1) * 4
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('20') // (playedBars=6 - leftCropBars=1) * 4
+  })
+
+  it('bounds the loop cycle to one tile (stem.barLength), never the full playedBars span, for a cropped stem', () => {
+    const rifff = drumsRifff() // barLength: 4
     const state = emptyAppState({
       rifffs: { 'rifff-1': rifff },
       channelOrder: ['rifff-1'],
@@ -187,9 +210,59 @@ describe('buildAlsXml', () => {
     const loop = findChild(clipBody, 'Loop')!
     const loopBody = childArray(loop, 'Loop')
 
-    expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('4') // 1 bar * 4
-    expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('24') // (1+6) bars * 4
+    expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('4') // wrapped(1)*4
+    expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('16') // stem.barLength(4)*4 -- NOT (1+6)*4 or 6*4
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('true')
+    expect(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value']).toBe('16')
+  })
+
+  it('bounds the loop cycle to one tile even for an UNCROPPED stem extended well past its native length', () => {
+    // The more common real-world case than cropping: a clip simply dragged/extended longer
+    // than its own native pattern. LoopEnd must still never exceed the short source file's
+    // own real duration, regardless of how long playedBars says the clip should be.
+    const rifff = drumsRifff() // barLength: 4
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' },
+      playedBars: { 'rifff-1': 32 } // 8x its own native 4-bar length, no crop
+    })
+    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+    const loop = findChild(clipBody, 'Loop')!
+    const loopBody = childArray(loop, 'Loop')
+
+    expect(attrs(clip)['@_Time']).toBe('32') // startBar*4, no crop
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('128') // playedBars(32)*4
+    expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('0')
+    expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('16') // still just stem.barLength*4
+  })
+
+  it('wraps a leftCropBars larger than stem.barLength into the correct tile phase', () => {
+    const rifff = drumsRifff() // barLength: 4
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': rifff },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' },
+      leftCrop: { 'rifff-1': 6 }, // > barLength(4), should wrap to phase 2
+      playedBars: { 'rifff-1': 10 }
+    })
+    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+    const loop = findChild(clipBody, 'Loop')!
+    const loopBody = childArray(loop, 'Loop')
+
+    expect(attrs(clip)['@_Time']).toBe('56') // (8 + 6) * 4 -- raw leftCropBars for position
+    expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('8') // wrapped(6 % 4 = 2) * 4
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('16') // (10 - 6) * 4
   })
 
   it("sets warp markers from the stem's native tempo (durationSec/barLength vs a clean 1-beat span)", () => {

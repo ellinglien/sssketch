@@ -72,6 +72,12 @@ function earliestRifff(rifffs: Rifff[]): Rifff {
 // treats a one-shot's durationSec/barLength as "cosmetic" for its own
 // ratio=1 stretch-skipping logic, they're still real, recorded numbers that
 // make a perfectly good warp-marker reference for Ableton's own purposes.
+//
+// One useful, exact (not approximate) consequence: since nativeBpm is
+// DERIVED from durationSec/barLength, stem.barLength*4 beats of warped time
+// always equals precisely stem.durationSec real seconds -- i.e. the file's
+// own full duration maps to exactly one tile cycle. computeLoopWindow below
+// relies on this for its hiddenLoopEndBeats bound.
 function nativeBpmFor(stem: Stem): number {
   const secPerBar = stem.durationSec / stem.barLength
   return 240 / secPerBar // (60 / secPerBar) beats/min-per-bar-unit * 4 beats/bar
@@ -95,36 +101,81 @@ interface LoopWindow {
   loopStartBeats: number
   loopEndBeats: number
   loopOn: boolean
+  /** Added to rifff.startBar (in BARS, not beats) for the clip's own Time
+   * attribute -- 0 for one-shots (no crop concept applies to them), raw
+   * (unwrapped) leftCropBars for everything else. */
+  timeShiftBars: number
+  /** The clip's own CurrentEnd -- its arrangement-visible duration, in
+   * beats. NOT the same thing as loopEndBeats (see the doc comment below):
+   * for a tiled (non-one-shot) stem this can be far longer than one loop
+   * cycle, since Ableton repeats [loopStartBeats, loopEndBeats) to fill it. */
+  currentEndBeats: number
+  /** The sample's own real, full extent, in beats -- always stem.barLength*4
+   * (see nativeBpmFor's doc comment for why that's exact, not approximate),
+   * regardless of oneShot/crop/playedBars. Used for HiddenLoopEnd. */
+  hiddenLoopEndBeats: number
 }
 
-// One-shots: trimStartSec/trimEndSec (source-relative seconds) converted to
-// beats via the stem's own native tempo, LoopOn=false (play once, no
-// tiling). Everything else: leftCropBars/playedBars, LoopOn=true --
-// playedBars is already an ABSOLUTE end-boundary measured from the clip's
-// own start (confirmed against selectors.ts's own clipGeometryFromFields:
-// visibleBars = playedBars - leftCropBars, NOT playedBars + leftCropBars),
-// so LoopEnd is playedBars*4, not (leftCropBars+playedBars)*4. See
+// The copied audio file is only stem.barLength bars long (see
+// nativeBpmFor's doc comment) -- NOT playedBars bars long. sssketch's own
+// engine reaches a longer playedBars-bar clip by tiling (repeating) that
+// short file via its own LoopSewing.cpp mechanism; this export relies on
+// Ableton's own ordinary LoopOn=true clip-loop tiling to do the same, since
+// the copied file itself is never re-rendered/extended. Concretely:
+//   - Loop*/HiddenLoop* define ONE TILE CYCLE (bounded by the sample's own
+//     real duration, stem.barLength*4 beats) -- NOT the whole playedBars
+//     span. leftCropBars only shifts which PHASE of that one tile Ableton
+//     starts/loops from (wrapped mod stem.barLength) -- it can never push
+//     LoopEnd past the sample's own real available audio, since there's no
+//     more data to loop into past that point.
+//   - The clip's own arrangement-visible span is a SEPARATE concern,
+//     governed by Time (position) and CurrentEnd (duration): Time shifts by
+//     the RAW (unwrapped) leftCropBars -- a genuine position change on the
+//     arrangement timeline, confirmed against selectors.ts's own
+//     clipGeometryFromFields ("leftPx: (startBar + leftCropBars) * ppb")
+//     and native-engine/Source/PlaybackEngineTests.cpp's own "leftCropBars
+//     clips the first tile without moving startBar" test. CurrentEnd =
+//     (playedBars - leftCropBars) * 4 (clipGeometryFromFields's own
+//     "visibleBars"). LoopOn=true makes Ableton repeat the loop cycle
+//     automatically to fill however long CurrentEnd says the clip should
+//     be, mirroring sssketch's own tiling without this export needing to
+//     enumerate individual repeats itself.
+// One-shots are unaffected by any of this -- their own file already
+// contains exactly the audio that should play (no tiling), so LoopOn=false
+// and Loop*/CurrentEnd all come from trimStartSec/trimEndSec instead. See
 // docs/superpowers/specs/2026-08-04-ableton-export-design.md's mapping
-// section for why LoopStart/LoopEnd still define the played region even
-// with LoopOn=false.
+// section (and its "Known risks" entry on the loop-cycle wrap
+// approximation for a cropped stem) for the fuller reasoning.
 function computeLoopWindow(
   stem: Stem,
   nativeBpm: number,
   leftCropBars: number,
   playedBars: number
 ): LoopWindow {
+  const beatsPerSecond = nativeBpm / 60
+  const hiddenLoopEndBeats = stem.barLength * 4
+
   if (stem.oneShot) {
-    const beatsPerSecond = nativeBpm / 60
+    const loopStartBeats = (stem.trimStartSec ?? 0) * beatsPerSecond
+    const loopEndBeats = (stem.trimEndSec ?? stem.durationSec) * beatsPerSecond
     return {
-      loopStartBeats: (stem.trimStartSec ?? 0) * beatsPerSecond,
-      loopEndBeats: (stem.trimEndSec ?? stem.durationSec) * beatsPerSecond,
-      loopOn: false
+      loopStartBeats,
+      loopEndBeats,
+      loopOn: false,
+      timeShiftBars: 0,
+      currentEndBeats: loopEndBeats,
+      hiddenLoopEndBeats
     }
   }
+
+  const wrappedLeftCropBars = ((leftCropBars % stem.barLength) + stem.barLength) % stem.barLength
   return {
-    loopStartBeats: leftCropBars * 4,
-    loopEndBeats: playedBars * 4,
-    loopOn: true
+    loopStartBeats: wrappedLeftCropBars * 4,
+    loopEndBeats: hiddenLoopEndBeats,
+    loopOn: true,
+    timeShiftBars: leftCropBars,
+    currentEndBeats: (playedBars - leftCropBars) * 4,
+    hiddenLoopEndBeats
   }
 }
 
@@ -150,21 +201,24 @@ function buildStemTrack(
   setAttr(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!, '@_Value', trackName)
 
   const clip = findAudioClip(track)
-  setAttr(clip, '@_Time', String((rifff.startBar ?? 0) * 4))
+
+  const nativeBpm = nativeBpmFor(stem)
+  const {
+    loopStartBeats,
+    loopEndBeats,
+    loopOn,
+    timeShiftBars,
+    currentEndBeats,
+    hiddenLoopEndBeats
+  } = computeLoopWindow(stem, nativeBpm, leftCropBars, playedBars)
+
+  setAttr(clip, '@_Time', String(((rifff.startBar ?? 0) + timeShiftBars) * 4))
 
   const clipBody = childArray(clip, 'AudioClip')
   setAttr(findChild(clipBody, 'Name')!, '@_Value', trackName)
 
-  const nativeBpm = nativeBpmFor(stem)
-  const { loopStartBeats, loopEndBeats, loopOn } = computeLoopWindow(
-    stem,
-    nativeBpm,
-    leftCropBars,
-    playedBars
-  )
-
   setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', '0')
-  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(loopEndBeats))
+  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(currentEndBeats))
 
   const loop = findChild(clipBody, 'Loop')!
   const loopBody = childArray(loop, 'Loop')
@@ -172,7 +226,7 @@ function buildStemTrack(
   setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndBeats))
   setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', loopOn ? 'true' : 'false')
   setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
-  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(loopEndBeats))
+  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEndBeats))
 
   const relativePath = join('Samples', 'Imported', fileName)
   const absolutePath = join(outputDir, relativePath)
