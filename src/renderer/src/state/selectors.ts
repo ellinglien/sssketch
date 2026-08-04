@@ -261,8 +261,7 @@ export function tileOffsetsPx(
 ): number[] {
   const visibleBars = playedBars - leftCropBars
   const tileWidthPx = widthPx * (stemBarLength / visibleBars)
-  const wrappedLeftCropBars =
-    ((leftCropBars % stemBarLength) + stemBarLength) % stemBarLength
+  const wrappedLeftCropBars = ((leftCropBars % stemBarLength) + stemBarLength) % stemBarLength
   const phaseShiftPx = wrappedLeftCropBars * (tileWidthPx / stemBarLength)
   // +1 over the naive ceil, but only when tiles are actually shifted:
   // shifting every tile left by phaseShiftPx can leave a gap at the
@@ -272,10 +271,7 @@ export function tileOffsetsPx(
   // before this feature existed, instead of one permanently-harmless-but-
   // unnecessary extra tile on every clip that's never had its left edge
   // touched.
-  const tileCount = Math.max(
-    1,
-    Math.ceil(widthPx / tileWidthPx) + (phaseShiftPx > 0 ? 1 : 0)
-  )
+  const tileCount = Math.max(1, Math.ceil(widthPx / tileWidthPx) + (phaseShiftPx > 0 ? 1 : 0))
   return Array.from({ length: tileCount }, (_, i) => i * tileWidthPx - phaseShiftPx)
 }
 
