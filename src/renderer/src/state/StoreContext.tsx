@@ -313,18 +313,58 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // code path the way AudioEngine.ts needed, because PlaybackEngine::renderBlock
   // recomputes scheduling fresh from whatever project is currently loaded on
   // every single audio block — see the Phase 3 design doc.
+  // pendingEngineSyncRef tracks whether an rAF-scheduled flush is currently
+  // pending OR in flight -- deliberately NOT cleared by this effect's own
+  // cleanup function on every dependency change (only on unmount, in the
+  // separate effect below). A naive `return () =>
+  // cancelAnimationFrame(...)` here would cancel-and-reschedule on every
+  // single dependency change; during a fast drag (state.dragVol changing
+  // far more often than once per animation frame), each new dispatch would
+  // perpetually push the flush deadline out, so it would never actually
+  // fire until the drag paused for a whole frame -- defeating the entire
+  // point of a live update. Guarding on this ref instead means the FIRST
+  // change after being idle schedules a flush ~1 frame out; every
+  // subsequent change while that flush is still pending (scheduled OR
+  // in-flight) is a no-op, and the eventual flush reads stateRef.current --
+  // the LATEST committed state at the moment it actually runs, not
+  // whatever was captured when it was scheduled.
+  const pendingEngineSyncRef = useRef(false)
+
   useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      const project = await buildEngineProject(state, resolveStretchedForPlayback, pluginCatalog)
-      if (!cancelled) {
-        await window.rifffApi.engineLoadProject(project)
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (!pendingEngineSyncRef.current) {
+      pendingEngineSyncRef.current = true
+      requestAnimationFrame(() => {
+        void (async () => {
+          try {
+            const project = await buildEngineProject(
+              stateRef.current,
+              resolveStretchedForPlayback,
+              pluginCatalog
+            )
+            await window.rifffApi.engineLoadProject(project)
+          } finally {
+            // Cleared only once the send actually completes (success or
+            // failure) -- not at the start of the rAF callback -- so at
+            // most one send is ever pending/in-flight at a time. Without
+            // this, a slow send (e.g. buildEngineProject's own rubberband
+            // resolveStretched round-trip) could let a second flush get
+            // scheduled and fire while the first is still in flight,
+            // reintroducing the exact overlapping-async-calls race the
+            // effect's own removed `cancelled` flag used to guard against.
+            pendingEngineSyncRef.current = false
+          }
+        })()
+      })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes playing/pos (no longer part of state at all); those are handled by the separate play/pause effect and the position-update subscription below, not by reloading the whole project
+    // No eslint-disable needed here: the effect body only reads
+    // stateRef.current (a ref, exempt from exhaustive-deps) rather than
+    // `state` directly, so the linter has no missing-dependency complaint
+    // about the individual state.* entries below. They're listed
+    // individually (not as a single `state` dep) intentionally, matching
+    // the granularity of the original effect, and intentionally exclude
+    // playing/pos (no longer part of state at all); those are handled by
+    // the separate play/pause effect and the position-update subscription
+    // below, not by reloading the whole project.
   }, [
     state.off,
     state.bpm,
@@ -344,6 +384,21 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // verification: after a resize-handle drag, the captured EngineProject
     // sent over IPC still showed the pre-drag playedBars.
     state.playedBars,
+    // Same class of gap as state.playedBars above, found while building the
+    // live-drag-preview feature: a committed left-crop change didn't sync
+    // to the engine at all, not even on mouse-up, since this field was
+    // simply never added here despite buildEngineProject.ts already reading
+    // it.
+    state.leftCrop,
+    // Live volume/fade preview during an active drag -- NOT
+    // dragPlayedBars/dragLeftCropBars, which stay commit-on-release only
+    // (pushing a length/crop change to the engine mid-drag risks an audible
+    // scheduling jump if the playhead is inside the tile being resized; see
+    // docs/superpowers/specs/2026-08-04-live-drag-preview-design.md's
+    // "Explicitly out of scope" section).
+    state.dragVol,
+    state.dragFadeIn,
+    state.dragFadeOut,
     // masterChain plugin IDs flow through this general project sync (the
     // native engine's own EngineProject.masterChain field just needs to
     // stay current); actually LOADING/swapping the plugin binary is a
