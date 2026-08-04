@@ -212,30 +212,65 @@ namespace sssketch
                 double offsetBars = std::fmod(rawOffsetBars, (double) stem.barLength);
                 if (offsetBars < 0.0)
                     offsetBars += (double) stem.barLength;
-                const double bound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
-                if (bound <= 0.0)
+                // lowerBound/upperBound together define the visible/audible
+                // window as [lowerBound, upperBound) bars, relative to
+                // start+offsetBars -- NEITHER start NOR offsetBars moves for
+                // a crop (see docs/superpowers/specs/
+                // 2026-08-04-tiled-clip-crop-trim-design.md); leftCropBars
+                // can be negative (extend-left, revealing tiles before the
+                // original anchor) just as playedBars can already exceed
+                // rifff.barLength (extend-right).
+                const double lowerBound = stem.leftCropBars;
+                const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
+                if (upperBound <= lowerBound)
                     continue;
                 const double secPerBarNative = stem.durationSec / (double) stem.barLength;
 
-                const int totalTiles = (int) std::ceil(bound / (double) stem.barLength);
+                const int firstTileIdx = (int) std::floor(lowerBound / (double) stem.barLength);
+                const int totalTiles = (int) std::ceil(upperBound / (double) stem.barLength);
                 const double tileDurationSec = (double) stem.barLength * spb;
-                const double firstTileStartSec = (start + offsetBars) * spb;
+                // The first AUDIBLE tile's own start (not tile 0's start,
+                // unless lowerBound is itself 0) -- this is what the
+                // one-tile-slack skip-ahead below measures forward from.
+                const double firstTileStartSec = (start + offsetBars + lowerBound) * spb;
 
                 // One tile of slack behind the naive floor absorbs floating-
                 // point drift at a tile boundary (positionBars accumulates by
                 // repeated addition in Transport.cpp) — worst case the extra
                 // tile checked here is immediately skipped by the per-tile
-                // overlap test below, at negligible cost.
-                int tileIdx = std::max(
+                // overlap test below, at negligible cost. Floored at
+                // firstTileIdx now, not a hardcoded 0 -- firstTileIdx can be
+                // negative (extend-left case).
+                int tileIdx = firstTileIdx + std::max(
                     0,
                     (int) std::floor((blockStartSec - firstTileStartSec) / tileDurationSec) - 1);
 
                 for (; tileIdx < totalTiles; ++tileIdx)
                 {
                     const double barOffset = (double) tileIdx * (double) stem.barLength;
-                    const double segmentBarLength = std::min((double) stem.barLength, bound - barOffset);
-                    const double segStartSec = (start + offsetBars + barOffset) * spb;
+                    // Clip THIS tile against both bounds symmetrically -- the
+                    // first audible tile gets clipped from the left when
+                    // lowerBound falls inside it (barOffset < lowerBound <
+                    // barOffset+barLength), the last gets clipped from the
+                    // right exactly as it always did.
+                    const double tileStart = std::max(barOffset, lowerBound);
+                    const double tileEnd = std::min(barOffset + (double) stem.barLength, upperBound);
+                    if (tileEnd <= tileStart)
+                        continue; // shouldn't normally happen given firstTileIdx/totalTiles above; defensive
+                    const double segmentBarLength = tileEnd - tileStart;
+                    const double segStartSec = (start + offsetBars + tileStart) * spb;
                     const double segEndSec = segStartSec + segmentBarLength * secPerBarNative;
+                    // How far into THIS tile's own native content segStartSec
+                    // actually begins -- zero for every tile except one
+                    // clipped from the left by lowerBound, where it's however
+                    // far past that tile's own natural start the crop point
+                    // falls. Without this, a left-clipped tile would read
+                    // from ITS OWN sample 0 at segStartSec instead of from
+                    // partway through -- the exact same "restarts instead of
+                    // continuing" bug this whole feature exists to fix, just
+                    // one layer deeper (source-buffer read position, not
+                    // just the rendered time window).
+                    const double sourceOffsetSec = (tileStart - barOffset) * secPerBarNative;
 
                     // Tiles only get later from here on — nothing further in
                     // this loop can overlap the block once one starts after it.
@@ -246,7 +281,7 @@ namespace sssketch
                     if (segEndSec <= blockStartSec)
                         continue;
 
-                    const bool isFirstSegment = tileIdx == 0;
+                    const bool isFirstSegment = tileIdx == firstTileIdx;
                     const bool isLastSegment = tileIdx == totalTiles - 1;
 
                     auto fadePoints = buildFadePoints(
@@ -302,7 +337,7 @@ namespace sssketch
                         // drift without changing behaviour for genuinely mismatched rates
                         // (still nearest-sample, just correctly nearest instead of
                         // always-floor).
-                        const int srcSample = (int) std::llround(posInSegSec * entry.sampleRate);
+                        const int srcSample = (int) std::llround((posInSegSec + sourceOffsetSec) * entry.sampleRate);
                         if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
 

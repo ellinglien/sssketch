@@ -244,6 +244,136 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            beginTest("leftCropBars clips the first tile without moving startBar, and reads from the correct offset into the source buffer");
+            {
+                // A 1-bar stem tiled twice (rifff.barLength=2), cropped 0.5
+                // bars from the left. The ramp fixture lets us confirm the
+                // FIRST rendered sample comes from HALFWAY into the stem's
+                // own 4s buffer (~0.5), not from its very start (~0.0) --
+                // proving the source read offset accounts for the crop, not
+                // just the rendered time window.
+                const int rampSamples = 176400; // 4s @ 44100Hz
+                auto ramp = writeRampFixtureWav("sssketch_pe_leftcrop_ramp.wav", rampSamples);
+
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.resolvedPath = ramp.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.leftCropBars = 0.5;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                const double sampleRate = 44100.0;
+                // A fresh segment start has its own unrelated 3ms
+                // click-guard micro-fade-in (see FadeGain.cpp's
+                // kMicroFadeSec), which would otherwise mask the very first
+                // few samples down toward 0 regardless of leftCropBars
+                // correctness. Render past it (200 samples ~= 4.5ms) and
+                // check the last sample in the block instead of the first.
+                const int numSamples = 200;
+                // Rendered window starts exactly at startBar + leftCropBars
+                // (0.5 bars = 2.0s at this tempo) -- startBar itself never
+                // moved.
+                const double blockStartSec = 2.0;
+                const double positionBars = blockStartSec / 4.0;
+
+                std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
+                engine.renderBlock(positionBars, sampleRate, numSamples, l.data(), r.data(), channelChains);
+
+                // Halfway into a 0..1 ramp over 176400 samples is ~0.5, not ~0.0.
+                expect(l[numSamples - 1] > 0.45f && l[numSamples - 1] < 0.55f);
+
+                ramp.deleteFile();
+            }
+
+            beginTest("a negative leftCropBars renders tiles before the original anchor (extend-left case)");
+            {
+                // Same setup, but leftCropBars=-1 -- one whole extra tile
+                // should now be audible starting one bar (2.0s) BEFORE
+                // startBar itself (i.e. at absolute position -2.0s).
+                const int rampSamples = 176400;
+                auto ramp = writeRampFixtureWav("sssketch_pe_extendleft_ramp.wav", rampSamples);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 1.0; // so the extended tile (1 bar earlier) still starts >= 0
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.resolvedPath = ramp.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.leftCropBars = -1.0;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                const double sampleRate = 44100.0;
+                const int numSamples = 4;
+                // startBar=1.0 bar (4.0s) + leftCropBars=-1.0 bar (-4.0s) = 0.0s.
+                const double blockStartSec = 0.0;
+                const double positionBars = blockStartSec / 4.0;
+
+                std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
+                engine.renderBlock(positionBars, sampleRate, numSamples, l.data(), r.data(), channelChains);
+
+                // Right at the start of this extended tile's own buffer -> near 0.0,
+                // confirming audio is actually rendered here at all (not silence,
+                // which is what today's code -- hardcoded floor of tileIdx at 0 --
+                // would produce, since this position is "before tile 0").
+                expect(l[0] < 0.05f);
+
+                ramp.deleteFile();
+            }
+
+            beginTest("leftCropBars beyond playedBars renders nothing (fully cropped away)");
+            {
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.resolvedPath = "/nonexistent.wav"; // never actually read if this test passes
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.playedBars = 2.0;
+                stem.leftCropBars = 3.0; // > playedBars
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                const double sampleRate = 44100.0;
+                const int numSamples = 4;
+                std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
+                // Should not crash, and should render silence (the missing
+                // file would be audible as non-silence garbage if this
+                // somehow tried to read it).
+                engine.renderBlock(0.0, sampleRate, numSamples, l.data(), r.data(), channelChains);
+                expect(l[0] == 0.0f);
+            }
+
             beginTest("a later repeat of a looping stem does not get a spurious fade-in");
             {
                 // Regression test: computeStemSchedule drops tiles whose end is already in
