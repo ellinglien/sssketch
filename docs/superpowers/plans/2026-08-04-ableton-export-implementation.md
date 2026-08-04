@@ -984,9 +984,12 @@ interface LoopWindow {
    * for a tiled (non-one-shot) stem this can be far longer than one loop
    * cycle, since Ableton repeats [loopStartBeats, loopEndBeats) to fill it. */
   currentEndBeats: number
-  /** The sample's own real, full extent, in beats -- always stem.barLength*4
-   * (see nativeBpmFor's doc comment for why that's exact, not approximate),
-   * regardless of oneShot/crop/playedBars. Used for HiddenLoopEnd. */
+  /** Used for HiddenLoopEnd. For a tiled (non-one-shot) stem, the sample's
+   * own real, full extent in beats -- stem.barLength*4 (see nativeBpmFor's
+   * doc comment for why that's exact, not approximate). For a one-shot,
+   * tracks loopEndBeats (the trim end) instead -- one-shots are never
+   * tile-bounded, so this must stay a no-op relative to their own
+   * LoopEnd/CurrentEnd (see computeLoopWindow's one-shot branch). */
   hiddenLoopEndBeats: number
 }
 
