@@ -175,24 +175,28 @@ describe('renumberIds', () => {
     expect(holders.map((n) => attrs(n)['@_Id'])).toEqual(['0', '1'])
   })
 
-  it("leaves a TrackSendHolder's OWN nested Ids untouched too, not just its own outer Id", () => {
-    // Regression test: a first attempt at this fix only protected
-    // TrackSendHolder's own Id, but still recursed into (and renumbered)
-    // its children -- the AutomationTarget/ModulationTarget Ids inside each
-    // Send, which are the actual "send knob" parameters. That still
-    // produced the exact same real Ableton "more send knobs than return
-    // tracks" error until the WHOLE subtree was left alone.
+  it("renumbers a TrackSendHolder's NESTED Ids (the actual send-knob parameters) even though its own outer Id is skipped", () => {
+    // Confirmed against real Ableton output: decompiling a real Live Set
+    // with a track duplicated 6 times showed every duplicate's
+    // TrackSendHolder Ids staying "0"/"1", while their nested
+    // AutomationTarget/ModulationTarget Ids were all freshly unique per
+    // duplicate -- never repeated, never left at the original template
+    // value. This is the opposite of an earlier (wrong) assumption that
+    // the whole subtree had to stay frozen.
     const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /></Send></TrackSendHolder></Sends></Root>'
+      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /><ModulationTarget Id="22195" /></Send></TrackSendHolder></Sends></Root>'
     )
     const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 100
+    let counter = 1000000
     renumberIds(sends, () => counter++)
 
     const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
+    expect(attrs(holder)['@_Id']).toBe('0') // outer Id still skipped
     const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194')
+    const at = findChild(childArray(send, 'Send'), 'AutomationTarget')!
+    const mt = findChild(childArray(send, 'Send'), 'ModulationTarget')!
+    expect(attrs(at)['@_Id']).toBe('1000000') // nested Ids DO get renumbered
+    expect(attrs(mt)['@_Id']).toBe('1000001')
   })
 
   it("still renumbers a TrackSendHolder's siblings and ancestors in an otherwise-renumbered subtree", () => {
@@ -204,15 +208,16 @@ describe('renumberIds', () => {
     renumberIds(outer, () => counter++)
 
     expect(attrs(outer)['@_Id']).toBe('100') // Outer itself still renumbered
-    const other = findChild(childArray(outer, 'Outer'), 'Other')!
-    expect(attrs(other)['@_Id']).toBe('101') // a plain sibling still renumbered
 
     const sends = findChild(childArray(outer, 'Outer'), 'Sends')!
     const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
     expect(attrs(holder)['@_Id']).toBe('0') // TrackSendHolder itself skipped
     const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
     const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194') // and everything nested inside it too
+    expect(attrs(target)['@_Id']).toBe('101') // nested Id renumbered
+
+    const other = findChild(childArray(outer, 'Outer'), 'Other')!
+    expect(attrs(other)['@_Id']).toBe('102') // a plain sibling still renumbered
   })
 })
 ```
@@ -294,62 +299,55 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
-/** Tags whose ENTIRE subtree -- not just their own `@_Id` -- must be left
- * completely untouched by renumbering, because it contains positional Ids
- * with real meaning to Ableton, not generic object-identity pointers
- * (unlike most other Ids in this document -- see renumberIds's own doc
- * comment). `TrackSendHolder` is confirmed the hard way, in three rounds:
- * first its OWN `Id` (correlates 1:1, by ordinal position, with the Set's
- * actual return tracks -- the reference template's own two
- * `TrackSendHolder`s are `Id="0"`/`"1"`, matching its two `ReturnTrack`s
- * exactly), then its NESTED `AutomationTarget`/`ModulationTarget` Ids too
- * (the actual "send knob" parameters) -- an initial fix that only protected
- * `TrackSendHolder`'s own Id while still recursing into (and renumbering)
- * its children was NOT enough; the exact same *"Track has more send knobs
- * than set has return tracks"* error persisted until the whole subtree was
- * left alone. A THIRD attempt tried the opposite extreme -- emptying
- * `<Sends>` out entirely rather than preserving it -- which avoided both
- * the send-knob-count error and the doc-wide duplicate-Id error the frozen
- * subtree can produce when duplicated across many clones, but caused a
- * worse failure: a real, reproducible Ableton CRASH (SIGSEGV) on file
- * load, confirmed via an actual crash report. Ableton's own mixer layout
- * evidently assumes every non-return track has exactly one
- * `TrackSendHolder` per `ReturnTrack` in the Set, unconditionally, and
- * indexes off the end of an empty list when that assumption is violated --
- * this is core mixer plumbing every track has, not an optional feature
- * sssketch can just omit. Freezing the whole subtree verbatim (this
- * function) is the only approach confirmed not to crash or trigger a
- * send-count load-refusal; it can still produce a "document is corrupt,
- * repair?" prompt from doc-wide duplicate nested Ids on a Set with many
- * cloned tracks, but that's a recoverable prompt, not data loss. If
- * another tag turns out to have the same problem, add it here rather than
- * reworking the whole renumbering strategy -- this document's Id semantics
- * are undocumented and only knowable empirically, one confirmed case at a
- * time. */
-const FROZEN_SUBTREE_TAGS = new Set(['TrackSendHolder'])
+/** Tags whose own `@_Id` must never be renumbered, because it's a small
+ * positional index scoped to the parent track (matching the ordinal
+ * position of a corresponding element elsewhere in the Set), not a
+ * document-wide identity pointer like every other Id in this format.
+ * `TrackSendHolder` is the confirmed case: a track's Nth `TrackSendHolder`
+ * always has `Id="N"` (0, 1, ...), matching the Set's Nth `ReturnTrack` --
+ * this holds in every real Ableton-produced file, INCLUDING ones with many
+ * duplicated tracks (confirmed by decompiling a real Live Set with a track
+ * duplicated 6 times: every single duplicate's two `TrackSendHolder`s were
+ * `Id="0"`/`"1"`, never renumbered, while their NESTED
+ * `AutomationTarget`/`ModulationTarget` Ids -- the actual "send knob"
+ * parameters -- were all freshly unique per duplicate). Renumbering
+ * `TrackSendHolder`'s own Id breaks that positional correlation and
+ * produces *"Track has more send knobs than set has return tracks"*. */
+const SKIP_OWN_ID_TAGS = new Set(['TrackSendHolder'])
 
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId` -- EXCEPT that a tag listed in FROZEN_SUBTREE_TAGS, and
- * everything nested inside it, is left completely untouched (`return`s
- * immediately, before touching this node's own Id or recursing into its
- * children at all). Necessary because cloning a template track via
- * cloneNode also duplicates every internal automation-target/pointee/
- * clip-slot Id it contains -- the reference template's own single canonical
- * AudioTrack has 69 of them. Confirmed empirically (see the design spec)
- * that the original, real, Ableton-produced reference file already reuses
- * small Id values across many unrelated elements without apparent problems,
- * so renumbering most of them is defensive rather than a fix for a
- * confirmed bug -- but `TrackSendHolder` is a real, confirmed exception
- * (see FROZEN_SUBTREE_TAGS's own doc comment), not a hypothetical one.
+ * `nextId` -- EXCEPT a tag listed in SKIP_OWN_ID_TAGS keeps its own Id as-is
+ * (recursion into its children still proceeds normally, so anything nested
+ * inside it still gets fresh unique Ids). Necessary because cloning a
+ * template track via cloneNode also duplicates every internal
+ * automation-target/pointee/clip-slot Id it contains -- the reference
+ * template's own single canonical AudioTrack has 69 of them. Confirmed
+ * empirically (see the design spec) that the original, real,
+ * Ableton-produced reference file already reuses small Id values across
+ * many unrelated elements without apparent problems, so renumbering most of
+ * them is defensive rather than a fix for a confirmed bug -- but
+ * `TrackSendHolder`'s own Id is a real, confirmed exception (see
+ * SKIP_OWN_ID_TAGS's own doc comment), not a hypothetical one.
+ *
+ * This function went through several wrong shapes before landing here --
+ * see docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
+ * risks" section for the full history (freezing TrackSendHolder's whole
+ * subtree avoided the send-knob-count error but produced document-wide
+ * duplicate Ids once cloned many times over; emptying `<Sends>` entirely
+ * avoided both but crashed Ableton outright, since every track is expected
+ * to have exactly one TrackSendHolder per ReturnTrack as a hard structural
+ * invariant). This shape -- skip only the outer Id, keep recursing into
+ * children -- is the one confirmed to match what real Ableton itself
+ * produces when duplicating a track.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
   const tag = Object.keys(node).find((key) => key !== ':@')
-  if (tag && FROZEN_SUBTREE_TAGS.has(tag)) return
+  const skipOwnId = tag !== undefined && SKIP_OWN_ID_TAGS.has(tag)
 
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
-  if (nodeAttrs && '@_Id' in nodeAttrs) {
+  if (nodeAttrs && '@_Id' in nodeAttrs && !skipOwnId) {
     nodeAttrs['@_Id'] = String(nextId())
   }
   for (const key of Object.keys(node)) {
@@ -1558,7 +1556,7 @@ export function buildAlsXml(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/buildAlsXml.test.ts`
-Expected: PASS (21 tests, count unchanged -- the Sends test still exists, just verifies frozen Ids instead of an emptied list)
+Expected: PASS (21 tests, count unchanged -- the Sends regression test still exists, verifying TrackSendHolder outer Ids stay frozen at 0/1 per track while nested send-knob Ids are unique document-wide)
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 

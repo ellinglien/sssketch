@@ -277,11 +277,12 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   handling above, not guessing.
 - **Ableton Live 12 only** — confirmed as the user's actual version, not just the test file's
   origin. Live 11 compatibility is untested and out of scope.
-- **Id renumbering and the `<Sends>`/`<TrackSendHolder>` substructure took five real,
-  confirmed rounds to get right on first real-world use — all now resolved, but the process is
-  worth recording since it's a good illustration of how empirical this undocumented format's
-  constraints are, and because one of the intermediate "fixes" actually made things worse in a
-  way that only showed up on load, not at export time.**
+- **Id renumbering and the `<Sends>`/`<TrackSendHolder>` substructure took six real, confirmed
+  rounds to get right on first real-world use — all now resolved, and the correct scheme is no
+  longer a guess, it's confirmed against real Ableton output. The process is worth recording in
+  full since it's a good illustration of how empirical this undocumented format's constraints
+  are, and because two of the intermediate "fixes" actually made things worse in ways that only
+  showed up on load, not at export time.**
   (1) The Set-level `<NextPointeeId>` element must be `>=` every `Id` used anywhere in the
   document, or Ableton refuses to open the file at all (*"document is corrupt... NextPointeeId
   is too low"*) — fixed by writing the renumbering counter's final value into it. This fix
@@ -292,17 +293,18 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   send knobs than set has return tracks."* First attempted fix: exclude only
   `TrackSendHolder`'s own `Id` from renumbering, still recurse into (and renumber) its
   children.
-  (3) That fix was incomplete — it produced the *exact same* "more send knobs" error, because
-  the real "send knob" the message refers to is the `<AutomationTarget>`/`<ModulationTarget>`
-  nested inside each `<TrackSendHolder>`'s own `<Send>`, not the holder's outer `Id`. Second
-  attempted fix: freeze `TrackSendHolder`'s entire subtree instead — no renumbering, no
-  recursion into it at all.
-  (4) That traded one bug for another: freezing the subtree means every cloned track now
-  shares the *identical* nested `AutomationTarget`/`ModulationTarget` Ids, and once that
-  frozen subtree gets duplicated across dozens of cloned tracks, Ableton correctly flags it as
-  *"non-unique Pointee IDs."* An intermediate fix reasoned "sssketch has no concept of send
-  level to a return track at all, so just don't carry this substructure into a clone" and
-  emptied every cloned track's own `<Sends>` down to zero `<TrackSendHolder>` children.
+  (3) That fix produced the *exact same* "more send knobs" error, which at the time was
+  attributed to the nested `AutomationTarget`/`ModulationTarget` Ids also needing to stay
+  frozen. Second attempted fix: freeze `TrackSendHolder`'s entire subtree instead — no
+  renumbering, no recursion into it at all. (In hindsight, per round (6) below, this diagnosis
+  was wrong — the nested Ids were never the problem; see that round for what the real bug in
+  this attempt likely was.)
+  (4) Freezing the whole subtree traded one bug for another: every cloned track now shares the
+  *identical* nested `AutomationTarget`/`ModulationTarget` Ids, and once that frozen subtree
+  gets duplicated across dozens of cloned tracks, Ableton correctly flags it as *"non-unique
+  Pointee IDs."* An intermediate fix reasoned "sssketch has no concept of send level to a
+  return track at all, so just don't carry this substructure into a clone" and emptied every
+  cloned track's own `<Sends>` down to zero `<TrackSendHolder>` children.
   (5) That intermediate fix was WRONG, and worse than (4) — it doesn't just refuse to load with
   a message, it makes Live **crash outright** (confirmed via a real macOS crash report: a
   SIGSEGV null-pointer-style dereference, `far: 0x00000000000000b8`, on Live's main thread
@@ -311,30 +313,40 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   plumbing every non-return track has, and Ableton's own mixer layout code evidently assumes
   unconditionally that each track has exactly one `<TrackSendHolder>` per `<ReturnTrack>` in
   the Set. With zero, it indexes off the end of an empty list while laying out the mixer on
-  load and crashes. **Actual final fix, and the one shipped**: go back to (3)'s frozen-subtree
-  approach — `alsXmlHelpers.ts`'s `renumberIds` keeps its `FROZEN_SUBTREE_TAGS` exception for
-  `TrackSendHolder`, leaving its entire subtree (Id and all nested Ids) untouched, verbatim,
-  on every clone. This means a Set with many cloned tracks can still hit (4)'s "non-unique
-  Pointee IDs" — but that is a "document is corrupt, repair?" prompt the user can act on, not
-  silent data loss from a crash. Between a recoverable prompt and an unrecoverable crash with
-  no error message at all, the prompt is the correct trade until the real per-track-unique
-  send-knob Id scheme is understood (see the next paragraph). `<ReturnTrack>`s are never
-  cloned, so their own real Sends are completely unaffected either way. If a sixth such failure
-  shows up somewhere else in the document, the lesson from this whole sequence is sharper than
-  "check whether sssketch needs the data" (which is what led to the crash): also check whether
-  Ableton's own runtime code has a hard structural expectation about the substructure's
-  presence/shape (count, parent-child relationships) that has nothing to do with what data it
-  encodes — a crash on load, with no message at all, is a strictly worse failure mode than a
-  refusal-to-open with a clear message, and should be weighed as such before shipping a fix
-  that merely "sidesteps" a validation error by deleting the thing being validated.
-  **Not yet solved**: the actual mechanism Ableton uses to validate/count "send knobs" per
-  track (is it purely the nested `AutomationTarget`/`ModulationTarget` Id values themselves,
-  their count, their document position, or some combination?) is still not understood — only
-  that touching them in either direction (renumber or remove) breaks something. A real fix
-  that gives each cloned track's send knobs genuinely unique Ids without breaking the
-  send-count validation would need either real Ableton documentation or a lot more empirical
-  probing (e.g. diffing two independently-real-Ableton-saved Sets with different Ids in this
-  position) than was available this session.
+  load and crashes. Reverted to (3)'s frozen-whole-subtree approach as the safer of two known-
+  bad states — a "document is corrupt, repair?" prompt is recoverable, a crash with no message
+  is not.
+  (6) But (3)'s frozen-subtree approach ALSO isn't actually safe at real project scale: on the
+  user's real ~33-cloned-track project, Ableton's own "repair" flow for the resulting
+  "non-unique Pointee IDs" error deduplicated the Ids in a way that broke the send-count
+  correlation again, right back to *"Track has more send knobs than set has return tracks"* —
+  an unrecoverable dead end (no further repair offered). **Real, empirically-confirmed final
+  fix**: rather than keep guessing from error messages alone, the user duplicated a real track
+  6 times directly in Ableton itself (unrelated to this export feature) and shared the
+  resulting `.als`. Decompiling it gave ground truth: every duplicate's `<TrackSendHolder>`
+  Ids stayed `"0"`/`"1"` (confirming (2)'s positional-index finding was always correct), while
+  the nested `<AutomationTarget>`/`<ModulationTarget>` Ids were freshly, globally unique on
+  *every single duplicate* — not frozen, not paired by any special offset, just unique. This is
+  exactly what round (2)'s first attempt already tried (skip only the outer Id, keep
+  renumbering everything nested) — which had been assumed broken. Re-implementing that exact
+  shape and testing it at the user's real project scale (27 AudioTracks + 9 GroupTracks, a
+  throwaway integration test scanning the whole document for duplicate
+  `AutomationTarget`/`ModulationTarget` Ids) found zero collisions, confirming this is the
+  correct scheme — round (3)'s original diagnosis (that nested Ids also needed freezing) was
+  simply wrong, and whatever caused round (2)'s original attempt to fail is not reproducible
+  from a clean implementation. `alsXmlHelpers.ts`'s `renumberIds` now has a `SKIP_OWN_ID_TAGS`
+  exception (renamed from `FROZEN_SUBTREE_TAGS`, since it now skips only the OWN Id, not the
+  whole subtree) for `TrackSendHolder`. `<ReturnTrack>`s are never cloned, so their own real
+  Sends are completely unaffected regardless. **The sharper lesson from this whole sequence**:
+  when an undocumented binary format's validation logic is involved, an error message's
+  apparent cause (round (3)'s "the nested Ids must be the problem too") can be wrong even when
+  a fix based on that diagnosis appears to work around the immediate symptom — real ground
+  truth from the tool's own output beats reasoning from error messages and trial-and-error
+  alone, and is worth getting even if it costs an extra round-trip with the user. Also worth
+  weighing: a crash with no error message at all (round (5)) is strictly worse than a
+  refusal-to-open with a clear one — that asymmetry should count heavily against any fix that
+  merely "sidesteps" a validation error by deleting the thing being validated, rather than
+  understanding what the validation actually requires.
 - **Loop-cycle wrap approximation for a cropped, tiled stem**: when `leftCropBars` is nonzero,
   the "Track/clip mapping algorithm" section's `LoopStart = wrappedLeftCropBars*4, LoopEnd =
   stem.barLength*4` gives each loop CYCLE a shorter span than a full tile

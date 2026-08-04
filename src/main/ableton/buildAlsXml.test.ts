@@ -547,23 +547,19 @@ describe('buildAlsXml', () => {
     expect(nextPointeeId).toBeGreaterThan(maxId)
   })
 
-  it('preserves TrackSendHolder count and Ids verbatim on cloned AudioTrack/GroupTrack instances', () => {
-    // Regression test: this substructure must stay exactly as the template
-    // has it, count and all. Two prior real, confirmed Ableton load
-    // failures came from RENUMBERING it (either TrackSendHolder's own Id,
-    // or its nested AutomationTarget/ModulationTarget "send knob" Ids) --
-    // "Track has more send knobs than set has return tracks". A later
-    // attempt to sidestep that by EMPTYING <Sends> entirely produced a
-    // worse failure: a real, reproducible Ableton crash (SIGSEGV) on file
-    // load, confirmed via an actual crash report -- Ableton's own mixer
-    // layout evidently assumes every non-return track has exactly one
-    // TrackSendHolder per ReturnTrack in the Set, unconditionally, and
-    // walks off the end of an empty list. Freezing the whole subtree
-    // verbatim (this test) is the only approach confirmed not to crash or
-    // trigger a load-refusal on the send-count dimension; it does still
-    // produce doc-wide duplicate nested Ids once a Set has many cloned
-    // tracks, but that's a "document is corrupt, repair?" prompt, not an
-    // unrecoverable crash -- see the design spec's "Known risks".
+  it('keeps TrackSendHolder outer Ids frozen at 0/1 on every cloned track, while giving nested send-knob Ids fresh document-wide-unique values', () => {
+    // Regression test, confirmed against real Ableton output this time --
+    // not just reasoning from error messages. Decompiling a real Live Set
+    // with a track duplicated 6 times showed exactly this shape: every
+    // duplicate's TrackSendHolder Ids stayed "0"/"1" (a positional index
+    // matching ReturnTrack count, not a document-wide identity pointer),
+    // while the nested AutomationTarget/ModulationTarget Ids -- the actual
+    // "send knob" parameters -- were freshly unique on every single
+    // duplicate. Two earlier, wrong approaches are why this test exists:
+    // renumbering the outer Id (or leaving the whole subtree frozen, nested
+    // Ids included) both produced real Ableton failures -- see the design
+    // spec's "Known risks" for the full history, including a crash from a
+    // third wrong approach (emptying <Sends> entirely).
     const rifff1 = drumsRifff()
     const rifff2: Rifff = { ...drumsRifff(), groupId: 'rifff-2', startBar: 16 }
     const state = emptyAppState({
@@ -579,17 +575,24 @@ describe('buildAlsXml', () => {
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
     const { tracks } = tracksOf(xml)
 
+    const allNestedIds: string[] = []
     for (const audioTrack of findAllChildren(tracks, 'AudioTrack')) {
       expect(sendHolderIds(audioTrack, 'AudioTrack')).toEqual(['0', '1'])
+      allNestedIds.push(...sendKnobIds(audioTrack, 'AudioTrack'))
     }
     for (const groupTrack of findAllChildren(tracks, 'GroupTrack')) {
       expect(sendHolderIds(groupTrack, 'GroupTrack')).toEqual(['0', '1'])
+      allNestedIds.push(...sendKnobIds(groupTrack, 'GroupTrack'))
     }
     // ReturnTracks were never cloned/touched -- their own real Sends (2
-    // TrackSendHolders each, per the reference template) survive as-is.
+    // TrackSendHolders each, per the reference template) survive as-is,
+    // and their own nested Ids are excluded from the uniqueness check
+    // below since they were never renumbered either.
     for (const returnTrack of findAllChildren(tracks, 'ReturnTrack')) {
       expect(sendHolderIds(returnTrack, 'ReturnTrack')).toEqual(['0', '1'])
     }
+
+    expect(new Set(allNestedIds).size).toBe(allNestedIds.length)
   })
 
   it('sets the Set-level tempo from state.bpm', () => {
@@ -669,4 +672,23 @@ function sendHolderIds(track: AlsNode, trackTag: string): string[] {
   const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
   const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
   return findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder').map((n) => attrs(n)['@_Id'])
+}
+
+// Collects every nested AutomationTarget/ModulationTarget Id (the actual
+// "send knob" parameters) across all of a track's TrackSendHolders.
+function sendKnobIds(track: AlsNode, trackTag: string): string[] {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
+  const ids: string[] = []
+  for (const holder of findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder')) {
+    const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
+    const sendBody = childArray(send, 'Send')
+    const at = findChild(sendBody, 'AutomationTarget')
+    const mt = findChild(sendBody, 'ModulationTarget')
+    if (at) ids.push(attrs(at)['@_Id'])
+    if (mt) ids.push(attrs(mt)['@_Id'])
+  }
+  return ids
 }

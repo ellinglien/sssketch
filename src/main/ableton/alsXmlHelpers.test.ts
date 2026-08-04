@@ -123,24 +123,28 @@ describe('renumberIds', () => {
     expect(holders.map((n) => attrs(n)['@_Id'])).toEqual(['0', '1'])
   })
 
-  it("leaves a TrackSendHolder's OWN nested Ids untouched too, not just its own outer Id", () => {
-    // Regression test: a first attempt at this fix only protected
-    // TrackSendHolder's own Id, but still recursed into (and renumbered)
-    // its children -- the AutomationTarget/ModulationTarget Ids inside each
-    // Send, which are the actual "send knob" parameters. That still
-    // produced the exact same real Ableton "more send knobs than return
-    // tracks" error until the WHOLE subtree was left alone.
+  it("renumbers a TrackSendHolder's NESTED Ids (the actual send-knob parameters) even though its own outer Id is skipped", () => {
+    // Confirmed against real Ableton output: decompiling a real Live Set
+    // with a track duplicated 6 times showed every duplicate's
+    // TrackSendHolder Ids staying "0"/"1", while their nested
+    // AutomationTarget/ModulationTarget Ids were all freshly unique per
+    // duplicate -- never repeated, never left at the original template
+    // value. This is the opposite of an earlier (wrong) assumption that
+    // the whole subtree had to stay frozen.
     const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /></Send></TrackSendHolder></Sends></Root>'
+      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /><ModulationTarget Id="22195" /></Send></TrackSendHolder></Sends></Root>'
     )
     const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 100
+    let counter = 1000000
     renumberIds(sends, () => counter++)
 
     const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
+    expect(attrs(holder)['@_Id']).toBe('0') // outer Id still skipped
     const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194')
+    const at = findChild(childArray(send, 'Send'), 'AutomationTarget')!
+    const mt = findChild(childArray(send, 'Send'), 'ModulationTarget')!
+    expect(attrs(at)['@_Id']).toBe('1000000') // nested Ids DO get renumbered
+    expect(attrs(mt)['@_Id']).toBe('1000001')
   })
 
   it("still renumbers a TrackSendHolder's siblings and ancestors in an otherwise-renumbered subtree", () => {
@@ -152,14 +156,15 @@ describe('renumberIds', () => {
     renumberIds(outer, () => counter++)
 
     expect(attrs(outer)['@_Id']).toBe('100') // Outer itself still renumbered
-    const other = findChild(childArray(outer, 'Outer'), 'Other')!
-    expect(attrs(other)['@_Id']).toBe('101') // a plain sibling still renumbered
 
     const sends = findChild(childArray(outer, 'Outer'), 'Sends')!
     const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
     expect(attrs(holder)['@_Id']).toBe('0') // TrackSendHolder itself skipped
     const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
     const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('22194') // and everything nested inside it too
+    expect(attrs(target)['@_Id']).toBe('101') // nested Id renumbered
+
+    const other = findChild(childArray(outer, 'Outer'), 'Other')!
+    expect(attrs(other)['@_Id']).toBe('102') // a plain sibling still renumbered
   })
 })
