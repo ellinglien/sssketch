@@ -647,6 +647,18 @@ describe('reducer', () => {
       expect(state.dragVol['r1:1']).toBeUndefined()
       expect(state.dragVol['r1:6']).toBeUndefined()
     })
+
+    it('does not affect other rifffs', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW_GROUP_VOLUME',
+        groupId: 'r1',
+        value: 0.4
+      })
+      expect(state.dragVol['r1:1']).toBe(0.4)
+      expect(state.dragVol['r2:1']).toBeUndefined()
+    })
   })
 
   describe('UNGROUP', () => {
