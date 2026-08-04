@@ -11,6 +11,7 @@ import {
 import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
+import { scheduleLiveParamSync } from './liveParamSync'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { useFrameScale } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
@@ -257,6 +258,7 @@ export function StemWaveformRow({
           Math.min(FADE_MAX, startFadeIn + deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
+        scheduleLiveParamSync('fadeIn', groupId, finalFadeIn)
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
@@ -281,6 +283,7 @@ export function StemWaveformRow({
           Math.min(FADE_MAX, startFadeOut - deltaX / (ppb * FADE_DRAG_SLOWDOWN))
         )
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
+        scheduleLiveParamSync('fadeOut', groupId, finalFadeOut)
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
@@ -333,6 +336,7 @@ export function StemWaveformRow({
       (_dx, deltaY) => {
         finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: finalVolume })
+        scheduleLiveParamSync('volume', key, finalVolume)
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
