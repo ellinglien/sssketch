@@ -69,6 +69,8 @@ target_sources(sssketch_engine PRIVATE
   Source/BakeStemTests.cpp
   Source/LoopRecorder.cpp
   Source/LoopRecorderTests.cpp
+  Source/LiveParamOverrides.cpp
+  Source/LiveParamOverridesTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE
