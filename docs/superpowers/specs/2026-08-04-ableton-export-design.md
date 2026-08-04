@@ -272,7 +272,7 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   handling above, not guessing.
 - **Ableton Live 12 only** — confirmed as the user's actual version, not just the test file's
   origin. Live 11 compatibility is untested and out of scope.
-- **Id renumbering had two real, confirmed failure modes on first real-world use — both fixed,
+- **Id renumbering had three real, confirmed failure modes on first real-world use — all fixed,
   but the underlying uncertainty (which of this undocumented format's many small Ids are safe
   to renumber) is inherently empirical, not something a code review can fully close out.**
   (1) The Set-level `<NextPointeeId>` element must be `>=` every `Id` used anywhere in the
@@ -281,11 +281,20 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   (2) `<TrackSendHolder>`'s own `Id` is a positional index correlating 1:1 with the Set's
   return tracks (its two `Id="0"`/`"1"` instances in the reference template exactly match its
   two `ReturnTrack`s) — renumbering it broke that correlation and produced *"Track has more
-  send knobs than set has return tracks."* Fixed by excluding `TrackSendHolder` from
-  `renumberIds` (see `alsXmlHelpers.ts`'s `POSITIONAL_ID_TAGS`). If a *third* such failure
-  shows up during further testing, the fix is the same shape: identify which tag's `Id` is
-  positional (not a generic pointer), add it to `POSITIONAL_ID_TAGS`, don't rework the whole
-  renumbering strategy speculatively.
+  send knobs than set has return tracks."*
+  (3) An **incomplete** first fix for (2) — excluding only `TrackSendHolder`'s own `Id` while
+  still recursing into (and renumbering) its children — produced the *exact same* error, because
+  the real "send knob" the message refers to is the `<AutomationTarget>`/`<ModulationTarget>`
+  nested inside each `<TrackSendHolder>`'s own `<Send>`, not the holder's outer `Id`. The
+  complete fix freezes `TrackSendHolder`'s **entire subtree** — no Id renumbering, no recursion
+  into it at all (see `alsXmlHelpers.ts`'s `FROZEN_SUBTREE_TAGS`, formerly named
+  `POSITIONAL_ID_TAGS` before this fix revealed "positional Id" wasn't the full story — it's
+  really "this whole subtree is a fixed, self-referential structure that must be copied
+  verbatim"). If a *fourth* such failure shows up during further testing, the fix is the same
+  shape: identify which tag's subtree is fixed/self-referential, add it to
+  `FROZEN_SUBTREE_TAGS`, don't rework the whole renumbering strategy speculatively — but also
+  don't assume the fix is "just exclude this one Id" without verifying the *whole* subtree
+  the way (2)'s incomplete first attempt didn't.
 - **Loop-cycle wrap approximation for a cropped, tiled stem**: when `leftCropBars` is nonzero,
   the "Track/clip mapping algorithm" section's `LoopStart = wrappedLeftCropBars*4, LoopEnd =
   stem.barLength*4` gives each loop CYCLE a shorter span than a full tile
