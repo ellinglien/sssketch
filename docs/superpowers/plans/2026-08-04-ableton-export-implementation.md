@@ -498,6 +498,37 @@ function drumsRifff(): Rifff {
   }
 }
 
+// A realistic one-shot fixture -- barLength: 1 is not an arbitrary test
+// choice, it's what importOneShot.ts actually hardcodes for every real
+// one-shot/recorded-take stem (its own doc comment: "cosmetic... the
+// native engine ignores bpm/barLength for tiling/resampling purposes
+// whenever a stem's oneShot is set"). durationSec is deliberately NOT a
+// round multiple of any beat count, so a test using this fixture can't
+// accidentally pass by coincidence the way it could with a duration that
+// happens to land on a whole number of beats either way.
+function realOneShotRifff(): Rifff {
+  return {
+    groupId: 'os-1',
+    name: 'vox-hit',
+    bpm: 120,
+    barLength: 1,
+    folderPath: '/fake/folder',
+    startBar: 4,
+    stems: [
+      {
+        slot: 0,
+        author: 'someone',
+        name: 'vox',
+        type: 'sampler',
+        path: '/source/vox.wav',
+        durationSec: 2.7317,
+        barLength: 1,
+        oneShot: true
+      }
+    ]
+  }
+}
+
 // Navigates from a parsed document down to the <Tracks> children array --
 // every test below starts from here.
 function tracksOf(xml: string) {
@@ -741,21 +772,26 @@ describe('buildAlsXml', () => {
     expect(warpModes).toContain('5')
   })
 
-  it('gives a one-shot stem LoopOn=false and maps trimStartSec/trimEndSec onto the loop window', () => {
-    const rifff = drumsRifff()
+  it('gives a one-shot stem LoopOn=false, IsWarped=false, and maps trimStartSec/trimEndSec at the PROJECT tempo', () => {
+    // Uses a realistic one-shot fixture (barLength: 1, matching what
+    // importOneShot.ts actually produces for every one-shot/recorded-take)
+    // -- NOT drumsRifff()'s barLength: 4, which would silently hide the
+    // nativeBpm bug this test exists to catch (see realOneShotRifff's own
+    // doc comment below).
+    const rifff = realOneShotRifff()
     rifff.stems[0] = {
       ...rifff.stems[0],
-      oneShot: true,
-      trimStartSec: 60 / 140, // 1 beat in
-      trimEndSec: (60 / 140) * 2 // 2 beats in
+      trimStartSec: 0.5, // 1 beat in, at the 120bpm project tempo below
+      trimEndSec: 1.5 // 3 beats in
     }
 
     const state = emptyAppState({
-      rifffs: { 'rifff-1': rifff },
-      channelOrder: ['rifff-1'],
-      channelOf: { 'rifff-1': 'rifff-1' }
+      bpm: 120,
+      rifffs: { 'os-1': rifff },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
     })
-    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
 
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
     const { tracks } = tracksOf(xml)
@@ -765,12 +801,100 @@ describe('buildAlsXml', () => {
     const loopBody = childArray(loop, 'Loop')
 
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
+    expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
+    // 0.5s and 1.5s at 120bpm (2 beats/sec) = 1 beat and 3 beats -- via the
+    // PROJECT's tempo, not any per-stem "native" tempo derived from the
+    // cosmetic barLength: 1.
     expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
-    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+    expect(Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])).toBeCloseTo(3, 10)
     // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
-    // stem.barLength*4 -- one-shots are never tile-bounded, so this must
-    // stay a true no-op relative to the pre-tile-cycle-fix behavior.
-    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    // stem.barLength*4 -- one-shots are never tile-bounded.
+    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+  })
+
+  it('does NOT collapse an untrimmed one-shot to exactly one bar regardless of its real duration', () => {
+    // Regression test for a real bug found in whole-feature review: every
+    // one-shot/recorded-take has a hardcoded, cosmetic barLength: 1 (see
+    // importOneShot.ts), so deriving warp/tempo from
+    // durationSec/barLength (nativeBpmFor) is meaningless for one-shots --
+    // it silently collapsed CurrentEnd to exactly 4 beats (one bar) no
+    // matter how long the sample actually was, then relied on
+    // IsWarped=true to force-stretch the whole file to fit.
+    const rifff = realOneShotRifff() // durationSec: 2.7317, deliberately not a round beat count
+    const state = emptyAppState({
+      bpm: 120,
+      rifffs: { 'os-1': rifff },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+
+    // 2.7317s at 120bpm (2 beats/sec) = 5.4634 beats -- NOT 4 (one bar),
+    // which is what the old nativeBpm-from-barLength=1 bug always produced.
+    const expectedBeats = 2.7317 * (120 / 60)
+    const actual = Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])
+    expect(actual).toBeCloseTo(expectedBeats, 9)
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).not.toBe('4')
+  })
+
+  it("scales a one-shot's occupied beat-span with the project's own tempo, since it's unwarped", () => {
+    // Unwarped audio plays at its own true native speed regardless of Set
+    // tempo -- it just occupies proportionally more or less
+    // arrangement-timeline space (beats) as the tempo changes. At 3x the
+    // tempo, the same real-world duration should occupy exactly 3x the
+    // beats.
+    const rifffAt60 = realOneShotRifff()
+    const rifffAt180 = realOneShotRifff()
+    const stateAt60 = emptyAppState({
+      bpm: 60,
+      rifffs: { 'os-1': rifffAt60 },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stateAt180 = emptyAppState({
+      bpm: 180,
+      rifffs: { 'os-1': rifffAt180 },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
+
+    const clipAt60 = findAudioClip(
+      findChild(tracksOf(buildAlsXml(TEMPLATE_XML, stateAt60, '/out', stemFileNames)).tracks, 'AudioTrack')!
+    )
+    const clipAt180 = findAudioClip(
+      findChild(tracksOf(buildAlsXml(TEMPLATE_XML, stateAt180, '/out', stemFileNames)).tracks, 'AudioTrack')!
+    )
+    const endAt60 = Number(attrs(findChild(childArray(clipAt60, 'AudioClip'), 'CurrentEnd')!)['@_Value'])
+    const endAt180 = Number(attrs(findChild(childArray(clipAt180, 'AudioClip'), 'CurrentEnd')!)['@_Value'])
+
+    expect(endAt180 / endAt60).toBeCloseTo(3, 9)
+  })
+
+  it('leaves a normal (tiled) stem warped, with unchanged tile-cycle math', () => {
+    // Confirms the one-shot fix above didn't regress the non-one-shot path.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' }
+    })
+    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+
+    expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('true')
+    const markers = childArray(findChild(clipBody, 'WarpMarkers')!, 'WarpMarkers')
+    expect(markers).toHaveLength(2)
+    expect(Number(attrs(markers[1])['@_SecTime'])).toBeCloseTo(60 / 140, 10)
   })
 
   it('skips a stem missing from stemFileNames instead of producing a broken track', () => {
@@ -991,6 +1115,22 @@ interface LoopWindow {
    * tile-bounded, so this must stay a no-op relative to their own
    * LoopEnd/CurrentEnd (see computeLoopWindow's one-shot branch). */
   hiddenLoopEndBeats: number
+  /** Whether this clip should be warped at all. true for a tiled
+   * (non-one-shot) stem -- warping is what lets a short native-tempo file
+   * play at the project's own tempo. false for a one-shot: forcing
+   * IsWarped=true on a one-shot and deriving warp markers from
+   * nativeBpmFor(stem) is a real bug this field exists to prevent -- every
+   * one-shot/recorded-take stem has a hardcoded, cosmetic barLength=1 (see
+   * importOneShot.ts), so nativeBpm is meaningless for them, and using it
+   * anyway collapses every untrimmed one-shot's played length to exactly
+   * one bar regardless of its real duration, then force-stretches the
+   * whole sample to fit. Unwarped, the audio plays at its own true native
+   * speed; loopStartBeats/loopEndBeats/currentEndBeats above are derived
+   * from real seconds via the PROJECT's own current tempo instead (see
+   * the one-shot branch below), which only changes how much
+   * arrangement-timeline SPACE the clip occupies, never the audio's own
+   * pitch/speed. */
+  isWarped: boolean
 }
 
 // The copied audio file is only stem.barLength bars long (see
@@ -998,7 +1138,8 @@ interface LoopWindow {
 // engine reaches a longer playedBars-bar clip by tiling (repeating) that
 // short file via its own LoopSewing.cpp mechanism; this export relies on
 // Ableton's own ordinary LoopOn=true clip-loop tiling to do the same, since
-// the copied file itself is never re-rendered/extended. Concretely:
+// the copied file itself is never re-rendered/extended. Concretely, for a
+// NON-one-shot (tiled) stem:
 //   - Loop*/HiddenLoop* define ONE TILE CYCLE (bounded by the sample's own
 //     real duration, stem.barLength*4 beats) -- NOT the whole playedBars
 //     span. leftCropBars only shifts which PHASE of that one tile Ableton
@@ -1016,40 +1157,44 @@ interface LoopWindow {
 //     "visibleBars"). LoopOn=true makes Ableton repeat the loop cycle
 //     automatically to fill however long CurrentEnd says the clip should
 //     be, mirroring sssketch's own tiling without this export needing to
-//     enumerate individual repeats itself.
-// One-shots are unaffected by any of this -- their own file already
-// contains exactly the audio that should play (no tiling), so LoopOn=false
-// and Loop*/CurrentEnd all come from trimStartSec/trimEndSec instead. See
+//     enumerate individual repeats itself. isWarped=true, since warping is
+//     exactly what makes a short native-tempo file play at the project's
+//     own tempo.
+// ONE-SHOTS are unaffected by the tiling logic above (their own file
+// already contains exactly the audio that should play, no tiling), but
+// need their OWN tempo handling entirely separate from nativeBpm -- a real
+// bug found in whole-feature review, not per-task review, since it only
+// shows up when cross-referencing this file against importOneShot.ts's own
+// "barLength=1 is cosmetic" convention. isWarped=false: LoopStart/LoopEnd/
+// CurrentEnd/HiddenLoopEnd are all derived from real seconds via the
+// PROJECT's own current tempo (the projectBpm parameter), not any per-stem
+// "native" tempo -- unwarped audio plays at its own true native speed
+// regardless of Set tempo, simply occupying proportionally more or less
+// arrangement-timeline beats as the Set tempo changes. See
 // docs/superpowers/specs/2026-08-04-ableton-export-design.md's mapping
-// section (and its "Known risks" entry on the loop-cycle wrap
-// approximation for a cropped stem) for the fuller reasoning.
+// section (and its "Known risks" entries on the loop-cycle wrap
+// approximation for a cropped stem, and on the unwarped-clip
+// representation being unconfirmed against a real reference example) for
+// the fuller reasoning.
 function computeLoopWindow(
   stem: Stem,
   nativeBpm: number,
   leftCropBars: number,
-  playedBars: number
+  playedBars: number,
+  projectBpm: number
 ): LoopWindow {
-  const beatsPerSecond = nativeBpm / 60
-
   if (stem.oneShot) {
-    // hiddenLoopEndBeats is tied to loopEndBeats here, NOT stem.barLength*4
-    // -- one-shots are never tile-bounded (see the doc comment above), so
-    // this branch's HiddenLoopEnd stays exactly what it was before the
-    // tile-cycle fix: the trim end, same as LoopEnd/CurrentEnd. Sharing
-    // stem.barLength*4 across both branches here would silently widen a
-    // trimmed one-shot's HiddenLoopEnd past its own trim end -- a real,
-    // if low-impact (LoopOn=false, so inaudible unless someone manually
-    // re-enables Loop on the clip in Ableton), unintended behavior change
-    // caught in code review.
-    const loopStartBeats = (stem.trimStartSec ?? 0) * beatsPerSecond
-    const loopEndBeats = (stem.trimEndSec ?? stem.durationSec) * beatsPerSecond
+    const projectBeatsPerSecond = projectBpm / 60
+    const loopStartBeats = (stem.trimStartSec ?? 0) * projectBeatsPerSecond
+    const loopEndBeats = (stem.trimEndSec ?? stem.durationSec) * projectBeatsPerSecond
     return {
       loopStartBeats,
       loopEndBeats,
       loopOn: false,
       timeShiftBars: 0,
       currentEndBeats: loopEndBeats,
-      hiddenLoopEndBeats: loopEndBeats
+      hiddenLoopEndBeats: loopEndBeats,
+      isWarped: false
     }
   }
 
@@ -1070,7 +1215,8 @@ function computeLoopWindow(
     // flagging the assumption rather than silently tolerating a negative
     // CurrentEnd.
     currentEndBeats: (playedBars - leftCropBars) * 4,
-    hiddenLoopEndBeats
+    hiddenLoopEndBeats,
+    isWarped: true
   }
 }
 
@@ -1083,7 +1229,8 @@ function buildStemTrack(
   outputDir: string,
   groupTrackId: string,
   leftCropBars: number,
-  playedBars: number
+  playedBars: number,
+  projectBpm: number
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
@@ -1098,8 +1245,15 @@ function buildStemTrack(
   const clip = findAudioClip(track)
 
   const nativeBpm = nativeBpmFor(stem)
-  const { loopStartBeats, loopEndBeats, loopOn, timeShiftBars, currentEndBeats, hiddenLoopEndBeats } =
-    computeLoopWindow(stem, nativeBpm, leftCropBars, playedBars)
+  const {
+    loopStartBeats,
+    loopEndBeats,
+    loopOn,
+    timeShiftBars,
+    currentEndBeats,
+    hiddenLoopEndBeats,
+    isWarped
+  } = computeLoopWindow(stem, nativeBpm, leftCropBars, playedBars, projectBpm)
 
   setAttr(clip, '@_Time', String(((rifff.startBar ?? 0) + timeShiftBars) * 4))
 
@@ -1117,6 +1271,8 @@ function buildStemTrack(
   setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
   setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEndBeats))
 
+  setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', isWarped ? 'true' : 'false')
+
   const relativePath = join('Samples', 'Imported', fileName)
   const absolutePath = join(outputDir, relativePath)
   const sampleRef = findChild(clipBody, 'SampleRef')!
@@ -1127,14 +1283,22 @@ function buildStemTrack(
 
   setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
 
-  const warpMarkersNode = findChild(clipBody, 'WarpMarkers')!
-  warpMarkersNode['WarpMarkers'] = [
-    { WarpMarker: [], ':@': { '@_Id': String(nextId()), '@_SecTime': '0', '@_BeatTime': '0' } },
-    {
-      WarpMarker: [],
-      ':@': { '@_Id': String(nextId()), '@_SecTime': String(60 / nativeBpm), '@_BeatTime': '1' }
-    }
-  ]
+  // Only write custom warp markers when the clip is actually warped -- for
+  // a one-shot (isWarped=false), nativeBpm is meaningless (see
+  // computeLoopWindow's own doc comment), so leave the template's own
+  // default WarpMarkers untouched rather than writing a fabricated value
+  // that would be actively misleading if warp were ever manually
+  // re-enabled on the clip in Ableton.
+  if (isWarped) {
+    const warpMarkersNode = findChild(clipBody, 'WarpMarkers')!
+    warpMarkersNode['WarpMarkers'] = [
+      { WarpMarker: [], ':@': { '@_Id': String(nextId()), '@_SecTime': '0', '@_BeatTime': '0' } },
+      {
+        WarpMarker: [],
+        ':@': { '@_Id': String(nextId()), '@_SecTime': String(60 / nativeBpm), '@_BeatTime': '1' }
+      }
+    ]
+  }
 
   return track
 }
@@ -1201,7 +1365,8 @@ export function buildAlsXml(
           outputDir,
           groupTrackId,
           leftCropBars,
-          playedBars
+          playedBars,
+          state.bpm
         )
         outTracks.push(track)
       }
@@ -1238,7 +1403,7 @@ export function buildAlsXml(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/buildAlsXml.test.ts`
-Expected: PASS (16 tests)
+Expected: PASS (19 tests)
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 

@@ -152,17 +152,33 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
      `[LoopStart, LoopEnd)` tile automatically to fill however long `CurrentEnd` says the clip
      should be — exactly mirroring sssketch's own tiling, without this export needing to
      enumerate individual repeats itself.
-   - **One-shot stems** (`stem.oneShot`) are unaffected by any of the above — a one-shot's own
-     file already contains exactly the audio it should play (no tiling), so `LoopOn=false`,
-     `Time = rifff.startBar * 4` (no crop concept applies to one-shots), and `LoopStart`/
-     `LoopEnd`/`CurrentEnd` all come from `trimStartSec`/`trimEndSec` (seconds, source-relative)
-     converted to beats via the stem's own native tempo (step 4): `LoopStart = trimStartSec *
-     (nativeBpm/60)`, `LoopEnd = CurrentEnd = HiddenLoopEnd = (trimEndSec ?? stem.durationSec) *
-     (nativeBpm/60)` — `HiddenLoopEnd` tracks the trim end here too, NOT `stem.barLength*4`
-     (the tile-cycle bound only applies to the tiled/non-one-shot case above).
-     Confirmed against the reference file that `LoopStart`/`LoopEnd` still define the played
-     region even with `LoopOn=false` (not purely a "repeat" concept). Omitting trim would
-     silently export more audio than intended for any trimmed one-shot.
+   - **One-shot stems** (`stem.oneShot`) are unaffected by the tiling logic above — a one-shot's
+     own file already contains exactly the audio it should play (no tiling), so `LoopOn=false`
+     and `Time = rifff.startBar * 4` (no crop concept applies to one-shots). But they need their
+     **own** tempo/warp treatment, entirely separate from step 4's `nativeBpm` — a real, second
+     bug found in whole-feature review (after the tile-cycle bug in the same area), not caught
+     by the per-task review that added this mapping originally. Every one-shot and recorded-take
+     stem is created with a **hardcoded, explicitly-cosmetic `barLength: 1`**
+     (`importOneShot.ts`'s own doc comments: *"the native engine ignores bpm/barLength for
+     tiling/resampling purposes whenever a stem's oneShot is set"*) — so `nativeBpm` (step 4,
+     derived from `durationSec/barLength`) is *meaningless* for a one-shot, and using it anyway
+     collapses every one-shot's `CurrentEnd` to exactly one bar (4 beats) regardless of its real
+     duration, then relies on `IsWarped=true` (inherited untouched from the template) to force
+     Ableton to time-stretch/compress the *entire* sample to fit — directly contradicting
+     `Stem.oneShot`'s own documented invariant (`src/shared/types.ts`: *"never auto-resampled to
+     match project bpm"*). The fix: one-shots are exported **unwarped**
+     (`IsWarped=false`, and no custom `WarpMarkers` written — the template's own default is left
+     alone, since it's inert once warp is off), with `LoopStart`/`LoopEnd`/`CurrentEnd`/
+     `HiddenLoopEnd` all derived from real seconds via the **project's own current tempo**
+     (`state.bpm`), not any per-stem "native" tempo — this is what makes the mapping correct:
+     unwarped audio plays at its own true native speed regardless of Set tempo, and simply
+     occupies proportionally more or less arrangement-timeline *space* (beats) as the Set tempo
+     changes, exactly mirroring how Ableton natively handles an unwarped clip.
+     `LoopStart = trimStartSec * (state.bpm/60)`, `LoopEnd = CurrentEnd = HiddenLoopEnd =
+     (trimEndSec ?? stem.durationSec) * (state.bpm/60)`. Confirmed against the reference file
+     that `LoopStart`/`LoopEnd` still define the played region even with `LoopOn=false` (not
+     purely a "repeat" concept). Omitting trim would silently export more audio than intended
+     for any trimmed one-shot.
 4. **Native tempo → warp markers**: `stemNativeSecPerBar = stem.durationSec / stem.barLength`
    (identical to `buildEngineProject.ts`'s own calculation, no rubberband call) → `nativeBpm =
    (60/stemNativeSecPerBar)*4`. Write exactly two `<WarpMarker>`s: `(SecTime=0, BeatTime=0)`
@@ -231,7 +247,8 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
 - **The one thing nothing in this repo can verify automatically**: opening the exported
   `.als` in real Ableton 12 and confirming it loads without errors, tracks/clips land where
   expected, and a couple of different stem types (at least one `drums` stem, one melodic/
-  other-typed stem) sound reasonable on their auto-picked warp mode. This is a manual
+  other-typed stem, **and one one-shot/recorded-take stem specifically** — see "Known risks"
+  below on the unwarped-clip representation) sound reasonable/correct. This is a manual
   acceptance step, not a gap to "fix" by mocking Ableton.
 
 ## Known risks / open uncertainties
@@ -264,3 +281,15 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   region shifted by at most one crop's worth of phase), but this is exactly the kind of thing
   the "manual acceptance in real Ableton" testing step should specifically listen for on a
   stem that's actually had its left-crop/extend handle used, not just an unmodified one.
+- **Unwarped-clip XML representation, unconfirmed against a real reference example**: the
+  one-shot fix above (`IsWarped=false`, `LoopStart`/`LoopEnd`/`CurrentEnd` derived from real
+  seconds via `state.bpm`) is a well-reasoned design, not a confirmed one — every clip in the
+  reference template happens to have `IsWarped=true`, so there's no real example of exactly how
+  Ableton represents an unwarped clip's trim/extent in this XML shape to check against. The
+  reasoning (an unwarped clip still uses beat-space `Loop*`/`CurrentEnd` values, mapped to real
+  seconds via whatever the Set's *current* tempo is, since there's no per-clip warp curve
+  overriding that mapping) is standard, well-understood Ableton behavior, but this is exactly
+  the kind of thing that should get first-priority attention in the "manual acceptance in real
+  Ableton" testing step — specifically, export a project containing a one-shot/recorded-take
+  stem and confirm it plays at its own correct, unstretched, real-world duration/pitch, not
+  compressed or stretched to fit some other length.
