@@ -170,6 +170,7 @@ namespace sssketch
                 transport.setBpm(project.bpm);
                 transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
+                engine.liveOverrides().clearAll();
 
                 std::vector<juce::String> channelIds;
                 for (const auto& rifff : project.rifffs)
@@ -226,6 +227,29 @@ namespace sssketch
             const double startBar = payload.isObject() ? (double) payload.getProperty("startBar", 0.0) : 0.0;
             const double endBar = payload.isObject() ? (double) payload.getProperty("endBar", 0.0) : 0.0;
             transport.setRecordingLoop(startBar, endBar);
+        }
+        else if (type == "set-live-param")
+        {
+            // Bypasses EngineProject/setProject() entirely -- see
+            // LiveParamOverrides.h's own doc comment for why. `value < 0`
+            // means "clear this key," matching this wire format's existing
+            // sentinel convention for "unset" numeric fields (e.g.
+            // EngineStem::startBarOverride/trimEndSec both use -1 the same
+            // way) rather than encoding a separate JSON null case.
+            if (payload.isObject())
+            {
+                const auto field = payload.getProperty("field", "").toString();
+                const auto key = payload.getProperty("key", "").toString();
+                const double rawValue = (double) payload.getProperty("value", -1.0);
+                const std::optional<float> value =
+                    rawValue < 0.0 ? std::nullopt : std::optional<float>((float) rawValue);
+                if (field == "volume")
+                    engine.liveOverrides().setVolumeOverride(key, value);
+                else if (field == "fadeIn")
+                    engine.liveOverrides().setFadeInOverride(key, value);
+                else if (field == "fadeOut")
+                    engine.liveOverrides().setFadeOutOverride(key, value);
+            }
         }
         else if (type == "list-input-devices")
         {
