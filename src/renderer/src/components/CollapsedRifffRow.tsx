@@ -577,9 +577,15 @@ export function CollapsedRifffRow({
         }
       },
       (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- see
-        // handleFadeInStart's identical comment above (indirectly clears
-        // the native live override this drag set via scheduleLiveParamSync).
+        // Load-bearing beyond the obvious "commit the real edit" -- also
+        // indirectly clears every stem's native live override this drag
+        // fanned out to above (SET_GROUP_VOLUME triggers the full-reload
+        // effect, and IpcServer.cpp's load-project handler clears the
+        // ENTIRE live-override map once that reload lands -- not just one
+        // key -- so this single dispatch correctly clears all of them, not
+        // just the first). See docs/superpowers/specs/
+        // 2026-08-04-live-param-fast-path-design.md's "Handoff at
+        // drag-end" section.
         if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
         dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: undefined })
       }

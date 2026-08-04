@@ -183,10 +183,17 @@ export async function buildEngineProject(
         startBarOverride: -1,
         // Prefers an in-progress drag preview over the committed value --
         // see docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
-        // Once StoreContext.tsx's engine-sync effect also depends on
-        // dragVol (a separate, later change), re-running this function on
-        // every dragVol change during an active volume drag is what lets
-        // playback hear the change live rather than only once, on release.
+        // NOT what makes a volume drag audible live any more, though --
+        // that's now a separate, much lighter path (liveParamSync.ts's
+        // scheduleLiveParamSync, see docs/superpowers/specs/
+        // 2026-08-04-live-param-fast-path-design.md) that bypasses this
+        // function/a full reload entirely. StoreContext.tsx's engine-sync
+        // effect deliberately no longer depends on dragVol, so THIS
+        // preference only ever matters as a harmless fallback -- e.g. if a
+        // full reload happens to fire for some unrelated reason (bpm
+        // change, undo, ...) while a drag is still in progress, the
+        // reload's own snapshot reflects the live value too, rather than
+        // momentarily reverting to the stale committed one.
         volume: state.dragVol[key] ?? state.vol[key] ?? 1,
         muted: state.mute[key] ?? false,
         oneShot: stem.oneShot ?? false,
@@ -204,7 +211,8 @@ export async function buildEngineProject(
       channelId: state.channelOf[rifff.groupId] ?? rifff.groupId,
       startBar: rifff.startBar ?? 0,
       barLength: rifff.barLength,
-      // Same drag-preview preference as volume above.
+      // Same drag-preview preference (and the same "harmless fallback,
+      // not what makes it live" caveat) as volume above.
       fadeInBars: state.dragFadeIn[rifff.groupId] ?? state.fadeIn[rifff.groupId] ?? 0,
       fadeOutBars: state.dragFadeOut[rifff.groupId] ?? state.fadeOut[rifff.groupId] ?? 0,
       stems
