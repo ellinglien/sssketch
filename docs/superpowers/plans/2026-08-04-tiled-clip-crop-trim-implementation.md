@@ -8,12 +8,18 @@ continues playing what it would always have played at each absolute bar position
 restarting from its own beginning at the new boundary.
 
 **Architecture:** `RESIZE_LEFT`'s action payload gains a new required field, `offsetSteps:
-number` — the new value to write into `off[groupId]`. The one dispatch site
-(`StemWaveformRow.tsx`) already tracks the exact bar delta (`grow`) it applies to `startBar`;
-it computes the new offset from that same `grow`, converted to grid steps via the clip's
-current `snapDiv`, and includes it in the dispatch. The reducer just writes whatever value it's
-given — no new logic there beyond storing the field, since the math already lives in the one
-call site that has `grow` and `snapDiv` on hand.
+number` — the new value to write into `off[groupId]`. There are actually TWO independent
+dispatch sites (discovered during Task 1's spec-compliance review, which caught the plan's
+original "one dispatch site" claim as wrong via a real typecheck failure) — `StemWaveformRow.
+tsx`'s `handleLeftResizeStart` (the expanded, per-stem row view) and `CollapsedRifffRow.tsx`'s
+own `handleLeftResizeStart` (the collapsed/summary view of the same tiled clip) — both are
+byte-for-byte identical copies of the same drag-handling logic, a pre-existing duplication in
+this codebase, not introduced by this plan. Both already track the exact bar delta (`grow`)
+they apply to `startBar`, and both already have `offsetSteps`/`snapIdx`/`SNAP_DIVS` in scope.
+Both need the identical fix: compute the new offset from that same `grow`, converted to grid
+steps via the clip's current `snapDiv`, and include it in the dispatch. The reducer just writes
+whatever value it's given — no new logic there beyond storing the field, since the math lives
+entirely in the two call sites that have `grow` and `snapDiv` on hand.
 
 **Tech Stack:** TypeScript, the existing Redux-style reducer in `src/renderer/src/state/
 store.ts`, Vitest for reducer tests.
@@ -196,6 +202,7 @@ git commit -m "Add offsetSteps to RESIZE_LEFT so a tiled clip's loop phase can s
 
 **Files:**
 - Modify: `src/renderer/src/components/StemWaveformRow.tsx:179-215` (`handleLeftResizeStart`)
+- Modify: `src/renderer/src/components/CollapsedRifffRow.tsx:271-300` (`handleLeftResizeStart`)
 
 - [ ] **Step 1: Update `handleLeftResizeStart` to track and dispatch the new offset**
 
@@ -301,18 +308,109 @@ with:
 component — lines 53-54 — and `SNAP_DIVS` is already imported at the top of the file, so no new
 imports are needed.)
 
-- [ ] **Step 2: Typecheck**
+- [ ] **Step 2: Apply the identical fix to `CollapsedRifffRow.tsx`'s own copy of this handler**
+
+`CollapsedRifffRow.tsx` (the collapsed/summary view of the same tiled clip, rendered instead of
+`StemWaveformRow.tsx` when the rifff isn't expanded — see `RifffBlockRow.tsx`) has its own,
+separate, byte-for-byte-identical `handleLeftResizeStart` function that dispatches the same
+`RESIZE_LEFT` action and needs the exact same fix. `offsetSteps` and `snapIdx` are already read
+via `useAppSelector` earlier in this component too (lines 179-180), and `SNAP_DIVS` is already
+imported at the top of the file (line 3) — no new imports needed here either.
+
+In `src/renderer/src/components/CollapsedRifffRow.tsx`, replace the whole `handleLeftResizeStart`
+function:
+
+```ts
+  function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    const startPosBar = baseStartBar
+    let finalPlayedBars = startPlayedBars
+    let finalStartBar = startPosBar
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const requestedGrow = -Math.round(deltaX / PPB)
+        const grow = Math.max(
+          MIN_PLAYED_BARS - startPlayedBars,
+          Math.min(startPosBar, requestedGrow)
+        )
+        finalPlayedBars = startPlayedBars + grow
+        finalStartBar = startPosBar - grow
+        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          dispatch({
+            type: 'RESIZE_LEFT',
+            groupId,
+            bars: finalPlayedBars,
+            startBar: finalStartBar
+          })
+        }
+        setDragLeftResize(null)
+      }
+    )
+  }
+```
+
+with:
+
+```ts
+  function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startPlayedBars = resolvedPlayedBars
+    const startPosBar = baseStartBar
+    const startOffsetSteps = offsetSteps
+    let finalPlayedBars = startPlayedBars
+    let finalStartBar = startPosBar
+    let finalOffsetSteps = startOffsetSteps
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const requestedGrow = -Math.round(deltaX / PPB)
+        const grow = Math.max(
+          MIN_PLAYED_BARS - startPlayedBars,
+          Math.min(startPosBar, requestedGrow)
+        )
+        finalPlayedBars = startPlayedBars + grow
+        finalStartBar = startPosBar - grow
+        // The loop's own phase shifts by the OPPOSITE delta startBar just
+        // moved by (startBar moved by -grow, so offsetBars moves by +grow),
+        // keeping startBar+offsetBars invariant -- see
+        // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md
+        // (same fix as StemWaveformRow.tsx's own handleLeftResizeStart --
+        // this component has its own separate copy of this handler for the
+        // collapsed/summary view of a tiled clip).
+        finalOffsetSteps = startOffsetSteps + grow * SNAP_DIVS[snapIdx]
+        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+      },
+      (moved) => {
+        if (moved) {
+          dispatch({
+            type: 'RESIZE_LEFT',
+            groupId,
+            bars: finalPlayedBars,
+            startBar: finalStartBar,
+            offsetSteps: finalOffsetSteps
+          })
+        }
+        setDragLeftResize(null)
+      }
+    )
+  }
+```
+
+- [ ] **Step 3: Typecheck**
 
 Run: `npm run typecheck`
-Expected: PASS — this confirms the dispatch site now satisfies `RESIZE_LEFT`'s new required
-`offsetSteps` field (this file has no automated tests of its own per this codebase's own
+Expected: PASS — this confirms BOTH dispatch sites now satisfy `RESIZE_LEFT`'s new required
+`offsetSteps` field (neither file has automated tests of its own per this codebase's own
 convention — React drag-handler components are verified by manual walkthrough, not unit
 tests — see CLAUDE.md's testing-conventions section).
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/renderer/src/components/StemWaveformRow.tsx
+git add src/renderer/src/components/StemWaveformRow.tsx src/renderer/src/components/CollapsedRifffRow.tsx
 git commit -m "Shift a tiled clip's loop phase when dragging its left resize handle"
 ```
 
@@ -341,6 +439,11 @@ new)
 This is a renderer-only change (no native engine, no main-process files touched) — hot-reloads
 automatically under `npm run dev`, no restart needed. With the dev app running:
 
+Repeat steps 1-4 below in BOTH the EXPANDED view (`StemWaveformRow.tsx`, click the rifff to
+expand it) and the COLLAPSED view (`CollapsedRifffRow.tsx`, the default/summary view) of the
+same tiled clip — they're two independent copies of the same handler (see Task 2's own note on
+this pre-existing duplication), so a mistake in one wouldn't show up testing only the other.
+
 1. Drag a multi-bar tiled clip (any regular, non-one-shot rifff placed on the timeline) onto a
    channel with room to its left.
 2. Drag its LEFT resize handle to the RIGHT (cropping/shrinking) by a couple of bars. Confirm:
@@ -355,8 +458,9 @@ automatically under `npm run dev`, no restart needed. With the dev app running:
    exactly as before this change (no restart/repositioning artifact was ever present there, and
    this plan made no changes to that code path).
 5. Place a recorded take (or any one-shot/dragged-in sample) on a channel and confirm its own
-   trim handles still behave exactly as before (this plan made no changes to
-   `oneShotResize.ts`/`CollapsedRifffRow.tsx`).
+   trim handles still behave exactly as before — one-shots use `trimStartSec`/`trimEndSec`
+   (`oneShotResize.ts`), a completely separate code path from `handleLeftResizeStart` in either
+   file this plan touches.
 
 Report back what you see — this is real-time audio/UI behavior that can't be verified any other
 way in this environment (see CLAUDE.md: "this environment has no GUI/audio interaction tooling,
