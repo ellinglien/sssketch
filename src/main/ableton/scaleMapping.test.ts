@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseKeyToAbletonScale } from './scaleMapping'
+import { LORE_ROOT_NAMES as WAREHOUSE_ROOT_NAMES } from '../loreWarehouse'
 
 describe('parseKeyToAbletonScale', () => {
   it('parses a confirmed root + Minor (Aeolian) scale', () => {
@@ -35,5 +36,13 @@ describe('parseKeyToAbletonScale', () => {
 
   it('returns undefined for undefined input', () => {
     expect(parseKeyToAbletonScale(undefined)).toBeUndefined()
+  })
+})
+
+describe('root name table stays in sync with loreWarehouse.ts', () => {
+  it('parses every root loreWarehouse.ts actually produces', () => {
+    WAREHOUSE_ROOT_NAMES.forEach((rootName, expectedOffset) => {
+      expect(parseKeyToAbletonScale(`${rootName} Minor (Aeolian)`)?.root).toBe(expectedOffset)
+    })
   })
 })

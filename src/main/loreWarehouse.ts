@@ -262,7 +262,20 @@ interface FullRiffRow extends RiffRow {
 // supports. "Major (Ionian)"/"Minor (Aeolian)" get their common pop name
 // alongside the mode name; every other entry is OUROVEON's own exact
 // string, used verbatim.
-const LORE_ROOT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'] as const
+export const LORE_ROOT_NAMES = [
+  'C',
+  'Db',
+  'D',
+  'Eb',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'Ab',
+  'A',
+  'Bb',
+  'B'
+] as const
 
 const LORE_SCALE_NAMES = [
   'Major (Ionian)',
