@@ -44,12 +44,10 @@ namespace sssketch
      * updates (memory_order_acquire/release only orders individual
      * load/store operations relative to each other; it does not make the
      * load+mutate+store sequence atomic as a whole). This class currently
-     * relies entirely on its callers for that invariant. No production
-     * caller exists yet (only this class's own test suite writes to it, as
-     * of this writing) -- but when IpcServer.cpp's set-live-param/
-     * load-project handlers land (see
+     * relies entirely on its callers for that invariant -- satisfied today
+     * by IpcServer.cpp's set-live-param/load-project handlers (see
      * docs/superpowers/plans/2026-08-04-live-param-fast-path-implementation.md's
-     * Task 3), they'll satisfy it automatically: juce::InterprocessConnection's
+     * Task 3, landed), since juce::InterprocessConnection's
      * `callbacksOnMessageThread` defaults to true, funneling every
      * connection's messageReceived() through the single global
      * MessageManager queue, processed strictly one at a time, so those
@@ -95,16 +93,26 @@ namespace sssketch
          * real (if very short) mutex from a small hashed pool, confirmed
          * directly against the shipped headers, not assumed
          * (atomic_is_lock_free<shared_ptr<T>> is hardcoded false there).
-         * Called from renderBlock() -- so now once per stem, twice per
-         * rifff, on EVERY block for the entire lifetime of playback, not
-         * just while something is actively being dragged. Accepted for the
-         * same reason PlaybackEngine's own `published` field's identical
-         * tradeoff was: the critical section is a single pointer-pair swap
-         * plus a refcount adjustment -- microseconds at most, several
-         * orders of magnitude under a single audio block's own ~10ms
-         * budget even when genuinely contended. See PlaybackEngine.h's own
-         * `published` field doc comment for the fuller reasoning and what
-         * to reconsider if this ever proves to matter in practice. */
+         * renderBlock() only calls these when hasAnyOverride() (below) is
+         * true -- i.e. only once per stem, twice per rifff, while
+         * something is ACTIVELY being dragged, not on every block for the
+         * entire lifetime of playback the way an earlier version of this
+         * comment described (that was true before hasAnyOverride() existed
+         * to gate these calls -- see its own doc comment). The mutex-based
+         * cost is accepted for the same reason PlaybackEngine's own
+         * `published` field's identical tradeoff was: the critical section
+         * is a single pointer-pair swap plus a refcount adjustment --
+         * microseconds at most, several orders of magnitude under a single
+         * audio block's own ~10ms budget even when genuinely contended.
+         * See PlaybackEngine.h's own `published` field doc comment for the
+         * fuller reasoning and what to reconsider if this ever proves to
+         * matter in practice. Note this class's own fast-exit doesn't
+         * cover PlaybackEngine's own `published` snapshot load, which
+         * still uses the identical mechanism unconditionally on EVERY
+         * block regardless of dragging (there's no override to gate it on
+         * -- a fresh snapshot is always needed) -- if glitching persists
+         * independent of active dragging, that's the next place to look,
+         * not here. */
         std::optional<float> volumeFor(const juce::String& stemKey) const;
         std::optional<float> fadeInFor(const juce::String& groupId) const;
         std::optional<float> fadeOutFor(const juce::String& groupId) const;
