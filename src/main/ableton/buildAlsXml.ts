@@ -67,17 +67,20 @@ function earliestRifff(rifffs: Rifff[]): Rifff {
 
 // A stem's own native tempo, derived the same way buildEngineProject.ts
 // derives it for stretch-ratio purposes -- reused here purely as a warp-
-// marker reference (NOT for stretching; this export never re-renders
-// audio). Meaningful for one-shots too: even though buildEngineProject.ts
-// treats a one-shot's durationSec/barLength as "cosmetic" for its own
-// ratio=1 stretch-skipping logic, they're still real, recorded numbers that
-// make a perfectly good warp-marker reference for Ableton's own purposes.
+// marker reference for a TILED (non-one-shot) stem's WarpMarkers (NOT for
+// stretching; this export never re-renders audio). NOT meaningful for a
+// one-shot: every one-shot/recorded-take has a hardcoded, cosmetic
+// barLength=1 (importOneShot.ts), so this function is only ever called for
+// its result to be used by buildStemTrack's tiled-stem warp-marker write,
+// gated on isWarped -- see computeLoopWindow's own isWarped doc comment for
+// why a one-shot must never use this value.
 //
-// One useful, exact (not approximate) consequence: since nativeBpm is
-// DERIVED from durationSec/barLength, stem.barLength*4 beats of warped time
-// always equals precisely stem.durationSec real seconds -- i.e. the file's
-// own full duration maps to exactly one tile cycle. computeLoopWindow below
-// relies on this for its hiddenLoopEndBeats bound.
+// One useful, exact (not approximate) consequence for the tiled case:
+// since nativeBpm is DERIVED from durationSec/barLength, stem.barLength*4
+// beats of warped time always equals precisely stem.durationSec real
+// seconds -- i.e. the file's own full duration maps to exactly one tile
+// cycle. computeLoopWindow's non-one-shot branch relies on this for its
+// hiddenLoopEndBeats bound.
 function nativeBpmFor(stem: Stem): number {
   const secPerBar = stem.durationSec / stem.barLength
   return 240 / secPerBar // (60 / secPerBar) beats/min-per-bar-unit * 4 beats/bar
