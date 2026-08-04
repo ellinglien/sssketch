@@ -21,6 +21,7 @@ import {
   buildEnvelopePath
 } from './envelope'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
+import { scheduleLiveParamSync } from './liveParamSync'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
@@ -499,8 +500,16 @@ export function CollapsedRifffRow({
           Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
         )
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
+        scheduleLiveParamSync('fadeIn', groupId, finalFadeIn)
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit" -- also
+        // indirectly clears the native live override this drag set via
+        // scheduleLiveParamSync above (SET_FADE_IN triggers the full-reload
+        // effect, whose native load-project handler clears every live
+        // override once it lands). See docs/superpowers/specs/
+        // 2026-08-04-live-param-fast-path-design.md's "Handoff at
+        // drag-end" section.
         if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
       }
@@ -518,8 +527,12 @@ export function CollapsedRifffRow({
           Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
         )
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
+        scheduleLiveParamSync('fadeOut', groupId, finalFadeOut)
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit" -- see
+        // handleFadeInStart's identical comment above (indirectly clears
+        // the native live override this drag set via scheduleLiveParamSync).
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
       }
@@ -555,8 +568,18 @@ export function CollapsedRifffRow({
       (_dx, deltaY) => {
         finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
         dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: finalVolume })
+        // Fans out to every stem in the rifff, matching
+        // SET_DRAG_PREVIEW_GROUP_VOLUME's own fan-out -- this drag
+        // controls the whole rifff's volume together, so every stem's own
+        // live override needs updating, not just one.
+        for (const stem of rifff.stems) {
+          scheduleLiveParamSync('volume', stemKey(groupId, stem.slot), finalVolume)
+        }
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit" -- see
+        // handleFadeInStart's identical comment above (indirectly clears
+        // the native live override this drag set via scheduleLiveParamSync).
         if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
         dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: undefined })
       }

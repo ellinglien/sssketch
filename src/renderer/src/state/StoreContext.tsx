@@ -416,15 +416,19 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // simply never added here despite buildEngineProject.ts already reading
     // it.
     state.leftCrop,
-    // Live volume/fade preview during an active drag -- NOT
-    // dragPlayedBars/dragLeftCropBars, which stay commit-on-release only
-    // (pushing a length/crop change to the engine mid-drag risks an audible
-    // scheduling jump if the playhead is inside the tile being resized; see
-    // docs/superpowers/specs/2026-08-04-live-drag-preview-design.md's
-    // "Explicitly out of scope" section).
-    state.dragVol,
-    state.dragFadeIn,
-    state.dragFadeOut,
+    // dragVol/dragFadeIn/dragFadeOut deliberately NOT here -- they used to
+    // be, triggering a full project reload on every drag step, which
+    // turned out to cause real, audible glitching at drag frequency (see
+    // docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md).
+    // Live volume/fade updates now go through a separate, much lighter
+    // path (liveParamSync.ts's scheduleLiveParamSync, called directly from
+    // the drag handlers) that bypasses this whole effect entirely. The
+    // COMMITTED fields (state.vol/fadeIn/fadeOut, above) stay here
+    // unchanged -- a drag's final commit still triggers exactly one full
+    // reload, same as any other edit, and that reload is what eventually
+    // clears the live override on the native side (see IpcServer.cpp's
+    // load-project handler) -- no explicit "clear" is ever dispatched from
+    // here.
     // masterChain plugin IDs flow through this general project sync (the
     // native engine's own EngineProject.masterChain field just needs to
     // stay current); actually LOADING/swapping the plugin binary is a
