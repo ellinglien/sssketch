@@ -40,6 +40,8 @@ const api = {
     ipcRenderer.invoke('export-stems-native', stateJson),
   exportStems: (stems: ExportedStem[]): Promise<string | null> =>
     ipcRenderer.invoke('export-stems', stems),
+  exportAls: (stateJson: string): Promise<string | null> =>
+    ipcRenderer.invoke('export-als', stateJson),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),

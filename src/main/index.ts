@@ -16,6 +16,7 @@ import {
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
+import { exportAbleton } from './exportAbleton'
 import { nativeExport, nativeExportStems } from './nativeExport'
 import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
@@ -236,6 +237,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('export-stems', (event, stems: ExportedStem[]) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     return exportStemsToWavs(win, stems)
+  })
+
+  ipcMain.handle('export-als', async (event, stateJson: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+    return exportAbleton(win, state)
   })
 
   try {
