@@ -1,11 +1,38 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 
-// Matches index.ts's own default BrowserWindow width -- the one reference
-// number the whole proportional-scaling scheme (.ra-frame's CSS transform,
-// see global.css) is built from.
+// Matches index.ts's own default BrowserWindow size -- the one reference
+// rectangle the whole proportional-scaling scheme (.ra-frame's CSS
+// transform, see global.css) is built from.
 const REFERENCE_WINDOW_WIDTH = 1512
+const REFERENCE_WINDOW_HEIGHT = 982
 
 const FrameScaleContext = createContext<number | null>(null)
+
+/** The smaller of the two axis-wise scale factors, so `.ra-frame` (a fixed
+ * 1512x982 box, centered via translate(-50%,-50%)) always fits fully
+ * within the real window on BOTH axes -- not just width. Width alone was
+ * the original formula, on the assumption that index.ts's own
+ * win.setAspectRatio(1512/982) always holds so height necessarily follows
+ * width in lockstep. That assumption is real but not airtight: confirmed
+ * the hard way -- a window moved across displays with different available
+ * screen sizes (e.g. a large external monitor to a smaller laptop screen)
+ * can get force-fit by macOS to whatever the new display actually has
+ * room for, overriding the app's own size/aspect-ratio constraints in a
+ * way that isn't a user-initiated resize the app gets a say in. When that
+ * happens, window.innerHeight ends up shorter than what the width-only
+ * formula assumes, .ra-frame's scaled height exceeds the real viewport,
+ * and the centering transform clips equal amounts off the TOP and BOTTOM
+ * -- which is exactly what silently ate the top toolbar row (Titlebar +
+ * ProjectMenu, see App.tsx) in that scenario, with no error or visible
+ * sign anything was wrong (the app just looked like it had no top bar).
+ * Taking the min of both axes costs nothing in the normal (ratio-locked)
+ * case, where both formulas agree. */
+function computeFrameScale(): number {
+  return Math.min(
+    window.innerWidth / REFERENCE_WINDOW_WIDTH,
+    window.innerHeight / REFERENCE_WINDOW_HEIGHT
+  )
+}
 
 /** Wraps the app (see App.tsx's top-level App component) so any component
  * can read the CURRENT frameScale -- needed by every bit of code that
@@ -23,15 +50,16 @@ const FrameScaleContext = createContext<number | null>(null)
  * drag-and-drop's grab-offset/drop-preview math) before each was traced
  * back to the same missing correction.
  *
- * Derived from window.innerWidth alone, not innerHeight -- innerWidth has
- * no OS chrome to account for (a title bar only adds height), and the
- * window's own aspect ratio is locked (index.ts's setAspectRatio), so width
- * and height always change in lockstep. */
+ * Computed via computeFrameScale (above) -- the min of the width-wise and
+ * height-wise scale factors, not width alone, precisely so a window that
+ * ends up off the intended aspect ratio (see computeFrameScale's own doc
+ * comment) still gets a frame that fits the real viewport on both axes
+ * instead of silently clipping a whole row of UI off one edge. */
 export function FrameScaleProvider({ children }: { children: ReactNode }): React.JSX.Element {
-  const [frameScale, setFrameScale] = useState(() => window.innerWidth / REFERENCE_WINDOW_WIDTH)
+  const [frameScale, setFrameScale] = useState(computeFrameScale)
   useEffect(() => {
     function handleResize(): void {
-      setFrameScale(window.innerWidth / REFERENCE_WINDOW_WIDTH)
+      setFrameScale(computeFrameScale())
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
