@@ -4,7 +4,11 @@ import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
-import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
+import {
+  clipGeometryFromFields,
+  resolvedPlayedBarsFromFields,
+  tileOffsetsPx
+} from '../state/selectors'
 import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
@@ -51,6 +55,7 @@ export function StemWaveformRow({
   const fadeOut = useAppSelector((s) => s.fadeOut[groupId] ?? 0)
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
   const snapIdx = useAppSelector((s) => s.snapIdx)
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const bpm = useAppSelector((s) => s.bpm)
@@ -59,10 +64,7 @@ export function StemWaveformRow({
   const playedBarsKey = groupId
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
-  const [dragLeftResize, setDragLeftResize] = useState<{
-    playedBars: number
-    startBar: number
-  } | null>(null)
+  const [dragLeftCropBars, setDragLeftCropBars] = useState<number | null>(null)
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
@@ -85,7 +87,7 @@ export function StemWaveformRow({
   }
 
   const resolvedPlayedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifff.barLength)
-  const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
+  const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
   const displayedFadeIn = dragFadeIn ?? fadeIn
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
@@ -95,6 +97,7 @@ export function StemWaveformRow({
     offsetSteps,
     snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
+    leftCropBars,
     rifffBarLength: rifff.barLength,
     stretchOn,
     rifffBpm: rifff.bpm,
@@ -102,32 +105,45 @@ export function StemWaveformRow({
     ppb
   })
   const baseStartBar = rifff.startBar ?? 0
-  // The sub-bar nudge offset (off[]) baked into stemGeo.leftPx, isolated so a
-  // left-resize preview can recompute leftPx from a new start bar while
-  // preserving it — it doesn't change during a resize.
-  const nudgeOffsetPx = stemGeo.leftPx - baseStartBar * ppb
-  const displayedStartBar = dragLeftResize?.startBar ?? baseStartBar
-  const leftPx = displayedStartBar * ppb + nudgeOffsetPx
+  const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
+  // Live preview during a left-edge drag uses the EXACT SAME formula real
+  // (committed) rendering uses -- unlike the old startBar-based preview this
+  // replaces, there's no separate reconciliation needed, since neither
+  // startBar nor offsetSteps ever moves for this drag anymore.
+  const previewGeo =
+    dragLeftCropBars !== null
+      ? clipGeometryFromFields({
+          startBar: baseStartBar,
+          offsetSteps,
+          snapDiv: SNAP_DIVS[snapIdx],
+          playedBarsOverride,
+          leftCropBars: dragLeftCropBars,
+          rifffBarLength: rifff.barLength,
+          stretchOn,
+          rifffBpm: rifff.bpm,
+          stateBpm: bpm,
+          ppb
+        })
+      : stemGeo
+  const leftPx = previewGeo.leftPx
   // While actively dragging, use the in-progress width instead of the
   // committed-state one, so the row visibly resizes in real time.
-  const widthPx =
-    dragPlayedBars !== null
-      ? dragPlayedBars * ppb
-      : dragLeftResize !== null
-        ? dragLeftResize.playedBars * ppb
-        : stemGeo.widthPx
+  const widthPx = dragPlayedBars !== null ? dragPlayedBars * ppb : previewGeo.widthPx
 
   // The native engine always loops a stem from its own beginning every
-  // stem.barLength bars — playedBars beyond that adds more repeats (or
+  // stem.barLength bars -- playedBars beyond that adds more repeats (or
   // truncates the last one), it never slows the audio down. One stretched
   // Waveform image would visually read as "slowed down," which contradicts
-  // that — so the waveform is tiled instead, at stem.barLength's own width,
-  // repeated across widthPx. The container's overflow:hidden (below) clips
-  // both an oversized last tile and a single undersized tile for free, so no
-  // per-tile clipping is needed here.
-  const tileWidthPx = widthPx * (stem.barLength / displayedPlayedBars)
-  const tileCount = Math.max(1, Math.ceil(displayedPlayedBars / stem.barLength))
-  const tileOffsets = Array.from({ length: tileCount }, (_, i) => i * tileWidthPx)
+  // that -- so the waveform is tiled instead. tileOffsetsPx also accounts
+  // for displayedLeftCropBars, shifting every tile so the correct mid-loop
+  // content lines up with what's actually audible (see its own doc comment).
+  const tileOffsets = tileOffsetsPx(
+    widthPx,
+    stem.barLength,
+    displayedPlayedBars,
+    displayedLeftCropBars
+  )
+  const tileWidthPx = widthPx * (stem.barLength / (displayedPlayedBars - displayedLeftCropBars))
 
   const fadeInPx = displayedFadeIn * ppb
   const fadeOutPx = displayedFadeOut * ppb
@@ -177,51 +193,32 @@ export function StemWaveformRow({
   }
 
   function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startLeftCropBars = leftCropBars
     const startPlayedBars = resolvedPlayedBars
     const startPosBar = baseStartBar
-    const startOffsetSteps = offsetSteps
-    let finalPlayedBars = startPlayedBars
-    let finalStartBar = startPosBar
-    let finalOffsetSteps = startOffsetSteps
+    let finalLeftCropBars = startLeftCropBars
     startPointerDrag(
       e,
       (deltaX) => {
-        // Dragging left (negative deltaX) extends the loop backward:
-        // playedBars grows and the start moves earlier by the same amount,
-        // so the RIGHT edge — where the loop currently ends — stays exactly
-        // in place. Snapped to whole bars, same as the right handle. The two
-        // clamps below can never conflict: the floor is always <= 0
-        // (MIN_PLAYED_BARS is always <= startPlayedBars already, since every
-        // committed playedBars value is already clamped to that floor) and
-        // startPosBar is always >= 0.
-        const requestedGrow = -Math.round(deltaX / ppb)
-        const grow = Math.max(
-          MIN_PLAYED_BARS - startPlayedBars,
-          Math.min(startPosBar, requestedGrow)
+        // Dragging right crops more off the left (leftCropBars grows);
+        // dragging left extends further left (leftCropBars shrinks, can go
+        // negative). Snapped to whole bars, same as the right handle.
+        // Clamped so the window never collapses below MIN_PLAYED_BARS wide
+        // and never extends before the project's own bar 0 -- both bounds
+        // computed from the drag-start snapshot, matching this codebase's
+        // existing convention for the right handle's own clamp.
+        const requestedLeftCropBars = startLeftCropBars + Math.round(deltaX / ppb)
+        finalLeftCropBars = Math.max(
+          -startPosBar,
+          Math.min(startPlayedBars - MIN_PLAYED_BARS, requestedLeftCropBars)
         )
-        finalPlayedBars = startPlayedBars + grow
-        finalStartBar = startPosBar - grow
-        // The loop's own phase shifts by the OPPOSITE delta startBar just
-        // moved by (startBar moved by -grow, so offsetBars moves by +grow),
-        // keeping startBar+offsetBars invariant -- the exact condition for
-        // "the same absolute bar position keeps showing the same loop
-        // content" instead of the pattern restarting from its own beginning
-        // at the new boundary. See docs/superpowers/specs/
-        // 2026-08-04-tiled-clip-crop-trim-design.md for the full derivation.
-        finalOffsetSteps = startOffsetSteps + grow * SNAP_DIVS[snapIdx]
-        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+        setDragLeftCropBars(finalLeftCropBars)
       },
       (moved) => {
         if (moved) {
-          dispatch({
-            type: 'RESIZE_LEFT',
-            groupId,
-            bars: finalPlayedBars,
-            startBar: finalStartBar,
-            offsetSteps: finalOffsetSteps
-          })
+          dispatch({ type: 'SET_LEFT_CROP_BARS', groupId, bars: finalLeftCropBars })
         }
-        setDragLeftResize(null)
+        setDragLeftCropBars(null)
       }
     )
   }
@@ -443,7 +440,7 @@ export function StemWaveformRow({
               one shows few or none within the clip's own width. Purely
               informational (pointer-events none), drawn under the resize/
               fade handles so it never competes with them for clicks. */}
-          {tileCount > 1 &&
+          {tileOffsets.length > 1 &&
             tileOffsets.slice(1).map((left) => (
               <div
                 key={left}
