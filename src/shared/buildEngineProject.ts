@@ -181,7 +181,12 @@ export async function buildEngineProject(
         leftCropBars: state.leftCrop[rifff.groupId] ?? 0,
         offsetSteps,
         startBarOverride: -1,
-        volume: state.vol[key] ?? 1,
+        // Prefers an in-progress drag preview over the committed value --
+        // see docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
+        // StoreContext.tsx's engine-sync effect re-runs this on every
+        // dragVol change during an active volume drag, so playback hears
+        // the change live rather than only once, on release.
+        volume: state.dragVol[key] ?? state.vol[key] ?? 1,
         muted: state.mute[key] ?? false,
         oneShot: stem.oneShot ?? false,
         trimStartSec: stem.trimStartSec ?? 0,
@@ -198,8 +203,9 @@ export async function buildEngineProject(
       channelId: state.channelOf[rifff.groupId] ?? rifff.groupId,
       startBar: rifff.startBar ?? 0,
       barLength: rifff.barLength,
-      fadeInBars: state.fadeIn[rifff.groupId] ?? 0,
-      fadeOutBars: state.fadeOut[rifff.groupId] ?? 0,
+      // Same drag-preview preference as volume above.
+      fadeInBars: state.dragFadeIn[rifff.groupId] ?? state.fadeIn[rifff.groupId] ?? 0,
+      fadeOutBars: state.dragFadeOut[rifff.groupId] ?? state.fadeOut[rifff.groupId] ?? 0,
       stems
     })
   }

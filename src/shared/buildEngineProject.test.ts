@@ -168,6 +168,37 @@ describe('buildEngineProject', () => {
     expect(project.rifffs[0].fadeOutBars).toBe(0.5)
   })
 
+  it('prefers a live drag-preview volume/fade over the committed value when present', async () => {
+    const state = stateWith({
+      bpm: 150,
+      vol: { 'r1:1': 0.7 },
+      fadeIn: { r1: 1.5 },
+      fadeOut: { r1: 0.5 },
+      dragVol: { 'r1:1': 0.2 },
+      dragFadeIn: { r1: 3 },
+      dragFadeOut: { r1: 1.2 }
+    })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    const stem = project.rifffs[0].stems[0]
+    expect(stem.volume).toBe(0.2)
+    expect(project.rifffs[0].fadeInBars).toBe(3)
+    expect(project.rifffs[0].fadeOutBars).toBe(1.2)
+  })
+
+  it('falls back to the committed volume/fade when no drag preview is present', async () => {
+    const state = stateWith({
+      bpm: 150,
+      vol: { 'r1:1': 0.7 },
+      fadeIn: { r1: 1.5 },
+      fadeOut: { r1: 0.5 }
+    })
+    const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
+    const stem = project.rifffs[0].stems[0]
+    expect(stem.volume).toBe(0.7)
+    expect(project.rifffs[0].fadeInBars).toBe(1.5)
+    expect(project.rifffs[0].fadeOutBars).toBe(0.5)
+  })
+
   it('always uses -1 as startBarOverride — a stem can no longer diverge from its own rifff (see UNGROUP)', async () => {
     const state = stateWith({ bpm: 150 }) // matches rifff.bpm -> ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
