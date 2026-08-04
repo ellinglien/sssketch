@@ -341,6 +341,10 @@ describe('buildAlsXml', () => {
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
     expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
     expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
+    // stem.barLength*4 -- one-shots are never tile-bounded, so this must
+    // stay a true no-op relative to the pre-tile-cycle-fix behavior.
+    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
   })
 
   it('skips a stem missing from stemFileNames instead of producing a broken track', () => {
