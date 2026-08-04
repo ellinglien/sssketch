@@ -3,7 +3,11 @@ import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/Store
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
-import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
+import {
+  clipGeometryFromFields,
+  resolvedPlayedBarsFromFields,
+  tileOffsetsPx
+} from '../state/selectors'
 import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
@@ -44,7 +48,8 @@ function CollapsedTiles({
   opacity,
   widthPx,
   stemBarLength,
-  playedBars
+  playedBars,
+  leftCropBars
 }: {
   path: string
   color: string
@@ -52,10 +57,10 @@ function CollapsedTiles({
   widthPx: number
   stemBarLength: number
   playedBars: number
+  leftCropBars: number
 }): React.JSX.Element {
-  const tileWidthPx = widthPx * (stemBarLength / playedBars)
-  const tileCount = Math.max(1, Math.ceil(widthPx / tileWidthPx))
-  const tileOffsets = Array.from({ length: tileCount }, (_, i) => i * tileWidthPx)
+  const tileOffsets = tileOffsetsPx(widthPx, stemBarLength, playedBars, leftCropBars)
+  const tileWidthPx = widthPx * (stemBarLength / (playedBars - leftCropBars))
   return (
     <>
       {tileOffsets.map((left) => (
@@ -70,7 +75,7 @@ function CollapsedTiles({
           the first, at the block's own left edge) — see StemWaveformRow's
           identical marker for why: makes how long the stem's own native loop
           actually is legible at a glance. */}
-      {tileCount > 1 &&
+      {tileOffsets.length > 1 &&
         tileOffsets.slice(1).map((left) => (
           <div
             key={left}
@@ -135,15 +140,12 @@ export function CollapsedRifffRow({
   const volume = useAppSelector((s) => s.vol[stemKey(groupId, firstStem.slot)] ?? 1)
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
-  const [dragLeftResize, setDragLeftResize] = useState<{
-    playedBars: number
-    startBar: number
-  } | null>(null)
+  const [dragLeftCropBars, setDragLeftCropBars] = useState<number | null>(null)
   const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
   const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
   const [dragVolume, setDragVolume] = useState<number | null>(null)
   // One-shot-only live drag preview -- separate from dragPlayedBars/
-  // dragLeftResize above, which a one-shot never uses (its resize handles
+  // dragLeftCropBars above, which a one-shot never uses (its resize handles
   // are unsnapped seconds-based trim/stretch, not bar-snapped playedBars).
   // trimStartSec/isStretch feed the waveform's own crop-vs-scale rendering
   // below -- trimming must crop a fixed-scale waveform (the audio didn't
@@ -177,10 +179,11 @@ export function CollapsedRifffRow({
   const playedBarsKey = groupId
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
+  const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
   const snapIdx = useAppSelector((s) => s.snapIdx)
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const resolvedPlayedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifff.barLength)
-  const displayedPlayedBars = dragPlayedBars ?? dragLeftResize?.playedBars ?? resolvedPlayedBars
+  const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
   const baseStartBar = rifff.startBar ?? 0
 
   const geo = clipGeometryFromFields({
@@ -188,31 +191,48 @@ export function CollapsedRifffRow({
     offsetSteps,
     snapDiv: SNAP_DIVS[snapIdx],
     playedBarsOverride,
+    leftCropBars,
     rifffBarLength: rifff.barLength,
     stretchOn,
     rifffBpm: rifff.bpm,
     stateBpm: bpm,
     ppb: PPB
   })
-  // Sub-bar nudge offset (off[]) baked into geo.leftPx, isolated so a
-  // left-resize preview can recompute leftPx from a new start bar while
-  // preserving it — see StemWaveformRow's identical pattern.
-  const nudgeOffsetPx = geo.leftPx - baseStartBar * PPB
+  const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
+  // Live preview during a left-edge drag (non-one-shot case) uses the EXACT
+  // SAME formula real (committed) rendering uses -- see StemWaveformRow's
+  // identical fix for why the old nudgeOffsetPx/displayedStartBar
+  // reconciliation trick is gone.
+  const previewGeo =
+    dragLeftCropBars !== null
+      ? clipGeometryFromFields({
+          startBar: baseStartBar,
+          offsetSteps,
+          snapDiv: SNAP_DIVS[snapIdx],
+          playedBarsOverride,
+          leftCropBars: dragLeftCropBars,
+          rifffBarLength: rifff.barLength,
+          stretchOn,
+          rifffBpm: rifff.bpm,
+          stateBpm: bpm,
+          ppb: PPB
+        })
+      : geo
   const oneShotCommittedDurationSec =
     oneShotStem != null
       ? (oneShotStem.trimEndSec ?? oneShotStem.durationSec) - (oneShotStem.trimStartSec ?? 0)
       : 0
   const displayedStartBar = isOneShot
     ? (oneShotDragPreview?.startBar ?? baseStartBar)
-    : (dragLeftResize?.startBar ?? baseStartBar)
-  const leftPx = displayedStartBar * PPB + nudgeOffsetPx
+    : baseStartBar
+  const leftPx = isOneShot
+    ? displayedStartBar * PPB + (geo.leftPx - baseStartBar * PPB)
+    : previewGeo.leftPx
   const widthPx = isOneShot
     ? oneShotWidthBars(oneShotDragPreview?.durationSec ?? oneShotCommittedDurationSec, bpm) * PPB
     : dragPlayedBars !== null
       ? dragPlayedBars * PPB
-      : dragLeftResize !== null
-        ? dragLeftResize.playedBars * PPB
-        : geo.widthPx
+      : previewGeo.widthPx
 
   // One-shot waveform geometry: trimming must CROP a fixed-scale waveform
   // (the audio's own duration/speed hasn't changed, only how much of it
@@ -269,43 +289,25 @@ export function CollapsedRifffRow({
   }
 
   function handleLeftResizeStart(e: React.MouseEvent): void {
+    const startLeftCropBars = leftCropBars
     const startPlayedBars = resolvedPlayedBars
     const startPosBar = baseStartBar
-    const startOffsetSteps = offsetSteps
-    let finalPlayedBars = startPlayedBars
-    let finalStartBar = startPosBar
-    let finalOffsetSteps = startOffsetSteps
+    let finalLeftCropBars = startLeftCropBars
     startPointerDrag(
       e,
       (deltaX) => {
-        const requestedGrow = -Math.round(deltaX / PPB)
-        const grow = Math.max(
-          MIN_PLAYED_BARS - startPlayedBars,
-          Math.min(startPosBar, requestedGrow)
+        const requestedLeftCropBars = startLeftCropBars + Math.round(deltaX / PPB)
+        finalLeftCropBars = Math.max(
+          -startPosBar,
+          Math.min(startPlayedBars - MIN_PLAYED_BARS, requestedLeftCropBars)
         )
-        finalPlayedBars = startPlayedBars + grow
-        finalStartBar = startPosBar - grow
-        // The loop's own phase shifts by the OPPOSITE delta startBar just
-        // moved by (startBar moved by -grow, so offsetBars moves by +grow),
-        // keeping startBar+offsetBars invariant -- see
-        // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md
-        // (same fix as StemWaveformRow.tsx's own handleLeftResizeStart --
-        // this component has its own separate copy of this handler for the
-        // collapsed/summary view of a tiled clip).
-        finalOffsetSteps = startOffsetSteps + grow * SNAP_DIVS[snapIdx]
-        setDragLeftResize({ playedBars: finalPlayedBars, startBar: finalStartBar })
+        setDragLeftCropBars(finalLeftCropBars)
       },
       (moved) => {
         if (moved) {
-          dispatch({
-            type: 'RESIZE_LEFT',
-            groupId,
-            bars: finalPlayedBars,
-            startBar: finalStartBar,
-            offsetSteps: finalOffsetSteps
-          })
+          dispatch({ type: 'SET_LEFT_CROP_BARS', groupId, bars: finalLeftCropBars })
         }
-        setDragLeftResize(null)
+        setDragLeftCropBars(null)
       }
     )
   }
@@ -624,6 +626,7 @@ export function CollapsedRifffRow({
                       widthPx={widthPx}
                       stemBarLength={stem.barLength}
                       playedBars={displayedPlayedBars}
+                      leftCropBars={displayedLeftCropBars}
                     />
                   ))}
           </div>
