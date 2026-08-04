@@ -541,54 +541,28 @@ describe('reducer', () => {
     })
   })
 
-  describe('RESIZE_LEFT', () => {
-    it("sets playedBars on the group key, moves the rifff's own startBar, and writes offsetSteps into off[groupId] even when the group had no prior entry there", () => {
+  describe('SET_LEFT_CROP_BARS', () => {
+    it('sets leftCrop for the given group', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        bars: 10,
-        startBar: 4,
-        offsetSteps: 0
-      })
-      expect(state.playedBars.r1).toBe(10)
-      expect(state.rifffs.r1.startBar).toBe(4)
-      expect(state.off.r1).toBe(0)
+      state = reducer(state, { type: 'SET_LEFT_CROP_BARS', groupId: 'r1', bars: 2 })
+      expect(state.leftCrop.r1).toBe(2)
     })
 
-    it('clamps playedBars to a minimum of 0.25 and startBar to a minimum of 0', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        bars: -3,
-        startBar: -2,
-        offsetSteps: 0
-      })
-      expect(state.playedBars.r1).toBe(0.25)
-      expect(state.rifffs.r1.startBar).toBe(0)
-    })
-
-    it('writes offsetSteps into the group-level off map, so the loop keeps continuing instead of restarting at the new boundary', () => {
+    it('does not touch startBar or offsetSteps -- the whole point of this action', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
       state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: 5 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        bars: 8,
-        startBar: 7,
-        offsetSteps: -3
-      })
-      // Cropping from the left moves startBar forward (6 -> 7 here); the
-      // dispatch site computes offsetSteps as the opposite-signed delta
-      // (see StemWaveformRow.tsx's handleLeftResizeStart) -- this test only
-      // confirms the reducer stores whatever value it's given, not the
-      // formula itself (that's exercised by manual walkthrough, since it
-      // lives in a drag handler -- see this plan's own Task 3).
-      expect(state.off.r1).toBe(-3)
+      state = reducer(state, { type: 'SET_LEFT_CROP_BARS', groupId: 'r1', bars: 2 })
+      expect(state.rifffs.r1.startBar).toBe(6)
+      expect(state.off.r1).toBe(5)
+    })
+
+    it('allows a negative value (extending left, revealing the loop before its original start)', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
+      state = reducer(state, { type: 'SET_LEFT_CROP_BARS', groupId: 'r1', bars: -3 })
+      expect(state.leftCrop.r1).toBe(-3)
     })
   })
 

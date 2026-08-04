@@ -59,6 +59,13 @@ export interface AppState {
    * groupId. Unset means "use rifff.barLength" — today's implicit behavior,
    * unchanged for a project with no resize edits. */
   playedBars: Record<string, number>
+  /** Bars cropped from a tiled clip's own LEFT edge, keyed by groupId. Default
+   * 0 (no crop). Together with playedBars, defines the visible/audible
+   * window as [startBar + leftCropBars, startBar + playedBars) -- startBar
+   * and offsetSteps never move for a resize; cropping is purely a windowing
+   * operation over a loop whose own phase anchor stays fixed. See
+   * docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md. */
+  leftCrop: Record<string, number>
   sel: string | null
   /** Visual top-to-bottom row order, as channel IDs — a fresh channel joins
    * the end of this list the moment a clip first lands on it (placed from
@@ -158,6 +165,7 @@ export const initialState: AppState = {
   fadeIn: {},
   fadeOut: {},
   playedBars: {},
+  leftCrop: {},
   sel: null,
   channelOrder: [],
   channelOf: {},
@@ -196,7 +204,7 @@ export type Action =
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
-  | { type: 'RESIZE_LEFT'; groupId: string; bars: number; startBar: number; offsetSteps: number }
+  | { type: 'SET_LEFT_CROP_BARS'; groupId: string; bars: number }
   | {
       type: 'SET_ONE_SHOT_TRIM'
       groupId: string
@@ -404,33 +412,18 @@ export function reducer(state: AppState, action: Action): AppState {
         playedBars: { ...state.playedBars, [action.key]: Math.max(MIN_PLAYED_BARS, action.bars) }
       }
 
-    // Dragging the LEFT resize handle: playedBars, the rifff's own start,
-    // and the loop's own phase (off[groupId]) all move together in one
-    // atomic edit (one undo step, not three) so the clip's right edge —
-    // where the loop currently ends — stays exactly in place while the
-    // loop extends backward, AND the pattern keeps playing what it always
-    // would have at each absolute bar position instead of restarting from
-    // its own beginning at the new boundary. The offsetSteps value itself
-    // is computed by the one dispatch site that has the exact bar delta on
-    // hand (StemWaveformRow.tsx's handleLeftResizeStart) -- see
-    // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md for
-    // the derivation (offsetBars must move by the OPPOSITE delta startBar
-    // moves by, so their sum stays invariant).
-    case 'RESIZE_LEFT': {
-      const rifff = state.rifffs[action.groupId]
+    // Dragging the LEFT resize handle -- unlike the old RESIZE_LEFT this
+    // replaces, this never touches startBar or offsetSteps. Cropping is
+    // purely a windowing operation: [startBar + leftCropBars, startBar +
+    // playedBars) is the visible/audible window, and neither endpoint of
+    // that window's own ANCHOR (startBar, offsetSteps) moves -- only how
+    // much of the loop is windowed away from the left. See
+    // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md.
+    case 'SET_LEFT_CROP_BARS':
       return {
         ...state,
-        playedBars: {
-          ...state.playedBars,
-          [action.groupId]: Math.max(MIN_PLAYED_BARS, action.bars)
-        },
-        rifffs: {
-          ...state.rifffs,
-          [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
-        },
-        off: { ...state.off, [action.groupId]: action.offsetSteps }
+        leftCrop: { ...state.leftCrop, [action.groupId]: action.bars }
       }
-    }
 
     case 'SET_ONE_SHOT_TRIM': {
       const rifff = state.rifffs[action.groupId]
