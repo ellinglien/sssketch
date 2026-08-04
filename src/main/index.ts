@@ -139,6 +139,19 @@ app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
 
+  // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
+  // icon comes from build/icon.icns, embedded in the .app bundle at build
+  // time by electron-builder, before Electron itself even starts. In dev
+  // (npm run dev, running the plain Electron binary with no such bundle)
+  // there's nothing to embed it into, so the Dock shows Electron's own
+  // stock icon instead -- this explicitly sets it at startup so dev matches
+  // what a packaged build already looks like. Gated to is.dev only:
+  // redundant, not wrong, in a packaged build (the bundle's own icon is
+  // already showing by the time this would run), but pointless to call there.
+  if (is.dev) {
+    app.dock?.setIcon(icon)
+  }
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
