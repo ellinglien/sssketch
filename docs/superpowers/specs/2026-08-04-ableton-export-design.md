@@ -121,28 +121,55 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
    above the template's own IDs), name it `<rifff.name> - <stem.name>` via the nested
    `<Name><EffectiveName Value="..."/></Name>` shape.
 2. **Bar → beat**: sssketch bars are always 4 beats (implicit 4/4 throughout). `beats = bars *
-   4`. Clip `Time` (arrangement position) = `rifff.startBar * 4`.
-3. **Loop window**: `leftCropBars`/`playedBars` (`state.leftCrop[groupId] ?? 0`,
-   `resolvePlayedBars(state, groupId)`) map onto `<Loop>`: `LoopStart = leftCropBars*4`,
-   `LoopEnd = playedBars*4` — `playedBars` is already an absolute end-boundary measured from
-   the clip's own start, not a length to add on top of the crop (confirmed against
-   `selectors.ts`'s own `clipGeometryFromFields`: `visibleBars = playedBars - leftCropBars`,
-   and the `[startBar, startBar + playedBars)` range comment on `groupIdAtPosition`) — and
-   `LoopOn=true`. One-shot stems (`stem.oneShot`)
-   get `LoopOn=false` instead, placed once — matching their existing no-crop/-extend
-   treatment elsewhere in sssketch. Confirmed against the reference file: `LoopStart`/
-   `LoopEnd` still define the played region within the source sample even when
-   `LoopOn=false` (they're not purely a "repeat" concept) — so a one-shot's own
-   `trimStartSec`/`trimEndSec` (seconds, source-relative) map onto them too, converted to
-   beats via the stem's native tempo (see step 4): `LoopStart = trimStartSec * (nativeBpm/60)`,
-   `LoopEnd = (trimEndSec ?? stem.durationSec) * (nativeBpm/60)`. Omitting this would silently
-   export more audio than intended for any trimmed one-shot.
+   4`.
+3. **The copied audio file is short — only `stem.barLength` bars long, not `playedBars` bars.**
+   This is the single most important fact the whole loop-window mapping hinges on, and it was
+   originally missed (caught during implementation review, not during design — see "Known
+   risks"). sssketch's own native engine achieves a longer `playedBars`-bar clip by *tiling*
+   (repeating) the stem's own short native-length file via its own `LoopSewing.cpp` mechanism;
+   this export copies that same short source file verbatim (no re-render), so Ableton has to do
+   the equivalent tiling itself, via its ordinary `LoopOn=true` clip-loop mechanism — this is
+   standard, everyday Ableton behavior (turning a short loop into a longer repeated pattern),
+   not a special case. Concretely, for a **non-one-shot** stem:
+   - `<Loop><LoopStart/><LoopEnd/></Loop>` define ONE TILE CYCLE, not the whole played span:
+     `LoopStart = wrappedLeftCropBars * 4`, `LoopEnd = stem.barLength * 4`, where
+     `wrappedLeftCropBars = ((leftCropBars % stem.barLength) + stem.barLength) % stem.barLength`
+     — the crop only shifts the *phase* Ableton starts/loops from within that one tile; it can
+     never push `LoopEnd` past the sample's own real, available duration (`stem.barLength * 4`
+     beats — see step 4 for why this is exact), which is the one thing that's genuinely
+     non-negotiable here (there's no more audio data past that point to loop into).
+   - `<HiddenLoopStart>0</HiddenLoopStart><HiddenLoopEnd>` = `stem.barLength * 4` — the
+     sample's own real, full extent (in warped-beat terms), independent of any crop.
+   - The clip's own **arrangement-visible span** is a *separate* concern from the loop-cycle
+     bounds above, and is governed by `Time` (position) and `CurrentEnd` (duration), not
+     `LoopEnd`: `Time = (rifff.startBar + leftCropBars) * 4` (the *raw*, unwrapped
+     `leftCropBars` — this is a genuine shift of the clip's position on the arrangement
+     timeline, confirmed against `selectors.ts`'s own `clipGeometryFromFields`:
+     `leftPx: (startBar + leftCropBars) * ppb`, and against `native-engine/Source/
+     PlaybackEngineTests.cpp`'s own `"leftCropBars clips the first tile without moving
+     startBar..."` test), and `CurrentEnd = (playedBars - leftCropBars) * 4` (`visibleBars` in
+     `clipGeometryFromFields`'s own terms). `LoopOn=true` makes Ableton repeat the
+     `[LoopStart, LoopEnd)` tile automatically to fill however long `CurrentEnd` says the clip
+     should be — exactly mirroring sssketch's own tiling, without this export needing to
+     enumerate individual repeats itself.
+   - **One-shot stems** (`stem.oneShot`) are unaffected by any of the above — a one-shot's own
+     file already contains exactly the audio it should play (no tiling), so `LoopOn=false`,
+     `Time = rifff.startBar * 4` (no crop concept applies to one-shots), and `LoopStart`/
+     `LoopEnd`/`CurrentEnd` all come from `trimStartSec`/`trimEndSec` (seconds, source-relative)
+     converted to beats via the stem's own native tempo (step 4): `LoopStart = trimStartSec *
+     (nativeBpm/60)`, `LoopEnd = CurrentEnd = (trimEndSec ?? stem.durationSec) * (nativeBpm/60)`.
+     Confirmed against the reference file that `LoopStart`/`LoopEnd` still define the played
+     region even with `LoopOn=false` (not purely a "repeat" concept). Omitting trim would
+     silently export more audio than intended for any trimmed one-shot.
 4. **Native tempo → warp markers**: `stemNativeSecPerBar = stem.durationSec / stem.barLength`
    (identical to `buildEngineProject.ts`'s own calculation, no rubberband call) → `nativeBpm =
    (60/stemNativeSecPerBar)*4`. Write exactly two `<WarpMarker>`s: `(SecTime=0, BeatTime=0)`
    and `(SecTime = 60/nativeBpm, BeatTime = 1)` — a clean one-beat span (the reference file's
    own fractional 0.03125-beat spacing was just Ableton's own auto-detection granularity, not
-   a requirement).
+   a requirement). One consequence worth being explicit about: by construction, `stem.barLength
+   * 4` beats of warped time always equals exactly `stem.durationSec` real seconds — i.e. the
+   file's own full duration maps to precisely one tile cycle, which is what makes step 3's
+   `LoopEnd`/`HiddenLoopEnd = stem.barLength * 4` exact rather than approximate.
 5. **Warp mode**: from `stem.type` — `drums` → `Beats` mode (preserves transients on
    percussive content), everything else → `Complex Pro` (best general-purpose quality).
    Encoded via whatever integer values correspond to these modes (to be confirmed against a
@@ -220,3 +247,18 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   handling above, not guessing.
 - **Ableton Live 12 only** — confirmed as the user's actual version, not just the test file's
   origin. Live 11 compatibility is untested and out of scope.
+- **Loop-cycle wrap approximation for a cropped, tiled stem**: when `leftCropBars` is nonzero,
+  the "Track/clip mapping algorithm" section's `LoopStart = wrappedLeftCropBars*4, LoopEnd =
+  stem.barLength*4` gives each loop CYCLE a shorter span than a full tile
+  (`(stem.barLength - wrappedLeftCropBars)*4` beats) — meaning every repeat past the first uses
+  that same shortened cycle, not a full tile. sssketch's own native tiling instead plays only
+  the *first* repeat short (truncated at the front) and every subsequent repeat as a full,
+  untouched tile (see `tileOffsetsPx`'s own doc comment). This is a genuine, acknowledged
+  approximation — not fully resolvable from the single reference file this design is grounded
+  in, since it hinges on exactly how Ableton's own loop-region semantics work for a first-play
+  vs. steady-state repeat, and the safer, always-valid choice (never asking Ableton to loop
+  past the sample's own real available audio) was picked over a closer-but-unverified
+  alternative. In practice the audible difference is probably small (a several-bars-long loop
+  region shifted by at most one crop's worth of phase), but this is exactly the kind of thing
+  the "manual acceptance in real Ableton" testing step should specifically listen for on a
+  stem that's actually had its left-crop/extend handle used, not just an unmodified one.
