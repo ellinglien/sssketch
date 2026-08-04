@@ -135,3 +135,36 @@ export function encodePng(width: number, height: number, rgba: Buffer): Buffer {
     pngChunk('IEND', Buffer.alloc(0))
   ])
 }
+
+/** Encodes a set of already-PNG-encoded images as a single .ico file,
+ * using the PNG-compressed ICO format Windows has supported since Vista
+ * (each directory entry just points at a normal embedded PNG file,
+ * rather than the older raw-BMP-plus-AND-mask format) -- avoids needing
+ * a second, different raster encoder for this one file. */
+export function encodeIco(entries: { size: number; png: Buffer }[]): Buffer {
+  const header = Buffer.alloc(6)
+  header.writeUInt16LE(0, 0) // reserved
+  header.writeUInt16LE(1, 2) // type: 1 = icon
+  header.writeUInt16LE(entries.length, 4)
+
+  const dirEntries: Buffer[] = []
+  const imageDatas: Buffer[] = []
+  let offset = 6 + entries.length * 16
+
+  for (const { size, png } of entries) {
+    const dir = Buffer.alloc(16)
+    dir[0] = size >= 256 ? 0 : size // width (0 means 256)
+    dir[1] = size >= 256 ? 0 : size // height
+    dir[2] = 0 // color count (0 = no palette)
+    dir[3] = 0 // reserved
+    dir.writeUInt16LE(1, 4) // color planes
+    dir.writeUInt16LE(32, 6) // bits per pixel
+    dir.writeUInt32LE(png.length, 8) // size of image data
+    dir.writeUInt32LE(offset, 12) // offset of image data
+    dirEntries.push(dir)
+    imageDatas.push(png)
+    offset += png.length
+  }
+
+  return Buffer.concat([header, ...dirEntries, ...imageDatas])
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { inflateSync } from 'node:zlib'
-import { renderIconRgba, encodePng } from './generate-app-icon.mts'
+import { renderIconRgba, encodePng, encodeIco } from './generate-app-icon.mts'
 
 function pixelAt(
   rgba: Buffer,
@@ -84,5 +84,49 @@ describe('encodePng', () => {
       const originalRow = rgba.subarray(y * rowBytes, (y + 1) * rowBytes)
       expect(rawRow).toEqual(originalRow)
     }
+  })
+})
+
+describe('encodeIco', () => {
+  it('writes a header declaring the correct icon count', () => {
+    const ico = encodeIco([
+      { size: 16, png: Buffer.from([1, 2, 3]) },
+      { size: 32, png: Buffer.from([4, 5]) }
+    ])
+    expect(ico.readUInt16LE(0)).toBe(0) // reserved
+    expect(ico.readUInt16LE(2)).toBe(1) // type: icon
+    expect(ico.readUInt16LE(4)).toBe(2) // count
+  })
+
+  it('encodes 256px entries using the special 0-means-256 byte convention', () => {
+    const ico = encodeIco([{ size: 256, png: Buffer.from([9, 9]) }])
+    const dirEntry = ico.subarray(6, 22)
+    expect(dirEntry[0]).toBe(0) // width byte: 0 means 256
+    expect(dirEntry[1]).toBe(0) // height byte: 0 means 256
+  })
+
+  it('total file length matches header + directory entries + concatenated PNG data', () => {
+    const entries = [
+      { size: 16, png: Buffer.from([1, 2, 3]) },
+      { size: 32, png: Buffer.from([4, 5, 6, 7]) }
+    ]
+    const ico = encodeIco(entries)
+    const expectedLength =
+      6 + entries.length * 16 + entries.reduce((sum, e) => sum + e.png.length, 0)
+    expect(ico.length).toBe(expectedLength)
+  })
+
+  it('each directory entry points at the correct offset into the concatenated image data', () => {
+    const entries = [
+      { size: 16, png: Buffer.from([1, 2, 3]) },
+      { size: 32, png: Buffer.from([4, 5, 6, 7]) }
+    ]
+    const ico = encodeIco(entries)
+    const firstOffset = ico.readUInt32LE(6 + 12) // first dir entry's offset field (bytes 12-15 of its 16-byte entry)
+    const secondOffset = ico.readUInt32LE(6 + 16 + 12)
+    expect(firstOffset).toBe(6 + 2 * 16) // right after header + 2 dir entries
+    expect(secondOffset).toBe(firstOffset + entries[0].png.length)
+    expect(ico.subarray(firstOffset, firstOffset + 3)).toEqual(Buffer.from([1, 2, 3]))
+    expect(ico.subarray(secondOffset, secondOffset + 4)).toEqual(Buffer.from([4, 5, 6, 7]))
   })
 })
