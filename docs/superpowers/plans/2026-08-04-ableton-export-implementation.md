@@ -471,7 +471,8 @@ function emptyAppState(overrides: Partial<AppState> = {}): AppState {
     rifffs: {},
     masterChain: [null, null, null, null],
     channelPlugins: {},
-    mode: 'normal'
+    mode: 'normal',
+    ...overrides
   } as AppState
 }
 
