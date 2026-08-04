@@ -3,6 +3,7 @@
 #include "EngineProject.h"
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
+#include "LiveParamOverrides.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
 #include <map>
@@ -88,6 +89,16 @@ namespace sssketch
          * — the metronome is a practice aid, not part of the actual mix. */
         void setMetronomeEnabled(bool enabled) { metronomeEnabled = enabled; }
         bool isMetronomeEnabled() const { return metronomeEnabled; }
+
+        /** Message-thread API: called by IpcServer's set-live-param handler
+         * to push a new live volume/fade value, and by its load-project
+         * handler to clear all overrides once a fresh project has been
+         * published -- see LiveParamOverrides's own doc comment. */
+        LiveParamOverrides& liveOverrides() { return liveParamOverrides; }
+
+        /** Audio-thread API: renderBlock() reads through this const
+         * overload. */
+        const LiveParamOverrides& liveOverrides() const { return liveParamOverrides; }
 
     private:
         /** Bundles the project together with every derived structure that
@@ -181,5 +192,7 @@ namespace sssketch
         std::shared_ptr<const ProjectSnapshot> published;
 
         bool metronomeEnabled = false;
+
+        LiveParamOverrides liveParamOverrides;
     };
 }

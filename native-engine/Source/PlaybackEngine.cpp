@@ -177,11 +177,30 @@ namespace sssketch
             for (const auto* rifffPtr : rifffPtrs)
             {
             const auto& rifff = *rifffPtr;
-            const FadeConfig fadeConfig { rifff.fadeInBars, rifff.fadeOutBars, spb };
+            // Prefers a live drag-override over the committed
+            // fadeInBars/fadeOutBars, exactly like effectiveVolume below
+            // does for stem.volume -- see LiveParamOverrides.h's own doc
+            // comment. Falls back to the committed value when no drag is
+            // currently touching this rifff's own fades.
+            const FadeConfig fadeConfig {
+                liveParamOverrides.fadeInFor(rifff.groupId).value_or(rifff.fadeInBars),
+                liveParamOverrides.fadeOutFor(rifff.groupId).value_or(rifff.fadeOutBars),
+                spb
+            };
 
             for (const auto& stem : rifff.stems)
             {
-                if (stem.muted || stem.volume <= 0.0)
+                // Prefers a live volume-drag override over the committed
+                // stem.volume -- see LiveParamOverrides.h's own doc
+                // comment. Read once per stem, used for both the mute/
+                // silence check below and every gain multiplication in
+                // this stem's own one-shot/tile-loop branch, so a live
+                // override can both silence an audible stem AND make a
+                // fully-silent one (committed volume 0) audible again --
+                // this MUST be resolved before the skip check below, not
+                // after.
+                const double effectiveVolume = liveParamOverrides.volumeFor(stem.stemKey).value_or(stem.volume);
+                if (stem.muted || effectiveVolume <= 0.0)
                     continue;
                 // Single combined lookup — get() + sampleRateFor() separately
                 // would hash the same path twice (and allocate a std::string
@@ -230,7 +249,7 @@ namespace sssketch
                         const int srcSample = (int) std::llround(sourceTimeSec * entry.sampleRate);
                         if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
-                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * stem.volume;
+                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume;
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
@@ -408,7 +427,7 @@ namespace sssketch
                         if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
 
-                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * stem.volume;
+                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume;
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;

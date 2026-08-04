@@ -458,6 +458,210 @@ namespace sssketch
                 expectWithinAbsoluteError(l[0], 0.5f, 0.01f);
             }
 
+            beginTest("renderBlock() prefers a live volume override over the committed stem volume");
+            {
+                auto rampFixture = writeFixtureWav("sssketch_pe_liveoverride_vol.wav", 0.5f, 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = rampFixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 4;
+                stem.playedBars = 4.0;
+                stem.volume = 0.2; // committed, quiet
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                engine.liveOverrides().setVolumeOverride("r1:1", 0.9f);
+
+                // 200 samples, not 4 -- see the crop-trim plan's own note on
+                // FadeGain.cpp's kMicroFadeSec (3ms click-guard fade-in on
+                // every fresh segment start): checking l[0] would measure
+                // that unrelated fade, not this test's own subject.
+                std::vector<float> l(200, 0.0f), r(200, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 200, l.data(), r.data(), channelChains);
+
+                // 0.5 (fixture) * 0.9 (override) = 0.45 -- would be
+                // 0.5 * 0.2 = 0.1 without the override.
+                expect(l[199] > 0.4f);
+
+                rampFixture.deleteFile();
+            }
+
+            beginTest("renderBlock() falls back to the committed stem volume when no override is set");
+            {
+                auto rampFixture = writeFixtureWav("sssketch_pe_nooverride_vol.wav", 0.5f, 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = rampFixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 4;
+                stem.playedBars = 4.0;
+                stem.volume = 0.2;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                // No override set.
+
+                std::vector<float> l(200, 0.0f), r(200, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 200, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[199], 0.1f, 0.02f); // 0.5 * 0.2
+
+                rampFixture.deleteFile();
+            }
+
+            beginTest("a live volume override makes an otherwise-silent stem (committed volume 0) audible");
+            {
+                // Regression test for a specific ordering requirement: the
+                // override must be resolved BEFORE the
+                // `stem.muted || effectiveVolume <= 0.0` skip check, not
+                // after -- otherwise a stem with committed volume 0 could
+                // never be woken up by a live override at all.
+                auto rampFixture = writeFixtureWav("sssketch_pe_liveoverride_wake.wav", 0.5f, 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = rampFixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 4;
+                stem.playedBars = 4.0;
+                stem.volume = 0.0; // committed silence
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                engine.liveOverrides().setVolumeOverride("r1:1", 0.7f);
+
+                std::vector<float> l(200, 0.0f), r(200, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 200, l.data(), r.data(), channelChains);
+                expect(l[199] > 0.3f); // 0.5 * 0.7 = 0.35 -- would be 0.0 without the override rescuing it from the skip
+
+                rampFixture.deleteFile();
+            }
+
+            beginTest("renderBlock() prefers a live fadeIn override over the committed rifff.fadeInBars");
+            {
+                auto rampFixture = writeFixtureWav("sssketch_pe_liveoverride_fadein.wav", 0.5f, 44100);
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                rifff.groupId = "r1";
+                rifff.fadeInBars = 2.0; // committed: an 8-second fade-in -- early samples near-silent
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = rampFixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 4;
+                stem.playedBars = 4.0;
+                stem.volume = 1.0;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                engine.liveOverrides().setFadeInOverride("r1", 0.0f); // override: no fade-in
+
+                std::vector<float> l(200, 0.0f), r(200, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 200, l.data(), r.data(), channelChains);
+                // Past the unrelated 3ms micro-fade, should be near the
+                // fixture's own 0.5 value -- NOT suppressed by the
+                // committed 2-bar fade-in, since the override replaces it.
+                expect(l[199] > 0.4f);
+
+                rampFixture.deleteFile();
+            }
+
+            beginTest("concurrent setVolumeOverride() and renderBlock() calls do not crash");
+            {
+                // Mirrors the existing "concurrent setProject() and
+                // renderBlock() calls do not crash" stress test -- same
+                // reasoning, applied to LiveParamOverrides' own atomic
+                // shared_ptr publish mechanism (the exact pattern already
+                // proven correct there).
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+
+                EngineProject project;
+                project.bpm = 120.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = "/nonexistent.wav"; // never actually decoded, see StemBufferCache::load's own doc comment
+                stem.durationSec = 4.0;
+                stem.barLength = 4;
+                stem.playedBars = 4.0;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                engine.setProject(project);
+
+                std::atomic<bool> stop { false };
+                std::thread overrideThread([&]() {
+                    float v = 0.0f;
+                    while (!stop.load())
+                    {
+                        v = std::fmod(v + 0.01f, 1.0f);
+                        engine.liveOverrides().setVolumeOverride("r1:1", v);
+                    }
+                });
+
+                std::thread renderThread([&]() {
+                    std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                    double positionBars = 0.0;
+                    const double secPerBar = (60.0 / project.bpm) * 4.0;
+                    for (int i = 0; i < 20000; ++i)
+                    {
+                        l.assign(512, 0.0f);
+                        r.assign(512, 0.0f);
+                        engine.renderBlock(positionBars, 44100.0, 512, l.data(), r.data(), channelChains);
+                        positionBars += (512.0 / 44100.0) / secPerBar;
+                    }
+                });
+
+                renderThread.join();
+                stop = true;
+                overrideThread.join();
+
+                // Reaching here at all -- no crash, no hang -- is the
+                // actual assertion.
+                expect(true);
+            }
+
             beginTest("two stems overlapping the same block sum their contributions rather than overwriting");
             {
                 // renderBlock's core job is accumulating (+=) every stem's contribution
