@@ -194,7 +194,6 @@ function main(): void {
   // short of hand-rolling that format too.
   const iconsetDir = resolve(repoRoot, 'build/AppIcon.iconset')
   if (existsSync(iconsetDir)) rmSync(iconsetDir, { recursive: true })
-  mkdirSync(iconsetDir)
   const icnsSizes: [string, number][] = [
     ['icon_16x16.png', 16],
     ['icon_16x16@2x.png', 32],
@@ -207,16 +206,19 @@ function main(): void {
     ['icon_512x512.png', 512],
     ['icon_512x512@2x.png', 1024]
   ]
-  for (const [name, size] of icnsSizes) {
-    writeFileSync(resolve(iconsetDir, name), pngAt(size))
-  }
   try {
+    // Cleanup in the finally below needs to cover this whole block, not
+    // just the iconutil call -- a write failing partway through (disk
+    // full, permissions) would otherwise leave iconsetDir behind exactly
+    // like an iconutil failure would, in the same tracked, non-gitignored
+    // build/ directory a later `git add build/` could accidentally stage.
+    mkdirSync(iconsetDir)
+    for (const [name, size] of icnsSizes) {
+      writeFileSync(resolve(iconsetDir, name), pngAt(size))
+    }
     execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', resolve(repoRoot, 'build/icon.icns')])
   } finally {
-    // Clean up even if iconutil fails -- build/ is a tracked, non-gitignored
-    // directory, so a stray AppIcon.iconset left behind here could get
-    // accidentally staged by a later `git add build/`.
-    rmSync(iconsetDir, { recursive: true })
+    if (existsSync(iconsetDir)) rmSync(iconsetDir, { recursive: true })
   }
 
   // build/icon.ico (windows icon source) -- standard sizes covering
