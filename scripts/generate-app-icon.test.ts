@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { renderIconRgba } from './generate-app-icon.mts'
 
-function pixelAt(rgba: Buffer, size: number, x: number, y: number): [number, number, number, number] {
+function pixelAt(
+  rgba: Buffer,
+  size: number,
+  x: number,
+  y: number
+): [number, number, number, number] {
   const offset = (y * size + x) * 4
   return [rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]]
 }
