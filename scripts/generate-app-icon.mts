@@ -210,8 +210,14 @@ function main(): void {
   for (const [name, size] of icnsSizes) {
     writeFileSync(resolve(iconsetDir, name), pngAt(size))
   }
-  execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', resolve(repoRoot, 'build/icon.icns')])
-  rmSync(iconsetDir, { recursive: true })
+  try {
+    execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', resolve(repoRoot, 'build/icon.icns')])
+  } finally {
+    // Clean up even if iconutil fails -- build/ is a tracked, non-gitignored
+    // directory, so a stray AppIcon.iconset left behind here could get
+    // accidentally staged by a later `git add build/`.
+    rmSync(iconsetDir, { recursive: true })
+  }
 
   // build/icon.ico (windows icon source) -- standard sizes covering
   // taskbar through large Explorer icon views.
