@@ -125,8 +125,14 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
 3. **Loop window**: `leftCropBars`/`playedBars` (`state.leftCrop[groupId] ?? 0`,
    `resolvePlayedBars(state, groupId)`) map onto `<Loop>`: `LoopStart = leftCropBars*4`,
    `LoopEnd = (leftCropBars+playedBars)*4`, `LoopOn=true`. One-shot stems (`stem.oneShot`)
-   get `LoopOn=false` instead, placed once at natural length — matching their existing
-   no-crop/-extend treatment elsewhere in sssketch.
+   get `LoopOn=false` instead, placed once — matching their existing no-crop/-extend
+   treatment elsewhere in sssketch. Confirmed against the reference file: `LoopStart`/
+   `LoopEnd` still define the played region within the source sample even when
+   `LoopOn=false` (they're not purely a "repeat" concept) — so a one-shot's own
+   `trimStartSec`/`trimEndSec` (seconds, source-relative) map onto them too, converted to
+   beats via the stem's native tempo (see step 4): `LoopStart = trimStartSec * (nativeBpm/60)`,
+   `LoopEnd = (trimEndSec ?? stem.durationSec) * (nativeBpm/60)`. Omitting this would silently
+   export more audio than intended for any trimmed one-shot.
 4. **Native tempo → warp markers**: `stemNativeSecPerBar = stem.durationSec / stem.barLength`
    (identical to `buildEngineProject.ts`'s own calculation, no rubberband call) → `nativeBpm =
    (60/stemNativeSecPerBar)*4`. Write exactly two `<WarpMarker>`s: `(SecTime=0, BeatTime=0)`
