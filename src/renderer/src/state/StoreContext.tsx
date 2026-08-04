@@ -322,11 +322,16 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // meaningful "unmount mid-flush" case to guard against here -- unlike a
   // component that can mount/unmount repeatedly. A naive `return () =>
   // cancelAnimationFrame(...)` here would cancel-and-reschedule on every
-  // single dependency change; during a fast drag (state.dragVol changing
-  // far more often than once per animation frame), each new dispatch would
-  // perpetually push the flush deadline out, so it would never actually
-  // fire until the drag paused for a whole frame -- defeating the entire
-  // point of a live update. Guarding on this ref instead means the FIRST
+  // single dependency change; if any of the tracked fields below ever
+  // change faster than once per animation frame (this effect no longer
+  // tracks state.dragVol/dragFadeIn/dragFadeOut, the fields that originally
+  // motivated this guard -- see docs/superpowers/specs/
+  // 2026-08-04-live-param-fast-path-design.md -- but the same risk applies
+  // to any future high-frequency dispatch this effect ends up depending
+  // on), each new dispatch would perpetually push the flush deadline out,
+  // so it would never actually fire until the changes paused for a whole
+  // frame -- defeating the entire point of coalescing rather than dropping
+  // updates. Guarding on this ref instead means the FIRST
   // change after being idle schedules a flush ~1 frame out; every
   // subsequent change while that flush is still pending (scheduled OR
   // in-flight) is a no-op, and the eventual flush reads stateRef.current --
