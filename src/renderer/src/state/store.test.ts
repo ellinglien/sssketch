@@ -566,6 +566,89 @@ describe('reducer', () => {
     })
   })
 
+  describe('SET_DRAG_PREVIEW', () => {
+    it('sets a volume preview for the given stem key, without touching committed vol', () => {
+      const next = reducer(initialState, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'volume',
+        key: 'r1:1',
+        value: 0.3
+      })
+      expect(next.dragVol['r1:1']).toBe(0.3)
+      expect(next.vol['r1:1']).toBeUndefined()
+    })
+
+    it('clears a preview when value is undefined', () => {
+      let state = reducer(initialState, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'fadeIn',
+        key: 'r1',
+        value: 1.5
+      })
+      expect(state.dragFadeIn.r1).toBe(1.5)
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'fadeIn',
+        key: 'r1',
+        value: undefined
+      })
+      expect(state.dragFadeIn.r1).toBeUndefined()
+    })
+
+    it('supports each of the five fields independently', () => {
+      let state = reducer(initialState, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'fadeOut',
+        key: 'r1',
+        value: 2
+      })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'playedBars',
+        key: 'r1',
+        value: 8
+      })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW',
+        field: 'leftCropBars',
+        key: 'r1',
+        value: -1
+      })
+      expect(state.dragFadeOut.r1).toBe(2)
+      expect(state.dragPlayedBars.r1).toBe(8)
+      expect(state.dragLeftCropBars.r1).toBe(-1)
+    })
+  })
+
+  describe('SET_DRAG_PREVIEW_GROUP_VOLUME', () => {
+    it("sets a volume preview for every stem in the group, matching SET_GROUP_VOLUME's own fan-out", () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW_GROUP_VOLUME',
+        groupId: 'r1',
+        value: 0.4
+      })
+      expect(state.dragVol['r1:1']).toBe(0.4)
+      expect(state.dragVol['r1:6']).toBe(0.4)
+    })
+
+    it("clears every stem's preview when value is undefined", () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW_GROUP_VOLUME',
+        groupId: 'r1',
+        value: 0.4
+      })
+      state = reducer(state, {
+        type: 'SET_DRAG_PREVIEW_GROUP_VOLUME',
+        groupId: 'r1',
+        value: undefined
+      })
+      expect(state.dragVol['r1:1']).toBeUndefined()
+      expect(state.dragVol['r1:6']).toBeUndefined()
+    })
+  })
+
   describe('UNGROUP', () => {
     it('splits every stem into its own independent, selected one-stem rifff', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

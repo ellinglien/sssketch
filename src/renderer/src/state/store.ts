@@ -66,6 +66,21 @@ export interface AppState {
    * operation over a loop whose own phase anchor stays fixed. See
    * docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md. */
   leftCrop: Record<string, number>
+  /** In-progress preview values for an active drag, keyed the same way as
+   * their committed counterpart (dragVol/stemKey, the rest/groupId) --
+   * populated on every mousemove of a volume/fade/length/crop drag,
+   * cleared on release. Transient (see history.ts's TRANSIENT_ACTION_TYPES)
+   * -- these are UI/audio previews, never real edits worth an undo
+   * checkpoint. Shared store state (not per-component useState) so every
+   * component reading the same key -- e.g. every StemWaveformRow instance
+   * sharing a groupId -- sees the SAME in-progress value live, not just the
+   * one row actually being dragged. See
+   * docs/superpowers/specs/2026-08-04-live-drag-preview-design.md. */
+  dragVol: Record<string, number>
+  dragFadeIn: Record<string, number>
+  dragFadeOut: Record<string, number>
+  dragPlayedBars: Record<string, number>
+  dragLeftCropBars: Record<string, number>
   sel: string | null
   /** Visual top-to-bottom row order, as channel IDs — a fresh channel joins
    * the end of this list the moment a clip first lands on it (placed from
@@ -166,6 +181,11 @@ export const initialState: AppState = {
   fadeOut: {},
   playedBars: {},
   leftCrop: {},
+  dragVol: {},
+  dragFadeIn: {},
+  dragFadeOut: {},
+  dragPlayedBars: {},
+  dragLeftCropBars: {},
   sel: null,
   channelOrder: [],
   channelOf: {},
@@ -205,6 +225,13 @@ export type Action =
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'SET_LEFT_CROP_BARS'; groupId: string; bars: number }
+  | {
+      type: 'SET_DRAG_PREVIEW'
+      field: 'volume' | 'fadeIn' | 'fadeOut' | 'playedBars' | 'leftCropBars'
+      key: string
+      value: number | undefined
+    }
+  | { type: 'SET_DRAG_PREVIEW_GROUP_VOLUME'; groupId: string; value: number | undefined }
   | {
       type: 'SET_ONE_SHOT_TRIM'
       groupId: string
@@ -424,6 +451,42 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         leftCrop: { ...state.leftCrop, [action.groupId]: action.bars }
       }
+
+    // Live, in-progress preview for a drag still in flight -- see AppState's
+    // own dragVol/etc. field comments. Each field maps to its own slice;
+    // value: undefined deletes the key entirely (falls back to the
+    // committed value everywhere it's read) rather than storing an
+    // undefined placeholder.
+    case 'SET_DRAG_PREVIEW': {
+      const sliceKey = (
+        {
+          volume: 'dragVol',
+          fadeIn: 'dragFadeIn',
+          fadeOut: 'dragFadeOut',
+          playedBars: 'dragPlayedBars',
+          leftCropBars: 'dragLeftCropBars'
+        } as const
+      )[action.field]
+      const next = { ...state[sliceKey] }
+      if (action.value === undefined) delete next[action.key]
+      else next[action.key] = action.value
+      return { ...state, [sliceKey]: next }
+    }
+
+    // Group-level counterpart to SET_DRAG_PREVIEW's 'volume' field, mirroring
+    // SET_GROUP_VOLUME's own fan-out -- the collapsed view's envelope drag
+    // controls every stem in the rifff together, so its live preview must
+    // fan out to every stem's own dragVol entry the same way, not just one.
+    case 'SET_DRAG_PREVIEW_GROUP_VOLUME': {
+      const rifff = state.rifffs[action.groupId]
+      const dragVol = { ...state.dragVol }
+      for (const stem of rifff.stems) {
+        const key = stemKey(action.groupId, stem.slot)
+        if (action.value === undefined) delete dragVol[key]
+        else dragVol[key] = action.value
+      }
+      return { ...state, dragVol }
+    }
 
     case 'SET_ONE_SHOT_TRIM': {
       const rifff = state.rifffs[action.groupId]
