@@ -476,6 +476,18 @@ function ProjectMenu(): React.JSX.Element {
     }
   }
 
+  async function handleExportAbleton(): Promise<void> {
+    setExporting(true)
+    try {
+      await window.rifffApi.exportAls(JSON.stringify(state))
+    } catch (err) {
+      console.error('ProjectMenu: failed to export to Ableton:', err)
+      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const buttonStyle = {
     height: 22,
     borderRadius: 0,
@@ -513,7 +525,8 @@ function ProjectMenu(): React.JSX.Element {
           y={exportMenu.y}
           items={[
             { label: 'export mix', onClick: handleExportMix },
-            { label: 'export stems', onClick: handleExportStems }
+            { label: 'export stems', onClick: handleExportStems },
+            { label: 'export ableton', onClick: handleExportAbleton }
           ]}
           onClose={() => setExportMenu(null)}
         />
