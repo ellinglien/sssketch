@@ -95,6 +95,25 @@ namespace sssketch
          * 33ms, not a one-shot full-file decode. */
         std::vector<float> peaksSoFar(int numBuckets) const;
 
+        /** Fixed-width bucketing, unlike peaksSoFar's fixed-COUNT rescaling
+         * above -- one bucket per full bucketDurationSec of audio actually
+         * captured so far, growing in LENGTH as more gets captured but
+         * never recomputing a bucket already returned by an earlier call (a
+         * bucket's own sample range, once it exists, never changes). Built
+         * for the renderer's live capture overlay (see ChannelRow.tsx):
+         * peaksSoFar's rescaling made that overlay visibly reshape its
+         * already-drawn portion on every poll, since EVERY bucket's
+         * boundaries (including bucket 0's) widened each time more got
+         * captured -- not the "write once and leave it" look that's
+         * actually wanted for something meant to be watched growing in
+         * real time. Trade-off: the most recent partial bucket (up to
+         * almost bucketDurationSec of audio) is never included -- a
+         * bucket's value is only ever computed once, over its complete
+         * range, so an incomplete one can't be returned without later
+         * being recomputed differently once it does complete, recreating
+         * the exact problem this method exists to avoid. */
+        std::vector<float> peaksFixedWindow(double bucketDurationSec) const;
+
         /** Writes whatever's been captured so far (writePos samples, not
          * the full pre-allocated buffer) to a 16-bit mono WAV file at the
          * given path. Returns false (and leaves outputPath untouched) on

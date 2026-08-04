@@ -122,14 +122,17 @@ namespace sssketch
             juce::DynamicObject::Ptr capPayload = new juce::DynamicObject();
             capPayload->setProperty("channelId", armedChannelId);
             juce::Array<juce::var> peaksVar;
-            // 64, not the original 32 -- bumped per feedback during manual
-            // testing asking for finer resolution, closer to (but less
-            // detailed than) the real waveform views elsewhere, which use
-            // peaksFromChannel's own 128-bucket default (see
-            // @shared/visuals.ts). Kept below that rather than matching it
-            // exactly -- this is a coarse "building up" indicator sampled
-            // live every ~33ms, not a one-shot full-file decode.
-            for (float peak : armedRecorder->peaksSoFar(64))
+            // Fixed-width buckets (see peaksFixedWindow's own doc comment)
+            // rather than peaksSoFar's rescale-to-N-buckets -- a bucket's
+            // value never changes once returned, so the renderer's overlay
+            // can draw each one once and leave it alone instead of visibly
+            // reshaping already-drawn portions on every poll. 0.05s (50ms)
+            // per bucket: fine enough to feel responsive at the ~33ms poll
+            // rate below, coarse enough not to flood the IPC payload during
+            // a multi-minute take. ChannelRow.tsx's LIVE_CAPTURE_BUCKET_SECONDS
+            // must match this exactly -- it derives the overlay's pixel
+            // width from bucket count, not from elapsedSeconds below.
+            for (float peak : armedRecorder->peaksFixedWindow(0.05))
                 peaksVar.add(peak);
             capPayload->setProperty("peaksSoFar", peaksVar);
             // Lets the renderer size the live overlay to match how long
@@ -277,6 +280,23 @@ namespace sssketch
                 // completing a loop pass.
                 armedRecorder = std::make_unique<LoopRecorder>(transport.currentSampleRate());
                 transport.setRecordingLoop(startBar, endBar);
+                // Jump playback to the loop start HERE, synchronously with
+                // arming, rather than relying on a separate later IPC
+                // message from the renderer (the old approach). writeBlock()
+                // captures raw input unconditionally from the very next
+                // audio callback regardless of transport position, so any
+                // gap between "recording started" and "playback actually
+                // reached startBar" is a real, audible mismatch: whatever
+                // the performer heard/played during that gap gets captured
+                // but is still placed on the timeline as if it began exactly
+                // at startBar. transport.play() jumps position instantly (no
+                // crossfade) and unconditionally starts playing -- unlike
+                // transport.setPosition(), which is designed for smooth
+                // mid-listen scrubbing and fades over several blocks, wrong
+                // for "the take starts now." Calling this every arm (even if
+                // already playing) is intentional: it guarantees capture and
+                // the audible backing track are aligned to the same instant.
+                transport.play(startBar);
                 transport.setLoopRecorder(armedRecorder.get());
                 payloadObj->setProperty("success", true);
             }

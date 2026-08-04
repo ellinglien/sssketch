@@ -175,6 +175,52 @@ namespace sssketch
                     if (peak > 0.0f) anyNonZero = true;
                 expect(anyNonZero);
             }
+
+            beginTest("peaksFixedWindow on a freshly-constructed recorder (never written to) is "
+                      "empty");
+            {
+                LoopRecorder recorder(48000.0);
+                expect(recorder.peaksFixedWindow(0.01).empty());
+            }
+
+            beginTest("peaksFixedWindow excludes a trailing partial bucket -- a bucket's value "
+                      "is only ever computed once, over its complete range, so it can't be "
+                      "returned before that range is fully captured");
+            {
+                LoopRecorder recorder(48000.0); // 0.01s bucket == 480 samples at 48kHz
+                std::vector<float> inputData(300, 0.6f); // fewer than 480 samples written
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 300);
+
+                expect(recorder.peaksFixedWindow(0.01).empty());
+            }
+
+            beginTest("peaksFixedWindow is append-only -- a bucket already returned by an "
+                      "earlier call keeps the exact same value on a later call, even once more "
+                      "audio has since been captured (the live capture overlay draws each bar "
+                      "once and must not see it reshape later)");
+            {
+                LoopRecorder recorder(48000.0); // 0.01s bucket == 480 samples at 48kHz
+                std::vector<float> quiet(480, 0.1f);
+                const float* quietChannels[] = { quiet.data() };
+                recorder.writeBlock(quietChannels, 1, 0, 480);
+
+                const auto firstPoll = recorder.peaksFixedWindow(0.01);
+                expectEquals((int) firstPoll.size(), 1);
+                expectWithinAbsoluteError(firstPoll[0], 0.1f, 0.01f);
+
+                std::vector<float> loud(480, 0.9f);
+                const float* loudChannels[] = { loud.data() };
+                recorder.writeBlock(loudChannels, 1, 0, 480);
+
+                const auto secondPoll = recorder.peaksFixedWindow(0.01);
+                expectEquals((int) secondPoll.size(), 2);
+                // Bucket 0's value is identical to what firstPoll already
+                // returned -- the whole point of this method over
+                // peaksSoFar's rescaling.
+                expectWithinAbsoluteError(secondPoll[0], 0.1f, 0.01f);
+                expectWithinAbsoluteError(secondPoll[1], 0.9f, 0.01f);
+            }
         }
     };
 

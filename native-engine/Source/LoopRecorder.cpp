@@ -71,6 +71,30 @@ namespace sssketch
         return result;
     }
 
+    std::vector<float> LoopRecorder::peaksFixedWindow(double bucketDurationSec) const
+    {
+        std::vector<float> result;
+        const auto* data = buffer.getReadPointer(0);
+        // Acquire load, paired with writeBlock's release store, same as
+        // peaksSoFar above.
+        const int currentWritePos = writePos.load(std::memory_order_acquire);
+        if (currentWritePos <= 0 || bucketDurationSec <= 0.0) return result;
+
+        const int samplesPerBucket = std::max(1, (int) std::lround(bucketDurationSec * sampleRate));
+        const int numBuckets = currentWritePos / samplesPerBucket; // whole buckets only -- see this method's own doc comment on excluding the trailing partial one
+        result.reserve((size_t) numBuckets);
+        for (int b = 0; b < numBuckets; ++b)
+        {
+            const int start = b * samplesPerBucket;
+            const int end = start + samplesPerBucket;
+            float peak = 0.0f;
+            for (int i = start; i < end; ++i)
+                peak = std::max(peak, std::abs(data[i]));
+            result.push_back(peak);
+        }
+        return result;
+    }
+
     bool LoopRecorder::writeToWavFile(const juce::String& outputPath) const
     {
         juce::File outFile(outputPath);
