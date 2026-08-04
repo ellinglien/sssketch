@@ -4,15 +4,33 @@
 #include "Metronome.h"
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace sssketch
 {
-    PlaybackEngine::PlaybackEngine(StemBufferCache& cache) : bufferCache(cache) {}
+    PlaybackEngine::PlaybackEngine(StemBufferCache& cache)
+        : bufferCache(cache), published(new ProjectSnapshot())
+    {
+        // Published to a freshly-constructed, empty snapshot immediately --
+        // renderBlock()/currentProjectForExport() must never see a null
+        // pointer, including before setProject() is ever called (see the
+        // "silence when no project is set" test, which relies on exactly
+        // this: an empty project.rifffs, not a null snapshot).
+    }
+
+    PlaybackEngine::~PlaybackEngine() { delete published.load(); }
+
+    double PlaybackEngine::secPerBar() const
+    {
+        const auto* snap = published.load(std::memory_order_acquire);
+        return snap->project.bpm > 0.0 ? (60.0 / snap->project.bpm) * 4.0 : 0.0;
+    }
 
     void PlaybackEngine::setProject(const EngineProject& project)
     {
-        currentProject = project;
-        for (auto& rifff : currentProject.rifffs)
+        auto* next = new ProjectSnapshot();
+        next->project = project;
+        for (auto& rifff : next->project.rifffs)
             for (auto& stem : rifff.stems)
                 // stem.durationSec: see StemBufferCache::load's own doc
                 // comment on why the loop-sewing blend needs this (not just
@@ -22,20 +40,27 @@ namespace sssketch
                 // buffers.
                 bufferCache.load(stem.resolvedPath, stem.durationSec);
 
-        channelGroups.clear();
-        for (const auto& rifff : currentProject.rifffs)
-            channelGroups[rifff.channelId].push_back(&rifff);
+        for (const auto& rifff : next->project.rifffs)
+            next->channelGroups[rifff.channelId].push_back(&rifff);
 
-        // Rebuild the render scratch space to match the new channel set --
-        // off the real-time thread (see renderBlock's own comment on why
-        // this lives here, not there). Inner per-numSamples buffers are left
-        // empty; renderBlock sizes those lazily on first use.
-        scratchChannelL.assign(channelGroups.size(), {});
-        scratchChannelR.assign(channelGroups.size(), {});
-        scratchChannelIds.clear();
-        scratchChannelIds.reserve(channelGroups.size());
-        for (const auto& [channelId, rifffPtrs] : channelGroups)
-            scratchChannelIds.push_back(channelId);
+        // Scratch space for the new channel set -- off the real-time thread
+        // (see renderBlock's own comment on why this lives here, not
+        // there). Inner per-numSamples buffers are left empty; renderBlock
+        // sizes those lazily on first use.
+        next->scratchChannelL.assign(next->channelGroups.size(), {});
+        next->scratchChannelR.assign(next->channelGroups.size(), {});
+        next->scratchChannelIds.reserve(next->channelGroups.size());
+        for (const auto& [channelId, rifffPtrs] : next->channelGroups)
+            next->scratchChannelIds.push_back(channelId);
+
+        const auto* old = published.exchange(next, std::memory_order_acq_rel);
+        // Detached, not deleted inline -- the audio thread may still be
+        // mid-renderBlock() on `old` at the exact instant of this exchange;
+        // by the time this detached thread actually runs, the audio
+        // thread's own bounded, fast real-time execution has certainly
+        // already moved on to the newly-published snapshot. Copied verbatim
+        // from ChannelChainRegistry.cpp's own identical handoff.
+        std::thread([old]() { delete old; }).detach();
     }
 
     void PlaybackEngine::renderBlock(
@@ -46,7 +71,15 @@ namespace sssketch
         float* outR,
         ChannelChainRegistry& channelChains) const
     {
-        const double spb = secPerBar();
+        // Loaded ONCE, here, and read through for the rest of this call --
+        // not via secPerBar() (which does its own independent load) or any
+        // other second load, which could observe a DIFFERENT snapshot than
+        // this one if a setProject() call landed in between the two loads.
+        const auto* snap = published.load(std::memory_order_acquire);
+        if (snap == nullptr)
+            return;
+
+        const double spb = snap->project.bpm > 0.0 ? (60.0 / snap->project.bpm) * 4.0 : 0.0;
         if (spb <= 0.0)
             return;
 
@@ -74,7 +107,7 @@ namespace sssketch
             }
         }
 
-        if (currentProject.rifffs.empty())
+        if (snap->project.rifffs.empty())
             return;
 
         // Per-channel accumulation: each channel's stems sum into their own
@@ -94,9 +127,9 @@ namespace sssketch
         // the previous call, which is rare; the common case is a fixed-size
         // resize() no-op followed by a plain zero-fill, no heap traffic at
         // all on this real-time callback.
-        auto& channelL = scratchChannelL;
-        auto& channelR = scratchChannelR;
-        auto& channelIds = scratchChannelIds;
+        auto& channelL = snap->scratchChannelL;
+        auto& channelR = snap->scratchChannelR;
+        auto& channelIds = snap->scratchChannelIds;
         for (size_t i = 0; i < channelL.size(); ++i)
         {
             if (channelL[i].size() != (size_t) numSamples)
@@ -109,7 +142,7 @@ namespace sssketch
         }
 
         size_t channelIdx = 0;
-        for (const auto& [channelId, rifffPtrs] : channelGroups)
+        for (const auto& [channelId, rifffPtrs] : snap->channelGroups)
         {
             float* chOutL = channelL[channelIdx].data();
             float* chOutR = channelR[channelIdx].data();
@@ -208,7 +241,7 @@ namespace sssketch
                 // is a hand-optimized reimplementation of the same algorithm
                 // for the real-time callback, not a caller of
                 // computeStemSchedule — see the comment above this loop).
-                const double rawOffsetBars = stem.offsetSteps / currentProject.snapDiv;
+                const double rawOffsetBars = stem.offsetSteps / snap->project.snapDiv;
                 double offsetBars = std::fmod(rawOffsetBars, (double) stem.barLength);
                 if (offsetBars < 0.0)
                     offsetBars += (double) stem.barLength;
