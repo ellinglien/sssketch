@@ -139,11 +139,13 @@ export function CollapsedRifffRow({
   // representative value becomes exactly correct the moment it's touched.
   const volume = useAppSelector((s) => s.vol[stemKey(groupId, firstStem.slot)] ?? 1)
 
-  const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)
-  const [dragLeftCropBars, setDragLeftCropBars] = useState<number | null>(null)
-  const [dragFadeIn, setDragFadeIn] = useState<number | null>(null)
-  const [dragFadeOut, setDragFadeOut] = useState<number | null>(null)
-  const [dragVolume, setDragVolume] = useState<number | null>(null)
+  // Shared, store-backed live preview -- see StemWaveformRow.tsx's identical
+  // change and docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
+  const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
+  const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
+  const dragFadeIn = useAppSelector((s) => s.dragFadeIn[groupId] ?? null)
+  const dragFadeOut = useAppSelector((s) => s.dragFadeOut[groupId] ?? null)
+  const dragVolume = useAppSelector((s) => s.dragVol[stemKey(groupId, firstStem.slot)] ?? null)
   // One-shot-only live drag preview -- separate from dragPlayedBars/
   // dragLeftCropBars above, which a one-shot never uses (its resize handles
   // are unsnapped seconds-based trim/stretch, not bar-snapped playedBars).
@@ -277,13 +279,23 @@ export function CollapsedRifffRow({
       e,
       (deltaX) => {
         finalPlayedBars = Math.max(MIN_PLAYED_BARS, Math.round(startPlayedBars + deltaX / PPB))
-        setDragPlayedBars(finalPlayedBars)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'playedBars',
+          key: playedBarsKey,
+          value: finalPlayedBars
+        })
       },
       (moved) => {
         if (moved) {
           dispatch({ type: 'SET_PLAYED_BARS', key: playedBarsKey, bars: finalPlayedBars })
         }
-        setDragPlayedBars(null)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'playedBars',
+          key: playedBarsKey,
+          value: undefined
+        })
       }
     )
   }
@@ -301,13 +313,23 @@ export function CollapsedRifffRow({
           -startPosBar,
           Math.min(startPlayedBars - MIN_PLAYED_BARS, requestedLeftCropBars)
         )
-        setDragLeftCropBars(finalLeftCropBars)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'leftCropBars',
+          key: groupId,
+          value: finalLeftCropBars
+        })
       },
       (moved) => {
         if (moved) {
           dispatch({ type: 'SET_LEFT_CROP_BARS', groupId, bars: finalLeftCropBars })
         }
-        setDragLeftCropBars(null)
+        dispatch({
+          type: 'SET_DRAG_PREVIEW',
+          field: 'leftCropBars',
+          key: groupId,
+          value: undefined
+        })
       }
     )
   }
@@ -472,11 +494,11 @@ export function CollapsedRifffRow({
           0,
           Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
         )
-        setDragFadeIn(finalFadeIn)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
-        setDragFadeIn(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
       }
     )
   }
@@ -491,11 +513,11 @@ export function CollapsedRifffRow({
           0,
           Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
         )
-        setDragFadeOut(finalFadeOut)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
-        setDragFadeOut(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
       }
     )
   }
@@ -528,11 +550,11 @@ export function CollapsedRifffRow({
       e,
       (_dx, deltaY) => {
         finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
-        setDragVolume(finalVolume)
+        dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: finalVolume })
       },
       (moved) => {
         if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
-        setDragVolume(null)
+        dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: undefined })
       }
     )
   }
