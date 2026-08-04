@@ -139,8 +139,12 @@ export function CollapsedRifffRow({
   // representative value becomes exactly correct the moment it's touched.
   const volume = useAppSelector((s) => s.vol[stemKey(groupId, firstStem.slot)] ?? 1)
 
-  // Shared, store-backed live preview -- see StemWaveformRow.tsx's identical
-  // change and docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
+  // Shared, store-backed live preview, not local useState -- this row is
+  // the one place a live volume/fade/length/crop preview needs to be
+  // readable from OUTSIDE this component (StoreContext.tsx's engine-sync
+  // effect, wired up in a later task, and StemWaveformRow's own sibling
+  // instances in the expanded view) rather than trapped in per-component
+  // state. See docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
   const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
   const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
   const dragFadeIn = useAppSelector((s) => s.dragFadeIn[groupId] ?? null)
