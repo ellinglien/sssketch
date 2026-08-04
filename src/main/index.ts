@@ -274,6 +274,13 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
+  ipcMain.handle(
+    'engine-set-live-param',
+    (_event, field: 'volume' | 'fadeIn' | 'fadeOut', key: string, value: number) => {
+      playbackEngine?.client.send('set-live-param', { field, key, value })
+    }
+  )
+
   ipcMain.handle('engine-set-loop-region', (_event, startBar: number, endBar: number) => {
     playbackEngine?.client.send('set-loop-region', { startBar, endBar })
   })

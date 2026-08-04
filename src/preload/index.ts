@@ -45,6 +45,11 @@ const api = {
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
+  engineSetLiveParam: (
+    field: 'volume' | 'fadeIn' | 'fadeOut',
+    key: string,
+    value: number
+  ): Promise<void> => ipcRenderer.invoke('engine-set-live-param', field, key, value),
   engineSetLoopRegion: (startBar: number, endBar: number): Promise<void> =>
     ipcRenderer.invoke('engine-set-loop-region', startBar, endBar),
   engineListInputDevices: (): Promise<string[]> => ipcRenderer.invoke('engine-list-input-devices'),
