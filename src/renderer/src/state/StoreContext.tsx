@@ -315,8 +315,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // every single audio block — see the Phase 3 design doc.
   // pendingEngineSyncRef tracks whether an rAF-scheduled flush is currently
   // pending OR in flight -- deliberately NOT cleared by this effect's own
-  // cleanup function on every dependency change (only on unmount, in the
-  // separate effect below). A naive `return () =>
+  // cleanup function on every dependency change. This provider is the
+  // app's single top-level parent, mounted exactly once for the lifetime of
+  // the window (see currentState's own doc comment above) and never
+  // unmounted before the whole renderer process tears down, so there's no
+  // meaningful "unmount mid-flush" case to guard against here -- unlike a
+  // component that can mount/unmount repeatedly. A naive `return () =>
   // cancelAnimationFrame(...)` here would cancel-and-reschedule on every
   // single dependency change; during a fast drag (state.dragVol changing
   // far more often than once per animation frame), each new dispatch would
@@ -329,9 +333,37 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // the LATEST committed state at the moment it actually runs, not
   // whatever was captured when it was scheduled.
   const pendingEngineSyncRef = useRef(false)
+  // Set whenever a dependency changes while a flush is already pending/
+  // in-flight (see scheduleEngineSync below) -- catches the case a plain
+  // pendingEngineSyncRef guard alone would silently drop: a change arriving
+  // WHILE the current send's own async IPC round-trip (buildEngineProject's
+  // rubberband resolveStretched call, then engineLoadProject) is still in
+  // flight has nothing to trigger a later re-send once that call finishes,
+  // since flipping a ref back to false doesn't itself cause a re-render or
+  // re-run this effect. Checked in the same `finally` block that clears
+  // pendingEngineSyncRef; if set, immediately schedules one more flush
+  // (which will read stateRef.current fresh at THAT point, reflecting
+  // whatever arrived) rather than leaving the engine on a stale mid-drag
+  // value until some unrelated later edit happens to touch a tracked field.
+  const dirtyEngineSyncRef = useRef(false)
 
   useEffect(() => {
-    if (!pendingEngineSyncRef.current) {
+    scheduleEngineSync()
+    // No eslint-disable needed here: the effect body only calls
+    // scheduleEngineSync (which itself only reads stateRef.current, a ref,
+    // exempt from exhaustive-deps) rather than reading `state` directly, so
+    // the linter has no missing-dependency complaint about the individual
+    // state.* entries below. They're listed individually (not as a single
+    // `state` dep) intentionally, matching the granularity of the original
+    // effect, and intentionally exclude playing/pos (no longer part of
+    // state at all); those are handled by the separate play/pause effect
+    // and the position-update subscription below, not by reloading the
+    // whole project.
+    function scheduleEngineSync(): void {
+      if (pendingEngineSyncRef.current) {
+        dirtyEngineSyncRef.current = true
+        return
+      }
       pendingEngineSyncRef.current = true
       requestAnimationFrame(() => {
         void (async () => {
@@ -346,25 +378,19 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             // Cleared only once the send actually completes (success or
             // failure) -- not at the start of the rAF callback -- so at
             // most one send is ever pending/in-flight at a time. Without
-            // this, a slow send (e.g. buildEngineProject's own rubberband
-            // resolveStretched round-trip) could let a second flush get
-            // scheduled and fire while the first is still in flight,
-            // reintroducing the exact overlapping-async-calls race the
-            // effect's own removed `cancelled` flag used to guard against.
+            // this, a slow send could let a second flush get scheduled and
+            // fire while the first is still in flight, reintroducing the
+            // exact overlapping-async-calls race the effect's own removed
+            // `cancelled` flag used to guard against.
             pendingEngineSyncRef.current = false
+            if (dirtyEngineSyncRef.current) {
+              dirtyEngineSyncRef.current = false
+              scheduleEngineSync()
+            }
           }
         })()
       })
     }
-    // No eslint-disable needed here: the effect body only reads
-    // stateRef.current (a ref, exempt from exhaustive-deps) rather than
-    // `state` directly, so the linter has no missing-dependency complaint
-    // about the individual state.* entries below. They're listed
-    // individually (not as a single `state` dep) intentionally, matching
-    // the granularity of the original effect, and intentionally exclude
-    // playing/pos (no longer part of state at all); those are handled by
-    // the separate play/pause effect and the position-update subscription
-    // below, not by reloading the whole project.
   }, [
     state.off,
     state.bpm,
