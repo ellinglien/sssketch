@@ -542,7 +542,7 @@ describe('reducer', () => {
   })
 
   describe('RESIZE_LEFT', () => {
-    it("sets playedBars on the group key and moves the rifff's own startBar", () => {
+    it("sets playedBars on the group key, moves the rifff's own startBar, and writes offsetSteps into off[groupId] even when the group had no prior entry there", () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
       state = reducer(state, {
@@ -554,6 +554,7 @@ describe('reducer', () => {
       })
       expect(state.playedBars.r1).toBe(10)
       expect(state.rifffs.r1.startBar).toBe(4)
+      expect(state.off.r1).toBe(0)
     })
 
     it('clamps playedBars to a minimum of 0.25 and startBar to a minimum of 0', () => {
@@ -589,20 +590,8 @@ describe('reducer', () => {
       // lives in a drag handler -- see this plan's own Task 3).
       expect(state.off.r1).toBe(-3)
     })
-
-    it('leaves off[groupId] untouched when it was never set (still defaults to 0 via ?? elsewhere)', () => {
-      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
-      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 6 })
-      state = reducer(state, {
-        type: 'RESIZE_LEFT',
-        groupId: 'r1',
-        bars: 10,
-        startBar: 4,
-        offsetSteps: 0
-      })
-      expect(state.off.r1).toBe(0)
-    })
   })
+
   describe('UNGROUP', () => {
     it('splits every stem into its own independent, selected one-stem rifff', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
