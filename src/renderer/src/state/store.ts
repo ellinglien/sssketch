@@ -196,7 +196,7 @@ export type Action =
   | { type: 'REMOVE_FROM_TIMELINE'; groupId: string }
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
-  | { type: 'RESIZE_LEFT'; groupId: string; bars: number; startBar: number }
+  | { type: 'RESIZE_LEFT'; groupId: string; bars: number; startBar: number; offsetSteps: number }
   | {
       type: 'SET_ONE_SHOT_TRIM'
       groupId: string
@@ -404,10 +404,18 @@ export function reducer(state: AppState, action: Action): AppState {
         playedBars: { ...state.playedBars, [action.key]: Math.max(MIN_PLAYED_BARS, action.bars) }
       }
 
-    // Dragging the LEFT resize handle: playedBars and the rifff's own start
-    // move together in one atomic edit (one undo step, not two) so the
-    // clip's right edge — where the loop currently ends — stays exactly in
-    // place while the loop extends backward.
+    // Dragging the LEFT resize handle: playedBars, the rifff's own start,
+    // and the loop's own phase (off[groupId]) all move together in one
+    // atomic edit (one undo step, not three) so the clip's right edge —
+    // where the loop currently ends — stays exactly in place while the
+    // loop extends backward, AND the pattern keeps playing what it always
+    // would have at each absolute bar position instead of restarting from
+    // its own beginning at the new boundary. The offsetSteps value itself
+    // is computed by the one dispatch site that has the exact bar delta on
+    // hand (StemWaveformRow.tsx's handleLeftResizeStart) -- see
+    // docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md for
+    // the derivation (offsetBars must move by the OPPOSITE delta startBar
+    // moves by, so their sum stays invariant).
     case 'RESIZE_LEFT': {
       const rifff = state.rifffs[action.groupId]
       return {
@@ -419,7 +427,8 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs: {
           ...state.rifffs,
           [action.groupId]: { ...rifff, startBar: Math.max(0, action.startBar) }
-        }
+        },
+        off: { ...state.off, [action.groupId]: action.offsetSteps }
       }
     }
 
