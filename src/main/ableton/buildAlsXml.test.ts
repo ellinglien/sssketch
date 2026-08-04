@@ -72,6 +72,37 @@ function drumsRifff(): Rifff {
   }
 }
 
+// A realistic one-shot fixture -- barLength: 1 is not an arbitrary test
+// choice, it's what importOneShot.ts actually hardcodes for every real
+// one-shot/recorded-take stem (its own doc comment: "cosmetic... the
+// native engine ignores bpm/barLength for tiling/resampling purposes
+// whenever a stem's oneShot is set"). durationSec is deliberately NOT a
+// round multiple of any beat count, so a test using this fixture can't
+// accidentally pass by coincidence the way it could with a duration that
+// happens to land on a whole number of beats either way.
+function realOneShotRifff(): Rifff {
+  return {
+    groupId: 'os-1',
+    name: 'vox-hit',
+    bpm: 120,
+    barLength: 1,
+    folderPath: '/fake/folder',
+    startBar: 4,
+    stems: [
+      {
+        slot: 0,
+        author: 'someone',
+        name: 'vox',
+        type: 'sampler',
+        path: '/source/vox.wav',
+        durationSec: 2.7317,
+        barLength: 1,
+        oneShot: true
+      }
+    ]
+  }
+}
+
 // Navigates from a parsed document down to the <Tracks> children array --
 // every test below starts from here.
 function tracksOf(xml: string): { liveSetChildren: AlsNode[]; tracks: AlsNode[] } {
@@ -315,21 +346,26 @@ describe('buildAlsXml', () => {
     expect(warpModes).toContain('5')
   })
 
-  it('gives a one-shot stem LoopOn=false and maps trimStartSec/trimEndSec onto the loop window', () => {
-    const rifff = drumsRifff()
+  it('gives a one-shot stem LoopOn=false, IsWarped=false, and maps trimStartSec/trimEndSec at the PROJECT tempo', () => {
+    // Uses a realistic one-shot fixture (barLength: 1, matching what
+    // importOneShot.ts actually produces for every one-shot/recorded-take)
+    // -- NOT drumsRifff()'s barLength: 4, which would silently hide the
+    // nativeBpm bug this test exists to catch (see realOneShotRifff's own
+    // doc comment below).
+    const rifff = realOneShotRifff()
     rifff.stems[0] = {
       ...rifff.stems[0],
-      oneShot: true,
-      trimStartSec: 60 / 140, // 1 beat in
-      trimEndSec: (60 / 140) * 2 // 2 beats in
+      trimStartSec: 0.5, // 1 beat in, at the 120bpm project tempo below
+      trimEndSec: 1.5 // 3 beats in
     }
 
     const state = emptyAppState({
-      rifffs: { 'rifff-1': rifff },
-      channelOrder: ['rifff-1'],
-      channelOf: { 'rifff-1': 'rifff-1' }
+      bpm: 120,
+      rifffs: { 'os-1': rifff },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
     })
-    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
 
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
     const { tracks } = tracksOf(xml)
@@ -339,12 +375,110 @@ describe('buildAlsXml', () => {
     const loopBody = childArray(loop, 'Loop')
 
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
+    expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
+    // 0.5s and 1.5s at 120bpm (2 beats/sec) = 1 beat and 3 beats -- via the
+    // PROJECT's tempo, not any per-stem "native" tempo derived from the
+    // cosmetic barLength: 1.
     expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
-    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+    expect(Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])).toBeCloseTo(3, 10)
     // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
-    // stem.barLength*4 -- one-shots are never tile-bounded, so this must
-    // stay a true no-op relative to the pre-tile-cycle-fix behavior.
-    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    // stem.barLength*4 -- one-shots are never tile-bounded.
+    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+  })
+
+  it('does NOT collapse an untrimmed one-shot to exactly one bar regardless of its real duration', () => {
+    // Regression test for a real bug found in whole-feature review: every
+    // one-shot/recorded-take has a hardcoded, cosmetic barLength: 1 (see
+    // importOneShot.ts), so deriving warp/tempo from
+    // durationSec/barLength (nativeBpmFor) is meaningless for one-shots --
+    // it silently collapsed CurrentEnd to exactly 4 beats (one bar) no
+    // matter how long the sample actually was, then relied on
+    // IsWarped=true to force-stretch the whole file to fit.
+    const rifff = realOneShotRifff() // durationSec: 2.7317, deliberately not a round beat count
+    const state = emptyAppState({
+      bpm: 120,
+      rifffs: { 'os-1': rifff },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+
+    // 2.7317s at 120bpm (2 beats/sec) = 5.4634 beats -- NOT 4 (one bar),
+    // which is what the old nativeBpm-from-barLength=1 bug always produced.
+    const expectedBeats = 2.7317 * (120 / 60)
+    const actual = Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])
+    expect(actual).toBeCloseTo(expectedBeats, 9)
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).not.toBe('4')
+  })
+
+  it("scales a one-shot's occupied beat-span with the project's own tempo, since it's unwarped", () => {
+    // Unwarped audio plays at its own true native speed regardless of Set
+    // tempo -- it just occupies proportionally more or less
+    // arrangement-timeline space (beats) as the tempo changes. At 3x the
+    // tempo, the same real-world duration should occupy exactly 3x the
+    // beats.
+    const rifffAt60 = realOneShotRifff()
+    const rifffAt180 = realOneShotRifff()
+    const stateAt60 = emptyAppState({
+      bpm: 60,
+      rifffs: { 'os-1': rifffAt60 },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stateAt180 = emptyAppState({
+      bpm: 180,
+      rifffs: { 'os-1': rifffAt180 },
+      channelOrder: ['os-1'],
+      channelOf: { 'os-1': 'os-1' }
+    })
+    const stemFileNames = new Map([['os-1:0', 'vox-hit-vox.wav']])
+
+    const clipAt60 = findAudioClip(
+      findChild(
+        tracksOf(buildAlsXml(TEMPLATE_XML, stateAt60, '/out', stemFileNames)).tracks,
+        'AudioTrack'
+      )!
+    )
+    const clipAt180 = findAudioClip(
+      findChild(
+        tracksOf(buildAlsXml(TEMPLATE_XML, stateAt180, '/out', stemFileNames)).tracks,
+        'AudioTrack'
+      )!
+    )
+    const endAt60 = Number(
+      attrs(findChild(childArray(clipAt60, 'AudioClip'), 'CurrentEnd')!)['@_Value']
+    )
+    const endAt180 = Number(
+      attrs(findChild(childArray(clipAt180, 'AudioClip'), 'CurrentEnd')!)['@_Value']
+    )
+
+    expect(endAt180 / endAt60).toBeCloseTo(3, 9)
+  })
+
+  it('leaves a normal (tiled) stem warped, with unchanged tile-cycle math', () => {
+    // Confirms the one-shot fix above didn't regress the non-one-shot path.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' }
+    })
+    const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+    const { tracks } = tracksOf(xml)
+    const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+    const clipBody = childArray(clip, 'AudioClip')
+
+    expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('true')
+    const markers = childArray(findChild(clipBody, 'WarpMarkers')!, 'WarpMarkers')
+    expect(markers).toHaveLength(2)
+    expect(Number(attrs(markers[1])['@_SecTime'])).toBeCloseTo(60 / 140, 10)
   })
 
   it('skips a stem missing from stemFileNames instead of producing a broken track', () => {
