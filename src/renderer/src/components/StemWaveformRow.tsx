@@ -261,6 +261,16 @@ export function StemWaveformRow({
         scheduleLiveParamSync('fadeIn', groupId, finalFadeIn)
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit": this is
+        // also what indirectly clears the native live override this drag
+        // set via scheduleLiveParamSync above -- SET_FADE_IN triggers
+        // StoreContext.tsx's full-reload effect, and IpcServer.cpp's
+        // load-project handler clears every live override right after
+        // that reload lands. Removing this dispatch (e.g. thinking
+        // scheduleLiveParamSync alone now covers it) would leave the
+        // engine stuck on this drag's last live value forever. See
+        // docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md's
+        // "Handoff at drag-end" section.
         if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
       }
@@ -286,6 +296,10 @@ export function StemWaveformRow({
         scheduleLiveParamSync('fadeOut', groupId, finalFadeOut)
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit" -- see
+        // handleFadeInStart's identical comment above for why (indirectly
+        // clears the native live override this drag set via
+        // scheduleLiveParamSync).
         if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
       }
@@ -339,6 +353,10 @@ export function StemWaveformRow({
         scheduleLiveParamSync('volume', key, finalVolume)
       },
       (moved) => {
+        // Load-bearing beyond the obvious "commit the real edit" -- see
+        // handleFadeInStart's identical comment above for why (indirectly
+        // clears the native live override this drag set via
+        // scheduleLiveParamSync).
         if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
         dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: undefined })
       }
