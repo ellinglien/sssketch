@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { placedRifffsInOrder, pasteRifffAction } from '../state/selectors'
 import { PolarGlyph } from './PolarGlyph'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
@@ -418,7 +418,7 @@ export function SketchStrip(): React.JSX.Element {
           >
             <PolarGlyph
               stems={rifff.stems}
-              identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
+              identityColor={stemColorVar(rifff.stems[0])}
               size={TILE_SIZE}
             />
             {/* How many bars this tile plays before the sequence advances —

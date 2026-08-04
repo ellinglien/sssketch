@@ -1,26 +1,30 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
-import { linearWaveBars } from '@shared/visuals'
+import { linearWaveBarsRunningMax } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
-import { markManualSeek } from '../state/manualSeek'
-import { RifffBlockRow } from './RifffBlockRow'
+import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
+import { ROW_HEIGHT } from './StemWaveformRow'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 
 // A recording channel with zero clips yet renders no RifffBlockRow at all,
 // so nothing establishes this row's flow height -- it would otherwise
 // collapse to 0px (RifffBlockRow.tsx's own NAME_BAR_HEIGHT spacer is what
 // normally does that job). Beyond just looking wrong, this silently broke
-// the live capture-level overlay below: its `top: 0, bottom: 0` fill
-// collapses to a real 0px box inside a 0px-tall parent, so the bars were
-// rendering (capturePeaks really was updating) but were invisible the
-// entire time a channel was armed -- a real bug found during manual
-// testing. Matches a single-stem clip's own footprint (RifffBlockRow's
-// NAME_BAR_HEIGHT=18 + StemWaveformRow's ROW_HEIGHT=44) so an empty
-// recording channel doesn't look jarringly different in size once a take
-// lands on it.
-const EMPTY_CHANNEL_MIN_HEIGHT = 62
+// the live capture-level overlay below: its fill collapses to a real 0px
+// box inside a 0px-tall parent, so the bars were rendering (capturePeaks
+// really was updating) but were invisible the entire time a channel was
+// armed -- a real bug found during manual testing. Matches a single-stem
+// clip's own footprint so an empty recording channel doesn't look
+// jarringly different in size once a take lands on it.
+const EMPTY_CHANNEL_MIN_HEIGHT = NAME_BAR_HEIGHT + ROW_HEIGHT
+
+// Must match IpcServer.cpp's own armedRecorder->peaksFixedWindow(0.05) call
+// exactly -- the live capture overlay below derives its pixel width from
+// capturePeaks.length * this value, not from a separately-pushed elapsed
+// time, so the two need to agree on what one bucket represents.
+const LIVE_CAPTURE_BUCKET_SECONDS = 0.05
 
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
@@ -237,24 +241,20 @@ function ChannelRowImpl({
         if (result.success) {
           setArmedLoopRegion(loopRegion)
           dispatch({ type: 'ARM_RECORDING_CHANNEL', channelId })
-          // Always seek to the loop's own start, whether or not playback
-          // was already running -- found during manual testing: capture
-          // starts the instant the engine attaches the recorder (whatever
-          // position that happens to be at), but the committed clip is
-          // always PLACED at loopRegion.startBar. Those only agree if
-          // arming genuinely starts monitoring/capturing from that exact
-          // bar every time; the old "only seek if not already playing"
-          // logic left position wherever an already-running transport
-          // happened to be, so recorded content and where it landed on
-          // the timeline could be arbitrarily misaligned. Mirrors Ruler
-          // seekTo's own "dispatch SET_POS, and if already playing also
-          // push the seek to the engine directly" pattern.
+          // The engine itself already jumped playback to loopRegion.startBar
+          // instantly and atomically as part of the arm-recording call above
+          // (see IpcServer.cpp's arm-recording handler) -- that's what
+          // actually keeps captured audio and its claimed timeline placement
+          // in sync. This just mirrors that into renderer state so the UI
+          // (playhead, play button) reflects it immediately rather than
+          // waiting for the next periodic position poll. Only dispatch PLAY
+          // if we weren't already playing -- it's a state transition action,
+          // not idempotent, and if already playing the engine has nothing
+          // new to be told (its own enginePlay effect only fires on a
+          // playing:false -> true transition).
           dispatch({ type: 'SET_POS', pos: loopRegion.startBar })
           if (!playing) {
             dispatch({ type: 'PLAY' })
-          } else {
-            markManualSeek()
-            void window.rifffApi.engineSetPosition(loopRegion.startBar)
           }
         } else {
           window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
@@ -320,25 +320,13 @@ function ChannelRowImpl({
   // sitting there) since the engine only pushes capture-level-update while
   // some channel is actually armed (see IpcServer.cpp's timerCallback).
   const [capturePeaks, setCapturePeaks] = useState<number[]>([])
-  // How much has actually been captured so far, in seconds -- drives the
-  // overlay's own WIDTH below. Capture length is no longer tied to the
-  // loop region at all (see LoopRecorder's own doc comment on the native
-  // side), so sizing the overlay to loopRegion's fixed bounds would
-  // squish an ever-growing recording into the same fixed pixel span,
-  // visually "shrinking" everything already drawn every time more gets
-  // captured -- exactly the bug reported during manual testing ("the wave
-  // shrinks and moves").
-  const [captureElapsedSeconds, setCaptureElapsedSeconds] = useState(0)
   useEffect(() => {
     if (!isArmed) return
-    const unsubscribe = window.rifffApi.onCaptureLevelUpdate(
-      (updateChannelId, peaks, elapsedSeconds) => {
-        if (updateChannelId === channelId) {
-          setCapturePeaks(peaks)
-          setCaptureElapsedSeconds(elapsedSeconds)
-        }
+    const unsubscribe = window.rifffApi.onCaptureLevelUpdate((updateChannelId, peaks) => {
+      if (updateChannelId === channelId) {
+        setCapturePeaks(peaks)
       }
-    )
+    })
     // Reset lives in the cleanup, not the setup body -- calling setState
     // synchronously in an effect's setup trips react-hooks/set-state-in-effect
     // (see BeatPicker.tsx's identical reasoning on its own preview-stop
@@ -347,7 +335,6 @@ function ChannelRowImpl({
     return () => {
       unsubscribe()
       setCapturePeaks([])
-      setCaptureElapsedSeconds(0)
     }
   }, [isArmed, channelId])
 
@@ -469,21 +456,33 @@ function ChannelRowImpl({
         // loopRegion selector -- capture length is no longer tied to the
         // loop region at all, so this needs to track "where and how much
         // has actually been recorded," not "the loop's own box." Width is
-        // captureElapsedSeconds converted to bars and back to pixels,
-        // growing in real time as the take grows -- sizing this to the
-        // loop region's own fixed width instead (the previous approach)
-        // squished an ever-longer recording into the same fixed span,
-        // visually shrinking/rescaling everything already drawn every
-        // time more got captured. Math.max(2, ...) keeps it from
-        // collapsing to 0px in the first instant after arming, before the
-        // first capture-level-update has arrived.
+        // derived from capturePeaks.length (each entry is exactly
+        // LIVE_CAPTURE_BUCKET_SECONDS of real captured audio -- see
+        // peaksFixedWindow's own doc comment on the native side), NOT from
+        // a separately-pushed elapsedSeconds -- growing in lockstep with
+        // the bars themselves means the container only ever widens in the
+        // same discrete steps new bars appear in, instead of stretching
+        // smoothly between bucket arrivals (which visibly "breathed" the
+        // most recently drawn bar wider each frame until the next bucket
+        // landed). Math.max(2, ...) keeps it from collapsing to 0px in the
+        // first instant after arming, before the first bucket exists yet.
         <div
           style={{
             position: 'absolute',
             left: armedLoopRegion.startBar * ppb,
-            width: Math.max(2, (captureElapsedSeconds / ((60 / bpm) * 4)) * ppb),
-            top: 0,
-            bottom: 0,
+            width: Math.max(
+              2,
+              ((capturePeaks.length * LIVE_CAPTURE_BUCKET_SECONDS) / ((60 / bpm) * 4)) * ppb
+            ),
+            // NAME_BAR_HEIGHT/ROW_HEIGHT, not top:0/bottom:0 spanning this
+            // whole channel row -- the row's own container includes the
+            // 18px name-bar strip above where a committed clip's Waveform
+            // actually renders (see RifffBlockRow.tsx), so filling the
+            // whole row stretched this overlay taller than -- and shifted
+            // it vertically from -- the exact lane the finished clip's own
+            // waveform will occupy. This matches that lane exactly.
+            top: NAME_BAR_HEIGHT,
+            height: ROW_HEIGHT,
             pointerEvents: 'none'
           }}
         >
@@ -496,13 +495,24 @@ function ChannelRowImpl({
               explicitly not wanted here) and no pitch line -- still no glow
               (an earlier, separate, explicit design decision). Full
               opacity, not Waveform.tsx's usual 0.75. Uses the dedicated
-              --ra-recording-live purple, not typeColorVar('audioIn') (the
-              committed clip's own red) -- per feedback, this should stand
-              out from every other color already on screen while actively
-              recording, not just read as a brighter version of the same
-              red every other audio-in clip already uses. */}
+              --ra-recording-live purple, which is the SAME purple
+              --ra-type-audio-in now uses for a committed clip too -- live
+              and final read as one continuous color language rather than
+              switching partway through.
+
+              linearWaveBarsRunningMax, not linearWaveBars -- the latter
+              normalizes every bar's height against Math.max(peaks) across
+              the WHOLE array, which for a live, growing array meant a
+              louder bucket arriving later in the take retroactively shrank
+              every bar already on screen (the "waveform looks animated"
+              bug). linearWaveBarsRunningMax normalizes each bar only
+              against peaks up to and including its own index -- values
+              that never change once present -- so a bar's height, once
+              drawn, is provably stable on every later poll, while still
+              tracking toward the same auto-normalized look
+              Waveform.tsx's own linearWaveBars gives the finished clip. */}
           <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
-            {linearWaveBars(capturePeaks).map((bar, i) => (
+            {linearWaveBarsRunningMax(capturePeaks).map((bar, i) => (
               <rect
                 key={i}
                 x={bar.x}

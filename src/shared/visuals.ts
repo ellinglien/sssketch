@@ -115,6 +115,36 @@ export function linearWaveBars(peaks: number[]): WaveformBar[] {
   })
 }
 
+/** Same geometry as linearWaveBars, but each bar's height is normalized
+ * against the running max of every peak up to and including its OWN
+ * index, not the whole array's max -- needed for a live, growing peaks
+ * array (ChannelRow.tsx's capture overlay) where re-deriving the divisor
+ * from the WHOLE array on every poll would retroactively rescale (and
+ * visibly reshape) bars already drawn, every time a louder bucket showed
+ * up later in the take. Bar i's height depends only on peaks[0..i] --
+ * values that, once present, never change again (see peaksFixedWindow's
+ * own append-only doc comment on the native side) -- so recomputing it
+ * on a later, longer array always reproduces the exact same result.
+ * Trades exact parity with the finished clip's own whole-file
+ * normalization (a quiet moment recorded before the take's eventual
+ * loudest one reads shorter live than it will in the committed clip,
+ * since the live view can't know about a louder moment that hasn't
+ * happened yet) for the "already-drawn bars never change" behavior a
+ * live meter needs and a whole-file normalization fundamentally can't
+ * give it. */
+export function linearWaveBarsRunningMax(peaks: number[]): WaveformBar[] {
+  const n = peaks.length
+  if (n === 0) return []
+  const stepWidth = 128 / n
+  let runningMax = 0
+  return peaks.map((p, i) => {
+    runningMax = Math.max(runningMax, p)
+    const mx = runningMax || 1
+    const h = (p / mx) * 45
+    return { x: i * stepWidth, width: stepWidth, y: 50 - h, height: h * 2 }
+  })
+}
+
 /** Cheap zero-crossing-rate brightness proxy, bucketed the same way
  * peaksFromChannel is — a rough "how much high-frequency content is in
  * this bucket" without running an FFT: high-frequency content crosses zero

@@ -45,6 +45,17 @@ export interface Stem {
    * file's own start -- NOT relative to trimStartSec). Undefined means
    * durationSec (play to the natural end). */
   trimEndSec?: number
+  /** True only for a take captured via this app's own loop-record feature
+   * (see importRecordedTake in src/main/importOneShot.ts) -- an orthogonal
+   * provenance flag, not a SoundType, deliberately kept separate from
+   * `type: 'audioIn'` (which also covers LORE's own mic-instrument
+   * imports, not ours to visually claim). Drives stemColorVar
+   * (theme/typeColor.ts) to color a committed recorded take with
+   * --ra-recording-live instead of --ra-type-audio-in's own color,
+   * everywhere a stem's identity color is shown -- per feedback, a
+   * recording should read as its own distinct category, not just another
+   * audio-in-typed clip. Undefined/false for every other stem. */
+  recordedInApp?: boolean
 }
 
 export interface Rifff {

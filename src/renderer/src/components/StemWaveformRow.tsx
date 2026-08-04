@@ -5,7 +5,7 @@ import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
@@ -55,7 +55,7 @@ export function StemWaveformRow({
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const bpm = useAppSelector((s) => s.bpm)
   const stem = rifff.stems.find((s) => s.slot === slot)!
-  const color = typeColorVar(stem.type)
+  const color = stemColorVar(stem)
   const playedBarsKey = groupId
 
   const [dragPlayedBars, setDragPlayedBars] = useState<number | null>(null)

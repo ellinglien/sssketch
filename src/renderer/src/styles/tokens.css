@@ -63,11 +63,16 @@
   --ra-mute-on-ink:    #1a0a0a;
   --ra-stretch-on:     #ededed;
   --ra-stretch-on-bg:  #161616;
-  /* Live capture-in-progress waveform (ChannelRow's armed-channel overlay)
-   * -- deliberately distinct from --ra-type-audio-in (the committed clip's
-   * own red), per feedback during manual testing asking for it to stand
-   * out from every other color already on screen while actively
-   * recording, rather than blending in with audio-in's own red. */
+  /* This app's own "recorded via the loop-record feature" color -- covers
+   * BOTH the live capture-in-progress overlay (ChannelRow's armed-channel
+   * overlay) AND, via stemColorVar (theme/typeColor.ts), a committed
+   * recorded take's identity color everywhere it's shown, so recording and
+   * playback read as one continuous color language. Deliberately NOT the
+   * same as --ra-type-audio-in above: that token is a SoundType color and
+   * covers every audioIn-typed stem regardless of provenance (e.g. LORE's
+   * own mic-instrument imports), which aren't ours to visually claim --
+   * see Stem's own recordedInApp doc comment on why this is a separate,
+   * orthogonal flag rather than a new SoundType. */
   --ra-recording-live: #8f7dd4;
 
   /* ——— type ——— */

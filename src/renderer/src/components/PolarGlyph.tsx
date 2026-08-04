@@ -3,7 +3,7 @@ import { polarGlyph, polarPitchLine } from '@shared/visuals'
 import { getBandEnergy } from '../audio/bandEnergyCache'
 import { getPitchContour } from '../audio/pitchCache'
 import type { Stem } from '@shared/types'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 
 // Bassline/melody range for the pitch-line overlay — narrower than
 // pitchContour.ts's own 60-2000Hz default search range, since the visible
@@ -108,7 +108,7 @@ export function PolarGlyph({
       const data = glyphDataByPath[stem.path]
       if (!data) return null
       const r0 = baseR0 + i * ringStep
-      const color = typeColorVar(stem.type)
+      const color = stemColorVar(stem)
       const bandPaths = [
         { arr: data.bass, r0, amp: amp * 0.5, opacity: 0.6 },
         { arr: data.mid, r0: r0 + amp * 0.35, amp: amp * 0.45, opacity: 0.4 },

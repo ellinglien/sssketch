@@ -8,7 +8,7 @@ import { stopActivePreview } from '../audio/previewLoop'
 import { applyLoopMicroFade } from '../audio/microFade'
 import { buildMetronomeBuffer } from '../audio/metronome'
 import { SNAP_DIVS } from '../state/store'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import type { Stem } from '@shared/types'
 import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
 import { computePitchContour } from '@shared/pitchContour'
@@ -924,7 +924,7 @@ export function BeatPicker({
                 >
                   <SpectrogramCanvas
                     spectrogram={spectrogram}
-                    color={typeColorVar(s.type)}
+                    color={stemColorVar(s)}
                     height={LANE_HEIGHT}
                   />
                   {/* One thin line at every point this stem's own native loop

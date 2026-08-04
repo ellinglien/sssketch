@@ -4,7 +4,7 @@ import { stretchRatio } from '../state/selectors'
 import { offsetLabels } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar, typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
 import { formatBpm } from '@shared/format'
 
@@ -48,7 +48,7 @@ export function Inspector({
   }
 
   const rifff = state.rifffs[groupId]
-  const color = typeColorVar(rifff.stems[0]?.type ?? 'fx')
+  const color = stemColorVar(rifff.stems[0])
   const stretchOn = state.stretch[groupId] ?? true
   const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
   const ratio = stretchRatio(state, groupId)
@@ -325,6 +325,12 @@ export function Inspector({
                         width: 6,
                         height: 12,
                         borderRadius: 0,
+                        // typeColorVar, not stemColorVar -- this swatch IS
+                        // the sound-type editor (click cycles stem.type), so
+                        // it needs to show the stem's real, current type
+                        // color even for a recorded take, not a
+                        // recordedInApp override that would mask what
+                        // clicking here actually changes.
                         background: typeColorVar(stem.type),
                         border: 'none',
                         padding: 0

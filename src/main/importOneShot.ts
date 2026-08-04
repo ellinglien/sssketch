@@ -92,34 +92,33 @@ export function importOneShot(path: string): Rifff | null {
 
 /**
  * Imports a recorded take (see docs/superpowers/specs/2026-08-03-loop-recording-design.md)
- * -- shares importOneShot's copyIntoLibrary step above, but differs in
- * exactly one respect: the resulting stem is NOT oneShot. A recorded take
- * should tile/stretch/loop like any other rifff, not play once and stop.
+ * -- shares importOneShot's copyIntoLibrary step above and, per feedback,
+ * behaves exactly like a dragged-in one-shot sample: plays the actual
+ * recording once from wherever it lands, trimmable via the same start/end
+ * handles a one-shot gets (see CollapsedRifffRow.tsx/oneShotResize.ts),
+ * rather than stretched/tiled to fit a bar grid. An earlier version derived
+ * barLength from the take's own real duration and left oneShot unset so a
+ * take would tile/stretch/loop like any other multi-stem rifff -- that's
+ * gone now; barLength is cosmetic (1, matching importOneShot's own
+ * convention) since the native engine ignores bpm/barLength for tiling/
+ * resampling purposes whenever a stem's oneShot is set (see Stem's own doc
+ * comment).
  *
- * barLength is derived from the audio's own real captured duration
- * (durationSec, measured off the actual WAV file), not the loop region's
- * length -- recording is no longer tied to completing a loop pass (see
- * LoopRecorder.h's own doc comment on the native side), so a take's real
- * duration can be shorter or longer than whatever the loop region happened
- * to be at the time. Rounds to the nearest whole bar rather than leaving a
- * fractional one -- this app's bar-based tiling/placement elsewhere assumes
- * whole bars, and a take is very unlikely to have been recorded for an
- * exact, un-rounded number of bars in the first place.
+ * bpm is still the project's real bpm at record time, unlike importOneShot's
+ * hardcoded 120 -- purely accurate metadata (Inspector display etc.),
+ * nothing reads it for playback once oneShot is set.
  */
 export function importRecordedTake(path: string, bpm: number): Rifff | null {
   const copied = copyIntoLibrary(path, 'importRecordedTake')
   if (!copied) return null
   const { groupId, destPath, durationSec } = copied
 
-  const secPerBar = (60 / bpm) * 4
-  const barLength = Math.max(1, Math.round(durationSec / secPerBar))
-
   const displayName = `recording ${new Date().toLocaleTimeString()}`
   return {
     groupId,
     name: displayName,
     bpm,
-    barLength,
+    barLength: 1,
     folderPath: path,
     stems: [
       {
@@ -129,7 +128,9 @@ export function importRecordedTake(path: string, bpm: number): Rifff | null {
         type: 'audioIn',
         path: destPath,
         durationSec,
-        barLength
+        barLength: 1,
+        oneShot: true,
+        recordedInApp: true
       }
     ]
   }

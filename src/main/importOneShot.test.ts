@@ -49,32 +49,21 @@ describe('importOneShot', () => {
 })
 
 describe('importRecordedTake', () => {
-  it("imports a recorded WAV as a non-one-shot stem, deriving barLength from the audio's own real duration", () => {
+  it('imports a recorded WAV as a one-shot stem, behaving like a dragged-in sample rather than tiling/stretching to a bar grid', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
     try {
-      // bpm 120 -> secPerBar = (60/120)*4 = 2s -- a 4-second take is
-      // exactly 2 bars, so barLength should come out deterministically
-      // rather than needing a fuzzy/approximate assertion.
       const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
       const result = importRecordedTake(testWavPath, 120)
       expect(result).not.toBeNull()
+      // bpm is still the project's real bpm (accurate metadata), but
+      // barLength is cosmetic -- see importRecordedTake's own doc comment.
       expect(result!.bpm).toBe(120)
-      expect(result!.barLength).toBe(2)
-      expect(result!.stems[0].oneShot).toBeUndefined()
-      expect(result!.stems[0].barLength).toBe(2)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('rounds barLength to the nearest whole bar rather than leaving a fractional one', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
-    try {
-      // secPerBar at 120bpm = 2s -- 4.6s is 2.3 bars, rounds to 2.
-      const testWavPath = writeTestWav(dir, 'take.wav', 4.6)
-      const result = importRecordedTake(testWavPath, 120)
-      expect(result).not.toBeNull()
-      expect(result!.barLength).toBe(2)
+      expect(result!.barLength).toBe(1)
+      expect(result!.stems).toHaveLength(1)
+      expect(result!.stems[0].oneShot).toBe(true)
+      expect(result!.stems[0].barLength).toBe(1)
+      expect(result!.stems[0].durationSec).toBeCloseTo(4.0, 1)
+      expect(result!.stems[0].type).toBe('audioIn')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

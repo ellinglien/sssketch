@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { PolarGlyph } from './PolarGlyph'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
 import { setGrabOffsetBars } from './dragGrabOffset'
 import { suppressNextSyntheticClick } from './dragUtils'
@@ -308,7 +308,7 @@ export function Shelf({
             >
               <PolarGlyph
                 stems={rifff.stems}
-                identityColor={typeColorVar(rifff.stems[0]?.type ?? 'fx')}
+                identityColor={stemColorVar(rifff.stems[0])}
                 size={TILE_SIZE - 4}
               />
             </button>

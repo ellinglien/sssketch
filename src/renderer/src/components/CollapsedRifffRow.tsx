@@ -4,7 +4,7 @@ import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { clipGeometryFromFields, resolvedPlayedBarsFromFields } from '../state/selectors'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import {
@@ -115,7 +115,7 @@ export function CollapsedRifffRow({
   const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const mute = useAppSelector((s) => s.mute)
   const firstStem = rifff.stems[0]
-  const color = typeColorVar(firstStem?.type ?? 'fx')
+  const color = stemColorVar(firstStem)
   const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
   const oneShotStem = isOneShot ? firstStem : null
   const secPerBar = (60 / bpm) * 4
@@ -567,7 +567,7 @@ export function CollapsedRifffRow({
         >
           {/* One tiled layer per stem, overlaid — same color-per-sound-type
               and opacity convention as PolarGlyph's own rings (fill =
-              typeColorVar(stem.type), opacity 0.55, no blend mode), so the
+              stemColorVar(stem), opacity 0.55, no blend mode), so the
               collapsed block's waveform reads as a mix of all its stems
               rather than just one representative one. Each stem's own mute
               state (independent of the single group-mute button, which just
@@ -597,7 +597,7 @@ export function CollapsedRifffRow({
                   >
                     <Waveform
                       path={oneShotStem.path}
-                      color={typeColorVar(oneShotStem.type)}
+                      color={stemColorVar(oneShotStem)}
                       opacity={0.55}
                     />
                   </div>
@@ -608,7 +608,7 @@ export function CollapsedRifffRow({
                     <CollapsedTiles
                       key={stem.slot}
                       path={stem.path}
-                      color={typeColorVar(stem.type)}
+                      color={stemColorVar(stem)}
                       opacity={0.55}
                       widthPx={widthPx}
                       stemBarLength={stem.barLength}

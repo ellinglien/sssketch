@@ -186,13 +186,15 @@ export function Ruler({
           </div>
         ))}
         {/* Loop-recording region bracket -- tinted fill + accent border,
-            using the same --ra-type-audio-in red already used for the
-            playhead/mute so this reads as "recording/input" without a new
-            token (see the design doc's own color rationale). Edge handles
-            are small hit zones straddling each boundary (6px wide,
-            centered on the edge via left offset), wide enough to grab
-            without the same "hit target too small" problem the fade
-            dots/resize handles had earlier this session. */}
+            using --ra-recording-live, this app's own loop-record feature
+            color (see tokens.css's own doc comment) -- not
+            --ra-type-audio-in, which is a generic SoundType color covering
+            every audio-in-typed stem regardless of provenance, not
+            specifically "recording." Edge handles are small hit zones
+            straddling each boundary (6px wide, centered on the edge via
+            left offset), wide enough to grab without the same "hit target
+            too small" problem the fade dots/resize handles had earlier
+            this session. */}
         {loopRegion && (
           <div
             style={{
@@ -201,10 +203,10 @@ export function Ruler({
               height: 24,
               left: loopRegion.startBar * ppb,
               width: (loopRegion.endBar - loopRegion.startBar) * ppb,
-              background: 'color-mix(in srgb, var(--ra-type-audio-in) 10%, transparent)',
-              borderTop: '2px solid var(--ra-type-audio-in)',
-              borderLeft: '2px solid var(--ra-type-audio-in)',
-              borderRight: '2px solid var(--ra-type-audio-in)',
+              background: 'color-mix(in srgb, var(--ra-recording-live) 10%, transparent)',
+              borderTop: '2px solid var(--ra-recording-live)',
+              borderLeft: '2px solid var(--ra-recording-live)',
+              borderRight: '2px solid var(--ra-recording-live)',
               pointerEvents: 'none'
             }}
           >

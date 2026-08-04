@@ -1,6 +1,6 @@
 import { useAppSelector, useDispatch, useZoom } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
-import { typeColorVar } from '../theme/typeColor'
+import { stemColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
@@ -10,10 +10,10 @@ import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 import { useFrameScale } from '../state/FrameScaleContext'
 
-const NAME_BAR_HEIGHT = 18
+export const NAME_BAR_HEIGHT = 18
 
 function identityColor(rifff: Rifff): string {
-  return typeColorVar(rifff.stems[0]?.type ?? 'fx')
+  return stemColorVar(rifff.stems[0])
 }
 
 export function RifffBlockRow({
