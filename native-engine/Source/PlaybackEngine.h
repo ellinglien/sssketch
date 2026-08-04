@@ -150,6 +150,34 @@ namespace sssketch
         // physically cannot be freed while renderBlock() (or anything else)
         // still holds that copy, no matter how many times or how fast
         // setProject() replaces `published` on another thread meanwhile.
+        //
+        // Known, deliberately-accepted tradeoff: unlike ChannelChainRegistry's
+        // own std::atomic<const T*>::load() (genuinely lock-free -- confirmed
+        // via atomic_is_lock_free), this project's actual libc++ implements
+        // atomic_load_explicit/atomic_store_explicit for shared_ptr via a
+        // real mutex from a small hashed pool (verified directly against
+        // this toolchain's headers and by disassembly, not assumed) --
+        // meaning renderBlock() takes a brief lock once per audio block,
+        // contending against setProject() at whatever frequency it's called
+        // (up to live-drag frequency). Accepted rather than hand-rolling a
+        // lock-free reclamation scheme (e.g. hazard pointers) because: (1)
+        // the critical section is a single pointer-pair swap plus a refcount
+        // adjustment -- microseconds at most, several orders of magnitude
+        // under a single audio block's own ~10ms budget even in the
+        // contended case; (2) unlike the raw-pointer scheme this replaced,
+        // there is no CONCRETE evidence of harm yet (that scheme's flaw was
+        // proven by an actual crashing stress test; this one is a verified
+        // mechanism, not a verified problem); and (3) building lock-free
+        // reclamation by hand is real, easy-to-get-subtly-wrong systems code
+        // that this project's own conventions discourage writing
+        // preemptively, without concrete evidence it's actually needed (see
+        // CLAUDE.md). If a manual listening test (see this feature's own
+        // plan's Task 8) or a future report of glitching under sustained
+        // live-dragging while playing DOES surface a real problem, that's
+        // the trigger to revisit this with a genuinely lock-free scheme
+        // (e.g. a single hazard-pointer slot, since renderBlock() is the
+        // only ever-concurrent reader of a given instance -- see its own
+        // doc comment) -- not before.
         std::shared_ptr<const ProjectSnapshot> published;
 
         bool metronomeEnabled = false;

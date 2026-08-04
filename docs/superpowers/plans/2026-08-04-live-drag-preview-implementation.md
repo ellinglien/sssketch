@@ -1922,5 +1922,26 @@ CLAUDE.md's own testing-conventions section). With the freshly-relaunched dev ap
    reducer, mirroring how `pos`/`playing` were already split out for the same reason (see
    `StoreContext.tsx`'s own module doc comment on that split) — report back rather than fixing it
    silently, since that would be a real scope addition to this plan.
+10. **Native lock-contention check** (added after Task 5's code review found that `PlaybackEngine`'s
+    fixed reclamation scheme -- `std::shared_ptr` accessed via `atomic_load_explicit`/
+    `atomic_store_explicit` -- takes a real (if very short) mutex on every `renderBlock()` call in
+    this project's actual libc++, not a lock-free operation; see `PlaybackEngine.h`'s `published`
+    field doc comment for the full reasoning on why this was accepted rather than building a
+    lock-free hazard-pointer scheme preemptively). While playing, do a fast, sustained volume or
+    fade drag (10+ seconds, moving quickly) and listen closely for any crackle/dropout/glitch
+    beyond what's already expected from the buffer-size baseline (see the earlier "quick wins"
+    buffer bump). If clean, no further action needed. If there's audible glitching specifically
+    correlated with dragging (not present when just playing without dragging), that's the trigger
+    to revisit `PlaybackEngine`'s reclamation scheme with a genuinely lock-free mechanism -- report
+    back rather than fixing it silently.
+
+**Also noted, explicitly deferred, not part of this plan's scope:** code review on Task 5 found
+that `ChannelChainRegistry`'s own `updateChannelSet()` uses the identical raw-atomic-pointer +
+detached-thread-delete reclamation scheme this plan just proved unsafe under sustained load in
+`PlaybackEngine` -- `ChannelChainRegistry.h`'s doc comment still asserts the "audio thread has
+certainly moved on" reasoning as fact, unqualified. It hasn't been observed to fail in practice
+(channel structural changes happen far less often than a live drag), and fixing it is unrelated
+to this plan's actual goal, but it's the same latent class of bug and worth a dedicated pass if
+channel-plugin churn frequency ever increases, or proactively as its own small follow-up.
 
 Report back what you see.
