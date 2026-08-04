@@ -547,14 +547,23 @@ describe('buildAlsXml', () => {
     expect(nextPointeeId).toBeGreaterThan(maxId)
   })
 
-  it("empties Sends on cloned AudioTrack/GroupTrack instances, leaving ReturnTracks' own Sends untouched", () => {
-    // Regression test for two real, confirmed Ableton load failures found
-    // trying to PRESERVE this substructure across clones: renumbering
-    // TrackSendHolder produced "Track has more send knobs than set has
-    // return tracks"; freezing it (so every clone shares identical nested
-    // Ids) produced "non-unique Pointee IDs" once duplicated across many
-    // tracks. sssketch has no concept of send-to-return-track at all, so
-    // the fix is to just not carry this substructure into cloned tracks.
+  it('preserves TrackSendHolder count and Ids verbatim on cloned AudioTrack/GroupTrack instances', () => {
+    // Regression test: this substructure must stay exactly as the template
+    // has it, count and all. Two prior real, confirmed Ableton load
+    // failures came from RENUMBERING it (either TrackSendHolder's own Id,
+    // or its nested AutomationTarget/ModulationTarget "send knob" Ids) --
+    // "Track has more send knobs than set has return tracks". A later
+    // attempt to sidestep that by EMPTYING <Sends> entirely produced a
+    // worse failure: a real, reproducible Ableton crash (SIGSEGV) on file
+    // load, confirmed via an actual crash report -- Ableton's own mixer
+    // layout evidently assumes every non-return track has exactly one
+    // TrackSendHolder per ReturnTrack in the Set, unconditionally, and
+    // walks off the end of an empty list. Freezing the whole subtree
+    // verbatim (this test) is the only approach confirmed not to crash or
+    // trigger a load-refusal on the send-count dimension; it does still
+    // produce doc-wide duplicate nested Ids once a Set has many cloned
+    // tracks, but that's a "document is corrupt, repair?" prompt, not an
+    // unrecoverable crash -- see the design spec's "Known risks".
     const rifff1 = drumsRifff()
     const rifff2: Rifff = { ...drumsRifff(), groupId: 'rifff-2', startBar: 16 }
     const state = emptyAppState({
@@ -571,15 +580,15 @@ describe('buildAlsXml', () => {
     const { tracks } = tracksOf(xml)
 
     for (const audioTrack of findAllChildren(tracks, 'AudioTrack')) {
-      expect(sendHolderCount(audioTrack, 'AudioTrack')).toBe(0)
+      expect(sendHolderIds(audioTrack, 'AudioTrack')).toEqual(['0', '1'])
     }
     for (const groupTrack of findAllChildren(tracks, 'GroupTrack')) {
-      expect(sendHolderCount(groupTrack, 'GroupTrack')).toBe(0)
+      expect(sendHolderIds(groupTrack, 'GroupTrack')).toEqual(['0', '1'])
     }
     // ReturnTracks were never cloned/touched -- their own real Sends (2
     // TrackSendHolders each, per the reference template) survive as-is.
     for (const returnTrack of findAllChildren(tracks, 'ReturnTrack')) {
-      expect(sendHolderCount(returnTrack, 'ReturnTrack')).toBe(2)
+      expect(sendHolderIds(returnTrack, 'ReturnTrack')).toEqual(['0', '1'])
     }
   })
 
@@ -651,13 +660,13 @@ function findAudioClip(audioTrack: ReturnType<typeof findChild>): AlsNode {
   return findChild(childArray(events, 'Events'), 'AudioClip')!
 }
 
-// Navigates <trackTag> > DeviceChain > Mixer > Sends and counts its
-// TrackSendHolder children -- shared by AudioTrack/GroupTrack/ReturnTrack,
-// which all share this same shape.
-function sendHolderCount(track: AlsNode, trackTag: string): number {
+// Navigates <trackTag> > DeviceChain > Mixer > Sends and returns its
+// TrackSendHolder Ids in document order -- shared by
+// AudioTrack/GroupTrack/ReturnTrack, which all share this same shape.
+function sendHolderIds(track: AlsNode, trackTag: string): string[] {
   const body = childArray(track, trackTag)
   const deviceChain = findChild(body, 'DeviceChain')!
   const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
   const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
-  return findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder').length
+  return findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder').map((n) => attrs(n)['@_Id'])
 }

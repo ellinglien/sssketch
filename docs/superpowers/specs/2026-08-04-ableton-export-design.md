@@ -126,12 +126,11 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
    corrupt and cannot be loaded. (NextPointeeId is too low: 22290 must be bigger than
    1001899)"*. Ableton validates this field is `>=` every `Id` actually used anywhere in the
    document before it will open the file at all — it's not just a hint, it's enforced.
-   **Also empty every cloned track's own `<Sends>`** (`<AudioTrack>`/`<GroupTrack>` >
-   `DeviceChain` > `Mixer` > `Sends`, leaving the `<Sends>` element present but with zero
-   `<TrackSendHolder>` children) — sssketch has no concept of "send level to a return track"
-   at all, and this substructure turned out to be actively unsafe to carry over from the
-   canonical template as-is (see "Known risks" below for the two real failure modes this
-   avoids). `<ReturnTrack>`s are never cloned, so their own real Sends are untouched.
+   **Every cloned track's own `<Sends>`** (`<AudioTrack>`/`<GroupTrack>` > `DeviceChain` >
+   `Mixer` > `Sends`) **is left completely frozen, verbatim, by `renumberIds`** — not
+   renumbered, and NOT emptied either (an emptied `<Sends>` was tried and caused a real
+   Ableton crash on load — see "Known risks" below for the full history). `<ReturnTrack>`s
+   are never cloned, so their own real Sends are untouched regardless.
 2. **Bar → beat**: sssketch bars are always 4 beats (implicit 4/4 throughout). `beats = bars *
    4`.
 3. **The copied audio file is short — only `stem.barLength` bars long, not `playedBars` bars.**
@@ -278,10 +277,11 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   handling above, not guessing.
 - **Ableton Live 12 only** — confirmed as the user's actual version, not just the test file's
   origin. Live 11 compatibility is untested and out of scope.
-- **Id renumbering and the `<Sends>`/`<TrackSendHolder>` substructure took four real,
+- **Id renumbering and the `<Sends>`/`<TrackSendHolder>` substructure took five real,
   confirmed rounds to get right on first real-world use — all now resolved, but the process is
   worth recording since it's a good illustration of how empirical this undocumented format's
-  constraints are.**
+  constraints are, and because one of the intermediate "fixes" actually made things worse in a
+  way that only showed up on load, not at export time.**
   (1) The Set-level `<NextPointeeId>` element must be `>=` every `Id` used anywhere in the
   document, or Ableton refuses to open the file at all (*"document is corrupt... NextPointeeId
   is too low"*) — fixed by writing the renumbering counter's final value into it. This fix
@@ -300,21 +300,41 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   (4) That traded one bug for another: freezing the subtree means every cloned track now
   shares the *identical* nested `AutomationTarget`/`ModulationTarget` Ids, and once that
   frozen subtree gets duplicated across dozens of cloned tracks, Ableton correctly flags it as
-  *"non-unique Pointee IDs."* **Final fix, and the one actually shipped**: stop trying to
-  preserve this substructure across clones at all. sssketch has no concept of "send level to a
-  return track" anywhere in its own data model — the whole `<Sends>` block only exists in a
-  cloned track because it was copied verbatim from the canonical template. Every cloned
-  `<AudioTrack>`/`<GroupTrack>`'s own `<Sends>` is now emptied of its `<TrackSendHolder>`
-  children entirely (see `buildAlsXml.ts`'s `clearSends`), sidestepping the whole class of bugs
-  rather than continuing to search for the one narrow renumbering scheme Ableton's
-  undocumented Pointee/send-knob validation actually wants. `<ReturnTrack>`s are never cloned,
-  so their own real Sends are completely unaffected. Verified via a full document-wide
-  Id-uniqueness check (not just spot-checking the previously-broken area) before shipping.
-  `alsXmlHelpers.ts`'s `renumberIds` is back to its original, simple, fully-unconditional form
-  — no tag-based exceptions of any kind remain in it. If a fifth such failure shows up
-  somewhere else in the document, the lesson from this whole sequence is: check first whether
-  the substructure represents anything sssketch's own model actually needs to carry over at
-  all — if it doesn't, removing it beats trying to selectively preserve/renumber it.
+  *"non-unique Pointee IDs."* An intermediate fix reasoned "sssketch has no concept of send
+  level to a return track at all, so just don't carry this substructure into a clone" and
+  emptied every cloned track's own `<Sends>` down to zero `<TrackSendHolder>` children.
+  (5) That intermediate fix was WRONG, and worse than (4) — it doesn't just refuse to load with
+  a message, it makes Live **crash outright** (confirmed via a real macOS crash report: a
+  SIGSEGV null-pointer-style dereference, `far: 0x00000000000000b8`, on Live's main thread
+  during its own file-open routine, before the user did anything else). `<Sends>`/
+  `<TrackSendHolder>` is not an optional feature sssketch happens not to use — it's core mixer
+  plumbing every non-return track has, and Ableton's own mixer layout code evidently assumes
+  unconditionally that each track has exactly one `<TrackSendHolder>` per `<ReturnTrack>` in
+  the Set. With zero, it indexes off the end of an empty list while laying out the mixer on
+  load and crashes. **Actual final fix, and the one shipped**: go back to (3)'s frozen-subtree
+  approach — `alsXmlHelpers.ts`'s `renumberIds` keeps its `FROZEN_SUBTREE_TAGS` exception for
+  `TrackSendHolder`, leaving its entire subtree (Id and all nested Ids) untouched, verbatim,
+  on every clone. This means a Set with many cloned tracks can still hit (4)'s "non-unique
+  Pointee IDs" — but that is a "document is corrupt, repair?" prompt the user can act on, not
+  silent data loss from a crash. Between a recoverable prompt and an unrecoverable crash with
+  no error message at all, the prompt is the correct trade until the real per-track-unique
+  send-knob Id scheme is understood (see the next paragraph). `<ReturnTrack>`s are never
+  cloned, so their own real Sends are completely unaffected either way. If a sixth such failure
+  shows up somewhere else in the document, the lesson from this whole sequence is sharper than
+  "check whether sssketch needs the data" (which is what led to the crash): also check whether
+  Ableton's own runtime code has a hard structural expectation about the substructure's
+  presence/shape (count, parent-child relationships) that has nothing to do with what data it
+  encodes — a crash on load, with no message at all, is a strictly worse failure mode than a
+  refusal-to-open with a clear message, and should be weighed as such before shipping a fix
+  that merely "sidesteps" a validation error by deleting the thing being validated.
+  **Not yet solved**: the actual mechanism Ableton uses to validate/count "send knobs" per
+  track (is it purely the nested `AutomationTarget`/`ModulationTarget` Id values themselves,
+  their count, their document position, or some combination?) is still not understood — only
+  that touching them in either direction (renumber or remove) breaks something. A real fix
+  that gives each cloned track's send knobs genuinely unique Ids without breaking the
+  send-count validation would need either real Ableton documentation or a lot more empirical
+  probing (e.g. diffing two independently-real-Ableton-saved Sets with different Ids in this
+  position) than was available this session.
 - **Loop-cycle wrap approximation for a cropped, tiled stem**: when `leftCropBars` is nonzero,
   the "Track/clip mapping algorithm" section's `LoopStart = wrappedLeftCropBars*4, LoopEnd =
   stem.barLength*4` gives each loop CYCLE a shorter span than a full tile

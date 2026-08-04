@@ -90,35 +90,6 @@ function findAudioClip(audioTrack: AlsNode): AlsNode {
   return findChild(childArray(events, 'Events'), 'AudioClip')!
 }
 
-/**
- * Empties every `<TrackSendHolder>` out of a cloned track's own `<Sends>`
- * (found at `<trackTag> > DeviceChain > Mixer > Sends`), leaving the
- * `<Sends>` element itself present but childless. sssketch has no concept
- * of "send level to a return track" at all, so this substructure only
- * exists in a cloned track because it was copied verbatim from the
- * canonical template -- and it turned out to be actively unsafe to carry
- * over as-is. Two real, confirmed Ableton load failures came from trying
- * to preserve it: renumbering `TrackSendHolder`'s own Id (or its nested
- * `AutomationTarget`/`ModulationTarget` "send knob" Ids) produces *"Track
- * has more send knobs than set has return tracks"*, while leaving it
- * completely frozen (so every clone shares the identical nested Ids)
- * produces *"non-unique Pointee IDs"* once that frozen subtree gets
- * duplicated across many cloned tracks. Since there's no sssketch data
- * this substructure could even represent, removing its contents entirely
- * sidesteps the whole class of bugs rather than trying to find the one
- * narrow renumbering scheme Ableton's undocumented Pointee/send-knob
- * validation actually wants. `<ReturnTrack>`s are never cloned (see
- * buildAlsXml's own `returnTracks` handling) so their own real Sends stay
- * completely untouched -- this only ever runs on a track this export
- * itself generated. */
-function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void {
-  const body = childArray(track, trackTag)
-  const deviceChain = findChild(body, 'DeviceChain')!
-  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
-  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
-  sends['Sends'] = []
-}
-
 interface LoopWindow {
   loopStartBeats: number
   loopEndBeats: number
@@ -256,7 +227,6 @@ function buildStemTrack(
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
-  clearSends(track, 'AudioTrack')
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
@@ -373,7 +343,6 @@ export function buildAlsXml(
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
-    clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupName = earliestRifff(rifffs).name
     const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
