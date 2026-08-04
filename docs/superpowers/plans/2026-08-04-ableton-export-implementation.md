@@ -767,6 +767,10 @@ describe('buildAlsXml', () => {
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
     expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
     expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
+    // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
+    // stem.barLength*4 -- one-shots are never tile-bounded, so this must
+    // stay a true no-op relative to the pre-tile-cycle-fix behavior.
+    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(2, 10)
   })
 
   it('skips a stem missing from stemFileNames instead of producing a broken track', () => {
@@ -1023,9 +1027,17 @@ function computeLoopWindow(
   playedBars: number
 ): LoopWindow {
   const beatsPerSecond = nativeBpm / 60
-  const hiddenLoopEndBeats = stem.barLength * 4
 
   if (stem.oneShot) {
+    // hiddenLoopEndBeats is tied to loopEndBeats here, NOT stem.barLength*4
+    // -- one-shots are never tile-bounded (see the doc comment above), so
+    // this branch's HiddenLoopEnd stays exactly what it was before the
+    // tile-cycle fix: the trim end, same as LoopEnd/CurrentEnd. Sharing
+    // stem.barLength*4 across both branches here would silently widen a
+    // trimmed one-shot's HiddenLoopEnd past its own trim end -- a real,
+    // if low-impact (LoopOn=false, so inaudible unless someone manually
+    // re-enables Loop on the clip in Ableton), unintended behavior change
+    // caught in code review.
     const loopStartBeats = (stem.trimStartSec ?? 0) * beatsPerSecond
     const loopEndBeats = (stem.trimEndSec ?? stem.durationSec) * beatsPerSecond
     return {
@@ -1034,10 +1046,11 @@ function computeLoopWindow(
       loopOn: false,
       timeShiftBars: 0,
       currentEndBeats: loopEndBeats,
-      hiddenLoopEndBeats
+      hiddenLoopEndBeats: loopEndBeats
     }
   }
 
+  const hiddenLoopEndBeats = stem.barLength * 4
   const wrappedLeftCropBars =
     ((leftCropBars % stem.barLength) + stem.barLength) % stem.barLength
   return {
@@ -1045,6 +1058,14 @@ function computeLoopWindow(
     loopEndBeats: hiddenLoopEndBeats,
     loopOn: true,
     timeShiftBars: leftCropBars,
+    // Assumes leftCropBars < playedBars, so this never goes to zero/
+    // negative -- true today because the only way to set leftCropBars is
+    // via StemWaveformRow.tsx/CollapsedRifffRow.tsx's drag handlers, both
+    // of which clamp it to at most (playedBars - MIN_PLAYED_BARS) before
+    // dispatching. Not re-enforced here since buildAlsXml.ts has no
+    // reasonable fallback if that UI-level invariant were ever violated --
+    // flagging the assumption rather than silently tolerating a negative
+    // CurrentEnd.
     currentEndBeats: (playedBars - leftCropBars) * 4,
     hiddenLoopEndBeats
   }

@@ -157,7 +157,9 @@ For each placed rifff (`state.rifffs` where `startBar !== undefined`), for each 
      `Time = rifff.startBar * 4` (no crop concept applies to one-shots), and `LoopStart`/
      `LoopEnd`/`CurrentEnd` all come from `trimStartSec`/`trimEndSec` (seconds, source-relative)
      converted to beats via the stem's own native tempo (step 4): `LoopStart = trimStartSec *
-     (nativeBpm/60)`, `LoopEnd = CurrentEnd = (trimEndSec ?? stem.durationSec) * (nativeBpm/60)`.
+     (nativeBpm/60)`, `LoopEnd = CurrentEnd = HiddenLoopEnd = (trimEndSec ?? stem.durationSec) *
+     (nativeBpm/60)` — `HiddenLoopEnd` tracks the trim end here too, NOT `stem.barLength*4`
+     (the tile-cycle bound only applies to the tiled/non-one-shot case above).
      Confirmed against the reference file that `LoopStart`/`LoopEnd` still define the played
      region even with `LoopOn=false` (not purely a "repeat" concept). Omitting trim would
      silently export more audio than intended for any trimmed one-shot.
