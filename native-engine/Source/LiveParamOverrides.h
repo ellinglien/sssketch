@@ -44,15 +44,18 @@ namespace sssketch
      * updates (memory_order_acquire/release only orders individual
      * load/store operations relative to each other; it does not make the
      * load+mutate+store sequence atomic as a whole). This class currently
-     * relies entirely on its callers for that invariant: every writer
-     * (IpcServer.cpp's set-live-param/load-project handlers) runs on the
-     * same message thread, since juce::InterprocessConnection's
-     * `callbacksOnMessageThread` defaults to true and funnels every
+     * relies entirely on its callers for that invariant. No production
+     * caller exists yet (only this class's own test suite writes to it, as
+     * of this writing) -- but when IpcServer.cpp's set-live-param/
+     * load-project handlers land (see
+     * docs/superpowers/plans/2026-08-04-live-param-fast-path-implementation.md's
+     * Task 3), they'll satisfy it automatically: juce::InterprocessConnection's
+     * `callbacksOnMessageThread` defaults to true, funneling every
      * connection's messageReceived() through the single global
-     * MessageManager queue, processed strictly one at a time -- so
-     * concurrent WRITERS genuinely cannot happen today. If that ever
-     * changes (e.g. a future caller writes from a different thread), this
-     * read-modify-write would need a compare-and-swap retry loop instead.
+     * MessageManager queue, processed strictly one at a time, so those
+     * handlers can never call a setter concurrently with each other. If a
+     * future caller ever writes from a genuinely different thread instead,
+     * this read-modify-write would need a compare-and-swap retry loop.
      *
      * clearAll() is meant to be called by IpcServer's own load-project
      * handler, right after every setProject() call (see
