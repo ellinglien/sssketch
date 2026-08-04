@@ -50,7 +50,9 @@ describe('encodePng', () => {
   it('starts with the standard PNG signature', () => {
     const rgba = renderIconRgba(4)
     const png = encodePng(4, 4, rgba)
-    expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    expect(png.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    )
   })
 
   it('IHDR declares the correct width, height, bit depth, and color type', () => {
