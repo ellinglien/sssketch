@@ -148,7 +148,16 @@ export function Ruler({
           handleLoopDragStart(e)
         }
       }}
-      title="click to scrub · drag to set loop region · cmd+drag to scrub"
+      onDoubleClick={() => {
+        // Guarded so a double-click with no region set doesn't dispatch a
+        // no-op SET_LOOP_REGION (and the pointless undo-history entry that
+        // would create). Clearing loopRegion is the only lever needed to
+        // "return to normal, loop the whole project" -- Transport.cpp's
+        // renderLoopAware already falls back to looping loopLengthBars
+        // whenever no recording loop is active.
+        if (loopRegion) onSetLoopRegion(null)
+      }}
+      title="click to scrub · drag to set loop region · cmd+drag to scrub · double-click to clear loop region"
       style={{
         position: 'sticky',
         top: 0,

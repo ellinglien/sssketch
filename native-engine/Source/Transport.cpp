@@ -22,6 +22,13 @@ namespace sssketch
         // LoopSewing.cpp and the loop-seam blend below both have).
         constexpr double kHaltFadeSec = 0.015;
         constexpr double kRepositionFadeSec = 0.012;
+
+        // A standard doubling from the typical ~512-sample OS/driver default --
+        // found during manual testing: the driver default produced audible
+        // crackling under load. Fixed for now (see docs/superpowers/specs/
+        // 2026-08-04-ruler-clear-loop-and-buffer-bump-design.md); a real
+        // user-adjustable setting is deferred follow-up work.
+        constexpr int kPreferredBufferSize = 1024;
     }
 
     Transport::Transport(PlaybackEngine& e, PluginChain& mc, ChannelChainRegistry& cc)
@@ -44,6 +51,25 @@ namespace sssketch
             juce::Logger::writeToLog("Transport: failed to open audio device: " + error);
             return false;
         }
+
+        // Request a larger buffer than whatever the OS/driver's own default
+        // is -- chooseBestBufferSize() (see the identical reasoning already
+        // documented in setRecordingInputDevice() below) picks the nearest
+        // size the driver actually supports if 1024 itself isn't exactly
+        // available, so this is safe across different hardware. Non-fatal
+        // if the driver rejects the setup outright -- keep using whatever
+        // buffer size the device already opened with above rather than
+        // tearing down transport setup entirely over it.
+        auto setup = deviceManager.getAudioDeviceSetup();
+        setup.bufferSize = kPreferredBufferSize;
+        auto bufferSizeError = deviceManager.setAudioDeviceSetup(setup, true);
+        if (bufferSizeError.isNotEmpty())
+        {
+            juce::Logger::writeToLog(
+                "Transport: failed to apply preferred buffer size, using device default: "
+                + bufferSizeError);
+        }
+
         deviceManager.addAudioCallback(this);
         return true;
     }
