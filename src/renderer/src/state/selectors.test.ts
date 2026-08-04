@@ -15,7 +15,8 @@ import {
   channelsInOrder,
   isSketchEligible,
   nextArrangerMode,
-  groupIdAtPosition
+  groupIdAtPosition,
+  tileOffsetsPx
 } from './selectors'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -70,6 +71,7 @@ describe('clipGeometryFromFields', () => {
       offsetSteps: 0,
       snapDiv: 4,
       playedBarsOverride: undefined,
+      leftCropBars: 0,
       rifffBarLength: 8,
       stretchOn: true,
       rifffBpm: 150,
@@ -86,6 +88,7 @@ describe('clipGeometryFromFields', () => {
       offsetSteps: -8,
       snapDiv: 4,
       playedBarsOverride: undefined,
+      leftCropBars: 0,
       rifffBarLength: 8,
       stretchOn: true,
       rifffBpm: 150,
@@ -102,6 +105,7 @@ describe('clipGeometryFromFields', () => {
       offsetSteps: 0,
       snapDiv: 4,
       playedBarsOverride: undefined,
+      leftCropBars: 0,
       rifffBarLength: 8,
       stretchOn: false,
       rifffBpm: 150,
@@ -117,6 +121,7 @@ describe('clipGeometryFromFields', () => {
       offsetSteps: 0,
       snapDiv: 4,
       playedBarsOverride: 16,
+      leftCropBars: 0,
       rifffBarLength: 8,
       stretchOn: true,
       rifffBpm: 150,
@@ -124,6 +129,73 @@ describe('clipGeometryFromFields', () => {
       ppb: 24
     })
     expect(bars.widthPx).toBe(16 * 24)
+  })
+
+  it('shrinks the width and shifts leftPx right when cropped from the left', () => {
+    // leftCropBars=2 at ppb=24: leftPx shifts by +2*24=48, width shrinks by
+    // the same 2 bars' worth of pixels.
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      leftCropBars: 2,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
+    expect(bars.leftPx).toBe(96 + 48) // (4+2)*24
+    expect(bars.widthPx).toBe((8 - 2) * 24)
+  })
+
+  it('extends the width and shifts leftPx left when leftCropBars is negative', () => {
+    const bars = clipGeometryFromFields({
+      startBar: 4,
+      offsetSteps: 0,
+      snapDiv: 4,
+      playedBarsOverride: undefined,
+      leftCropBars: -1,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      ppb: 24
+    })
+    expect(bars.leftPx).toBe(96 - 24) // (4-1)*24
+    expect(bars.widthPx).toBe((8 + 1) * 24)
+  })
+})
+
+describe('tileOffsetsPx', () => {
+  it('tiles from pixel 0 when there is no crop', () => {
+    // 2 bars played, 1-bar stem, ppb=24 -> tileWidthPx=24, 2 tiles at [0, 24]
+    expect(tileOffsetsPx(48, 1, 2, 0)).toEqual([0, 24])
+  })
+
+  it('shifts every tile left by the wrapped crop amount, so the correct mid-loop content lands at pixel 0', () => {
+    // 1-bar stem, cropped 0.5 bars from the left, played to 2 bars total,
+    // width = (2-0.5)*24 = 36. tileWidthPx = 36 * (1/1.5) = 24. Each tile
+    // shifts left by 0.5 bars' worth of pixels: 0.5*24 = 12.
+    expect(tileOffsetsPx(36, 1, 2, 0.5)).toEqual([-12, 12, 36])
+  })
+
+  it('wraps a crop amount larger than one stem bar into [0, stemBarLength)', () => {
+    // leftCropBars=2.5 with a 1-bar stem wraps to 0.5 bars of phase shift --
+    // same shift as the test above, despite a much larger raw crop amount.
+    // playedBars=4.0 keeps visibleBars (4.0-2.5=1.5) and therefore
+    // tileWidthPx identical to the test above, so the expected output is
+    // the exact same array -- isolating "wrapping" as the only thing this
+    // test is actually checking.
+    expect(tileOffsetsPx(36, 1, 4.0, 2.5)).toEqual([-12, 12, 36])
+  })
+
+  it('wraps a negative crop amount into [0, stemBarLength) the same way', () => {
+    // leftCropBars=-0.5 wraps to 0.5 bars too ((-0.5 % 1) + 1) % 1 = 0.5).
+    // playedBars=1.0 again keeps visibleBars (1.0-(-0.5)=1.5) matching the
+    // first test's own 1.5, for the same reason as above.
+    expect(tileOffsetsPx(36, 1, 1.0, -0.5)).toEqual([-12, 12, 36])
   })
 })
 

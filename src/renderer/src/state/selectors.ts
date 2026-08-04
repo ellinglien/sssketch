@@ -167,6 +167,10 @@ export interface ClipGeometryFields {
   offsetSteps: number
   snapDiv: number
   playedBarsOverride: number | undefined
+  /** Bars cropped from this clip's own left edge -- see leftCrop's own doc
+   * comment on AppState (store.ts). 0 = no crop, the default for every
+   * clip that's never had its left handle dragged. */
+  leftCropBars: number
   rifffBarLength: number
   stretchOn: boolean
   rifffBpm: number
@@ -185,6 +189,7 @@ export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry
     offsetSteps,
     snapDiv,
     playedBarsOverride,
+    leftCropBars,
     rifffBarLength,
     stretchOn,
     rifffBpm,
@@ -193,8 +198,12 @@ export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry
   } = fields
   const offsetPx = (offsetSteps * ppb) / snapDiv
   const playedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifffBarLength)
-  const shownBars = stretchOn ? playedBars : playedBars * (rifffBpm / stateBpm)
-  return { leftPx: startBar * ppb + offsetPx, widthPx: shownBars * ppb }
+  const visibleBars = playedBars - leftCropBars
+  const shownBars = stretchOn ? visibleBars : visibleBars * (rifffBpm / stateBpm)
+  return {
+    leftPx: (startBar + leftCropBars) * ppb + offsetPx,
+    widthPx: shownBars * ppb
+  }
 }
 
 /** A clip's screen position/width. Uses resolvePlayedBars (which reflects
@@ -214,12 +223,60 @@ export function clipGeometry(state: AppState, groupId: string, ppb: number): Cli
     offsetSteps,
     snapDiv,
     playedBarsOverride: state.playedBars[groupId],
+    leftCropBars: state.leftCrop[groupId] ?? 0,
     rifffBarLength: rifff.barLength,
     stretchOn,
     rifffBpm: rifff.bpm,
     stateBpm: state.bpm,
     ppb
   })
+}
+
+/** Pixel offsets for each repeat of a tiled clip's waveform image, shared by
+ * StemWaveformRow.tsx (expanded view) and CollapsedRifffRow.tsx's own
+ * CollapsedTiles (collapsed view) -- both previously duplicated this exact
+ * formula. Extracted here (like clipGeometryFromFields already was) both for
+ * testability and to fix the two independent copies with one change.
+ *
+ * A tile's own image always starts at its stem's sample 0 -- normally fine,
+ * since tile 0 is drawn at the container's own left edge, which is exactly
+ * where the stem's own audio starts too. But once leftCropBars != 0, the
+ * container's left edge no longer sits at the stem's sample-0 point (it
+ * sits leftCropBars bars into the stem's own repeating pattern instead) --
+ * every tile needs to shift left by that same wrapped amount so the
+ * CORRECT mid-loop content lands at the container's own pixel 0, matching
+ * what actually plays (see PlaybackEngine.cpp's own analogous
+ * sourceOffsetSec fix). Wrapped into [0, stemBarLength) first since a
+ * crop amount doesn't need to exceed one stem-bar-length of phase shift --
+ * shifting by a whole multiple of stemBarLength doesn't change which
+ * content shows (every tile is identical content already).
+ *
+ * widthPx here is the ALREADY-CROPPED visible width (i.e. clipGeometry's
+ * own widthPx) -- not the full uncropped playedBars width. */
+export function tileOffsetsPx(
+  widthPx: number,
+  stemBarLength: number,
+  playedBars: number,
+  leftCropBars: number
+): number[] {
+  const visibleBars = playedBars - leftCropBars
+  const tileWidthPx = widthPx * (stemBarLength / visibleBars)
+  const wrappedLeftCropBars =
+    ((leftCropBars % stemBarLength) + stemBarLength) % stemBarLength
+  const phaseShiftPx = wrappedLeftCropBars * (tileWidthPx / stemBarLength)
+  // +1 over the naive ceil, but only when tiles are actually shifted:
+  // shifting every tile left by phaseShiftPx can leave a gap at the
+  // container's own right edge that an extra tile is needed to cover.
+  // Conditional (not unconditional) so the overwhelmingly common
+  // leftCropBars=0 case keeps rendering exactly the same tile count as
+  // before this feature existed, instead of one permanently-harmless-but-
+  // unnecessary extra tile on every clip that's never had its left edge
+  // touched.
+  const tileCount = Math.max(
+    1,
+    Math.ceil(widthPx / tileWidthPx) + (phaseShiftPx > 0 ? 1 : 0)
+  )
+  return Array.from({ length: tileCount }, (_, i) => i * tileWidthPx - phaseShiftPx)
 }
 
 const DEFAULT_LOOP_BARS = 32
