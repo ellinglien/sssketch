@@ -12,6 +12,8 @@
 // note on why: getting this into the existing tsconfig project-reference
 // graph would require changes disproportionate to a one-off script).
 
+import { deflateSync } from 'node:zlib'
+
 const CANVAS_BASE = 1024
 const BG_COLOR = [0x0a, 0x0a, 0x0a] as const // #0a0a0a, matches --ra-bg-frame
 const BAR_COLOR = [0xed, 0xed, 0xed] as const // #ededed, matches --ra-text
@@ -65,4 +67,71 @@ export function renderIconRgba(size: number): Buffer {
     }
   }
   return buf
+}
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    }
+    table[n] = c >>> 0
+  }
+  return table
+})()
+
+function crc32(buf: Buffer): number {
+  let crc = 0xffffffff
+  for (let i = 0; i < buf.length; i++) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8)
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuf = Buffer.from(type, 'ascii')
+  const lengthBuf = Buffer.alloc(4)
+  lengthBuf.writeUInt32BE(data.length, 0)
+  const crcBuf = Buffer.alloc(4)
+  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0)
+  return Buffer.concat([lengthBuf, typeBuf, data, crcBuf])
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/** Encodes a raw RGBA buffer (as renderIconRgba produces) as a standard
+ * 8-bit-depth, color-type-6 (RGBA) PNG file. Every scanline is prefixed
+ * with filter-type 0 (None) -- simplest correct encoding, and fine here
+ * since flat-color rectangles compress well under deflate regardless of
+ * per-row filtering. IDAT's compressed payload is exactly what
+ * zlib.deflateSync produces (PNG's own spec requires zlib-wrapped
+ * deflate, RFC 1950 -- the same format deflateSync outputs, no extra
+ * wrapping needed). */
+export function encodePng(width: number, height: number, rgba: Buffer): Buffer {
+  const rowBytes = width * 4
+  const raw = Buffer.alloc(height * (1 + rowBytes))
+  for (let y = 0; y < height; y++) {
+    const rawOffset = y * (1 + rowBytes)
+    raw[rawOffset] = 0 // filter type: None
+    rgba.copy(raw, rawOffset + 1, y * rowBytes, (y + 1) * rowBytes)
+  }
+
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8 // bit depth
+  ihdr[9] = 6 // color type: RGBA
+  ihdr[10] = 0 // compression method
+  ihdr[11] = 0 // filter method
+  ihdr[12] = 0 // interlace method
+
+  const idat = deflateSync(raw)
+
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', idat),
+    pngChunk('IEND', Buffer.alloc(0))
+  ])
 }

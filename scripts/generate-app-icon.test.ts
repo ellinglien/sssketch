@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { renderIconRgba } from './generate-app-icon.mts'
+import { inflateSync } from 'node:zlib'
+import { renderIconRgba, encodePng } from './generate-app-icon.mts'
 
 function pixelAt(
   rgba: Buffer,
@@ -42,5 +43,44 @@ describe('renderIconRgba', () => {
     // Same fractions as the 1024 case, scaled down: left bar's own
     // center is (336/1024)*64 = 21, (608/1024)*64 = 38.
     expect(pixelAt(rgba, 64, 21, 38)).toEqual([0xed, 0xed, 0xed, 0xff])
+  })
+})
+
+describe('encodePng', () => {
+  it('starts with the standard PNG signature', () => {
+    const rgba = renderIconRgba(4)
+    const png = encodePng(4, 4, rgba)
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  })
+
+  it('IHDR declares the correct width, height, bit depth, and color type', () => {
+    const rgba = renderIconRgba(4)
+    const png = encodePng(4, 4, rgba)
+    // IHDR chunk: 4-byte length, 4-byte type "IHDR", then 13 bytes of
+    // data, starting right after the 8-byte PNG signature.
+    const ihdr = png.subarray(8 + 8, 8 + 8 + 13)
+    expect(ihdr.readUInt32BE(0)).toBe(4) // width
+    expect(ihdr.readUInt32BE(4)).toBe(4) // height
+    expect(ihdr[8]).toBe(8) // bit depth
+    expect(ihdr[9]).toBe(6) // color type: RGBA
+  })
+
+  it('round-trips: decompressing IDAT recovers the exact original pixel data', () => {
+    const rgba = renderIconRgba(8)
+    const png = encodePng(8, 8, rgba)
+    // IDAT chunk starts right after the 8-byte signature + 25-byte IHDR
+    // chunk (4 length + 4 type + 13 data + 4 crc).
+    const idatStart = 8 + 25
+    const idatLength = png.readUInt32BE(idatStart)
+    const idatData = png.subarray(idatStart + 8, idatStart + 8 + idatLength)
+    const raw = inflateSync(idatData)
+    // Strip each row's filter-type byte (always 0/None) and compare
+    // against the original RGBA buffer.
+    const rowBytes = 8 * 4
+    for (let y = 0; y < 8; y++) {
+      const rawRow = raw.subarray(y * (1 + rowBytes) + 1, (y + 1) * (1 + rowBytes))
+      const originalRow = rgba.subarray(y * rowBytes, (y + 1) * rowBytes)
+      expect(rawRow).toEqual(originalRow)
+    }
   })
 })
