@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export interface ContextMenuItem {
   label: string
@@ -18,6 +18,24 @@ export function ContextMenu({
   onClose: () => void
 }): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
+  // Starts at the requested (x, y), then clamped once the menu's real
+  // rendered size is known (below) -- x/y alone (e.g. a button's own
+  // rect.left/rect.bottom, see App.tsx's export menu) take no account of
+  // how close that point is to the window's own edge, so a menu opened
+  // near the right edge previously rendered partially outside the
+  // Electron window's own frame (unlike a browser tab, there's no OS
+  // desktop for the overflow to spill onto -- it's just clipped).
+  const [position, setPosition] = useState({ left: x, top: y })
+
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const margin = 8
+    const left = Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))
+    const top = Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))
+    setPosition({ left, top })
+  }, [x, y])
 
   useEffect(() => {
     // Capture phase, not bubble — a bubble-phase window listener never fires
@@ -58,8 +76,8 @@ export function ContextMenu({
       onContextMenu={(e) => e.preventDefault()}
       style={{
         position: 'fixed',
-        left: x,
-        top: y,
+        left: position.left,
+        top: position.top,
         zIndex: 20,
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border-strong)',
