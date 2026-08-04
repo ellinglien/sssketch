@@ -53,10 +53,24 @@ namespace sssketch
 
         double secPerBar() const;
 
-        /** Read-only access to the project most recently passed to setProject(),
-         * for the render-export IPC handler to render "whatever was last
-         * loaded" without inventing a second way to pass project data. */
-        const EngineProject& currentProjectForExport() const { return published.load()->project; }
+        /** A copy of the project most recently passed to setProject(), for
+         * the render-export IPC handler to render "whatever was last
+         * loaded" without inventing a second way to pass project data.
+         * Deliberately returned BY VALUE, not by reference into the
+         * published snapshot -- render-export (RenderExport.cpp) holds onto
+         * this across a long, synchronous operation (plugin loading + a
+         * full offline render), unlike renderBlock()'s own single load-and-
+         * read-within-one-call pattern. A reference would only be safe for
+         * as long as no other setProject() call republishes (and eventually
+         * frees) the snapshot it points into -- true today only by the
+         * accidental, undocumented invariant that this connection's message
+         * handling is single-threaded and synchronous, so a live-drag
+         * volume push can never actually interleave with an in-progress
+         * export. Returning a copy removes the dependency on that invariant
+         * entirely, at the cost of one non-real-time-thread copy per export
+         * request (cheap -- this is metadata, not audio; stem audio lives
+         * in StemBufferCache, not inside EngineProject itself). */
+        EngineProject currentProjectForExport() const { return published.load()->project; }
 
         /** Toggled by the 'set-metronome' IPC message — off by default, so a
          * freshly-constructed engine (including RenderExport's own, offline)

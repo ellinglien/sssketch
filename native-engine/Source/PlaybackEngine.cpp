@@ -8,6 +8,18 @@
 
 namespace sssketch
 {
+    namespace
+    {
+        // Shared by secPerBar() and renderBlock() so the bpm->secPerBar
+        // formula only exists once -- renderBlock() still can't call
+        // secPerBar() itself (that would be a second, independent atomic
+        // load of `published`, risking a different snapshot than the one
+        // already loaded at the top of the call -- see renderBlock's own
+        // comment), so this free function is what both instead call against
+        // whichever project.bpm they've each already loaded.
+        double secPerBarFor(double bpm) { return bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
+    }
+
     PlaybackEngine::PlaybackEngine(StemBufferCache& cache)
         : bufferCache(cache), published(new ProjectSnapshot())
     {
@@ -23,7 +35,7 @@ namespace sssketch
     double PlaybackEngine::secPerBar() const
     {
         const auto* snap = published.load(std::memory_order_acquire);
-        return snap->project.bpm > 0.0 ? (60.0 / snap->project.bpm) * 4.0 : 0.0;
+        return secPerBarFor(snap->project.bpm);
     }
 
     void PlaybackEngine::setProject(const EngineProject& project)
@@ -59,7 +71,18 @@ namespace sssketch
         // by the time this detached thread actually runs, the audio
         // thread's own bounded, fast real-time execution has certainly
         // already moved on to the newly-published snapshot. Copied verbatim
-        // from ChannelChainRegistry.cpp's own identical handoff.
+        // from ChannelChainRegistry.cpp's own identical handoff -- a
+        // scheduling heuristic, not a proven happens-before relationship,
+        // but the same one already accepted and shipped for that class's
+        // own real-time handoff in this exact codebase. Code review on this
+        // task flagged that this path is about to go from low frequency to
+        // drag-frequency (many calls/sec, see docs/superpowers/specs/
+        // 2026-08-04-live-drag-preview-design.md) -- worth reconsidering
+        // (a generation-counter handshake, or a small fixed pool instead of
+        // malloc/delete per call) if that frequency increase ever turns out
+        // to matter in practice; not done preemptively here since it would
+        // diverge from the established, already-proven pattern this is
+        // deliberately mirroring, for a risk that's still only theoretical.
         std::thread([old]() { delete old; }).detach();
     }
 
@@ -79,7 +102,7 @@ namespace sssketch
         if (snap == nullptr)
             return;
 
-        const double spb = snap->project.bpm > 0.0 ? (60.0 / snap->project.bpm) * 4.0 : 0.0;
+        const double spb = secPerBarFor(snap->project.bpm);
         if (spb <= 0.0)
             return;
 
