@@ -1178,7 +1178,6 @@ interface LoopWindow {
 // the fuller reasoning.
 function computeLoopWindow(
   stem: Stem,
-  nativeBpm: number,
   leftCropBars: number,
   playedBars: number,
   projectBpm: number
@@ -1253,7 +1252,7 @@ function buildStemTrack(
     currentEndBeats,
     hiddenLoopEndBeats,
     isWarped
-  } = computeLoopWindow(stem, nativeBpm, leftCropBars, playedBars, projectBpm)
+  } = computeLoopWindow(stem, leftCropBars, playedBars, projectBpm)
 
   setAttr(clip, '@_Time', String(((rifff.startBar ?? 0) + timeShiftBars) * 4))
 
