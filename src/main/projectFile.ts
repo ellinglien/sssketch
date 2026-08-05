@@ -154,9 +154,19 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
   }
 }
 
-/** Writes json directly to path, no dialog -- the shared write-and-clear-
- * autosave behavior saveProjectAs (dialog-based) and saveProjectToLibrary
- * (library-based) both need, extracted so neither duplicates it. */
+/** Writes json directly to path, no dialog -- the write-and-clear-autosave
+ * sequence saveProjectToLibrary needs; saveProjectAs still does this inline
+ * since it's kept untouched as the escape hatch.
+ *
+ * Deliberately no try/catch here: unlike openProject/openLibrarySketch/
+ * autosave (which return null on failure because they're either
+ * background/optional operations or "not found" is a normal outcome), a
+ * real write failure (disk full, permissions) must throw and surface
+ * visibly rather than silently masquerade as a successful save. This
+ * matches exportAbleton.ts's buildAndWriteAlsProject/exportAbleton
+ * convention -- a real failure here throws/rejects rather than being
+ * caught and resolved as null. The caller (a later task's App.tsx Save
+ * action) is expected to wrap this in its own try/catch. */
 export function saveProjectInPlace(path: string, json: string): void {
   writeFileSync(path, json, 'utf-8')
   clearAutosave()
@@ -165,7 +175,8 @@ export function saveProjectInPlace(path: string, json: string): void {
 /** Routine, no-dialog save for a library-resident sketch -- creates the
  * sketch's own folder on first save, overwrites in place on every
  * subsequent one. See docs/superpowers/specs/
- * 2026-08-05-project-library-design.md. */
+ * 2026-08-05-project-library-design.md. Throws on failure -- see
+ * saveProjectInPlace's doc comment for why. */
 export function saveProjectToLibrary(name: string, json: string): { path: string } {
   mkdirSync(sketchDir(name), { recursive: true })
   const path = sketchProjectPath(name)
