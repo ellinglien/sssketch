@@ -244,7 +244,20 @@ handles collisions for the WAV-stems export.
 Consistent with this codebase's existing "don't fail the whole export over one bad piece"
 convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
 
-- A stem whose source file can't be read/copied: skip that stem's clip, log it, continue.
+- A stem whose source file can't be read/copied/decoded: skip that stem's clip, log it,
+  continue. **A LORE-cached stem's source path has no file extension and its actual on-disk
+  bytes are Endlesss's own storage codec (FLAC, confirmed empirically)** — a naive
+  `copyFileSync` to a `.wav`-named destination produces a file Ableton correctly refuses to
+  load (*"does not appear to be a valid WAV file"*, confirmed via a real Ableton load
+  attempt). `exportAbleton.ts` splits stems by source extension (mirroring `bakeOffset.ts`'s
+  own `isWavPath` convention): a real `.wav` source is a plain `copyFileSync`; anything else is
+  routed through the native engine's existing `bake-stem` IPC command (`BakeStem.cpp`, already
+  used by `bakeOffset.ts` for the same LORE-non-WAV distinction), which decodes it via JUCE's
+  `AudioFormatManager` (FLAC/Ogg/WAV/AIFF all registered) and writes a real WAV to the
+  destination. One engine process is spawned and reused for the whole batch of non-WAV stems,
+  not one per stem — same spawn-connect-act-teardown shape `bakeOffset.ts`'s own
+  `bakeNativeJobs` already uses. A stem that fails to decode is skipped the same way a failed
+  copy is.
 - No rifffs placed: surface a clear "nothing to export" error rather than writing an empty
   `.als`.
 - Unparseable `Rifff.key`: omit `ScaleInformation` (see above) — not an error.
