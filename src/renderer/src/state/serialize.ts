@@ -16,6 +16,7 @@ export type PersistedProject = Omit<
   | 'armedChannelId'
   | 'availableInputDevices'
   | 'selectedInputDevice'
+  | 'regionSelection'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -42,6 +43,7 @@ export function serializeProject(state: AppState): string {
     armedChannelId,
     availableInputDevices,
     selectedInputDevice,
+    regionSelection,
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */

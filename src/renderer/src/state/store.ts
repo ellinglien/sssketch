@@ -66,6 +66,12 @@ export interface AppState {
    * operation over a loop whose own phase anchor stays fixed. See
    * docs/superpowers/specs/2026-08-04-tiled-clip-crop-trim-design.md. */
   leftCrop: Record<string, number>
+  /** One stem's own muted spans, keyed by stemKey(groupId, slot) -- absolute
+   * arrangement-bar positions, the same coordinate space rifff.startBar
+   * already lives in. Real arrangement data (persists normally, like
+   * leftCrop), not a UI-mode toggle. See
+   * docs/superpowers/specs/2026-08-05-clip-region-mute-design.md. */
+  muteRegions: Record<string, { startBar: number; endBar: number }[]>
   /** In-progress preview values for an active drag, keyed the same way as
    * their committed counterpart (dragVol/stemKey, the rest/groupId) --
    * populated on every mousemove of a volume/fade/length/crop drag,
@@ -120,6 +126,18 @@ export interface AppState {
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
   inspectorCollapsed: boolean
+  /** The in-progress or pending-delete region selection -- null when
+   * nothing is selected. `mode: 'mute'` means Delete/Backspace should mute
+   * this span (it was dragged over raw/unmuted audio); `mode: 'unmute'`
+   * means it exactly matches an existing muted region and Delete/Backspace
+   * should remove that mute instead. Not persisted (see serialize.ts) --
+   * same "how I'm currently working" treatment as volumeDragMode. */
+  regionSelection: {
+    stemKeys: string[]
+    startBar: number
+    endBar: number
+    mode: 'mute' | 'unmute'
+  } | null
   /** A 4/4 click track, higher-pitched on beat 1 of each bar — a practice/
    * reference aid, not part of the actual arrangement. Toggled from
    * TransportBar; StoreContext.tsx pushes the current value to the native
@@ -181,6 +199,7 @@ export const initialState: AppState = {
   fadeOut: {},
   playedBars: {},
   leftCrop: {},
+  muteRegions: {},
   dragVol: {},
   dragFadeIn: {},
   dragFadeOut: {},
@@ -198,6 +217,7 @@ export const initialState: AppState = {
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
+  regionSelection: null,
   metronomeEnabled: false,
   masterChain: [null, null, null, null],
   channelPlugins: {},
@@ -225,6 +245,17 @@ export type Action =
   | { type: 'DELETE_RIFFFS'; groupIds: string[] }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'SET_LEFT_CROP_BARS'; groupId: string; bars: number }
+  | { type: 'ADD_MUTE_REGION'; stemKeys: string[]; startBar: number; endBar: number }
+  | { type: 'REMOVE_MUTE_REGION'; stemKey: string; startBar: number; endBar: number }
+  | {
+      type: 'SET_REGION_SELECTION'
+      selection: {
+        stemKeys: string[]
+        startBar: number
+        endBar: number
+        mode: 'mute' | 'unmute'
+      } | null
+    }
   | {
       type: 'SET_DRAG_PREVIEW'
       field: 'volume' | 'fadeIn' | 'fadeOut' | 'playedBars' | 'leftCropBars'
@@ -455,6 +486,26 @@ export function reducer(state: AppState, action: Action): AppState {
         leftCrop: { ...state.leftCrop, [action.groupId]: action.bars }
       }
 
+    case 'ADD_MUTE_REGION': {
+      const muteRegions = { ...state.muteRegions }
+      for (const stemKey of action.stemKeys) {
+        const existing = muteRegions[stemKey] ?? []
+        muteRegions[stemKey] = [...existing, { startBar: action.startBar, endBar: action.endBar }]
+      }
+      return { ...state, muteRegions }
+    }
+
+    case 'REMOVE_MUTE_REGION': {
+      const existing = state.muteRegions[action.stemKey] ?? []
+      const next = existing.filter(
+        (r) => !(r.startBar === action.startBar && r.endBar === action.endBar)
+      )
+      return { ...state, muteRegions: { ...state.muteRegions, [action.stemKey]: next } }
+    }
+
+    case 'SET_REGION_SELECTION':
+      return { ...state, regionSelection: action.selection }
+
     // Live, in-progress preview for a drag still in flight -- see AppState's
     // own dragVol/etc. field comments. Each field maps to its own slice;
     // value: undefined deletes the key entirely (falls back to the
@@ -615,6 +666,7 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs,
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
+        muteRegions: omitStems(state.muteRegions),
         off: omitGroups(state.off),
         playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),

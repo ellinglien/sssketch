@@ -39,7 +39,11 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // whatever commit action (SET_VOLUME, SET_FADE_IN, ...) fires once on
   // release, which is NOT in this set.
   'SET_DRAG_PREVIEW',
-  'SET_DRAG_PREVIEW_GROUP_VOLUME'
+  'SET_DRAG_PREVIEW_GROUP_VOLUME',
+  // The in-progress/pending region selection -- same "not a real edit"
+  // treatment as SET_DRAG_PREVIEW; the real edits are ADD_MUTE_REGION/
+  // REMOVE_MUTE_REGION, dispatched once Delete/Backspace actually commits.
+  'SET_REGION_SELECTION'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

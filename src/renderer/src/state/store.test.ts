@@ -572,6 +572,111 @@ describe('reducer', () => {
     })
   })
 
+  describe('mute regions', () => {
+    it('ADD_MUTE_REGION appends a region to each listed stem', () => {
+      const state = reducer(initialState, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0', 'r1:1'],
+        startBar: 4,
+        endBar: 8
+      })
+      expect(state.muteRegions['r1:0']).toEqual([{ startBar: 4, endBar: 8 }])
+      expect(state.muteRegions['r1:1']).toEqual([{ startBar: 4, endBar: 8 }])
+    })
+
+    it('ADD_MUTE_REGION appends onto an existing list rather than replacing it', () => {
+      const seeded = reducer(initialState, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0'],
+        startBar: 0,
+        endBar: 2
+      })
+      const state = reducer(seeded, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0'],
+        startBar: 4,
+        endBar: 8
+      })
+      expect(state.muteRegions['r1:0']).toEqual([
+        { startBar: 0, endBar: 2 },
+        { startBar: 4, endBar: 8 }
+      ])
+    })
+
+    it('REMOVE_MUTE_REGION removes only the exact matching region', () => {
+      const seeded = reducer(initialState, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0'],
+        startBar: 0,
+        endBar: 2
+      })
+      const withTwo = reducer(seeded, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0'],
+        startBar: 4,
+        endBar: 8
+      })
+      const state = reducer(withTwo, {
+        type: 'REMOVE_MUTE_REGION',
+        stemKey: 'r1:0',
+        startBar: 0,
+        endBar: 2
+      })
+      expect(state.muteRegions['r1:0']).toEqual([{ startBar: 4, endBar: 8 }])
+    })
+
+    it('REMOVE_MUTE_REGION is a no-op if no exact match exists', () => {
+      const seeded = reducer(initialState, {
+        type: 'ADD_MUTE_REGION',
+        stemKeys: ['r1:0'],
+        startBar: 0,
+        endBar: 2
+      })
+      const state = reducer(seeded, {
+        type: 'REMOVE_MUTE_REGION',
+        stemKey: 'r1:0',
+        startBar: 1,
+        endBar: 3
+      })
+      expect(state.muteRegions['r1:0']).toEqual([{ startBar: 0, endBar: 2 }])
+    })
+
+    it('SET_REGION_SELECTION sets and clears the transient selection', () => {
+      const selection = { stemKeys: ['r1:0'], startBar: 1, endBar: 3, mode: 'mute' as const }
+      const set = reducer(initialState, { type: 'SET_REGION_SELECTION', selection })
+      expect(set.regionSelection).toEqual(selection)
+      const cleared = reducer(set, { type: 'SET_REGION_SELECTION', selection: null })
+      expect(cleared.regionSelection).toBeNull()
+    })
+
+    it('DELETE_RIFFFS strips muteRegions for every deleted stem', () => {
+      const rifff = {
+        groupId: 'r1',
+        name: 'x',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '/f',
+        stems: [
+          {
+            slot: 0,
+            author: 'a',
+            name: 's',
+            type: 'fx' as const,
+            path: '/p',
+            durationSec: 1,
+            barLength: 1
+          }
+        ]
+      }
+      const seeded = reducer(
+        { ...initialState, rifffs: { r1: rifff } },
+        { type: 'ADD_MUTE_REGION', stemKeys: ['r1:0'], startBar: 0, endBar: 2 }
+      )
+      const state = reducer(seeded, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.muteRegions['r1:0']).toBeUndefined()
+    })
+  })
+
   describe('SET_DRAG_PREVIEW', () => {
     it('sets a volume preview for the given stem key, without touching committed vol', () => {
       const next = reducer(initialState, {
