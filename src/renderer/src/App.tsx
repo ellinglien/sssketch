@@ -34,6 +34,7 @@ import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
+import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
@@ -54,6 +55,21 @@ import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import type { Rifff } from '@shared/types'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
+
+/** Tracks what the currently-open project actually is, so Save/Export know
+ * whether to write in place (no dialog) or fall back to the existing
+ * dialog-based path:
+ * - `null`: untitled, never saved this session -- first Save creates a
+ *   fresh library entry.
+ * - `{ kind: 'library', name }`: a library-resident sketch -- routine
+ *   Save/Export both write in place to that sketch's own folder.
+ * - `{ kind: 'external', path }`: opened via the legacy "open" dialog from
+ *   outside the library -- routine Save writes in place to that exact
+ *   path (no dialog needed, the path is already known), but Export falls
+ *   back to the dialog-based exportAbleton, since there's no library
+ *   folder structure to write an Ableton export into.
+ * See docs/superpowers/specs/2026-08-05-project-library-design.md. */
+type CurrentSketch = { kind: 'library'; name: string } | { kind: 'external'; path: string } | null
 
 function barForClientX(
   clientX: number,
@@ -400,12 +416,21 @@ function Timeline({
   )
 }
 
-function ProjectMenu(): React.JSX.Element {
+function ProjectMenu({
+  currentSketch,
+  setCurrentSketch,
+  onOpenLibrary
+}: {
+  currentSketch: CurrentSketch
+  setCurrentSketch: (sketch: CurrentSketch) => void
+  onOpenLibrary: () => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const setBusy = useBusy()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
 
   function handleNew(): void {
     if (
@@ -415,13 +440,31 @@ function ProjectMenu(): React.JSX.Element {
       return
     }
     dispatch({ type: 'LOAD_STATE', state: initialState })
+    setCurrentSketch(null)
   }
 
   async function handleSave(): Promise<void> {
     try {
-      await window.rifffApi.saveProject(serializeProject(state))
+      const json = serializeProject(state)
+      if (currentSketch === null) {
+        const name = await window.rifffApi.generateDefaultProjectName()
+        await window.rifffApi.saveProjectToLibrary(name, json)
+        setCurrentSketch({ kind: 'library', name })
+      } else if (currentSketch.kind === 'library') {
+        await window.rifffApi.saveProjectToLibrary(currentSketch.name, json)
+      } else {
+        await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
+      }
     } catch (err) {
       console.error('ProjectMenu: failed to save project:', err)
+    }
+  }
+
+  async function handleSaveCopyElsewhere(): Promise<void> {
+    try {
+      await window.rifffApi.saveProject(serializeProject(state))
+    } catch (err) {
+      console.error('ProjectMenu: failed to save a copy elsewhere:', err)
     }
   }
 
@@ -440,10 +483,24 @@ function ProjectMenu(): React.JSX.Element {
       setBusy('loading waveforms…')
       await warmStemCaches(loaded)
       dispatch({ type: 'LOAD_STATE', state: loaded })
+      setCurrentSketch({ kind: 'external', path: result.path })
     } catch (err) {
       console.error('ProjectMenu: failed to open project:', err)
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function handleDuplicateAsNewVersion(): Promise<void> {
+    if (currentSketch === null || currentSketch.kind !== 'library') return
+    try {
+      // Save current edits first, so the duplicate reflects them.
+      await window.rifffApi.saveProjectToLibrary(currentSketch.name, serializeProject(state))
+      const result = await window.rifffApi.duplicateSketch(currentSketch.name)
+      if (!result) return
+      setCurrentSketch({ kind: 'library', name: result.name })
+    } catch (err) {
+      console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
     }
   }
 
@@ -479,7 +536,20 @@ function ProjectMenu(): React.JSX.Element {
   async function handleExportAbleton(): Promise<void> {
     setExporting(true)
     try {
-      await window.rifffApi.exportAls(JSON.stringify(state))
+      if (currentSketch !== null && currentSketch.kind === 'library') {
+        const warn = await window.rifffApi.shouldWarnBeforeAbletonOverwrite(currentSketch.name)
+        if (
+          warn &&
+          !window.confirm(
+            "This sketch's Ableton export has been modified since the last export from sssketch (likely from mixing directly in Ableton). Exporting again will overwrite it. Continue?"
+          )
+        ) {
+          return
+        }
+        await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
+      } else {
+        await window.rifffApi.exportAls(JSON.stringify(state))
+      }
     } catch (err) {
       console.error('ProjectMenu: failed to export to Ableton:', err)
       window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -503,12 +573,37 @@ function ProjectMenu(): React.JSX.Element {
       <button onClick={handleNew} style={buttonStyle}>
         new
       </button>
-      <button onClick={handleSave} style={buttonStyle}>
+      <button
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setSaveMenu({ x: rect.left, y: rect.bottom + 4 })
+        }}
+        style={buttonStyle}
+      >
         save
       </button>
+      {saveMenu && (
+        <ContextMenu
+          x={saveMenu.x}
+          y={saveMenu.y}
+          items={[
+            { label: 'save', onClick: handleSave },
+            { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere }
+          ]}
+          onClose={() => setSaveMenu(null)}
+        />
+      )}
       <button onClick={handleOpen} style={buttonStyle}>
         open
       </button>
+      <button onClick={onOpenLibrary} style={buttonStyle}>
+        library
+      </button>
+      {currentSketch !== null && currentSketch.kind === 'library' && (
+        <button onClick={handleDuplicateAsNewVersion} style={buttonStyle}>
+          duplicate
+        </button>
+      )}
       <button
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect()
@@ -665,6 +760,8 @@ function Frame(): React.JSX.Element {
   }, [persistedJson])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
+  const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
+  const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside
   // pickerGroupId so BeatPicker opens on just the first one. Drives two
@@ -1118,7 +1215,11 @@ function Frame(): React.JSX.Element {
             />
           </div>
           <div style={{ paddingRight: 14 }}>
-            <ProjectMenu />
+            <ProjectMenu
+              currentSketch={currentSketch}
+              setCurrentSketch={setCurrentSketch}
+              onOpenLibrary={() => setLibraryBrowserOpen(true)}
+            />
           </div>
         </div>
         <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
@@ -1324,6 +1425,29 @@ function Frame(): React.JSX.Element {
           <LoreLibraryBrowser
             onClose={() => setLoreLibraryOpen(false)}
             onImported={handleLoreImported}
+          />
+        )}
+        {libraryBrowserOpen && (
+          <ProjectLibraryBrowser
+            onClose={() => setLibraryBrowserOpen(false)}
+            onSelect={(name) => {
+              void (async () => {
+                setBusy('opening project…')
+                try {
+                  const result = await window.rifffApi.openLibrarySketch(name)
+                  if (!result) return
+                  const loaded = deserializeProject(JSON.parse(result.json))
+                  setBusy('loading waveforms…')
+                  await warmStemCaches(loaded)
+                  dispatch({ type: 'LOAD_STATE', state: loaded })
+                  setCurrentSketch({ kind: 'library', name })
+                } catch (err) {
+                  console.error('App: failed to open library sketch:', err)
+                } finally {
+                  setBusy(null)
+                }
+              })()
+            }}
           />
         )}
         {contextMenu && (
