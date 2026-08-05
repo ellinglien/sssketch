@@ -1,9 +1,10 @@
 // src/main/ableton/buildAlsXml.ts
 import { join } from 'node:path'
 import type { AppState } from '../../renderer/src/state/store'
-import type { Rifff, Stem } from '@shared/types'
+import type { BusId, Rifff, Stem } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { parseKeyToAbletonScale } from './scaleMapping'
+import { packIntoTracks } from '@shared/packIntoTracks'
 import {
   parseAls,
   serializeAls,
@@ -33,25 +34,6 @@ const WARP_MODE_COMPLEX_PRO = 5
 function resolvePlayedBarsFor(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
   return state.playedBars[groupId] ?? rifff.barLength
-}
-
-// Mirrors selectors.ts's channelsInOrder grouping (without the ordering/
-// recording-channel concerns, which don't apply here -- a recording channel
-// with nothing recorded onto it has nothing to export by definition).
-function placedRifffsByChannel(state: AppState): Map<string, Rifff[]> {
-  const byChannel = new Map<string, Rifff[]>()
-  for (const rifff of Object.values(state.rifffs)) {
-    if (rifff.startBar === undefined) continue
-    const channelId = state.channelOf[rifff.groupId] ?? rifff.groupId
-    const list = byChannel.get(channelId)
-    if (list) list.push(rifff)
-    else byChannel.set(channelId, [rifff])
-  }
-  return byChannel
-}
-
-function earliestRifff(rifffs: Rifff[]): Rifff {
-  return [...rifffs].sort((a, b) => (a.startBar ?? 0) - (b.startBar ?? 0))[0]
 }
 
 // A stem's own native tempo, derived the same way buildEngineProject.ts
@@ -274,37 +256,56 @@ function tilePhaseAtElapsedBeats(
   return ((raw % tileLengthBeats) + tileLengthBeats) % tileLengthBeats
 }
 
-function buildStemTrack(
-  canonicalAudioTrack: AlsNode,
+/** The template's own canonical AudioClip, found by traversing
+ * `canonicalAudioTrack` directly (never cloned) -- a read-only source
+ * every stem's own clip segments get cloned FROM. Kept separate from
+ * building a real track so many different stems can share one physical
+ * Ableton track (see buildSharedAudioTrack) while each still gets its own
+ * fully-renumbered clip elements. */
+function findCanonicalClip(canonicalAudioTrack: AlsNode): AlsNode {
+  const body = childArray(canonicalAudioTrack, 'AudioTrack')
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+  const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+  const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+  return findChild(childArray(events, 'Events'), 'AudioClip')!
+}
+
+interface StemClipsResult {
+  clips: AlsNode[]
+  trackName: string
+  /** This stem's own OVERALL span (earliest segment's start to latest
+   * segment's end), including any internal silent gap from a mute region
+   * -- used as ONE indivisible packable unit by packIntoTracks. See this
+   * task's own "Design decision" note in the plan for why packing doesn't
+   * go finer than stem granularity. */
+  startBeats: number
+  endBeats: number
+}
+
+/**
+ * Builds the AudioClip elements for one stem -- one per audible segment
+ * (see subtractMutedRanges), each independently cloned from
+ * `canonicalClipTemplate` and Id-renumbered via the shared `nextId`
+ * counter. Does NOT build or clone a track -- callers combine multiple
+ * stems' clips onto a shared AudioTrack via packIntoTracks, since
+ * Ableton's own audio track can only play one clip at a time but
+ * different (non-overlapping) stems can still share one.
+ */
+function buildStemClips(
+  canonicalClipTemplate: AlsNode,
   nextId: () => number,
   rifff: Rifff,
   stem: Stem,
   fileName: string,
   outputDir: string,
-  groupTrackId: string,
   leftCropBars: number,
   playedBars: number,
   projectBpm: number,
   muteRegions: AppState['muteRegions']
-): AlsNode {
-  const track = cloneNode(canonicalAudioTrack)
-  renumberIds(track, nextId)
-  clearSends(track, 'AudioTrack')
-
-  const trackBody = childArray(track, 'AudioTrack')
-  setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
-
+): StemClipsResult {
   const trackName = `${rifff.name} - ${stem.name}`
-  const nameNode = findChild(trackBody, 'Name')!
-  setAttr(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!, '@_Value', trackName)
-
-  const deviceChain = findChild(trackBody, 'DeviceChain')!
-  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
-  const sampleNode = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
-  const arrangerAuto = findChild(childArray(sampleNode, 'Sample'), 'ArrangerAutomation')!
-  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
-  const canonicalClip = findChild(childArray(events, 'Events'), 'AudioClip')!
-
   const nativeBpm = nativeBpmFor(stem)
   const {
     loopStartBeats,
@@ -330,10 +331,9 @@ function buildStemTrack(
   const absolutePath = join(outputDir, relativePath)
   const tileLengthBeats = stem.barLength * 4
 
-  const segmentClips: AlsNode[] = []
-  audibleSegments.forEach((segment, i) => {
-    const segClip = i === 0 ? canonicalClip : cloneNode(canonicalClip)
-    if (i > 0) renumberIds(segClip, nextId)
+  const clips = audibleSegments.map((segment) => {
+    const segClip = cloneNode(canonicalClipTemplate)
+    renumberIds(segClip, nextId)
 
     setAttr(segClip, '@_Time', String(segment.segStartBeats))
     const clipBody = childArray(segClip, 'AudioClip')
@@ -389,10 +389,43 @@ function buildStemTrack(
       ]
     }
 
-    segmentClips.push(segClip)
+    return segClip
   })
 
-  events['Events'] = segmentClips
+  return { clips, trackName, startBeats: clipStartBeats, endBeats: clipEndBeats }
+}
+
+/**
+ * Clones the template audio track once and populates it with the given
+ * clips (already fully built/Id-renumbered by buildStemClips) -- used for
+ * a bus's own packed tracks, where several non-overlapping stems' clips
+ * can share one physical Ableton track. `trackName` is the label for this
+ * specific physical track, not necessarily any one stem's own name (see
+ * this task's caller in buildAlsXml, which picks a shared label when more
+ * than one stem lands on the same track).
+ */
+function buildSharedAudioTrack(
+  canonicalAudioTrack: AlsNode,
+  nextId: () => number,
+  groupTrackId: string,
+  trackName: string,
+  clips: AlsNode[]
+): AlsNode {
+  const track = cloneNode(canonicalAudioTrack)
+  renumberIds(track, nextId)
+  clearSends(track, 'AudioTrack')
+
+  const trackBody = childArray(track, 'AudioTrack')
+  setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
+  const nameNode = findChild(trackBody, 'Name')!
+  setAttr(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!, '@_Value', trackName)
+
+  const deviceChain = findChild(trackBody, 'DeviceChain')!
+  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+  const sampleNode = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+  const arrangerAuto = findChild(childArray(sampleNode, 'Sample'), 'ArrangerAutomation')!
+  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+  events['Events'] = clips
 
   return track
 }
@@ -452,44 +485,74 @@ export function buildAlsXml(
   const nextId = (): number => nextIdValue++
   const outTracks: AlsNode[] = []
 
-  const byChannel = placedRifffsByChannel(state)
-  for (const channelId of state.channelOrder) {
-    const rifffs = byChannel.get(channelId)
-    if (!rifffs || rifffs.length === 0) continue
+  const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+  const DEFAULT_BUS: BusId = 'aux'
+  const canonicalClipTemplate = findCanonicalClip(canonicalAudioTrack)
+
+  const byBus = new Map<BusId, StemClipsResult[]>()
+  for (const busId of BUS_IDS) byBus.set(busId, [])
+
+  const placedForBuses = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+  for (const rifff of placedForBuses) {
+    const playedBars = resolvePlayedBarsFor(state, rifff.groupId)
+    const leftCropBars = state.leftCrop[rifff.groupId] ?? 0
+
+    for (const stem of rifff.stems) {
+      const key = stemKey(rifff.groupId, stem.slot)
+      const fileName = stemFileNames.get(key)
+      if (!fileName) continue
+
+      const result = buildStemClips(
+        canonicalClipTemplate,
+        nextId,
+        rifff,
+        stem,
+        fileName,
+        outputDir,
+        leftCropBars,
+        playedBars,
+        state.bpm,
+        state.muteRegions
+      )
+      if (result.clips.length === 0) continue // fully muted -- nothing to place
+
+      const busId = state.busOf[key] ?? DEFAULT_BUS
+      byBus.get(busId)!.push(result)
+    }
+  }
+
+  for (const busId of BUS_IDS) {
+    const entries = byBus.get(busId)!
+    if (entries.length === 0) continue
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
     clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
-    const groupName = earliestRifff(rifffs).name
     const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
-    setAttr(findChild(childArray(groupNameNode, 'Name'), 'EffectiveName')!, '@_Value', groupName)
+    setAttr(findChild(childArray(groupNameNode, 'Name'), 'EffectiveName')!, '@_Value', busId)
     outTracks.push(groupTrack)
 
-    for (const rifff of rifffs) {
-      const playedBars = resolvePlayedBarsFor(state, rifff.groupId)
-      const leftCropBars = state.leftCrop[rifff.groupId] ?? 0
-
-      for (const stem of rifff.stems) {
-        const key = stemKey(rifff.groupId, stem.slot)
-        const fileName = stemFileNames.get(key)
-        if (!fileName) continue
-
-        const track = buildStemTrack(
-          canonicalAudioTrack,
-          nextId,
-          rifff,
-          stem,
-          fileName,
-          outputDir,
-          groupTrackId,
-          leftCropBars,
-          playedBars,
-          state.bpm,
-          state.muteRegions
-        )
-        outTracks.push(track)
-      }
+    const packed = packIntoTracks(
+      entries,
+      (e) => e.startBeats,
+      (e) => e.endBeats
+    )
+    for (const trackEntries of packed) {
+      const allClips = trackEntries.flatMap((e) => e.clips)
+      // If only one stem landed on this physical track, use its own name
+      // -- otherwise several stems share it (packed together because they
+      // don't overlap in time), and picking one arbitrarily would
+      // misrepresent what's actually on it.
+      const trackName = trackEntries.length === 1 ? trackEntries[0].trackName : `${busId} (shared)`
+      const track = buildSharedAudioTrack(
+        canonicalAudioTrack,
+        nextId,
+        groupTrackId,
+        trackName,
+        allClips
+      )
+      outTracks.push(track)
     }
   }
 

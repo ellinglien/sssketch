@@ -34,6 +34,7 @@ function emptyAppState(overrides: Partial<AppState> = {}): AppState {
     playedBars: {},
     leftCrop: {},
     muteRegions: {},
+    busOf: {},
     dragVol: {},
     dragFadeIn: {},
     dragFadeOut: {},
@@ -138,7 +139,7 @@ describe('buildAlsXml', () => {
     expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(1)
   })
 
-  it('names the stem track "<rifff name> - <stem name>" and the group after the channel\'s earliest rifff', () => {
+  it('names the stem track "<rifff name> - <stem name>" and the group after its bus (aux, with no busOf entry)', () => {
     const state = emptyAppState({
       rifffs: { 'rifff-1': drumsRifff() },
       channelOrder: ['rifff-1'],
@@ -157,7 +158,10 @@ describe('buildAlsXml', () => {
     const groupTrack = findChild(tracks, 'GroupTrack')!
     const groupName = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
     const groupEffName = findChild(childArray(groupName, 'Name'), 'EffectiveName')!
-    expect(attrs(groupEffName)['@_Value']).toBe('my-rifff')
+    // Grouping is now by bus, not by channel -- with no busOf entry for
+    // this stem, it falls back to 'aux' (see the 'bus clustering' describe
+    // block below for dedicated bus-naming/grouping coverage).
+    expect(attrs(groupEffName)['@_Value']).toBe('aux')
   })
 
   it('links the stem track to its group via TrackGroupId', () => {
@@ -786,6 +790,163 @@ describe('buildAlsXml', () => {
       const loop = findChild(second, 'Loop')!
       const loopBody = childArray(loop, 'Loop')
       expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('12')
+    })
+  })
+
+  describe('bus clustering', () => {
+    it('groups tracks by bus instead of by channel, using the bus name for the GroupTrack', () => {
+      const rifffA = { ...drumsRifff(), groupId: 'rifff-a', name: 'kick-loop' }
+      const rifffB: Rifff = {
+        groupId: 'rifff-b',
+        name: 'bass-loop',
+        bpm: 140,
+        barLength: 4,
+        folderPath: '/fake/folder',
+        startBar: 20, // well past rifff-a's own span, so nothing overlaps
+        stems: [
+          {
+            slot: 0,
+            author: 'someone',
+            name: 'sub',
+            type: 'bass',
+            path: '/source/sub.wav',
+            durationSec: (60 / 140) * 4 * 4,
+            barLength: 4
+          }
+        ]
+      }
+      const state = emptyAppState({
+        rifffs: { 'rifff-a': rifffA, 'rifff-b': rifffB },
+        channelOrder: ['rifff-a', 'rifff-b'],
+        channelOf: { 'rifff-a': 'rifff-a', 'rifff-b': 'rifff-b' },
+        busOf: { 'rifff-a:0': 'drums', 'rifff-b:0': 'bass' }
+      })
+      const stemFileNames = new Map([
+        ['rifff-a:0', 'kick.wav'],
+        ['rifff-b:0', 'sub.wav']
+      ])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+
+      const groupTracks = findAllChildren(tracks, 'GroupTrack')
+      const groupNames = groupTracks.map((g) => {
+        const nameNode = findChild(childArray(g, 'GroupTrack'), 'Name')!
+        return attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']
+      })
+      // Fixed bus order (drums, bass, lead, backing, aux), only non-empty
+      // buses emitted -- 'drums' before 'bass' regardless of input order.
+      expect(groupNames).toEqual(['drums', 'bass'])
+      expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(2)
+    })
+
+    it('falls back to the aux bus for a stem with no bus assignment yet', () => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' }
+        // no busOf entry at all
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const groupTrack = findChild(tracks, 'GroupTrack')!
+      const nameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
+      expect(attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']).toBe(
+        'aux'
+      )
+    })
+
+    it('packs two non-overlapping stems from the same bus onto ONE shared audio track', () => {
+      const rifffA: Rifff = {
+        groupId: 'rifff-a',
+        name: 'first',
+        bpm: 140,
+        barLength: 4,
+        folderPath: '/fake/folder',
+        startBar: 0,
+        stems: [
+          {
+            slot: 0,
+            author: 'someone',
+            name: 'a',
+            type: 'drums',
+            path: '/source/a.wav',
+            durationSec: (60 / 140) * 4 * 4,
+            barLength: 4
+          }
+        ]
+      }
+      const rifffB: Rifff = {
+        groupId: 'rifff-b',
+        name: 'second',
+        bpm: 140,
+        barLength: 4,
+        folderPath: '/fake/folder',
+        startBar: 20, // well after rifff-a ends -- no overlap
+        stems: [
+          {
+            slot: 0,
+            author: 'someone',
+            name: 'b',
+            type: 'drums',
+            path: '/source/b.wav',
+            durationSec: (60 / 140) * 4 * 4,
+            barLength: 4
+          }
+        ]
+      }
+      const state = emptyAppState({
+        rifffs: { 'rifff-a': rifffA, 'rifff-b': rifffB },
+        channelOrder: ['rifff-a', 'rifff-b'],
+        channelOf: { 'rifff-a': 'rifff-a', 'rifff-b': 'rifff-b' },
+        busOf: { 'rifff-a:0': 'drums', 'rifff-b:0': 'drums' }
+      })
+      const stemFileNames = new Map([
+        ['rifff-a:0', 'a.wav'],
+        ['rifff-b:0', 'b.wav']
+      ])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+
+      expect(findAllChildren(tracks, 'GroupTrack')).toHaveLength(1)
+      const audioTracks = findAllChildren(tracks, 'AudioTrack')
+      expect(audioTracks).toHaveLength(1) // both stems packed onto ONE track
+
+      const body = childArray(audioTracks[0], 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      const clips = findAllChildren(childArray(events, 'Events'), 'AudioClip')
+      expect(clips).toHaveLength(2) // one clip per stem, same track
+    })
+
+    it('opens a second track when two stems from the same bus DO overlap in time', () => {
+      const rifffA = { ...drumsRifff(), groupId: 'rifff-a', name: 'a' } // startBar: 8
+      const rifffB: Rifff = {
+        ...drumsRifff(),
+        groupId: 'rifff-b',
+        name: 'b',
+        startBar: 8 // same start as rifff-a -- fully overlapping
+      }
+      const state = emptyAppState({
+        rifffs: { 'rifff-a': rifffA, 'rifff-b': rifffB },
+        channelOrder: ['rifff-a', 'rifff-b'],
+        channelOf: { 'rifff-a': 'rifff-a', 'rifff-b': 'rifff-b' },
+        busOf: { 'rifff-a:0': 'drums', 'rifff-b:0': 'drums' }
+      })
+      const stemFileNames = new Map([
+        ['rifff-a:0', 'a.wav'],
+        ['rifff-b:0', 'b.wav']
+      ])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(2)
     })
   })
 })
