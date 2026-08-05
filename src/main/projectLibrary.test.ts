@@ -145,6 +145,15 @@ describe('projectLibrary', () => {
         'outdoor-jam-3'
       )
     })
+
+    it('throws a clear error instead of looping unboundedly when every candidate up to the cap is taken', async () => {
+      const { nextVersionName } = await import('./projectLibrary')
+      const existingNames = ['outdoor-jam']
+      for (let n = 2; n <= 1000; n++) existingNames.push(`outdoor-jam-${n}`)
+      expect(() => nextVersionName('outdoor-jam', existingNames)).toThrow(
+        "nextVersionName: could not find an unused name for 'outdoor-jam' after 1000 attempts"
+      )
+    })
   })
 
   describe('sketch meta / overwrite safety', () => {

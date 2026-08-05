@@ -141,12 +141,24 @@ export function listLibrarySketches(): LibrarySketchSummary[] {
  * name. Strips any trailing `-<number>` from `baseName` first, so
  * duplicating an already-numbered version (e.g. "outdoor-jam-2") continues
  * the SAME sequence ("outdoor-jam-3") instead of stacking a second suffix
- * ("outdoor-jam-2-2"). */
+ * ("outdoor-jam-2-2"). Bounded (see MAX_VERSION_ATTEMPTS) per the design
+ * spec's error-handling requirement -- existingNames is always a finite
+ * array in practice, so this can't truly infinite-loop, but a clear error
+ * is required over an unbounded loop regardless. */
+const MAX_VERSION_ATTEMPTS = 1000
+
 export function nextVersionName(baseName: string, existingNames: string[]): string {
   const root = baseName.replace(/-\d+$/, '')
   const existing = new Set(existingNames)
   let n = 2
-  while (existing.has(`${root}-${n}`)) n++
+  while (existing.has(`${root}-${n}`)) {
+    n++
+    if (n > MAX_VERSION_ATTEMPTS) {
+      throw new Error(
+        `nextVersionName: could not find an unused name for '${baseName}' after ${MAX_VERSION_ATTEMPTS} attempts`
+      )
+    }
+  }
   return `${root}-${n}`
 }
 
