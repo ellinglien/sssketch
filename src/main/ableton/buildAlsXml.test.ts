@@ -225,7 +225,12 @@ describe('buildAlsXml', () => {
     const clipBody = childArray(clip, 'AudioClip')
 
     expect(attrs(clip)['@_Time']).toBe('36') // (startBar=8 + leftCropBars=1) * 4
-    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('20') // (playedBars=6 - leftCropBars=1) * 4
+    // CurrentStart/CurrentEnd are ABSOLUTE arrangement-beat positions (same
+    // coordinate space as Time), not durations relative to it -- so
+    // CurrentEnd = Time(36) + relative duration((playedBars=6 -
+    // leftCropBars=1) * 4 = 20).
+    expect(attrs(findChild(clipBody, 'CurrentStart')!)['@_Value']).toBe('36')
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('56')
   })
 
   it('bounds the loop cycle to one tile (stem.barLength), never the full playedBars span, for a cropped stem', () => {
@@ -273,7 +278,8 @@ describe('buildAlsXml', () => {
     const loopBody = childArray(loop, 'Loop')
 
     expect(attrs(clip)['@_Time']).toBe('32') // startBar*4, no crop
-    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('128') // playedBars(32)*4
+    // CurrentEnd is absolute: Time(32) + playedBars(32)*4 relative = 160.
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('160')
     expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('0')
     expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('16') // still just stem.barLength*4
   })
@@ -298,7 +304,8 @@ describe('buildAlsXml', () => {
 
     expect(attrs(clip)['@_Time']).toBe('56') // (8 + 6) * 4 -- raw leftCropBars for position
     expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('8') // wrapped(6 % 4 = 2) * 4
-    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('16') // (10 - 6) * 4
+    // CurrentEnd is absolute: Time(56) + (10 - 6) * 4 relative = 72.
+    expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('72')
   })
 
   it("sets warp markers from the stem's native tempo (durationSec/barLength vs a clean 1-beat span)", () => {
@@ -386,7 +393,8 @@ describe('buildAlsXml', () => {
     // cosmetic barLength: 1.
     expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
     expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
-    expect(Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+    // CurrentEnd is absolute: Time (startBar=4 * 4 = 16) + 3 relative beats.
+    expect(Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])).toBeCloseTo(19, 10)
     // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
     // stem.barLength*4 -- one-shots are never tile-bounded.
     expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
@@ -416,7 +424,8 @@ describe('buildAlsXml', () => {
 
     // 2.7317s at 120bpm (2 beats/sec) = 5.4634 beats -- NOT 4 (one bar),
     // which is what the old nativeBpm-from-barLength=1 bug always produced.
-    const expectedBeats = 2.7317 * (120 / 60)
+    // CurrentEnd is absolute: Time (startBar=4 * 4 = 16) + that relative span.
+    const expectedBeats = 16 + 2.7317 * (120 / 60)
     const actual = Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])
     expect(actual).toBeCloseTo(expectedBeats, 9)
     expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).not.toBe('4')
@@ -456,14 +465,25 @@ describe('buildAlsXml', () => {
         'AudioTrack'
       )!
     )
+    // CurrentEnd is absolute (Time + relative span), and Time is identical
+    // in both cases (same startBar, unaffected by bpm) -- so the 3x
+    // relationship only holds on the span past CurrentStart, not on the
+    // raw CurrentEnd values themselves.
+    const startAt60 = Number(
+      attrs(findChild(childArray(clipAt60, 'AudioClip'), 'CurrentStart')!)['@_Value']
+    )
     const endAt60 = Number(
       attrs(findChild(childArray(clipAt60, 'AudioClip'), 'CurrentEnd')!)['@_Value']
+    )
+    const startAt180 = Number(
+      attrs(findChild(childArray(clipAt180, 'AudioClip'), 'CurrentStart')!)['@_Value']
     )
     const endAt180 = Number(
       attrs(findChild(childArray(clipAt180, 'AudioClip'), 'CurrentEnd')!)['@_Value']
     )
 
-    expect(endAt180 / endAt60).toBeCloseTo(3, 9)
+    expect(startAt60).toBe(startAt180)
+    expect((endAt180 - startAt180) / (endAt60 - startAt60)).toBeCloseTo(3, 9)
   })
 
   it('leaves a normal (tiled) stem warped, with unchanged tile-cycle math', () => {
@@ -602,6 +622,37 @@ describe('buildAlsXml', () => {
     const tempo = findChild(childArray(mixer, 'Mixer'), 'Tempo')!
     const manual = findChild(childArray(tempo, 'Tempo'), 'Manual')!
     expect(attrs(manual)['@_Value']).toBe('135.5')
+  })
+
+  it('removes any leftover tempo automation envelope, so Manual actually takes effect', () => {
+    // Regression test: template.xml carries a real leftover tempo
+    // automation envelope (a single breakpoint pinning tempo to the
+    // template's own original 123.400002, covering the whole timeline)
+    // from whatever real Ableton project it was captured from. Ableton
+    // honors an active envelope over Manual wherever it has a breakpoint --
+    // confirmed via real user testing that a Set exported with this
+    // envelope still intact displays the template's stale tempo, not
+    // state.bpm, no matter what Manual says.
+    const state = emptyAppState({ bpm: 135.5 })
+    const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map())
+    const { liveSetChildren } = tracksOf(xml)
+    const mainTrack = findChild(liveSetChildren, 'MainTrack')!
+    const mainTrackBody = childArray(mainTrack, 'MainTrack')
+    const deviceChain = findChild(mainTrackBody, 'DeviceChain')!
+    const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+    const tempo = findChild(childArray(mixer, 'Mixer'), 'Tempo')!
+    const tempoAutomationTargetId = attrs(
+      findChild(childArray(tempo, 'Tempo'), 'AutomationTarget')!
+    )['@_Id']
+
+    const autoEnvelopes = findChild(mainTrackBody, 'AutomationEnvelopes')!
+    const envelopes = findChild(childArray(autoEnvelopes, 'AutomationEnvelopes'), 'Envelopes')!
+    const remainingPointeeIds = childArray(envelopes, 'Envelopes').map((envelope) => {
+      const target = findChild(childArray(envelope, 'AutomationEnvelope'), 'EnvelopeTarget')!
+      return attrs(findChild(childArray(target, 'EnvelopeTarget'), 'PointeeId')!)['@_Value']
+    })
+    expect(remainingPointeeIds).not.toContain(tempoAutomationTargetId)
+    expect(xml).not.toContain('123.400002')
   })
 
   it('sets the Set-level Scale from the earliest placed rifff that has a parseable key', () => {

@@ -270,13 +270,26 @@ function buildStemTrack(
     isWarped
   } = computeLoopWindow(stem, leftCropBars, playedBars, projectBpm)
 
-  setAttr(clip, '@_Time', String(((rifff.startBar ?? 0) + timeShiftBars) * 4))
+  // CurrentStart/CurrentEnd are ABSOLUTE arrangement-beat positions -- the
+  // same coordinate space as Time, NOT a duration relative to it. Confirmed
+  // the hard way: an earlier version of this code set CurrentStart="0" and
+  // CurrentEnd=currentEndBeats (i.e. treated them as relative), which
+  // happened to look fine for a clip at Time=0 (0 and 0+duration are the
+  // same either way) but silently deleted every clip placed later in the
+  // arrangement -- Ableton's own load-time "Repair" step removes any clip
+  // whose (Start, End) span is zero or negative, and read literally as
+  // absolute positions, a Time=32 clip with CurrentEnd=16 has End(16) <
+  // Start(32). Real Ableton log line that pinned this down: "Repair Track:
+  // '...' Clip: '...' Start: 32 End: 16 Delete clip because its length is
+  // too small."
+  const timeBeats = ((rifff.startBar ?? 0) + timeShiftBars) * 4
+  setAttr(clip, '@_Time', String(timeBeats))
 
   const clipBody = childArray(clip, 'AudioClip')
   setAttr(findChild(clipBody, 'Name')!, '@_Value', trackName)
 
-  setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', '0')
-  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(currentEndBeats))
+  setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(timeBeats))
+  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(timeBeats + currentEndBeats))
 
   const loop = findChild(clipBody, 'Loop')!
   const loopBody = childArray(loop, 'Loop')
@@ -427,10 +440,40 @@ export function buildAlsXml(
 
   // Set-level tempo.
   const mainTrack = findChild(liveSetChildren, 'MainTrack')!
-  const mtDeviceChain = findChild(childArray(mainTrack, 'MainTrack'), 'DeviceChain')!
+  const mainTrackBody = childArray(mainTrack, 'MainTrack')
+  const mtDeviceChain = findChild(mainTrackBody, 'DeviceChain')!
   const mtMixer = findChild(childArray(mtDeviceChain, 'DeviceChain'), 'Mixer')!
   const tempoNode = findChild(childArray(mtMixer, 'Mixer'), 'Tempo')!
-  setAttr(findChild(childArray(tempoNode, 'Tempo'), 'Manual')!, '@_Value', String(state.bpm))
+  const tempoBody = childArray(tempoNode, 'Tempo')
+  setAttr(findChild(tempoBody, 'Manual')!, '@_Value', String(state.bpm))
+
+  // The template carries a leftover tempo AUTOMATION ENVELOPE, captured
+  // from whatever real Ableton project template.xml was built from (see
+  // MainTrack's own AutomationEnvelopes list). Confirmed the hard way (a
+  // real "exported Set's tempo displays as the template's original
+  // 123.4 no matter what Manual above says" report, not a guess): Ableton
+  // always honors an active automation envelope over the raw Manual value
+  // wherever it has a breakpoint, and this template's envelope has exactly
+  // one, covering the whole timeline from the very start. sssketch has no
+  // per-project tempo-automation concept of its own, so the fix is
+  // removing the matching envelope entirely (found by Id, via the Tempo
+  // element's own AutomationTarget) -- NOT rewriting its curve to track
+  // state.bpm, which would just be re-deriving the same "one flat
+  // breakpoint" shape by hand for no benefit.
+  const tempoAutomationTargetId = attrs(findChild(tempoBody, 'AutomationTarget')!)['@_Id']
+  const autoEnvelopesNode = findChild(mainTrackBody, 'AutomationEnvelopes')
+  const envelopesNode = autoEnvelopesNode
+    ? findChild(childArray(autoEnvelopesNode, 'AutomationEnvelopes'), 'Envelopes')
+    : undefined
+  if (envelopesNode) {
+    envelopesNode['Envelopes'] = childArray(envelopesNode, 'Envelopes').filter((envelope) => {
+      const target = findChild(childArray(envelope, 'AutomationEnvelope'), 'EnvelopeTarget')!
+      const pointeeId = attrs(findChild(childArray(target, 'EnvelopeTarget'), 'PointeeId')!)[
+        '@_Value'
+      ]
+      return pointeeId !== tempoAutomationTargetId
+    })
+  }
 
   // Set-level scale, from the earliest placed rifff with a parseable key.
   const placed = Object.values(state.rifffs)

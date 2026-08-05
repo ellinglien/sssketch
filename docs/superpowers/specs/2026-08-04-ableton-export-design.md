@@ -402,3 +402,41 @@ convention (e.g. `buildEngineProject.ts`'s rubberband-failure fallback):
   Ableton" testing step — specifically, export a project containing a one-shot/recorded-take
   stem and confirm it plays at its own correct, unstretched, real-world duration/pitch, not
   compressed or stretched to fit some other length.
+
+## Post-ship bugs found via real multi-group project testing (2026-08-05)
+
+Both found and fixed via the Project Library feature's real-world testing, once exports
+started routinely containing more than one placed rifff/channel — the single-rifff test
+projects used throughout the original build-out never exercised either.
+
+- **`CurrentStart`/`CurrentEnd` were written as relative durations; Ableton reads them as
+  absolute arrangement-beat positions.** `buildStemTrack` set `CurrentStart="0"` and
+  `CurrentEnd=<relative duration>`, which coincidentally looks correct for a clip at `Time=0`
+  (relative and absolute math agree when the offset is zero) but is wrong for every clip placed
+  later in the arrangement. Symptom: only the first (Time=0) group's audio showed up on open;
+  every later group's tracks existed (correctly grouped/named/routed) but were silently
+  empty — no error dialog, no visible failure. Root-caused via Ableton's own `Log.txt`
+  (`~/Library/Preferences/Ableton/Live <version>/Log.txt`), which logs its load-time "Repair"
+  pass: `Repair Track: '...' Clip: '...' Start: 32 End: 16 Delete clip because its length is
+  too small.` — Ableton computed `End` as the raw (relative) `CurrentEnd` value and `Start` as
+  `Time`, got a zero-or-negative span for anything past the first group, and silently deleted
+  the clip before ever analyzing its audio (confirmed further by `.asd` waveform-cache sidecar
+  files existing only for the first group's samples — Ableton never got far enough to analyze
+  the rest). Fix: `CurrentStart = Time`, `CurrentEnd = Time + <relative duration>`, both in the
+  same absolute coordinate space Ableton actually reads.
+- **Leftover tempo automation envelope in `template.xml` silently overrides the `Manual` tempo
+  this export sets.** `template.xml` was captured from a real Ableton project that had a tempo
+  automation envelope present (`MainTrack > AutomationEnvelopes > Envelopes`, one
+  `AutomationEnvelope` whose `EnvelopeTarget > PointeeId` matches the Set-level `Tempo` node's
+  own `AutomationTarget` Id), with a single `FloatEvent` at `Time="-63072000"` (effectively "the
+  very start of the timeline") pinning tempo to the template's own original value
+  (`123.400002`). `buildAlsXml` only ever wrote the `Manual` value; it never touched this
+  envelope. Ableton always honors an active automation envelope over a parameter's raw `Manual`
+  value wherever the envelope has a breakpoint, so the exported Set displayed the template's
+  original tempo regardless of `state.bpm` — symptom reported as "tempo stuck at the previously
+  open file's BPM," which was actually this baked-in envelope, not any kind of document-reuse/
+  caching issue in Ableton itself. Fix: after setting `Manual`, look up the `Tempo` node's own
+  `AutomationTarget` Id and remove the matching `AutomationEnvelope` entry entirely (found by
+  Id match, not by position) — matching this doc's own established precedent from the Sends
+  saga above (removing what sssketch doesn't model, rather than trying to keep an
+  automation curve it has no data for in sync).
