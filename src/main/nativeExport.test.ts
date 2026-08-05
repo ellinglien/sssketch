@@ -31,7 +31,7 @@ import type { Rifff } from '../shared/types'
 // which set masterChain.
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
 
-import { loopLengthBarsFor, nativeExport } from './nativeExport'
+import { loopLengthBarsFor, nativeExport, soloState } from './nativeExport'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -72,6 +72,33 @@ describe('loopLengthBarsFor', () => {
     // startBar 4 + a resize to 16 bars = 20, not 4 + 8 = 12.
     const state = stateWith({ playedBars: { r1: 16 } })
     expect(loopLengthBarsFor(state)).toBe(20)
+  })
+})
+
+describe('soloState', () => {
+  it('mutes every key except the target(s), regardless of the input mute map', () => {
+    const state = stateWith({ mute: { 'r1:1': false, 'r1:2': true } })
+    const result = soloState(state, new Set(['r1:1']), ['r1:1', 'r1:2'])
+    expect(result.mute).toEqual({ 'r1:1': false, 'r1:2': true })
+  })
+
+  it('zeroes the master chain regardless of what was set', () => {
+    const state = stateWith({ masterChain: ['some-limiter-id', null, null, null] })
+    const result = soloState(state, new Set(['r1:1']), ['r1:1', 'r1:2'])
+    expect(result.masterChain).toEqual([null, null, null, null])
+  })
+
+  it('supports multiple simultaneous targets (a bus solo, not just a single stem)', () => {
+    const state = stateWith({})
+    const result = soloState(state, new Set(['r1:1', 'r1:2']), ['r1:1', 'r1:2', 'r1:3'])
+    expect(result.mute).toEqual({ 'r1:1': false, 'r1:2': false, 'r1:3': true })
+  })
+
+  it('leaves every other field of state untouched', () => {
+    const state = stateWith({ bpm: 133 })
+    const result = soloState(state, new Set(['r1:1']), ['r1:1'])
+    expect(result.bpm).toBe(133)
+    expect(result.rifffs).toBe(state.rifffs)
   })
 })
 

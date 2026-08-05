@@ -25,6 +25,26 @@ export function loopLengthBarsFor(state: AppState): number {
 }
 
 /**
+ * Builds the per-target solo state used to isolate one or more stems for a
+ * solo render: every stem NOT in `targetKeys` muted, and the master chain
+ * zeroed out. A solo render is for auditioning a stem/bus on its own, not
+ * through the mix's own limiter/mastering chain -- without this, an
+ * isolated stem WAV was previously rendered through the FULL master chain
+ * individually, which won't sum correctly with the real mixdown (each
+ * stem hits the limiter on its own, N times, instead of the limiter
+ * seeing the summed mix once). See
+ * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md.
+ * `allKeys` must include every stemKey that could sound in this project --
+ * anything not in `targetKeys` gets muted, so an incomplete list would
+ * leave an unrelated stem audible.
+ */
+export function soloState(state: AppState, targetKeys: Set<string>, allKeys: string[]): AppState {
+  const soloMute: Record<string, boolean> = {}
+  for (const key of allKeys) soloMute[key] = !targetKeys.has(key)
+  return { ...state, mute: soloMute, masterChain: [null, null, null, null] }
+}
+
+/**
  * Renders the full arrangement to a WAV via the native engine — the app's only
  * mixdown/export path, running entirely in the main process (spawn engine,
  * load-project, render-export to a temp file, read it back, tear down). Live
@@ -106,12 +126,15 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
   try {
     await client.connect(engineHandle.port)
 
+    const allKeys = targets.map((t) => t.key)
     for (const target of targets) {
-      const soloMute: Record<string, boolean> = {}
-      for (const other of targets) soloMute[other.key] = other.key !== target.key
-      const soloState: AppState = { ...state, mute: soloMute }
+      const targetState = soloState(state, new Set([target.key]), allKeys)
 
-      const project = await buildEngineProject(soloState, resolveStretchedForExport, pluginCatalog)
+      const project = await buildEngineProject(
+        targetState,
+        resolveStretchedForExport,
+        pluginCatalog
+      )
       const tempPath = join(tmpdir(), `sssketch-export-${randomUUID()}.wav`)
 
       client.send('load-project', project)
