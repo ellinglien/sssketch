@@ -1,4 +1,4 @@
-import { TYPE_ORDER, stemKey, type Rifff, type SoundType } from '@shared/types'
+import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 
 export const SNAP_DIVS = [4, 8, 16, 32] as const
@@ -111,6 +111,15 @@ export interface AppState {
    * never reads this field at all; playback doesn't care which row a clip
    * is drawn on. */
   channelOf: Record<string, string>
+  /** Which mix bus a stem is assigned to for Ableton export track reduction,
+   * keyed by stemKey(groupId, slot) -- mirrors channelOf's own shape, just
+   * per-stem instead of per-rifff (two stems in the same rifff can belong
+   * to different buses). A stem absent from this map has no assignment
+   * yet -- buildAlsXml.ts falls back to the 'aux' bus for those, so export
+   * is useful immediately, before any labelling UI exists. Export-time
+   * grouping only; never reaches EngineProject or the native engine. See
+   * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md. */
+  busOf: Record<string, BusId>
   exp: Record<string, boolean>
   /** Global interaction mode for the expanded waveform's open body: false (default)
    * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
@@ -208,6 +217,7 @@ export const initialState: AppState = {
   sel: null,
   channelOrder: [],
   channelOf: {},
+  busOf: {},
   exp: {},
   loopRegion: null,
   recordingChannelIds: {},
@@ -234,6 +244,7 @@ export type Action =
   | { type: 'ADD_TO_SHELF'; rifff: Rifff }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
+  | { type: 'ASSIGN_TO_BUS'; stemKey: string; busId: BusId }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
@@ -396,6 +407,9 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       return { ...placed, channelOf, channelOrder, channelPlugins }
     }
+
+    case 'ASSIGN_TO_BUS':
+      return { ...state, busOf: { ...state.busOf, [action.stemKey]: action.busId } }
 
     // Repacks every rifff in groupIds into contiguous bar positions, in that
     // order, starting at bar 0 — the only way rifffs get reordered/inserted
@@ -667,6 +681,7 @@ export function reducer(state: AppState, action: Action): AppState {
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
         muteRegions: omitStems(state.muteRegions),
+        busOf: omitStems(state.busOf),
         off: omitGroups(state.off),
         playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),

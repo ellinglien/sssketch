@@ -23,6 +23,17 @@ export const TYPE_CSS_VAR: Record<SoundType, string> = {
   audioIn: '--ra-type-audio-in'
 }
 
+/** Which mix bus a stem is assigned to, for Ableton export track reduction
+ * -- a DIFFERENT axis from SoundType (which describes what Endlesss device
+ * produced a stem, not where it belongs in a mix). Deliberately NOT added
+ * as a SoundType variant -- see
+ * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md for why
+ * conflating the two would be wrong (SoundType resolves to 'audioIn' for
+ * ~90% of live-recorded material, which carries no mix-placement
+ * information at all). Five buses is the deliberately chosen starting
+ * set -- few enough to label by ear quickly. */
+export type BusId = 'drums' | 'bass' | 'lead' | 'backing' | 'aux'
+
 export interface Stem {
   slot: number
   author: string

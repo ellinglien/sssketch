@@ -1541,4 +1541,52 @@ describe('reducer', () => {
       expect(next.selectedInputDevice).toBe('BlackHole 2ch')
     })
   })
+
+  describe('bus assignment', () => {
+    it("ASSIGN_TO_BUS sets a stem's bus", () => {
+      const state = reducer(initialState, {
+        type: 'ASSIGN_TO_BUS',
+        stemKey: 'r1:0',
+        busId: 'drums'
+      })
+      expect(state.busOf['r1:0']).toBe('drums')
+    })
+
+    it('ASSIGN_TO_BUS overwrites a previous assignment for the same stem', () => {
+      const first = reducer(initialState, {
+        type: 'ASSIGN_TO_BUS',
+        stemKey: 'r1:0',
+        busId: 'drums'
+      })
+      const state = reducer(first, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:0', busId: 'bass' })
+      expect(state.busOf['r1:0']).toBe('bass')
+    })
+
+    it('DELETE_RIFFFS strips busOf for every deleted stem', () => {
+      const rifff = {
+        groupId: 'r1',
+        name: 'x',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '/f',
+        stems: [
+          {
+            slot: 0,
+            author: 'a',
+            name: 's',
+            type: 'fx' as const,
+            path: '/p',
+            durationSec: 1,
+            barLength: 1
+          }
+        ]
+      }
+      const seeded = reducer(
+        { ...initialState, rifffs: { r1: rifff } },
+        { type: 'ASSIGN_TO_BUS', stemKey: 'r1:0', busId: 'drums' }
+      )
+      const state = reducer(seeded, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.busOf['r1:0']).toBeUndefined()
+    })
+  })
 })
