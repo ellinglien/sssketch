@@ -66,55 +66,30 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
-/** Tags whose own `@_Id` must never be renumbered, because it's a small
- * positional index scoped to the parent track (matching the ordinal
- * position of a corresponding element elsewhere in the Set), not a
- * document-wide identity pointer like every other Id in this format.
- * `TrackSendHolder` is the confirmed case: a track's Nth `TrackSendHolder`
- * always has `Id="N"` (0, 1, ...), matching the Set's Nth `ReturnTrack` --
- * this holds in every real Ableton-produced file, INCLUDING ones with many
- * duplicated tracks (confirmed by decompiling a real Live Set with a track
- * duplicated 6 times: every single duplicate's two `TrackSendHolder`s were
- * `Id="0"`/`"1"`, never renumbered, while their NESTED
- * `AutomationTarget`/`ModulationTarget` Ids -- the actual "send knob"
- * parameters -- were all freshly unique per duplicate). Renumbering
- * `TrackSendHolder`'s own Id breaks that positional correlation and
- * produces *"Track has more send knobs than set has return tracks"*. */
-const SKIP_OWN_ID_TAGS = new Set(['TrackSendHolder'])
-
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId` -- EXCEPT a tag listed in SKIP_OWN_ID_TAGS keeps its own Id as-is
- * (recursion into its children still proceeds normally, so anything nested
- * inside it still gets fresh unique Ids). Necessary because cloning a
- * template track via cloneNode also duplicates every internal
- * automation-target/pointee/clip-slot Id it contains -- the reference
- * template's own single canonical AudioTrack has 69 of them. Confirmed
- * empirically (see the design spec) that the original, real,
- * Ableton-produced reference file already reuses small Id values across
- * many unrelated elements without apparent problems, so renumbering most of
- * them is defensive rather than a fix for a confirmed bug -- but
- * `TrackSendHolder`'s own Id is a real, confirmed exception (see
- * SKIP_OWN_ID_TAGS's own doc comment), not a hypothetical one.
+ * `nextId`. Necessary because cloning a template track via cloneNode also
+ * duplicates every internal automation-target/pointee/clip-slot Id it
+ * contains -- the reference template's own single canonical AudioTrack has
+ * 69 of them. Confirmed empirically (see the design spec) that the original,
+ * real, Ableton-produced reference file already reuses small Id values
+ * across unrelated elements without apparent problems, so this is defensive
+ * rather than a fix for a confirmed bug.
  *
- * This function went through several wrong shapes before landing here --
- * see docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
- * risks" section for the full history (freezing TrackSendHolder's whole
- * subtree avoided the send-knob-count error but produced document-wide
- * duplicate Ids once cloned many times over; emptying `<Sends>` entirely
- * avoided both but crashed Ableton outright, since every track is expected
- * to have exactly one TrackSendHolder per ReturnTrack as a hard structural
- * invariant). This shape -- skip only the outer Id, keep recursing into
- * children -- is the one confirmed to match what real Ableton itself
- * produces when duplicating a track.
+ * This function went through several wrong, `TrackSendHolder`-specific
+ * shapes before landing back here in its original, fully-unconditional
+ * form -- see docs/superpowers/specs/2026-08-04-ableton-export-design.md's
+ * "Known risks" section for the full history. None of those Id-renumbering
+ * schemes were ever actually the problem: the real fix was to stop cloning
+ * `<Sends>`'s contents into new tracks at all, and to drop `<ReturnTrack>`s
+ * from the export entirely (see `buildAlsXml.ts`), sidestepping Ableton's
+ * still-not-fully-understood per-track send-knob validation rather than
+ * continuing to search for the exact scheme it wants.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
-  const tag = Object.keys(node).find((key) => key !== ':@')
-  const skipOwnId = tag !== undefined && SKIP_OWN_ID_TAGS.has(tag)
-
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
-  if (nodeAttrs && '@_Id' in nodeAttrs && !skipOwnId) {
+  if (nodeAttrs && '@_Id' in nodeAttrs) {
     nodeAttrs['@_Id'] = String(nextId())
   }
   for (const key of Object.keys(node)) {

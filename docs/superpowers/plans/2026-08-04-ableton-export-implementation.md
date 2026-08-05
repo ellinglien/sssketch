@@ -159,66 +159,6 @@ describe('renumberIds', () => {
     expect(attrs(leaf)['@_Id']).toBe('5')
   })
 
-  it('leaves TrackSendHolder Ids untouched, since they are a positional index correlating to return-track count, not a generic identity Id', () => {
-    // Regression test: renumbering TrackSendHolder's Id made a real
-    // exported file fail to open in Ableton with "Track has more send
-    // knobs than set has return tracks" -- confirmed against real
-    // Ableton, not a guess.
-    const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0" /><TrackSendHolder Id="1" /></Sends></Root>'
-    )
-    const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 100
-    renumberIds(sends, () => counter++)
-
-    const holders = findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder')
-    expect(holders.map((n) => attrs(n)['@_Id'])).toEqual(['0', '1'])
-  })
-
-  it("renumbers a TrackSendHolder's NESTED Ids (the actual send-knob parameters) even though its own outer Id is skipped", () => {
-    // Confirmed against real Ableton output: decompiling a real Live Set
-    // with a track duplicated 6 times showed every duplicate's
-    // TrackSendHolder Ids staying "0"/"1", while their nested
-    // AutomationTarget/ModulationTarget Ids were all freshly unique per
-    // duplicate -- never repeated, never left at the original template
-    // value. This is the opposite of an earlier (wrong) assumption that
-    // the whole subtree had to stay frozen.
-    const doc = parseAls(
-      '<Root><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /><ModulationTarget Id="22195" /></Send></TrackSendHolder></Sends></Root>'
-    )
-    const sends = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Sends')!
-    let counter = 1000000
-    renumberIds(sends, () => counter++)
-
-    const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
-    expect(attrs(holder)['@_Id']).toBe('0') // outer Id still skipped
-    const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const at = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    const mt = findChild(childArray(send, 'Send'), 'ModulationTarget')!
-    expect(attrs(at)['@_Id']).toBe('1000000') // nested Ids DO get renumbered
-    expect(attrs(mt)['@_Id']).toBe('1000001')
-  })
-
-  it("still renumbers a TrackSendHolder's siblings and ancestors in an otherwise-renumbered subtree", () => {
-    const doc = parseAls(
-      '<Root><Outer Id="1"><Sends><TrackSendHolder Id="0"><Send><AutomationTarget Id="22194" /></Send></TrackSendHolder></Sends><Other Id="2" /></Outer></Root>'
-    )
-    const outer = findChild(childArray(findChild(doc, 'Root')!, 'Root'), 'Outer')!
-    let counter = 100
-    renumberIds(outer, () => counter++)
-
-    expect(attrs(outer)['@_Id']).toBe('100') // Outer itself still renumbered
-
-    const sends = findChild(childArray(outer, 'Outer'), 'Sends')!
-    const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
-    expect(attrs(holder)['@_Id']).toBe('0') // TrackSendHolder itself skipped
-    const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
-    const target = findChild(childArray(send, 'Send'), 'AutomationTarget')!
-    expect(attrs(target)['@_Id']).toBe('101') // nested Id renumbered
-
-    const other = findChild(childArray(outer, 'Outer'), 'Other')!
-    expect(attrs(other)['@_Id']).toBe('102') // a plain sibling still renumbered
-  })
 })
 ```
 
@@ -299,55 +239,30 @@ export function cloneNode(node: AlsNode): AlsNode {
   return structuredClone(node)
 }
 
-/** Tags whose own `@_Id` must never be renumbered, because it's a small
- * positional index scoped to the parent track (matching the ordinal
- * position of a corresponding element elsewhere in the Set), not a
- * document-wide identity pointer like every other Id in this format.
- * `TrackSendHolder` is the confirmed case: a track's Nth `TrackSendHolder`
- * always has `Id="N"` (0, 1, ...), matching the Set's Nth `ReturnTrack` --
- * this holds in every real Ableton-produced file, INCLUDING ones with many
- * duplicated tracks (confirmed by decompiling a real Live Set with a track
- * duplicated 6 times: every single duplicate's two `TrackSendHolder`s were
- * `Id="0"`/`"1"`, never renumbered, while their NESTED
- * `AutomationTarget`/`ModulationTarget` Ids -- the actual "send knob"
- * parameters -- were all freshly unique per duplicate). Renumbering
- * `TrackSendHolder`'s own Id breaks that positional correlation and
- * produces *"Track has more send knobs than set has return tracks"*. */
-const SKIP_OWN_ID_TAGS = new Set(['TrackSendHolder'])
-
 /**
  * Recursively replaces every `@_Id` attribute found anywhere within `node`'s
  * subtree (not just on `node` itself) with a freshly allocated value from
- * `nextId` -- EXCEPT a tag listed in SKIP_OWN_ID_TAGS keeps its own Id as-is
- * (recursion into its children still proceeds normally, so anything nested
- * inside it still gets fresh unique Ids). Necessary because cloning a
- * template track via cloneNode also duplicates every internal
- * automation-target/pointee/clip-slot Id it contains -- the reference
- * template's own single canonical AudioTrack has 69 of them. Confirmed
- * empirically (see the design spec) that the original, real,
- * Ableton-produced reference file already reuses small Id values across
- * many unrelated elements without apparent problems, so renumbering most of
- * them is defensive rather than a fix for a confirmed bug -- but
- * `TrackSendHolder`'s own Id is a real, confirmed exception (see
- * SKIP_OWN_ID_TAGS's own doc comment), not a hypothetical one.
+ * `nextId`. Necessary because cloning a template track via cloneNode also
+ * duplicates every internal automation-target/pointee/clip-slot Id it
+ * contains -- the reference template's own single canonical AudioTrack has
+ * 69 of them. Confirmed empirically (see the design spec) that the original,
+ * real, Ableton-produced reference file already reuses small Id values
+ * across unrelated elements without apparent problems, so this is defensive
+ * rather than a fix for a confirmed bug.
  *
- * This function went through several wrong shapes before landing here --
- * see docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
- * risks" section for the full history (freezing TrackSendHolder's whole
- * subtree avoided the send-knob-count error but produced document-wide
- * duplicate Ids once cloned many times over; emptying `<Sends>` entirely
- * avoided both but crashed Ableton outright, since every track is expected
- * to have exactly one TrackSendHolder per ReturnTrack as a hard structural
- * invariant). This shape -- skip only the outer Id, keep recursing into
- * children -- is the one confirmed to match what real Ableton itself
- * produces when duplicating a track.
+ * This function went through several wrong, `TrackSendHolder`-specific
+ * shapes before landing back here in its original, fully-unconditional
+ * form -- see docs/superpowers/specs/2026-08-04-ableton-export-design.md's
+ * "Known risks" section for the full history. None of those Id-renumbering
+ * schemes were ever actually the problem: the real fix was to stop cloning
+ * `<Sends>`'s contents into new tracks at all, and to drop `<ReturnTrack>`s
+ * from the export entirely (see `buildAlsXml.ts`), sidestepping Ableton's
+ * still-not-fully-understood per-track send-knob validation rather than
+ * continuing to search for the exact scheme it wants.
  */
 export function renumberIds(node: AlsNode, nextId: () => number): void {
-  const tag = Object.keys(node).find((key) => key !== ':@')
-  const skipOwnId = tag !== undefined && SKIP_OWN_ID_TAGS.has(tag)
-
   const nodeAttrs = node[':@'] as Record<string, string> | undefined
-  if (nodeAttrs && '@_Id' in nodeAttrs && !skipOwnId) {
+  if (nodeAttrs && '@_Id' in nodeAttrs) {
     nodeAttrs['@_Id'] = String(nextId())
   }
   for (const key of Object.keys(node)) {
@@ -362,7 +277,7 @@ export function renumberIds(node: AlsNode, nextId: () => number): void {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/alsXmlHelpers.test.ts`
-Expected: PASS (11 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -644,7 +559,12 @@ function tracksOf(xml: string) {
 }
 
 describe('buildAlsXml', () => {
-  it('produces one AudioTrack + one GroupTrack for a single placed rifff/stem, plus the two return tracks', () => {
+  it('produces one AudioTrack + one GroupTrack for a single placed rifff/stem, and drops the return tracks entirely', () => {
+    // ReturnTracks are excluded from the export -- see buildAlsXml.ts's own
+    // doc comment for why: after 8 real, confirmed failed attempts to make
+    // cloned tracks' <Sends> agree with Ableton's per-track send-knob
+    // validation, dropping return tracks (so every track's <Sends> is
+    // legitimately empty) is the only approach that actually loads.
     const state = emptyAppState({
       rifffs: { 'rifff-1': drumsRifff() },
       channelOrder: ['rifff-1'],
@@ -655,7 +575,7 @@ describe('buildAlsXml', () => {
     const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
     const { tracks } = tracksOf(xml)
 
-    expect(findAllChildren(tracks, 'ReturnTrack')).toHaveLength(2)
+    expect(findAllChildren(tracks, 'ReturnTrack')).toHaveLength(0)
     expect(findAllChildren(tracks, 'GroupTrack')).toHaveLength(1)
     expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(1)
   })
@@ -1354,6 +1274,28 @@ function computeLoopWindow(
   }
 }
 
+/**
+ * Empties every `<TrackSendHolder>` out of a cloned track's own `<Sends>`
+ * (found at `<trackTag> > DeviceChain > Mixer > Sends`), leaving the
+ * `<Sends>` element itself present but childless. This is only safe because
+ * `<ReturnTrack>`s are dropped from the export entirely (see buildAlsXml's
+ * own handling below) -- Ableton's per-track send-knob validation turned
+ * out to require every non-return track's `<Sends>` to have exactly one
+ * `<TrackSendHolder>` per `<ReturnTrack>` in the Set, so emptying it while
+ * still shipping 2 ReturnTracks previously crashed Ableton outright. With
+ * zero ReturnTracks, zero TrackSendHolders is the only valid state, and
+ * there's no longer any Id scheme to get right at all. See
+ * docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
+ * risks" for the full history of what didn't work before this.
+ */
+function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
+  sends['Sends'] = []
+}
+
 function buildStemTrack(
   canonicalAudioTrack: AlsNode,
   nextId: () => number,
@@ -1368,6 +1310,7 @@ function buildStemTrack(
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
+  clearSends(track, 'AudioTrack')
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
@@ -1463,7 +1406,22 @@ export function buildAlsXml(
 
   const canonicalAudioTrack = findChild(tracks, 'AudioTrack')!
   const canonicalGroupTrack = findChild(tracks, 'GroupTrack')!
-  const returnTracks = findAllChildren(tracks, 'ReturnTrack')
+
+  // <ReturnTrack>s are dropped from the export entirely -- not carried
+  // over, not cloned. sssketch has no concept of sends/return-track
+  // routing in its own data model, and after 8 real, confirmed failed
+  // attempts to make cloned tracks' <Sends> agree with Ableton's own
+  // (still not fully understood) per-track send-knob validation -- see
+  // docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
+  // risks" for the full history -- the only approach that actually works
+  // is removing the return tracks so there's no send-knob scheme to get
+  // right at all: zero ReturnTracks means zero TrackSendHolders is the
+  // only valid state for every other track's own <Sends> (see
+  // clearSends). The exported project simply opens without the 2 default
+  // reverb/delay returns pre-configured; the user adds their own once
+  // they start mixing in Ableton.
+  const sendsPreNode = findChild(liveSetChildren, 'SendsPre')!
+  sendsPreNode['SendsPre'] = []
 
   // A plain closure over an outer-scope counter (not a separate
   // makeIdAllocator helper) specifically so nextIdValue can be read back
@@ -1475,7 +1433,7 @@ export function buildAlsXml(
   // itself uses (its own Ids top out in the tens of thousands).
   let nextIdValue = 1_000_000
   const nextId = (): number => nextIdValue++
-  const outTracks: AlsNode[] = [...returnTracks]
+  const outTracks: AlsNode[] = []
 
   const byChannel = placedRifffsByChannel(state)
   for (const channelId of state.channelOrder) {
@@ -1484,6 +1442,7 @@ export function buildAlsXml(
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
+    clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupName = earliestRifff(rifffs).name
     const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
@@ -1556,7 +1515,7 @@ export function buildAlsXml(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/main/ableton/buildAlsXml.test.ts`
-Expected: PASS (21 tests, count unchanged -- the Sends regression test still exists, verifying TrackSendHolder outer Ids stay frozen at 0/1 per track while nested send-knob Ids are unique document-wide)
+Expected: PASS (21 tests, count unchanged -- the Sends regression test now verifies ReturnTracks are dropped entirely and every cloned track's own Sends is empty)
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 

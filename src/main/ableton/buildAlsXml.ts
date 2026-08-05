@@ -8,7 +8,6 @@ import {
   parseAls,
   serializeAls,
   findChild,
-  findAllChildren,
   childArray,
   attrs,
   setAttr,
@@ -213,6 +212,28 @@ function computeLoopWindow(
   }
 }
 
+/**
+ * Empties every `<TrackSendHolder>` out of a cloned track's own `<Sends>`
+ * (found at `<trackTag> > DeviceChain > Mixer > Sends`), leaving the
+ * `<Sends>` element itself present but childless. This is only safe because
+ * `<ReturnTrack>`s are dropped from the export entirely (see buildAlsXml's
+ * own handling below) -- Ableton's per-track send-knob validation turned
+ * out to require every non-return track's `<Sends>` to have exactly one
+ * `<TrackSendHolder>` per `<ReturnTrack>` in the Set, so emptying it while
+ * still shipping 2 ReturnTracks previously crashed Ableton outright. With
+ * zero ReturnTracks, zero TrackSendHolders is the only valid state, and
+ * there's no longer any Id scheme to get right at all. See
+ * docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
+ * risks" for the full history of what didn't work before this.
+ */
+function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+  const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
+  sends['Sends'] = []
+}
+
 function buildStemTrack(
   canonicalAudioTrack: AlsNode,
   nextId: () => number,
@@ -227,6 +248,7 @@ function buildStemTrack(
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
+  clearSends(track, 'AudioTrack')
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
@@ -322,7 +344,22 @@ export function buildAlsXml(
 
   const canonicalAudioTrack = findChild(tracks, 'AudioTrack')!
   const canonicalGroupTrack = findChild(tracks, 'GroupTrack')!
-  const returnTracks = findAllChildren(tracks, 'ReturnTrack')
+
+  // <ReturnTrack>s are dropped from the export entirely -- not carried
+  // over, not cloned. sssketch has no concept of sends/return-track
+  // routing in its own data model, and after 8 real, confirmed failed
+  // attempts to make cloned tracks' <Sends> agree with Ableton's own
+  // (still not fully understood) per-track send-knob validation -- see
+  // docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
+  // risks" for the full history -- the only approach that actually works
+  // is removing the return tracks so there's no send-knob scheme to get
+  // right at all: zero ReturnTracks means zero TrackSendHolders is the
+  // only valid state for every other track's own <Sends> (see
+  // clearSends). The exported project simply opens without the 2 default
+  // reverb/delay returns pre-configured; the user adds their own once
+  // they start mixing in Ableton.
+  const sendsPreNode = findChild(liveSetChildren, 'SendsPre')!
+  sendsPreNode['SendsPre'] = []
 
   // A plain closure over an outer-scope counter (not a separate
   // makeIdAllocator helper) specifically so nextIdValue can be read back
@@ -334,7 +371,7 @@ export function buildAlsXml(
   // itself uses (its own Ids top out in the tens of thousands).
   let nextIdValue = 1_000_000
   const nextId = (): number => nextIdValue++
-  const outTracks: AlsNode[] = [...returnTracks]
+  const outTracks: AlsNode[] = []
 
   const byChannel = placedRifffsByChannel(state)
   for (const channelId of state.channelOrder) {
@@ -343,6 +380,7 @@ export function buildAlsXml(
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
+    clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupName = earliestRifff(rifffs).name
     const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
