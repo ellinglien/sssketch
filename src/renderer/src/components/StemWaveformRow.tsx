@@ -10,9 +10,9 @@ import {
 } from '../state/selectors'
 import { stemColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
-import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
+import { startPointerDrag } from './dragUtils'
 import { scheduleLiveParamSync } from './liveParamSync'
-import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
+import { mouseBarFromDragEvent } from './dragGrabOffset'
 import { useFrameScale } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
 import {
@@ -59,6 +59,8 @@ export function StemWaveformRow({
   const snapIdx = useAppSelector((s) => s.snapIdx)
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const bpm = useAppSelector((s) => s.bpm)
+  const muteRegions = useAppSelector((s) => s.muteRegions[key] ?? [])
+  const regionSelection = useAppSelector((s) => s.regionSelection)
   const stem = rifff.stems.find((s) => s.slot === slot)!
   const color = stemColorVar(stem)
   const playedBarsKey = groupId
@@ -306,39 +308,69 @@ export function StemWaveformRow({
     )
   }
 
-  // Click anywhere on the waveform (that isn't a resize handle, fade dot, or
-  // a real drag) moves the transport playhead to that exact point — the
-  // same free/unsnapped scrub Ruler already offers, just reachable directly
-  // from the clip itself instead of needing to find the matching spot on
-  // the ruler above. Skipped while volumeDragMode is on, since that mode
-  // repurposes this same surface for volume dragging instead.
-  function handleScrubClick(e: React.MouseEvent): void {
-    if (volumeDragMode) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    // Fraction of the element's own MEASURED width, not a raw clientX pixel
-    // delta divided by ppb -- getBoundingClientRect()/clientX report real
-    // rendered screen pixels, which only equal ppb's logical pixels 1:1 when
-    // nothing between this element and the viewport is scaled. The whole
-    // app is wrapped in a transform: scale(frameScale) (App.tsx's Frame
-    // component, matching the current window size against a fixed design
-    // canvas), so raw pixel deltas are routinely off by frameScale. The
-    // fraction is scale-invariant, so multiplying it by this clip's own
-    // ACTUAL rendered bar-span sidesteps the mismatch entirely.
-    //
-    // That bar-span is widthPx/ppb, NOT displayedPlayedBars -- they only
-    // agree when stretch is on. With stretch off, clipGeometry renders at
-    // shownBars = playedBars * (rifff.bpm / bpm), a different value than
-    // displayedPlayedBars (which is always the played-bars count, never
-    // tempo-adjusted) -- using the wrong one here silently used the wrong
-    // bar-span for any un-stretched stem, still landing off target.
-    const fraction = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0
-    const bar = Math.max(0, leftPx / ppb + fraction * (widthPx / ppb))
-    dispatch({ type: 'SELECT', groupId })
-    dispatch({ type: 'SET_POS', pos: bar })
-    if (playing) {
-      markManualSeek()
-      void window.rifffApi.engineSetPosition(bar)
+  // Mousedown anywhere on the waveform body (that isn't a resize handle or
+  // fade dot): if it lands inside an already-muted region, immediately
+  // selects that region's exact bounds (mode 'unmute') -- no drag needed,
+  // matching "clicking a muted span re-selects it" from the design spec.
+  // Otherwise starts an Ableton-style drag-to-select (mode 'mute'); if the
+  // drag never actually moved (a plain click), falls back to the original
+  // click-to-scrub behavior instead of leaving a zero-width selection
+  // behind. Skipped while volumeDragMode is on, which repurposes this same
+  // surface for volume dragging instead (unchanged from before).
+  function handleRegionMouseDown(e: React.MouseEvent): void {
+    if (volumeDragMode) {
+      handleVolumeStart(e)
+      return
     }
+    const mouseBar = mouseBarFromDragEvent(e, ppb, frameScale)
+    if (mouseBar === null) return
+
+    const existingRegion = muteRegions.find((r) => mouseBar >= r.startBar && mouseBar < r.endBar)
+    if (existingRegion) {
+      e.preventDefault()
+      e.stopPropagation()
+      dispatch({
+        type: 'SET_REGION_SELECTION',
+        selection: {
+          stemKeys: [key],
+          startBar: existingRegion.startBar,
+          endBar: existingRegion.endBar,
+          mode: 'unmute'
+        }
+      })
+      return
+    }
+
+    const startBar = mouseBar
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const currentBar = Math.max(0, startBar + deltaX / ppb)
+        dispatch({
+          type: 'SET_REGION_SELECTION',
+          selection: {
+            stemKeys: [key],
+            startBar: Math.min(startBar, currentBar),
+            endBar: Math.max(startBar, currentBar),
+            mode: 'mute'
+          }
+        })
+      },
+      (moved) => {
+        if (moved) return
+        // Not a real drag -- same click-to-scrub behavior this surface
+        // always had, and clear any selection this click might have
+        // started (there shouldn't be one yet at this point, but keeps
+        // this handler self-contained regardless of call order).
+        dispatch({ type: 'SET_REGION_SELECTION', selection: null })
+        dispatch({ type: 'SELECT', groupId })
+        dispatch({ type: 'SET_POS', pos: startBar })
+        if (playing) {
+          markManualSeek()
+          void window.rifffApi.engineSetPosition(startBar)
+        }
+      }
+    )
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -363,28 +395,11 @@ export function StemWaveformRow({
     )
   }
 
-  // Default (volumeDragMode off): the waveform body is a native HTML5 drag
-  // target, moving the whole rifff — exposed on a wider surface than the
-  // label column alone. When volumeDragMode is on, this never fires: the
-  // browser only initiates a native drag from a mousedown that wasn't
-  // already preventDefault'd, and handleVolumeStart (wired below) calls
-  // preventDefault via startPointerDrag whenever volumeDragMode is on.
-  function handleWaveformDragStart(e: React.DragEvent): void {
-    suppressNextSyntheticClick()
-    e.dataTransfer.setData('text/rifff-group-id', groupId)
-    const mouseBar = mouseBarFromDragEvent(e, ppb, frameScale)
-    if (mouseBar !== null) {
-      setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
-    }
-  }
-
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
         <div
           data-rifff-clip
-          draggable
-          onDragStart={handleWaveformDragStart}
           onContextMenu={handleWaveformContextMenu}
           onDoubleClick={() => {
             // Mirrors the import-time default seeded in store.ts's
@@ -669,22 +684,62 @@ export function StemWaveformRow({
               mousedown before it ever reaches them, not just visually
               overlap them. */}
           <div
-            onMouseDown={(e) => {
-              if (volumeDragMode) handleVolumeStart(e)
-            }}
-            onClick={handleScrubClick}
+            onMouseDown={handleRegionMouseDown}
             title={
               volumeDragMode
                 ? 'drag to adjust volume · right-click to mute'
-                : 'click to scrub playhead · drag to move clip · right-click to mute'
+                : 'click to scrub playhead · drag to select a region (delete to mute) · right-click to mute'
             }
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'grab',
+              cursor: volumeDragMode ? 'ns-resize' : 'crosshair',
               zIndex: 2
             }}
           />
+
+          {/* Muted regions: a diagonal hatch replacing the waveform for that
+              span. Purely visual (pointerEvents none) -- handleRegionMouseDown
+              on the full-body surface above already does its own bar-based
+              lookup against muteRegions, so this never needs its own
+              separate mousedown handler. Positioned relative to the clip's
+              own left edge (leftPx), matching every other per-pixel overlay
+              in this component (fade dots, envelope curve). */}
+          {muteRegions.map((region, i) => (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: region.startBar * ppb - leftPx,
+                width: (region.endBar - region.startBar) * ppb,
+                background:
+                  'repeating-linear-gradient(45deg, color-mix(in srgb, var(--ra-mute-on) 55%, transparent) 0 3px, transparent 3px 8px)',
+                zIndex: 1,
+                pointerEvents: 'none'
+              }}
+            />
+          ))}
+
+          {/* Live/pending region selection -- shown while dragging, and
+              after release until Delete/Backspace commits it or it's
+              cancelled. */}
+          {regionSelection && regionSelection.stemKeys.includes(key) && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: regionSelection.startBar * ppb - leftPx,
+                width: (regionSelection.endBar - regionSelection.startBar) * ppb,
+                background: 'color-mix(in srgb, var(--ra-text) 15%, transparent)',
+                border: '1px solid var(--ra-text)',
+                zIndex: 1,
+                pointerEvents: 'none'
+              }}
+            />
+          )}
 
           {dragVolume !== null && (
             <div
