@@ -42,6 +42,23 @@ const api = {
     ipcRenderer.invoke('export-stems', stems),
   exportAls: (stateJson: string): Promise<string | null> =>
     ipcRenderer.invoke('export-als', stateJson),
+  saveProjectToLibrary: (name: string, json: string): Promise<{ path: string }> =>
+    ipcRenderer.invoke('save-project-to-library', name, json),
+  saveProjectInPlace: (path: string, json: string): Promise<void> =>
+    ipcRenderer.invoke('save-project-in-place', path, json),
+  openLibrarySketch: (name: string): Promise<{ path: string; json: string } | null> =>
+    ipcRenderer.invoke('open-library-sketch', name),
+  duplicateSketch: (currentName: string): Promise<{ name: string; path: string } | null> =>
+    ipcRenderer.invoke('duplicate-sketch', currentName),
+  listLibrarySketches: (): Promise<{ name: string; mtimeMs: number }[]> =>
+    ipcRenderer.invoke('list-library-sketches'),
+  getLibraryRoot: (): Promise<string> => ipcRenderer.invoke('get-library-root'),
+  setLibraryRoot: (newRoot: string): Promise<void> =>
+    ipcRenderer.invoke('set-library-root', newRoot),
+  shouldWarnBeforeAbletonOverwrite: (libraryName: string): Promise<boolean> =>
+    ipcRenderer.invoke('should-warn-before-ableton-overwrite', libraryName),
+  exportAlsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
+    ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),

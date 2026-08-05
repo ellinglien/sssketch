@@ -12,11 +12,15 @@ import {
   openProject,
   writeAutosave,
   loadAutosave,
-  clearAutosave
+  clearAutosave,
+  saveProjectToLibrary,
+  saveProjectInPlace,
+  openLibrarySketch,
+  duplicateSketchAsNewVersion
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
-import { exportAbleton } from './exportAbleton'
+import { exportAbleton, exportAbletonToLibrary } from './exportAbleton'
 import { nativeExport, nativeExportStems } from './nativeExport'
 import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
@@ -31,6 +35,12 @@ import {
   downloadMissingStems,
   type RiffFilters
 } from './loreWarehouse'
+import {
+  listLibrarySketches,
+  libraryRootPath,
+  setLibraryRootPath,
+  shouldWarnBeforeOverwrite
+} from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
 // read from the before-quit handler below, which runs in a different
@@ -244,6 +254,38 @@ app.whenReady().then(async () => {
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
     return exportAbleton(win, state)
   })
+
+  ipcMain.handle('save-project-to-library', (_event, name: string, json: string) =>
+    saveProjectToLibrary(name, json)
+  )
+
+  ipcMain.handle('save-project-in-place', (_event, path: string, json: string) =>
+    saveProjectInPlace(path, json)
+  )
+
+  ipcMain.handle('open-library-sketch', (_event, name: string) => openLibrarySketch(name))
+
+  ipcMain.handle('duplicate-sketch', (_event, currentName: string) =>
+    duplicateSketchAsNewVersion(currentName)
+  )
+
+  ipcMain.handle('list-library-sketches', () => listLibrarySketches())
+
+  ipcMain.handle('get-library-root', () => libraryRootPath())
+
+  ipcMain.handle('set-library-root', (_event, newRoot: string) => setLibraryRootPath(newRoot))
+
+  ipcMain.handle('should-warn-before-ableton-overwrite', (_event, libraryName: string) =>
+    shouldWarnBeforeOverwrite(libraryName)
+  )
+
+  ipcMain.handle(
+    'export-als-to-library',
+    async (_event, stateJson: string, libraryName: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportAbletonToLibrary(state, libraryName)
+    }
+  )
 
   try {
     playbackEngine = await startPlaybackEngine()
