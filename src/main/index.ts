@@ -16,7 +16,8 @@ import {
   saveProjectToLibrary,
   saveProjectInPlace,
   openLibrarySketch,
-  duplicateSketchAsNewVersion
+  duplicateSketchAsNewVersion,
+  generateDefaultProjectName
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
@@ -254,6 +255,8 @@ app.whenReady().then(async () => {
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
     return exportAbleton(win, state)
   })
+
+  ipcMain.handle('generate-default-project-name', () => generateDefaultProjectName())
 
   ipcMain.handle('save-project-to-library', (_event, name: string, json: string) =>
     saveProjectToLibrary(name, json)

@@ -42,6 +42,8 @@ const api = {
     ipcRenderer.invoke('export-stems', stems),
   exportAls: (stateJson: string): Promise<string | null> =>
     ipcRenderer.invoke('export-als', stateJson),
+  generateDefaultProjectName: (): Promise<string> =>
+    ipcRenderer.invoke('generate-default-project-name'),
   saveProjectToLibrary: (name: string, json: string): Promise<{ path: string }> =>
     ipcRenderer.invoke('save-project-to-library', name, json),
   saveProjectInPlace: (path: string, json: string): Promise<void> =>
