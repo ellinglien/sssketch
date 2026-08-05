@@ -109,19 +109,18 @@ function pad2(n: number): string {
 }
 
 /** Generates a default project filename (without extension), following the
- * pattern `emoji-YYYY-MM-DD-adjective-noun` -- e.g.
- * "🌙-2026-08-01-groovy-sparrow". `date` is injectable for deterministic
- * tests; defaults to now. The emoji is deliberately placed BEFORE the date
- * (not after) -- this means library folders no longer sort chronologically
- * by default in Finder the way the date-first scheme alone would; accepted
- * as a known, easily-reversible tradeoff (see design spec's Naming
- * section). */
+ * pattern `YYYY-MM-DD-adjective-noun-emoji` -- e.g.
+ * "2026-08-01-groovy-sparrow-🌙". `date` is injectable for deterministic
+ * tests; defaults to now. The emoji is placed AFTER the date (not before,
+ * as originally shipped) specifically so library folders keep sorting
+ * chronologically by default in Finder -- the date-first scheme's whole
+ * point was defeated by an emoji prefix. */
 export function generateDefaultProjectName(date: Date = new Date()): string {
   const dateStr = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
   const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)]
   const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
   const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `${emoji}-${dateStr}-${adjective}-${noun}`
+  return `${dateStr}-${adjective}-${noun}-${emoji}`
 }
 
 /**

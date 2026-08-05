@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { join, basename, dirname } from 'node:path'
-import { dialog, BrowserWindow } from 'electron'
+import { dialog, shell, BrowserWindow } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { stemKey } from '@shared/types'
 // electron-vite's own Node-asset mechanism -- resolves to a real filesystem
@@ -206,6 +206,10 @@ export async function buildAndWriteAlsProject(
  * outputDir is wherever the user chose and may contain unrelated content).
  * Otherwise a stem removed from the arrangement since the last export
  * would leave its old copy orphaned there forever.
+ *
+ * Opens `Ableton/` in Finder once the export finishes -- with routine saves
+ * no longer going through a dialog, this is the only on-screen confirmation
+ * a user gets that the export actually landed somewhere.
  */
 export async function exportAbletonToLibrary(state: AppState, libraryName: string): Promise<void> {
   const abletonDir = sketchAbletonDir(libraryName)
@@ -214,6 +218,7 @@ export async function exportAbletonToLibrary(state: AppState, libraryName: strin
   await buildAndWriteAlsProject(state, abletonDir, libraryName)
   const alsPath = join(abletonDir, `${libraryName}.als`)
   writeSketchMeta(libraryName, { lastExportAlsMtimeMs: statSync(alsPath).mtimeMs })
+  await shell.openPath(abletonDir)
 }
 
 /**
@@ -226,7 +231,8 @@ export async function exportAbletonToLibrary(state: AppState, libraryName: strin
  * as null, matching nativeExport.ts's own throw-and-let-the-renderer-catch
  * convention (see App.tsx's handleExportMix, which already try/catches +
  * window.alerts for exactly this) -- deliberately not swallowed the way
- * exportMixToWav's write failure is.
+ * exportMixToWav's write failure is. Opens the destination folder in
+ * Finder on success, matching exportAbletonToLibrary's own behavior.
  */
 export async function exportAbleton(win: BrowserWindow, state: AppState): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
@@ -238,5 +244,6 @@ export async function exportAbleton(win: BrowserWindow, state: AppState): Promis
   const outputDir = dirname(result.filePath)
   const projectName = basename(result.filePath, '.als')
   await buildAndWriteAlsProject(state, outputDir, projectName)
+  await shell.openPath(outputDir)
   return result.filePath
 }

@@ -21,14 +21,14 @@ vi.mock('electron', () => ({
 }))
 
 describe('generateDefaultProjectName', () => {
-  it('formats as an emoji + YYYY-MM-DD-adjective-noun for a given date', () => {
+  it('formats as YYYY-MM-DD-adjective-noun + emoji for a given date', () => {
     const name = generateDefaultProjectName(new Date(2026, 7, 1)) // August 1, 2026
-    expect(name).toMatch(/^\p{Extended_Pictographic}-2026-08-01-[a-z]+-[a-z]+$/u)
+    expect(name).toMatch(/^2026-08-01-[a-z]+-[a-z]+-\p{Extended_Pictographic}$/u)
   })
 
   it('zero-pads single-digit month and day', () => {
     const name = generateDefaultProjectName(new Date(2026, 0, 5)) // January 5, 2026
-    expect(name).toMatch(/^\p{Extended_Pictographic}-2026-01-05-[a-z]+-[a-z]+$/u)
+    expect(name).toMatch(/^2026-01-05-[a-z]+-[a-z]+-\p{Extended_Pictographic}$/u)
   })
 
   it('varies the adjective-noun pair across calls (not a fixed pair)', () => {
@@ -40,7 +40,7 @@ describe('generateDefaultProjectName', () => {
   it('varies the emoji across calls (not a fixed one)', () => {
     const date = new Date(2026, 7, 1)
     const emojis = new Set(
-      Array.from({ length: 30 }, () => generateDefaultProjectName(date).split('-')[0])
+      Array.from({ length: 30 }, () => generateDefaultProjectName(date).split('-').pop())
     )
     expect(emojis.size).toBeGreaterThan(1)
   })
