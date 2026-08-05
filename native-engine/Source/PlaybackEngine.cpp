@@ -2,6 +2,7 @@
 #include "PlaybackEngine.h"
 #include "FadeGain.h"
 #include "Metronome.h"
+#include "MuteRegionGain.h"
 #include <algorithm>
 #include <cmath>
 
@@ -267,7 +268,8 @@ namespace sssketch
                         const int srcSample = (int) std::llround(sourceTimeSec * entry.sampleRate);
                         if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
-                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume;
+                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume
+                            * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
@@ -445,7 +447,8 @@ namespace sssketch
                         if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
                             continue;
 
-                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume;
+                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume
+                            * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;

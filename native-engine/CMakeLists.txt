@@ -49,6 +49,8 @@ target_sources(sssketch_engine PRIVATE
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp
   Source/FadeGainTests.cpp
+  Source/MuteRegionGain.h
+  Source/MuteRegionGain.cpp
   Source/LoopSewing.cpp
   Source/LoopSewingTests.cpp
   Source/Metronome.cpp

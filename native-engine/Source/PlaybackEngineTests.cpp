@@ -169,6 +169,103 @@ namespace sssketch
                 for (float s : l) expectEquals(s, 0.0f);
             }
 
+            beginTest("a mute region silences only its own span, not the whole stem");
+            {
+                // 4 bars at 60bpm (secPerBar=4s) -> whole stem spans [0,16)s.
+                // Mute region covers bars [2,3) -> seconds [8,12). This test
+                // renders as far as t=14s, so -- unlike most other tests in
+                // this file, which stay inside the shared 1-second `fixture`
+                // -- it needs its own fixture whose actual sample count
+                // covers the full declared 16s (matching the
+                // stem.durationSec convention used by e.g. oneShotFixture
+                // above: fixture length in samples == declared durationSec),
+                // otherwise reads past 44100 samples would silently return
+                // silence from the out-of-bounds guard in renderBlock
+                // regardless of mute state, defeating the point of this test.
+                auto muteFixture = writeFixtureWav("sssketch_pe_mute_fixture.wav", 0.5f, 16 * 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = muteFixture.getFullPathName(); // constant 0.5
+                stem.durationSec = 16.0;
+                stem.barLength = 4;
+                stem.muteRegions.push_back({ 2.0, 3.0 });
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                // Deep inside the mute region (t=10s, well past both micro-fade
+                // edges at 8s/12s) -- must be silent.
+                {
+                    std::vector<float> l(64, 0.0f), r(64, 0.0f);
+                    engine.renderBlock(10.0 / 4.0, 44100.0, 64, l.data(), r.data(), channelChains);
+                    for (float s : l) expectWithinAbsoluteError(s, 0.0f, 0.001f);
+                }
+                // Well before the mute region (t=2s) -- must be unaffected.
+                {
+                    std::vector<float> l(64, 0.0f), r(64, 0.0f);
+                    engine.renderBlock(2.0 / 4.0, 44100.0, 64, l.data(), r.data(), channelChains);
+                    for (float s : l) expectWithinAbsoluteError(s, 0.5f, 0.001f);
+                }
+                // Well after the mute region (t=14s) -- must be unaffected.
+                {
+                    std::vector<float> l(64, 0.0f), r(64, 0.0f);
+                    engine.renderBlock(14.0 / 4.0, 44100.0, 64, l.data(), r.data(), channelChains);
+                    for (float s : l) expectWithinAbsoluteError(s, 0.5f, 0.001f);
+                }
+                muteFixture.deleteFile();
+            }
+
+            beginTest("a mute region's edge ramps rather than jumps discontinuously");
+            {
+                // Same setup as above (see that test's own comment on why it
+                // needs a full 16s fixture rather than the shared 1s one);
+                // render a block straddling the mute region's own start edge
+                // (8s) and confirm the samples ramp down smoothly rather than
+                // jumping from 0.5 to 0.0 between two adjacent samples.
+                auto muteFixture = writeFixtureWav("sssketch_pe_mute_edge_fixture.wav", 0.5f, 16 * 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = muteFixture.getFullPathName();
+                stem.durationSec = 16.0;
+                stem.barLength = 4;
+                stem.muteRegions.push_back({ 2.0, 3.0 }); // seconds [8,12)
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                // Render starting 5ms before the edge, straddling t=8.0s.
+                const double positionBars = 7.995 / 4.0;
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(positionBars, 44100.0, 512, l.data(), r.data(), channelChains);
+
+                // No two adjacent samples should differ by more than a small
+                // fraction of the full 0.5 -> 0.0 swing -- a hard cut would
+                // produce exactly one sample-to-sample jump of the full 0.5.
+                float maxAdjacentDelta = 0.0f;
+                for (size_t i = 1; i < l.size(); ++i)
+                    maxAdjacentDelta = std::max(maxAdjacentDelta, std::abs(l[i] - l[i - 1]));
+                expect(maxAdjacentDelta < 0.1f);
+                muteFixture.deleteFile();
+            }
+
             beginTest("nothing renders before the stem's start position");
             {
                 EngineProject project;
