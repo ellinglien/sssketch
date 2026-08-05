@@ -80,6 +80,15 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // this restructuring sidesteps the rule instead of suppressing it.
   const [computed, setComputed] = useState<{
     forStems: ClusterableStem[]
+    // The subset of `forStems` that successfully extracted features --
+    // everything downstream (rawVectors, mergeSequence, and clusters built
+    // via cutAtK below) is indexed against THIS array, not `forStems`
+    // itself, so a stem dropped for a failed extraction can't desync the
+    // index mapping. `forStems` is kept only as the staleness key against
+    // the outer `stems` memo (see `loading` below) -- it must stay the
+    // exact reference the effect was launched with, not the filtered
+    // subset, or a `stems` identity change would never be detected.
+    analyzedStems: ClusterableStem[]
     mergeSequence: MergeStep[]
   } | null>(null)
   const loading = computed === null || computed.forStems !== stems
@@ -88,15 +97,42 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const rawVectors = await Promise.all(
+      // Promise.allSettled, not Promise.all -- a single stem with a
+      // corrupt/unreadable file rejecting shouldn't sink feature
+      // extraction for every OTHER stem in the project (Promise.all would
+      // reject as a whole the instant any one input rejects). Each
+      // rejected stem is logged and excluded from the clustering
+      // population entirely, rather than either crashing the modal or
+      // substituting a zero vector -- a fake zero-vector data point would
+      // corrupt standardizeFeatures' per-dimension mean/stddev for every
+      // OTHER stem too.
+      const results = await Promise.allSettled(
         stems.map(async (s) => {
           const features = await getStemFeatures(s.path)
           return toFeatureArray(features)
         })
       )
       if (cancelled) return
+      const analyzedStems: ClusterableStem[] = []
+      const rawVectors: number[][] = []
+      results.forEach((result, i) => {
+        if (result.status === 'fulfilled') {
+          analyzedStems.push(stems[i])
+          rawVectors.push(result.value)
+        } else {
+          console.error(
+            'ClusterStemsBrowser: feature extraction failed for stem',
+            stems[i].path,
+            result.reason
+          )
+        }
+      })
       const standardized = standardizeFeatures(rawVectors)
-      setComputed({ forStems: stems, mergeSequence: computeMergeSequence(standardized) })
+      setComputed({
+        forStems: stems,
+        analyzedStems,
+        mergeSequence: computeMergeSequence(standardized)
+      })
     })().catch((err) => {
       if (!cancelled) {
         console.error('ClusterStemsBrowser: feature extraction/clustering failed', err)
@@ -104,7 +140,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
         // derivation above) -- cutAtK on an empty merge list just leaves
         // every stem as its own singleton cluster, a reasonable fallback
         // rather than leaving the modal stuck on "analyzing..." forever.
-        setComputed({ forStems: stems, mergeSequence: [] })
+        setComputed({ forStems: stems, analyzedStems: [], mergeSequence: [] })
       }
     })
     return () => {
@@ -114,13 +150,14 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
 
   const clusters = useMemo(() => {
     if (!computed || computed.forStems !== stems) return []
+    const { analyzedStems } = computed
     const indexGroups = cutAtK(
       computed.mergeSequence,
-      stems.length,
-      Math.min(clusterCount, stems.length)
+      analyzedStems.length,
+      Math.min(clusterCount, analyzedStems.length)
     )
     return indexGroups
-      .map((indices) => indices.map((i) => stems[i]))
+      .map((indices) => indices.map((i) => analyzedStems[i]))
       .sort((a, b) => b.length - a.length)
   }, [computed, stems, clusterCount])
 
@@ -133,9 +170,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   const clampedFocusedRow = Math.min(focusedRow, Math.max(0, clusters.length - 1))
 
   function assignCluster(members: ClusterableStem[], busId: BusId): void {
-    for (const member of members) {
-      dispatch({ type: 'ASSIGN_TO_BUS', stemKey: member.key, busId })
-    }
+    dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
   }
 
   // Arrow keys move focus between rows; number keys 1-5 assign the

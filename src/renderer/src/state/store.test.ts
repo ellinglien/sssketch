@@ -1628,6 +1628,32 @@ describe('reducer', () => {
       expect(state.busOf['r1:0']).toBe('bass')
     })
 
+    it('ASSIGN_STEMS_TO_BUS assigns every given stemKey to the busId in one dispatch', () => {
+      const state = reducer(initialState, {
+        type: 'ASSIGN_STEMS_TO_BUS',
+        stemKeys: ['r1:0', 'r1:1', 'r2:0'],
+        busId: 'lead'
+      })
+      expect(state.busOf['r1:0']).toBe('lead')
+      expect(state.busOf['r1:1']).toBe('lead')
+      expect(state.busOf['r2:0']).toBe('lead')
+    })
+
+    it('ASSIGN_STEMS_TO_BUS overwrites any previous per-stem assignments', () => {
+      const first = reducer(initialState, {
+        type: 'ASSIGN_TO_BUS',
+        stemKey: 'r1:0',
+        busId: 'drums'
+      })
+      const state = reducer(first, {
+        type: 'ASSIGN_STEMS_TO_BUS',
+        stemKeys: ['r1:0', 'r1:1'],
+        busId: 'backing'
+      })
+      expect(state.busOf['r1:0']).toBe('backing')
+      expect(state.busOf['r1:1']).toBe('backing')
+    })
+
     it('DELETE_RIFFFS strips busOf for every deleted stem', () => {
       const rifff = {
         groupId: 'r1',

@@ -245,6 +245,7 @@ export type Action =
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
   | { type: 'ASSIGN_TO_BUS'; stemKey: string; busId: BusId }
+  | { type: 'ASSIGN_STEMS_TO_BUS'; stemKeys: string[]; busId: BusId }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
@@ -411,6 +412,17 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'ASSIGN_TO_BUS':
       return { ...state, busOf: { ...state.busOf, [action.stemKey]: action.busId } }
+
+    // Batched counterpart to ASSIGN_TO_BUS, for the "cluster stems"
+    // labelling UI's own per-cluster bus assignment -- a cluster can have
+    // many member stems, and assigning them all in one click should be
+    // ONE undo step, not one per stem (same reasoning as SET_GROUP_MUTE
+    // above).
+    case 'ASSIGN_STEMS_TO_BUS': {
+      const busOf = { ...state.busOf }
+      for (const key of action.stemKeys) busOf[key] = action.busId
+      return { ...state, busOf }
+    }
 
     // Repacks every rifff in groupIds into contiguous bar positions, in that
     // order, starting at bar 0 — the only way rifffs get reordered/inserted
