@@ -58,19 +58,32 @@ async function materializeStem(
 ): Promise<boolean> {
   const cachePath = cachedStemPath(path)
   if (!existsSync(cachePath)) {
-    if (isWavPath(path)) {
-      copyFileSync(path, cachePath)
-    } else {
-      if (!client) return false
-      const result = (await client.sendAndAwaitType(
-        'bake-stem',
-        { path, rotationSec: 0, outputPath: cachePath },
-        'bake-stem-result'
-      )) as { success: boolean; error?: string }
-      if (!result.success) {
-        console.error(`materializeStem: native decode failed for ${path}: ${result.error}`)
-        return false
+    try {
+      if (isWavPath(path)) {
+        copyFileSync(path, cachePath)
+      } else {
+        if (!client) return false
+        const result = (await client.sendAndAwaitType(
+          'bake-stem',
+          { path, rotationSec: 0, outputPath: cachePath },
+          'bake-stem-result'
+        )) as { success: boolean; error?: string }
+        if (!result.success) {
+          console.error(`materializeStem: native decode failed for ${path}: ${result.error}`)
+          // The native side may have left a partial/empty file at
+          // outputPath despite reporting failure -- don't let that poison
+          // the cache for every future export of this stem (see CLAUDE.md's
+          // "cache by path, evict on rejection" convention).
+          if (existsSync(cachePath)) rmSync(cachePath)
+          return false
+        }
       }
+    } catch (err) {
+      // Same reasoning as above: a copy/decode that threw partway through
+      // may still have left a partial file behind. Evict before rethrowing
+      // so this failure doesn't silently poison the cache forever.
+      if (existsSync(cachePath)) rmSync(cachePath)
+      throw err
     }
   }
   cloneOrCopy(cachePath, destPath)
@@ -89,12 +102,13 @@ async function materializeStem(
  * Throws if no rifff is placed at all (nothing to export) or if the
  * checked-in template can't be read (should never happen in practice).
  *
- * `Samples/Imported/` is cleared before repopulating -- otherwise a stem
- * removed from the arrangement since the last export into this SAME
- * outputDir would leave its old copy orphaned there forever. This only
- * touches this one export's own destination folder, never the shared
- * cache itself (other sketches/versions may still reference those cached
- * files).
+ * Does NOT clear `Samples/Imported/` before repopulating -- `outputDir` may
+ * be a folder this codebase doesn't own (the dialog-based exportAbleton
+ * lets the user pick anywhere, including an existing folder with unrelated
+ * content). A caller that DOES own its outputDir outright and wants stale,
+ * removed-from-the-arrangement stems cleaned up first (see
+ * exportAbletonToLibrary) is responsible for clearing it itself before
+ * calling this.
  */
 export async function buildAndWriteAlsProject(
   state: AppState,
@@ -107,7 +121,6 @@ export async function buildAndWriteAlsProject(
   }
 
   const samplesDir = join(outputDir, 'Samples', 'Imported')
-  rmSync(samplesDir, { recursive: true, force: true })
   mkdirSync(samplesDir, { recursive: true })
   mkdirSync(samplesCacheDir(), { recursive: true })
 
@@ -145,7 +158,16 @@ export async function buildAndWriteAlsProject(
   if (needsEngine) {
     engineHandle = await spawnEngine()
     client = new EngineClient()
-    await client.connect(engineHandle.port)
+    try {
+      await client.connect(engineHandle.port)
+    } catch (err) {
+      // spawnEngine() already resolved, meaning the process is up and
+      // running -- if connect() then throws, stop it here so it isn't
+      // orphaned (the try/finally below is never reached in that case,
+      // since this whole block runs before it).
+      engineHandle.stop()
+      throw err
+    }
   }
   try {
     for (const { key, path, destPath } of stemEntries) {
@@ -177,10 +199,18 @@ export async function buildAndWriteAlsProject(
  * have already checked that and confirmed with the user BEFORE calling
  * this, the same way App.tsx's handleNew owns its own window.confirm
  * rather than pushing that into the main process.
+ *
+ * Clears `Ableton/Samples/Imported/` before calling buildAndWriteAlsProject
+ * -- safe ONLY here, because `sketchAbletonDir(libraryName)` is a folder
+ * sssketch fully owns (unlike the dialog-based exportAbleton below, whose
+ * outputDir is wherever the user chose and may contain unrelated content).
+ * Otherwise a stem removed from the arrangement since the last export
+ * would leave its old copy orphaned there forever.
  */
 export async function exportAbletonToLibrary(state: AppState, libraryName: string): Promise<void> {
   const abletonDir = sketchAbletonDir(libraryName)
   mkdirSync(abletonDir, { recursive: true })
+  rmSync(join(abletonDir, 'Samples', 'Imported'), { recursive: true, force: true })
   await buildAndWriteAlsProject(state, abletonDir, libraryName)
   const alsPath = join(abletonDir, `${libraryName}.als`)
   writeSketchMeta(libraryName, { lastExportAlsMtimeMs: statSync(alsPath).mtimeMs })
