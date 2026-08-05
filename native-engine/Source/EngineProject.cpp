@@ -124,6 +124,29 @@ namespace sssketch
                         stem.oneShot = getBool(stemVar, "oneShot", false);
                         stem.trimStartSec = getDouble(stemVar, "trimStartSec", 0.0);
                         stem.trimEndSec = getDouble(stemVar, "trimEndSec", -1.0);
+
+                        auto muteRegionsVar = stemVar.getProperty("muteRegions", juce::var());
+                        if (auto* muteRegionsArray = muteRegionsVar.getArray())
+                        {
+                            for (auto& regionVar : *muteRegionsArray)
+                            {
+                                if (regionVar.getDynamicObject() == nullptr)
+                                {
+                                    errorOut = "muteRegions entry is not an object (stemKey: " + stem.stemKey + ")";
+                                    return false;
+                                }
+                                EngineStem::MuteRegion region;
+                                region.startBar = getDouble(regionVar, "startBar", 0.0);
+                                region.endBar = getDouble(regionVar, "endBar", 0.0);
+                                stem.muteRegions.push_back(region);
+                            }
+                        }
+                        else if (stemVar.hasProperty("muteRegions") && !isNullish(muteRegionsVar))
+                        {
+                            errorOut = "muteRegions is present but not an array (stemKey: " + stem.stemKey + ")";
+                            return false;
+                        }
+
                         rifff.stems.push_back(std::move(stem));
                     }
                 }

@@ -24,6 +24,17 @@ namespace sssketch
         double startBarOverride = -1.0; // -1.0 = use the rifff's own startBar
         double volume = 1.0;
         bool muted = false;
+        /** A muted span, in bars -- the same absolute arrangement-bar
+         * coordinate space startBarOverride/rifff.startBar already use.
+         * Kept in bars (not pre-converted to seconds) so PlaybackEngine.cpp
+         * can apply muteRegionGainAt() directly with no per-block
+         * conversion or heap allocation -- see MuteRegionGain.h. */
+        struct MuteRegion
+        {
+            double startBar = 0.0;
+            double endBar = 0.0;
+        };
+        std::vector<MuteRegion> muteRegions;
         // See docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
         // When true, PlaybackEngine::renderBlock's one-shot branch is used
         // instead of the normal tile/resample path -- trimStartSec/trimEndSec

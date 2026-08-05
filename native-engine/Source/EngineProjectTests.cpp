@@ -274,6 +274,35 @@ namespace sssketch
                 expectWithinAbsoluteError(project.rifffs[0].stems[0].leftCropBars, 1.5, 0.0001);
                 expectWithinAbsoluteError(project.rifffs[0].stems[1].leftCropBars, 0.0, 0.0001);
             }
+
+            beginTest("parses muteRegions on a stem");
+            {
+                EngineProject project;
+                juce::String error;
+                bool ok = parseEngineProject(
+                    R"({"rifffs":[{"groupId":"g1","stems":[{"stemKey":"g1:0","muteRegions":[{"startBar":4,"endBar":8},{"startBar":12,"endBar":16}]}]}]})",
+                    project, error);
+                expect(ok);
+                expectEquals(project.rifffs.size(), (size_t) 1);
+                expectEquals(project.rifffs[0].stems.size(), (size_t) 1);
+                const auto& regions = project.rifffs[0].stems[0].muteRegions;
+                expectEquals(regions.size(), (size_t) 2);
+                expectEquals(regions[0].startBar, 4.0);
+                expectEquals(regions[0].endBar, 8.0);
+                expectEquals(regions[1].startBar, 12.0);
+                expectEquals(regions[1].endBar, 16.0);
+            }
+
+            beginTest("defaults to empty muteRegions when absent");
+            {
+                EngineProject project;
+                juce::String error;
+                bool ok = parseEngineProject(
+                    R"({"rifffs":[{"groupId":"g1","stems":[{"stemKey":"g1:0"}]}]})",
+                    project, error);
+                expect(ok);
+                expect(project.rifffs[0].stems[0].muteRegions.empty());
+            }
         }
     };
 

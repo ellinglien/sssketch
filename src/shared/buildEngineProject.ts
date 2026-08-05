@@ -14,6 +14,7 @@ export interface EngineStem {
   startBarOverride: number // -1 means "use the rifff's own startBar"
   volume: number
   muted: boolean
+  muteRegions: { startBar: number; endBar: number }[]
   oneShot: boolean
   trimStartSec: number
   trimEndSec: number // -1 means "play to the stem's own natural durationSec"
@@ -196,6 +197,7 @@ export async function buildEngineProject(
         // momentarily reverting to the stale committed one.
         volume: state.dragVol[key] ?? state.vol[key] ?? 1,
         muted: state.mute[key] ?? false,
+        muteRegions: state.muteRegions[key] ?? [],
         oneShot: stem.oneShot ?? false,
         trimStartSec: stem.trimStartSec ?? 0,
         trimEndSec: stem.trimEndSec ?? -1
