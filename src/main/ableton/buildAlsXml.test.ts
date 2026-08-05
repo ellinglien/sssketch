@@ -33,6 +33,7 @@ function emptyAppState(overrides: Partial<AppState> = {}): AppState {
     fadeOut: {},
     playedBars: {},
     leftCrop: {},
+    muteRegions: {},
     dragVol: {},
     dragFadeIn: {},
     dragFadeOut: {},
@@ -696,6 +697,96 @@ describe('buildAlsXml', () => {
     expect(() =>
       buildAlsXml(TEMPLATE_XML, state, '/out', new Map([['rifff-1:0', 'a.wav']]))
     ).not.toThrow()
+  })
+
+  describe('mute region export', () => {
+    it('emits a single unsplit clip when a stem has no mute regions (unchanged behavior)', () => {
+      const rifff = drumsRifff() // startBar: 8, barLength: 4
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const body = childArray(audioTrack, 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      const clips = findAllChildren(childArray(events, 'Events'), 'AudioClip')
+      expect(clips).toHaveLength(1)
+    })
+
+    it('splits a stem into two clips around a muted middle span, with a real gap', () => {
+      const rifff = drumsRifff() // startBar: 8, barLength: 4, stem barLength: 4
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        playedBars: { 'rifff-1': 8 }, // clip spans [8,16) bars = beats [32,64)
+        muteRegions: { 'rifff-1:0': [{ startBar: 10, endBar: 11 }] } // beats [40,44)
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const body = childArray(audioTrack, 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      const clips = findAllChildren(childArray(events, 'Events'), 'AudioClip')
+      expect(clips).toHaveLength(2)
+
+      const first = childArray(clips[0], 'AudioClip')
+      expect(attrs(findChild(first, 'CurrentStart')!)['@_Value']).toBe('32')
+      expect(attrs(findChild(first, 'CurrentEnd')!)['@_Value']).toBe('40')
+      const second = childArray(clips[1], 'AudioClip')
+      expect(attrs(findChild(second, 'CurrentStart')!)['@_Value']).toBe('44')
+      expect(attrs(findChild(second, 'CurrentEnd')!)['@_Value']).toBe('64')
+
+      // Both clips' own @_Id (and every Id nested within each, e.g. WarpMarker
+      // Ids) must be unique -- the second clip is a clone of the first plus
+      // renumbering, not a raw duplicate.
+      expect(attrs(clips[0])['@_Id']).not.toBe(attrs(clips[1])['@_Id'])
+    })
+
+    it('continues the tile phase correctly across a gap, not restarting from LoopStart', () => {
+      // barLength=4 (16 beats/tile). Clip spans [8,16) bars = beats [32,64),
+      // unmuted, LoopStart would be 0 (no crop). Mute region at bars [10,11)
+      // = beats [40,44) -- 8 beats (2 bars) into the clip. The second segment
+      // starts 12 beats (3 bars) into the clip's own original timeline (its
+      // own Time is beats 44, clip started at beat 32 -- elapsed 12 beats),
+      // so its own tile phase should be (0 + 12) mod 16 = 12 beats, NOT 0.
+      const rifff = drumsRifff()
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        playedBars: { 'rifff-1': 8 },
+        muteRegions: { 'rifff-1:0': [{ startBar: 10, endBar: 11 }] }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const body = childArray(audioTrack, 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      const clips = findAllChildren(childArray(events, 'Events'), 'AudioClip')
+      const second = childArray(clips[1], 'AudioClip')
+      const loop = findChild(second, 'Loop')!
+      const loopBody = childArray(loop, 'Loop')
+      expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('12')
+    })
   })
 })
 

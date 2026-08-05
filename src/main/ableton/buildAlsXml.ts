@@ -79,16 +79,6 @@ function warpModeFor(stem: Stem): number {
   return stem.type === 'drums' ? WARP_MODE_BEATS : WARP_MODE_COMPLEX_PRO
 }
 
-function findAudioClip(audioTrack: AlsNode): AlsNode {
-  const body = childArray(audioTrack, 'AudioTrack')
-  const deviceChain = findChild(body, 'DeviceChain')!
-  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
-  const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
-  const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
-  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
-  return findChild(childArray(events, 'Events'), 'AudioClip')!
-}
-
 interface LoopWindow {
   loopStartBeats: number
   loopEndBeats: number
@@ -234,6 +224,56 @@ function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void
   sends['Sends'] = []
 }
 
+interface AudibleSegment {
+  segStartBeats: number
+  segEndBeats: number
+}
+
+/** Given a clip's full [clipStartBeats, clipEndBeats) span and a stem's own
+ * muted bar-ranges (converted to the same absolute-beats space as
+ * clipStartBeats/clipEndBeats), returns the disjoint AUDIBLE sub-spans
+ * remaining. A mute range outside the clip's own span is ignored; one that
+ * fully covers the clip produces zero segments (nothing audible left).
+ * Overlapping/adjacent mute ranges simply merge into one gap. */
+function subtractMutedRanges(
+  clipStartBeats: number,
+  clipEndBeats: number,
+  mutedRanges: { startBar: number; endBar: number }[]
+): AudibleSegment[] {
+  const sorted = mutedRanges
+    .map((r) => ({ startBeats: r.startBar * 4, endBeats: r.endBar * 4 }))
+    .sort((a, b) => a.startBeats - b.startBeats)
+  const segments: AudibleSegment[] = []
+  let cursor = clipStartBeats
+  for (const range of sorted) {
+    const rangeStart = Math.max(range.startBeats, clipStartBeats)
+    const rangeEnd = Math.min(range.endBeats, clipEndBeats)
+    if (rangeEnd <= cursor) continue
+    if (rangeStart > cursor) segments.push({ segStartBeats: cursor, segEndBeats: rangeStart })
+    cursor = Math.max(cursor, rangeEnd)
+  }
+  if (cursor < clipEndBeats) segments.push({ segStartBeats: cursor, segEndBeats: clipEndBeats })
+  return segments
+}
+
+/** For a TILED (non-one-shot) stem's clip, the tile phase (in beats,
+ * wrapped into [0, tileLengthBeats)) `elapsedBeatsFromClipStart` beats past
+ * the clip's own ORIGINAL Time position -- i.e. "if a segment starts this
+ * many beats after the clip's true beginning, which point in the tile
+ * cycle is that?" Used so a segment resuming after a muted gap picks up
+ * the SAME tile phase it would have had if the gap didn't exist, rather
+ * than restarting the loop from originalLoopStartBeats every time. Mirrors
+ * computeLoopWindow's own wrappedLeftCropBars wrapping, generalized to an
+ * arbitrary elapsed offset instead of just leftCropBars itself. */
+function tilePhaseAtElapsedBeats(
+  originalLoopStartBeats: number,
+  elapsedBeatsFromClipStart: number,
+  tileLengthBeats: number
+): number {
+  const raw = originalLoopStartBeats + elapsedBeatsFromClipStart
+  return ((raw % tileLengthBeats) + tileLengthBeats) % tileLengthBeats
+}
+
 function buildStemTrack(
   canonicalAudioTrack: AlsNode,
   nextId: () => number,
@@ -244,7 +284,8 @@ function buildStemTrack(
   groupTrackId: string,
   leftCropBars: number,
   playedBars: number,
-  projectBpm: number
+  projectBpm: number,
+  muteRegions: AppState['muteRegions']
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
@@ -257,7 +298,12 @@ function buildStemTrack(
   const nameNode = findChild(trackBody, 'Name')!
   setAttr(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!, '@_Value', trackName)
 
-  const clip = findAudioClip(track)
+  const deviceChain = findChild(trackBody, 'DeviceChain')!
+  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+  const sampleNode = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+  const arrangerAuto = findChild(childArray(sampleNode, 'Sample'), 'ArrangerAutomation')!
+  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+  const canonicalClip = findChild(childArray(events, 'Events'), 'AudioClip')!
 
   const nativeBpm = nativeBpmFor(stem)
   const {
@@ -271,62 +317,82 @@ function buildStemTrack(
   } = computeLoopWindow(stem, leftCropBars, playedBars, projectBpm)
 
   // CurrentStart/CurrentEnd are ABSOLUTE arrangement-beat positions -- the
-  // same coordinate space as Time, NOT a duration relative to it. Confirmed
-  // the hard way: an earlier version of this code set CurrentStart="0" and
-  // CurrentEnd=currentEndBeats (i.e. treated them as relative), which
-  // happened to look fine for a clip at Time=0 (0 and 0+duration are the
-  // same either way) but silently deleted every clip placed later in the
-  // arrangement -- Ableton's own load-time "Repair" step removes any clip
-  // whose (Start, End) span is zero or negative, and read literally as
-  // absolute positions, a Time=32 clip with CurrentEnd=16 has End(16) <
-  // Start(32). Real Ableton log line that pinned this down: "Repair Track:
-  // '...' Clip: '...' Start: 32 End: 16 Delete clip because its length is
-  // too small."
-  const timeBeats = ((rifff.startBar ?? 0) + timeShiftBars) * 4
-  setAttr(clip, '@_Time', String(timeBeats))
-
-  const clipBody = childArray(clip, 'AudioClip')
-  setAttr(findChild(clipBody, 'Name')!, '@_Value', trackName)
-
-  setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(timeBeats))
-  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(timeBeats + currentEndBeats))
-
-  const loop = findChild(clipBody, 'Loop')!
-  const loopBody = childArray(loop, 'Loop')
-  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(loopStartBeats))
-  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndBeats))
-  setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', loopOn ? 'true' : 'false')
-  setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
-  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEndBeats))
-
-  setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', isWarped ? 'true' : 'false')
+  // same coordinate space as Time, NOT a duration relative to it. See the
+  // module-level history note above computeLoopWindow for why (a real
+  // Ableton "Repair... Delete clip because its length is too small" bug
+  // this convention avoids).
+  const clipStartBeats = ((rifff.startBar ?? 0) + timeShiftBars) * 4
+  const clipEndBeats = clipStartBeats + currentEndBeats
+  const muteRegionsForStem = muteRegions[stemKey(rifff.groupId, stem.slot)] ?? []
+  const audibleSegments = subtractMutedRanges(clipStartBeats, clipEndBeats, muteRegionsForStem)
 
   const relativePath = join('Samples', 'Imported', fileName)
   const absolutePath = join(outputDir, relativePath)
-  const sampleRef = findChild(clipBody, 'SampleRef')!
-  const fileRef = findChild(childArray(sampleRef, 'SampleRef'), 'FileRef')!
-  const fileRefBody = childArray(fileRef, 'FileRef')
-  setAttr(findChild(fileRefBody, 'Path')!, '@_Value', absolutePath)
-  setAttr(findChild(fileRefBody, 'RelativePath')!, '@_Value', relativePath)
+  const tileLengthBeats = stem.barLength * 4
 
-  setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
+  const segmentClips: AlsNode[] = []
+  audibleSegments.forEach((segment, i) => {
+    const segClip = i === 0 ? canonicalClip : cloneNode(canonicalClip)
+    if (i > 0) renumberIds(segClip, nextId)
 
-  // Only write custom warp markers when the clip is actually warped -- for
-  // a one-shot (isWarped=false), nativeBpm is meaningless (see
-  // computeLoopWindow's own doc comment), so leave the template's own
-  // default WarpMarkers untouched rather than writing a fabricated value
-  // that would be actively misleading if warp were ever manually
-  // re-enabled on the clip in Ableton.
-  if (isWarped) {
-    const warpMarkersNode = findChild(clipBody, 'WarpMarkers')!
-    warpMarkersNode['WarpMarkers'] = [
-      { WarpMarker: [], ':@': { '@_Id': String(nextId()), '@_SecTime': '0', '@_BeatTime': '0' } },
-      {
-        WarpMarker: [],
-        ':@': { '@_Id': String(nextId()), '@_SecTime': String(60 / nativeBpm), '@_BeatTime': '1' }
-      }
-    ]
-  }
+    setAttr(segClip, '@_Time', String(segment.segStartBeats))
+    const clipBody = childArray(segClip, 'AudioClip')
+    setAttr(findChild(clipBody, 'Name')!, '@_Value', trackName)
+    setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(segment.segStartBeats))
+    setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(segment.segEndBeats))
+
+    const loop = findChild(clipBody, 'Loop')!
+    const loopBody = childArray(loop, 'Loop')
+    // For a tiled (non-one-shot) stem, a segment resuming after a muted gap
+    // must continue the tile's phase as if the gap never happened -- NOT
+    // restart the loop from loopStartBeats -- or the audio would jump phase
+    // right after every mute gap. A one-shot has no tiling concept at all
+    // (isWarped=false), so it just keeps the same loopStartBeats/loopEndBeats
+    // computed once above for every segment.
+    const segLoopStartBeats = isWarped
+      ? tilePhaseAtElapsedBeats(
+          loopStartBeats,
+          segment.segStartBeats - clipStartBeats,
+          tileLengthBeats
+        )
+      : loopStartBeats
+    setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(segLoopStartBeats))
+    setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndBeats))
+    setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', loopOn ? 'true' : 'false')
+    setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
+    setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEndBeats))
+
+    setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', isWarped ? 'true' : 'false')
+
+    const sampleRef = findChild(clipBody, 'SampleRef')!
+    const fileRef = findChild(childArray(sampleRef, 'SampleRef'), 'FileRef')!
+    const fileRefBody = childArray(fileRef, 'FileRef')
+    setAttr(findChild(fileRefBody, 'Path')!, '@_Value', absolutePath)
+    setAttr(findChild(fileRefBody, 'RelativePath')!, '@_Value', relativePath)
+
+    setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
+
+    // Only write custom warp markers when the clip is actually warped -- for
+    // a one-shot (isWarped=false), nativeBpm is meaningless (see
+    // computeLoopWindow's own doc comment), so leave the template's own
+    // default WarpMarkers untouched rather than writing a fabricated value
+    // that would be actively misleading if warp were ever manually
+    // re-enabled on the clip in Ableton.
+    if (isWarped) {
+      const warpMarkersNode = findChild(clipBody, 'WarpMarkers')!
+      warpMarkersNode['WarpMarkers'] = [
+        { WarpMarker: [], ':@': { '@_Id': String(nextId()), '@_SecTime': '0', '@_BeatTime': '0' } },
+        {
+          WarpMarker: [],
+          ':@': { '@_Id': String(nextId()), '@_SecTime': String(60 / nativeBpm), '@_BeatTime': '1' }
+        }
+      ]
+    }
+
+    segmentClips.push(segClip)
+  })
+
+  events['Events'] = segmentClips
 
   return track
 }
@@ -419,7 +485,8 @@ export function buildAlsXml(
           groupTrackId,
           leftCropBars,
           playedBars,
-          state.bpm
+          state.bpm,
+          state.muteRegions
         )
         outTracks.push(track)
       }
