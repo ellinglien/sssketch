@@ -1,6 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { dialog, BrowserWindow, app } from 'electron'
+import {
+  sketchDir,
+  sketchProjectPath,
+  listLibrarySketches,
+  nextVersionName
+} from './projectLibrary'
 
 // Fun, short words for the auto-generated default project name -- kept
 // tasteful and on-theme for a music/creative tool, not an exhaustive
@@ -73,18 +79,49 @@ const NOUNS = [
   'summit'
 ]
 
+// Matches ADJECTIVES/NOUNS's own tasteful, music/creative tone above.
+// Randomly prefixed onto every generated name (see generateDefaultProjectName)
+// -- purely cosmetic personality/glanceability in the library list, not
+// load-bearing for anything else.
+const EMOJIS = [
+  '🎵',
+  '🎶',
+  '🎸',
+  '🎹',
+  '🥁',
+  '🎧',
+  '🎤',
+  '🌊',
+  '🔥',
+  '✨',
+  '🌙',
+  '⚡',
+  '🍃',
+  '🌀',
+  '🔮',
+  '💫',
+  '🌈',
+  '🪐'
+]
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
 /** Generates a default project filename (without extension), following the
- * pattern `YYYY-MM-DD-adjective-noun` -- e.g. "2026-08-01-groovy-sparrow".
- * `date` is injectable for deterministic tests; defaults to now. */
+ * pattern `emoji-YYYY-MM-DD-adjective-noun` -- e.g.
+ * "🌙-2026-08-01-groovy-sparrow". `date` is injectable for deterministic
+ * tests; defaults to now. The emoji is deliberately placed BEFORE the date
+ * (not after) -- this means library folders no longer sort chronologically
+ * by default in Finder the way the date-first scheme alone would; accepted
+ * as a known, easily-reversible tradeoff (see design spec's Naming
+ * section). */
 export function generateDefaultProjectName(date: Date = new Date()): string {
   const dateStr = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+  const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)]
   const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
   const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `${dateStr}-${adjective}-${noun}`
+  return `${emoji}-${dateStr}-${adjective}-${noun}`
 }
 
 /**
@@ -115,6 +152,60 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
     console.error(`saveProjectAs: failed to write project to ${result.filePath}: ${message}`)
     return null
   }
+}
+
+/** Writes json directly to path, no dialog -- the shared write-and-clear-
+ * autosave behavior saveProjectAs (dialog-based) and saveProjectToLibrary
+ * (library-based) both need, extracted so neither duplicates it. */
+export function saveProjectInPlace(path: string, json: string): void {
+  writeFileSync(path, json, 'utf-8')
+  clearAutosave()
+}
+
+/** Routine, no-dialog save for a library-resident sketch -- creates the
+ * sketch's own folder on first save, overwrites in place on every
+ * subsequent one. See docs/superpowers/specs/
+ * 2026-08-05-project-library-design.md. */
+export function saveProjectToLibrary(name: string, json: string): { path: string } {
+  mkdirSync(sketchDir(name), { recursive: true })
+  const path = sketchProjectPath(name)
+  saveProjectInPlace(path, json)
+  return { path }
+}
+
+/** Reads back a library sketch's own project file, by name -- the
+ * dialog-free counterpart to openProject, used by the new Project Library
+ * browser. Returns null (not a thrown error) if the sketch doesn't exist
+ * or its file can't be read, matching openProject's own convention. */
+export function openLibrarySketch(name: string): { path: string; json: string } | null {
+  const path = sketchProjectPath(name)
+  if (!existsSync(path)) return null
+  try {
+    return { path, json: readFileSync(path, 'utf-8') }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`openLibrarySketch: failed to read ${path}: ${message}`)
+    return null
+  }
+}
+
+/** "Duplicate as new version": copies currentName's own project JSON
+ * verbatim into a freshly-computed `<name>-N` sketch. Nothing audio-related
+ * is copied here -- the project file is just JSON pointers to source stem
+ * paths; the new sketch's own NEXT Ableton export benefits from the shared
+ * sample cache automatically (see projectLibrary.ts), no special-casing
+ * needed at this layer. Returns null if currentName isn't an existing
+ * library sketch. */
+export function duplicateSketchAsNewVersion(
+  currentName: string
+): { name: string; path: string } | null {
+  const source = openLibrarySketch(currentName)
+  if (!source) return null
+  const newName = nextVersionName(
+    currentName,
+    listLibrarySketches().map((s) => s.name)
+  )
+  return { name: newName, ...saveProjectToLibrary(newName, source.json) }
 }
 
 const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
