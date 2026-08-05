@@ -129,3 +129,35 @@ export function computePitchContour(
 
   return { numFrames, freqHz }
 }
+
+export interface VoicedPitchFeatures {
+  /** Fraction of frames (0-1) with a confident pitch estimate -- see
+   * PitchContour.freqHz's own doc comment: 0 means unvoiced. Splits
+   * pitched material (lead/backing melodies) from unpitched (drums,
+   * noise, most percussive one-shots) for clustering purposes. */
+  voicedFraction: number
+  /** Variance of the VOICED frames' own pitch, in cents (log-frequency
+   * space) around their mean -- NOT raw Hz variance, which isn't
+   * musically comparable across registers (an octave spans a vastly
+   * different Hz range depending on how high/low the pitch already is).
+   * Unvoiced frames are excluded entirely, not treated as 0 Hz -- a mix
+   * of silence and one constant pitch has zero real pitch variance, not
+   * enormous variance from spuriously including the silent gaps. */
+  pitchVarianceCents: number
+}
+
+export function voicedPitchFeatures(contour: PitchContour): VoicedPitchFeatures {
+  const voiced: number[] = []
+  for (let i = 0; i < contour.freqHz.length; i++) {
+    if (contour.freqHz[i] > 0) voiced.push(contour.freqHz[i])
+  }
+
+  const voicedFraction = contour.numFrames > 0 ? voiced.length / contour.numFrames : 0
+  if (voiced.length === 0) return { voicedFraction, pitchVarianceCents: 0 }
+
+  const cents = voiced.map((hz) => 1200 * Math.log2(hz))
+  const mean = cents.reduce((sum, c) => sum + c, 0) / cents.length
+  const variance = cents.reduce((sum, c) => sum + (c - mean) ** 2, 0) / cents.length
+
+  return { voicedFraction, pitchVarianceCents: variance }
+}
