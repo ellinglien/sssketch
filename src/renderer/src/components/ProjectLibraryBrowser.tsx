@@ -38,18 +38,43 @@ export function ProjectLibraryBrowser({
 }): React.JSX.Element {
   const [sketches, setSketches] = useState<LibrarySketchSummary[] | null>(null)
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
+  const [changingLocation, setChangingLocation] = useState(false)
 
   useEffect(() => {
-    void window.rifffApi.listLibrarySketches().then(setSketches)
-    void window.rifffApi.getLibraryRoot().then(setLibraryRoot)
+    window.rifffApi
+      .listLibrarySketches()
+      .then(setSketches)
+      .catch((err) => {
+        console.error('ProjectLibraryBrowser: listLibrarySketches() failed:', err)
+        setSketches([])
+      })
+    window.rifffApi
+      .getLibraryRoot()
+      .then(setLibraryRoot)
+      .catch((err) => {
+        console.error('ProjectLibraryBrowser: getLibraryRoot() failed:', err)
+      })
   }, [])
 
   async function handleChangeLocation(): Promise<void> {
-    const newRoot = await window.rifffApi.pickFolder()
-    if (!newRoot) return
-    await window.rifffApi.setLibraryRoot(newRoot)
-    setLibraryRoot(newRoot)
-    setSketches(await window.rifffApi.listLibrarySketches())
+    setChangingLocation(true)
+    try {
+      const newRoot = await window.rifffApi.pickFolder()
+      if (!newRoot) return
+      // Clear the old list only once we know we're actually switching roots
+      // (not on cancel) -- otherwise a cancelled picker would strand the
+      // modal on "loading..." forever, since nothing would ever repopulate
+      // `sketches`.
+      setSketches(null)
+      await window.rifffApi.setLibraryRoot(newRoot)
+      setLibraryRoot(newRoot)
+      setSketches(await window.rifffApi.listLibrarySketches())
+    } catch (err) {
+      console.error('ProjectLibraryBrowser: handleChangeLocation() failed:', err)
+      setSketches([])
+    } finally {
+      setChangingLocation(false)
+    }
   }
 
   return (
@@ -149,7 +174,11 @@ export function ProjectLibraryBrowser({
           >
             {libraryRoot ?? ''}
           </span>
-          <button onClick={handleChangeLocation} style={buttonStyle()}>
+          <button
+            onClick={handleChangeLocation}
+            disabled={changingLocation}
+            style={buttonStyle(changingLocation)}
+          >
             change location…
           </button>
         </div>
