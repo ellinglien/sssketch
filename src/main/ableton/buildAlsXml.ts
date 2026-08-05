@@ -42,7 +42,7 @@ function resolvePlayedBarsFor(state: AppState, groupId: string): number {
 // stretching; this export never re-renders audio). NOT meaningful for a
 // one-shot: every one-shot/recorded-take has a hardcoded, cosmetic
 // barLength=1 (importOneShot.ts), so this function is only ever called for
-// its result to be used by buildStemTrack's tiled-stem warp-marker write,
+// its result to be used by buildStemClips's tiled-stem warp-marker write,
 // gated on isWarped -- see computeLoopWindow's own isWarped doc comment for
 // why a one-shot must never use this value.
 //
@@ -275,11 +275,17 @@ function findCanonicalClip(canonicalAudioTrack: AlsNode): AlsNode {
 interface StemClipsResult {
   clips: AlsNode[]
   trackName: string
-  /** This stem's own OVERALL span (earliest segment's start to latest
-   * segment's end), including any internal silent gap from a mute region
-   * -- used as ONE indivisible packable unit by packIntoTracks. See this
-   * task's own "Design decision" note in the plan for why packing doesn't
-   * go finer than stem granularity. */
+  /** This stem's own OVERALL span, pre-mute-region-trimming (the clip's
+   * full un-split extent, not the narrower bounds of its actual audible
+   * segments) -- used as ONE indivisible packable unit by packIntoTracks.
+   * Deliberately conservative: if a mute region eats into the very start
+   * or end, the true audible span is narrower than this, but using the
+   * wider span only ever makes packIntoTracks open a track slightly
+   * earlier/later than strictly necessary, never causes a real overlap to
+   * go undetected. Same "packing doesn't go finer than stem granularity"
+   * simplification as the internal-mute-gap case documented in
+   * docs/superpowers/plans/2026-08-05-stem-bus-clustering-implementation.md's
+   * Task 4. */
   startBeats: number
   endBeats: number
 }
