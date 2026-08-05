@@ -35,6 +35,7 @@ import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
+import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
@@ -419,11 +420,13 @@ function Timeline({
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
-  onOpenLibrary
+  onOpenLibrary,
+  onOpenClusterStems
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
   onOpenLibrary: () => void
+  onOpenClusterStems: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -601,6 +604,9 @@ function ProjectMenu({
       <button onClick={onOpenLibrary} style={buttonStyle}>
         library
       </button>
+      <button onClick={onOpenClusterStems} style={buttonStyle}>
+        cluster stems
+      </button>
       {currentSketch !== null && currentSketch.kind === 'library' && (
         <button onClick={handleDuplicateAsNewVersion} style={buttonStyle}>
           duplicate
@@ -775,6 +781,7 @@ function Frame(): React.JSX.Element {
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
+  const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside
   // pickerGroupId so BeatPicker opens on just the first one. Drives two
@@ -1262,6 +1269,7 @@ function Frame(): React.JSX.Element {
               currentSketch={currentSketch}
               setCurrentSketch={setCurrentSketch}
               onOpenLibrary={() => setLibraryBrowserOpen(true)}
+              onOpenClusterStems={() => setClusterStemsOpen(true)}
             />
           </div>
         </div>
@@ -1493,6 +1501,7 @@ function Frame(): React.JSX.Element {
             }}
           />
         )}
+        {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
