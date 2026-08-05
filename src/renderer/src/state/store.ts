@@ -409,7 +409,10 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'SELECT':
-      return { ...state, sel: action.groupId }
+      // Clicking a clip/rifff title to select it should always bring the
+      // inspector back if it's currently collapsed -- selecting something
+      // you can't see the details of is never useful.
+      return { ...state, sel: action.groupId, inspectorCollapsed: false }
 
     case 'SET_TEMPO':
       return { ...state, bpm: Math.min(200, Math.max(40, action.bpm)) }

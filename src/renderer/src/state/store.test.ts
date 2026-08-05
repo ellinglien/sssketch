@@ -219,6 +219,12 @@ describe('reducer', () => {
     expect(state.sel).toBe('r1')
   })
 
+  it('re-expands the inspector on select, if it was collapsed', () => {
+    const collapsed = { ...initialState, inspectorCollapsed: true }
+    const state = reducer(collapsed, { type: 'SELECT', groupId: 'r1' })
+    expect(state.inspectorCollapsed).toBe(false)
+  })
+
   it('clamps tempo to 40..200', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 500 }).bpm).toBe(200)
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 1 }).bpm).toBe(40)
