@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
@@ -20,9 +20,8 @@ import {
   envelopeCurveD,
   buildEnvelopePath
 } from './envelope'
-import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
+import { startPointerDrag } from './dragUtils'
 import { scheduleLiveParamSync } from './liveParamSync'
-import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
 import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
 import {
@@ -120,6 +119,26 @@ export function CollapsedRifffRow({
   const bpm = useAppSelector((s) => s.bpm)
   const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const mute = useAppSelector((s) => s.mute)
+  const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
+  const regionSelection = useAppSelector((s) => s.regionSelection)
+  // The collapsed view shows the UNION of every stem's own muted spans --
+  // a region only needs ONE stem to have it for the block to visibly show
+  // it as muted, since the whole point of collapsed view is "one summary
+  // block for this rifff." Deduped by exact (startBar,endBar) match.
+  const muteRegions = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { startBar: number; endBar: number }[] = []
+    for (const stem of rifff.stems) {
+      const key = stemKey(groupId, stem.slot)
+      for (const region of muteRegionsByStem[key] ?? []) {
+        const dedupeKey = `${region.startBar}:${region.endBar}`
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        out.push(region)
+      }
+    }
+    return out
+  }, [rifff.stems, groupId, muteRegionsByStem])
   const firstStem = rifff.stems[0]
   const color = stemColorVar(firstStem)
   const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
@@ -539,25 +558,72 @@ export function CollapsedRifffRow({
     )
   }
 
-  // Click anywhere on the waveform (that isn't a resize handle, fade dot, or
-  // a real drag) moves the transport playhead to that exact point — same
-  // free/unsnapped scrub Ruler already offers, reachable directly from the
-  // clip itself. Skipped while volumeDragMode is on, since that mode
-  // repurposes this same surface for volume dragging instead.
-  function handleScrubClick(e: React.MouseEvent): void {
-    if (volumeDragMode) return
+  // Mousedown anywhere on the waveform body (that isn't a resize handle or
+  // fade dot): if it lands inside an already-muted region, immediately
+  // selects that region's exact bounds (mode 'unmute') -- no drag needed,
+  // matching "clicking a muted span re-selects it" from the design spec.
+  // Otherwise starts an Ableton-style drag-to-select (mode 'mute'), scoped to
+  // EVERY stem in this rifff at once (unlike StemWaveformRow's single-stem
+  // scope) -- collapsing hides per-stem detail, so muting here mutes the
+  // whole group. If the drag never actually moved (a plain click), falls
+  // back to the original click-to-scrub behavior instead of leaving a
+  // zero-width selection behind. Skipped while volumeDragMode is on, which
+  // repurposes this same surface for volume dragging instead (unchanged from
+  // before).
+  function handleRegionMouseDown(e: React.MouseEvent): void {
+    if (volumeDragMode) {
+      handleVolumeStart(e)
+      return
+    }
     const rect = e.currentTarget.getBoundingClientRect()
     // getBoundingClientRect()/clientX report real screen pixels, but leftPx
     // and PPB are both logical, pre-scale pixels -- see FrameScaleContext's
     // own doc comment. Dividing the raw real pixel offset by frameScale
     // first recovers its logical equivalent before combining it with leftPx.
-    const bar = Math.max(0, leftPx / PPB + toLogicalX(e.clientX - rect.left, frameScale) / PPB)
-    dispatch({ type: 'SELECT', groupId })
-    dispatch({ type: 'SET_POS', pos: bar })
-    if (playing) {
-      markManualSeek()
-      void window.rifffApi.engineSetPosition(bar)
+    const startBar = Math.max(0, leftPx / PPB + toLogicalX(e.clientX - rect.left, frameScale) / PPB)
+
+    const stemKeys = rifff.stems.map((s) => stemKey(groupId, s.slot))
+    const existingRegion = muteRegions.find((r) => startBar >= r.startBar && startBar < r.endBar)
+    if (existingRegion) {
+      e.preventDefault()
+      e.stopPropagation()
+      dispatch({
+        type: 'SET_REGION_SELECTION',
+        selection: {
+          stemKeys,
+          startBar: existingRegion.startBar,
+          endBar: existingRegion.endBar,
+          mode: 'unmute'
+        }
+      })
+      return
     }
+
+    startPointerDrag(
+      e,
+      (deltaX) => {
+        const currentBar = Math.max(0, startBar + deltaX / PPB)
+        dispatch({
+          type: 'SET_REGION_SELECTION',
+          selection: {
+            stemKeys,
+            startBar: Math.min(startBar, currentBar),
+            endBar: Math.max(startBar, currentBar),
+            mode: 'mute'
+          }
+        })
+      },
+      (moved) => {
+        if (moved) return
+        dispatch({ type: 'SET_REGION_SELECTION', selection: null })
+        dispatch({ type: 'SELECT', groupId })
+        dispatch({ type: 'SET_POS', pos: startBar })
+        if (playing) {
+          markManualSeek()
+          void window.rifffApi.engineSetPosition(startBar)
+        }
+      }
+    )
   }
 
   function handleVolumeStart(e: React.MouseEvent): void {
@@ -597,25 +663,6 @@ export function CollapsedRifffRow({
       <div style={{ flex: 1, position: 'relative' }}>
         <div
           data-rifff-clip
-          draggable
-          onDragStart={(e) => {
-            suppressNextSyntheticClick()
-            // Always moves the whole group, regardless of link state —
-            // unlike the expanded view's per-stem grab targets. Collapsing
-            // hides per-stem detail; a summary block dragging "part of
-            // itself" independently would be confusing with nothing on
-            // screen to show which stem moved.
-            e.dataTransfer.setData('text/rifff-group-id', groupId)
-            // Must pass this file's own local PPB (the zoom-adjusted shadow,
-            // see its own doc comment above), not some other value -- a
-            // previous version of this call omitted the argument entirely
-            // and silently used a fixed default-zoom constant instead,
-            // ignoring the real current zoom level.
-            const mouseBar = mouseBarFromDragEvent(e, PPB, frameScale)
-            if (mouseBar !== null) {
-              setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
-            }
-          }}
           onContextMenu={handleBlockContextMenu}
           title="right-click to mute group · ctrl+right-click to solo"
           style={{
@@ -861,31 +908,81 @@ export function CollapsedRifffRow({
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on, repurposing the same open area that
-              otherwise right-clicks to mute the group or drags to move the
-              clip. While off, this does nothing on mousedown — the event is
-              left alone so the outer container's own drag handling proceeds
-              normally instead. zIndex stays below the resize handles (3) and
-              fade dots (4) in both modes — see StemWaveformRow's identical
-              fix (a full-coverage div at the same z-index as those small
-              edge targets would otherwise physically sit on top of them and
-              swallow their mousedown before it ever reaches them). */}
+              otherwise right-clicks to mute the group or drags to select a
+              mute region. While off, this does nothing on mousedown — the
+              event is left alone so the outer container's own drag handling
+              proceeds normally instead. zIndex stays below the resize
+              handles (3) and fade dots (4) in both modes — see
+              StemWaveformRow's identical fix (a full-coverage div at the
+              same z-index as those small edge targets would otherwise
+              physically sit on top of them and swallow their mousedown
+              before it ever reaches them). */}
           <div
-            onMouseDown={(e) => {
-              if (volumeDragMode) handleVolumeStart(e)
-            }}
-            onClick={handleScrubClick}
+            onMouseDown={handleRegionMouseDown}
             title={
               volumeDragMode
                 ? 'drag to adjust group volume · right-click to mute'
-                : 'click to scrub playhead · drag to move clip · right-click to mute'
+                : 'click to scrub playhead · drag to select a region (delete to mute) · right-click to mute'
             }
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'grab',
+              cursor: volumeDragMode ? 'ns-resize' : 'crosshair',
               zIndex: 2
             }}
           />
+
+          {/* Muted regions: a diagonal hatch replacing the waveform for that
+              span. Purely visual (pointerEvents none) --
+              handleRegionMouseDown on the full-body surface above already
+              does its own bar-based lookup against muteRegions, so this
+              never needs its own separate mousedown handler. Positioned
+              relative to the clip's own left edge (leftPx), matching every
+              other per-pixel overlay in this component (fade dots, envelope
+              curve). muteRegions here is the UNION across every stem in this
+              rifff -- see its own doc comment above. */}
+          {muteRegions.map((region, i) => (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: region.startBar * PPB - leftPx,
+                width: (region.endBar - region.startBar) * PPB,
+                background:
+                  'repeating-linear-gradient(45deg, color-mix(in srgb, var(--ra-mute-on) 55%, transparent) 0 3px, transparent 3px 8px)',
+                zIndex: 1,
+                pointerEvents: 'none'
+              }}
+            />
+          ))}
+
+          {/* Live/pending region selection -- shown while dragging, and
+              after release until Delete/Backspace commits it or it's
+              cancelled. Visible whenever the active selection touches ANY of
+              this rifff's own stems -- see this file's own Step 5 doc
+              comment in the plan for why `.some(...)` is used here instead
+              of StemWaveformRow's single-key `.includes(key)` check (there's
+              no single `key` variable in this file). */}
+          {regionSelection &&
+            regionSelection.stemKeys.some((k) =>
+              rifff.stems.some((s) => stemKey(groupId, s.slot) === k)
+            ) && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: regionSelection.startBar * PPB - leftPx,
+                  width: (regionSelection.endBar - regionSelection.startBar) * PPB,
+                  background: 'color-mix(in srgb, var(--ra-text) 15%, transparent)',
+                  border: '1px solid var(--ra-text)',
+                  zIndex: 1,
+                  pointerEvents: 'none'
+                }}
+              />
+            )}
 
           {dragVolume !== null && (
             <div
