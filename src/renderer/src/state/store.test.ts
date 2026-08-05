@@ -1222,6 +1222,72 @@ describe('reducer', () => {
     })
   })
 
+  describe('SOLO_STEMS', () => {
+    it('solos an arbitrary set of stems spanning multiple different rifffs, muting every other stem', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r3' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r3', startBar: 8 })
+      // Cluster spans one stem from r1, one stem from r2 -- neither whole
+      // rifff, which SOLO_GROUP/SOLO_CHANNEL couldn't express.
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1', 'r2:6'] })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:6']).toBe(true)
+      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mute['r2:6']).toBe(false)
+      expect(state.mute['r3:1']).toBe(true)
+      expect(state.mute['r3:6']).toBe(true)
+    })
+
+    it('does not touch a rifff still sitting unplaced in the shelf', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      // r2 is deliberately left unplaced, still sitting in the shelf.
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
+      expect(state.mute['r2:1']).toBeUndefined()
+      expect(state.mute['r2:6']).toBeUndefined()
+    })
+
+    it('toggles back to fully unmuted when dispatched again with the same stemKeys', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
+      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:6']).toBe(false)
+      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mute['r2:6']).toBe(false)
+    })
+
+    it('re-solos (does not toggle off) when dispatched for a DIFFERENT stemKeys set than the one currently soloed', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r2:1'] })
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mute['r2:1']).toBe(false)
+    })
+  })
+
   describe('SET_GROUP_VOLUME', () => {
     it('sets every stem in the rifff to the same volume at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

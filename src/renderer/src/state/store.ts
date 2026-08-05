@@ -309,6 +309,7 @@ export type Action =
   | { type: 'SOLO_GROUP'; groupId: string }
   | { type: 'SET_CHANNEL_MUTE'; channelId: string; muted: boolean }
   | { type: 'SOLO_CHANNEL'; channelId: string }
+  | { type: 'SOLO_STEMS'; stemKeys: string[] }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNGROUP'; groupId: string }
@@ -847,6 +848,33 @@ export function reducer(state: AppState, action: Action): AppState {
           mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
             ? false
             : channelOfRifff(rifff) !== action.channelId
+        }
+      }
+      return { ...state, mute }
+    }
+
+    // Solos an arbitrary SET of stems that may span multiple different
+    // rifffs -- unlike SOLO_GROUP (whole rifff) or SOLO_CHANNEL (whole
+    // channel), the "cluster stems" labelling UI's own solo-all button
+    // needs to solo just the member stems of one cluster, which can come
+    // from anywhere in the project. Same toggle-back-when-already-soloed
+    // semantics as SOLO_GROUP, scoped to placed rifffs only, for the same
+    // reasons documented on SOLO_GROUP above.
+    case 'SOLO_STEMS': {
+      const targetKeys = new Set(action.stemKeys)
+      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+      const alreadySoloed = rifffList.every((rifff) =>
+        rifff.stems.every((stem) => {
+          const key = stemKey(rifff.groupId, stem.slot)
+          const expectedMuted = !targetKeys.has(key)
+          return !!state.mute[key] === expectedMuted
+        })
+      )
+      const mute = { ...state.mute }
+      for (const rifff of rifffList) {
+        for (const stem of rifff.stems) {
+          const key = stemKey(rifff.groupId, stem.slot)
+          mute[key] = alreadySoloed ? false : !targetKeys.has(key)
         }
       }
       return { ...state, mute }
