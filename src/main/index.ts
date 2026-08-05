@@ -13,6 +13,8 @@ import {
   writeAutosave,
   loadAutosave,
   clearAutosave,
+  writeAutosaveSketchInfo,
+  loadAutosaveSketchInfo,
   saveProjectToLibrary,
   saveProjectInPlace,
   openLibrarySketch,
@@ -229,6 +231,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('load-autosave', () => loadAutosave())
 
   ipcMain.handle('clear-autosave', () => clearAutosave())
+
+  ipcMain.handle('autosave-project-sketch', (_event, json: string) => writeAutosaveSketchInfo(json))
+
+  ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
     const win = BrowserWindow.fromWebContents(event.sender)!

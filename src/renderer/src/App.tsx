@@ -457,6 +457,7 @@ function ProjectMenu({
       }
     } catch (err) {
       console.error('ProjectMenu: failed to save project:', err)
+      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -501,6 +502,7 @@ function ProjectMenu({
       setCurrentSketch({ kind: 'library', name: result.name })
     } catch (err) {
       console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
+      window.alert(`Duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -722,12 +724,18 @@ function Frame(): React.JSX.Element {
   // pixel math silently drifts off target after a resize" story.
   const frameScale = useFrameScale()
 
+  const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
+
   // Once, on mount: offer to restore a crash-recovery snapshot from a
   // previous session that never got explicitly saved (see projectFile.ts's
   // writeAutosave/loadAutosave/clearAutosave — a dedicated file, decoupled
   // from the user's own named .sssketchproj saves). Cleared either way once
   // answered, so a later launch doesn't keep asking about the same stale
-  // snapshot.
+  // snapshot. Also restores currentSketch from the sketch-info sidecar (see
+  // writeAutosaveSketchInfo/loadAutosaveSketchInfo) -- without this, the
+  // next routine Save after a recovered library sketch would silently fork
+  // a brand-new library entry instead of writing back to the sketch the
+  // recovered content actually came from.
   useEffect(() => {
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
@@ -740,27 +748,32 @@ function Frame(): React.JSX.Element {
         await warmStemCaches(loaded)
         dispatch({ type: 'LOAD_STATE', state: loaded })
         setBusy(null)
+        const sketchJson = await window.rifffApi.loadAutosaveSketch()
+        setCurrentSketch(sketchJson ? (JSON.parse(sketchJson) as CurrentSketch) : null)
       }
       void window.rifffApi.clearAutosave()
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch/setBusy are stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch/setBusy/setCurrentSketch are stable
   }, [])
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
   // last real edit. Depends on the SERIALIZED content (a string), not state
   // itself, so a purely transient UI change (mode, volumeDragMode — both
   // already excluded from serializeProject's own output) produces the exact
-  // same string and doesn't reset the debounce timer for nothing.
+  // same string and doesn't reset the debounce timer for nothing. Also
+  // writes currentSketch to its own sidecar file in lockstep (see
+  // writeAutosaveSketchInfo), so a crash-recovery restore knows which
+  // sketch the recovered snapshot actually belongs to.
   const persistedJson = useMemo(() => serializeProject(state), [state])
   useEffect(() => {
     const id = window.setTimeout(() => {
       void window.rifffApi.autosaveProject(persistedJson)
+      void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [persistedJson])
+  }, [persistedJson, currentSketch])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
-  const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside

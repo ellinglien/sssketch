@@ -257,11 +257,52 @@ export function loadAutosave(): string | null {
   }
 }
 
+const AUTOSAVE_SKETCH_FILENAME = 'autosaveSketch.json'
+
+function autosaveSketchPath(): string {
+  return join(app.getPath('userData'), AUTOSAVE_SKETCH_FILENAME)
+}
+
+/** Persists which sketch the current autosave snapshot belongs to (see
+ * writeAutosave) as an opaque JSON blob -- main process doesn't need to
+ * understand its shape (the renderer's own CurrentSketch type), just
+ * store/retrieve it verbatim -- so a crash-recovery restore can also
+ * restore the CORRECT currentSketch instead of silently forking a new
+ * library entry on the next Save. Written in lockstep with writeAutosave
+ * from App.tsx's own debounced autosave effect. */
+export function writeAutosaveSketchInfo(json: string): void {
+  try {
+    writeFileSync(autosaveSketchPath(), json, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`writeAutosaveSketchInfo: failed to write ${autosaveSketchPath()}: ${message}`)
+  }
+}
+
+/** Reads back the sketch-info sidecar, if one exists -- checked alongside
+ * loadAutosave() when offering to restore a crash-recovery snapshot.
+ * Returns null (not a thrown error) both when nothing was ever written
+ * (e.g. an autosave captured before this existed, or a genuinely untitled
+ * sketch) and when reading one fails. */
+export function loadAutosaveSketchInfo(): string | null {
+  const path = autosaveSketchPath()
+  if (!existsSync(path)) return null
+  try {
+    return readFileSync(path, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`loadAutosaveSketchInfo: failed to read ${path}: ${message}`)
+    return null
+  }
+}
+
 /** Deletes the recovery snapshot — called once the user has been asked
  * about it at startup (whichever way they answered, so a later launch
  * doesn't keep asking about the same stale snapshot), and again after any
- * explicit Save (see saveProjectAs above). A no-op if there's nothing
- * there. */
+ * explicit Save (see saveProjectAs above). Also deletes the sketch-info
+ * sidecar (see writeAutosaveSketchInfo) in the same pass, so every
+ * existing call site clears both files together automatically. A no-op
+ * if there's nothing there. */
 export function clearAutosave(): void {
   const path = autosavePath()
   try {
@@ -269,6 +310,13 @@ export function clearAutosave(): void {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`clearAutosave: failed to delete ${path}: ${message}`)
+  }
+  const sketchPath = autosaveSketchPath()
+  try {
+    if (existsSync(sketchPath)) unlinkSync(sketchPath)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`clearAutosave: failed to delete ${sketchPath}: ${message}`)
   }
 }
 

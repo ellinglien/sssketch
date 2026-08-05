@@ -33,6 +33,9 @@ const api = {
   autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
   loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
   clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
+  autosaveProjectSketch: (json: string): Promise<void> =>
+    ipcRenderer.invoke('autosave-project-sketch', json),
+  loadAutosaveSketch: (): Promise<string | null> => ipcRenderer.invoke('load-autosave-sketch'),
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
