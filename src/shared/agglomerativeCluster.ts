@@ -31,8 +31,9 @@ export function computeMergeSequence(vectors: number[][]): MergeStep[] {
   // clusterMembers[id] = original vector indices currently in that
   // cluster. Ids 0..n-1 start as singletons; each merge allocates a new
   // id for the combined result and RETIRES its two inputs (their own
-  // members lists are left in place for cutAtK to still read, but they
-  // stop being separately "active").
+  // members lists are left in place, harmlessly unread -- this array is
+  // local to this function; cutAtK below only ever sees the returned
+  // MergeStep[] and rebuilds its own member map independently).
   const clusterMembers: number[][] = vectors.map((_, i) => [i])
   const active = new Set<number>(vectors.map((_, i) => i))
   const merges: MergeStep[] = []
