@@ -915,6 +915,26 @@ function Frame(): React.JSX.Element {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+
+      // A pending region selection always takes precedence over the
+      // whole-clip delete below -- a user who just finished dragging a
+      // region expects Delete to act on THAT, not blow away the entire
+      // clip. See docs/superpowers/specs/2026-08-05-clip-region-mute-design.md.
+      if (state.regionSelection) {
+        const { stemKeys, startBar, endBar, mode } = state.regionSelection
+        if (mode === 'mute') {
+          dispatch({ type: 'ADD_MUTE_REGION', stemKeys, startBar, endBar })
+        } else {
+          for (const stemKey of stemKeys) {
+            dispatch({ type: 'REMOVE_MUTE_REGION', stemKey, startBar, endBar })
+          }
+        }
+        dispatch({ type: 'SET_REGION_SELECTION', selection: null })
+        return
+      }
+
       if (!state.sel) return
       const selectedRifff = state.rifffs[state.sel]
       // Unplaced (library-only) rifffs are Shelf's own domain — see its own
@@ -927,13 +947,23 @@ function Frame(): React.JSX.Element {
       // this handler firing too would remove the same rifff a second time
       // (a no-op) but skip that repack step, racing with SketchStrip's own.
       if (state.mode === 'sketch') return
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: state.sel })
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, state.mode, state.rifffs, dispatch])
+  }, [state.sel, state.mode, state.rifffs, state.regionSelection, dispatch])
+
+  // Escape cancels a pending region selection without changing anything --
+  // see docs/superpowers/specs/2026-08-05-clip-region-mute-design.md.
+  useEffect(() => {
+    if (!state.regionSelection) return
+    function handleEscape(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return
+      dispatch({ type: 'SET_REGION_SELECTION', selection: null })
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [state.regionSelection, dispatch])
 
   // Space toggles play/pause, the standard DAW convention. Skipped only while
   // the beat-picker is open (it owns spacebar for tap-to-mark while it's up)
