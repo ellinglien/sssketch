@@ -108,6 +108,22 @@ describe('deserializeProject mode fallback', () => {
   })
 })
 
+describe('deserializeProject snapIdx clamp', () => {
+  it('clamps an old save with snapIdx 3 (pre-cap 1/32) down to 2 (1/16, the new coarsest)', () => {
+    // SNAP_DIVS was [4, 8, 16, 32] before the 1/32 division was removed; it's
+    // now [4, 8, 16] (see store.ts), so a save from before that cap can carry
+    // snapIdx: 3, which is out of range for the current SNAP_DIVS and would
+    // read back as undefined everywhere SNAP_DIVS[state.snapIdx] is used.
+    const persisted = {
+      ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
+      snapIdx: 3
+    } as unknown as import('./serialize').PersistedProject
+
+    const restored = deserializeProject(persisted)
+    expect(restored.snapIdx).toBe(2)
+  })
+})
+
 describe('deserializeProject migration from trackOrder', () => {
   it('migrates an old-shape project (trackOrder, no channelOrder/channelOf) into one channel per clip, same order', () => {
     const legacy = {
