@@ -461,6 +461,35 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.channelOf
   ])
 
+  // Inbound half of the same bidirectional relationship as the outbound
+  // state.bpm sync effect directly above -- kept next to it deliberately,
+  // per this feature's own design (see LinkSession.h's doc comment for the
+  // native side). Fires when IpcServer.cpp's link-poll timer detects a Link
+  // PEER (Maschine, Ableton, etc.) changed the session tempo, and adopts it
+  // into state.bpm the same way a manual TransportBar edit would.
+  //
+  // Feedback-loop analysis: dispatching SET_TEMPO here re-triggers the
+  // outbound effect above (state.bpm changed -> rAF-scheduled
+  // buildEngineProject -> engineLoadProject -> load-project ->
+  // transport.setBpm -> linkSession.syncTempo(thisSameBpm)). This does NOT
+  // echo back out to Link: LinkSession::checkForExternalTempoChange already
+  // updated its own lastKnownSessionTempo to this exact value the moment it
+  // detected the change (native-side, before this push was even sent), so
+  // by the time that outbound syncTempo call lands, both
+  // lastKnownSessionTempo and the incoming bpm already agree with the
+  // session's own tempo -- syncTempo's own "did sssketch's tempo actually
+  // differ from the session" comparison is false, so it no-ops rather than
+  // committing anything back to the session. See LinkSession.cpp's
+  // checkForExternalTempoChange/syncTempo for the exact comparison this
+  // relies on. Uses `dispatch` (not `rawDispatch`) so this lands as a
+  // normal undo-tracked edit, same as a manual TransportBar tempo commit --
+  // there's no reason for a peer-driven adoption to be exempt from undo.
+  useEffect(() => {
+    return window.rifffApi.onLinkTempoChanged((bpm) => {
+      dispatch({ type: 'SET_TEMPO', bpm })
+    })
+  }, [dispatch])
+
   useEffect(() => {
     if (playing) {
       void window.rifffApi.enginePlay(pos)
