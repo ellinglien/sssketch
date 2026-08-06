@@ -523,7 +523,20 @@ export function reducer(state: AppState, action: Action): AppState {
         // overlapping clips).
         channelOf[groupId] = groupId
       }
-      return { ...state, rifffs, stretch, channelOf, channelOrder: action.groupIds }
+      // De-duped while preserving first-occurrence order -- defense-in-depth
+      // matching ADD_RECORDING_CHANNEL's own guard above. No known caller
+      // legitimately passes a duplicate groupId (a rifff can only occupy one
+      // sketch-sequence slot), but assigning action.groupIds verbatim would
+      // otherwise let one slip straight into channelOrder, which
+      // channelsInOrder (selectors.ts) would then render as two literal
+      // <ChannelRow> elements for the same clip.
+      return {
+        ...state,
+        rifffs,
+        stretch,
+        channelOf,
+        channelOrder: Array.from(new Set(action.groupIds))
+      }
     }
 
     case 'SELECT':
@@ -1174,7 +1187,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'ADD_RECORDING_CHANNEL':
       return {
         ...state,
-        channelOrder: [...state.channelOrder, action.channelId],
+        channelOrder: state.channelOrder.includes(action.channelId)
+          ? state.channelOrder
+          : [...state.channelOrder, action.channelId],
         recordingChannelIds: { ...state.recordingChannelIds, [action.channelId]: true }
       }
 

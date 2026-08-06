@@ -6,7 +6,13 @@ import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { ROW_HEIGHT } from './StemWaveformRow'
-import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
+import {
+  getStateSnapshot,
+  useAppSelector,
+  useDispatch,
+  usePlaying,
+  useZoom
+} from '../state/StoreContext'
 
 // A recording channel with zero clips yet renders no RifffBlockRow at all,
 // so nothing establishes this row's flow height -- it would otherwise
@@ -76,7 +82,6 @@ function ChannelRowImpl({
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
   const bpm = useAppSelector((s) => s.bpm)
-  const channelOf = useAppSelector((s) => s.channelOf)
   const loopRegion = useAppSelector((s) => s.loopRegion)
   const playing = usePlaying()
   const ppb = useZoom()
@@ -202,9 +207,23 @@ function ChannelRowImpl({
             dispatch({ type: 'ADD_TO_SHELF', rifff })
             // Replace any previous take on this channel -- see the design
             // doc's own "Retake behavior" section. Find the existing placed
-            // rifff (if any) on this channel by scanning rifffsMap/channelOf.
-            const previousTakeGroupId = Object.keys(rifffsMap).find(
-              (id) => rifffsMap[id].startBar !== undefined && channelOf[id] === channelId
+            // rifff (if any) on this channel by scanning rifffs/channelOf.
+            // Re-reads CURRENT live state via getStateSnapshot() rather than
+            // a rifffsMap/channelOf closed over at render time -- two
+            // unguarded async round-trips already happened above
+            // (engineDisarmRecording, then importRecordedTake's own WAV
+            // decode), during which something else could have touched this
+            // channel's placed clips (e.g. a drag-and-drop landing on it
+            // mid-import). Dispatching REMOVE_FROM_TIMELINE against a stale
+            // snapshot could miss the actual current previous take, leaving
+            // the old clip stacked alongside the new one -- same
+            // stale-closure-during-an-async-gap pattern already fixed in
+            // useGatedRecordingControls.ts's lockInGatedRecording.
+            const liveState = getStateSnapshot()
+            const previousTakeGroupId = Object.keys(liveState.rifffs).find(
+              (id) =>
+                liveState.rifffs[id].startBar !== undefined &&
+                liveState.channelOf[id] === channelId
             )
             if (previousTakeGroupId)
               dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: previousTakeGroupId })

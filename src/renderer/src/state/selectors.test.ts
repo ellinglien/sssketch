@@ -313,6 +313,17 @@ describe('placedRifffsInOrder', () => {
     })
     expect(placedRifffsInOrder(state).map((r) => r.groupId)).toEqual(['r1', 'r2'])
   })
+
+  // placedRifffsInOrder is a thin flatMap over channelsInOrder's own output
+  // (see its doc comment), so it inherits that selector's defensive dedup
+  // for free rather than needing a second, separate guard -- this test
+  // exercises that inheritance directly rather than assuming it.
+  it('never returns a duplicate groupId even if channelOrder itself has a repeat', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: unplaced })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    const withDuplicate = { ...state, channelOrder: [...state.channelOrder, 'r1'] }
+    expect(placedRifffsInOrder(withDuplicate).map((r) => r.groupId)).toEqual(['r1'])
+  })
 })
 
 describe('channelsInOrder', () => {
@@ -340,6 +351,26 @@ describe('channelsInOrder', () => {
     expect(channels).toHaveLength(1)
     expect(channels[0].channelId).toBe('rec-1')
     expect(channels[0].rifffs).toEqual([])
+  })
+
+  // Defense-in-depth: reducers now guard against ever producing a duplicate
+  // entry in channelOrder (see store.ts's ADD_RECORDING_CHANNEL/
+  // SEQUENCE_RIFFFS tests), but this selector is what actually turns
+  // channelOrder into the list App.tsx renders one <ChannelRow> per entry
+  // from -- a duplicate here means two literal React elements for the same
+  // channel, showing the same clips twice. Constructs a state with an
+  // artificially duplicated channelOrder directly (rather than via the
+  // reducer, which can no longer produce one) specifically to exercise this
+  // selector's own dedup in isolation.
+  it('never returns a duplicate channelId even if channelOrder itself has a repeat', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    const withDuplicate = { ...state, channelOrder: [...state.channelOrder, 'r1'] }
+    const channels = channelsInOrder(withDuplicate)
+    expect(channels.map((c) => c.channelId)).toEqual(['r1'])
   })
 
   it('keeps a recording channel visible after its only clip is removed from the timeline', () => {

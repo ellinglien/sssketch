@@ -546,6 +546,24 @@ describe('reducer', () => {
       expect(state.stretch.r1).toBe(true)
       expect(state.stretch.r2).toBe(true)
     })
+
+    // Real bug, same class as ADD_RECORDING_CHANNEL's own missing guard
+    // (see that describe block): this reducer assigned channelOrder from
+    // action.groupIds verbatim, with no de-dup. A caller that ever passes a
+    // duplicate groupId (defense-in-depth -- no known legitimate caller does
+    // today) would leave channelOrder with a duplicate entry, which
+    // channelsInOrder then renders as two literal <ChannelRow> elements for
+    // one channel/clip.
+    it('de-duplicates channelOrder even if groupIds contains a repeat', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'SEQUENCE_RIFFFS', groupIds: ['r1', 'r2', 'r1'] })
+      expect(state.channelOrder.filter((id) => id === 'r1')).toHaveLength(1)
+      expect(state.channelOrder).toEqual(['r1', 'r2'])
+    })
   })
 
   describe('initialState', () => {
@@ -1566,6 +1584,20 @@ describe('reducer', () => {
       const next = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
       expect(next.channelOrder).toContain('rec-1')
       expect(next.recordingChannelIds['rec-1']).toBe(true)
+    })
+
+    // Real bug: this reducer pushed onto channelOrder unconditionally, unlike
+    // its siblings MOVE_TO_CHANNEL/PLACE_ON_TIMELINE, which both guard with
+    // an .includes() check first. A caller dispatching this twice for the
+    // SAME channelId (e.g. a rapid double-press of the "+ rec channel"
+    // button/`/` hotkey, neither of which debounces) duplicated the id in
+    // channelOrder -- which channelsInOrder then rendered as two literal
+    // <ChannelRow> elements for one channel, showing the same clips twice
+    // ("double images... left on the timeline" bug report).
+    it('does not duplicate the channelId in channelOrder if dispatched twice', () => {
+      const once = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+      const twice = reducer(once, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+      expect(twice.channelOrder.filter((id) => id === 'rec-1')).toHaveLength(1)
     })
   })
 

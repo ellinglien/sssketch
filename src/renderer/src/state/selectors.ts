@@ -66,10 +66,23 @@ export function channelsInOrder(state: AppState): Channel[] {
     if (list) list.push(rifff)
     else byChannel.set(channelId, [rifff])
   }
-  const ordered = state.channelOrder.filter(
-    (id) => byChannel.has(id) || state.recordingChannelIds[id]
-  )
-  const seen = new Set(ordered)
+  // Defense-in-depth de-dup: reducers (ADD_RECORDING_CHANNEL, SEQUENCE_RIFFFS
+  // in store.ts) already guard against ever writing a duplicate entry into
+  // channelOrder, but this is the layer that actually turns channelOrder
+  // into the list App.tsx renders one <ChannelRow> per entry from -- if some
+  // FUTURE reducer bug reintroduces a duplicate, filtering it back out here
+  // means the render layer still can't produce two literal React elements
+  // for the same channel (the "double images... left on the timeline" bug
+  // class). filter()'s own seen-set doubles as the seed for the
+  // first-seen-order fallback loop just below, so a channel that made it
+  // into `ordered` is never re-added there either.
+  const seen = new Set<string>()
+  const ordered = state.channelOrder.filter((id) => {
+    if (seen.has(id)) return false
+    if (!(byChannel.has(id) || state.recordingChannelIds[id])) return false
+    seen.add(id)
+    return true
+  })
   for (const channelId of byChannel.keys()) {
     if (!seen.has(channelId)) {
       ordered.push(channelId)
