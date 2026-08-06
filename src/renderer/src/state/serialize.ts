@@ -22,6 +22,7 @@ export type PersistedProject = Omit<
   | 'gatedRecordingEnabled'
   | 'gatedRecordingChannelId'
   | 'gatedRecordingTargetGroupId'
+  | 'pendingLockInConfirm'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -53,6 +54,7 @@ export function serializeProject(state: AppState): string {
     gatedRecordingEnabled,
     gatedRecordingChannelId,
     gatedRecordingTargetGroupId,
+    pendingLockInConfirm,
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */

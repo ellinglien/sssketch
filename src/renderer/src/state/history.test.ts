@@ -137,6 +137,15 @@ describe('historyReducer', () => {
     expect(h.present.gatedRecordingTargetGroupId).toBe('r1')
   })
 
+  it('does not push history for SET_PENDING_LOCK_IN_CONFIRM', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const pastLengthAfterRealEdit = h.past.length
+    h = historyReducer(h, { type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: true })
+    expect(h.past).toHaveLength(pastLengthAfterRealEdit)
+    expect(h.present.pendingLockInConfirm).toBe(true)
+  })
+
   it('DOES push history for ADD_STEM_TO_RIFFF -- it is a real, undo-able edit', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })

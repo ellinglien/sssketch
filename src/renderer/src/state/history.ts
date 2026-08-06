@@ -39,6 +39,11 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // checkpoint. ADD_STEM_TO_RIFFF (the actual lock-in) is NOT in this
   // set -- that one really is an edit.
   'SET_GATED_RECORDING_TARGET',
+  // Whether the "lock in the most recent recording pass?" confirm dialog
+  // (LockInConfirmDialog.tsx) is currently showing -- same "how I'm
+  // currently working" bookkeeping category as SET_GATED_RECORDING_TARGET
+  // just above, not a user edit worth its own undo checkpoint.
+  'SET_PENDING_LOCK_IN_CONFIRM',
   // A pure IPC-fetch side effect (App.tsx's input-device dropdown re-fetches
   // on every focus while the list is still empty), not a user edit worth an
   // undo checkpoint -- same "how I'm currently working" category as

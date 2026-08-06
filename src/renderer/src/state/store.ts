@@ -244,6 +244,21 @@ export interface AppState {
    * currently working" convention as gatedRecordingChannelId. See
    * docs/superpowers/specs/2026-08-06-rifff-recording-design.md. */
   gatedRecordingTargetGroupId: string | null
+  /** True while the "lock in the most recent recording pass?" confirm
+   * dialog (LockInConfirmDialog.tsx) should be showing. Set by
+   * useGatedRecordingControls.ts's confirmLockInIfRecording -- multiple
+   * components each call that hook independently (App.tsx,
+   * RifffBlockRow.tsx), so each gets its OWN local hook state; this field
+   * lives here, in the single shared reducer, instead, so no matter which
+   * hook instance triggers a confirm, there's still only ever ONE physical
+   * dialog rendered (mounted once, unconditionally, from App.tsx's Frame).
+   * The dialog's own "which choice did the user make" plumbing is a
+   * separate, deliberately-not-reducer-state module-level promise resolver
+   * (see useGatedRecordingControls.ts's own pendingLockInResolve) -- this
+   * boolean only ever answers "is it visible," never "what was chosen."
+   * Not persisted, same "how I'm currently working" convention as
+   * gatedRecordingTargetGroupId above. */
+  pendingLockInConfirm: boolean
   rifffs: Record<string, Rifff>
 }
 
@@ -277,6 +292,7 @@ export const initialState: AppState = {
   gatedRecordingEnabled: false,
   gatedRecordingChannelId: null,
   gatedRecordingTargetGroupId: null,
+  pendingLockInConfirm: false,
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
@@ -390,6 +406,7 @@ export type Action =
   | { type: 'SET_GATED_RECORDING_ENABLED'; enabled: boolean }
   | { type: 'SET_GATED_RECORDING_CHANNEL'; channelId: string | null }
   | { type: 'SET_GATED_RECORDING_TARGET'; groupId: string | null }
+  | { type: 'SET_PENDING_LOCK_IN_CONFIRM'; pending: boolean }
   | { type: 'ADD_STEM_TO_RIFFF'; groupId: string; stem: Rifff['stems'][number] }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
@@ -1253,6 +1270,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_GATED_RECORDING_TARGET':
       return { ...state, gatedRecordingTargetGroupId: action.groupId }
+
+    case 'SET_PENDING_LOCK_IN_CONFIRM':
+      return { ...state, pendingLockInConfirm: action.pending }
 
     case 'ADD_STEM_TO_RIFFF': {
       const rifff = state.rifffs[action.groupId]

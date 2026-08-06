@@ -68,6 +68,18 @@ describe('project serialization', () => {
     expect(restored.gatedRecordingTargetGroupId).toBeNull()
   })
 
+  it('does not persist pendingLockInConfirm -- always reopens with the confirm dialog hidden', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: true })
+    expect(state.pendingLockInConfirm).toBe(true)
+
+    const json = serializeProject(state)
+    expect(JSON.parse(json).pendingLockInConfirm).toBeUndefined()
+
+    const restored = deserializeProject(JSON.parse(json))
+    expect(restored.pendingLockInConfirm).toBe(false)
+  })
+
   it('does not persist tidiedView/gatedRecordingEnabled/gatedRecordingChannelId -- always reopens at their defaults', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'TOGGLE_TIDIED_VIEW' })

@@ -1,6 +1,64 @@
-import { getStateSnapshot, useAppState, useDispatch, usePlaying } from './StoreContext'
+import {
+  getStateSnapshot,
+  useAppState,
+  useDispatch,
+  usePlaying,
+  type DispatchableAction
+} from './StoreContext'
 import { stopActivePreview } from '../audio/previewLoop'
 import type { LoopRegion } from './store'
+import type { Dispatch } from 'react'
+
+// Holds the in-flight confirm dialog's own resolve function, plus the
+// SETTLEMENT promise it belongs to -- plain module-level variables, not
+// React state, because a promise's resolve callback isn't serializable/
+// reducer-friendly the way pendingLockInConfirm (store.ts's AppState field)
+// is. confirmLockInIfRecording below sets both, LockInConfirmDialog.tsx's
+// own two buttons call resolvePendingLockInConfirm (exported below) to
+// settle the resolver half.
+//
+// IMPORTANT: a second call to confirmLockInIfRecording IS reachable while a
+// first is still unresolved -- the click-catching backdrop blocks
+// mouse-triggered callers (Stop button, a rifff double-click), but the
+// spacebar play/pause shortcut (App.tsx) also routes through
+// confirmLockInIfRecording and is a plain `window` keydown listener, not
+// blocked by the backdrop at all. confirmLockInIfRecording's own guard below
+// (checking pendingLockInSettlement before creating a new one) makes every
+// such joining caller await the SAME settlement instead of overwriting
+// pendingLockInResolve and orphaning the first caller's promise forever.
+//
+// pendingLockInSettlement deliberately resolves to void, not the raw
+// boolean answer -- it represents "the user has answered AND, if they chose
+// to keep it, lockInGatedRecording() has actually finished," built via a
+// single .then() attached ONCE, at creation time, in confirmLockInIfRecording
+// below. If this instead just re-exposed the raw boolean to every joining
+// caller, each of them would independently see keepIt===true and each call
+// lockInGatedRecording() itself -- committing the SAME take twice. Routing
+// every caller through the one shared settlement (whichever caller created
+// it) is what keeps the actual commit a single-fire side effect while still
+// letting every caller safely await "fully dealt with" before proceeding
+// (e.g. handleStop's subsequent STOP dispatch).
+let pendingLockInResolve: ((keepIt: boolean) => void) | null = null
+let pendingLockInSettlement: Promise<void> | null = null
+
+// Called by LockInConfirmDialog.tsx's own "lock it in"/"discard" buttons --
+// settles whatever confirm is currently pending (a no-op if somehow nothing
+// is, e.g. a stray double-click on an already-dismissed dialog) and clears
+// pendingLockInConfirm so the dialog itself hides. Deliberately does NOT
+// clear pendingLockInSettlement itself -- confirmLockInIfRecording's own
+// .then() chain still needs it live a moment longer to run lockInGatedRecording
+// and let every joined caller's own await resolve; it's cleared there,
+// once that chain actually finishes, not here. Kept as the ONE place that
+// resolves pendingLockInResolve, per this file's own module-level-escape-hatch
+// design (see pendingLockInResolve's own doc comment).
+export function resolvePendingLockInConfirm(
+  dispatch: Dispatch<DispatchableAction>,
+  keepIt: boolean
+): void {
+  pendingLockInResolve?.(keepIt)
+  pendingLockInResolve = null
+  dispatch({ type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: false })
+}
 
 /** Endlesss-style gated ("always listening") recording controls -- see
  * GatedLoopRecorder's own doc comment (native-engine) for the capture
@@ -115,15 +173,48 @@ export function useGatedRecordingControls(): {
   // recording and hasn't been committed, a tiny popup should ask if they
   // want to commit the most recent loop... i just forget to press the \
   // key" -- easy to forget, and losing a take silently is much worse than
-  // one extra confirm click. Plain window.confirm, matching this app's own
-  // existing convention for exactly this kind of lightweight yes/no gate
-  // (see ProjectMenu's handleNew). A no-op while recording isn't even
-  // enabled.
+  // one extra confirm click. A no-op while recording isn't even enabled.
+  //
+  // Used to be a plain window.confirm(...) -- Electron/Chromium's native
+  // confirm always renders generic "OK"/"Cancel" buttons with no way to
+  // customize their text, which read ambiguously for this specific
+  // interruption-style phrasing (unlike this app's other window.confirm call
+  // sites, which are all direct "do X?" questions where OK unambiguously
+  // means yes -- see e.g. ProjectMenu's handleNew). Replaced with
+  // LockInConfirmDialog.tsx, a custom overlay (mounted once, unconditionally,
+  // from App.tsx) with explicitly-labeled "lock it in"/"discard" buttons.
+  // Since this hook is called independently from multiple components
+  // (App.tsx, RifffBlockRow.tsx), each with its own local state, the
+  // dialog's visibility lives in the shared reducer (state.pendingLockInConfirm)
+  // rather than local useState here -- see that field's own doc comment on
+  // AppState. The user's answer is delivered from OUTSIDE this function call
+  // entirely (the dialog's button handlers, via resolvePendingLockInConfirm
+  // above) -- pendingLockInResolve is the bridge. If a confirm is ALREADY
+  // pending (see pendingLockInSettlement's own doc comment for exactly how
+  // that's reachable -- the spacebar shortcut, not just a stray double
+  // dispatch), this joins the SAME outstanding settlement instead of
+  // starting a second one and, critically, does NOT independently call
+  // lockInGatedRecording itself -- see pendingLockInSettlement's own doc
+  // comment for why a naive "every caller sees keepIt===true, every caller
+  // commits" design would double-commit the same take.
   async function confirmLockInIfRecording(): Promise<void> {
     if (!state.gatedRecordingEnabled) return
-    if (window.confirm('Lock in the most recent recording pass first?')) {
-      await lockInGatedRecording()
+    if (!pendingLockInSettlement) {
+      dispatch({ type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: true })
+      const answered = new Promise<boolean>((resolve) => {
+        pendingLockInResolve = resolve
+      })
+      // This .then() is attached exactly once, right here, at creation time
+      // -- it's what makes lockInGatedRecording a single-fire side effect no
+      // matter how many callers below end up awaiting the same
+      // pendingLockInSettlement.
+      pendingLockInSettlement = answered
+        .then((keepIt) => (keepIt ? lockInGatedRecording() : undefined))
+        .finally(() => {
+          pendingLockInSettlement = null
+        })
     }
+    await pendingLockInSettlement
   }
 
   async function disableGatedRecording(): Promise<void> {

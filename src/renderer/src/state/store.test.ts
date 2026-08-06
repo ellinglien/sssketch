@@ -1725,6 +1725,22 @@ describe('reducer', () => {
     })
   })
 
+  describe('SET_PENDING_LOCK_IN_CONFIRM', () => {
+    it('sets pendingLockInConfirm', () => {
+      const state = reducer(initialState, {
+        type: 'SET_PENDING_LOCK_IN_CONFIRM',
+        pending: true
+      })
+      expect(state.pendingLockInConfirm).toBe(true)
+    })
+
+    it('clears it back to false', () => {
+      let state = reducer(initialState, { type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: true })
+      state = reducer(state, { type: 'SET_PENDING_LOCK_IN_CONFIRM', pending: false })
+      expect(state.pendingLockInConfirm).toBe(false)
+    })
+  })
+
   describe('ADD_STEM_TO_RIFFF', () => {
     it("appends the stem to the rifff's own stems array", () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

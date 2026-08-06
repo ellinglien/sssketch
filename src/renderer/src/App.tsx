@@ -36,6 +36,7 @@ import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
+import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
@@ -1544,6 +1545,7 @@ function Frame(): React.JSX.Element {
           />
         )}
         {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
+        <LockInConfirmDialog />
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
