@@ -421,7 +421,7 @@ function ProjectMenu({
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
 
-  function handleNew(): void {
+  async function handleNew(): Promise<void> {
     if (
       Object.keys(state.rifffs).length > 0 &&
       !window.confirm('Discard the current project and start a new one?')
@@ -429,7 +429,17 @@ function ProjectMenu({
       return
     }
     dispatch({ type: 'LOAD_STATE', state: initialState })
-    setCurrentSketch(null)
+    // Give the fresh sketch a real library name immediately, same as the
+    // mount effect's own fresh-start path below -- otherwise currentSketch
+    // stays null and the debounced autosave effect (gated on
+    // currentSketch.kind === 'library') never fires no matter what gets
+    // imported afterward, and the top bar shows the same generic
+    // "untitled sketch" placeholder as before, making New look like it did
+    // nothing.
+    setCurrentSketch({
+      kind: 'library',
+      name: await window.rifffApi.generateDefaultProjectName()
+    })
   }
 
   async function handleSave(): Promise<void> {
