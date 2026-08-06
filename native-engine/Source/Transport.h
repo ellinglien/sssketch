@@ -173,5 +173,20 @@ namespace sssketch
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;
+
+        // The device name that setRecordingInputDevice() last SUCCESSFULLY
+        // applied its full recording configuration to (explicit input
+        // channels 0+1, useDefaultInputChannels=false, sampleRate/bufferSize
+        // forced to 0/0 for auto-choose -- see that function's own comments
+        // for why each of those matters). Deliberately NOT the same thing as
+        // "whatever inputDeviceName deviceManager.getAudioDeviceSetup()
+        // currently reports" -- see setRecordingInputDevice()'s short-circuit
+        // comment for why that distinction is safety-critical. Starts empty,
+        // so the first call after openDefaultDevice() (which opens SOME
+        // default input device via initialiseWithDefaultDevices, but never
+        // applies this function's own explicit recording setup) can never
+        // short-circuit just because the OS-default device's name happens to
+        // match what's requested.
+        juce::String lastConfiguredRecordingInputDevice;
     };
 }

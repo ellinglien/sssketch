@@ -91,6 +91,54 @@ namespace sssketch
 
     juce::String Transport::setRecordingInputDevice(const juce::String& deviceName)
     {
+        // Short-circuit: skip the expensive teardown/reopen below entirely
+        // when this exact device is already fully configured for recording.
+        // deviceManager.setAudioDeviceSetup(setup, true) always calls
+        // stopDevice() + currentAudioDevice->open(...) +
+        // currentAudioDevice->start(...) even when JUCE's own internal
+        // needsNewDevice check decides nothing about the device OBJECT needs
+        // recreating -- and CoreAudio's own open() backend always calls
+        // close() first, tearing down and recreating the IOProc + property
+        // listeners regardless. Called repeatedly for an unchanged device
+        // (e.g. from stacked/re-entrant callers) this is exactly what caused
+        // a real observed coreaudiod CPU spike/thrashing incident.
+        //
+        // The condition is deliberately THREE-part, not just "deviceName
+        // equals the live setup's inputDeviceName":
+        //  1. deviceName == lastConfiguredRecordingInputDevice -- the name
+        //     this function itself last successfully configured, NOT just
+        //     whatever the device manager's live setup happens to report.
+        //     This is the safety-critical distinction: right after
+        //     openDefaultDevice(), the live setup's inputDeviceName can
+        //     already equal some real device name (initialiseWithDefaultDevices
+        //     picked an OS default), but that default-device open never
+        //     applied THIS function's own explicit inputChannels bits 0+1,
+        //     useDefaultInputChannels=false, or forced sampleRate/bufferSize
+        //     = 0/0 -- so treating "the live setup's name happens to match"
+        //     as equivalent to "already configured for recording" would
+        //     wrongly skip real, necessary configuration on the very first
+        //     call. lastConfiguredRecordingInputDevice starts empty and is
+        //     only ever set below, after a successful apply, so this can't
+        //     happen.
+        //  2. deviceManager.getAudioDeviceSetup().inputDeviceName still
+        //     equals deviceName -- guards against the device having changed
+        //     out from under us since the last successful call (e.g. the
+        //     device disconnected and JUCE's manager silently fell back to
+        //     something else) without going through this function.
+        //  3. deviceManager.getCurrentAudioDevice() != nullptr -- guards
+        //     against skipping when no device is actually open right now
+        //     (e.g. it was closed, or never successfully opened despite
+        //     lastConfiguredRecordingInputDevice being stale from an earlier
+        //     session state) -- skipping here would leave recording silently
+        //     non-functional instead of reopening.
+        if (deviceName.isNotEmpty()
+            && deviceName == lastConfiguredRecordingInputDevice
+            && deviceManager.getAudioDeviceSetup().inputDeviceName == deviceName
+            && deviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            return {};
+        }
+
         auto setup = deviceManager.getAudioDeviceSetup();
         setup.inputDeviceName = deviceName;
         setup.useDefaultInputChannels = false;
@@ -115,7 +163,10 @@ namespace sssketch
         // explicit value > 0 was requested).
         setup.sampleRate = 0;
         setup.bufferSize = 0;
-        return deviceManager.setAudioDeviceSetup(setup, true);
+        auto error = deviceManager.setAudioDeviceSetup(setup, true);
+        if (error.isEmpty())
+            lastConfiguredRecordingInputDevice = deviceName;
+        return error;
     }
 
     void Transport::closeDevice()

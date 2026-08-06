@@ -1198,7 +1198,12 @@ function Frame(): React.JSX.Element {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key !== '\\') return
+      // e.repeat guards against the OS's own key-repeat re-firing keydown
+      // continuously while held -- same convention as the Option/Alt handler
+      // above (see its own comment). Without this, holding \ down fires
+      // enableGatedRecording()/lockInGatedRecording() many times in rapid
+      // succession instead of once per physical press.
+      if (e.key !== '\\' || e.repeat) return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()

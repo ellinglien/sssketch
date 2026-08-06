@@ -41,6 +41,24 @@ import type { Dispatch } from 'react'
 let pendingLockInResolve: ((keepIt: boolean) => void) | null = null
 let pendingLockInSettlement: Promise<void> | null = null
 
+// Module-level (not useState/useRef) for the same reason pendingLockInResolve/
+// pendingLockInSettlement above are module-level: useGatedRecordingControls()
+// is called independently from multiple component instances (App.tsx,
+// RifffBlockRow.tsx), each with its OWN closure over `state`. enableGatedRecording
+// below only dispatches SET_GATED_RECORDING_ENABLED (the flag its OWN callers
+// already gate on) AFTER awaiting a full native IPC round trip -- until that
+// resolves, every caller's closed-over state.gatedRecordingEnabled is still
+// stale `false`, so a held key's repeat events (or a rapid double-click on the
+// rec-dot button) can re-enter this function many times before the first call
+// even finishes, each one independently triggering an expensive CoreAudio
+// device reopen. A component-local guard (e.g. useRef) wouldn't stop a SECOND
+// component instance from re-entering; this has to be shared across all of
+// them, same reasoning as ChannelRow.tsx's own togglingArm state serves for
+// its single-component equivalent (handleToggleArm), adapted here to a
+// module-level flag since this guard needs to work across instances, not
+// just within one.
+let enablingGatedRecording = false
+
 // Called by LockInConfirmDialog.tsx's own "lock it in"/"discard" buttons --
 // settles whatever confirm is currently pending (a no-op if somehow nothing
 // is, e.g. a stray double-click on an already-dismissed dialog) and clears
@@ -95,73 +113,83 @@ export function useGatedRecordingControls(): {
   // feedback: users need an explicit way to stop without losing the
   // ability to grab multiple takes via \ alone.
   async function enableGatedRecording(): Promise<void> {
-    const region = state.loopRegion
-    const loopBars = region ? region.endBar - region.startBar : 0
-    if (!region || loopBars <= 0 || loopBars > 16) {
-      window.alert('select a loop region of 16 bars or less first (drag on the ruler)')
-      return
-    }
-    // Same "nothing to record from without an explicitly selected device"
-    // gating ChannelRow.tsx's own manual arm/disarm flow already enforces
-    // (see its canArm/handleToggleArm) -- mirrored here rather than letting
-    // the engine silently capture from whatever device the AudioDeviceManager
-    // already happened to have open. Alert-and-no-op, matching this
-    // function's own existing loop-region check just above (TransportBar.tsx's
-    // rec-dot button comment already documents this "otherwise just alerts
-    // and no-ops" convention).
-    if (!state.selectedInputDevice) {
-      window.alert('select an input device first')
-      return
-    }
-    const result = await window.rifffApi.engineSetGatedRecordingEnabled(
-      true,
-      region.startBar,
-      region.endBar,
-      state.selectedInputDevice
-    )
-    if (!result.success) {
-      if (result.error) window.alert(`Couldn't enable recording mode: ${result.error}`)
-      return
-    }
-    dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: true })
-    // Pins down exactly which recording channel the NEXT lock-in will land
-    // on -- reuses an existing EMPTY recording channel if one's sitting
-    // around (e.g. the always-present invariant channel from the mount
-    // effect above), otherwise mints a fresh one. This is also what
-    // ChannelRow.tsx's live waveform overlay binds to (see
-    // gatedRecordingChannelId's own doc comment on AppState) -- pinning it
-    // HERE, once, rather than re-deriving "the" recording channel by
-    // searching channelOrder each render, is what keeps the overlay and the
-    // actual lock-in destination from ever disagreeing.
-    //
-    // Skipped entirely when a rifff is already targeted (double-click path,
-    // see targetRifffForRecording below) -- gatedRecordingChannelId stays
-    // null in that case, matching the mutual-exclusivity contract with
-    // gatedRecordingTargetGroupId.
-    if (!state.gatedRecordingTargetGroupId) {
-      const placedChannelIds = new Set(Object.values(state.channelOf))
-      const emptyRecordingChannelId = state.channelOrder.find(
-        (id) => state.recordingChannelIds[id] && !placedChannelIds.has(id)
-      )
-      const targetChannelId = emptyRecordingChannelId ?? crypto.randomUUID()
-      if (!emptyRecordingChannelId) {
-        dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: targetChannelId })
+    // See enablingGatedRecording's own doc comment above -- blocks re-entry
+    // while a previous call is still awaiting the native IPC round trip
+    // below, regardless of which component instance's closure this call
+    // came from.
+    if (enablingGatedRecording) return
+    enablingGatedRecording = true
+    try {
+      const region = state.loopRegion
+      const loopBars = region ? region.endBar - region.startBar : 0
+      if (!region || loopBars <= 0 || loopBars > 16) {
+        window.alert('select a loop region of 16 bars or less first (drag on the ruler)')
+        return
       }
-      dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: targetChannelId })
-    }
-    // Starts playback automatically if it isn't already running -- gated
-    // recording only ever captures anything while the transport is
-    // actually moving, so without this, arming it and not separately
-    // remembering to hit play produced a real reported bug ("didn't seem
-    // to record anything"). Deliberately does NOT jump to region.startBar
-    // anymore (an earlier version did) -- per direct feedback ("it should
-    // just go with the spot you press it at"), enabling recording
-    // shouldn't yank the playhead anywhere. Play (or keep playing) from
-    // wherever pos already is; Transport.cpp's own renderLoopAware now
-    // handles "hasn't reached the loop region yet" by playing straight
-    // through unwrapped until it arrives there naturally, then looping.
-    if (!playing) {
-      dispatch({ type: 'PLAY' })
+      // Same "nothing to record from without an explicitly selected device"
+      // gating ChannelRow.tsx's own manual arm/disarm flow already enforces
+      // (see its canArm/handleToggleArm) -- mirrored here rather than letting
+      // the engine silently capture from whatever device the AudioDeviceManager
+      // already happened to have open. Alert-and-no-op, matching this
+      // function's own existing loop-region check just above (TransportBar.tsx's
+      // rec-dot button comment already documents this "otherwise just alerts
+      // and no-ops" convention).
+      if (!state.selectedInputDevice) {
+        window.alert('select an input device first')
+        return
+      }
+      const result = await window.rifffApi.engineSetGatedRecordingEnabled(
+        true,
+        region.startBar,
+        region.endBar,
+        state.selectedInputDevice
+      )
+      if (!result.success) {
+        if (result.error) window.alert(`Couldn't enable recording mode: ${result.error}`)
+        return
+      }
+      dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: true })
+      // Pins down exactly which recording channel the NEXT lock-in will land
+      // on -- reuses an existing EMPTY recording channel if one's sitting
+      // around (e.g. the always-present invariant channel from the mount
+      // effect above), otherwise mints a fresh one. This is also what
+      // ChannelRow.tsx's live waveform overlay binds to (see
+      // gatedRecordingChannelId's own doc comment on AppState) -- pinning it
+      // HERE, once, rather than re-deriving "the" recording channel by
+      // searching channelOrder each render, is what keeps the overlay and the
+      // actual lock-in destination from ever disagreeing.
+      //
+      // Skipped entirely when a rifff is already targeted (double-click path,
+      // see targetRifffForRecording below) -- gatedRecordingChannelId stays
+      // null in that case, matching the mutual-exclusivity contract with
+      // gatedRecordingTargetGroupId.
+      if (!state.gatedRecordingTargetGroupId) {
+        const placedChannelIds = new Set(Object.values(state.channelOf))
+        const emptyRecordingChannelId = state.channelOrder.find(
+          (id) => state.recordingChannelIds[id] && !placedChannelIds.has(id)
+        )
+        const targetChannelId = emptyRecordingChannelId ?? crypto.randomUUID()
+        if (!emptyRecordingChannelId) {
+          dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: targetChannelId })
+        }
+        dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: targetChannelId })
+      }
+      // Starts playback automatically if it isn't already running -- gated
+      // recording only ever captures anything while the transport is
+      // actually moving, so without this, arming it and not separately
+      // remembering to hit play produced a real reported bug ("didn't seem
+      // to record anything"). Deliberately does NOT jump to region.startBar
+      // anymore (an earlier version did) -- per direct feedback ("it should
+      // just go with the spot you press it at"), enabling recording
+      // shouldn't yank the playhead anywhere. Play (or keep playing) from
+      // wherever pos already is; Transport.cpp's own renderLoopAware now
+      // handles "hasn't reached the loop region yet" by playing straight
+      // through unwrapped until it arrives there naturally, then looping.
+      if (!playing) {
+        dispatch({ type: 'PLAY' })
+      }
+    } finally {
+      enablingGatedRecording = false
     }
   }
 
