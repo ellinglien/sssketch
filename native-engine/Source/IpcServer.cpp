@@ -576,14 +576,33 @@ namespace sssketch
                 const double startBar = (double) payload.getProperty("startBar", 0.0);
                 const double endBar = (double) payload.getProperty("endBar", 0.0);
                 const double loopBars = endBar - startBar;
+                const auto deviceName = payload.getProperty("deviceName", "").toString();
+
+                // Selects the user's chosen input device BEFORE arming --
+                // mirrors arm-recording's identical handling above. Without
+                // this call, gated recording silently captured from
+                // whatever device the AudioDeviceManager already happened
+                // to have open (the OS/JUCE startup default, typically the
+                // built-in mic) instead of whatever the renderer's own
+                // device dropdown showed as selected -- a real reported
+                // bug. See useGatedRecordingControls.ts's enableGatedRecording
+                // for how deviceName is sourced from state.selectedInputDevice
+                // on the renderer side.
+                const auto error = transport.setRecordingInputDevice(deviceName);
+
                 // Defensive, mirrors the renderer's own UI gating (the
                 // control is disabled unless a loop region is selected and
                 // is <=16 bars) -- kept here too so a stale or malformed
                 // request can't silently arm an oversized/invalid buffer.
-                if (loopBars <= 0.0 || loopBars > 16.0 || transport.currentBpm() <= 0.0)
+                // Combined with the device-switch error exactly like
+                // arm-recording above: a bad/missing device fails the WHOLE
+                // operation rather than proceeding to arm against
+                // whatever device happened to already be open.
+                if (error.isNotEmpty() || loopBars <= 0.0 || loopBars > 16.0 || transport.currentBpm() <= 0.0)
                 {
                     payloadObj->setProperty("success", false);
-                    payloadObj->setProperty("error", "invalid loop region for gated recording");
+                    payloadObj->setProperty(
+                        "error", error.isNotEmpty() ? error : juce::String("invalid loop region for gated recording"));
                 }
                 else
                 {

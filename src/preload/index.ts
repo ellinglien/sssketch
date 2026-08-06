@@ -123,9 +123,10 @@ const api = {
   engineSetGatedRecordingEnabled: (
     enabled: boolean,
     startBar: number,
-    endBar: number
+    endBar: number,
+    deviceName: string
   ): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('engine-set-gated-recording-enabled', enabled, startBar, endBar),
+    ipcRenderer.invoke('engine-set-gated-recording-enabled', enabled, startBar, endBar, deviceName),
   engineCaptureGatedTake: (): Promise<{
     committed: boolean
     path?: string

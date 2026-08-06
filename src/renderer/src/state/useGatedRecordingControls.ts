@@ -43,10 +43,23 @@ export function useGatedRecordingControls(): {
       window.alert('select a loop region of 16 bars or less first (drag on the ruler)')
       return
     }
+    // Same "nothing to record from without an explicitly selected device"
+    // gating ChannelRow.tsx's own manual arm/disarm flow already enforces
+    // (see its canArm/handleToggleArm) -- mirrored here rather than letting
+    // the engine silently capture from whatever device the AudioDeviceManager
+    // already happened to have open. Alert-and-no-op, matching this
+    // function's own existing loop-region check just above (TransportBar.tsx's
+    // rec-dot button comment already documents this "otherwise just alerts
+    // and no-ops" convention).
+    if (!state.selectedInputDevice) {
+      window.alert('select an input device first')
+      return
+    }
     const result = await window.rifffApi.engineSetGatedRecordingEnabled(
       true,
       region.startBar,
-      region.endBar
+      region.endBar,
+      state.selectedInputDevice
     )
     if (!result.success) {
       if (result.error) window.alert(`Couldn't enable recording mode: ${result.error}`)
@@ -115,7 +128,7 @@ export function useGatedRecordingControls(): {
 
   async function disableGatedRecording(): Promise<void> {
     await confirmLockInIfRecording()
-    await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0)
+    await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0, '')
     dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: false })
     dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: null })
     dispatch({ type: 'SET_GATED_RECORDING_TARGET', groupId: null })
@@ -275,7 +288,7 @@ export function useGatedRecordingControls(): {
     }
     if (state.gatedRecordingEnabled) {
       await confirmLockInIfRecording()
-      await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0)
+      await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0, '')
       dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: false })
     }
     dispatch({ type: 'SET_LOOP_REGION', region })

@@ -461,13 +461,14 @@ app.whenReady().then(async () => {
       _event,
       enabled: boolean,
       startBar: number,
-      endBar: number
+      endBar: number,
+      deviceName: string
     ): Promise<{ success: boolean; error?: string }> => {
       if (!playbackEngine) return { success: false, error: 'engine not running' }
       try {
         return (await playbackEngine.client.sendAndAwaitType(
           'set-gated-recording-enabled',
-          { enabled, startBar, endBar },
+          { enabled, startBar, endBar, deviceName },
           'set-gated-recording-enabled-result'
         )) as { success: boolean; error?: string }
       } catch (err) {
