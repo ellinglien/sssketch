@@ -1,17 +1,208 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
-import { nextArrangerMode, isSketchEligible } from '../state/selectors'
+import { loopLengthBars } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
+import { ContextMenu } from './ContextMenu'
 
-export function TransportBar(): React.JSX.Element {
+// Persisted per-machine (same pattern as LoreLibraryBrowser's own
+// loreUsername), not part of the project file -- selectedInputDevice/
+// availableInputDevices are deliberately excluded from PersistedProject
+// (see state/serialize.ts), since a device name is a fact about the machine
+// running the app, not the arrangement itself. Restored once devices are
+// actually fetched (only then do we know whether the stored name is
+// still a real, currently-available device) -- see this component's own
+// fetchAndRestoreInputDevices, triggered on mount and again any time
+// selectedInputDevice reads back as null (e.g. after loading a project,
+// which resets it since it isn't part of the saved file), not just when
+// the dropdown happens to receive focus.
+const INPUT_DEVICE_STORAGE_KEY = 'sssketch:selectedInputDevice'
+
+function loadStoredInputDevice(): string | null {
+  try {
+    return localStorage.getItem(INPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeSelectedInputDevice(device: string | null): void {
+  try {
+    if (device) localStorage.setItem(INPUT_DEVICE_STORAGE_KEY, device)
+    else localStorage.removeItem(INPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    // localStorage unavailable (e.g. private mode) -- the setting just
+    // won't survive a restart, not worth surfacing as an error.
+  }
+}
+
+// A plain triangle-body + pendulum-arm silhouette, monochrome via
+// currentColor -- matches this app's existing convention of drawing
+// transport glyphs directly (▶/■ elsewhere in this same file) rather than
+// pulling in an icon library, and its "no emoji in chrome" design-system
+// rule (CLAUDE.md).
+function MetronomeIcon(): React.JSX.Element {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+      <path d="M5 14 L8 2 L11 14 Z" strokeWidth="1.4" strokeLinejoin="round" />
+      <line x1="8" y1="12" x2="11" y2="4" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx="9.7" cy="7" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+// Plain filled circle, same hand-drawn-glyph convention as MetronomeIcon --
+// a record-button dot. Drawn as SVG geometry (not a CSS border-radius div)
+// since this design system otherwise forbids border-radius everywhere else
+// (tokens.css); a circle glyph representing recording state is the one
+// legitimate exception, same category as the waveform/playhead colors this
+// system reserves color for, so it's drawn deliberately rather than via the
+// banned CSS shortcut.
+//
+// dim and pulse are separate booleans, not one -- dim reflects whether
+// gated recording is armed at all (on vs off), while pulse additionally
+// requires transport to actually be playing. Per direct feedback, sitting
+// armed-but-paused shouldn't pulse -- the pulse means "actively listening
+// right now," which can only be true while the transport is moving through
+// the loop region (see GatedLoopRecorder's own gate, which only ever
+// writes samples during real playback).
+function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX.Element {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10">
+      <circle
+        cx="5"
+        cy="5"
+        r="5"
+        fill="var(--ra-recording-live)"
+        opacity={dim ? 0.35 : 1}
+        style={pulse ? { animation: 'ra-rec-pulse 1.4s ease-in-out infinite' } : undefined}
+      />
+      <style>{`
+        @keyframes ra-rec-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.25; }
+        }
+      `}</style>
+    </svg>
+  )
+}
+
+// Same hand-drawn-glyph convention as MetronomeIcon above -- a circle plus
+// 8 radial ticks reads as a gear/settings symbol without pulling in an icon
+// library or using the (font-dependent, arguably-an-emoji) ⚙ character.
+function GearIcon(): React.JSX.Element {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+      <circle cx="8" cy="8" r="3.2" strokeWidth="1.3" />
+      <path
+        d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export function TransportBar({
+  onOpenClusterStems,
+  onEnableGatedRecording,
+  onDisableGatedRecording,
+  onStop
+}: {
+  onOpenClusterStems: () => void
+  onEnableGatedRecording: () => void
+  onDisableGatedRecording: () => void
+  // Separate from a plain STOP dispatch -- App.tsx's handleStop also checks
+  // for an uncommitted gated-recording pass first (see its own doc
+  // comment), which needs state this component doesn't have direct access
+  // to construct itself.
+  onStop: () => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
+  const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
+
+  const availableInputDevices = state.availableInputDevices
+  const selectedInputDevice = state.selectedInputDevice
+  const isAnyChannelArmed = state.armedChannelId !== null
+  // Guards the input-device dropdown's lazy fetch against firing twice --
+  // availableInputDevices.length === 0 alone isn't enough, since React
+  // state hasn't updated yet if the dropdown is focused a second time
+  // before the first fetch resolves. Same "ref set synchronously before an
+  // async call starts" idiom LoreLibraryBrowser.tsx's own handleLoadMore
+  // uses for the identical class of problem.
+  const fetchingInputDevicesRef = useRef(false)
+
+  // Shared by the mount/reset effect and the dropdown's own onFocus below --
+  // see INPUT_DEVICE_STORAGE_KEY's doc comment for why this needs to run on
+  // more than just focus.
+  function fetchAndRestoreInputDevices(): void {
+    if (fetchingInputDevicesRef.current) return
+    fetchingInputDevicesRef.current = true
+    void window.rifffApi
+      .engineListInputDevices()
+      .then((devices) => {
+        dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
+        // Restore the last-picked device once we actually know it's still
+        // real -- only meaningful while selectedInputDevice reads as null,
+        // and only if it's genuinely present in this fetch's device list (a
+        // loopback driver from a previous session might not be installed/
+        // running anymore).
+        const stored = loadStoredInputDevice()
+        if (stored && devices.includes(stored)) {
+          dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device: stored })
+        }
+      })
+      .catch((err) => {
+        console.error('TransportBar: failed to list input devices:', err)
+      })
+      .finally(() => {
+        fetchingInputDevicesRef.current = false
+      })
+  }
+
+  // Runs on mount, and again any time selectedInputDevice reads back as
+  // null after having been something else -- notably right after loading a
+  // project, which resets it to null (it's excluded from PersistedProject,
+  // see state/serialize.ts). Without this, the stored device only ever got
+  // restored once the dropdown happened to receive focus, which read as
+  // "doesn't remember the input method" for anyone who armed a recording
+  // without ever clicking into the dropdown first.
+  useEffect(() => {
+    if (selectedInputDevice === null) fetchAndRestoreInputDevices()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAndRestoreInputDevices is stable in spirit (closes over dispatch, which useDispatch guarantees is stable) and deliberately excluded to avoid re-running on every render; the intent is "re-fire only when selectedInputDevice transitions to null"
+  }, [selectedInputDevice])
+
+  // Ableton Link (https://github.com/Ableton/link) status -- fetched
+  // on-demand and re-polled on a slow timer, not pushed continuously by
+  // the engine (a human glancing at a peer count doesn't need sub-second
+  // freshness, same "fetch when relevant, not streamed" reasoning as this
+  // app's own input-device list). enabled mirrors the engine's own
+  // isEnabled() rather than being locally optimistic, so a failed toggle
+  // (e.g. the engine isn't running yet) doesn't leave the button showing
+  // a state that isn't real.
+  const [linkStatus, setLinkStatus] = useState<{ enabled: boolean; numPeers: number }>({
+    enabled: false,
+    numPeers: 0
+  })
+  useEffect(() => {
+    let cancelled = false
+    async function poll(): Promise<void> {
+      const status = await window.rifffApi.engineGetLinkStatus()
+      if (!cancelled) setLinkStatus(status)
+    }
+    void poll()
+    const id = window.setInterval(() => void poll(), 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
 
   // Decoupled from state.bpm while focused: SET_TEMPO clamps to [40, 200], and a
   // controlled input that snaps back to the clamped value on every keystroke makes
@@ -54,55 +245,94 @@ export function TransportBar(): React.JSX.Element {
           // A Shelf/SketchStrip/LORE-browser tile preview is a separate Web
           // Audio loop, entirely outside the native transport this button
           // otherwise controls — starting real playback should always win
-          // over whatever preview happens to still be looping, same as
-          // BeatPicker already does the moment it opens.
+          // (or, while playing, stopping should always kill) whatever
+          // preview happens to still be looping, same as BeatPicker already
+          // does the moment it opens.
           stopActivePreview()
-          dispatch({ type: playing ? 'PAUSE' : 'PLAY' })
+          // Play and Stop merged into one button, per direct feedback --
+          // clicking while playing now fully stops (resets pos to 0) rather
+          // than pausing in place, so there's one obvious toggle instead of
+          // two adjacent buttons doing similar things. Stopping goes through
+          // onStop (not a direct dispatch) so App.tsx can check for an
+          // uncommitted gated-recording pass first -- see its own doc
+          // comment on handleStop.
+          if (playing) {
+            onStop()
+          } else {
+            dispatch({ type: 'PLAY' })
+          }
         }}
-        aria-label={playing ? 'Pause' : 'Play'}
+        aria-label={playing ? 'Stop' : 'Play'}
         style={{
-          width: 36,
-          height: 26,
+          width: 22,
+          height: 22,
           borderRadius: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           border: '1px solid var(--ra-border-strong)',
           background: playing ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
-          color: playing ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+          color: playing ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
+          fontSize: 11
         }}
       >
-        {playing ? '❙❙' : '▶'}
+        {playing ? '■' : '▶'}
       </button>
+
       <button
-        onClick={() => {
-          // Also a safety net for a tile preview stuck playing with no
-          // obvious way to stop it (e.g. an accidental click during a drag)
-          // — Stop is the one button a user reaches for by reflex when
-          // something's audibly wrong, so it should be able to kill
-          // anything audible, not just the native transport.
-          stopActivePreview()
-          dispatch({ type: 'STOP' })
-        }}
-        aria-label="Stop"
+        onClick={() =>
+          state.gatedRecordingEnabled ? onDisableGatedRecording() : onEnableGatedRecording()
+        }
+        // Enabling needs a loop region selected first (see App.tsx's own
+        // enableGatedRecording, which otherwise just alerts and no-ops) --
+        // disabled rather than silently doing nothing on click, so the
+        // button itself communicates "you need a loop region first" before
+        // a click ever happens. Always enabled while recording mode is
+        // already on, regardless of loop region, so it can still be
+        // clicked to disable.
+        disabled={!state.gatedRecordingEnabled && !state.loopRegion}
+        aria-label={
+          state.gatedRecordingEnabled ? 'Disable gated recording' : 'Enable gated recording'
+        }
+        title={
+          state.gatedRecordingEnabled
+            ? 'recording mode is on -- listening for the selected loop region, press \\ to lock in the latest pass. click to disable.'
+            : state.loopRegion
+              ? 'enable gated recording for the selected loop region'
+              : 'select a loop region first (drag on the ruler)'
+        }
         style={{
-          width: 28,
-          height: 26,
+          width: 22,
+          height: 22,
           borderRadius: 0,
-          border: '1px solid var(--ra-border)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: `1px solid ${state.gatedRecordingEnabled ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
           background: 'var(--ra-bg-row-active)',
-          color: 'var(--ra-text-2)'
+          opacity: !state.gatedRecordingEnabled && !state.loopRegion ? 0.35 : 1,
+          cursor: !state.gatedRecordingEnabled && !state.loopRegion ? 'not-allowed' : 'pointer'
         }}
       >
-        ■
+        <RecDotIcon
+          dim={!state.gatedRecordingEnabled}
+          pulse={state.gatedRecordingEnabled && playing}
+        />
       </button>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        {/* Fixed character-count width (the app's monospace font makes `ch`
-            exact) so the sixteenth-note digit flipping between 1 and 2
-            characters mid-playback doesn't jitter the row and push every
-            button after it left/right. Sized to the longest realistic
-            reading ("032.4.16" / "10:59.9") rather than changing the actual
-            zero-padding convention. */}
-        <span style={{ fontSize: 16, fontWeight: 700, width: '8ch', display: 'inline-block' }}>
-          {positionLabel(pos)}
+        {/* Remaining time leads now -- the biggest, most attention-grabbing
+            number in the row, since "how much longer" is what you actually
+            watch during playback. Elapsed and the bars.beats.16th position
+            are still shown, just demoted to secondary/reference info.
+            Fixed character-count width (the app's monospace font makes `ch`
+            exact) so digits flipping mid-playback doesn't jitter the row and
+            push every button after it left/right. */}
+        <span
+          style={{ fontSize: 16, fontWeight: 700, width: '7ch', display: 'inline-block' }}
+          title="remaining"
+        >
+          -{elapsedLabel(Math.max(0, loopLengthBars(state) - pos), state.bpm)}
         </span>
         <span
           style={{
@@ -111,9 +341,41 @@ export function TransportBar(): React.JSX.Element {
             width: '7ch',
             display: 'inline-block'
           }}
+          title="elapsed"
         >
           {elapsedLabel(pos, state.bpm)}
         </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: 'var(--ra-text-3)',
+            width: '8ch',
+            display: 'inline-block'
+          }}
+          title="bar.beat.16th position"
+        >
+          {positionLabel(pos)}
+        </span>
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
+          aria-label="Toggle metronome"
+          title={state.metronomeEnabled ? 'metronome: on' : 'metronome: off'}
+          style={{
+            height: 22,
+            width: 22,
+            borderRadius: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: state.metronomeEnabled
+              ? 'var(--ra-stretch-on-bg)'
+              : 'var(--ra-bg-row-active)',
+            border: `1px solid ${state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+            color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          }}
+        >
+          <MetronomeIcon />
+        </button>
       </div>
 
       <div
@@ -187,6 +449,28 @@ export function TransportBar(): React.JSX.Element {
       </div>
 
       <button
+        onClick={() => {
+          const next = !linkStatus.enabled
+          void window.rifffApi.engineSetLinkEnabled(next).then(() => {
+            void window.rifffApi.engineGetLinkStatus().then(setLinkStatus)
+          })
+        }}
+        aria-label="Toggle Ableton Link"
+        title="Ableton Link — sync tempo with other Link-enabled apps on this network"
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: linkStatus.enabled ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${linkStatus.enabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: linkStatus.enabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        link{linkStatus.enabled && linkStatus.numPeers > 0 ? ` · ${linkStatus.numPeers}` : ''}
+      </button>
+
+      <button
         onClick={() => dispatch({ type: 'CYCLE_SNAP' })}
         aria-label="Cycle snap grid"
         style={{
@@ -238,45 +522,111 @@ export function TransportBar(): React.JSX.Element {
       {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
       <button
-        onClick={() => dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })}
-        aria-label="Cycle arranger mode"
-        title={
-          state.mode === 'normal' && !isSketchEligible(state)
-            ? 'mode: normal (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
-            : `mode: ${state.mode} (Tab)`
-        }
+        onClick={(e) => {
+          // Toggles closed if already open, rather than always re-opening/
+          // repositioning -- without this, clicking the same trigger
+          // button again while the menu is already open raced against
+          // ContextMenu's own capture-phase outside-click dismissal (which
+          // fires first, since it's on window in the capture phase and this
+          // button's onClick runs in the bubble phase): the menu closed and
+          // then immediately re-opened in the same click, which visually
+          // read as "clicking the button again does nothing" instead of
+          // the expected close. Per direct feedback.
+          if (gearMenu) {
+            setGearMenu(null)
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setGearMenu({ x: rect.left, y: rect.bottom + 4 })
+        }}
+        aria-label="More arranger options"
+        title="tidy up / tidy view"
         style={{
           height: 22,
+          width: 22,
           borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          background:
-            state.mode !== 'normal' ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: state.tidiedView ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        {state.mode}
+        <GearIcon />
       </button>
+      {gearMenu && (
+        <ContextMenu
+          x={gearMenu.x}
+          y={gearMenu.y}
+          items={[
+            { label: 'tidy up', onClick: onOpenClusterStems },
+            {
+              label: state.tidiedView ? 'tidy view: on' : 'tidy view: off',
+              onClick: () => dispatch({ type: 'TOGGLE_TIDIED_VIEW' })
+            }
+          ]}
+          onClose={() => setGearMenu(null)}
+        />
+      )}
 
       <button
-        onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
-        aria-label="Toggle metronome"
-        title={state.metronomeEnabled ? 'metronome: on' : 'metronome: off'}
+        onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
+        title="add another recording channel (/)"
         style={{
-          height: 22,
-          borderRadius: 0,
-          padding: '0 8px',
+          fontFamily: 'inherit',
           fontSize: 10,
-          background: state.metronomeEnabled
-            ? 'var(--ra-stretch-on-bg)'
-            : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          color: 'var(--ra-text)',
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border-strong)',
+          padding: '5px 10px',
+          cursor: 'pointer',
+          textTransform: 'lowercase'
         }}
       >
-        click
+        + rec channel
       </button>
+      <select
+        value={selectedInputDevice ?? ''}
+        disabled={isAnyChannelArmed}
+        title={
+          isAnyChannelArmed
+            ? 'disarm the current recording before changing the input device'
+            : undefined
+        }
+        onFocus={() => {
+          // Re-fetches on every focus, not just while the list is still
+          // empty -- a device (e.g. a loopback driver) can be
+          // installed/started after the app launched, and the engine's
+          // own scanForDevices() call (see Transport::
+          // availableInputDeviceNames) is cheap enough to redo each
+          // time rather than only ever trusting a stale first fetch.
+          fetchAndRestoreInputDevices()
+        }}
+        onChange={(e) => {
+          const device = e.target.value || null
+          dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device })
+          storeSelectedInputDevice(device)
+        }}
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 10,
+          color: 'var(--ra-text)',
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border)',
+          padding: '5px 8px',
+          cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer'
+        }}
+      >
+        <option value="">
+          {availableInputDevices.length === 0 ? 'no input devices found' : 'select input device...'}
+        </option>
+        {availableInputDevices.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }

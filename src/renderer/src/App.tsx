@@ -39,7 +39,6 @@ import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
-import { FrameScaleProvider, useFrameScale, toLogicalX } from './state/FrameScaleContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { markManualSeek } from './state/manualSeek'
@@ -49,6 +48,7 @@ import {
   pasteRifffAction,
   channelsInOrder,
   nextArrangerMode,
+  isSketchEligible,
   groupIdAtPosition
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
@@ -74,18 +74,9 @@ import { pickBestRifffForReOne } from '@shared/reOneScoring'
  * See docs/superpowers/specs/2026-08-05-project-library-design.md. */
 type CurrentSketch = { kind: 'library'; name: string } | { kind: 'external'; path: string } | null
 
-function barForClientX(
-  clientX: number,
-  container: HTMLDivElement,
-  ppb: number,
-  frameScale: number
-): number {
+function barForClientX(clientX: number, container: HTMLDivElement, ppb: number): number {
   const rect = container.getBoundingClientRect()
-  // getBoundingClientRect()/clientX report real screen pixels, but ppb is
-  // defined in logical, pre-scale pixels -- see FrameScaleContext's own doc
-  // comment. Without dividing out frameScale first, this drifts off target
-  // the moment the window isn't at its default size.
-  const xInTimeline = toLogicalX(clientX - rect.left, frameScale)
+  const xInTimeline = clientX - rect.left
   return Math.max(0, Math.round(xInTimeline / ppb))
 }
 
@@ -100,31 +91,12 @@ function barForClientX(
 const GHOST_ROW_COUNT = 3
 const GHOST_ROW_HEIGHT = 44
 
-// Persisted per-machine (same pattern as LoreLibraryBrowser's own
-// loreUsername), not part of the project file -- selectedInputDevice/
-// availableInputDevices are deliberately excluded from PersistedProject
-// (see serialize.ts), since a device name is a fact about the machine
-// running the app, not the arrangement itself. Restored once devices are
-// actually fetched (only then do we know whether the stored name is
-// still a real, currently-available device), not on app mount.
-const INPUT_DEVICE_STORAGE_KEY = 'sssketch:selectedInputDevice'
-
-function loadStoredInputDevice(): string | null {
-  try {
-    return localStorage.getItem(INPUT_DEVICE_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
-function storeSelectedInputDevice(device: string | null): void {
-  try {
-    if (device) localStorage.setItem(INPUT_DEVICE_STORAGE_KEY, device)
-    else localStorage.removeItem(INPUT_DEVICE_STORAGE_KEY)
-  } catch {
-    // localStorage unavailable (e.g. private mode) -- the setting just
-    // won't survive a restart, not worth surfacing as an error.
-  }
+// No Node `path` module in the renderer -- a plain string split covers what
+// this needs (an externally-opened sketch's own file name, sans its project
+// extension, as an Ableton export's default suggested filename).
+function basenameWithoutProjectExt(filePath: string): string {
+  const base = filePath.split(/[\\/]/).pop() ?? filePath
+  return base.replace(/\.sssketchproj$/i, '')
 }
 
 // Always-present trailing empty bars past the arrangement's actual loop end —
@@ -156,7 +128,6 @@ function Timeline({
   const playing = usePlaying()
   const [dropBar, setDropBar] = useState<number | null>(null)
   const ppb = useZoom()
-  const frameScale = useFrameScale()
   const loopRegion = useAppSelector((s) => s.loopRegion)
   // Lets resolveDrop/handleDropOnChannel below read the LATEST state at
   // call time without closing over the reactive `state` variable itself --
@@ -181,8 +152,8 @@ function Timeline({
   // changes that actually affect channel membership/order.
   const channels = useMemo(
     () => channelsInOrder(state),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally narrowed to the only fields channelsInOrder actually reads; depending on `state` itself would recompute on every dispatch (a new object every time), defeating the point
-    [state.rifffs, state.channelOf, state.channelOrder]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally narrowed to the only fields channelsInOrder actually reads; depending on `state` itself would recompute on every dispatch (a new object every time), defeating the point. tidiedView/busOf are read only by the tidied-view branch (see selectors.ts), but still need to be here unconditionally -- this array can't itself branch on which mode is active.
+    [state.rifffs, state.channelOf, state.channelOrder, state.tidiedView, state.busOf]
   )
 
   // Click anywhere in the arranger that isn't a clip (a stem waveform
@@ -197,11 +168,7 @@ function Timeline({
   // drag, on a 5px resize handle).
   function handleBackgroundClick(e: MouseEvent<HTMLDivElement>): void {
     const rect = e.currentTarget.getBoundingClientRect()
-    // getBoundingClientRect()/clientX report real screen pixels, but ppb is
-    // defined in logical, pre-scale pixels -- see FrameScaleContext's own
-    // doc comment. Without dividing out frameScale first, this drifts off
-    // target the moment the window isn't at its default size.
-    const bar = Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
+    const bar = Math.max(0, (e.clientX - rect.left) / ppb)
     dispatch({ type: 'SET_POS', pos: bar })
     if (playing) {
       markManualSeek()
@@ -211,12 +178,7 @@ function Timeline({
 
   function handleDragOver(e: DragEvent<HTMLDivElement>): void {
     e.preventDefault()
-    setDropBar(
-      applyGrabOffset(
-        barForClientX(e.clientX, e.currentTarget, ppb, frameScale),
-        getGrabOffsetBars()
-      )
-    )
+    setDropBar(applyGrabOffset(barForClientX(e.clientX, e.currentTarget, ppb), getGrabOffsetBars()))
     // Cmd/Ctrl-drag duplicates a placed clip instead of moving it (see
     // handleDrop's text/rifff-group-id branch) — this just gives the OS its
     // own native "copy" cursor treatment (a green + badge on macOS) while
@@ -240,8 +202,15 @@ function Timeline({
       e.stopPropagation()
       setDropBar(null)
       const state = stateRef.current
+      // Tidied view's rows are a computed overlay (see selectors.ts's
+      // tidiedChannelsInOrder) -- their channelIds are synthetic and were
+      // never written to state.channelOf/channelOrder, so letting a drop
+      // reach MOVE_TO_CHANNEL here would either silently do nothing useful
+      // or (worse) write a bogus "tidied:drums:0"-style channelId into real
+      // state. Flip back to the normal view to edit.
+      if (state.tidiedView) return
       const startBar = applyGrabOffset(
-        barForClientX(e.clientX, e.currentTarget, ppb, frameScale),
+        barForClientX(e.clientX, e.currentTarget, ppb),
         getGrabOffsetBars()
       )
 
@@ -296,7 +265,7 @@ function Timeline({
       const channelId = targetChannelId ?? state.channelOf[groupId] ?? crypto.randomUUID()
       dispatch({ type: 'MOVE_TO_CHANNEL', groupId, startBar, channelId })
     },
-    [ppb, frameScale, dispatch]
+    [ppb, dispatch]
   )
 
   // The Timeline container's own catch-all — fires for anything a specific
@@ -324,11 +293,7 @@ function Timeline({
     // propagation before this bubbles up, so a right-click on an actual clip
     // never also triggers the paste menu.
     e.preventDefault()
-    onOpenPasteMenu(
-      e.clientX,
-      e.clientY,
-      barForClientX(e.clientX, e.currentTarget, ppb, frameScale)
-    )
+    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget, ppb))
   }
 
   // Ruler's own manual drag-to-set (or double-click-to-clear) loop region --
@@ -344,7 +309,7 @@ function Timeline({
   // guarantees for this path (docs/superpowers/specs/2026-08-06-rifff-recording-design.md).
   // targetRifffForRecording's own re-click-same-target refresh case
   // deliberately dispatches SET_LOOP_REGION alone (without touching the
-  // target) -- that's a different call site, so clearing the target here
+  // target) — that's a different call site, so clearing the target here
   // doesn't interfere with it.
   function handleSetLoopRegion(region: LoopRegion): void {
     dispatch({ type: 'SET_LOOP_REGION', region })
@@ -444,17 +409,14 @@ function Timeline({
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
-  onOpenLibrary,
-  onOpenClusterStems
+  onOpenLibrary
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
   onOpenLibrary: () => void
-  onOpenClusterStems: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
-  const setBusy = useBusy()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
@@ -493,29 +455,6 @@ function ProjectMenu({
       await window.rifffApi.saveProject(serializeProject(state))
     } catch (err) {
       console.error('ProjectMenu: failed to save a copy elsewhere:', err)
-    }
-  }
-
-  async function handleOpen(): Promise<void> {
-    setBusy('opening project…')
-    try {
-      const result = await window.rifffApi.openProject()
-      if (!result) return
-      const loaded = deserializeProject(JSON.parse(result.json))
-      // Pre-warm every stem's analysis caches BEFORE dispatching LOAD_STATE
-      // -- otherwise the timeline/sketch strip renders immediately with
-      // blank waveforms/radial glyphs that visibly pop in one at a time as
-      // each mounted component's own decode happens to finish. Waiting here
-      // means the busy overlay covers that whole "still processing" window
-      // instead of just the file read.
-      setBusy('loading waveforms…')
-      await warmStemCaches(loaded)
-      dispatch({ type: 'LOAD_STATE', state: loaded })
-      setCurrentSketch({ kind: 'external', path: result.path })
-    } catch (err) {
-      console.error('ProjectMenu: failed to open project:', err)
-    } finally {
-      setBusy(null)
     }
   }
 
@@ -576,8 +515,22 @@ function ProjectMenu({
           return
         }
         await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
+      } else if (currentSketch !== null && currentSketch.kind === 'external') {
+        // A real, known project file exists on disk -- export directly
+        // next to it (an Ableton/ folder alongside the source
+        // .sssketchproj), named identically to the project, no dialog.
+        // Mirrors the library path's own no-dialog, always-named-after-
+        // the-project convention now that there's a real source file to
+        // be identical to.
+        await window.rifffApi.exportAlsNextToSource(JSON.stringify(state), currentSketch.path)
       } else {
-        await window.rifffApi.exportAls(JSON.stringify(state))
+        // currentSketch === null: a project that's never been saved at all
+        // has no real file/location to name this export after -- keep the
+        // save dialog here (there's genuinely nothing to skip it FOR), but
+        // still suggest the same auto-generated name handleSave would give
+        // it, instead of the old generic "sssketch-export" default.
+        const defaultName = await window.rifffApi.generateDefaultProjectName()
+        await window.rifffApi.exportAls(JSON.stringify(state), defaultName)
       }
     } catch (err) {
       console.error('ProjectMenu: failed to export to Ableton:', err)
@@ -604,6 +557,15 @@ function ProjectMenu({
       </button>
       <button
         onClick={(e) => {
+          // Toggles closed if already open -- see TransportBar.tsx's own
+          // gear-menu button for why this matters (without it, re-clicking
+          // the trigger while the menu is open raced against ContextMenu's
+          // capture-phase outside-click dismissal and just reopened it in
+          // the same click).
+          if (saveMenu) {
+            setSaveMenu(null)
+            return
+          }
           const rect = e.currentTarget.getBoundingClientRect()
           setSaveMenu({ x: rect.left, y: rect.bottom + 4 })
         }}
@@ -622,14 +584,8 @@ function ProjectMenu({
           onClose={() => setSaveMenu(null)}
         />
       )}
-      <button onClick={handleOpen} style={buttonStyle}>
-        open
-      </button>
       <button onClick={onOpenLibrary} style={buttonStyle}>
-        library
-      </button>
-      <button onClick={onOpenClusterStems} style={buttonStyle}>
-        cluster stems
+        open
       </button>
       {currentSketch !== null && currentSketch.kind === 'library' && (
         <button onClick={handleDuplicateAsNewVersion} style={buttonStyle}>
@@ -638,6 +594,12 @@ function ProjectMenu({
       )}
       <button
         onClick={(e) => {
+          // Toggles closed if already open -- see the save button above /
+          // TransportBar.tsx's gear-menu button for why.
+          if (exportMenu) {
+            setExportMenu(null)
+            return
+          }
           const rect = e.currentTarget.getBoundingClientRect()
           setExportMenu({ x: rect.left, y: rect.bottom + 4 })
         }}
@@ -713,16 +675,21 @@ function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const setBusy = useBusy()
-  const availableInputDevices = useAppSelector((s) => s.availableInputDevices)
-  const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
-  const isAnyChannelArmed = useAppSelector((s) => s.armedChannelId !== null)
-  // Guards the input-device dropdown's lazy fetch against firing twice --
-  // availableInputDevices.length === 0 alone isn't enough, since React
-  // state hasn't updated yet if the dropdown is focused a second time
-  // before the first fetch resolves. Same "ref set synchronously before an
-  // async call starts" idiom LoreLibraryBrowser.tsx's own handleLoadMore
-  // uses for the identical class of problem.
-  const fetchingInputDevicesRef = useRef(false)
+
+  // A project should always have somewhere to record onto -- fires on
+  // mount and again any time recordingChannelIds empties out (e.g.
+  // "new project", or loading an old save that predates this feature).
+  // Purely additive: doesn't stop a user from adding MORE recording
+  // channels via the existing "+ rec" button, just guarantees there's
+  // never zero. The Endlesss-style gated recording feature (see the \
+  // key handler below) always targets whichever one of these channels
+  // comes first in channelOrder.
+  useEffect(() => {
+    if (Object.keys(state.recordingChannelIds).length === 0) {
+      dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
+    }
+  }, [state.recordingChannelIds, dispatch])
+
   const history = useHistory()
   const playing = usePlaying()
   const {
@@ -746,21 +713,6 @@ function Frame(): React.JSX.Element {
     stateRef.current = state
   }, [state])
 
-  // .ra-frame (global.css) is a fixed-size "design canvas" (matching the
-  // app's default 1512x982 window, see index.ts) that gets uniformly
-  // scaled via CSS transform to match the CURRENT window size, rather than
-  // reflowing its fixed-pixel children (panel widths, fonts, buttons)
-  // independently -- that keeps every part of the UI in the same
-  // proportion to every other part at any window size, so shrinking
-  // towards the window's minimum makes everything smaller together
-  // instead of letting fixed-width chrome (e.g. the 308px Inspector) eat a
-  // disproportionate share of a now-much-smaller timeline area. See
-  // FrameScaleContext for the state/resize-listener itself (shared with
-  // every component that needs to convert a real screen pixel into a
-  // logical one), and its own doc comment for the broader "this is why raw
-  // pixel math silently drifts off target after a resize" story.
-  const frameScale = useFrameScale()
-
   const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
 
   // Once, on mount: offer to restore a crash-recovery snapshot from a
@@ -776,22 +728,75 @@ function Frame(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
-      if (!json) return
-      if (window.confirm('Recover unsaved work from a previous session?')) {
+      if (json && window.confirm('Recover unsaved work from a previous session?')) {
         const loaded = deserializeProject(JSON.parse(json))
-        // Same pre-warm as ProjectMenu's handleOpen -- see its own doc
-        // comment for why this happens before LOAD_STATE, not after.
-        setBusy('loading waveforms…')
+        // Same pre-warm-before-LOAD_STATE reasoning as the library
+        // browser's onSelect/onOpenFromDisk handlers below -- avoids the
+        // timeline/sketch strip rendering with blank waveforms that pop
+        // in one at a time as each mounted component's own decode finishes.
+        setBusy('loading…')
         await warmStemCaches(loaded)
         dispatch({ type: 'LOAD_STATE', state: loaded })
         setBusy(null)
         const sketchJson = await window.rifffApi.loadAutosaveSketch()
         setCurrentSketch(sketchJson ? (JSON.parse(sketchJson) as CurrentSketch) : null)
+        void window.rifffApi.clearAutosave()
+        return
       }
-      void window.rifffApi.clearAutosave()
+      if (json) void window.rifffApi.clearAutosave()
+
+      // Nothing to recover (or recovery declined) -- open straight back
+      // into whatever was last opened (see writeLastOpenedSketch, kept
+      // updated by the effect below), same pattern as the library
+      // browser's own onSelect/onOpenFromDisk handlers, rather than always
+      // starting a brand-new sketch. Per direct feedback ("sssketch should
+      // open with the last opened file").
+      const lastOpenedJson = await window.rifffApi.loadLastOpenedSketch()
+      const lastOpened = lastOpenedJson ? (JSON.parse(lastOpenedJson) as CurrentSketch) : null
+      if (lastOpened) {
+        const result =
+          lastOpened.kind === 'library'
+            ? await window.rifffApi.openLibrarySketch(lastOpened.name)
+            : await window.rifffApi.openProjectFromPath(lastOpened.path)
+        if (result) {
+          const loaded = deserializeProject(JSON.parse(result.json))
+          setBusy('loading…')
+          await warmStemCaches(loaded)
+          dispatch({ type: 'LOAD_STATE', state: loaded })
+          setBusy(null)
+          setCurrentSketch(lastOpened)
+          return
+        }
+        // The pointed-at sketch is gone (deleted/moved/renamed since it was
+        // last opened) -- fall through to the fresh-sketch path below
+        // rather than getting stuck unable to start at all.
+      }
+
+      // Fresh start (nothing to recover, no last-opened sketch, or it's
+      // gone) -- give the sketch a real library name immediately rather
+      // than leaving it null/"untitled sketch" until an explicit Save, so
+      // importing something right away already has somewhere real to land
+      // (see the debounced autosave effect below, which writes straight to
+      // this library entry once there's real content).
+      setCurrentSketch({
+        kind: 'library',
+        name: await window.rifffApi.generateDefaultProjectName()
+      })
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch/setBusy/setCurrentSketch are stable
   }, [])
+
+  // Keeps the last-opened-sketch pointer (see writeLastOpenedSketch) in
+  // sync with currentSketch, so the NEXT launch's mount effect above can
+  // open straight back into wherever this session left off. Skipped while
+  // currentSketch is null (a brand-new, never-yet-located sketch, e.g.
+  // right after "new" -- see ProjectMenu's handleNew) so quitting before
+  // that sketch is ever saved/named doesn't overwrite the pointer to the
+  // last REAL sketch with nothing addressable to reopen.
+  useEffect(() => {
+    if (currentSketch !== null)
+      void window.rifffApi.saveLastOpenedSketch(JSON.stringify(currentSketch))
+  }, [currentSketch])
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
   // last real edit. Depends on the SERIALIZED content (a string), not state
@@ -806,9 +811,23 @@ function Frame(): React.JSX.Element {
     const id = window.setTimeout(() => {
       void window.rifffApi.autosaveProject(persistedJson)
       void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
+      // Also writes straight to the library folder once there's a real
+      // named sketch AND real content -- the whole point of auto-naming a
+      // fresh sketch immediately (see the mount effect above) is that
+      // imported content ends up somewhere real and discoverable without
+      // an explicit Save. Gated on non-empty rifffs so a session where
+      // nothing was ever imported doesn't litter the library with an
+      // empty, auto-named folder on every launch.
+      if (
+        currentSketch !== null &&
+        currentSketch.kind === 'library' &&
+        Object.keys(state.rifffs).length > 0
+      ) {
+        void window.rifffApi.saveProjectToLibrary(currentSketch.name, persistedJson)
+      }
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [persistedJson, currentSketch])
+  }, [persistedJson, currentSketch, state.rifffs])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
@@ -1020,10 +1039,22 @@ function Frame(): React.JSX.Element {
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
-      dispatch({ type: playing ? 'PAUSE' : 'PLAY' })
+      if (playing) {
+        // Routes through confirmLockInIfRecording first (see its own doc
+        // comment) rather than a bare dispatch -- pausing via spacebar is
+        // one of the three ways direct feedback called out for silently
+        // abandoning an uncommitted gated-recording pass.
+        void (async () => {
+          await confirmLockInIfRecording()
+          dispatch({ type: 'PAUSE' })
+        })()
+      } else {
+        dispatch({ type: 'PLAY' })
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- confirmLockInIfRecording isn't memoized (fresh closure every render), but closes over nothing beyond state/dispatch, already covered by listing playing/pickerGroupId/dispatch -- listing it too would just re-bind the listener on every render instead of only when those actually change, with no safety benefit (same reasoning as the existing \\ key effect further down).
   }, [pickerGroupId, playing, dispatch])
 
   // V toggles volumeDragMode — see StemWaveformRow.tsx's waveform-body drag
@@ -1144,6 +1175,36 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== '\\') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      void (state.gatedRecordingEnabled ? lockInGatedRecording() : enableGatedRecording())
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- enableGatedRecording/lockInGatedRecording aren't memoized (fresh closures every render), but close over nothing beyond state/dispatch/playing, all effectively covered by `state` already being listed -- listing them too would just re-bind the listener on every render instead of only when state actually changes, with no safety benefit.
+  }, [state, dispatch])
+
+  // "/" adds a new recording channel -- same action as the "+ rec channel"
+  // button below, just reachable without leaving the keyboard while
+  // recording. Mirrors the "\" effect above exactly (ignore while typing
+  // in an input/textarea, preventDefault so "/" itself never lands in a
+  // focused field first).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== '/') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [dispatch])
+
   // Hold Cmd to pan the arranger view by dragging anywhere in it, rather
   // than having to grab the scrollbar directly.
   const handModeHeld = useHandModeHeld()
@@ -1178,12 +1239,7 @@ function Frame(): React.JSX.Element {
     if (!container) return
     const rect = container.getBoundingClientRect()
     pendingZoomAnchorRef.current = {
-      // getBoundingClientRect()/clientX report real screen pixels, but
-      // container.scrollLeft (combined with this below, in
-      // scrollLeftForZoomChange) is logical -- see FrameScaleContext's own
-      // doc comment. Converting here keeps the anchor calc in one
-      // consistent (logical) unit throughout.
-      cursorXInContainer: toLogicalX(e.clientX - rect.left, frameScale),
+      cursorXInContainer: e.clientX - rect.left,
       oldScrollLeft: container.scrollLeft,
       oldPpb: ppb
     }
@@ -1265,14 +1321,8 @@ function Frame(): React.JSX.Element {
     startPointerDrag(
       e,
       (deltaX, deltaY) => {
-        // startPointerDrag's deltaX/deltaY are real screen pixels (from
-        // native mousemove clientX/clientY), but scrollLeft/scrollTop are
-        // logical -- see FrameScaleContext's own doc comment. Without
-        // dividing out frameScale first, the view pans faster or slower
-        // than the actual cursor movement the moment the window isn't at
-        // its default size.
-        container.scrollLeft = startScrollLeft - toLogicalX(deltaX, frameScale)
-        container.scrollTop = startScrollTop - toLogicalX(deltaY, frameScale)
+        container.scrollLeft = startScrollLeft - deltaX
+        container.scrollTop = startScrollTop - deltaY
       },
       () => setPanning(false)
     )
@@ -1281,7 +1331,7 @@ function Frame(): React.JSX.Element {
   return (
     <div className="ra-viewport">
       <SketchModeAutoFollow />
-      <div className="ra-frame" style={{ transform: `translate(-50%, -50%) scale(${frameScale})` }}>
+      <div className="ra-frame">
         <div
           style={{
             display: 'flex',
@@ -1291,8 +1341,20 @@ function Frame(): React.JSX.Element {
         >
           <div style={{ flex: 1 }}>
             <Titlebar
+              sketchName={
+                currentSketch === null
+                  ? 'untitled sketch'
+                  : currentSketch.kind === 'library'
+                    ? currentSketch.name
+                    : basenameWithoutProjectExt(currentSketch.path)
+              }
               rifffCount={Object.keys(state.rifffs).length}
               stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
+              mode={state.mode}
+              sketchEligible={isSketchEligible(state)}
+              onCycleMode={() =>
+                dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
+              }
             />
           </div>
           <div style={{ paddingRight: 14 }}>
@@ -1300,108 +1362,16 @@ function Frame(): React.JSX.Element {
               currentSketch={currentSketch}
               setCurrentSketch={setCurrentSketch}
               onOpenLibrary={() => setLibraryBrowserOpen(true)}
-              onOpenClusterStems={() => setClusterStemsOpen(true)}
             />
           </div>
         </div>
         <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
-        {/* .ra-frame is a flex column with the default align-items:stretch --
-            without this wrapper, a bare button dropped in as a direct sibling
-            of Shelf/TransportBar would stretch to the frame's full width
-            instead of sizing to its own content. The wrapper also gives the
-            input-device dropdown (added alongside this button in a later
-            task) a natural place to sit in the same row. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            onClick={() =>
-              dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
-            }
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              color: 'var(--ra-text)',
-              background: 'var(--ra-bg-row-active)',
-              border: '1px solid var(--ra-border-strong)',
-              padding: '5px 10px',
-              cursor: 'pointer',
-              textTransform: 'lowercase'
-            }}
-          >
-            + rec channel
-          </button>
-          <select
-            value={selectedInputDevice ?? ''}
-            disabled={isAnyChannelArmed}
-            title={
-              isAnyChannelArmed
-                ? 'disarm the current recording before changing the input device'
-                : undefined
-            }
-            onFocus={() => {
-              // Re-fetches on every focus, not just while the list is still
-              // empty -- a device (e.g. a loopback driver) can be
-              // installed/started after the app launched, and the engine's
-              // own scanForDevices() call (see Transport::
-              // availableInputDeviceNames) is cheap enough to redo each
-              // time rather than only ever trusting a stale first fetch.
-              // fetchingInputDevicesRef still guards against a second
-              // concurrent request if focus fires again before this one
-              // resolves.
-              if (!fetchingInputDevicesRef.current) {
-                fetchingInputDevicesRef.current = true
-                void window.rifffApi
-                  .engineListInputDevices()
-                  .then((devices) => {
-                    dispatch({ type: 'SET_AVAILABLE_INPUT_DEVICES', devices })
-                    // Restore the last-picked device once we actually know
-                    // it's still real -- only meaningful the first time
-                    // (selectedInputDevice is still null), and only if it's
-                    // genuinely present in this fetch's device list (a
-                    // loopback driver from a previous session might not be
-                    // installed/running anymore).
-                    if (!selectedInputDevice) {
-                      const stored = loadStoredInputDevice()
-                      if (stored && devices.includes(stored)) {
-                        dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device: stored })
-                      }
-                    }
-                  })
-                  .catch((err) => {
-                    console.error('Frame: failed to list input devices:', err)
-                  })
-                  .finally(() => {
-                    fetchingInputDevicesRef.current = false
-                  })
-              }
-            }}
-            onChange={(e) => {
-              const device = e.target.value || null
-              dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device })
-              storeSelectedInputDevice(device)
-            }}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              color: 'var(--ra-text)',
-              background: 'var(--ra-bg-row-active)',
-              border: '1px solid var(--ra-border)',
-              padding: '5px 8px',
-              cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <option value="">
-              {availableInputDevices.length === 0
-                ? 'no input devices found'
-                : 'select input device...'}
-            </option>
-            {availableInputDevices.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <TransportBar />
+        <TransportBar
+          onOpenClusterStems={() => setClusterStemsOpen(true)}
+          onEnableGatedRecording={() => void enableGatedRecording()}
+          onDisableGatedRecording={() => void disableGatedRecording()}
+          onStop={() => void handleStop()}
+        />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
           TransportBar rows above take their own natural heights — the row's
@@ -1519,12 +1489,33 @@ function Frame(): React.JSX.Element {
                   const result = await window.rifffApi.openLibrarySketch(name)
                   if (!result) return
                   const loaded = deserializeProject(JSON.parse(result.json))
-                  setBusy('loading waveforms…')
+                  setBusy('loading…')
                   await warmStemCaches(loaded)
                   dispatch({ type: 'LOAD_STATE', state: loaded })
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
+                } finally {
+                  setBusy(null)
+                }
+              })()
+            }}
+            onOpenFromDisk={() => {
+              setLibraryBrowserOpen(false)
+              void (async () => {
+                setBusy('opening project…')
+                try {
+                  const result = await window.rifffApi.openProject()
+                  if (!result) return
+                  const loaded = deserializeProject(JSON.parse(result.json))
+                  // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
+                  // handler right above -- see its own comment history.
+                  setBusy('loading…')
+                  await warmStemCaches(loaded)
+                  dispatch({ type: 'LOAD_STATE', state: loaded })
+                  setCurrentSketch({ kind: 'external', path: result.path })
+                } catch (err) {
+                  console.error('App: failed to open project from disk:', err)
                 } finally {
                   setBusy(null)
                 }
@@ -1548,13 +1539,11 @@ function Frame(): React.JSX.Element {
 
 export default function App(): React.JSX.Element {
   return (
-    <FrameScaleProvider>
-      <StoreProvider>
-        <BusyProvider>
-          <Frame />
-          <BusyOverlay />
-        </BusyProvider>
-      </StoreProvider>
-    </FrameScaleProvider>
+    <StoreProvider>
+      <BusyProvider>
+        <Frame />
+        <BusyOverlay />
+      </BusyProvider>
+    </StoreProvider>
   )
 }
