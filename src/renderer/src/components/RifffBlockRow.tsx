@@ -31,6 +31,7 @@ export function RifffBlockRow({
   const rifff = useAppSelector((s) => s.rifffs[groupId])
   const selected = useAppSelector((s) => s.sel === groupId)
   const isGatedRecordingTarget = useAppSelector((s) => s.gatedRecordingTargetGroupId === groupId)
+  const gatedRecordingEnabled = useAppSelector((s) => s.gatedRecordingEnabled)
   const playing = usePlaying()
   const { targetRifffForRecording } = useGatedRecordingControls()
   const expandedFlag = useAppSelector((s) => !!s.exp[groupId])
@@ -171,16 +172,24 @@ export function RifffBlockRow({
           // Same purple (--ra-recording-live) pulsing dot as TransportBar's
           // own rec indicator and Ruler's loop bracket -- reused rather
           // than reinvented, right down to the keyframe name. Pulses only
-          // while actually playing (matching those two), since "actively
-          // listening" is only true while the transport is moving through
-          // the loop region.
+          // while gated recording is enabled AND transport is actually
+          // playing -- not just armed -- matching TransportBar's own rec dot
+          // and Ruler's loop bracket, since "actively listening" is only
+          // true while the transport is moving through the loop region
+          // (see GatedLoopRecorder's own gate). Targeting a rifff via
+          // double-click does not itself enable gated recording, so the dot
+          // must not pulse (implying live capture) until arming happens too.
           <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0 }}>
             <circle
               cx="5"
               cy="5"
               r="5"
               fill="var(--ra-recording-live)"
-              style={playing ? { animation: 'ra-rec-pulse 1.4s ease-in-out infinite' } : undefined}
+              style={
+                gatedRecordingEnabled && playing
+                  ? { animation: 'ra-rec-pulse 1.4s ease-in-out infinite' }
+                  : undefined
+              }
             />
             <style>{`
               @keyframes ra-rec-pulse {
