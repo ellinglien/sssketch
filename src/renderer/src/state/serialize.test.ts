@@ -67,6 +67,27 @@ describe('project serialization', () => {
     const restored = deserializeProject(JSON.parse(json))
     expect(restored.gatedRecordingTargetGroupId).toBeNull()
   })
+
+  it('does not persist tidiedView/gatedRecordingEnabled/gatedRecordingChannelId -- always reopens at their defaults', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'TOGGLE_TIDIED_VIEW' })
+    state = reducer(state, { type: 'SET_GATED_RECORDING_ENABLED', enabled: true })
+    state = reducer(state, { type: 'SET_GATED_RECORDING_CHANNEL', channelId: 'r1' })
+    expect(state.tidiedView).toBe(true)
+    expect(state.gatedRecordingEnabled).toBe(true)
+    expect(state.gatedRecordingChannelId).toBe('r1')
+
+    const json = serializeProject(state)
+    const parsed = JSON.parse(json)
+    expect(parsed.tidiedView).toBeUndefined()
+    expect(parsed.gatedRecordingEnabled).toBeUndefined()
+    expect(parsed.gatedRecordingChannelId).toBeUndefined()
+
+    const restored = deserializeProject(parsed)
+    expect(restored.tidiedView).toBe(initialState.tidiedView)
+    expect(restored.gatedRecordingEnabled).toBe(initialState.gatedRecordingEnabled)
+    expect(restored.gatedRecordingChannelId).toBe(initialState.gatedRecordingChannelId)
+  })
 })
 
 describe('deserializeProject mode fallback', () => {
