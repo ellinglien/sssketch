@@ -17,6 +17,10 @@ export type PersistedProject = Omit<
   | 'availableInputDevices'
   | 'selectedInputDevice'
   | 'regionSelection'
+  | 'tidiedView'
+  | 'gatedRecordingEnabled'
+  | 'gatedRecordingChannelId'
+  | 'gatedRecordingTargetGroupId'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -44,6 +48,10 @@ export function serializeProject(state: AppState): string {
     availableInputDevices,
     selectedInputDevice,
     regionSelection,
+    tidiedView,
+    gatedRecordingEnabled,
+    gatedRecordingChannelId,
+    gatedRecordingTargetGroupId,
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */
@@ -69,5 +77,12 @@ function migrateTrackOrder(trackOrder: string[]): Pick<AppState, 'channelOrder' 
 export function deserializeProject(data: PersistedProject | LegacyPersistedProject): AppState {
   const migrated = 'channelOrder' in data ? {} : migrateTrackOrder(data.trackOrder)
   const state = { ...initialState, ...data, ...migrated }
+  // SNAP_DIVS was capped from [4,8,16,32] to [4,8,16] -- an old save with
+  // snapIdx: 3 (1/32) is still valid AppState at the type level (this
+  // function's own input isn't runtime-validated against the current
+  // union), but SNAP_DIVS[3] is undefined at every read site once loaded.
+  // Clamp to the new coarsest-available index rather than let that surface
+  // as a silent NaN/undefined somewhere in the snap-grid UI.
+  if (state.snapIdx > 2) state.snapIdx = 2
   return isSketchEligible(state) ? state : { ...state, mode: 'normal' }
 }

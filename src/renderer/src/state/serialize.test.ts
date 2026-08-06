@@ -55,6 +55,18 @@ describe('project serialization', () => {
     const restored = deserializeProject(JSON.parse(json))
     expect(restored.inspectorCollapsed).toBe(false)
   })
+
+  it('does not persist gatedRecordingTargetGroupId -- always reopens with nothing targeted', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+    expect(state.gatedRecordingTargetGroupId).toBe('r1')
+
+    const json = serializeProject(state)
+    expect(JSON.parse(json).gatedRecordingTargetGroupId).toBeUndefined()
+
+    const restored = deserializeProject(JSON.parse(json))
+    expect(restored.gatedRecordingTargetGroupId).toBeNull()
+  })
 })
 
 describe('deserializeProject mode fallback', () => {
