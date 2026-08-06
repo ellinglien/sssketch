@@ -1,5 +1,6 @@
 import { useAppState, useDispatch, usePlaying } from './StoreContext'
 import { stopActivePreview } from '../audio/previewLoop'
+import type { LoopRegion } from './store'
 
 /** Endlesss-style gated ("always listening") recording controls -- see
  * GatedLoopRecorder's own doc comment (native-engine) for the capture
@@ -19,6 +20,7 @@ export function useGatedRecordingControls(): {
   lockInGatedRecording: () => Promise<void>
   confirmLockInIfRecording: () => Promise<void>
   handleStop: () => Promise<void>
+  targetRifffForRecording: (groupId: string, region: LoopRegion) => Promise<void>
 } {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -213,11 +215,37 @@ export function useGatedRecordingControls(): {
     }
   }
 
+  // Called by RifffBlockRow.tsx/SketchStrip.tsx's own onDoubleClick --
+  // pins groupId as the gated-recording target and sets the loop region to
+  // match it (region is the caller's own current-geometry-derived span,
+  // same "reflects however the clip is ACTUALLY sized right now" data
+  // both components already compute for their existing double-click
+  // behavior). If recording is currently enabled (either the channel path
+  // or a previous rifff target), confirms before abandoning whatever's
+  // in-progress, then turns recording OFF -- re-targeting mid-session
+  // requires an explicit \ press to resume onto the new target, same
+  // two-step "set the region/target, then press \ to actually start
+  // capturing" flow a fresh double-click already has. This sidesteps
+  // having to splice a live loop-region change into an already-running
+  // native capture.
+  async function targetRifffForRecording(groupId: string, region: LoopRegion): Promise<void> {
+    if (!region) return
+    if (state.gatedRecordingEnabled) {
+      await confirmLockInIfRecording()
+      await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0)
+      dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: false })
+    }
+    dispatch({ type: 'SET_LOOP_REGION', region })
+    dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: null })
+    dispatch({ type: 'SET_GATED_RECORDING_TARGET', groupId })
+  }
+
   return {
     enableGatedRecording,
     disableGatedRecording,
     lockInGatedRecording,
     confirmLockInIfRecording,
-    handleStop
+    handleStop,
+    targetRifffForRecording
   }
 }
