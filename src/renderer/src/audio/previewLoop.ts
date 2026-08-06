@@ -1,10 +1,16 @@
-import { sqrtGain } from '@shared/mixGain'
 import { applyLoopMicroFade } from './microFade'
 
 export interface PreviewStemInput {
   path: string
-  /** Extra per-stem gain multiplier beyond the shared sqrtGain headroom
-   * normalization (e.g. a stem's own saved volume) — defaults to 1. */
+  /** This stem's own committed gain — state.vol[stemKey(...)] (already has
+   * sqrtGain's stem-count headroom normalization baked in from import time,
+   * see store.ts's ADD_TO_SHELF/ADD_STEM_TO_RIFFF reducer cases), exactly
+   * as buildEngineProject.ts sends it to the native engine for real
+   * arranger playback. Applied directly, with NO further sqrtGain
+   * multiplication here — this function used to also compute a fresh
+   * sqrtGain(stems.length) and multiply it in on top, double-applying the
+   * same headroom factor and making every preview measurably quieter than
+   * the arranger's own playback of the same rifff. Defaults to 1. */
   gain?: number
   /** This stem's true, bar-derived duration in seconds (Stem.durationSec) —
    * when provided, the loop point is locked to exactly this instead of the
@@ -38,7 +44,6 @@ export async function startPreviewLoop(
   stems: PreviewStemInput[],
   isCancelled: () => boolean
 ): Promise<AudioBufferSourceNode[]> {
-  const gain = sqrtGain(stems.length)
   const decodeResults = await Promise.allSettled(
     stems.map(async (stem) => {
       const bytes = await window.rifffApi.readAudioFile(stem.path)
@@ -69,7 +74,7 @@ export async function startPreviewLoop(
       source.loopEnd = Math.min(stem.durationSec, buffer.duration)
     }
     const gainNode = ctx.createGain()
-    gainNode.gain.value = gain * (stem.gain ?? 1)
+    gainNode.gain.value = stem.gain ?? 1
     source.connect(gainNode)
     gainNode.connect(ctx.destination)
     source.start(0)

@@ -3,6 +3,7 @@ import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLib
 import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
+import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -700,9 +701,22 @@ export function LoreLibraryBrowser({
         // two don't play over each other.
         if (playing) dispatch({ type: 'PAUSE' })
         const cachedStems = resolved.stems.filter((s) => s.path !== null)
+        // previewLoop.ts itself no longer applies sqrtGain's stem-count
+        // headroom normalization (see its own doc comment) — Shelf.tsx's
+        // tile preview passes state.vol, which already has that baked in
+        // from import time, so a second application there was a real bug
+        // (previews were quieter than the arranger). This riff hasn't been
+        // imported yet, though, so there's no state.vol entry for it — its
+        // raw LORE GainsJSON gain never had sqrtGain applied at all, so it
+        // has to be computed fresh here, same as this preview always did.
+        const gain = sqrtGain(cachedStems.length)
         const sources = await startPreviewLoop(
           getAudioContext(),
-          cachedStems.map((s) => ({ path: s.path!, gain: s.gain, durationSec: s.durationSec })),
+          cachedStems.map((s) => ({
+            path: s.path!,
+            gain: gain * s.gain,
+            durationSec: s.durationSec
+          })),
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)

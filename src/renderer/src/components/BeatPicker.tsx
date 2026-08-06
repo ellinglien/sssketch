@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/selectors'
 import type { Action, AppState } from '../state/store'
-import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import { stopActivePreview } from '../audio/previewLoop'
 import { applyLoopMicroFade } from '../audio/microFade'
@@ -621,7 +620,6 @@ export function BeatPicker({
     const ctx = getAudioContext()
     freeStartTimeRef.current = ctx.currentTime
     const stemsToPreview = previewAll ? rifff.stems : [stem]
-    const gain = sqrtGain(stemsToPreview.length)
     for (const s of stemsToPreview) {
       const buf = buffers[s.slot]
       if (!buf) continue
@@ -646,12 +644,17 @@ export function BeatPicker({
       source.loopStart = 0
       source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
-      // Same per-stem volume multiplier Shelf.tsx's tile preview already
-      // applies (state.vol[stemKey(...)] ?? 1) — without this, a rifff
-      // whose stems have been turned up/down from their default volume
-      // sounded different here than everywhere else, since this preview
-      // never read the project's own committed per-stem volume at all.
-      gainNode.gain.value = gain * (state.vol[stemKey(rifff.groupId, s.slot)] ?? 1)
+      // state.vol[stemKey(...)] already has sqrtGain's stem-count headroom
+      // normalization baked in from import time (see store.ts's
+      // ADD_TO_SHELF/ADD_STEM_TO_RIFFF reducer cases) — exactly the same
+      // value buildEngineProject.ts sends the native engine for real
+      // arranger playback, applied here directly with no further sqrtGain
+      // multiplication. This used to also compute a fresh
+      // sqrtGain(stemsToPreview.length) and multiply it in on top,
+      // double-applying the same headroom factor and making this preview
+      // measurably quieter than the arranger's own playback of the same
+      // rifff (worse the more stems it has).
+      gainNode.gain.value = state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
       source.start(0)
@@ -680,7 +683,6 @@ export function BeatPicker({
     // by its own (possibly shorter, tiling) loop length.
     const stemsToPreview = previewAll ? rifff.stems : [stem]
     const ctx = getAudioContext()
-    const gain = sqrtGain(stemsToPreview.length)
     // Marks when THIS pick's playback began, so the playhead sweep (which
     // reads this same ref — see the effect above) tracks from here rather
     // than a stale timestamp left over from a previous pick or free-play.
@@ -709,9 +711,10 @@ export function BeatPicker({
       source.loopStart = 0
       source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
-      // Same per-stem volume multiplier as toggleFreePlay above (and
-      // Shelf.tsx's tile preview) — see its comment.
-      gainNode.gain.value = gain * (state.vol[stemKey(rifff.groupId, s.slot)] ?? 1)
+      // Same per-stem volume, no redundant sqrtGain multiplication, as
+      // toggleFreePlay above (and Shelf.tsx's tile preview) — see its
+      // comment.
+      gainNode.gain.value = state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
       source.start(0)
