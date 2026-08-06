@@ -57,4 +57,32 @@ namespace sssketch
         link.commitAppSessionState(sessionState);
         lastKnownSessionTempo = sssketchBpm;
     }
+
+    std::optional<double> LinkSession::checkForExternalTempoChange()
+    {
+        // See this method's own doc comment (.h) for why numPeers() == 0 is
+        // excluded, not just !isEnabled() -- a lone session's own outbound
+        // pushes already keep lastKnownSessionTempo in lockstep with
+        // sessionTempo() with zero peers involved, so this is mainly a
+        // cheap, intention-revealing guard rather than one that's ever
+        // strictly load-bearing on its own.
+        if (!link.isEnabled() || link.numPeers() == 0) return std::nullopt;
+
+        auto sessionState = link.captureAppSessionState();
+        const double sessionTempo = sessionState.tempo();
+
+        if (std::abs(sessionTempo - lastKnownSessionTempo) > kTempoEpsilon)
+        {
+            // Mirrors syncTempo's own peer-detected branch exactly (see its
+            // comment above) -- absorbing the new value into
+            // lastKnownSessionTempo here, immediately, is what keeps the
+            // eventual outbound echo (renderer adopts this value ->
+            // load-project -> syncTempo) a no-op instead of fighting the
+            // peer right back. See this method's own .h doc comment for the
+            // full trace.
+            lastKnownSessionTempo = sessionTempo;
+            return sessionTempo;
+        }
+        return std::nullopt;
+    }
 }

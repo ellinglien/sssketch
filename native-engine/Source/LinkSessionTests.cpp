@@ -101,6 +101,68 @@ namespace sssketch
                 session.pushTempoNow(140.0);
                 expectWithinAbsoluteError(session.sessionTempo(), 120.0, 0.01);
             }
+
+            // checkForExternalTempoChange's own "did a PEER change the
+            // tempo" detection is gated on numPeers() > 0 (see its own doc
+            // comment), and -- same limitation as this file's own top
+            // comment already documents for syncTempo's peer-branch --
+            // there's no deterministic way to get a real peer connected in
+            // this environment (no second Link-enabled process/app on the
+            // network). So the tests below cover what's actually testable
+            // without one: the disabled/no-peers early-outs, and the
+            // (arguably more important) regression case that this
+            // session's OWN outbound pushes are never misread as an
+            // external change -- exactly the bookkeeping the feedback-loop
+            // prevention for the renderer's inbound listener depends on.
+
+            beginTest("checkForExternalTempoChange returns nullopt while disabled");
+            {
+                LinkSession session(120.0);
+                session.setEnabled(false);
+                expect(!session.checkForExternalTempoChange().has_value());
+            }
+
+            beginTest("checkForExternalTempoChange returns nullopt when enabled with no peers "
+                      "and nothing has changed (this test process is alone on the network)");
+            {
+                LinkSession session(120.0);
+                session.setEnabled(true);
+                expect(session.numPeers() == 0);
+                expect(!session.checkForExternalTempoChange().has_value());
+            }
+
+            beginTest("checkForExternalTempoChange never reports this session's own "
+                      "syncTempo push as an external change -- regression coverage for the "
+                      "feedback-loop prevention the renderer's inbound listener relies on: "
+                      "if this ever returned a value here, the renderer would echo its own "
+                      "tempo change right back out, fighting itself in a loop");
+            {
+                LinkSession session(120.0);
+                session.setEnabled(true);
+                session.syncTempo(135.0);
+                expect(!session.checkForExternalTempoChange().has_value());
+            }
+
+            beginTest("checkForExternalTempoChange never reports this session's own "
+                      "pushTempoNow push as an external change either, same reasoning as "
+                      "the syncTempo case above");
+            {
+                LinkSession session(120.0);
+                session.setEnabled(true);
+                session.pushTempoNow(150.0);
+                expect(!session.checkForExternalTempoChange().has_value());
+            }
+
+            beginTest("checkForExternalTempoChange is idempotent when polled repeatedly with "
+                      "no intervening tempo change");
+            {
+                LinkSession session(120.0);
+                session.setEnabled(true);
+                session.syncTempo(160.0);
+                expect(!session.checkForExternalTempoChange().has_value());
+                expect(!session.checkForExternalTempoChange().has_value());
+                expect(!session.checkForExternalTempoChange().has_value());
+            }
         }
     };
 

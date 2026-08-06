@@ -1,6 +1,7 @@
 // native-engine/Source/LinkSession.h
 #pragma once
 #include <ableton/Link.hpp>
+#include <optional>
 
 namespace sssketch
 {
@@ -10,25 +11,37 @@ namespace sssketch
      *
      * Deliberately NOT wired into the real-time audio callback -- Link's
      * own captureAppSessionState()/commitAppSessionState() are documented
-     * thread-safe (if not realtime-safe), so this runs entirely from
-     * IpcConnection's existing 30Hz message-thread timer (see
-     * timerCallback's own call to syncTempo below). Simpler and lower-risk
-     * than threading Link through Transport's actual audio callback, and
-     * fully sufficient for tempo sync -- this doesn't attempt
-     * beat-quantized launch/start-stop sync, just "what tempo is the
-     * session at."
+     * thread-safe (if not realtime-safe), so this runs entirely from the
+     * message thread. Two separate call sites, matching the two sync
+     * directions below: syncTempo is called from IpcConnection::
+     * messageReceived's load-project handling (OUTBOUND -- fires on every
+     * real project change, not tied to a timer, so it keeps syncing even
+     * while paused); checkForExternalTempoChange is polled from
+     * IpcConnection's own link-poll MultiTimer id, which runs continuously
+     * from connection-made until teardown, independent of the separate
+     * play-gated position-update timer (see IpcServer.cpp for both).
+     * Simpler and lower-risk than threading Link through Transport's
+     * actual audio callback, and fully sufficient for tempo sync -- this
+     * doesn't attempt beat-quantized launch/start-stop sync, just "what
+     * tempo is the session at."
      *
-     * Sync direction is deliberately ONE-WAY for now: sssketch's own
-     * tempo changes get pushed out to the Link session (so other apps can
-     * follow sssketch), but a tempo change originating from a PEER is
-     * only tracked internally (see lastKnownSessionTempo) to avoid
-     * fighting them for control of the session tempo -- it does NOT get
-     * pulled back into sssketch's own project bpm. Adopting a peer's
-     * tempo change would need a push all the way from this native
-     * engine's own message-thread poll back to the renderer's own
-     * state.bpm (a real, but separable, follow-up -- the one-way push
-     * direction implemented here is already useful on its own: other
-     * Link apps can already follow sssketch's tempo). */
+     * Sync is now two-way: sssketch's own tempo changes get pushed out to
+     * the Link session via syncTempo/pushTempoNow (so other apps can
+     * follow sssketch), AND a tempo change originating from a PEER is
+     * detected by checkForExternalTempoChange and pushed forward (via
+     * IpcConnection -> engineClient.ts -> preload -> StoreContext.tsx's
+     * inbound listener) so the renderer can adopt it into state.bpm.
+     * Feedback-loop note: when the renderer adopts a peer's tempo, its own
+     * existing outbound sync effect fires right back (state.bpm changed ->
+     * load-project -> transport.setBpm -> syncTempo). This does NOT echo
+     * back to Link: checkForExternalTempoChange already updated
+     * lastKnownSessionTempo to the peer's value the moment it detected the
+     * change, so by the time that outbound syncTempo call lands, both
+     * lastKnownSessionTempo and the incoming sssketchBpm already agree
+     * with the session's own tempo -- syncTempo's own "did sssketch's
+     * tempo actually differ from the session" check is false, so it's a
+     * no-op. See checkForExternalTempoChange's own doc comment below for
+     * the numPeers()>0 gate this relies on. */
     class LinkSession
     {
     public:
@@ -61,6 +74,40 @@ namespace sssketch
          * own steady-state non-fighting behavior to get more
          * complicated. */
         void pushTempoNow(double sssketchBpm);
+
+        /** Polled periodically (message thread only, see IpcConnection's
+         * own link-poll MultiTimer id -- ~750ms cadence, running
+         * continuously regardless of play state) to detect a tempo change
+         * that originated from a PEER rather than from sssketch's own
+         * syncTempo/pushTempoNow calls above, so it can be surfaced to the
+         * renderer -- the "adopt a peer's tempo" half of two-way sync this
+         * class's own doc comment describes.
+         *
+         * Returns the new tempo if the session's own current tempo
+         * differs from lastKnownSessionTempo AND at least one peer is
+         * present. The numPeers() > 0 gate specifically excludes "no
+         * peers at all" sessions: with zero peers, commitAppSessionState
+         * applies locally with no negotiation, so sessionTempo() already
+         * reflects sssketch's own last outbound push by the time any
+         * poll could observe it -- lastKnownSessionTempo's existing
+         * bookkeeping (updated by every syncTempo/pushTempoNow call)
+         * already keeps that case from reading as an "external" change on
+         * its own; this gate is an extra, cheap belt-and-braces check
+         * against relying on that alone, and it also matches the
+         * intuition that "peer changed the tempo" is meaningless to
+         * report when there is no peer.
+         *
+         * Updates lastKnownSessionTempo as a side effect when it DOES
+         * detect a change (same bookkeeping syncTempo's own peer-detected
+         * branch already performs) -- this is what makes the eventual
+         * outbound echo (renderer adopts the value -> load-project ->
+         * syncTempo) a no-op instead of fighting the peer right back; see
+         * this class's own doc comment above for the full trace.
+         *
+         * Returns nullopt when nothing changed (including while
+         * disabled, or with no peers). Real-time-unsafe, same as
+         * syncTempo -- message thread only. */
+        std::optional<double> checkForExternalTempoChange();
 
         /** The Link session's own current tempo -- exposed mainly for
          * tests (see LinkSessionTests.cpp); real callers use syncTempo
