@@ -1,4 +1,4 @@
-import { useAppSelector, useDispatch, useZoom } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import type { Rifff } from '@shared/types'
 import { stemColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
@@ -9,6 +9,7 @@ import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 import { useFrameScale } from '../state/FrameScaleContext'
+import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 
 export const NAME_BAR_HEIGHT = 18
 
@@ -29,6 +30,9 @@ export function RifffBlockRow({
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
   const selected = useAppSelector((s) => s.sel === groupId)
+  const isGatedRecordingTarget = useAppSelector((s) => s.gatedRecordingTargetGroupId === groupId)
+  const playing = usePlaying()
+  const { targetRifffForRecording } = useGatedRecordingControls()
   const expandedFlag = useAppSelector((s) => !!s.exp[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
   const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
@@ -95,6 +99,33 @@ export function RifffBlockRow({
           dispatch({ type: 'SELECT', groupId })
           dispatch({ type: 'TOGGLE_EXPAND', groupId })
         }}
+        onDoubleClick={(e) => {
+          // Targets THIS rifff for gated recording -- sets the project's
+          // loop region to exactly this clip's CURRENT rendered span
+          // (derived straight from geo's own leftPx/widthPx, converted
+          // back to bars via ppb, so it reflects however the clip is
+          // ACTUALLY sized right now: a playedBars resize, a left-crop
+          // trim, stretch on/off -- all already baked into geo by
+          // clipGeometryFromFields above) AND pins this rifff as where the
+          // NEXT locked-in take attaches as a new stem -- see
+          // useGatedRecordingControls' targetRifffForRecording and
+          // docs/superpowers/specs/2026-08-06-rifff-recording-design.md.
+          // An earlier version used rifff.barLength (the clip's intrinsic
+          // one-pass length, ignoring all of the above) and dispatched
+          // SET_LOOP_REGION directly, which per direct feedback was wrong
+          // -- "it should set it to whatever the length it is currently,
+          // not the original." Mirrors Ruler.tsx's own
+          // double-click-to-CLEAR-loop-region convention (same gesture,
+          // opposite direction depending on where you double-click). The
+          // two onClick firings each half of this double-click also
+          // triggers (SELECT + TOGGLE_EXPAND, twice) are harmless — they
+          // cancel out, leaving expand state unchanged and this clip
+          // selected, same as a single click would.
+          e.stopPropagation()
+          const startBar = geo.leftPx / ppb
+          const lengthBars = geo.widthPx / ppb
+          void targetRifffForRecording(groupId, { startBar, endBar: startBar + lengthBars })
+        }}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
@@ -105,7 +136,10 @@ export function RifffBlockRow({
           dispatch({ type: 'SELECT', groupId })
           onOpenContextMenu(e.clientX, e.clientY, groupId)
         }}
-        title={(expanded ? 'click to collapse' : 'click to expand') + ' · ctrl+right-click to solo'}
+        title={
+          (expanded ? 'click to collapse' : 'click to expand') +
+          ' · ctrl+right-click to solo · double-click to target this rifff for recording'
+        }
         style={{
           position: 'absolute',
           top: 0,
@@ -133,6 +167,29 @@ export function RifffBlockRow({
         >
           {rifff.name}
         </span>
+        {isGatedRecordingTarget && (
+          // Same purple (--ra-recording-live) pulsing dot as TransportBar's
+          // own rec indicator and Ruler's loop bracket -- reused rather
+          // than reinvented, right down to the keyframe name. Pulses only
+          // while actually playing (matching those two), since "actively
+          // listening" is only true while the transport is moving through
+          // the loop region.
+          <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0 }}>
+            <circle
+              cx="5"
+              cy="5"
+              r="5"
+              fill="var(--ra-recording-live)"
+              style={playing ? { animation: 'ra-rec-pulse 1.4s ease-in-out infinite' } : undefined}
+            />
+            <style>{`
+              @keyframes ra-rec-pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.25; }
+              }
+            `}</style>
+          </svg>
+        )}
       </div>
 
       {expanded ? (
