@@ -5,6 +5,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
+import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -28,6 +29,7 @@ export function SketchStrip(): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
+  const { targetRifffForRecording } = useGatedRecordingControls()
 
   // Sorted by startBar (not placedRifffsInOrder's own trackOrder-based row
   // order) — SEQUENCE_RIFFFS keeps the two in sync, but startBar is the
@@ -185,6 +187,22 @@ export function SketchStrip(): React.JSX.Element {
     } else {
       dispatch({ type: 'PLAY' })
     }
+  }
+
+  // Targets this tile's rifff for gated recording -- new in this component
+  // (no double-click handling existed here before). Sets the loop region
+  // to exactly this tile's own CURRENT played span (effectiveBars -- the
+  // same value already used for tile layout/glyph sizing, so it reflects a
+  // right-click-drag length adjustment just like RifffBlockRow.tsx's own
+  // double-click reflects a playedBars resize) and pins the rifff as where
+  // the next locked-in take attaches as a new stem -- see
+  // useGatedRecordingControls' targetRifffForRecording and
+  // docs/superpowers/specs/2026-08-06-rifff-recording-design.md.
+  function handleTileDoubleClick(e: React.MouseEvent, rifff: Rifff): void {
+    e.stopPropagation()
+    const startBar = rifff.startBar ?? 0
+    const lengthBars = effectiveBars(rifff)
+    void targetRifffForRecording(rifff.groupId, { startBar, endBar: startBar + lengthBars })
   }
 
   // Dragging the orbiting dot scrubs the playhead within its own rifff's
@@ -392,6 +410,7 @@ export function SketchStrip(): React.JSX.Element {
         const dotY = 50 + orbitRadius * Math.sin(angleRad)
         const isDraggingBars = !!dragBarsFor?.groupIds.has(rifff.groupId)
         const displayBars = dragBarsFor?.groupIds.has(rifff.groupId) ? dragBarsFor.bars : bars
+        const isGatedRecordingTarget = state.gatedRecordingTargetGroupId === rifff.groupId
 
         return (
           <div
@@ -402,9 +421,10 @@ export function SketchStrip(): React.JSX.Element {
               e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
             }}
             onClick={(e) => handleTileClick(e, rifff)}
+            onDoubleClick={(e) => handleTileDoubleClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => handleBarsMouseDown(e, rifff)}
-            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · ctrl+right-click to solo`}
+            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · ctrl+right-click to solo · double-click to target for recording`}
             style={{
               order: index * 10,
               position: 'relative',
@@ -468,6 +488,45 @@ export function SketchStrip(): React.JSX.Element {
                   strokeWidth={1.5}
                   style={{ pointerEvents: 'none' }}
                 />
+              </svg>
+            )}
+            {isGatedRecordingTarget && (
+              // Same purple (--ra-recording-live) pulsing dot as
+              // TransportBar's own rec indicator, Ruler's loop bracket, and
+              // RifffBlockRow's own equivalent -- reused, right down to the
+              // keyframe name. Corner-positioned so it doesn't collide with
+              // the centered bar-count label or the orbiting scrub dot.
+              // Pulses only while gated recording is enabled AND transport
+              // is actually playing -- not just armed -- matching
+              // TransportBar/Ruler/RifffBlockRow's own dots, since
+              // "actively listening" is only true while the transport is
+              // moving through the loop region. Targeting a tile via
+              // double-click does not itself enable gated recording, so the
+              // dot must not pulse (implying live capture) until arming
+              // happens too.
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                style={{ position: 'absolute', top: 2, right: 2, pointerEvents: 'none' }}
+              >
+                <circle
+                  cx="5"
+                  cy="5"
+                  r="5"
+                  fill="var(--ra-recording-live)"
+                  style={
+                    state.gatedRecordingEnabled && playing
+                      ? { animation: 'ra-rec-pulse 1.4s ease-in-out infinite' }
+                      : undefined
+                  }
+                />
+                <style>{`
+                  @keyframes ra-rec-pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.25; }
+                  }
+                `}</style>
               </svg>
             )}
           </div>
