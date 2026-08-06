@@ -747,7 +747,19 @@ function Frame(): React.JSX.Element {
         dispatch({ type: 'LOAD_STATE', state: loaded })
         setBusy(null)
         const sketchJson = await window.rifffApi.loadAutosaveSketch()
-        setCurrentSketch(sketchJson ? (JSON.parse(sketchJson) as CurrentSketch) : null)
+        // The sketch-info sidecar can be missing/corrupted even when the
+        // content autosave above recovered fine (they're written/read
+        // independently -- see writeAutosaveSketchInfo/loadAutosaveSketchInfo).
+        // Falling back to null here would leave real recovered content
+        // showing as "untitled sketch" AND excluded from the debounced
+        // autosave effect's own library-write gating below (it requires
+        // currentSketch.kind === 'library'). Give it a real name instead,
+        // same as the fresh-start branch further down.
+        setCurrentSketch(
+          sketchJson
+            ? (JSON.parse(sketchJson) as CurrentSketch)
+            : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
+        )
         void window.rifffApi.clearAutosave()
         return
       }
