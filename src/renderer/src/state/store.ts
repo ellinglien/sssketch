@@ -1241,6 +1241,14 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'ADD_STEM_TO_RIFFF': {
       const rifff = state.rifffs[action.groupId]
+      // Defense-in-depth: a caller can legitimately race a dispatch against
+      // a groupId that's already gone by the time this reducer runs (see
+      // lockInGatedRecording's stale-closure race in
+      // useGatedRecordingControls.ts -- fixed there by re-reading live
+      // state before dispatching, but this guard means ANY future caller
+      // mistake, not just that one, can't corrupt the state tree by
+      // spreading `undefined`). No-op rather than throw.
+      if (!rifff) return state
       return {
         ...state,
         rifffs: {

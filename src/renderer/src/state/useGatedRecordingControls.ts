@@ -1,4 +1,4 @@
-import { useAppState, useDispatch, usePlaying } from './StoreContext'
+import { getStateSnapshot, useAppState, useDispatch, usePlaying } from './StoreContext'
 import { stopActivePreview } from '../audio/previewLoop'
 import type { LoopRegion } from './store'
 
@@ -161,11 +161,34 @@ export function useGatedRecordingControls(): {
             targetRifff.stems.map((s) => s.slot)
           )
           if (stem) {
-            dispatch({
-              type: 'ADD_STEM_TO_RIFFF',
-              groupId: state.gatedRecordingTargetGroupId,
-              stem
-            })
+            // importRecordedStem above is a real async round-trip -- the
+            // target rifff can be deleted/ungrouped WHILE it's in flight
+            // (store.ts's own DELETE_RIFFFS/UNGROUP cases clear
+            // gatedRecordingTargetGroupId live when that happens). This
+            // hook's own `state` is a frozen closure captured at render
+            // time, so it would never see that change; dispatching against
+            // it here would hand ADD_STEM_TO_RIFFF a groupId the live
+            // reducer no longer has. Re-read the CURRENT state via
+            // getStateSnapshot() right before dispatching so this check
+            // reflects reality at the moment it matters, not the moment
+            // this function started.
+            const liveState = getStateSnapshot()
+            const liveTargetGroupId = liveState.gatedRecordingTargetGroupId
+            if (liveTargetGroupId && liveState.rifffs[liveTargetGroupId]) {
+              dispatch({
+                type: 'ADD_STEM_TO_RIFFF',
+                groupId: liveTargetGroupId,
+                stem
+              })
+            } else {
+              // Mirrors the fallback below -- the engine has already
+              // committed the take to disk (result.path) and
+              // importRecordedStem already built the stem, but the target
+              // rifff vanished while we were awaiting it. Surfacing this
+              // rather than silently dropping the take is the same
+              // silent-take-loss concern this whole fallback exists for.
+              window.alert("Couldn't attach the recorded take: the target rifff no longer exists.")
+            }
           }
         } else {
           // The engine has already committed a real take to disk at

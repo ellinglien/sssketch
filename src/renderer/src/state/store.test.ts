@@ -1742,6 +1742,32 @@ describe('reducer', () => {
       state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
       expect(state.rifffs.r1.barLength).toBe(8)
     })
+
+    it('is a no-op when groupId refers to a rifff that no longer exists', () => {
+      // Guards the stale-closure race documented in
+      // useGatedRecordingControls.ts's lockInGatedRecording: a rifff can be
+      // deleted/ungrouped while a gated-recording take is still in flight,
+      // so this reducer case must not crash by spreading `undefined` when
+      // dispatched against a groupId that's already gone.
+      const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'take',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 4,
+        barLength: 4,
+        recordedInApp: true
+      }
+      const result = reducer(state, {
+        type: 'ADD_STEM_TO_RIFFF',
+        groupId: 'does-not-exist',
+        stem: newStem
+      })
+      expect(result).toBe(state)
+      expect(result.rifffs['does-not-exist']).toBeUndefined()
+    })
   })
 
   describe('bus assignment', () => {
