@@ -457,7 +457,14 @@ export function SketchStrip(): React.JSX.Element {
             />
             {/* How many bars this tile plays before the sequence advances —
                 always shown, not just when trimmed, so the whole sketch's
-                pacing is readable at a glance. */}
+                pacing is readable at a glance. Rounded for DISPLAY ONLY —
+                displayBars/bars stay full-precision everywhere else in this
+                component (isCurrent's playback-window check, the scrub dot's
+                fraction/angle math), since a rifff with a recently-attached
+                recorded stem can carry real-world timing floating-point
+                noise around its intended bar count (e.g.
+                16.000003184020517 instead of 16); shown raw, that reads as a
+                garbled string of digits at this font size. */}
             <span
               style={{
                 position: 'absolute',
@@ -470,7 +477,7 @@ export function SketchStrip(): React.JSX.Element {
                 pointerEvents: 'none'
               }}
             >
-              {displayBars}
+              {Math.round(displayBars)}
             </span>
             {isCurrent && (
               <svg
