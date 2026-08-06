@@ -383,7 +383,7 @@ function ChannelRowImpl({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              setChainPanelOpen(true)
+              setChainPanelOpen((open) => !open)
             }}
             aria-label={`channel ${channelId} plugin chain`}
             title="channel plugin chain"
