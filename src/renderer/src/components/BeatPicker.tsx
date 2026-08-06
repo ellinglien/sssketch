@@ -9,7 +9,7 @@ import { applyLoopMicroFade } from '../audio/microFade'
 import { buildMetronomeBuffer } from '../audio/metronome'
 import { SNAP_DIVS } from '../state/store'
 import { stemColorVar } from '../theme/typeColor'
-import type { Stem } from '@shared/types'
+import { stemKey, type Stem } from '@shared/types'
 import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
 import { computePitchContour } from '@shared/pitchContour'
 import { octaveGridlines } from '@shared/noteNames'
@@ -646,7 +646,12 @@ export function BeatPicker({
       source.loopStart = 0
       source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
-      gainNode.gain.value = gain
+      // Same per-stem volume multiplier Shelf.tsx's tile preview already
+      // applies (state.vol[stemKey(...)] ?? 1) — without this, a rifff
+      // whose stems have been turned up/down from their default volume
+      // sounded different here than everywhere else, since this preview
+      // never read the project's own committed per-stem volume at all.
+      gainNode.gain.value = gain * (state.vol[stemKey(rifff.groupId, s.slot)] ?? 1)
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
       source.start(0)
@@ -704,7 +709,9 @@ export function BeatPicker({
       source.loopStart = 0
       source.loopEnd = loopEndSec
       const gainNode = ctx.createGain()
-      gainNode.gain.value = gain
+      // Same per-stem volume multiplier as toggleFreePlay above (and
+      // Shelf.tsx's tile preview) — see its comment.
+      gainNode.gain.value = gain * (state.vol[stemKey(rifff.groupId, s.slot)] ?? 1)
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
       source.start(0)
