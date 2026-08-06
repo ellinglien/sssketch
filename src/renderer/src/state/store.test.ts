@@ -1656,6 +1656,58 @@ describe('reducer', () => {
     })
   })
 
+  describe('ADD_STEM_TO_RIFFF', () => {
+    it("appends the stem to the rifff's own stems array", () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'groovy sparrow 1:00:00 PM',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 4,
+        barLength: 4,
+        recordedInApp: true
+      }
+      state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
+      expect(state.rifffs.r1.stems).toHaveLength(3)
+      expect(state.rifffs.r1.stems[2]).toEqual(newStem)
+    })
+
+    it("extends rifff.barLength to the new stem's barLength when it's longer", () => {
+      // makeRifff()'s own barLength is 8 (from its own stems, slot 1's barLength).
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'take',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 40,
+        barLength: 16,
+        recordedInApp: true
+      }
+      state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
+      expect(state.rifffs.r1.barLength).toBe(16)
+    })
+
+    it('leaves rifff.barLength unchanged when the new stem is shorter', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'take',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 2,
+        barLength: 2,
+        recordedInApp: true
+      }
+      state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
+      expect(state.rifffs.r1.barLength).toBe(8)
+    })
+  })
+
   describe('bus assignment', () => {
     it("ASSIGN_TO_BUS sets a stem's bus", () => {
       const state = reducer(initialState, {

@@ -390,6 +390,7 @@ export type Action =
   | { type: 'SET_GATED_RECORDING_ENABLED'; enabled: boolean }
   | { type: 'SET_GATED_RECORDING_CHANNEL'; channelId: string | null }
   | { type: 'SET_GATED_RECORDING_TARGET'; groupId: string | null }
+  | { type: 'ADD_STEM_TO_RIFFF'; groupId: string; stem: Rifff['stems'][number] }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
@@ -1219,6 +1220,24 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_GATED_RECORDING_TARGET':
       return { ...state, gatedRecordingTargetGroupId: action.groupId }
+
+    case 'ADD_STEM_TO_RIFFF': {
+      const rifff = state.rifffs[action.groupId]
+      return {
+        ...state,
+        rifffs: {
+          ...state.rifffs,
+          [action.groupId]: {
+            ...rifff,
+            stems: [...rifff.stems, action.stem],
+            // Mirrors buildRifff.ts's own "a rifff's own barLength is the
+            // max across its stems" convention -- only extends, never
+            // shrinks (a shorter new stem doesn't truncate its siblings).
+            barLength: Math.max(rifff.barLength, action.stem.barLength)
+          }
+        }
+      }
+    }
 
     case 'SET_AVAILABLE_INPUT_DEVICES':
       return { ...state, availableInputDevices: action.devices }
