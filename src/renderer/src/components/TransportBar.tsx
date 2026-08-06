@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAppState, useDispatch, useHistory, usePos, usePlaying } from '../state/StoreContext'
+import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { SNAP_DIVS } from '../state/store'
 import { nextArrangerMode, isSketchEligible } from '../state/selectors'
@@ -9,7 +9,6 @@ import { MasterChainPanel } from './MasterChainPanel'
 export function TransportBar(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
-  const history = useHistory()
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
@@ -234,7 +233,7 @@ export function TransportBar(): React.JSX.Element {
           color: masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        master
+        fx on main
       </button>
       {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
@@ -278,43 +277,6 @@ export function TransportBar(): React.JSX.Element {
       >
         click
       </button>
-
-      <div style={{ display: 'flex', gap: 4 }}>
-        <button
-          onClick={history.undo}
-          disabled={!history.canUndo}
-          aria-label="Undo"
-          title="Undo (Cmd+Z)"
-          style={{
-            width: 22,
-            height: 22,
-            borderRadius: 0,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: history.canUndo ? 'var(--ra-text)' : 'var(--ra-text-4)',
-            fontSize: 11
-          }}
-        >
-          ↶
-        </button>
-        <button
-          onClick={history.redo}
-          disabled={!history.canRedo}
-          aria-label="Redo"
-          title="Redo (Cmd+Shift+Z)"
-          style={{
-            width: 22,
-            height: 22,
-            borderRadius: 0,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: history.canRedo ? 'var(--ra-text)' : 'var(--ra-text-4)',
-            fontSize: 11
-          }}
-        >
-          ↷
-        </button>
-      </div>
     </div>
   )
 }
