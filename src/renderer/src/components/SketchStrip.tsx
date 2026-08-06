@@ -198,6 +198,20 @@ export function SketchStrip(): React.JSX.Element {
   // the next locked-in take attaches as a new stem -- see
   // useGatedRecordingControls' targetRifffForRecording and
   // docs/superpowers/specs/2026-08-06-rifff-recording-design.md.
+  // Unlike RifffBlockRow.tsx's own onClick (SELECT + TOGGLE_EXPAND), this
+  // double-click's two constituent single clicks each also fire
+  // handleTileClick above, and that one is NOT a no-op: on a stopped tile
+  // it dispatches SET_POS to the tile's start and then PLAY, so
+  // double-clicking a stopped tile to target it for recording also starts
+  // playback as a side effect (and double-clicking a different tile while
+  // already playing yanks the transport to it, same as a single click
+  // would). Treated as acceptable, not a bug -- targetRifffForRecording
+  // never turns gatedRecordingEnabled ON (only off, when re-targeting), so
+  // there's no risk of this accidentally starting a real capture, and
+  // enableGatedRecording's own auto-play (see its doc comment above) exists
+  // for the identical reason: gated recording only ever captures while the
+  // transport is actually moving, so getting it moving here too is
+  // convergent with that, not accidental.
   function handleTileDoubleClick(e: React.MouseEvent, rifff: Rifff): void {
     e.stopPropagation()
     const startBar = rifff.startBar ?? 0
