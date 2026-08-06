@@ -633,7 +633,7 @@ function ProjectMenu({
       </button>
       {currentSketch !== null && currentSketch.kind === 'library' && (
         <button onClick={handleDuplicateAsNewVersion} style={buttonStyle}>
-          duplicate
+          save a copy
         </button>
       )}
       <button
