@@ -764,7 +764,16 @@ export function reducer(state: AppState, action: Action): AppState {
         channelOf,
         channelOrder,
         channelPlugins,
-        sel: state.sel && ids.has(state.sel) ? null : state.sel
+        sel: state.sel && ids.has(state.sel) ? null : state.sel,
+        // Deleting the rifff a gated recording is currently targeted at
+        // (double-click path, see useGatedRecordingControls.ts) would
+        // otherwise leave gatedRecordingTargetGroupId dangling -- a
+        // subsequent lock-in would silently drop the captured take. Clear
+        // it proactively so that can't happen.
+        gatedRecordingTargetGroupId:
+          state.gatedRecordingTargetGroupId && ids.has(state.gatedRecordingTargetGroupId)
+            ? null
+            : state.gatedRecordingTargetGroupId
       }
     }
 
@@ -1064,7 +1073,16 @@ export function reducer(state: AppState, action: Action): AppState {
         fadeOut,
         stretch,
         channelOf,
-        sel: newGroupIds[0] ?? null
+        sel: newGroupIds[0] ?? null,
+        // Ungrouping the rifff a gated recording is currently targeted at
+        // (double-click path, see useGatedRecordingControls.ts) would
+        // otherwise leave gatedRecordingTargetGroupId dangling -- a
+        // subsequent lock-in would silently drop the captured take. Clear
+        // it proactively so that can't happen.
+        gatedRecordingTargetGroupId:
+          state.gatedRecordingTargetGroupId === action.groupId
+            ? null
+            : state.gatedRecordingTargetGroupId
       }
     }
 

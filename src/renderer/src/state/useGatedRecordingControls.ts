@@ -167,6 +167,16 @@ export function useGatedRecordingControls(): {
               stem
             })
           }
+        } else {
+          // The engine has already committed a real take to disk at
+          // result.path by this point regardless -- store.ts's own
+          // UNGROUP/DELETE_RIFFFS cases clear gatedRecordingTargetGroupId
+          // proactively when the target rifff goes away, so this should be
+          // rare, but it's still reachable (e.g. loopBars somehow
+          // undefined) and silently dropping the take here would be exactly
+          // the kind of silent take-loss confirmLockInIfRecording above was
+          // built to avoid.
+          window.alert("Couldn't attach the recorded take: the target rifff no longer exists.")
         }
         return
       }

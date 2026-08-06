@@ -340,6 +340,24 @@ describe('reducer', () => {
       state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1', 'r2'] })
       expect(state.rifffs).toEqual({})
     })
+
+    it('clears gatedRecordingTargetGroupId when the targeted rifff is among those deleted', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+      expect(state.gatedRecordingTargetGroupId).toBeNull()
+    })
+
+    it('leaves gatedRecordingTargetGroupId untouched when a different rifff is deleted', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+      state = reducer(state, { type: 'DELETE_RIFFFS', groupIds: ['r2'] })
+      expect(state.gatedRecordingTargetGroupId).toBe('r1')
+    })
   })
 
   it('applying a bake repoints every stem at its baked path and resets offsets to 0', () => {
@@ -847,6 +865,24 @@ describe('reducer', () => {
       expect(state.off.r1).toBeUndefined()
       expect(state.stretch.r1).toBeUndefined()
       expect(state.channelOf.r1).toBeUndefined()
+    })
+
+    it('clears gatedRecordingTargetGroupId when the targeted rifff is the one being ungrouped', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+      expect(state.gatedRecordingTargetGroupId).toBeNull()
+    })
+
+    it('leaves gatedRecordingTargetGroupId untouched when a different rifff is ungrouped', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r2' })
+      })
+      state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r2' })
+      expect(state.gatedRecordingTargetGroupId).toBe('r1')
     })
   })
 
