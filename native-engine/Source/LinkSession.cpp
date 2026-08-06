@@ -9,7 +9,15 @@ namespace sssketch
         constexpr double kTempoEpsilon = 0.001;
     }
 
-    LinkSession::LinkSession(double initialBpm) : link(initialBpm), lastKnownSessionTempo(initialBpm) {}
+    LinkSession::LinkSession(double initialBpm) : link(initialBpm), lastKnownSessionTempo(initialBpm)
+    {
+        // ableton::Link's own documented default is DISABLED -- sssketch wants
+        // Link on from the moment the engine starts, rather than requiring a
+        // manual per-session toggle in the renderer's Transport bar, so enable
+        // it here, before any renderer-driven set-link-enabled IPC call could
+        // otherwise be the first thing to flip it on.
+        link.enable(true);
+    }
 
     void LinkSession::syncTempo(double sssketchBpm)
     {

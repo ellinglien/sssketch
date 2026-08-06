@@ -22,10 +22,13 @@ namespace sssketch
 
         void runTest() override
         {
-            beginTest("starts disabled, per ableton::Link's own documented default");
+            beginTest("starts enabled by default -- ableton::Link's own documented "
+                      "default is disabled, but sssketch's LinkSession deliberately "
+                      "enables it at construction so Link is on from engine startup "
+                      "without requiring a manual per-session toggle");
             {
                 LinkSession session(120.0);
-                expect(!session.isEnabled());
+                expect(session.isEnabled());
             }
 
             beginTest("setEnabled toggles isEnabled()");
@@ -49,6 +52,7 @@ namespace sssketch
                       "stays at whatever it was constructed with");
             {
                 LinkSession session(120.0);
+                session.setEnabled(false); // sessions now start enabled by default
                 session.syncTempo(140.0);
                 expectWithinAbsoluteError(session.sessionTempo(), 120.0, 0.01);
             }
@@ -93,6 +97,7 @@ namespace sssketch
             beginTest("pushTempoNow is a no-op while disabled");
             {
                 LinkSession session(120.0);
+                session.setEnabled(false); // sessions now start enabled by default
                 session.pushTempoNow(140.0);
                 expectWithinAbsoluteError(session.sessionTempo(), 120.0, 0.01);
             }
