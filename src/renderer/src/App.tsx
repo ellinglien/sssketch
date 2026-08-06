@@ -43,6 +43,7 @@ import { FrameScaleProvider, useFrameScale, toLogicalX } from './state/FrameScal
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { markManualSeek } from './state/manualSeek'
+import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
   loopLengthBars,
   pasteRifffAction,
@@ -701,6 +702,13 @@ function Frame(): React.JSX.Element {
   const fetchingInputDevicesRef = useRef(false)
   const history = useHistory()
   const playing = usePlaying()
+  const {
+    enableGatedRecording,
+    disableGatedRecording,
+    lockInGatedRecording,
+    confirmLockInIfRecording,
+    handleStop
+  } = useGatedRecordingControls()
   const ppb = useZoom()
   // Lets openClipMenu below read the LATEST state at call time (a context
   // menu is a discrete, rare user action, not a hot path) without closing
