@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { initialState, reducer, type AppState } from './store'
-import type { Rifff } from '@shared/types'
+import { stemKey, type Rifff } from '@shared/types'
+import { sqrtGain } from '@shared/mixGain'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
   return {
@@ -1767,6 +1768,46 @@ describe('reducer', () => {
       })
       expect(result).toBe(state)
       expect(result.rifffs['does-not-exist']).toBeUndefined()
+    })
+
+    it("seeds the new stem's vol with headroom-scaled gain instead of leaving it at unity", () => {
+      // makeRifff() has 2 pre-existing stems, so the new stem joins a
+      // 3-stem mix -- it should be seeded at sqrtGain(3), matching what
+      // ADD_TO_SHELF would have used had this stem been part of the
+      // original import, not left to default to unity gain (the bug).
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'groovy sparrow 1:00:00 PM',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 4,
+        barLength: 4,
+        recordedInApp: true
+      }
+      state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
+      expect(state.vol[stemKey('r1', 7)]).toBe(sqrtGain(3))
+    })
+
+    it("leaves existing stems' vol entries untouched, including user-adjusted ones", () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      // Simulate a user having already adjusted one stem's volume away from
+      // its original import-time seed.
+      state = { ...state, vol: { ...state.vol, [stemKey('r1', 1)]: 0.91 } }
+      const newStem: Rifff['stems'][number] = {
+        slot: 7,
+        author: '',
+        name: 'take',
+        type: 'audioIn',
+        path: '/x/take.wav',
+        durationSec: 4,
+        barLength: 4,
+        recordedInApp: true
+      }
+      state = reducer(state, { type: 'ADD_STEM_TO_RIFFF', groupId: 'r1', stem: newStem })
+      expect(state.vol[stemKey('r1', 1)]).toBe(0.91)
+      expect(state.vol[stemKey('r1', 6)]).toBe(sqrtGain(2))
     })
   })
 

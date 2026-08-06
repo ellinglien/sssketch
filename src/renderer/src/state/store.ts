@@ -1249,6 +1249,18 @@ export function reducer(state: AppState, action: Action): AppState {
       // mistake, not just that one, can't corrupt the state tree by
       // spreading `undefined`). No-op rather than throw.
       if (!rifff) return state
+      // Seed the new stem's own vol entry so it doesn't sum in at unity
+      // gain against siblings that are already headroom-scaled (the bug:
+      // a stem added here previously fell back to buildEngineProject.ts's
+      // default of 1 when no vol entry existed, clipping the mix). Scale
+      // by the rifff's total stem count INCLUDING the new one -- the same
+      // ballpark ADD_TO_SHELF would have used had this stem been part of
+      // the original import. Existing stems' entries are never touched:
+      // some may already be user-adjusted away from their original seed,
+      // and re-normalizing everyone else's volume is a bigger behavior
+      // change than this fix is about.
+      const key = stemKey(action.groupId, action.stem.slot)
+      const vol = { ...state.vol, [key]: sqrtGain(rifff.stems.length + 1) }
       return {
         ...state,
         rifffs: {
@@ -1261,7 +1273,8 @@ export function reducer(state: AppState, action: Action): AppState {
             // shrinks (a shorter new stem doesn't truncate its siblings).
             barLength: Math.max(rifff.barLength, action.stem.barLength)
           }
-        }
+        },
+        vol
       }
     }
 
