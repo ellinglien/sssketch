@@ -4,7 +4,8 @@ import { join, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { readWavHeaderBytes, libraryRoot } from './importRifff'
 import { readWavDurationSeconds } from '../shared/wavDuration'
-import type { Rifff } from '@shared/types'
+import { randomAdjectiveNoun } from './projectFile'
+import type { Rifff, Stem } from '@shared/types'
 
 interface CopiedAudioFile {
   groupId: string
@@ -92,33 +93,54 @@ export function importOneShot(path: string): Rifff | null {
 
 /**
  * Imports a recorded take (see docs/superpowers/specs/2026-08-03-loop-recording-design.md)
- * -- shares importOneShot's copyIntoLibrary step above and, per feedback,
- * behaves exactly like a dragged-in one-shot sample: plays the actual
- * recording once from wherever it lands, trimmable via the same start/end
- * handles a one-shot gets (see CollapsedRifffRow.tsx/oneShotResize.ts),
- * rather than stretched/tiled to fit a bar grid. An earlier version derived
- * barLength from the take's own real duration and left oneShot unset so a
- * take would tile/stretch/loop like any other multi-stem rifff -- that's
- * gone now; barLength is cosmetic (1, matching importOneShot's own
- * convention) since the native engine ignores bpm/barLength for tiling/
- * resampling purposes whenever a stem's oneShot is set (see Stem's own doc
- * comment).
+ * -- shares importOneShot's copyIntoLibrary step above. Two distinct shapes,
+ * selected by whether loopBars is passed:
  *
- * bpm is still the project's real bpm at record time, unlike importOneShot's
- * hardcoded 120 -- purely accurate metadata (Inspector display etc.),
- * nothing reads it for playback once oneShot is set.
+ * - Manual arm/disarm takes (ChannelRow.tsx's own commit flow, loopBars
+ *   omitted) behave exactly like a dragged-in one-shot sample: play the
+ *   actual recording once from wherever it lands, trimmable via the same
+ *   start/end handles a one-shot gets (see CollapsedRifffRow.tsx/
+ *   oneShotResize.ts), rather than stretched/tiled to fit a bar grid --
+ *   this capture's own real duration is arbitrary (arm-to-disarm, not tied
+ *   to any loop length), so tiling it would be meaningless. barLength is
+ *   cosmetic (1) since the native engine ignores bpm/barLength for tiling/
+ *   resampling purposes whenever a stem's oneShot is set (see Stem's own
+ *   doc comment).
+ * - Gated-recording takes (App.tsx's lockInGatedRecording, loopBars passed
+ *   through from the selected loop region's own length) are, per direct
+ *   feedback ("because the rec clips are now loops, they should behave as
+ *   other imported rifffs, as loops"), captured to always span EXACTLY
+ *   that many bars (see GatedLoopRecorder's own fixed-buffer design and its
+ *   loop-seam crossfade blend) -- so unlike a manual take, this one SHOULD
+ *   tile/stretch/replicate via handles like any other imported rifff, not
+ *   play once and stop. oneShot stays unset and barLength is the real
+ *   loopBars value, not the arbitrary-capture placeholder above.
+ *
+ * bpm is the project's real bpm at record time either way, unlike
+ * importOneShot's hardcoded 120 -- for the manual/oneShot case this is
+ * purely accurate metadata (nothing reads it for playback once oneShot is
+ * set); for the gated/tiled case it's load-bearing, same as any other
+ * tiled rifff's own bpm.
+ *
+ * name is a random "adjective noun" pair (see projectFile.ts's
+ * randomAdjectiveNoun, shared with this app's other auto-naming) followed
+ * by the record time -- e.g. "groovy sparrow 2:14:07 PM" -- giving the
+ * personality of this app's other auto-generated names while still telling
+ * two takes recorded close together apart at a glance, per direct feedback
+ * asking for the timestamp back alongside the random name.
  */
-export function importRecordedTake(path: string, bpm: number): Rifff | null {
+export function importRecordedTake(path: string, bpm: number, loopBars?: number): Rifff | null {
   const copied = copyIntoLibrary(path, 'importRecordedTake')
   if (!copied) return null
   const { groupId, destPath, durationSec } = copied
 
-  const displayName = `recording ${new Date().toLocaleTimeString()}`
+  const displayName = `${randomAdjectiveNoun()} ${new Date().toLocaleTimeString()}`
+  const barLength = loopBars ?? 1
   return {
     groupId,
     name: displayName,
     bpm,
-    barLength: 1,
+    barLength,
     folderPath: path,
     stems: [
       {
@@ -128,10 +150,79 @@ export function importRecordedTake(path: string, bpm: number): Rifff | null {
         type: 'audioIn',
         path: destPath,
         durationSec,
-        barLength: 1,
-        oneShot: true,
+        barLength,
+        oneShot: loopBars === undefined ? true : undefined,
         recordedInApp: true
       }
     ]
+  }
+}
+
+/**
+ * Imports a gated-recording take as a STEM to attach to an existing rifff
+ * (App.tsx's useGatedRecordingControls, the double-click-a-rifff path --
+ * see docs/superpowers/specs/2026-08-06-rifff-recording-design.md), rather
+ * than a whole new Rifff (that's importRecordedTake's job, unchanged, for
+ * the manual-Ruler-drag / standalone-channel path). Shares
+ * copyIntoLibrary's own "copy the WAV into the library, measure its real
+ * duration" step.
+ *
+ * barLength is NOT loopBars directly -- a rifff's own stems all stretch
+ * together by ONE shared ratio (state.bpm / rifff.bpm), but this stem was
+ * captured live at the CURRENT project tempo, not at rifffBpm. Naively
+ * using loopBars would double-stretch it whenever rifffBpm differs from
+ * the live tempo. Instead, barLength is chosen so this stem's own "native
+ * tempo" (durationSec/barLength-derived, see buildAlsXml.ts's
+ * nativeBpmFor) resolves to EXACTLY rifffBpm -- the rifff's shared stretch
+ * ratio then maps that back to the tempo it was actually captured at,
+ * correctly, regardless of how far rifffBpm has drifted from the live
+ * project tempo:
+ *
+ *   durationSec = actual captured duration (loopBars * secPerBar at record time)
+ *   barLength   = durationSec * rifffBpm / 240
+ *
+ * When rifffBpm equals the live capture tempo, this reduces to exactly
+ * barLength = loopBars (secPerBar = 240/bpm, so durationSec =
+ * loopBars*240/bpm, and durationSec*bpm/240 = loopBars) -- i.e. no
+ * observable compensation in the common case where the rifff's own tempo
+ * already matches.
+ *
+ * existingSlots is every OTHER stem's slot already on the target rifff --
+ * this stem's own slot is one past the highest of those (or 0 if the
+ * rifff has none), just enough to avoid a collision; no attempt to
+ * reproduce real Endlesss instrument-slot semantics.
+ *
+ * loopBars (the caller's intended bar count) is deliberately unread here
+ * (renamed with a leading underscore to satisfy this project's
+ * noUnusedParameters) -- durationSec, measured straight off the copied
+ * WAV by copyIntoLibrary, already reflects the real captured length that
+ * loopBars was supposed to describe, and the barLength formula above only
+ * needs durationSec + rifffBpm. Kept as a parameter anyway so the call
+ * site's intent ("this many bars, at rifffBpm") stays self-documenting
+ * and to mirror importRecordedTake's own signature.
+ */
+export function importRecordedStem(
+  path: string,
+  rifffBpm: number,
+  _loopBars: number,
+  existingSlots: number[] = []
+): Stem | null {
+  const copied = copyIntoLibrary(path, 'importRecordedStem')
+  if (!copied) return null
+  const { destPath, durationSec } = copied
+
+  const barLength = (durationSec * rifffBpm) / 240
+  const slot = existingSlots.length === 0 ? 0 : Math.max(...existingSlots) + 1
+  const name = `${randomAdjectiveNoun()} ${new Date().toLocaleTimeString()}`
+
+  return {
+    slot,
+    author: '',
+    name,
+    type: 'audioIn',
+    path: destPath,
+    durationSec,
+    barLength,
+    recordedInApp: true
   }
 }

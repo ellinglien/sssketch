@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { encodeWavPCM16 } from '@shared/encodeWav'
-import { importOneShot, importRecordedTake } from './importOneShot'
+import { importOneShot, importRecordedTake, importRecordedStem } from './importOneShot'
 
 function writeTestWav(dir: string, name: string, seconds: number, sampleRate = 44100): string {
   const numSamples = Math.round(seconds * sampleRate)
@@ -49,7 +49,7 @@ describe('importOneShot', () => {
 })
 
 describe('importRecordedTake', () => {
-  it('imports a recorded WAV as a one-shot stem, behaving like a dragged-in sample rather than tiling/stretching to a bar grid', () => {
+  it('imports a manual arm/disarm take (no loopBars) as a one-shot stem, behaving like a dragged-in sample rather than tiling/stretching to a bar grid', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
     try {
       const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
@@ -69,7 +69,107 @@ describe('importRecordedTake', () => {
     }
   })
 
+  it('imports a gated-recording take (loopBars passed) as a tiled/looped rifff, not a one-shot -- it should behave like any other imported rifff, replicating via handles', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
+      const result = importRecordedTake(testWavPath, 120, 4)
+      expect(result).not.toBeNull()
+      expect(result!.bpm).toBe(120)
+      expect(result!.barLength).toBe(4)
+      expect(result!.stems).toHaveLength(1)
+      expect(result!.stems[0].oneShot).toBeUndefined()
+      expect(result!.stems[0].barLength).toBe(4)
+      expect(result!.stems[0].type).toBe('audioIn')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('names every take a random "adjective noun" pair followed by the record time', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedtake-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 1.0)
+      const result = importRecordedTake(testWavPath, 120)
+      expect(result!.name).toMatch(/^[a-z]+ [a-z]+ .+$/)
+      expect(result!.stems[0].name).toBe(result!.name)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('returns null for a non-wav path', () => {
     expect(importRecordedTake('/tmp/not-a-wav.mp3', 120)).toBeNull()
+  })
+})
+
+describe('importRecordedStem', () => {
+  it('returns a Stem (not a Rifff) with the compensated barLength when rifff.bpm differs from the live tempo', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      // 4 bars at 120bpm (2s/bar) = 8 real seconds captured.
+      const testWavPath = writeTestWav(dir, 'take.wav', 8.0)
+      // rifff.bpm=150 (the rifff's own fixed tempo), captured at 4 bars.
+      const stem = importRecordedStem(testWavPath, 150, 4)
+      expect(stem).not.toBeNull()
+      // barLength = durationSec * rifff.bpm / 240 = 8 * 150 / 240 = 5.
+      expect(stem!.barLength).toBeCloseTo(5, 5)
+      expect(stem!.durationSec).toBeCloseTo(8.0, 1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('is a no-op compensation (barLength === loopBars) when rifff.bpm equals the capture tempo', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      // 4 bars at 120bpm (2s/bar) = 8 real seconds -- captured AT rifff.bpm
+      // itself (120), so compensation should reduce to barLength=loopBars.
+      const testWavPath = writeTestWav(dir, 'take.wav', 8.0)
+      const stem = importRecordedStem(testWavPath, 120, 4)
+      expect(stem!.barLength).toBeCloseTo(4, 5)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('assigns a slot one past the highest existing slot', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
+      const stem = importRecordedStem(testWavPath, 120, 4, [1, 6, 3])
+      expect(stem!.slot).toBe(7)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('assigns slot 0 when the rifff has no existing stems', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
+      const stem = importRecordedStem(testWavPath, 120, 4, [])
+      expect(stem!.slot).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('names the stem a random "adjective noun" pair followed by the record time, type audioIn, recordedInApp, no oneShot', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      const testWavPath = writeTestWav(dir, 'take.wav', 4.0)
+      const stem = importRecordedStem(testWavPath, 120, 4, [])
+      expect(stem!.name).toMatch(/^[a-z]+ [a-z]+ .+$/)
+      expect(stem!.type).toBe('audioIn')
+      expect(stem!.recordedInApp).toBe(true)
+      expect(stem!.oneShot).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a non-wav path', () => {
+    expect(importRecordedStem('/tmp/not-a-wav.mp3', 120, 4, [])).toBeNull()
   })
 })
