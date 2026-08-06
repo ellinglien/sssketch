@@ -9,7 +9,6 @@ import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
 import { useFrameScale } from '../state/FrameScaleContext'
-import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 
 export const NAME_BAR_HEIGHT = 18
 
@@ -33,7 +32,6 @@ export function RifffBlockRow({
   const isGatedRecordingTarget = useAppSelector((s) => s.gatedRecordingTargetGroupId === groupId)
   const gatedRecordingEnabled = useAppSelector((s) => s.gatedRecordingEnabled)
   const playing = usePlaying()
-  const { targetRifffForRecording } = useGatedRecordingControls()
   const expandedFlag = useAppSelector((s) => !!s.exp[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
   const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
@@ -101,31 +99,34 @@ export function RifffBlockRow({
           dispatch({ type: 'TOGGLE_EXPAND', groupId })
         }}
         onDoubleClick={(e) => {
-          // Targets THIS rifff for gated recording -- sets the project's
-          // loop region to exactly this clip's CURRENT rendered span
-          // (derived straight from geo's own leftPx/widthPx, converted
-          // back to bars via ppb, so it reflects however the clip is
-          // ACTUALLY sized right now: a playedBars resize, a left-crop
+          // Sets the project's loop region to exactly this clip's CURRENT
+          // rendered span (derived straight from geo's own leftPx/widthPx,
+          // converted back to bars via ppb, so it reflects however the clip
+          // is ACTUALLY sized right now: a playedBars resize, a left-crop
           // trim, stretch on/off -- all already baked into geo by
-          // clipGeometryFromFields above) AND pins this rifff as where the
-          // NEXT locked-in take attaches as a new stem -- see
-          // useGatedRecordingControls' targetRifffForRecording and
-          // docs/superpowers/specs/2026-08-06-rifff-recording-design.md.
-          // An earlier version used rifff.barLength (the clip's intrinsic
-          // one-pass length, ignoring all of the above) and dispatched
-          // SET_LOOP_REGION directly, which per direct feedback was wrong
-          // -- "it should set it to whatever the length it is currently,
-          // not the original." Mirrors Ruler.tsx's own
+          // clipGeometryFromFields above). Mirrors Ruler.tsx's own
           // double-click-to-CLEAR-loop-region convention (same gesture,
           // opposite direction depending on where you double-click). The
           // two onClick firings each half of this double-click also
           // triggers (SELECT + TOGGLE_EXPAND, twice) are harmless — they
           // cancel out, leaving expand state unchanged and this clip
           // selected, same as a single click would.
+          //
+          // Gated-recording target-pinning (targetRifffForRecording) used to
+          // live here too -- deliberately disabled per explicit product
+          // decision after repeated attempts to fix glitchy audio in that
+          // feature. The underlying machinery
+          // (useGatedRecordingControls/store.ts/importOneShot.ts) is left
+          // fully intact for a future re-enable; this is just no longer a
+          // way to trigger it. See isGatedRecordingTarget/the purple-dot JSX
+          // below, which is also left in place, dead but harmless.
           e.stopPropagation()
           const startBar = geo.leftPx / ppb
           const lengthBars = geo.widthPx / ppb
-          void targetRifffForRecording(groupId, { startBar, endBar: startBar + lengthBars })
+          dispatch({
+            type: 'SET_LOOP_REGION',
+            region: { startBar, endBar: startBar + lengthBars }
+          })
         }}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -139,7 +140,7 @@ export function RifffBlockRow({
         }}
         title={
           (expanded ? 'click to collapse' : 'click to expand') +
-          ' · ctrl+right-click to solo · double-click to target this rifff for recording'
+          ' · ctrl+right-click to solo · double-click to loop this clip'
         }
         style={{
           position: 'absolute',

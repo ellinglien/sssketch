@@ -5,7 +5,6 @@ import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
-import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 import type { Rifff } from '@shared/types'
 
 export const TILE_SIZE = 64
@@ -29,7 +28,6 @@ export function SketchStrip(): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
-  const { targetRifffForRecording } = useGatedRecordingControls()
 
   // Sorted by startBar (not placedRifffsInOrder's own trackOrder-based row
   // order) — SEQUENCE_RIFFFS keeps the two in sync, but startBar is the
@@ -187,36 +185,6 @@ export function SketchStrip(): React.JSX.Element {
     } else {
       dispatch({ type: 'PLAY' })
     }
-  }
-
-  // Targets this tile's rifff for gated recording -- new in this component
-  // (no double-click handling existed here before). Sets the loop region
-  // to exactly this tile's own CURRENT played span (effectiveBars -- the
-  // same value already used for tile layout/glyph sizing, so it reflects a
-  // right-click-drag length adjustment just like RifffBlockRow.tsx's own
-  // double-click reflects a playedBars resize) and pins the rifff as where
-  // the next locked-in take attaches as a new stem -- see
-  // useGatedRecordingControls' targetRifffForRecording and
-  // docs/superpowers/specs/2026-08-06-rifff-recording-design.md.
-  // Unlike RifffBlockRow.tsx's own onClick (SELECT + TOGGLE_EXPAND), this
-  // double-click's two constituent single clicks each also fire
-  // handleTileClick above, and that one is NOT a no-op: on a stopped tile
-  // it dispatches SET_POS to the tile's start and then PLAY, so
-  // double-clicking a stopped tile to target it for recording also starts
-  // playback as a side effect (and double-clicking a different tile while
-  // already playing yanks the transport to it, same as a single click
-  // would). Treated as acceptable, not a bug -- targetRifffForRecording
-  // never turns gatedRecordingEnabled ON (only off, when re-targeting), so
-  // there's no risk of this accidentally starting a real capture, and
-  // enableGatedRecording's own auto-play (see its doc comment above) exists
-  // for the identical reason: gated recording only ever captures while the
-  // transport is actually moving, so getting it moving here too is
-  // convergent with that, not accidental.
-  function handleTileDoubleClick(e: React.MouseEvent, rifff: Rifff): void {
-    e.stopPropagation()
-    const startBar = rifff.startBar ?? 0
-    const lengthBars = effectiveBars(rifff)
-    void targetRifffForRecording(rifff.groupId, { startBar, endBar: startBar + lengthBars })
   }
 
   // Dragging the orbiting dot scrubs the playhead within its own rifff's
@@ -435,10 +403,9 @@ export function SketchStrip(): React.JSX.Element {
               e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
             }}
             onClick={(e) => handleTileClick(e, rifff)}
-            onDoubleClick={(e) => handleTileDoubleClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => handleBarsMouseDown(e, rifff)}
-            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · ctrl+right-click to solo · double-click to target for recording`}
+            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · ctrl+right-click to solo`}
             style={{
               order: index * 10,
               position: 'relative',
