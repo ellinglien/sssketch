@@ -4,7 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
-import { importOneShot, importRecordedTake } from './importOneShot'
+import { importOneShot, importRecordedTake, importRecordedStem } from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -184,6 +184,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number) => {
     return importRecordedTake(path, bpm)
   })
+
+  ipcMain.handle(
+    'import-recorded-stem',
+    (_event, path: string, rifffBpm: number, loopBars: number, existingSlots: number[]) => {
+      return importRecordedStem(path, rifffBpm, loopBars, existingSlots)
+    }
+  )
 
   ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
 

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Rifff, ExportedStem } from '@shared/types'
+import type { Rifff, ExportedStem, Stem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import type { PluginCatalog } from '../main/pluginCatalog'
@@ -11,6 +11,17 @@ const api = {
     ipcRenderer.invoke('import-one-shot', path),
   importRecordedTake: (path: string, bpm: number): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-recorded-take', path, bpm),
+  // See importRecordedStem's own doc comment (src/main/importOneShot.ts)
+  // for the tempo-compensation math -- rifffBpm is the TARGET rifff's own
+  // bpm (not the project's live state.bpm), existingSlots is every other
+  // stem already on that rifff (for slot-collision avoidance).
+  importRecordedStem: (
+    path: string,
+    rifffBpm: number,
+    loopBars: number,
+    existingSlots: number[]
+  ): Promise<Stem | null> =>
+    ipcRenderer.invoke('import-recorded-stem', path, rifffBpm, loopBars, existingSlots),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
