@@ -230,6 +230,16 @@ export function useGatedRecordingControls(): {
   // native capture.
   async function targetRifffForRecording(groupId: string, region: LoopRegion): Promise<void> {
     if (!region) return
+    // Re-clicking the rifff that's ALREADY the current target is a no-op
+    // refresh, not a re-target -- covers the case where the clip's own
+    // rendered geometry changed (a resize) since targeting began, per the
+    // design doc's own "Re-clicking the same target" section. Deliberately
+    // does NOT go through confirmLockInIfRecording/disable -- there's
+    // nothing to abandon, the same rifff is still the destination.
+    if (groupId === state.gatedRecordingTargetGroupId) {
+      dispatch({ type: 'SET_LOOP_REGION', region })
+      return
+    }
     if (state.gatedRecordingEnabled) {
       await confirmLockInIfRecording()
       await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0)
