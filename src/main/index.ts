@@ -628,11 +628,28 @@ app.whenReady().then(async () => {
         }
       })
     }
+    // Unsolicited push from IpcServer.cpp's own link-poll MultiTimer id --
+    // fires whenever LinkSession::checkForExternalTempoChange detects a peer
+    // changed the Link session's tempo (see LinkSession.h's own doc comment).
+    // Same "rides an engine-side timer, re-subscribe on every crash-recovery
+    // respawn" reasoning as the other subscribeTo* functions here — this one
+    // doesn't ride the SAME timer as position-update (it keeps running
+    // independent of play state), but the respawn hazard is identical:
+    // without re-subscribing here, a crash-triggered EngineClient swap would
+    // silently stop forwarding Link tempo changes to the renderer.
+    function subscribeToLinkTempoChanged(): void {
+      engine.client.on('link-tempo-changed', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-link-tempo-changed', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
     subscribeToMasterPluginLoaded()
     subscribeToChannelPluginLoaded()
     subscribeToCaptureLevelUpdates()
     subscribeToGatedRecordingUpdates()
+    subscribeToLinkTempoChanged()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
@@ -640,6 +657,7 @@ app.whenReady().then(async () => {
       subscribeToChannelPluginLoaded()
       subscribeToCaptureLevelUpdates()
       subscribeToGatedRecordingUpdates()
+      subscribeToLinkTempoChanged()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }

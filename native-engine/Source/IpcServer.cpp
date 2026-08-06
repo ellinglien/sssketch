@@ -3,6 +3,24 @@
 
 namespace sssketch
 {
+    namespace
+    {
+        // MultiTimer IDs for IpcConnection's two independent polling
+        // cadences -- see the class's own doc comment (.h) for why a
+        // single juce::Timer no longer suffices.
+        constexpr int kPositionTimerId = 0; // position-update/capture-level pushes -- ~30Hz, only while playing
+        constexpr int kLinkPollTimerId = 1; // LinkSession::checkForExternalTempoChange -- always running
+
+        // ~500ms-1s, per this feature's own design doc -- frequent enough that a
+        // peer's tempo nudge reaches Maschine/Ableton/etc. via sssketch within
+        // roughly a second, infrequent enough that a captureAppSessionState()
+        // call every tick would be wasteful (Link's own docs note it's
+        // real-time-unsafe but message-thread-cheap; still no reason to do it
+        // 30x/sec when nothing needs sub-second freshness here, unlike the
+        // playhead).
+        constexpr int kLinkPollIntervalMs = 750;
+    }
+
     // File-local helper for building the render-export-result reply — mirrors
     // how position-update's payload is built inline in timerCallback() above,
     // just factored out since it's needed both on the success and failure path.
@@ -42,11 +60,18 @@ namespace sssketch
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
         : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm())
     {
+        // Started once here, never stopped until teardown (destructor/
+        // connectionLost below) -- deliberately NOT gated by play/pause/stop
+        // like kPositionTimerId is. See LinkSession.h's own doc comment and
+        // this class's own doc comment (.h) for why external tempo detection
+        // needs to keep running independent of play state.
+        startTimer(kLinkPollTimerId, kLinkPollIntervalMs);
     }
 
     IpcConnection::~IpcConnection()
     {
-        stopTimer();
+        stopTimer(kPositionTimerId);
+        stopTimer(kLinkPollTimerId);
         detachArmedRecorderOnTeardown();
         // InterprocessConnection's destructor requires derived classes to have
         // already called disconnect() — without this, pending messages can still
@@ -99,7 +124,8 @@ namespace sssketch
     void IpcConnection::connectionLost()
     {
         juce::Logger::writeToLog("IpcConnection: client disconnected");
-        stopTimer();
+        stopTimer(kPositionTimerId);
+        stopTimer(kLinkPollTimerId);
         transport.stop();
         detachArmedRecorderOnTeardown();
     }
@@ -111,8 +137,34 @@ namespace sssketch
         sendMessage(block);
     }
 
-    void IpcConnection::timerCallback()
+    void IpcConnection::timerCallback(int timerID)
     {
+        if (timerID == kLinkPollTimerId)
+        {
+            // Unsolicited push, same "engine spontaneously tells the
+            // renderer something changed" pattern as position-update/
+            // capture-level-update/gated-recording-update below -- relayed
+            // by src/main/index.ts's subscribeToLinkTempoChanged onto
+            // 'engine-link-tempo-changed', exposed to the renderer via
+            // preload's onLinkTempoChanged, and adopted into state.bpm by
+            // StoreContext.tsx's inbound listener (kept next to that
+            // effect's own outbound state.bpm sync -- see its doc comment
+            // there for the feedback-loop analysis).
+            if (const auto changedBpm = linkSession.checkForExternalTempoChange())
+            {
+                juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+                payload->setProperty("bpm", *changedBpm);
+                juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                obj->setProperty("type", "link-tempo-changed");
+                obj->setProperty("payload", juce::var(payload.get()));
+                sendJson(juce::var(obj.get()));
+            }
+            return;
+        }
+
+        // timerID == kPositionTimerId from here on -- unchanged from before
+        // this class became a MultiTimer, see this method's own doc comment
+        // (.h) for why the split was needed.
         juce::DynamicObject::Ptr obj = new juce::DynamicObject();
         obj->setProperty("type", "position-update");
         juce::DynamicObject::Ptr payload = new juce::DynamicObject();
@@ -252,19 +304,22 @@ namespace sssketch
         {
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
             transport.play(fromPos);
-            startTimerHz(30); // position-update push rate — matches the renderer's
-                               // existing ~60fps rAF poll closely enough for a smooth
-                               // playhead without flooding the socket
+            // ~33ms (~30Hz) position-update push rate — matches the renderer's
+            // existing ~60fps rAF poll closely enough for a smooth playhead
+            // without flooding the socket. kLinkPollTimerId is untouched here
+            // -- it runs independent of play state, started once in the
+            // constructor.
+            startTimer(kPositionTimerId, 33);
         }
         else if (type == "pause")
         {
             transport.pause();
-            stopTimer();
+            stopTimer(kPositionTimerId);
         }
         else if (type == "stop")
         {
             transport.stop();
-            stopTimer();
+            stopTimer(kPositionTimerId);
         }
         else if (type == "set-position")
         {

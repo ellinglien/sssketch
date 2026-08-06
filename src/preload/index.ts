@@ -231,6 +231,18 @@ const api = {
     ipcRenderer.on('engine-restarted', listener)
     return () => ipcRenderer.removeListener('engine-restarted', listener)
   },
+  // Channel name follows the same 'engine-' prefix convention as every other
+  // engine-originated push bridged here -- main/index.ts's
+  // subscribeToLinkTempoChanged forwards IpcServer's own "link-tempo-changed"
+  // push (from LinkSession::checkForExternalTempoChange, see its doc comment)
+  // onto this renderer-facing channel. StoreContext.tsx's inbound listener
+  // (kept next to its outbound state.bpm sync effect) adopts this into
+  // state.bpm via SET_TEMPO.
+  onLinkTempoChanged: (callback: (bpm: number) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { bpm: number }): void => callback(payload.bpm)
+    ipcRenderer.on('engine-link-tempo-changed', listener)
+    return () => ipcRenderer.removeListener('engine-link-tempo-changed', listener)
+  },
   loreWarehouseAvailable: (): Promise<boolean> => ipcRenderer.invoke('lore-warehouse-available'),
   loreListJams: (filterText: string): Promise<LoreJam[]> =>
     ipcRenderer.invoke('lore-list-jams', filterText),

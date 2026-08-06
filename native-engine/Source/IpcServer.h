@@ -18,8 +18,25 @@ namespace sssketch
     /** One accepted client connection. Handles the Electron -> JUCE messages
      * documented in docs/superpowers/specs/2026-07-28-juce-audio-engine-design.md's
      * IPC protocol section (the Phase 1 subset: load-project, play, pause,
-     * stop, set-position), and pushes position-update while playing. */
-    class IpcConnection : public juce::InterprocessConnection, private juce::Timer
+     * stop, set-position), and pushes position-update while playing.
+     *
+     * private juce::MultiTimer, not plain juce::Timer -- this connection
+     * needs two independent polling cadences that DON'T share a lifecycle:
+     * the existing position-update/capture-level push (kPositionTimerId in
+     * IpcServer.cpp, started/stopped around play/pause/stop, ~30Hz) and
+     * LinkSession's own external-tempo-change poll (kLinkPollTimerId,
+     * started once in the constructor and never stopped until teardown --
+     * see LinkSession.h's own doc comment for why tempo detection must
+     * keep running independent of play state, same reasoning already
+     * established for syncTempo's own OUTBOUND push on load-project).
+     * MultiTimer still runs both on the same message thread via JUCE's
+     * existing timer machinery -- no new thread, matching this codebase's
+     * real-time-thread discipline (see this repo's own CLAUDE.md); it's
+     * the same category of thing as BridgeClient's own separate 500ms
+     * juce::Timer elsewhere in this codebase, just using JUCE's built-in
+     * multi-cadence facility instead of a second class, since both
+     * cadences now live on the same object. */
+    class IpcConnection : public juce::InterprocessConnection, private juce::MultiTimer
     {
     public:
         IpcConnection(PlaybackEngine& engine, Transport& transport, PluginChain& masterChain,
@@ -32,7 +49,10 @@ namespace sssketch
 
     private:
         void sendJson(const juce::var& payload);
-        void timerCallback() override; // pushes position-update while playing
+        // timerID is one of kPositionTimerId/kLinkPollTimerId (IpcServer.cpp) --
+        // see this class's own doc comment above for why this is a MultiTimer
+        // now instead of a single juce::Timer.
+        void timerCallback(int timerID) override;
         // Shared by the destructor and connectionLost() -- either can run
         // while a recording is still armed. See its own doc comment (.cpp)
         // for why this deliberately leaks rather than frees synchronously.
