@@ -97,7 +97,14 @@ export function Titlebar({
             alignItems: 'center',
             justifyContent: 'center',
             background: mode !== 'normal' ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-            border: `1px solid ${mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+            // Border stays the normal subtle token regardless of mode --
+            // unlike TransportBar's similarly-shaped toggle buttons (gear/
+            // tidy, metronome), this one already has TWO other signals for
+            // active state (background color AND a swapped icon glyph), so
+            // a third signal via a bright --ra-stretch-on border read as a
+            // harsh white stroke on this small icon-only button. Per direct
+            // feedback ("remove the white stroke around the sketch button").
+            border: '1px solid var(--ra-border)',
             color: mode !== 'normal' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
           }}
         >
