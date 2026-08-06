@@ -443,6 +443,20 @@ function ChannelRowImpl({
               title="remove recording channel"
               style={{
                 ...baseButtonStyle,
+                // Matches its siblings' (muteButtonStyle/soloButtonStyle/
+                // fxButtonStyle/recordButtonStyle, all above) static
+                // background/border treatment -- this button never had it
+                // (confirmed via git blame: missing since it was first added
+                // in 45610a4, not a recent regression), so it fell through to
+                // Chromium's default <button> UA chrome (a light "ButtonFace"
+                // fill with a beveled border) instead of this app's own dark
+                // theme -- a bright, out-of-place box against this near-black
+                // UI. No state-conditional variant needed here (unlike
+                // mute/solo/record, "x" has no on/off state of its own to
+                // reflect in its background/border), so this mirrors
+                // fxButtonStyle's plain static styling exactly.
+                background: 'var(--ra-bg-row-active)',
+                border: '1px solid var(--ra-border)',
                 color: 'var(--ra-text-2)',
                 cursor: togglingArm ? 'not-allowed' : 'pointer'
               }}
