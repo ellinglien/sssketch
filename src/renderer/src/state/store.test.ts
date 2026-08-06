@@ -231,10 +231,10 @@ describe('reducer', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 120 }).bpm).toBe(120)
   })
 
-  it('cycles snap index through 0..3 and wraps', () => {
+  it('cycles snap index through 0..2 and wraps', () => {
+    // SNAP_DIVS is [4, 8, 16] -- capped at 1/16 (1/32 removed, was finer
+    // than anyone needed in practice).
     let state = initialState // snapIdx starts at 2
-    state = reducer(state, { type: 'CYCLE_SNAP' })
-    expect(state.snapIdx).toBe(3)
     state = reducer(state, { type: 'CYCLE_SNAP' })
     expect(state.snapIdx).toBe(0) // wraps past the end of the array
     state = reducer(state, { type: 'CYCLE_SNAP' })
@@ -1257,7 +1257,14 @@ describe('reducer', () => {
       expect(state.mute['r2:6']).toBeUndefined()
     })
 
-    it('toggles back to fully unmuted when dispatched again with the same stemKeys', () => {
+    it('stays soloed (does NOT toggle off) when dispatched again with the same stemKeys', () => {
+      // Real bug this guards against: the cluster-labelling UI dispatches
+      // SOLO_STEMS every time a thumbnail is clicked, including clicking
+      // the SAME thumbnail again (e.g. to scrub to a different point in
+      // the same clip) -- a toggle-back-when-already-soloed design (this
+      // action's original behavior) would silently un-solo everything back
+      // to the full mix on that second identical click, reported as
+      // "clicking around... I hear everything come back."
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1268,9 +1275,9 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
       expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r1:6']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
-      expect(state.mute['r2:6']).toBe(false)
+      expect(state.mute['r1:6']).toBe(true)
+      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mute['r2:6']).toBe(true)
     })
 
     it('re-solos (does not toggle off) when dispatched for a DIFFERENT stemKeys set than the one currently soloed', () => {
@@ -1285,6 +1292,31 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r2:1'] })
       expect(state.mute['r1:1']).toBe(true)
       expect(state.mute['r2:1']).toBe(false)
+    })
+  })
+
+  describe('RESTORE_MUTE', () => {
+    it('replaces the whole mute map verbatim, undoing whatever SOLO_STEMS did since', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      // A real pre-existing mute the user had set deliberately, before any
+      // solo preview happened -- this is the exact state RESTORE_MUTE must
+      // bring back, not a blanket "unmute everything."
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r2:1' })
+      const snapshot = state.mute
+
+      state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
+      expect(state.mute).not.toEqual(snapshot)
+
+      state = reducer(state, { type: 'RESTORE_MUTE', mute: snapshot })
+      expect(state.mute).toEqual(snapshot)
+      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mute['r1:1']).toBeFalsy()
     })
   })
 
@@ -1605,6 +1637,22 @@ describe('reducer', () => {
         device: 'BlackHole 2ch'
       })
       expect(next.selectedInputDevice).toBe('BlackHole 2ch')
+    })
+  })
+
+  describe('SET_GATED_RECORDING_TARGET', () => {
+    it('sets gatedRecordingTargetGroupId', () => {
+      const state = reducer(initialState, {
+        type: 'SET_GATED_RECORDING_TARGET',
+        groupId: 'r1'
+      })
+      expect(state.gatedRecordingTargetGroupId).toBe('r1')
+    })
+
+    it('clears it back to null', () => {
+      let state = reducer(initialState, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+      state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: null })
+      expect(state.gatedRecordingTargetGroupId).toBeNull()
     })
   })
 

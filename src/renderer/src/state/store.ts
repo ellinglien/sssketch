@@ -1,7 +1,10 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 
-export const SNAP_DIVS = [4, 8, 16, 32] as const
+// Capped at 1/16 -- 1/32 existed here before but was finer than anyone
+// actually needed in practice (per direct user feedback: "it can get so
+// fine but it doesn't need to be").
+export const SNAP_DIVS = [4, 8, 16] as const
 
 // A played length of 0 would never schedule any audio (and risks a divide-
 // by-zero downstream) — unlike a stem position of 0, which is meaningful.
@@ -45,7 +48,7 @@ export type LoopRegion = { startBar: number; endBar: number } | null
 
 export interface AppState {
   bpm: number
-  snapIdx: 0 | 1 | 2 | 3
+  snapIdx: 0 | 1 | 2
   vol: Record<string, number>
   mute: Record<string, boolean>
   off: Record<string, number>
@@ -135,6 +138,16 @@ export interface AppState {
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
   inspectorCollapsed: boolean
+  /** View-only arranger overlay: when true, selectors.ts's channelsInOrder
+   * recomputes rows by packing placed rifffs onto shared tracks per bus
+   * (busOf + packIntoTracks) instead of today's one-row-per-clip layout --
+   * a preview of how the Ableton export will group things. Toggled from
+   * TransportBar. Not persisted (see serialize.ts) -- always starts off,
+   * same as every other "how I'm currently viewing this" toggle here.
+   * Editing (drag-to-move/reassign channel) is disabled while this is on
+   * -- see App.tsx's resolveDrop -- since the rows shown are computed, not
+   * real channel assignments; flip back off to edit. */
+  tidiedView: boolean
   /** The in-progress or pending-delete region selection -- null when
    * nothing is selected. `mode: 'mute'` means Delete/Backspace should mute
    * this span (it was dragged over raw/unmuted audio); `mode: 'unmute'`
@@ -194,6 +207,43 @@ export interface AppState {
    * chosen yet" (arming is disabled until something is selected). Not
    * persisted, same reasoning as availableInputDevices itself. */
   selectedInputDevice: string | null
+  /** Endlesss-style threshold-gated ("always listening") recording mode --
+   * see GatedLoopRecorder's own doc comment (native-engine) and App.tsx's
+   * \ key handler. True between successfully enabling it (requires a
+   * selected loopRegion of <=16 bars) and either explicitly disabling it
+   * (the rec dot, clicked while on) or a failed engine call -- locking in a
+   * take (\ while already on) does NOT turn this back off, so repeated \
+   * presses can grab successive takes across multiple loop passes. Purely a
+   * UI-state mirror of the engine's own armed/not-armed state, not the
+   * source of truth -- the \ handler always awaits the real engine IPC
+   * result before dispatching this. Not persisted, same "how I'm currently
+   * working" convention as armedChannelId above. */
+  gatedRecordingEnabled: boolean
+  /** Which recording channel the NEXT gated-recording lock-in will land on
+   * -- set once when gated recording is enabled (reusing an existing empty
+   * recording channel if one exists, else creating one -- see App.tsx's
+   * enableGatedRecording), then rotated to a freshly-created empty channel
+   * after each successful lock-in (see lockInGatedRecording), so it always
+   * points at whichever channel is currently "pending" a take. This is also
+   * what ChannelRow.tsx's live waveform overlay binds to -- an earlier
+   * version instead searched channelOrder for "the first recording
+   * channel," which broke the moment lock-in started minting a NEW channel
+   * per take instead of reusing one (see that task's own history): the
+   * overlay got stuck on the original, permanently-empty invariant channel
+   * forever, on the wrong row, never clearing after a commit. null while
+   * gated recording isn't enabled. Not persisted, same "how I'm currently
+   * working" convention as armedChannelId/gatedRecordingEnabled above. */
+  gatedRecordingChannelId: string | null
+  /** Which rifff (by groupId), if any, the NEXT gated-recording lock-in
+   * will attach a new STEM to -- set by double-clicking a placed rifff
+   * (RifffBlockRow.tsx/SketchStrip.tsx, via useGatedRecordingControls'
+   * targetRifffForRecording), mutually exclusive with
+   * gatedRecordingChannelId above (enabling recording via either path
+   * clears the other -- see targetRifffForRecording's own doc comment).
+   * null while nothing is targeted. Not persisted, same "how I'm
+   * currently working" convention as gatedRecordingChannelId. See
+   * docs/superpowers/specs/2026-08-06-rifff-recording-design.md. */
+  gatedRecordingTargetGroupId: string | null
   rifffs: Record<string, Rifff>
 }
 
@@ -224,9 +274,13 @@ export const initialState: AppState = {
   armedChannelId: null,
   availableInputDevices: [],
   selectedInputDevice: null,
+  gatedRecordingEnabled: false,
+  gatedRecordingChannelId: null,
+  gatedRecordingTargetGroupId: null,
   volumeDragMode: false,
   mode: 'sketch',
   inspectorCollapsed: false,
+  tidiedView: false,
   regionSelection: null,
   metronomeEnabled: false,
   masterChain: [null, null, null, null],
@@ -311,6 +365,7 @@ export type Action =
   | { type: 'SET_CHANNEL_MUTE'; channelId: string; muted: boolean }
   | { type: 'SOLO_CHANNEL'; channelId: string }
   | { type: 'SOLO_STEMS'; stemKeys: string[] }
+  | { type: 'RESTORE_MUTE'; mute: Record<string, boolean> }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNGROUP'; groupId: string }
@@ -323,6 +378,7 @@ export type Action =
   | { type: 'SET_VOLUME_DRAG_MODE'; enabled: boolean }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
+  | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
@@ -331,6 +387,9 @@ export type Action =
   | { type: 'REMOVE_RECORDING_CHANNEL'; channelId: string }
   | { type: 'ARM_RECORDING_CHANNEL'; channelId: string }
   | { type: 'DISARM_RECORDING_CHANNEL' }
+  | { type: 'SET_GATED_RECORDING_ENABLED'; enabled: boolean }
+  | { type: 'SET_GATED_RECORDING_CHANNEL'; channelId: string | null }
+  | { type: 'SET_GATED_RECORDING_TARGET'; groupId: string | null }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
@@ -476,7 +535,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, bpm: Math.min(200, Math.max(40, action.bpm)) }
 
     case 'CYCLE_SNAP':
-      return { ...state, snapIdx: ((state.snapIdx + 1) % 4) as AppState['snapIdx'] }
+      return { ...state, snapIdx: ((state.snapIdx + 1) % 3) as AppState['snapIdx'] }
 
     case 'NUDGE_OFFSET': {
       const current = state.off[action.key] ?? 0
@@ -867,30 +926,44 @@ export function reducer(state: AppState, action: Action): AppState {
 
     // Solos an arbitrary SET of stems that may span multiple different
     // rifffs -- unlike SOLO_GROUP (whole rifff) or SOLO_CHANNEL (whole
-    // channel), the "cluster stems" labelling UI's own solo-all button
-    // needs to solo just the member stems of one cluster, which can come
-    // from anywhere in the project. Same toggle-back-when-already-soloed
-    // semantics as SOLO_GROUP, scoped to placed rifffs only, for the same
-    // reasons documented on SOLO_GROUP above.
+    // channel), the "cluster stems" labelling UI needs to solo just the
+    // member stems of one cluster, which can come from anywhere in the
+    // project. DELIBERATELY NOT a toggle, unlike SOLO_GROUP/SOLO_CHANNEL
+    // above -- this is dispatched repeatedly and idempotently as the user
+    // clicks around auditioning different stems/clusters, and a real bug
+    // this fixed: with toggle-back-when-already-soloed semantics (this
+    // action's original design, copied from SOLO_GROUP), clicking the SAME
+    // thumbnail twice in a row (e.g. to scrub to a different point in the
+    // same clip) landed on the exact same stemKeys set both times, so the
+    // second click matched "already soloed" and silently un-soloed
+    // everything back to the full mix -- reported as "clicking around... I
+    // hear everything come back." Always solos EXACTLY `action.stemKeys`,
+    // every time, no matter what was soloed before. Scoped to placed
+    // rifffs only, for the same reason documented on SOLO_GROUP above.
     case 'SOLO_STEMS': {
       const targetKeys = new Set(action.stemKeys)
       const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-      const alreadySoloed = rifffList.every((rifff) =>
-        rifff.stems.every((stem) => {
-          const key = stemKey(rifff.groupId, stem.slot)
-          const expectedMuted = !targetKeys.has(key)
-          return !!state.mute[key] === expectedMuted
-        })
-      )
       const mute = { ...state.mute }
       for (const rifff of rifffList) {
         for (const stem of rifff.stems) {
           const key = stemKey(rifff.groupId, stem.slot)
-          mute[key] = alreadySoloed ? false : !targetKeys.has(key)
+          mute[key] = !targetKeys.has(key)
         }
       }
       return { ...state, mute }
     }
+
+    // Restores a full mute snapshot verbatim -- used by ClusterStemsBrowser
+    // to undo whatever temporary SOLO_STEMS preview-auditioning it did while
+    // open, the moment it closes. SOLO_STEMS (like SOLO_GROUP/SOLO_CHANNEL)
+    // deliberately discards the exact prior per-stem mute state on solo
+    // (documented on SOLO_GROUP above: "solo is normally a temporary A/B
+    // listen, not a state worth preserving precisely") -- fine for those
+    // in-context solo toggles, but the cluster browser's own preview
+    // shouldn't leak into the real arrangement's mute state once you've
+    // closed it and gone back to just play the project normally.
+    case 'RESTORE_MUTE':
+      return { ...state, mute: action.mute }
 
     // Sets every stem in the rifff to the same volume in one atomic edit —
     // the collapsed view's own envelope drag, which (like SET_GROUP_MUTE)
@@ -1073,6 +1146,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_INSPECTOR_COLLAPSED':
       return { ...state, inspectorCollapsed: !state.inspectorCollapsed }
 
+    case 'TOGGLE_TIDIED_VIEW':
+      return { ...state, tidiedView: !state.tidiedView }
+
     case 'SET_LOOP_REGION':
       return { ...state, loopRegion: action.region }
 
@@ -1107,10 +1183,21 @@ export function reducer(state: AppState, action: Action): AppState {
         channelPlugins = { ...channelPlugins }
         delete channelPlugins[action.channelId]
       }
+      // Guards against a dangling gatedRecordingChannelId -- if the user
+      // manually removes the exact channel currently pinned as the
+      // gated-recording target (see its own doc comment), the next lock-in
+      // would otherwise try to place a take on a channelId no longer in
+      // recordingChannelIds. Cleared rather than re-picked here since
+      // there's no live loop region context in this reducer to validate a
+      // replacement against -- App.tsx's enableGatedRecording already
+      // handles "no target pinned yet" by picking/creating one fresh.
+      const gatedRecordingChannelId =
+        state.gatedRecordingChannelId === action.channelId ? null : state.gatedRecordingChannelId
       return {
         ...state,
         channelOrder: state.channelOrder.filter((id) => id !== action.channelId),
         recordingChannelIds,
+        gatedRecordingChannelId,
         channelOf,
         rifffs,
         channelPlugins,
@@ -1123,6 +1210,15 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'DISARM_RECORDING_CHANNEL':
       return { ...state, armedChannelId: null }
+
+    case 'SET_GATED_RECORDING_ENABLED':
+      return { ...state, gatedRecordingEnabled: action.enabled }
+
+    case 'SET_GATED_RECORDING_CHANNEL':
+      return { ...state, gatedRecordingChannelId: action.channelId }
+
+    case 'SET_GATED_RECORDING_TARGET':
+      return { ...state, gatedRecordingTargetGroupId: action.groupId }
 
     case 'SET_AVAILABLE_INPUT_DEVICES':
       return { ...state, availableInputDevices: action.devices }
