@@ -52,6 +52,7 @@ import {
   groupIdAtPosition
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
+import type { LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
@@ -330,6 +331,28 @@ function Timeline({
     )
   }
 
+  // Ruler's own manual drag-to-set (or double-click-to-clear) loop region --
+  // distinct from targetRifffForRecording's programmatic SET_LOOP_REGION when
+  // double-clicking a rifff to gate-record onto it (useGatedRecordingControls.ts).
+  // A manual drag here always means "record standalone starting here," which
+  // is incompatible with a stale gatedRecordingTargetGroupId left pinned from
+  // an earlier double-click: enableGatedRecording/lockInGatedRecording both
+  // treat a non-null target as "attach the take onto that rifff," so without
+  // clearing it here a manual drag after a double-click would silently
+  // capture over the WRONG span (and tempo-compensate against the wrong
+  // rifff's bpm) instead of the standalone-channel behavior the design doc
+  // guarantees for this path (docs/superpowers/specs/2026-08-06-rifff-recording-design.md).
+  // targetRifffForRecording's own re-click-same-target refresh case
+  // deliberately dispatches SET_LOOP_REGION alone (without touching the
+  // target) -- that's a different call site, so clearing the target here
+  // doesn't interfere with it.
+  function handleSetLoopRegion(region: LoopRegion): void {
+    dispatch({ type: 'SET_LOOP_REGION', region })
+    if (state.gatedRecordingTargetGroupId) {
+      dispatch({ type: 'SET_GATED_RECORDING_TARGET', groupId: null })
+    }
+  }
+
   if (state.mode === 'sketch') {
     return <SketchStrip />
   }
@@ -379,7 +402,7 @@ function Timeline({
         bars={loopLengthBars(state) + TRAILING_BLANK_BARS}
         ppb={ppb}
         loopRegion={loopRegion}
-        onSetLoopRegion={(region) => dispatch({ type: 'SET_LOOP_REGION', region })}
+        onSetLoopRegion={handleSetLoopRegion}
       />
       {channels.map((channel) => (
         <ChannelRow
