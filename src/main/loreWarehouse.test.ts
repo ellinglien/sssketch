@@ -290,24 +290,24 @@ describe('listRiffs', () => {
     const insert = db.prepare(
       'INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName) VALUES (?,?,?,?,?,?)'
     )
-    // One more than RIFF_PAGE_SIZE (200) — the real bug report this covers:
+    // One more than RIFF_PAGE_SIZE (1000) — the real bug report this covers:
     // some of Elling's actual jams have 20,000+ riffs, and the old hard
-    // LIMIT 200 with no offset silently dropped everything past it.
-    for (let i = 0; i < 201; i++) {
+    // LIMIT with no offset silently dropped everything past it.
+    for (let i = 0; i < 1001; i++) {
       insert.run(`riff-big-${i}`, 'jam-big', i, 130, 8, 'elling')
     }
     db.close()
     setWarehouseRootForTests(root)
 
     const page1 = listRiffs('jam-big', {})
-    expect(page1.riffs).toHaveLength(200)
+    expect(page1.riffs).toHaveLength(1000)
     expect(page1.hasMore).toBe(true)
-    expect(page1.nextOffset).toBe(200)
+    expect(page1.nextOffset).toBe(1000)
 
     const page2 = listRiffs('jam-big', { offset: page1.nextOffset })
     expect(page2.riffs).toHaveLength(1)
     expect(page2.hasMore).toBe(false)
-    expect(page2.nextOffset).toBe(201)
+    expect(page2.nextOffset).toBe(1001)
 
     // Newest-first (CreationTime DESC), so no riff should appear on both
     // pages.

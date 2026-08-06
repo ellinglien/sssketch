@@ -146,7 +146,15 @@ interface StemLookupRow {
   CreatorUserName: string
 }
 
-const RIFF_PAGE_SIZE = 200
+// Raised 5x (200 -> 1000) per direct user request: some of Elling's real
+// jams have 20,000+ riffs and the old 200-per-page size meant hitting the
+// scroll-load-more boundary constantly while browsing. 1000 stays well
+// clear of SQLite's default SQLITE_MAX_VARIABLE_NUMBER (32766, modern
+// bundled versions) that listRiffs' own stem-creator batch lookup below
+// depends on -- worst case one page's rows reference up to 8 distinct
+// StemCIDs each, i.e. 8000 placeholders in that IN (...) query, comfortably
+// under the limit.
+const RIFF_PAGE_SIZE = 1000
 
 export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
   const db = getWarehouseDb()
