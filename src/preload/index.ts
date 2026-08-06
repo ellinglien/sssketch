@@ -9,8 +9,12 @@ const api = {
     ipcRenderer.invoke('import-rifff', paths),
   importOneShot: (path: string): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-one-shot', path),
-  importRecordedTake: (path: string, bpm: number): Promise<Rifff | null> =>
-    ipcRenderer.invoke('import-recorded-take', path, bpm),
+  // loopBars, when passed, is a gated-recording take's own loop-region
+  // length -- see importRecordedTake's own doc comment for why that makes
+  // it tile/loop like any other rifff instead of playing once (the default
+  // when omitted, for manual arm/disarm takes).
+  importRecordedTake: (path: string, bpm: number, loopBars?: number): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-recorded-take', path, bpm, loopBars),
   // See importRecordedStem's own doc comment (src/main/importOneShot.ts)
   // for the tempo-compensation math -- rifffBpm is the TARGET rifff's own
   // bpm (not the project's live state.bpm), existingSlots is every other
@@ -23,6 +27,7 @@ const api = {
   ): Promise<Stem | null> =>
     ipcRenderer.invoke('import-recorded-stem', path, rifffBpm, loopBars, existingSlots),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
+  pickRifffImportPaths: (): Promise<string[]> => ipcRenderer.invoke('pick-rifff-import-paths'),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
   // only reachable from main/preload, so the renderer has to go through this bridge
@@ -41,12 +46,22 @@ const api = {
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
+  openProjectFromPath: (path: string): Promise<{ path: string; json: string } | null> =>
+    ipcRenderer.invoke('open-project-from-path', path),
   autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
   loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
   clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
   autosaveProjectSketch: (json: string): Promise<void> =>
     ipcRenderer.invoke('autosave-project-sketch', json),
   loadAutosaveSketch: (): Promise<string | null> => ipcRenderer.invoke('load-autosave-sketch'),
+  // Distinct from autosave{Project,ProjectSketch}Sketch above -- those are
+  // crash-recovery only (cleared once offered at startup). This pair is
+  // never cleared, always reflecting the most recently opened/created
+  // sketch, so the NEXT launch can open straight back into it -- see
+  // App.tsx's mount effect.
+  saveLastOpenedSketch: (json: string): Promise<void> =>
+    ipcRenderer.invoke('save-last-opened-sketch', json),
+  loadLastOpenedSketch: (): Promise<string | null> => ipcRenderer.invoke('load-last-opened-sketch'),
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
@@ -54,8 +69,8 @@ const api = {
     ipcRenderer.invoke('export-stems-native', stateJson),
   exportStems: (stems: ExportedStem[]): Promise<string | null> =>
     ipcRenderer.invoke('export-stems', stems),
-  exportAls: (stateJson: string): Promise<string | null> =>
-    ipcRenderer.invoke('export-als', stateJson),
+  exportAls: (stateJson: string, defaultName?: string): Promise<string | null> =>
+    ipcRenderer.invoke('export-als', stateJson, defaultName),
   generateDefaultProjectName: (): Promise<string> =>
     ipcRenderer.invoke('generate-default-project-name'),
   saveProjectToLibrary: (name: string, json: string): Promise<{ path: string }> =>
@@ -75,6 +90,8 @@ const api = {
     ipcRenderer.invoke('should-warn-before-ableton-overwrite', libraryName),
   exportAlsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
     ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
+  exportAlsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
+    ipcRenderer.invoke('export-als-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
@@ -95,10 +112,30 @@ const api = {
     endBar: number
   ): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('engine-arm-recording', channelId, deviceName, startBar, endBar),
-  engineDisarmRecording: (): Promise<{ committed: boolean; path?: string; error?: string }> =>
-    ipcRenderer.invoke('engine-disarm-recording'),
+  engineDisarmRecording: (): Promise<{
+    committed: boolean
+    path?: string
+    error?: string
+    latencyCompensationBars?: number
+  }> => ipcRenderer.invoke('engine-disarm-recording'),
   engineSetMetronome: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('engine-set-metronome', enabled),
+  engineSetGatedRecordingEnabled: (
+    enabled: boolean,
+    startBar: number,
+    endBar: number
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('engine-set-gated-recording-enabled', enabled, startBar, endBar),
+  engineCaptureGatedTake: (): Promise<{
+    committed: boolean
+    path?: string
+    error?: string
+    latencyCompensationBars?: number
+  }> => ipcRenderer.invoke('engine-capture-gated-take'),
+  engineSetLinkEnabled: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke('engine-set-link-enabled', enabled),
+  engineGetLinkStatus: (): Promise<{ enabled: boolean; numPeers: number }> =>
+    ipcRenderer.invoke('engine-get-link-status'),
   engineLoadMasterPlugin: (
     slot: number,
     pluginId: string | null,
@@ -182,6 +219,12 @@ const api = {
     ): void => callback(payload.channelId, payload.peaksSoFar, payload.elapsedSeconds)
     ipcRenderer.on('engine-capture-level-update', listener)
     return () => ipcRenderer.removeListener('engine-capture-level-update', listener)
+  },
+  onGatedRecordingUpdate: (callback: (peaks: number[]) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { peaks: number[] }): void =>
+      callback(payload.peaks)
+    ipcRenderer.on('engine-gated-recording-update', listener)
+    return () => ipcRenderer.removeListener('engine-gated-recording-update', listener)
   },
   onEngineRestarted: (callback: () => void): (() => void) => {
     const listener = (): void => callback()

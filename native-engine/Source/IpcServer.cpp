@@ -40,7 +40,7 @@ namespace sssketch
     }
 
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
-        : engine(e), transport(t), masterChain(mc), channelChains(cc)
+        : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm())
     {
     }
 
@@ -75,10 +75,20 @@ namespace sssketch
     // CLAUDE.md on the native engine).
     void IpcConnection::detachArmedRecorderOnTeardown()
     {
-        if (!armedRecorder) return;
-        transport.setLoopRecorder(nullptr);
+        if (!armedRecorder && !gatedRecorder) return;
+        if (armedRecorder)
+        {
+            transport.setLoopRecorder(nullptr);
+            armedRecorder.release();
+        }
+        // Same reasoning as above, for the gated recorder -- see this
+        // method's own doc comment (.h).
+        if (gatedRecorder)
+        {
+            transport.setGatedRecorder(nullptr);
+            gatedRecorder.release();
+        }
         transport.setRecordingLoop(0.0, 0.0);
-        armedRecorder.release();
     }
 
     void IpcConnection::connectionMade()
@@ -149,6 +159,29 @@ namespace sssketch
             capObj->setProperty("payload", juce::var(capPayload.get()));
             sendJson(juce::var(capObj.get()));
         }
+
+        // Same piggyback-on-the-existing-30Hz-timer reasoning as the
+        // armedRecorder push above, for the gated (threshold-triggered)
+        // recording feature -- see GatedLoopRecorder::peaks' own doc
+        // comment for why this always spans the WHOLE fixed buffer rather
+        // than "how much captured so far." 128 buckets matches this app's
+        // own standard waveform resolution elsewhere (see
+        // @shared/visuals.ts's peaksFromChannel default and the 0-128
+        // viewBox every Waveform-style SVG already uses), so the
+        // renderer's live overlay can reuse the exact same rendering path
+        // as a finished clip's own waveform.
+        if (gatedRecorder)
+        {
+            juce::DynamicObject::Ptr gatedPayload = new juce::DynamicObject();
+            juce::Array<juce::var> peaksVar;
+            for (float peak : gatedRecorder->peaks(128))
+                peaksVar.add(peak);
+            gatedPayload->setProperty("peaks", peaksVar);
+            juce::DynamicObject::Ptr gatedObj = new juce::DynamicObject();
+            gatedObj->setProperty("type", "gated-recording-update");
+            gatedObj->setProperty("payload", juce::var(gatedPayload.get()));
+            sendJson(juce::var(gatedObj.get()));
+        }
     }
 
     void IpcConnection::messageReceived(const juce::MemoryBlock& message)
@@ -168,6 +201,20 @@ namespace sssketch
             if (parseEngineProject(payloadJson, project, error))
             {
                 transport.setBpm(project.bpm);
+                // Pushes sssketch's own current project tempo out to the
+                // Link session (see LinkSession's own doc comment for the
+                // one-way sync direction and why) -- hooked onto this
+                // existing per-project-change handler rather than a new
+                // periodic timer, deliberately: the position-update timer
+                // (see timerCallback below) only runs while playing
+                // (started/stopped by the play/pause/stop handlers
+                // further down), so piggybacking tempo sync onto it would
+                // silently stop syncing the instant playback pauses --
+                // exactly the opposite of what a "stay in sync" feature
+                // should do. load-project fires on every real project
+                // state change regardless of play state, which is what
+                // "sssketch's own tempo changed" actually means here.
+                linkSession.syncTempo(project.bpm);
                 transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
                 // The ENTIRE mechanism by which a live override (set via
@@ -286,6 +333,40 @@ namespace sssketch
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }
+        else if (type == "set-link-enabled")
+        {
+            const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
+            linkSession.setEnabled(enabled);
+            // Asserts sssketch's own current tempo into the session right
+            // away on enable, rather than waiting for the next incidental
+            // load-project to happen to carry a tempo CHANGE (syncTempo's
+            // own steady-state comparison can't tell "I just joined a
+            // session that already had a different tempo" apart from "a
+            // peer nudged it" -- see LinkSession::pushTempoNow's own doc
+            // comment for the full reasoning). Without this, enabling
+            // Link while joining an existing session (e.g. hardware
+            // already running at its own tempo) silently did nothing
+            // audible -- a real reported bug.
+            if (enabled) linkSession.pushTempoNow(transport.currentBpm());
+        }
+        else if (type == "get-link-status")
+        {
+            // Request/response, not a periodic push -- same "fetched
+            // on-demand, not continuously streamed" convention as
+            // list-input-devices above. The renderer polls this on its
+            // own slow timer (no need for anything faster than a human
+            // glancing at a peer count), matching this project's own
+            // established pattern for anything that isn't the
+            // playhead/capture-level pushes actually needing sub-second
+            // freshness.
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("enabled", linkSession.isEnabled());
+            payloadObj->setProperty("numPeers", (int) linkSession.numPeers());
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "link-status");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "arm-recording")
         {
             if (!payload.isObject())
@@ -372,6 +453,16 @@ namespace sssketch
                 {
                     payloadObj->setProperty("committed", true);
                     payloadObj->setProperty("path", outputPath);
+                    // See Transport::roundTripLatencySamples' own doc comment --
+                    // the captured take is delayed by roughly this much relative
+                    // to when it was actually played. The renderer subtracts
+                    // this from the take's placed startBar to compensate.
+                    payloadObj->setProperty(
+                        "latencyCompensationBars",
+                        Transport::latencySamplesToBars(
+                            transport.roundTripLatencySamples(),
+                            transport.currentSampleRate(),
+                            transport.currentBpm()));
                 }
                 else
                 {
@@ -394,6 +485,112 @@ namespace sssketch
 
             juce::DynamicObject::Ptr obj = new juce::DynamicObject();
             obj->setProperty("type", "disarm-recording-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "set-gated-recording-enabled")
+        {
+            // Endlesss-style threshold-gated recording (see
+            // GatedLoopRecorder's own doc comment) -- "recording mode"
+            // on/off, independent of the manual arm-recording/
+            // disarm-recording flow above. enabled:true (re-)arms a fresh
+            // GatedLoopRecorder sized to [startBar, endBar); enabled:false
+            // detaches it. Reuses transport's own recordingLoopStartBar/
+            // EndBar fields (via setRecordingLoop) as "the currently
+            // selected loop region" -- same fields the manual flow also
+            // uses, since conceptually there's one active recording-loop
+            // region regardless of which mechanism is using it.
+            if (!payload.isObject())
+                return;
+            const bool enabled = (bool) payload.getProperty("enabled", false);
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+
+            if (!enabled)
+            {
+                transport.setGatedRecorder(nullptr);
+                // Same deferred-free reasoning as arm-recording/
+                // disarm-recording's own previousRecorder handling above --
+                // the audio thread may still be mid-callback with
+                // Transport's raw pointer to this object for a brief
+                // window right after setGatedRecorder(nullptr).
+                previousGatedRecorder = std::move(gatedRecorder);
+                payloadObj->setProperty("success", true);
+            }
+            else
+            {
+                const double startBar = (double) payload.getProperty("startBar", 0.0);
+                const double endBar = (double) payload.getProperty("endBar", 0.0);
+                const double loopBars = endBar - startBar;
+                // Defensive, mirrors the renderer's own UI gating (the
+                // control is disabled unless a loop region is selected and
+                // is <=16 bars) -- kept here too so a stale or malformed
+                // request can't silently arm an oversized/invalid buffer.
+                if (loopBars <= 0.0 || loopBars > 16.0 || transport.currentBpm() <= 0.0)
+                {
+                    payloadObj->setProperty("success", false);
+                    payloadObj->setProperty("error", "invalid loop region for gated recording");
+                }
+                else
+                {
+                    const double secPerBar = (60.0 / transport.currentBpm()) * 4.0;
+                    transport.setGatedRecorder(nullptr);
+                    previousGatedRecorder = std::move(gatedRecorder);
+                    gatedRecorder = std::make_unique<GatedLoopRecorder>(
+                        transport.currentSampleRate(), loopBars, secPerBar);
+                    transport.setRecordingLoop(startBar, endBar);
+                    transport.setGatedRecorder(gatedRecorder.get());
+                    payloadObj->setProperty("success", true);
+                }
+            }
+
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "set-gated-recording-enabled-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "capture-gated-take")
+        {
+            // Commits whatever's currently in the gated buffer (silence
+            // where nothing's been captured this lap) as a take, WITHOUT
+            // touching gatedRecorder/Transport's attachment at all --
+            // "locking in" a take must not stop or reset ongoing capture
+            // (see GatedLoopRecorder's own doc comment): it keeps
+            // listening for the next lap immediately afterward, and
+            // playback is untouched throughout.
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            if (gatedRecorder)
+            {
+                const auto outputPath = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("sssketch-gated-take-" + juce::Uuid().toString() + ".wav")
+                    .getFullPathName();
+                if (gatedRecorder->writeToWavFile(outputPath))
+                {
+                    payloadObj->setProperty("committed", true);
+                    payloadObj->setProperty("path", outputPath);
+                    // Same round-trip latency compensation as
+                    // disarm-recording's own handling above -- see
+                    // Transport::roundTripLatencySamples' own doc comment.
+                    payloadObj->setProperty(
+                        "latencyCompensationBars",
+                        Transport::latencySamplesToBars(
+                            transport.roundTripLatencySamples(),
+                            transport.currentSampleRate(),
+                            transport.currentBpm()));
+                }
+                else
+                {
+                    payloadObj->setProperty("committed", false);
+                    payloadObj->setProperty("error", "failed to write gated take to disk");
+                }
+            }
+            else
+            {
+                payloadObj->setProperty("committed", false);
+                payloadObj->setProperty("error", "gated recording is not enabled");
+            }
+
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "capture-gated-take-result");
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }

@@ -10,11 +10,14 @@ import { renderStretched } from './rubberband'
 import {
   saveProjectAs,
   openProject,
+  openProjectFromPath,
   writeAutosave,
   loadAutosave,
   clearAutosave,
   writeAutosaveSketchInfo,
   loadAutosaveSketchInfo,
+  writeLastOpenedSketch,
+  loadLastOpenedSketch,
   saveProjectToLibrary,
   saveProjectInPlace,
   openLibrarySketch,
@@ -23,7 +26,7 @@ import {
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
-import { exportAbleton, exportAbletonToLibrary } from './exportAbleton'
+import { exportAbleton, exportAbletonToLibrary, exportAbletonNextToSource } from './exportAbleton'
 import { nativeExport, nativeExportStems } from './nativeExport'
 import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
@@ -69,25 +72,25 @@ function createWindow(): BrowserWindow {
   // Create the browser window.
   const win = new BrowserWindow({
     // 1512x982 -- the current MacBook Pro's own logical resolution
-    // (14"/16", ratio ~1.54:1), not an arbitrary round number -- so
-    // fullscreening the app fills the actual screen shape instead of
-    // leaving bars on the sides the way the previous 3:2 (1.5) guess did.
+    // (14"/16", ratio ~1.54:1), not an arbitrary round number -- just the
+    // initial/default size now, not an enforced shape (see below).
     width: 1512,
     height: 982,
+    // Floors, not a locked shape -- keeps the arranger area from being
+    // crushed below usability, same numbers as the old locked minimum.
     minWidth: 945,
     minHeight: 614,
-    // Locked at the default size for now -- proportional scaling
-    // (App.tsx's FrameScaleContext/.ra-frame transform:scale()) has been a
-    // repeat source of subtly-wrong cursor/click math at non-default window
-    // sizes (several bugs already root-caused and fixed this way, but the
-    // underlying scaling mechanism itself keeps being the thing that makes
-    // them possible in the first place). Disabling resize removes the
-    // whole class of "window isn't exactly 1512px wide" bugs outright.
-    // fullscreenable:false too -- entering fullscreen changes the window's
-    // effective size the same way a manual resize does, so it needs the
-    // same lock. Revisit if proportional scaling comes back.
-    resizable: false,
-    fullscreenable: false,
+    // Resizable and fullscreenable again as of the .ra-frame rework
+    // (global.css/App.tsx's old FrameScaleContext, removed): the previous
+    // lock existed only because whole-app proportional CSS scaling made
+    // every click/drag coordinate calculation dependent on window size --
+    // a repeat source of subtly-wrong cursor math (several bugs root-caused
+    // and fixed this way, but the scaling mechanism itself kept being what
+    // made them possible). .ra-frame now just fills the real window at
+    // real, 1:1 pixels with no scale transform, so there's nothing left for
+    // a resize or fullscreen to put out of sync.
+    resizable: true,
+    fullscreenable: true,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -101,21 +104,6 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => {
     win.show()
-
-    // The default (1512x982) and minimum (945x614) sizes above are both the
-    // same ~1.54:1 ratio -- that's the layout's intended shape. Without a lock,
-    // dragging the window to an off-ratio size (very wide+short, or
-    // narrow+tall) makes the app's panels feel cramped or leaves dead
-    // space. Locking the aspect ratio means an edge or corner drag resizes
-    // proportionately, the same way holding shift does for an image.
-    //
-    // Called here, after show() -- not right after construction -- because
-    // on macOS setAspectRatio can silently fail to stick if the native
-    // window hasn't actually been mapped/shown by the OS yet (a real,
-    // known Electron/macOS gotcha, not a hypothetical one: confirmed here
-    // by the constraint not holding in practice when this was called
-    // pre-show).
-    win.setAspectRatio(1512 / 982)
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -181,8 +169,8 @@ app.whenReady().then(async () => {
     return importOneShot(path)
   })
 
-  ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number) => {
-    return importRecordedTake(path, bpm)
+  ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number, loopBars?: number) => {
+    return importRecordedTake(path, bpm, loopBars)
   })
 
   ipcMain.handle(
@@ -215,6 +203,19 @@ app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0]
   })
 
+  // Rifff import normally only happens by dragging a folder (or its loose
+  // stem files) onto the shelf's own drop zone -- this is the click-to-pick
+  // equivalent, for the "+" tile at the end of that same row. openFile +
+  // openDirectory + multiSelections together lets one dialog cover both
+  // "picked a rifff folder" and "picked several loose stem files", matching
+  // what Shelf.tsx's own handleDrop already accepts from a real drag.
+  ipcMain.handle('pick-rifff-import-paths', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'openDirectory', 'multiSelections']
+    })
+    return result.canceled ? [] : result.filePaths
+  })
+
   ipcMain.handle('read-audio-file', async (_event, path: string) => readAudioFile(path))
 
   ipcMain.handle('render-stretched', (_event, stemPath: string, ratio: number) =>
@@ -233,6 +234,8 @@ app.whenReady().then(async () => {
     return openProject(win)
   })
 
+  ipcMain.handle('open-project-from-path', (_event, path: string) => openProjectFromPath(path))
+
   ipcMain.handle('autosave-project', (_event, json: string) => writeAutosave(json))
 
   ipcMain.handle('load-autosave', () => loadAutosave())
@@ -242,6 +245,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('autosave-project-sketch', (_event, json: string) => writeAutosaveSketchInfo(json))
 
   ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
+
+  ipcMain.handle('save-last-opened-sketch', (_event, json: string) => writeLastOpenedSketch(json))
+
+  ipcMain.handle('load-last-opened-sketch', () => loadLastOpenedSketch())
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
@@ -263,10 +270,10 @@ app.whenReady().then(async () => {
     return exportStemsToWavs(win, stems)
   })
 
-  ipcMain.handle('export-als', async (event, stateJson: string) => {
+  ipcMain.handle('export-als', async (event, stateJson: string, defaultName?: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return exportAbleton(win, state)
+    return exportAbleton(win, state, defaultName)
   })
 
   ipcMain.handle('generate-default-project-name', () => generateDefaultProjectName())
@@ -300,6 +307,14 @@ app.whenReady().then(async () => {
     async (_event, stateJson: string, libraryName: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
       return exportAbletonToLibrary(state, libraryName)
+    }
+  )
+
+  ipcMain.handle(
+    'export-als-next-to-source',
+    async (_event, stateJson: string, sourcePath: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportAbletonNextToSource(state, sourcePath)
     }
   )
 
@@ -390,14 +405,24 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'engine-disarm-recording',
-    async (): Promise<{ committed: boolean; path?: string; error?: string }> => {
+    async (): Promise<{
+      committed: boolean
+      path?: string
+      error?: string
+      latencyCompensationBars?: number
+    }> => {
       if (!playbackEngine) return { committed: false }
       try {
         return (await playbackEngine.client.sendAndAwaitType(
           'disarm-recording',
           undefined,
           'disarm-recording-result'
-        )) as { committed: boolean; path?: string; error?: string }
+        )) as {
+          committed: boolean
+          path?: string
+          error?: string
+          latencyCompensationBars?: number
+        }
       } catch (err) {
         console.error('engine-disarm-recording: failed:', err)
         return { committed: false, error: String(err) }
@@ -408,6 +433,76 @@ app.whenReady().then(async () => {
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
     playbackEngine?.client.send('set-metronome', { enabled })
   })
+
+  ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {
+    playbackEngine?.client.send('set-link-enabled', { enabled })
+  })
+
+  ipcMain.handle(
+    'engine-get-link-status',
+    async (): Promise<{ enabled: boolean; numPeers: number }> => {
+      if (!playbackEngine) return { enabled: false, numPeers: 0 }
+      try {
+        return (await playbackEngine.client.sendAndAwaitType(
+          'get-link-status',
+          undefined,
+          'link-status'
+        )) as { enabled: boolean; numPeers: number }
+      } catch (err) {
+        console.error('engine-get-link-status: failed:', err)
+        return { enabled: false, numPeers: 0 }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-set-gated-recording-enabled',
+    async (
+      _event,
+      enabled: boolean,
+      startBar: number,
+      endBar: number
+    ): Promise<{ success: boolean; error?: string }> => {
+      if (!playbackEngine) return { success: false, error: 'engine not running' }
+      try {
+        return (await playbackEngine.client.sendAndAwaitType(
+          'set-gated-recording-enabled',
+          { enabled, startBar, endBar },
+          'set-gated-recording-enabled-result'
+        )) as { success: boolean; error?: string }
+      } catch (err) {
+        console.error('engine-set-gated-recording-enabled: failed:', err)
+        return { success: false, error: String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-capture-gated-take',
+    async (): Promise<{
+      committed: boolean
+      path?: string
+      error?: string
+      latencyCompensationBars?: number
+    }> => {
+      if (!playbackEngine) return { committed: false }
+      try {
+        return (await playbackEngine.client.sendAndAwaitType(
+          'capture-gated-take',
+          undefined,
+          'capture-gated-take-result'
+        )) as {
+          committed: boolean
+          path?: string
+          error?: string
+          latencyCompensationBars?: number
+        }
+      } catch (err) {
+        console.error('engine-capture-gated-take: failed:', err)
+        return { committed: false, error: String(err) }
+      }
+    }
+  )
 
   ipcMain.handle(
     'engine-load-master-plugin',
@@ -522,16 +617,29 @@ app.whenReady().then(async () => {
         }
       })
     }
+    // Same "rides the existing per-connection 30Hz timer, re-subscribe on
+    // every crash-recovery respawn" reasoning as subscribeToCaptureLevelUpdates
+    // above -- the gated (threshold-triggered) recording feature's own live
+    // waveform preview.
+    function subscribeToGatedRecordingUpdates(): void {
+      engine.client.on('gated-recording-update', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-gated-recording-update', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
     subscribeToMasterPluginLoaded()
     subscribeToChannelPluginLoaded()
     subscribeToCaptureLevelUpdates()
+    subscribeToGatedRecordingUpdates()
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
       subscribeToMasterPluginLoaded()
       subscribeToChannelPluginLoaded()
       subscribeToCaptureLevelUpdates()
+      subscribeToGatedRecordingUpdates()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }

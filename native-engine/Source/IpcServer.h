@@ -8,6 +8,8 @@
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
 #include "LoopRecorder.h"
+#include "GatedLoopRecorder.h"
+#include "LinkSession.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 
@@ -34,6 +36,8 @@ namespace sssketch
         // Shared by the destructor and connectionLost() -- either can run
         // while a recording is still armed. See its own doc comment (.cpp)
         // for why this deliberately leaks rather than frees synchronously.
+        // Detaches both the manual-arm LoopRecorder AND the gated one
+        // (below), same reasoning for each.
         void detachArmedRecorderOnTeardown();
 
         PlaybackEngine& engine;
@@ -56,6 +60,19 @@ namespace sssketch
         // subsequent disarm/re-arm; never read, purely a deferred-deletion
         // holding spot.
         std::unique_ptr<LoopRecorder> previousRecorder;
+        // Same ownership/lifetime pattern as armedRecorder/previousRecorder
+        // above, for the Endlesss-style threshold-gated recording feature
+        // (see GatedLoopRecorder's own doc comment) -- set/cleared by
+        // set-gated-recording-enabled, read directly (not via Transport) by
+        // capture-gated-take to write out the current take without
+        // detaching anything.
+        std::unique_ptr<GatedLoopRecorder> gatedRecorder;
+        std::unique_ptr<GatedLoopRecorder> previousGatedRecorder;
+        // Owned directly (not a raw-pointer handoff to Transport like the
+        // recorders above) -- LinkSession never touches the audio thread
+        // at all, see its own doc comment, so there's no cross-thread
+        // lifetime hazard to guard against here.
+        LinkSession linkSession;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer
