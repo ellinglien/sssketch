@@ -124,6 +124,60 @@ describe('deserializeProject snapIdx clamp', () => {
   })
 })
 
+describe('deserializeProject barLength noise migration', () => {
+  // Real confirmed example: importRecordedStem's tempo-compensation math
+  // (src/main/importOneShot.ts, before the 033a1c7 source-side fix) could
+  // produce a barLength polluted by sample-quantization noise instead of
+  // the clean integer it was designed to land on. ADD_STEM_TO_RIFFF folds a
+  // stem's barLength into the whole rifff's own barLength via Math.max, so
+  // the noise corrupts both levels. The source-side fix only stops NEW
+  // noise from being written; a project saved before it landed still has
+  // the raw noisy value in its JSON and needs this load-time migration.
+  const noisyBarLength = 16.000003184020517
+
+  it('snaps a noisy near-integer rifff.barLength to the exact integer', () => {
+    const persisted = {
+      ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
+      rifffs: { r1: { ...rifff, barLength: noisyBarLength } }
+    } as unknown as import('./serialize').PersistedProject
+
+    const restored = deserializeProject(persisted)
+    expect(restored.rifffs.r1.barLength).toBe(16)
+  })
+
+  it('snaps a noisy near-integer stem.barLength (within a rifff) to the exact integer', () => {
+    const persisted = {
+      ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
+      rifffs: {
+        r1: {
+          ...rifff,
+          stems: [{ ...rifff.stems[0], barLength: noisyBarLength }]
+        }
+      }
+    } as unknown as import('./serialize').PersistedProject
+
+    const restored = deserializeProject(persisted)
+    expect(restored.rifffs.r1.stems[0].barLength).toBe(16)
+  })
+
+  it('leaves a genuinely fractional barLength (real tempo compensation) untouched at both levels', () => {
+    const persisted = {
+      ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
+      rifffs: {
+        r1: {
+          ...rifff,
+          barLength: 7.75,
+          stems: [{ ...rifff.stems[0], barLength: 7.75 }]
+        }
+      }
+    } as unknown as import('./serialize').PersistedProject
+
+    const restored = deserializeProject(persisted)
+    expect(restored.rifffs.r1.barLength).toBe(7.75)
+    expect(restored.rifffs.r1.stems[0].barLength).toBe(7.75)
+  })
+})
+
 describe('deserializeProject migration from trackOrder', () => {
   it('migrates an old-shape project (trackOrder, no channelOrder/channelOf) into one channel per clip, same order', () => {
     const legacy = {

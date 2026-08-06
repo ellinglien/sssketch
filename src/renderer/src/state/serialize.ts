@@ -1,5 +1,6 @@
 import { initialState, type AppState } from './store'
 import { isSketchEligible } from './selectors'
+import { snapToWholeBarIfNearlyExact } from '@shared/barLengthSnap'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -74,6 +75,44 @@ function migrateTrackOrder(trackOrder: string[]): Pick<AppState, 'channelOrder' 
   return { channelOrder, channelOf }
 }
 
+// A save from before the source-side fix in src/main/importOneShot.ts
+// (commit 033a1c7) can carry a rifff.barLength and/or stem.barLength
+// polluted by sample-quantization noise instead of the clean integer it
+// was designed to land on (e.g. 16.000003184020517 instead of 16) -- see
+// src/shared/barLengthSnap.ts's own comment for the full mechanism and why
+// it causes periodic tiling glitches in the native engine. That fix only
+// prevents NEW noise from being written; it does nothing to repair a
+// project that already has the noisy value baked into its saved JSON, so
+// the same snap is reapplied here, at load time, to every rifff and every
+// stem within it. Rebuilds the rifffs record only when something actually
+// changed, so an already-clean project's state isn't needlessly
+// reallocated.
+function snapBarLengthNoise(rifffs: AppState['rifffs']): AppState['rifffs'] {
+  let rifffsChanged = false
+  const nextRifffs: AppState['rifffs'] = {}
+  for (const [groupId, rifff] of Object.entries(rifffs)) {
+    const snappedBarLength = snapToWholeBarIfNearlyExact(rifff.barLength)
+    let stemsChanged = false
+    const nextStems = rifff.stems.map((stem) => {
+      const snappedStemBarLength = snapToWholeBarIfNearlyExact(stem.barLength)
+      if (snappedStemBarLength === stem.barLength) return stem
+      stemsChanged = true
+      return { ...stem, barLength: snappedStemBarLength }
+    })
+    if (snappedBarLength === rifff.barLength && !stemsChanged) {
+      nextRifffs[groupId] = rifff
+      continue
+    }
+    rifffsChanged = true
+    nextRifffs[groupId] = {
+      ...rifff,
+      barLength: snappedBarLength,
+      stems: stemsChanged ? nextStems : rifff.stems
+    }
+  }
+  return rifffsChanged ? nextRifffs : rifffs
+}
+
 export function deserializeProject(data: PersistedProject | LegacyPersistedProject): AppState {
   const migrated = 'channelOrder' in data ? {} : migrateTrackOrder(data.trackOrder)
   const state = { ...initialState, ...data, ...migrated }
@@ -84,5 +123,6 @@ export function deserializeProject(data: PersistedProject | LegacyPersistedProje
   // Clamp to the new coarsest-available index rather than let that surface
   // as a silent NaN/undefined somewhere in the snap-grid UI.
   if (state.snapIdx > 2) state.snapIdx = 2
+  state.rifffs = snapBarLengthNoise(state.rifffs)
   return isSketchEligible(state) ? state : { ...state, mode: 'normal' }
 }
