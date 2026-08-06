@@ -579,7 +579,10 @@ function ProjectMenu({
           y={saveMenu.y}
           items={[
             { label: 'save', onClick: handleSave },
-            { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere }
+            { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere },
+            ...(currentSketch !== null && currentSketch.kind === 'library'
+              ? [{ label: 'save a copy', onClick: handleDuplicateAsNewVersion }]
+              : [])
           ]}
           onClose={() => setSaveMenu(null)}
         />
@@ -587,11 +590,6 @@ function ProjectMenu({
       <button onClick={onOpenLibrary} style={buttonStyle}>
         open
       </button>
-      {currentSketch !== null && currentSketch.kind === 'library' && (
-        <button onClick={handleDuplicateAsNewVersion} style={buttonStyle}>
-          save a copy
-        </button>
-      )}
       <button
         onClick={(e) => {
           // Toggles closed if already open -- see the save button above /
