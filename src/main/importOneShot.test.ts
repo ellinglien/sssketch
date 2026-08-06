@@ -144,6 +144,40 @@ describe('importRecordedStem', () => {
     }
   })
 
+  it('snaps a barLength polluted by sample-quantization noise to the exact whole bar it was meant to be', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      // Chosen so durationSec * rifffBpm / 240 lands at 4.000003306878307
+      // rather than exactly 4 -- the same shape of noise (~3e-6 bars) as
+      // the real bug's confirmed 16.000003184020517, caused by 44100 not
+      // dividing evenly into the ideal duration in floating point. See
+      // this file's real-project repro in the handoff for the original
+      // 3.18e-6 example this mirrors.
+      const testWavPath = writeTestWav(dir, 'take.wav', (4 * 240) / 85)
+      const stem = importRecordedStem(testWavPath, 85, 4)
+      expect(stem).not.toBeNull()
+      expect(stem!.barLength).toBe(4)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not snap a genuinely fractional, tempo-compensated barLength that is nowhere near a whole bar', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
+    try {
+      // 4 bars captured at 120bpm (2s/bar) = 8s, compensated for a rifff
+      // fixed at 232.5bpm: barLength = 8 * 232.5 / 240 = 7.75 -- a real,
+      // deliberate fractional value from genuine tempo compensation, not
+      // measurement noise, and must be left untouched.
+      const testWavPath = writeTestWav(dir, 'take.wav', 8.0)
+      const stem = importRecordedStem(testWavPath, 232.5, 4)
+      expect(stem!.barLength).toBeCloseTo(7.75, 4)
+      expect(stem!.barLength).not.toBe(8)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('assigns slot 0 when the rifff has no existing stems', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-recordedstem-test-'))
     try {
