@@ -128,6 +128,38 @@ describe('historyReducer', () => {
     expect(h.present.armedChannelId).toBe('B') // still not reverted by redo either
   })
 
+  it('does not push history for SET_GATED_RECORDING_TARGET', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const pastLengthAfterRealEdit = h.past.length
+    h = historyReducer(h, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })
+    expect(h.past).toHaveLength(pastLengthAfterRealEdit)
+    expect(h.present.gatedRecordingTargetGroupId).toBe('r1')
+  })
+
+  it('DOES push history for ADD_STEM_TO_RIFFF -- it is a real, undo-able edit', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const pastLengthAfterRealEdit = h.past.length
+    h = historyReducer(h, {
+      type: 'ADD_STEM_TO_RIFFF',
+      groupId: 'r1',
+      stem: {
+        slot: 7,
+        author: '',
+        name: 'take',
+        type: 'audioIn',
+        path: '/x.wav',
+        durationSec: 4,
+        barLength: 4
+      }
+    })
+    expect(h.past.length).toBeGreaterThan(pastLengthAfterRealEdit)
+    expect(h.present.rifffs.r1.stems).toHaveLength(2)
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.rifffs.r1.stems).toHaveLength(1)
+  })
+
   it('caps history length rather than growing unboundedly', () => {
     let h = createHistoryState(initialState)
     for (let i = 0; i < 150; i++) {

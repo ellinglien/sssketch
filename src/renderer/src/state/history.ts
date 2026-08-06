@@ -28,6 +28,17 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'TOGGLE_METRONOME',
   'ARM_RECORDING_CHANNEL',
   'DISARM_RECORDING_CHANNEL',
+  // Rotates on every gated-recording lock-in (see App.tsx's
+  // lockInGatedRecording) -- "how I'm currently working" bookkeeping for
+  // where the NEXT take will land, same category as ARM/DISARM_RECORDING_
+  // CHANNEL above, not a user edit worth its own undo checkpoint.
+  'SET_GATED_RECORDING_CHANNEL',
+  // Same "how I'm currently working" bookkeeping category as
+  // SET_GATED_RECORDING_CHANNEL just above -- pinning/clearing which
+  // rifff a lock-in will land on isn't itself a user edit worth an undo
+  // checkpoint. ADD_STEM_TO_RIFFF (the actual lock-in) is NOT in this
+  // set -- that one really is an edit.
+  'SET_GATED_RECORDING_TARGET',
   // A pure IPC-fetch side effect (App.tsx's input-device dropdown re-fetches
   // on every focus while the list is still empty), not a user edit worth an
   // undo checkpoint -- same "how I'm currently working" category as
