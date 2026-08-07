@@ -95,17 +95,22 @@ export function getSyncStatus(source: 'shared' | 'jam', key: string): SyncStatus
 /** Serves a listing page purely from the local index, matching
  * listSharedFeed/listRiffsInJam's own RiffPage shape -- or returns null if
  * the requested [offset, offset+count) range isn't fully covered by what's
- * synced, meaning the caller should fall back to a live fetch instead of
+ * synced AND we can't be sure that's the true end (index.complete is
+ * false), meaning the caller should fall back to a live fetch instead of
  * risking a falsely-truncated page. See the design spec's own note on this
  * boundary tradeoff (a v1 simplification: paginating past the synced
  * portion always does one live round trip rather than trying to splice
- * live+local results together). */
+ * live+local results together). When index.complete IS true, though, a
+ * short/overflowing count is never "falsely" truncated -- a sync that
+ * reached the real end of the feed/jam has already established there's
+ * nothing beyond order.length, so it's served as-is (fewer riffs than
+ * asked for, exactly like the live endpoints' own end-of-results shape). */
 export function sliceSyncedPage(
   index: SyncIndexFile,
   offset: number,
   count: number
 ): RiffPage | null {
-  if (offset + count > index.order.length) return null
+  if (offset + count > index.order.length && !index.complete) return null
   const slice = index.order.slice(offset, offset + count)
   return {
     riffs: slice.map((riffCID) => index.riffs[riffCID].summary),

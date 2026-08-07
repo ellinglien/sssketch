@@ -10,6 +10,7 @@ import type {
   RiffPage
 } from '@shared/loreLibrary'
 import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/loreLibrary'
+import { loadSyncIndex, sliceSyncedPage, sliceSyncedRiff } from './endlesssSyncIndex'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -503,6 +504,25 @@ export async function listSharedFeed(
   count: number,
   fetchImpl: FetchLike = fetch
 ): Promise<RiffPage> {
+  const syncIndex = loadSyncIndex('shared', userName)
+  if (syncIndex) {
+    const syncedPage = sliceSyncedPage(syncIndex, offset, count)
+    if (syncedPage) {
+      // Warm sharedFeedCache from the WHOLE synced index (not just this
+      // page) so resolveSharedFeedRiff can resolve any riff currently
+      // rendered from a synced page, not just the very last one fetched --
+      // strictly better than the live path's own "only the last page is
+      // resolvable" limitation, and free since the index is already loaded
+      // into memory to slice it.
+      const newCache = new Map<string, LoreResolvedRiff>()
+      for (const riffCID of syncIndex.order) {
+        newCache.set(riffCID, syncIndex.riffs[riffCID].resolved)
+      }
+      sharedFeedCache = newCache
+      return syncedPage
+    }
+  }
+
   const session = activeSession()
   const headers: Record<string, string> = { 'User-Agent': userAgent() }
   if (session) headers.Authorization = bearerAuthHeader(session)
@@ -699,11 +719,18 @@ export async function listRiffsInJam(
   filters: RiffFilters,
   fetchImpl: FetchLike = fetch
 ): Promise<RiffPage> {
-  const session = activeSession()
   const offset = filters.offset ?? 0
+  const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
+
+  const syncIndex = loadSyncIndex('jam', jamId)
+  if (syncIndex) {
+    const syncedPage = sliceSyncedPage(syncIndex, offset, limit)
+    if (syncedPage) return syncedPage
+  }
+
+  const session = activeSession()
   if (!session) return { riffs: [], hasMore: false, nextOffset: offset }
 
-  const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -806,6 +833,12 @@ export async function resolveJamRiff(
   riffCID: string,
   fetchImpl: FetchLike = fetch
 ): Promise<LoreResolvedRiff | null> {
+  const syncIndex = loadSyncIndex('jam', jamId)
+  if (syncIndex) {
+    const synced = sliceSyncedRiff(syncIndex, riffCID)
+    if (synced) return synced
+  }
+
   const session = activeSession()
   if (!session) return null
 

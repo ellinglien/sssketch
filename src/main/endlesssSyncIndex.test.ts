@@ -137,6 +137,21 @@ describe('endlesssSyncIndex', () => {
     expect(sliceSyncedPage(index, 0, 5)).toBeNull()
   })
 
+  it('sliceSyncedPage still serves a (shorter) page when complete is true, even if count overflows what is synced', async () => {
+    const { sliceSyncedPage } = await import('./endlesssSyncIndex')
+    const index = {
+      updatedAt: 1,
+      complete: true,
+      order: ['riff_1'],
+      riffs: { riff_1: { summary: fakeSummary('riff_1'), resolved: fakeResolved('riff_1') } }
+    }
+    const page = sliceSyncedPage(index, 0, 30)
+    expect(page).not.toBeNull()
+    expect(page!.riffs.map((r) => r.riffCID)).toEqual(['riff_1'])
+    expect(page!.hasMore).toBe(false)
+    expect(page!.nextOffset).toBe(1)
+  })
+
   it('sliceSyncedPage at the exact synced boundary reports hasMore based on `complete`', async () => {
     const { sliceSyncedPage } = await import('./endlesssSyncIndex')
     const index = {
