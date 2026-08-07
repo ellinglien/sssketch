@@ -269,7 +269,44 @@ const api = {
   ): Promise<{ jamCID: string; offset: number; matchedRiffCID: string } | null> =>
     ipcRenderer.invoke('lore-resolve-riff-with-context', riffCID),
   loreDownloadMissingStems: (riffCID: string): Promise<LoreResolvedRiff | null> =>
-    ipcRenderer.invoke('lore-download-missing-stems', riffCID)
+    ipcRenderer.invoke('lore-download-missing-stems', riffCID),
+  endlesssLogin: (
+    username: string,
+    password: string
+  ): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer
+      .invoke('endlesss-login', username, password)
+      .then((r) => (r.ok ? { ok: true } : { ok: false, error: r.error })),
+  endlesssLogout: (): Promise<void> => ipcRenderer.invoke('endlesss-logout'),
+  endlesssAuthStatus: (): Promise<
+    { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number }
+  > => ipcRenderer.invoke('endlesss-auth-status'),
+  endlesssListSharedFeed: (
+    userName: string,
+    offset: number,
+    count: number
+  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
+    ipcRenderer.invoke('endlesss-list-shared-feed', userName, offset, count),
+  endlesssResolveSharedFeedRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
+    ipcRenderer.invoke('endlesss-resolve-shared-feed-riff', riffCID),
+  endlesssListJams: (): Promise<LoreJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
+  endlesssListRiffs: (
+    jamId: string,
+    filters: {
+      dateFrom?: number
+      dateTo?: number
+      bpm?: number
+      userName?: string
+      onlyFullyCached?: boolean
+      targetUser?: string
+      onlyContainsUser?: boolean
+      offset?: number
+      limit?: number
+    }
+  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
+    ipcRenderer.invoke('endlesss-list-riffs', jamId, filters),
+  endlesssResolveRiff: (jamId: string, riffCID: string): Promise<LoreResolvedRiff | null> =>
+    ipcRenderer.invoke('endlesss-resolve-riff', jamId, riffCID)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

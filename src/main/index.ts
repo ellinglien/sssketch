@@ -42,6 +42,16 @@ import {
   downloadMissingStems
 } from './loreWarehouse'
 import {
+  loginWithCredentials,
+  logout as endlesssLogout,
+  getAuthStatus as getEndlesssAuthStatus,
+  listSharedFeed,
+  resolveSharedFeedRiff,
+  listJams as listEndlesssJams,
+  listRiffsInJam,
+  resolveJamRiff
+} from './endlesssApi'
+import {
   listLibrarySketches,
   libraryRootPath,
   setLibraryRootPath,
@@ -196,6 +206,27 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('lore-download-missing-stems', (_event, riffCID: string) =>
     downloadMissingStems(riffCID)
+  )
+
+  ipcMain.handle('endlesss-login', (_event, username: string, password: string) =>
+    loginWithCredentials(username, password)
+  )
+  ipcMain.handle('endlesss-logout', () => endlesssLogout())
+  ipcMain.handle('endlesss-auth-status', () => getEndlesssAuthStatus())
+  ipcMain.handle(
+    'endlesss-list-shared-feed',
+    (_event, userName: string, offset: number, count: number) =>
+      listSharedFeed(userName, offset, count)
+  )
+  ipcMain.handle('endlesss-resolve-shared-feed-riff', (_event, riffCID: string) =>
+    resolveSharedFeedRiff(riffCID)
+  )
+  ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
+  ipcMain.handle('endlesss-list-riffs', (_event, jamId: string, filters: RiffFilters) =>
+    listRiffsInJam(jamId, filters)
+  )
+  ipcMain.handle('endlesss-resolve-riff', (_event, jamId: string, riffCID: string) =>
+    resolveJamRiff(jamId, riffCID)
   )
 
   ipcMain.handle('pick-folder', async () => {
