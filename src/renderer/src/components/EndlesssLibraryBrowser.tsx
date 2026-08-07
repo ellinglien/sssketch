@@ -76,6 +76,21 @@ function groupRiffsByDate(riffs: LoreRiffSummary[]): RiffDateGroup[] {
   return groups
 }
 
+/** True if `jamName` is exactly the account's own username, OR the
+ * username repeated back-to-back some whole number of times ("elling",
+ * "ellingelling", etc.) -- confirmed live that at least one real personal
+ * jam is named with the username doubled, not just once, so a plain
+ * equality check missed it entirely (the jam list came back empty). Still
+ * deliberately NOT a substring match -- see the filter's own doc comment
+ * for why that let through every collab jam that merely mentions the
+ * person by name. */
+function isPersonalJamName(jamName: string, username: string): boolean {
+  const name = jamName.trim().toLowerCase()
+  const user = username.trim().toLowerCase()
+  if (user === '' || name === '' || name.length % user.length !== 0) return false
+  return name === user.repeat(name.length / user.length)
+}
+
 /** One riff's preview circle -- shared between the shared-feed and
  * private-jams tabs so both get the same click/pulse/imported-badge
  * behavior for free rather than reimplementing it twice. `playing` drives
@@ -224,6 +239,17 @@ export function EndlesssLibraryBrowser({
   // visible on the very next render, well before the resolve effect even
   // runs) -- so the stale riffCID left behind here never renders as playing.
   const [playingRiffCID, setPlayingRiffCID] = useState<string | null>(null)
+  // Set once startPreviewLoop's attempt for a riff has SETTLED, regardless
+  // of outcome -- distinct from playingRiffCID (which only ever gets set on
+  // success). Used to gate the "no audio available" message below on
+  // whether playback was genuinely tried and failed, rather than on a
+  // proxy signal like "every stem's path is null" -- that proxy missed a
+  // real case seen live: some stems WERE cached (so the old check didn't
+  // fire), yet nothing played and no message showed either, silently.
+  // Checking previewAttemptedForCID === selectedRiffCID && playingRiffCID
+  // !== selectedRiffCID catches any "we tried, it didn't work" outcome,
+  // whatever the underlying reason.
+  const [previewAttemptedForCID, setPreviewAttemptedForCID] = useState<string | null>(null)
   const [importedRiffGroupIds, setImportedRiffGroupIds] = useState<Map<string, string>>(new Map())
   const [busyRiffCID, setBusyRiffCID] = useState<string | null>(null)
   const previewTokenRef = useRef(0)
@@ -405,6 +431,8 @@ export function EndlesssLibraryBrowser({
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
+        if (cancelled) return
+        setPreviewAttemptedForCID(selectedRiffCID)
         if (sources.length > 0) {
           previewTokenRef.current = registerActivePreview(stopPreview)
           setPlayingRiffCID(selectedRiffCID)
@@ -453,14 +481,14 @@ export function EndlesssLibraryBrowser({
         // everything, this direct path is specifically for browsing WITHOUT
         // LORE). Per direct feedback: narrow this list down to jams that are
         // actually this person's own -- by Endlesss convention, a personal
-        // jam's default (never-renamed) name is EXACTLY the owner's
-        // username, nothing else. An earlier version of this filter matched
-        // any jam whose name merely CONTAINED the username, which still let
-        // through every collab/remix jam that happens to mention them by
-        // name ("Elling's House of Pies", "Remix Inspo: Elling", etc.) --
-        // exact match is what actually isolates the one real personal jam.
-        const lower = username.toLowerCase()
-        setJams(jams.filter((jam) => jam.name.toLowerCase() === lower))
+        // jam's default (never-renamed) name is just the owner's username
+        // (possibly repeated -- see isPersonalJamName). An earlier version
+        // of this filter matched any jam whose name merely CONTAINED the
+        // username, which still let through every collab/remix jam that
+        // happens to mention them by name ("Elling's House of Pies", "Remix
+        // Inspo: Elling", etc.) -- this is what actually isolates the real
+        // personal jam(s).
+        setJams(jams.filter((jam) => isPersonalJamName(jam.name, username)))
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListJams() failed:', err)
@@ -613,6 +641,8 @@ export function EndlesssLibraryBrowser({
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
+        if (cancelled) return
+        setPreviewAttemptedForCID(selectedRiffCID)
         if (sources.length > 0) {
           previewTokenRef.current = registerActivePreview(stopPreview)
           setPlayingRiffCID(selectedRiffCID)
@@ -866,7 +896,7 @@ export function EndlesssLibraryBrowser({
                 cursor: 'pointer'
               }}
             >
-              my private jams
+              my private jam
             </button>
           </div>
           <button
@@ -1011,10 +1041,15 @@ export function EndlesssLibraryBrowser({
                   {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
                   {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
                   {resolvedRiff.stems.length > 0 &&
-                    resolvedRiff.stems.every((s) => s.path === null) && (
+                    previewAttemptedForCID === selectedRiffCID &&
+                    playingRiffCID !== selectedRiffCID && (
                       <span style={{ color: 'var(--ra-mute-on)' }}>
                         {' '}
-                        · no audio available (stems failed to download)
+                        · no audio available (
+                        {resolvedRiff.stems.every((s) => s.path === null)
+                          ? 'stems failed to download'
+                          : 'cached but failed to play'}
+                        )
                       </span>
                     )}
                 </div>
@@ -1179,10 +1214,15 @@ export function EndlesssLibraryBrowser({
                         {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
                         {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
                         {resolvedRiff.stems.length > 0 &&
-                          resolvedRiff.stems.every((s) => s.path === null) && (
+                          previewAttemptedForCID === selectedRiffCID &&
+                          playingRiffCID !== selectedRiffCID && (
                             <span style={{ color: 'var(--ra-mute-on)' }}>
                               {' '}
-                              · no audio available (stems failed to download)
+                              · no audio available (
+                              {resolvedRiff.stems.every((s) => s.path === null)
+                                ? 'stems failed to download'
+                                : 'cached but failed to play'}
+                              )
                             </span>
                           )}
                       </div>

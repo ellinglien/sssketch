@@ -115,6 +115,43 @@ export function LoreLibraryBrowser({
   const [available, setAvailable] = useState<boolean | null>(null)
   const [jamFilter, setJamFilter] = useState('')
   const [jams, setJams] = useState<LoreJam[]>([])
+  // Real Endlesss account membership, fetched once on mount if the person
+  // happens to already be logged in via the Endlesss-direct tab's own
+  // session (see EndlesssLoginPanel/endlesssApi.ts -- entirely separate
+  // login from anything LORE-specific). null means "unknown/not logged
+  // in" -- don't filter, show LORE's full local list as before. Per direct
+  // feedback ("it seems to have all jams ever made, even private ones"):
+  // warehouse.db3's own Jams table carries NO membership/ownership column
+  // at all (confirmed by inspecting its schema directly -- just JamCID and
+  // PublicName), so there's no local way to know which of the thousands of
+  // jams LORE has ever synced content from are actually ones this account
+  // belongs to. The live Endlesss membership API (already used by the
+  // Endlesss-direct private-jams tab) is the only real source of truth for
+  // that, so borrow it here too -- filters the LORE list down by JamCID
+  // intersection when available, and degrades to "no filtering" rather
+  // than forcing a login just to browse the local warehouse.
+  const [membershipJamCIDs, setMembershipJamCIDs] = useState<Set<string> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .endlesssAuthStatus()
+      .then((status) => {
+        if (cancelled || !status.loggedIn) return
+        return window.rifffApi.endlesssListJams().then((realJams) => {
+          if (!cancelled) setMembershipJamCIDs(new Set(realJams.map((j) => j.jamCID)))
+        })
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: membership lookup failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const visibleJams = useMemo(
+    () => (membershipJamCIDs ? jams.filter((jam) => membershipJamCIDs.has(jam.jamCID)) : jams),
+    [jams, membershipJamCIDs]
+  )
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
   const riffGroups = useMemo(() => groupRiffsByDateAndTempo(riffs), [riffs])
@@ -847,7 +884,7 @@ export function LoreLibraryBrowser({
                 )}
               </div>
               <div style={{ overflowY: 'auto', flex: 1 }}>
-                {jams.map((jam) => (
+                {visibleJams.map((jam) => (
                   <button
                     key={jam.jamCID}
                     onClick={() => setSelectedJamCID(jam.jamCID)}
