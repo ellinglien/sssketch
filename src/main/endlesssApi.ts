@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
+  LoreJam,
   LoreResolvedRiff,
   LoreResolvedStem,
   LoreRiffSummary,
@@ -235,6 +236,10 @@ function bearerAuthHeader(session: EndlesssSession): string {
   return `Bearer ${credentialsBase64(session)}`
 }
 
+function basicAuthHeader(session: EndlesssSession): string {
+  return `Basic ${credentialsBase64(session)}`
+}
+
 // ---- raw wire shapes, field names traced from OUROVEON's own CEREAL_NVP
 // declarations (see the design spec's Addendum) -- not guessed. ----
 
@@ -450,4 +455,87 @@ export async function resolveSharedFeedRiff(
   const cached = sharedFeedCache.get(riffCID)
   if (!cached) return null
   return downloadMissingStemsFor('shared', riffCID, cached, fetchImpl)
+}
+
+interface RawMembershipRow {
+  id: string
+  key: string
+}
+
+interface RawMembershipResponse {
+  total_rows: number
+  rows: RawMembershipRow[]
+}
+
+// CouchDB path-segment escaping for usernames/jam IDs containing hyphens --
+// traced from OUROVEON's own escaping (hyphens become "(2d)").
+function escapeCouchIdSegment(id: string): string {
+  return id.replace(/-/g, '(2d)')
+}
+
+async function fetchJamDisplayName(
+  jamId: string,
+  session: EndlesssSession,
+  fetchImpl: FetchLike
+): Promise<string> {
+  try {
+    const res = await fetchWithTimeout(
+      fetchImpl,
+      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(jamId)}/Profile`,
+      { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
+    )
+    if (!res.ok) return jamId
+    const body = (await res.json()) as { displayName?: unknown }
+    return typeof body.displayName === 'string' && body.displayName.trim() !== ''
+      ? body.displayName
+      : jamId
+  } catch (err) {
+    console.error(`endlesssApi: failed to fetch display name for jam ${jamId}:`, err)
+    return jamId
+  }
+}
+
+/** Lists the account's subscribed jams -- private and public alike, since
+ * this endpoint only ever returns jams the authenticated account actually
+ * has access to (see the design spec's grounding section). Requires a
+ * session; returns [] if not logged in rather than throwing, matching this
+ * module's "never throws" convention elsewhere. `lastRiffTime` is left at 0
+ * (unlike LORE's own listJams, which derives it from synced riff data this
+ * module doesn't have) -- the UI can sort jams alphabetically or by join
+ * order instead. */
+export async function listJams(fetchImpl: FetchLike = fetch): Promise<LoreJam[]> {
+  const session = activeSession()
+  if (!session) return []
+
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      fetchImpl,
+      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(session.username)}/_design/membership/_view/getMembership`,
+      { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
+    )
+  } catch (err) {
+    console.error('endlesssApi: listJams network failure:', err)
+    return []
+  }
+  if (!res.ok) {
+    console.error(`endlesssApi: listJams HTTP ${res.status}`)
+    return []
+  }
+
+  let body: RawMembershipResponse
+  try {
+    body = (await res.json()) as RawMembershipResponse
+  } catch (err) {
+    console.error('endlesssApi: listJams malformed JSON:', err)
+    return []
+  }
+
+  return Promise.all(
+    (body.rows ?? []).map(async (row) => ({
+      jamCID: row.id,
+      name: await fetchJamDisplayName(row.id, session, fetchImpl),
+      lastRiffTime: 0
+    }))
+  )
 }

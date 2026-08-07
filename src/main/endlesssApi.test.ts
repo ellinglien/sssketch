@@ -355,3 +355,75 @@ describe('endlesssApi shared feed', () => {
     expect(resolved).toBeNull()
   })
 })
+
+describe('endlesssApi jam listing', () => {
+  async function loggedInFetch(loginResponse: Record<string, unknown> = {}): Promise<typeof fetch> {
+    const { loginWithCredentials } = await import('./endlesssApi')
+    const fakeLoginFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: 't',
+            password: 'p',
+            user_id: 'u1',
+            expires: Date.now() + 1000 * 60 * 60 * 24,
+            ...loginResponse
+          }),
+          { status: 200 }
+        )
+    )
+    await loginWithCredentials('elling', 'hunter2', fakeLoginFetch as typeof fetch)
+    return fakeLoginFetch as typeof fetch
+  }
+
+  it('listJams returns an empty list when not logged in', async () => {
+    const { listJams, logout } = await import('./endlesssApi')
+    logout()
+    const jams = await listJams(vi.fn() as unknown as typeof fetch)
+    expect(jams).toEqual([])
+  })
+
+  it('listJams fetches membership then a display name per jam', async () => {
+    await loggedInFetch()
+    const { listJams } = await import('./endlesssApi')
+    const calls: string[] = []
+    const fakeFetch = vi.fn(async (url: string) => {
+      calls.push(url)
+      if (url.includes('_design/membership')) {
+        return new Response(
+          JSON.stringify({
+            total_rows: 1,
+            rows: [{ id: 'jam_abc', key: '2020-09-23T13:04:02.375Z' }]
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.endsWith('/Profile')) {
+        return new Response(JSON.stringify({ displayName: 'My Cool Jam' }), { status: 200 })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    })
+    const jams = await listJams(fakeFetch as typeof fetch)
+    expect(jams).toEqual([{ jamCID: 'jam_abc', name: 'My Cool Jam', lastRiffTime: 0 }])
+    expect(calls[0]).toBe(
+      'https://data.endlesss.fm/user_appdata$elling/_design/membership/_view/getMembership'
+    )
+    expect(calls[1]).toBe('https://data.endlesss.fm/user_appdata$jam_abc/Profile')
+  })
+
+  it('listJams falls back to the raw jam ID as the name if the profile fetch fails', async () => {
+    await loggedInFetch()
+    const { listJams } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(async (url: string) => {
+      if (url.includes('_design/membership')) {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'jam_abc', key: 'x' }] }),
+          { status: 200 }
+        )
+      }
+      return new Response('not found', { status: 404 })
+    })
+    const jams = await listJams(fakeFetch as typeof fetch)
+    expect(jams).toEqual([{ jamCID: 'jam_abc', name: 'jam_abc', lastRiffTime: 0 }])
+  })
+})
