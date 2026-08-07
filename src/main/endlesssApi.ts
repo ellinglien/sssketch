@@ -1,4 +1,6 @@
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -29,6 +31,89 @@ interface EndlesssLoginResponse {
   password: string
   user_id: string
   expires: number
+}
+
+const SESSION_FILENAME = 'endlesss-session.enc'
+
+function sessionFilePath(): string {
+  return join(app.getPath('userData'), SESSION_FILENAME)
+}
+
+let currentSession: EndlesssSession | null = null
+let sessionLoadAttempted = false
+
+/** Encrypts and writes the session to disk. If safeStorage encryption isn't
+ * available on this platform/environment, the session simply isn't
+ * persisted -- requiring login every launch is a safer failure mode than
+ * ever writing these credentials in plaintext. */
+function persistSession(session: EndlesssSession): void {
+  if (!safeStorage.isEncryptionAvailable()) return
+  const encrypted = safeStorage.encryptString(JSON.stringify(session))
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  writeFileSync(sessionFilePath(), encrypted)
+}
+
+function loadPersistedSession(): EndlesssSession | null {
+  if (!safeStorage.isEncryptionAvailable()) return null
+  const path = sessionFilePath()
+  if (!existsSync(path)) return null
+  try {
+    const decrypted = safeStorage.decryptString(readFileSync(path))
+    const parsed = JSON.parse(decrypted) as Partial<EndlesssSession>
+    if (
+      typeof parsed.token !== 'string' ||
+      typeof parsed.password !== 'string' ||
+      typeof parsed.userId !== 'string' ||
+      typeof parsed.username !== 'string' ||
+      typeof parsed.expires !== 'number'
+    ) {
+      return null
+    }
+    return parsed as EndlesssSession
+  } catch (err) {
+    console.error('endlesssApi: failed to load persisted session:', err)
+    return null
+  }
+}
+
+/** Lazily loads whatever session was persisted from a previous launch, at
+ * most once per process lifetime -- every other call just reads the
+ * in-memory currentSession, which loginWithCredentials/logout also keep in
+ * sync. */
+function ensureSessionLoaded(): void {
+  if (sessionLoadAttempted) return
+  sessionLoadAttempted = true
+  currentSession = loadPersistedSession()
+}
+
+/** The live session, or null if there isn't one / it's expired. Every
+ * network function in this module that needs auth calls this rather than
+ * reading currentSession directly, so expiry is checked in exactly one
+ * place. */
+function activeSession(): EndlesssSession | null {
+  ensureSessionLoaded()
+  if (!currentSession || currentSession.expires <= Date.now()) return null
+  return currentSession
+}
+
+export function getAuthStatus():
+  { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number } {
+  const session = activeSession()
+  if (!session) return { loggedIn: false }
+  return { loggedIn: true, userId: session.userId, expiresAt: session.expires }
+}
+
+export function logout(): void {
+  currentSession = null
+  sessionLoadAttempted = true
+  const path = sessionFilePath()
+  if (existsSync(path)) {
+    try {
+      unlinkSync(path)
+    } catch (err) {
+      console.error('endlesssApi: failed to remove persisted session on logout:', err)
+    }
+  }
 }
 
 function userAgent(): string {
@@ -124,5 +209,8 @@ export async function loginWithCredentials(
     username,
     expires: parsed.expires
   }
+  currentSession = session
+  sessionLoadAttempted = true
+  persistSession(session)
   return { ok: true, session }
 }
