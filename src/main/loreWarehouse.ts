@@ -220,18 +220,6 @@ interface FullRiffRow extends RiffRow {
   Scale: number | null
 }
 
-// Traced directly from OUROVEON's own source (endlesss/core.constants.h,
-// cRootNames/cScaleNames), not guessed -- same "verify against the real
-// reference client" standard this file already applies to instrumentMask
-// below. Root is a 12-tone chromatic index; OUROVEON's own naming
-// deliberately favors flats over sharps for the black keys (Db, Eb, F#,
-// Ab, Bb -- not a typo, that's genuinely the reference client's own
-// spelling choice, kept verbatim rather than "fixed" to an enharmonic
-// sharps-only convention). Scale is a 0-17 index covering the 7 diatonic
-// modes plus pentatonic/blues/whole-tone/chromatic scales Endlesss also
-// supports. "Major (Ionian)"/"Minor (Aeolian)" get their common pop name
-// alongside the mode name; every other entry is OUROVEON's own exact
-// string, used verbatim.
 interface FullStemRow {
   StemCID: string
   CreatorUserName: string
