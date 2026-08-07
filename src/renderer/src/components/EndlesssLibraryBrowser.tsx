@@ -20,7 +20,16 @@ const SHARED_FEED_STORAGE_KEY = 'sssketch:endlesssSharedFeedUsername'
 const SHARED_FEED_PAGE_SIZE = 30
 
 type EndlesssTab = 'shared-feed' | 'private-jams'
-type AuthStatus = { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number }
+type AuthStatus =
+  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
+
+/** Flat, ownership-agnostic fill for shared-feed riff circles -- unlike
+ * LORE's riffCircleColor, there's no ownerFraction signal available here
+ * (every Endlesss-direct riff summary reports it as 0, a deliberate v1
+ * simplification -- see endlesssApi.ts), and it wouldn't mean much anyway:
+ * this tab is inherently "things this account made or was shared," so
+ * varying brightness by ownership has no real information to carry. */
+const FEED_RIFF_CIRCLE_COLOR = 'rgb(148, 148, 148)'
 
 export function EndlesssLibraryBrowser({
   onClose,
@@ -73,8 +82,12 @@ export function EndlesssLibraryBrowser({
 
   // Auto-effective username: whoever's logged in, once authenticated --
   // matches the design spec's "logging in swaps the plain username lookup
-  // for the authenticated session automatically" UX.
-  const effectiveUsername = feedUsername.trim()
+  // for the authenticated session automatically" UX. Logging in already
+  // identifies the account by username (it's the only credential Endlesss
+  // login uses besides the password), so asking for it a second time here
+  // would be pure redundancy -- the manual field only matters pre-login, for
+  // the "peek at a public feed with no account" quick path.
+  const effectiveUsername = authStatus.loggedIn ? authStatus.username : feedUsername.trim()
 
   // Only used for the scroll-triggered "load more" (append) case, invoked
   // from the onScroll event handler below -- a synchronous setFeedLoading(true)
@@ -411,26 +424,28 @@ export function EndlesssLibraryBrowser({
             }}
           >
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                type="text"
-                value={feedUsername}
-                onChange={(e) => setFeedUsername(e.target.value)}
-                placeholder={
-                  authStatus.loggedIn
-                    ? 'your endlesss username (or leave blank)'
-                    : 'endlesss username — no login needed for public shares'
-                }
-                style={{
-                  height: 24,
-                  fontSize: 11,
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text)',
-                  border: '1px solid var(--ra-border)',
-                  borderRadius: 0,
-                  padding: '0 6px',
-                  width: 260
-                }}
-              />
+              {authStatus.loggedIn ? (
+                <span style={{ fontSize: 11, color: 'var(--ra-text-2)' }}>
+                  showing @{authStatus.username}&rsquo;s shared feed
+                </span>
+              ) : (
+                <input
+                  type="text"
+                  value={feedUsername}
+                  onChange={(e) => setFeedUsername(e.target.value)}
+                  placeholder="endlesss username — no login needed for public shares"
+                  style={{
+                    height: 24,
+                    fontSize: 11,
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    border: '1px solid var(--ra-border)',
+                    borderRadius: 0,
+                    padding: '0 6px',
+                    width: 260
+                  }}
+                />
+              )}
               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                 {feedRiffs.length} riffs{feedHasMore ? '+' : ''}
               </span>
@@ -447,35 +462,54 @@ export function EndlesssLibraryBrowser({
                 overflowY: 'auto',
                 flex: 1,
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 4
+                flexWrap: 'wrap',
+                alignContent: 'flex-start',
+                gap: 5
               }}
             >
               {feedRiffs.map((riff) => (
-                <button
-                  key={riff.riffCID}
-                  onClick={() => setSelectedRiffCID(riff.riffCID)}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '6px 8px',
-                    fontSize: 11,
-                    border: 'none',
-                    borderRadius: 0,
-                    background:
-                      selectedRiffCID === riff.riffCID ? 'var(--ra-bg-row-active)' : 'transparent',
-                    color: 'var(--ra-text)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <span>{riff.userName || 'shared riff'}</span>
-                  <span style={{ color: 'var(--ra-text-3)' }}>
-                    {formatBpm(riff.bpm)} BPM · {riff.stemCount} stems
-                    {importedRiffGroupIds.has(riff.riffCID) ? ' · imported' : ''}
-                  </span>
-                </button>
+                <div key={riff.riffCID} style={{ position: 'relative', width: 18, height: 18 }}>
+                  <button
+                    onClick={() => setSelectedRiffCID(riff.riffCID)}
+                    title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: '50%',
+                      // Same cue hierarchy as LoreLibraryBrowser's own riff
+                      // circles: selection ring first, then "not everything's
+                      // downloaded yet" (dashed), else a plain solid border --
+                      // see downloadMissingStemsFor, already wired to fetch
+                      // whatever's missing the moment a riff is selected, so
+                      // showing the circle before it's fully cached is safe.
+                      border:
+                        selectedRiffCID === riff.riffCID
+                          ? '2px solid var(--ra-playhead)'
+                          : riff.cachedStemCount < riff.stemCount
+                            ? '1px dashed var(--ra-text-3)'
+                            : '1px solid var(--ra-border)',
+                      padding: 0,
+                      background: FEED_RIFF_CIRCLE_COLOR,
+                      cursor: 'pointer'
+                    }}
+                  />
+                  {importedRiffGroupIds.has(riff.riffCID) && (
+                    <span
+                      title="already imported"
+                      style={{
+                        position: 'absolute',
+                        bottom: -2,
+                        right: -2,
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        background: 'var(--ra-stretch-on)',
+                        border: '1px solid var(--ra-bg-bar)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  )}
+                </div>
               ))}
               {feedRiffs.length === 0 && !feedLoading && (
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)', marginTop: 6 }}>

@@ -279,7 +279,7 @@ const api = {
       .then((r) => (r.ok ? { ok: true } : { ok: false, error: r.error })),
   endlesssLogout: (): Promise<void> => ipcRenderer.invoke('endlesss-logout'),
   endlesssAuthStatus: (): Promise<
-    { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number }
+    { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
   endlesssListSharedFeed: (
     userName: string,

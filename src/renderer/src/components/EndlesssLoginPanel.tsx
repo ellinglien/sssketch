@@ -1,7 +1,8 @@
 // src/renderer/src/components/EndlesssLoginPanel.tsx
 import { useEffect, useMemo, useState } from 'react'
 
-type AuthStatus = { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number }
+type AuthStatus =
+  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
 
 function daysLeftFor(status: AuthStatus): number | null {
   if (!status.loggedIn) return null
@@ -89,7 +90,7 @@ export function EndlesssLoginPanel({
         }}
       >
         <span>
-          logged in
+          logged in as {status.loggedIn ? status.username : ''}
           {daysLeft !== null && (
             <>
               {' '}

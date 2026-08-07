@@ -461,7 +461,7 @@ describe('endlesssApi riff listing in a jam', () => {
       return new Response(
         JSON.stringify({
           total_rows: 1,
-          rows: [{ id: 'riff_1', key: 1700000000000000000, value: ['stem_1', 'stem_2'] }]
+          rows: [{ id: 'riff_1', key: 1700000000000, value: ['stem_1', 'stem_2'] }]
         }),
         { status: 200 }
       )

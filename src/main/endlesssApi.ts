@@ -106,10 +106,15 @@ function activeSession(): EndlesssSession | null {
 }
 
 export function getAuthStatus():
-  { loggedIn: false } | { loggedIn: true; userId: string; expiresAt: number } {
+  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number } {
   const session = activeSession()
   if (!session) return { loggedIn: false }
-  return { loggedIn: true, userId: session.userId, expiresAt: session.expires }
+  return {
+    loggedIn: true,
+    userId: session.userId,
+    username: session.username,
+    expiresAt: session.expires
+  }
 }
 
 export function logout(): void {
@@ -607,9 +612,13 @@ const DEFAULT_RIFF_PAGE_SIZE = 200
 /** Lists riffs in one jam via the same rifffLoopsByCreateTime CouchDB view
  * OUROVEON itself uses -- lightweight (id/creation-time/stem-IDs only, no
  * per-riff metadata), matching the two-step "list then resolve" shape this
- * whole path already uses. `key` is documented (ResultRiffAndStemIDs, see
- * the design spec's Addendum) as unix NANOSECONDS -- divided by 1e9 here to
- * match LoreRiffSummary's unix-SECONDS convention. Client-side filters
+ * whole path already uses. `key` was assumed (per ResultRiffAndStemIDs' own
+ * comment, see the design spec's Addendum) to be unix NANOSECONDS -- real
+ * live testing against an actual jam showed every riff rendering as
+ * 12/31/1969 (epoch), meaning that assumption was wrong; the real unit is
+ * unix MILLISECONDS (JS's own standard `Date.now()` convention), so this
+ * divides by 1000 to match LoreRiffSummary's unix-SECONDS convention, not
+ * 1e9. Client-side filters
  * (date/bpm/userName) from RiffFilters are NOT applied here -- the raw view
  * doesn't expose that metadata without a per-riff resolve, unlike LORE's own
  * SQL-backed listRiffs. This is a deliberate v1 scope trim (see the
@@ -652,7 +661,7 @@ export async function listRiffsInJam(
   const rows = body.rows ?? []
   const riffs: LoreRiffSummary[] = rows.map((row) => ({
     riffCID: row.id,
-    creationTime: Math.floor(row.key / 1e9),
+    creationTime: Math.floor(row.key / 1000),
     bpm: 0,
     barLength: 0,
     userName: '',
