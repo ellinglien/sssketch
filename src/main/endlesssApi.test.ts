@@ -545,6 +545,73 @@ describe('endlesssApi jam riff resolution', () => {
     expect(JSON.parse(calls[0].body!)).toEqual({ keys: ['riff_1'] })
     expect(JSON.parse(calls[1].body!)).toEqual({ keys: ['stem_1'] })
   })
+
+  it('listRiffOwnership returns {} when not logged in', async () => {
+    const { listRiffOwnership, logout } = await import('./endlesssApi')
+    logout()
+    const result = await listRiffOwnership(
+      'jam_abc',
+      ['riff_1'],
+      'elling',
+      vi.fn() as unknown as typeof fetch
+    )
+    expect(result).toEqual({})
+  })
+
+  it('listRiffOwnership returns {} without any network call when given no riffCIDs', async () => {
+    await loggedIn()
+    const { listRiffOwnership } = await import('./endlesssApi')
+    const fakeFetch = vi.fn()
+    const result = await listRiffOwnership('jam_abc', [], 'elling', fakeFetch as typeof fetch)
+    expect(result).toEqual({})
+    expect(fakeFetch).not.toHaveBeenCalled()
+  })
+
+  it('listRiffOwnership batches both round trips and computes ownerFraction per riff', async () => {
+    await loggedIn()
+    const { listRiffOwnership } = await import('./endlesssApi')
+    const calls: { url: string; body?: string }[] = []
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body as string | undefined })
+      const keys = JSON.parse(init!.body as string).keys as string[]
+      if (keys.includes('riff_1')) {
+        return new Response(
+          JSON.stringify({
+            total_rows: 2,
+            rows: [
+              { id: 'riff_1', doc: rawRiffDoc('stem_1') },
+              {
+                id: 'riff_2',
+                doc: rawRiffDoc('stem_2', { _id: 'riff_2' })
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          total_rows: 2,
+          rows: [
+            { id: 'stem_1', doc: rawStemDoc({ creatorUserName: 'elling' }) },
+            { id: 'stem_2', doc: rawStemDoc({ _id: 'stem_2', creatorUserName: 'someoneElse' }) }
+          ]
+        }),
+        { status: 200 }
+      )
+    })
+    const result = await listRiffOwnership(
+      'jam_abc',
+      ['riff_1', 'riff_2'],
+      'elling',
+      fakeFetch as typeof fetch
+    )
+    expect(result).toEqual({ riff_1: 1, riff_2: 0 })
+    // Exactly two round trips regardless of riff/stem count -- riff docs, then stem docs.
+    expect(calls).toHaveLength(2)
+    expect(JSON.parse(calls[0].body!).keys).toEqual(['riff_1', 'riff_2'])
+    expect(JSON.parse(calls[1].body!).keys.sort()).toEqual(['stem_1', 'stem_2'])
+  })
 })
 
 describe('endlesssApi stem downloading', () => {

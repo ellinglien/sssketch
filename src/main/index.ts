@@ -49,7 +49,8 @@ import {
   resolveSharedFeedRiff,
   listJams as listEndlesssJams,
   listRiffsInJam,
-  resolveJamRiff
+  resolveJamRiff,
+  listRiffOwnership
 } from './endlesssApi'
 import {
   listLibrarySketches,
@@ -227,6 +228,11 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle('endlesss-resolve-riff', (_event, jamId: string, riffCID: string) =>
     resolveJamRiff(jamId, riffCID)
+  )
+  ipcMain.handle(
+    'endlesss-list-riff-ownership',
+    (_event, jamId: string, riffCIDs: string[], targetUser: string) =>
+      listRiffOwnership(jamId, riffCIDs, targetUser)
   )
 
   ipcMain.handle('pick-folder', async () => {

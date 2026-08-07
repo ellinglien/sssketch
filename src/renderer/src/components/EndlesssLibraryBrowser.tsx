@@ -170,9 +170,14 @@ export function EndlesssLibraryBrowser({
   }, [feedUsername])
 
   const [feedRiffs, setFeedRiffs] = useState<LoreRiffSummary[]>([])
+  const feedRiffGroups = useMemo(() => groupRiffsByDate(feedRiffs), [feedRiffs])
   const [feedHasMore, setFeedHasMore] = useState(false)
   const [feedNextOffset, setFeedNextOffset] = useState(0)
   const [feedLoading, setFeedLoading] = useState(false)
+  // Measured to decide whether to auto-load more pages -- see the
+  // fill-the-visible-area effect below.
+  const feedGridRef = useRef<HTMLDivElement>(null)
+  const jamGridRef = useRef<HTMLDivElement>(null)
 
   const [selectedRiffCID, setSelectedRiffCID] = useState<string | null>(null)
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
@@ -324,6 +329,23 @@ export function EndlesssLibraryBrowser({
     }
   }, [tab, effectiveUsername])
 
+  // Keeps loading more pages until the grid actually overflows its
+  // container (or there's nothing left to load) -- SHARED_FEED_PAGE_SIZE's
+  // 30 tiny circles didn't come close to filling this modal's height, so
+  // the scroll-triggered load-more below never got a chance to fire: there
+  // was nothing to scroll. Confirmed live -- a fresh feed rendered one
+  // sparse row with a huge empty gap above the "load more" button. Deferred
+  // through a microtask (not called directly) so the eventual
+  // setFeedLoading(true) inside loadFeed doesn't read as a synchronous
+  // setState-in-effect.
+  useEffect(() => {
+    if (tab !== 'shared-feed' || !feedHasMore || feedLoading) return
+    const el = feedGridRef.current
+    if (!el || el.scrollHeight > el.clientHeight) return
+    void Promise.resolve().then(() => loadFeed(feedNextOffset, true))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFeed intentionally excluded, it's a plain function recreated every render, not a stable dependency
+  }, [tab, feedRiffs, feedHasMore, feedLoading, feedNextOffset])
+
   useEffect(() => {
     // Eager, unconditional stop -- fires every time selectedRiffCID changes
     // (including to null, which is how clicking the already-selected riff
@@ -391,11 +413,22 @@ export function EndlesssLibraryBrowser({
   useEffect(() => {
     if (tab !== 'private-jams' || !authStatus.loggedIn) return
     let cancelled = false
+    const username = authStatus.username
     window.rifffApi
       .endlesssListJams()
       .then((jams) => {
         if (cancelled) return
-        setJams(jams)
+        // A membership view lists every jam the account has ever joined --
+        // for an active account that's frequently dozens of collaborative
+        // jams, most of which LORE's own browser already covers (it syncs
+        // everything, this direct path is specifically for browsing WITHOUT
+        // LORE). Per direct feedback: narrow this list down to jams that are
+        // actually this person's own -- by Endlesss convention, a personal
+        // jam's default name already contains the owner's username, which
+        // reliably tells apart "my own space" from "a jam I'm merely a
+        // member of" without needing any extra API call.
+        const lower = username.toLowerCase()
+        setJams(jams.filter((jam) => jam.name.toLowerCase().includes(lower)))
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListJams() failed:', err)
@@ -403,7 +436,33 @@ export function EndlesssLibraryBrowser({
     return () => {
       cancelled = true
     }
-  }, [tab, authStatus.loggedIn])
+  }, [tab, authStatus])
+
+  // Fetches ownerFraction for every riffCID in a freshly (or newly appended)
+  // loaded jam page in one batched pass -- see endlesssApi.ts's own
+  // listRiffOwnership doc comment for why this is cheap (two _all_docs
+  // round trips regardless of page size, no audio ever downloaded). Without
+  // this, jamOwnerFractions was only ever filled in by the resolve/prefetch
+  // effects below, which only run once a riff is actually clicked -- every
+  // circle read as an identical flat gray "mystery dot" until then, per
+  // direct feedback ("hunting in the dark... clicking something hoping it
+  // turns white"). Fire-and-forget: a failure here just leaves those
+  // riffs' circles flat gray, no worse than before this existed.
+  function fetchOwnershipFor(jamId: string, riffCIDs: string[]): void {
+    if (!authStatus.loggedIn || riffCIDs.length === 0) return
+    window.rifffApi
+      .endlesssListRiffOwnership(jamId, riffCIDs, authStatus.username)
+      .then((fractions) => {
+        setJamOwnerFractions((prev) => {
+          const next = new Map(prev)
+          for (const [riffCID, fraction] of Object.entries(fractions)) next.set(riffCID, fraction)
+          return next
+        })
+      })
+      .catch((err) => {
+        console.error('EndlesssLibraryBrowser: endlesssListRiffOwnership() failed:', err)
+      })
+  }
 
   useEffect(() => {
     if (!selectedJamCID) return
@@ -415,6 +474,10 @@ export function EndlesssLibraryBrowser({
         setJamRiffs(page.riffs)
         setJamRiffsHasMore(page.hasMore)
         setJamRiffsNextOffset(page.nextOffset)
+        fetchOwnershipFor(
+          selectedJamCID,
+          page.riffs.map((r) => r.riffCID)
+        )
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListRiffs() failed:', err)
@@ -425,6 +488,7 @@ export function EndlesssLibraryBrowser({
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchOwnershipFor intentionally excluded, it's a plain function recreated every render (closes over authStatus) not a stable dependency; including it would re-run this effect on every render
   }, [selectedJamCID])
 
   function loadMoreJamRiffs(): void {
@@ -436,12 +500,28 @@ export function EndlesssLibraryBrowser({
         setJamRiffs((prev) => [...prev, ...page.riffs])
         setJamRiffsHasMore(page.hasMore)
         setJamRiffsNextOffset(page.nextOffset)
+        fetchOwnershipFor(
+          selectedJamCID,
+          page.riffs.map((r) => r.riffCID)
+        )
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListRiffs() (load more) failed:', err)
       })
       .finally(() => setJamRiffsLoading(false))
   }
+
+  // Same fill-the-visible-area idea as the shared-feed grid above -- DEFAULT_RIFF_PAGE_SIZE
+  // (200) usually already overflows this modal on its own, but a small jam
+  // shouldn't be left with the same sparse-page/dead-scroll problem just
+  // because it happens to have fewer riffs than that.
+  useEffect(() => {
+    if (!selectedJamCID || !jamRiffsHasMore || jamRiffsLoading) return
+    const el = jamGridRef.current
+    if (!el || el.scrollHeight > el.clientHeight) return
+    void Promise.resolve().then(() => loadMoreJamRiffs())
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadMoreJamRiffs intentionally excluded, it's a plain function recreated every render, not a stable dependency
+  }, [selectedJamCID, jamRiffs, jamRiffsHasMore, jamRiffsLoading])
 
   useEffect(() => {
     // Eager, unconditional stop -- see the shared-feed resolve effect's own
@@ -688,6 +768,7 @@ export function EndlesssLibraryBrowser({
             </div>
 
             <div
+              ref={feedGridRef}
               onScroll={(e) => {
                 if (!feedHasMore || feedLoading) return
                 const el = e.currentTarget
@@ -698,24 +779,43 @@ export function EndlesssLibraryBrowser({
                 overflowY: 'auto',
                 flex: 1,
                 display: 'flex',
-                flexWrap: 'wrap',
-                alignContent: 'flex-start',
-                gap: 5
+                flexDirection: 'column',
+                gap: 8
               }}
             >
-              {feedRiffs.map((riff) => (
-                <RiffCircle
-                  key={riff.riffCID}
-                  title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                  selected={selectedRiffCID === riff.riffCID}
-                  playing={selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID}
-                  fullyCached={riff.cachedStemCount >= riff.stemCount}
-                  imported={importedRiffGroupIds.has(riff.riffCID)}
-                  ownerFraction={riff.ownerFraction}
-                  onClick={() =>
-                    setSelectedRiffCID((prev) => (prev === riff.riffCID ? null : riff.riffCID))
-                  }
-                />
+              {feedRiffGroups.map((group) => (
+                <div key={group.label}>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      color: 'var(--ra-text-3)',
+                      display: 'block',
+                      marginBottom: 3
+                    }}
+                  >
+                    {group.label}
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {group.riffs.map((riff) => (
+                      <RiffCircle
+                        key={riff.riffCID}
+                        title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                        selected={selectedRiffCID === riff.riffCID}
+                        playing={
+                          selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID
+                        }
+                        fullyCached={riff.cachedStemCount >= riff.stemCount}
+                        imported={importedRiffGroupIds.has(riff.riffCID)}
+                        ownerFraction={riff.ownerFraction}
+                        onClick={() =>
+                          setSelectedRiffCID((prev) =>
+                            prev === riff.riffCID ? null : riff.riffCID
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
               ))}
               {feedRiffs.length === 0 && !feedLoading && (
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)', marginTop: 6 }}>
@@ -832,6 +932,7 @@ export function EndlesssLibraryBrowser({
               {selectedJamCID && (
                 <>
                   <div
+                    ref={jamGridRef}
                     onScroll={(e) => {
                       if (!jamRiffsHasMore || jamRiffsLoading) return
                       const el = e.currentTarget

@@ -768,3 +768,50 @@ export async function resolveJamRiff(
   const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.values()])
   return downloadMissingStemsFor('jam', riffCID, resolved, fetchImpl)
 }
+
+/** Ownership-only pass over a whole page of jam riffs at once, batched into
+ * exactly two _all_docs round trips (all riff docs, then every stem doc
+ * they collectively reference) regardless of how many riffCIDs are passed
+ * -- deliberately does NOT download any stem audio (unlike resolveJamRiff),
+ * so the browser can color a full page of riff circles by attribution
+ * (ownerFraction, via computeOwnerFraction) as soon as it loads instead of
+ * only learning it one riff at a time as each gets individually
+ * clicked/prefetched. That per-riff-click approach left circles reading as
+ * flat gray "mystery dots" until clicked -- exactly the LORE library
+ * browser's own listRiffs already avoids, since it's backed by a
+ * pre-synced local warehouse with this metadata available up front; this
+ * is the direct-Endlesss-path equivalent of that same up-front sync step. */
+export async function listRiffOwnership(
+  jamId: string,
+  riffCIDs: string[],
+  targetUser: string,
+  fetchImpl: FetchLike = fetch
+): Promise<Record<string, number>> {
+  const session = activeSession()
+  if (!session || riffCIDs.length === 0) return {}
+
+  const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, riffCIDs, session, fetchImpl)
+  const stemIdsByRiff = new Map<string, string[]>()
+  const allStemIds = new Set<string>()
+  for (const [riffCID, riffDoc] of riffDocs) {
+    const stemIds = riffDoc.state.playback
+      .map((slot) => slot.slot?.current)
+      .filter(
+        (current): current is { on: boolean; currentLoop?: string; gain: number } => !!current?.on
+      )
+      .map((current) => current.currentLoop)
+      .filter((id): id is string => typeof id === 'string')
+    stemIdsByRiff.set(riffCID, stemIds)
+    stemIds.forEach((id) => allStemIds.add(id))
+  }
+
+  const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, [...allStemIds], session, fetchImpl)
+  const result: Record<string, number> = {}
+  for (const [riffCID, stemIds] of stemIdsByRiff) {
+    const creatorUserNames = stemIds
+      .map((id) => stemDocs.get(id)?.creatorUserName)
+      .filter((name): name is string => typeof name === 'string')
+    result[riffCID] = computeOwnerFraction(creatorUserNames, targetUser)
+  }
+  return result
+}

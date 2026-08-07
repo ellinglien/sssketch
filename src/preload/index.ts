@@ -306,7 +306,13 @@ const api = {
   ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
     ipcRenderer.invoke('endlesss-list-riffs', jamId, filters),
   endlesssResolveRiff: (jamId: string, riffCID: string): Promise<LoreResolvedRiff | null> =>
-    ipcRenderer.invoke('endlesss-resolve-riff', jamId, riffCID)
+    ipcRenderer.invoke('endlesss-resolve-riff', jamId, riffCID),
+  endlesssListRiffOwnership: (
+    jamId: string,
+    riffCIDs: string[],
+    targetUser: string
+  ): Promise<Record<string, number>> =>
+    ipcRenderer.invoke('endlesss-list-riff-ownership', jamId, riffCIDs, targetUser)
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)
