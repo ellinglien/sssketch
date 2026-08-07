@@ -1,6 +1,13 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type {
+  LoreResolvedRiff,
+  LoreResolvedStem,
+  LoreRiffSummary,
+  RiffPage
+} from '@shared/loreLibrary'
+import { resolveKeyName } from '@shared/loreLibrary'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -213,4 +220,234 @@ export async function loginWithCredentials(
   sessionLoadAttempted = true
   persistSession(session)
   return { ok: true, session }
+}
+
+/** Both Basic (data.endlesss.fm) and Bearer (api.endlesss.fm) auth are built
+ * from the same token:password pair, base64-encoded -- per OUROVEON's own
+ * comment ("Bearer ... formed out of token:password"), the Bearer variant
+ * uses the identical encoding Basic auth would, just under a different
+ * header scheme. */
+function credentialsBase64(session: EndlesssSession): string {
+  return Buffer.from(`${session.token}:${session.password}`).toString('base64')
+}
+
+function bearerAuthHeader(session: EndlesssSession): string {
+  return `Bearer ${credentialsBase64(session)}`
+}
+
+// ---- raw wire shapes, field names traced from OUROVEON's own CEREAL_NVP
+// declarations (see the design spec's Addendum) -- not guessed. ----
+
+interface RawStemDoc {
+  _id: string
+  cdn_attachments: {
+    oggAudio?: { bucket?: string; endpoint: string; key?: string; url: string; length: number }
+    flacAudio?: { endpoint: string; key: string; length: number; url: string }
+  }
+  bps: number
+  length16ths: number
+  presetName: string
+  creatorUserName: string
+  isDrum?: boolean
+  isNote?: boolean
+  isBass?: boolean
+  isMic?: boolean
+}
+
+interface RawRiffSlot {
+  slot: { current?: { on: boolean; currentLoop?: string; gain: number } }
+}
+
+interface RawRiffDoc {
+  _id: string
+  state: { bps: number; barLength: number; playback: RawRiffSlot[] }
+  userName: string
+  created: number
+  root: number
+  scale: number
+}
+
+interface RawSharedRiffEntry {
+  _id: string
+  doc_id: string
+  action_timestamp: number
+  rifff: RawRiffDoc
+  loops: (RawStemDoc | null)[]
+  private?: boolean
+}
+
+interface RawSharedFeedResponse {
+  data: RawSharedRiffEntry[]
+}
+
+// Matches OUROVEON's own BPStoRoundedBPM: ceil (not round) to 2 decimal
+// places -- kept identical so tempo values displayed here match what the
+// official ecosystem would show for the same riff.
+function bpsToRoundedBpm(bps: number): number {
+  return Math.ceil(bps * 60 * 100) / 100
+}
+
+function stemFlagsToMask(stem: RawStemDoc): number {
+  let mask = 0
+  if (stem.isDrum) mask |= 1 << 1
+  if (stem.isNote) mask |= 1 << 2
+  if (stem.isBass) mask |= 1 << 3
+  if (stem.isMic) mask |= 1 << 4
+  return mask
+}
+
+// Deliberately OGG-only for v1: sssketch's existing decode pipeline (shared
+// with the LORE path, whose synced stems are always ogg-content files) has
+// no FLAC support today, and OUROVEON itself documents flacAudio as "very
+// rare" for a stem to lack ogg entirely. A stem with only flacAudio (no
+// oggAudio) is treated as undownloadable (downloadUrl: null) rather than
+// attempting a decode path that doesn't exist yet elsewhere in this app.
+function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreResolvedStem {
+  const bpm = bpsToRoundedBpm(stem.bps)
+  const barLength = stem.length16ths / 16
+  return {
+    stemCID: stem._id,
+    slot,
+    path: null,
+    gain,
+    creatorUserName: stem.creatorUserName,
+    presetName: stem.presetName,
+    instrumentMask: stemFlagsToMask(stem),
+    durationSec: barLength * (60 / bpm) * 4,
+    barLength,
+    downloadUrl: stem.cdn_attachments.oggAudio?.url ?? null
+  }
+}
+
+function buildResolvedRiff(
+  riffCID: string,
+  riffDoc: RawRiffDoc,
+  stemDocs: (RawStemDoc | null)[]
+): LoreResolvedRiff {
+  const stems: LoreResolvedStem[] = []
+  riffDoc.state.playback.forEach((slotWrapper, index) => {
+    const current = slotWrapper.slot?.current
+    if (!current || !current.on || !current.currentLoop) return
+    const stemDoc = stemDocs.find((s) => s?._id === current.currentLoop)
+    if (!stemDoc) return
+    stems.push(buildResolvedStem(stemDoc, index + 1, current.gain))
+  })
+  return {
+    riffCID,
+    bpm: bpsToRoundedBpm(riffDoc.state.bps),
+    barLength: riffDoc.state.barLength,
+    key: resolveKeyName(riffDoc.root, riffDoc.scale),
+    stems
+  }
+}
+
+function summarizeResolvedRiff(
+  riffCID: string,
+  userName: string,
+  creationTime: number,
+  resolved: LoreResolvedRiff
+): LoreRiffSummary {
+  return {
+    riffCID,
+    creationTime,
+    bpm: resolved.bpm,
+    barLength: resolved.barLength,
+    userName,
+    stemCount: resolved.stems.length,
+    cachedStemCount: 0, // nothing downloaded yet -- listing never touches disk
+    ownerFraction: 0 // deliberately flat for v1 -- see the implementation plan's Task 4 note
+  }
+}
+
+// Temporary stub -- replaced with a real implementation in a later task.
+async function downloadMissingStemsFor(
+  _source: 'shared' | string,
+  _riffCID: string,
+  resolved: LoreResolvedRiff,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- unused until the real impl lands in a later task
+  _fetchImpl: FetchLike
+): Promise<LoreResolvedRiff> {
+  return resolved
+}
+
+// Populated by listSharedFeed, read by resolveSharedFeedRiff -- avoids a
+// second network round trip for shared-feed riffs specifically, since the
+// listing response already embeds full riff+stem detail (unlike the
+// private-jam path, which genuinely needs list-then-resolve). Cleared and
+// repopulated on every listSharedFeed call; a resolve for a riff outside the
+// most recently listed page returns null rather than guessing stale data.
+let sharedFeedCache = new Map<string, LoreResolvedRiff>()
+
+export async function listSharedFeed(
+  userName: string,
+  offset: number,
+  count: number,
+  fetchImpl: FetchLike = fetch
+): Promise<RiffPage> {
+  const session = activeSession()
+  const headers: Record<string, string> = { 'User-Agent': userAgent() }
+  if (session) headers.Authorization = bearerAuthHeader(session)
+
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      fetchImpl,
+      `${API_HOST}/api/v3/feed/shared_by/${encodeURIComponent(userName)}?size=${count}&from=${offset}`,
+      { headers }
+    )
+  } catch (err) {
+    console.error('endlesssApi: listSharedFeed network failure:', err)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+  if (!res.ok) {
+    console.error(`endlesssApi: listSharedFeed HTTP ${res.status}`)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+
+  let body: RawSharedFeedResponse
+  try {
+    body = (await res.json()) as RawSharedFeedResponse
+  } catch (err) {
+    console.error('endlesssApi: listSharedFeed malformed JSON:', err)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+
+  const newCache = new Map<string, LoreResolvedRiff>()
+  const summaries: LoreRiffSummary[] = []
+  for (const entry of body.data ?? []) {
+    // entry.loops can contain literal nulls for unused slots -- a documented
+    // Endlesss backend quirk (see the design spec's grounding section), not
+    // something to treat as malformed data.
+    const stemDocs = (entry.loops ?? []).filter((s): s is RawStemDoc => s !== null)
+    const resolved = buildResolvedRiff(entry.doc_id, entry.rifff, stemDocs)
+    newCache.set(entry.doc_id, resolved)
+    summaries.push(
+      summarizeResolvedRiff(
+        entry.doc_id,
+        entry.rifff.userName,
+        Math.floor(entry.action_timestamp / 1000),
+        resolved
+      )
+    )
+  }
+  sharedFeedCache = newCache
+
+  return {
+    riffs: summaries,
+    hasMore: summaries.length === count,
+    nextOffset: offset + summaries.length
+  }
+}
+
+/** Resolves a riff previously returned by listSharedFeed, downloading
+ * whatever stems aren't already cached locally. Returns null if this
+ * riffCID wasn't in the most recently listed page (the UI always lists
+ * before resolving, so this is a "stale selection" guard, not a real gap). */
+export async function resolveSharedFeedRiff(
+  riffCID: string,
+  fetchImpl: FetchLike = fetch
+): Promise<LoreResolvedRiff | null> {
+  const cached = sharedFeedCache.get(riffCID)
+  if (!cached) return null
+  return downloadMissingStemsFor('shared', riffCID, cached, fetchImpl)
 }

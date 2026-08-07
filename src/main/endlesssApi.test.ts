@@ -204,3 +204,154 @@ describe('endlesssApi session persistence', () => {
     }
   })
 })
+
+function rawStemDoc(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    _id: 'stem_1',
+    cdn_attachments: {
+      oggAudio: {
+        endpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+        key: 'attachments/oggAudio/1/abc',
+        url: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc',
+        mime: 'audio/ogg',
+        length: 12345
+      }
+    },
+    bps: 2.0,
+    length16ths: 64,
+    originalPitch: 0,
+    barLength: 4,
+    presetName: '808 Kick',
+    creatorUserName: 'elling',
+    primaryColour: 'ff0000',
+    sampleRate: 44100,
+    created: 1700000000000,
+    isDrum: true,
+    isNote: false,
+    isBass: false,
+    isMic: false,
+    ...overrides
+  }
+}
+
+function rawRiffDoc(
+  stemId: string,
+  overrides: Partial<Record<string, unknown>> = {}
+): Record<string, unknown> {
+  return {
+    _id: 'riff_1',
+    state: {
+      bps: 2.0,
+      barLength: 4,
+      playback: [
+        { slot: { current: { on: true, currentLoop: stemId, gain: 0.8 } } },
+        ...Array.from({ length: 7 }, () => ({ slot: {} }))
+      ]
+    },
+    userName: 'elling',
+    created: 1700000000000,
+    root: 0,
+    scale: 5,
+    ...overrides
+  }
+}
+
+describe('endlesssApi shared feed', () => {
+  it('listSharedFeed parses a real-shaped response into riff summaries', async () => {
+    const { listSharedFeed } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(async (url: string) => {
+      expect(url).toBe('https://api.endlesss.fm/api/v3/feed/shared_by/elling?size=20&from=0')
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              _id: 'shared_1',
+              doc_id: 'riff_1',
+              action_timestamp: 1700000000000,
+              title: 'a cool riff',
+              rifff: rawRiffDoc('stem_1'),
+              loops: [rawStemDoc(), null, null, null, null, null, null, null],
+              image: false,
+              private: false
+            }
+          ]
+        }),
+        { status: 200 }
+      )
+    })
+    const page = await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
+    expect(page.riffs).toHaveLength(1)
+    expect(page.riffs[0]).toMatchObject({
+      riffCID: 'riff_1',
+      userName: 'elling',
+      stemCount: 1,
+      cachedStemCount: 0
+    })
+  })
+
+  it("listSharedFeed tolerates null entries in a riff's own loops array", async () => {
+    const { listSharedFeed } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                _id: 'shared_1',
+                doc_id: 'riff_1',
+                action_timestamp: 1700000000000,
+                title: 'x',
+                rifff: rawRiffDoc('stem_1'),
+                loops: [null, null, rawStemDoc(), null, null, null, null, null],
+                image: false
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    )
+    const page = await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
+    expect(page.riffs[0].stemCount).toBe(1)
+  })
+
+  it('resolveSharedFeedRiff returns full stem detail with downloadUrl set from cdn_attachments', async () => {
+    const { listSharedFeed, resolveSharedFeedRiff } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                _id: 'shared_1',
+                doc_id: 'riff_1',
+                action_timestamp: 1700000000000,
+                title: 'x',
+                rifff: rawRiffDoc('stem_1'),
+                loops: [rawStemDoc(), null, null, null, null, null, null, null],
+                image: false
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    )
+    await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
+    const resolved = await resolveSharedFeedRiff('riff_1', fakeFetch as typeof fetch)
+    expect(resolved).not.toBeNull()
+    expect(resolved!.stems).toHaveLength(1)
+    expect(resolved!.stems[0]).toMatchObject({
+      stemCID: 'stem_1',
+      slot: 1,
+      gain: 0.8,
+      creatorUserName: 'elling',
+      presetName: '808 Kick',
+      downloadUrl: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc'
+    })
+  })
+
+  it('resolveSharedFeedRiff returns null for a riff never returned by a prior listSharedFeed call', async () => {
+    const { resolveSharedFeedRiff } = await import('./endlesssApi')
+    const resolved = await resolveSharedFeedRiff('never_listed', vi.fn() as unknown as typeof fetch)
+    expect(resolved).toBeNull()
+  })
+})
