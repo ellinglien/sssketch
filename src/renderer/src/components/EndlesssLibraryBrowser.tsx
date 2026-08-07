@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreResolvedRiff, LoreRiffSummary } from '@shared/loreLibrary'
+import { computeOwnerFraction } from '@shared/loreLibrary'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import {
@@ -15,21 +16,53 @@ import { formatBpm } from '@shared/format'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { EndlesssLoginPanel } from './EndlesssLoginPanel'
+import { riffCircleColor } from '../theme/riffCircleColor'
 
 const SHARED_FEED_STORAGE_KEY = 'sssketch:endlesssSharedFeedUsername'
 const SHARED_FEED_PAGE_SIZE = 30
+
+// How many riffs past the one just selected to warm the local stem cache
+// for in the background -- the person browsing is very likely to click one
+// of the next few next, especially when stepping through chronologically,
+// so this makes that step feel instant instead of re-triggering the same
+// resolve-then-download round trip on every click.
+const PREFETCH_COUNT = 3
 
 type EndlesssTab = 'shared-feed' | 'private-jams'
 type AuthStatus =
   { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
 
-/** Flat, ownership-agnostic fill for shared-feed riff circles -- unlike
- * LORE's riffCircleColor, there's no ownerFraction signal available here
- * (every Endlesss-direct riff summary reports it as 0, a deliberate v1
- * simplification -- see endlesssApi.ts), and it wouldn't mean much anyway:
- * this tab is inherently "things this account made or was shared," so
- * varying brightness by ownership has no real information to carry. */
-const FEED_RIFF_CIRCLE_COLOR = 'rgb(148, 148, 148)'
+interface RiffDateGroup {
+  label: string
+  riffs: LoreRiffSummary[]
+}
+
+/** Groups riffs by local calendar date -- without this, a jam's riff grid is
+ * an undifferentiated wall of identically-sized, identically-colored circles
+ * (Endlesss-direct listings carry no bpm at list time, unlike LORE's own
+ * listRiffs, so there's no tempo axis to sub-group by here). Switching
+ * between jams with no visual date breaks makes it look like nothing
+ * happened even when the riff set genuinely changed -- see
+ * LoreLibraryBrowser.tsx's own groupRiffsByDateAndTempo for the same idea
+ * with a tempo axis added on top. Riffs already arrive sorted by
+ * creationTime DESC (see listRiffsInJam), so a single linear scan suffices. */
+function groupRiffsByDate(riffs: LoreRiffSummary[]): RiffDateGroup[] {
+  const groups: RiffDateGroup[] = []
+  for (const riff of riffs) {
+    const label = new Date(riff.creationTime * 1000).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
+    let group = groups[groups.length - 1]
+    if (!group || group.label !== label) {
+      group = { label, riffs: [] }
+      groups.push(group)
+    }
+    group.riffs.push(riff)
+  }
+  return groups
+}
 
 /** One riff's preview circle -- shared between the shared-feed and
  * private-jams tabs so both get the same click/pulse/imported-badge
@@ -48,6 +81,7 @@ function RiffCircle({
   playing,
   fullyCached,
   imported,
+  ownerFraction,
   onClick
 }: {
   title: string
@@ -55,6 +89,12 @@ function RiffCircle({
   playing: boolean
   fullyCached: boolean
   imported: boolean
+  /** 0-1, drives brightness the same way LORE's own riff circles do -- see
+   * riffCircleColor. Endlesss-direct listings don't always have this at
+   * list time (only the shared-feed path does, since its listing response
+   * embeds full stem docs; the private-jam path fills it in progressively
+   * as riffs get resolved/prefetched -- see jamOwnerFractions). */
+  ownerFraction: number
   onClick: () => void
 }): React.JSX.Element {
   return (
@@ -78,7 +118,7 @@ function RiffCircle({
               ? '1px solid var(--ra-border)'
               : '1px dashed var(--ra-text-3)',
           padding: 0,
-          background: FEED_RIFF_CIRCLE_COLOR,
+          background: riffCircleColor(ownerFraction),
           cursor: 'pointer',
           animation: playing ? 'ra-rec-pulse 1.4s ease-in-out infinite' : undefined
         }}
@@ -136,6 +176,23 @@ export function EndlesssLibraryBrowser({
 
   const [selectedRiffCID, setSelectedRiffCID] = useState<string | null>(null)
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
+  // Which riffCID, if any, actually has live audio sources playing right
+  // now -- NOT the same thing as "a riff is resolved/selected". Resolving
+  // can legitimately finish with zero playable stems (stem download failed,
+  // or every stem in the riff turned out undownloadable -- see
+  // downloadMissingStemsFor), in which case there's nothing to play even
+  // though resolvedRiff is non-null. Driving the circle's pulse off
+  // resolvedRiff alone made the UI lie in that case: the circle would fade
+  // in/out forever with no audio ever actually starting. Set only in the
+  // async .then once sources are actually pushed; deliberately NOT reset to
+  // null by stopPreview itself (that would be a synchronous setState call
+  // inside an effect body, which react-hooks/set-state-in-effect correctly
+  // flags) -- instead each RiffCircle's `playing` prop below also requires
+  // `selectedRiffCID === riff.riffCID`, which already flips to false the
+  // instant selection changes (a plain state update from the click handler,
+  // visible on the very next render, well before the resolve effect even
+  // runs) -- so the stale riffCID left behind here never renders as playing.
+  const [playingRiffCID, setPlayingRiffCID] = useState<string | null>(null)
   const [importedRiffGroupIds, setImportedRiffGroupIds] = useState<Map<string, string>>(new Map())
   const [busyRiffCID, setBusyRiffCID] = useState<string | null>(null)
   const previewTokenRef = useRef(0)
@@ -164,9 +221,17 @@ export function EndlesssLibraryBrowser({
   const [jams, setJams] = useState<LoreJam[]>([])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   const [jamRiffs, setJamRiffs] = useState<LoreRiffSummary[]>([])
+  const jamRiffGroups = useMemo(() => groupRiffsByDate(jamRiffs), [jamRiffs])
   const [jamRiffsHasMore, setJamRiffsHasMore] = useState(false)
   const [jamRiffsNextOffset, setJamRiffsNextOffset] = useState(0)
   const [jamRiffsLoading, setJamRiffsLoading] = useState(false)
+  // ownerFraction, filled in progressively as jam riffs get resolved
+  // (selection or prefetch) -- see the private-jams resolve effect and the
+  // jam prefetch effect below. Endlesss's lightweight rifffLoopsByCreateTime
+  // view (listRiffsInJam) has no per-stem creator info, unlike the
+  // shared-feed listing, which embeds full stem docs and can compute
+  // ownerFraction eagerly server-side (see endlesssApi.ts).
+  const [jamOwnerFractions, setJamOwnerFractions] = useState<Map<string, number>>(new Map())
 
   const playing = usePlaying()
   const dispatch = useDispatch()
@@ -289,7 +354,10 @@ export function EndlesssLibraryBrowser({
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
-        if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
+        if (sources.length > 0) {
+          previewTokenRef.current = registerActivePreview(stopPreview)
+          setPlayingRiffCID(selectedRiffCID)
+        }
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssResolveSharedFeedRiff() failed:', err)
@@ -299,6 +367,22 @@ export function EndlesssLibraryBrowser({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch/stopPreview intentionally excluded, matching LoreLibraryBrowser.tsx's own established pattern for this exact kind of effect
   }, [selectedRiffCID])
+
+  // Warms the local stem cache for the next few riffs after the one just
+  // selected -- resolveSharedFeedRiff's own downloadMissingStemsFor is a
+  // no-op for anything already on disk, so calling it again once the user
+  // actually clicks one of these is cheap; this just moves that download
+  // earlier so it's usually already done by the time they get there.
+  // Fire-and-forget: failures here aren't worth surfacing, the real resolve
+  // on actual selection will report them normally.
+  useEffect(() => {
+    if (tab !== 'shared-feed' || !selectedRiffCID) return
+    const idx = feedRiffs.findIndex((r) => r.riffCID === selectedRiffCID)
+    if (idx === -1) return
+    for (const riff of feedRiffs.slice(idx + 1, idx + 1 + PREFETCH_COUNT)) {
+      window.rifffApi.endlesssResolveSharedFeedRiff(riff.riffCID).catch(() => {})
+    }
+  }, [tab, selectedRiffCID, feedRiffs])
 
   useEffect(() => {
     return () => stopPreview()
@@ -371,6 +455,13 @@ export function EndlesssLibraryBrowser({
       .then(async (resolved) => {
         if (cancelled || !resolved) return
         setResolvedRiff(resolved)
+        if (authStatus.loggedIn) {
+          const fraction = computeOwnerFraction(
+            resolved.stems.map((s) => s.creatorUserName),
+            authStatus.username
+          )
+          setJamOwnerFractions((prev) => new Map(prev).set(selectedRiffCID, fraction))
+        }
         if (playing) dispatch({ type: 'PAUSE' })
         const cachedStems = resolved.stems.filter((s) => s.path !== null)
         const gain = sqrtGain(cachedStems.length)
@@ -384,7 +475,10 @@ export function EndlesssLibraryBrowser({
           () => cancelled
         )
         previewSourcesRef.current.push(...sources)
-        if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
+        if (sources.length > 0) {
+          previewTokenRef.current = registerActivePreview(stopPreview)
+          setPlayingRiffCID(selectedRiffCID)
+        }
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssResolveRiff() failed:', err)
@@ -394,6 +488,32 @@ export function EndlesssLibraryBrowser({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- matches the shared-feed resolve effect's own established exclusions
   }, [tab, selectedJamCID, selectedRiffCID])
+
+  // Same idea as the shared-feed prefetch effect above, plus this is also
+  // how jamOwnerFractions gets filled in for riffs the person hasn't
+  // explicitly clicked yet -- resolving downloads stem docs (with
+  // creatorUserName) as a side effect regardless of why it was triggered.
+  useEffect(() => {
+    if (tab !== 'private-jams' || !selectedJamCID || !selectedRiffCID || !authStatus.loggedIn) {
+      return
+    }
+    const idx = jamRiffs.findIndex((r) => r.riffCID === selectedRiffCID)
+    if (idx === -1) return
+    const username = authStatus.username
+    for (const riff of jamRiffs.slice(idx + 1, idx + 1 + PREFETCH_COUNT)) {
+      window.rifffApi
+        .endlesssResolveRiff(selectedJamCID, riff.riffCID)
+        .then((resolved) => {
+          if (!resolved) return
+          const fraction = computeOwnerFraction(
+            resolved.stems.map((s) => s.creatorUserName),
+            username
+          )
+          setJamOwnerFractions((prev) => new Map(prev).set(riff.riffCID, fraction))
+        })
+        .catch(() => {})
+    }
+  }, [tab, selectedJamCID, selectedRiffCID, jamRiffs, authStatus])
 
   function handleImport(riffCID: string, resolved: LoreResolvedRiff): void {
     setBusy('importing rifff…')
@@ -588,9 +708,10 @@ export function EndlesssLibraryBrowser({
                   key={riff.riffCID}
                   title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
                   selected={selectedRiffCID === riff.riffCID}
-                  playing={selectedRiffCID === riff.riffCID && resolvedRiff !== null}
+                  playing={selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID}
                   fullyCached={riff.cachedStemCount >= riff.stemCount}
                   imported={importedRiffGroupIds.has(riff.riffCID)}
+                  ownerFraction={riff.ownerFraction}
                   onClick={() =>
                     setSelectedRiffCID((prev) => (prev === riff.riffCID ? null : riff.riffCID))
                   }
@@ -605,11 +726,37 @@ export function EndlesssLibraryBrowser({
               )}
             </div>
 
+            {feedHasMore && (
+              <button
+                onClick={() => loadFeed(feedNextOffset, true)}
+                disabled={feedLoading}
+                style={{
+                  alignSelf: 'center',
+                  height: 22,
+                  borderRadius: 0,
+                  padding: '0 12px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: feedLoading ? 'var(--ra-text-4)' : 'var(--ra-text-2)'
+                }}
+              >
+                {feedLoading ? 'loading…' : 'load more'}
+              </button>
+            )}
+
             {resolvedRiff && selectedRiffCID && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
                   {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
                   {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                  {resolvedRiff.stems.length > 0 &&
+                    resolvedRiff.stems.every((s) => s.path === null) && (
+                      <span style={{ color: 'var(--ra-mute-on)' }}>
+                        {' '}
+                        · no audio available (stems failed to download)
+                      </span>
+                    )}
                 </div>
                 <button
                   onClick={() => handleImport(selectedRiffCID, resolvedRiff)}
@@ -694,33 +841,80 @@ export function EndlesssLibraryBrowser({
                       overflowY: 'auto',
                       flex: 1,
                       display: 'flex',
-                      flexWrap: 'wrap',
-                      alignContent: 'flex-start',
-                      gap: 5
+                      flexDirection: 'column',
+                      gap: 8
                     }}
                   >
-                    {jamRiffs.map((riff) => (
-                      <RiffCircle
-                        key={riff.riffCID}
-                        title={`${new Date(riff.creationTime * 1000).toLocaleDateString()} · ${riff.stemCount} stems`}
-                        selected={selectedRiffCID === riff.riffCID}
-                        playing={selectedRiffCID === riff.riffCID && resolvedRiff !== null}
-                        fullyCached={riff.cachedStemCount >= riff.stemCount}
-                        imported={importedRiffGroupIds.has(riff.riffCID)}
-                        onClick={() =>
-                          setSelectedRiffCID((prev) =>
-                            prev === riff.riffCID ? null : riff.riffCID
-                          )
-                        }
-                      />
+                    {jamRiffGroups.map((group) => (
+                      <div key={group.label}>
+                        <span
+                          style={{
+                            fontSize: 9,
+                            color: 'var(--ra-text-3)',
+                            display: 'block',
+                            marginBottom: 3
+                          }}
+                        >
+                          {group.label}
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {group.riffs.map((riff) => (
+                            <RiffCircle
+                              key={riff.riffCID}
+                              title={`${new Date(riff.creationTime * 1000).toLocaleDateString()} · ${riff.stemCount} stems`}
+                              selected={selectedRiffCID === riff.riffCID}
+                              playing={
+                                selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID
+                              }
+                              fullyCached={riff.cachedStemCount >= riff.stemCount}
+                              imported={importedRiffGroupIds.has(riff.riffCID)}
+                              ownerFraction={
+                                jamOwnerFractions.get(riff.riffCID) ?? riff.ownerFraction
+                              }
+                              onClick={() =>
+                                setSelectedRiffCID((prev) =>
+                                  prev === riff.riffCID ? null : riff.riffCID
+                                )
+                              }
+                            />
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
+
+                  {jamRiffsHasMore && (
+                    <button
+                      onClick={loadMoreJamRiffs}
+                      disabled={jamRiffsLoading}
+                      style={{
+                        alignSelf: 'center',
+                        marginTop: 8,
+                        height: 22,
+                        borderRadius: 0,
+                        padding: '0 12px',
+                        fontSize: 10,
+                        border: '1px solid var(--ra-border)',
+                        background: 'var(--ra-bg-row-active)',
+                        color: jamRiffsLoading ? 'var(--ra-text-4)' : 'var(--ra-text-2)'
+                      }}
+                    >
+                      {jamRiffsLoading ? 'loading…' : 'load more'}
+                    </button>
+                  )}
 
                   {resolvedRiff && selectedRiffCID && (
                     <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
                       <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
                         {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
                         {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                        {resolvedRiff.stems.length > 0 &&
+                          resolvedRiff.stems.every((s) => s.path === null) && (
+                            <span style={{ color: 'var(--ra-mute-on)' }}>
+                              {' '}
+                              · no audio available (stems failed to download)
+                            </span>
+                          )}
                       </div>
                       <button
                         onClick={() => handleImport(selectedRiffCID, resolvedRiff)}

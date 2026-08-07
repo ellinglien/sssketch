@@ -9,7 +9,7 @@ import type {
   RiffFilters,
   RiffPage
 } from '@shared/loreLibrary'
-import { resolveKeyName } from '@shared/loreLibrary'
+import { computeOwnerFraction, resolveKeyName } from '@shared/loreLibrary'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -356,7 +356,8 @@ function summarizeResolvedRiff(
   riffCID: string,
   userName: string,
   creationTime: number,
-  resolved: LoreResolvedRiff
+  resolved: LoreResolvedRiff,
+  ownerFraction: number
 ): LoreRiffSummary {
   return {
     riffCID,
@@ -366,7 +367,7 @@ function summarizeResolvedRiff(
     userName,
     stemCount: resolved.stems.length,
     cachedStemCount: 0, // nothing downloaded yet -- listing never touches disk
-    ownerFraction: 0 // deliberately flat for v1 -- see the implementation plan's Task 4 note
+    ownerFraction
   }
 }
 
@@ -482,12 +483,24 @@ export async function listSharedFeed(
     const stemDocs = (entry.loops ?? []).filter((s): s is RawStemDoc => s !== null)
     const resolved = buildResolvedRiff(entry.doc_id, entry.rifff, stemDocs)
     newCache.set(entry.doc_id, resolved)
+    // The shared-feed listing response embeds full stem docs (unlike the
+    // private-jam list-then-resolve path), so ownerFraction can be computed
+    // right here rather than staying flat -- `userName` is the account whose
+    // feed is being browsed, which per EndlesssLibraryBrowser's own
+    // effectiveUsername logic is always the logged-in viewer's own username
+    // once authenticated, so "fraction authored by userName" reads as
+    // "fraction authored by you" in the common case.
+    const ownerFraction = computeOwnerFraction(
+      stemDocs.map((s) => s.creatorUserName),
+      userName
+    )
     summaries.push(
       summarizeResolvedRiff(
         entry.doc_id,
         entry.rifff.userName,
         Math.floor(entry.action_timestamp / 1000),
-        resolved
+        resolved,
+        ownerFraction
       )
     )
   }

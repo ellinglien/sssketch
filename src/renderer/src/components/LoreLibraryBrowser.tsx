@@ -14,31 +14,11 @@ import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
+import { riffCircleColor } from '../theme/riffCircleColor'
 import { classifyStems } from '../audio/classifyStems'
 import { buildImportedRifff } from '../audio/importResolvedRiff'
 import { stemKey, type Rifff } from '@shared/types'
 import { formatBpm } from '@shared/format'
-
-/** Continuous brightness ramp from dark gray (0% ownership) to white (100%
- * ownership) — one brightness axis, no separate accent hue, matching the
- * app's existing "color spent only on things that carry information" design
- * language (see tokens.css).
- *
- * Used to render flat black for any riff missing cached stems, regardless of
- * ownership — but that collapsed two different meanings into the same
- * color: "not yours" and "not downloaded to this machine yet" (which, it
- * turns out, isn't necessarily temporary — some stems only ever get fetched
- * on demand by LORE itself, streamed live over the network rather than
- * pre-cached, so a riff can stay "not fully cached" indefinitely even though
- * every stem in it is real and downloadable — see downloadMissingStems).
- * Ownership brightness now always applies; "not fully cached" gets its own
- * dashed-border cue instead (see the circle's own border logic below). */
-function riffCircleColor(riff: LoreRiffSummary): string {
-  const lo = 60 // dark gray floor, not pure black, so 0% still reads as "a riff", not "empty"
-  const hi = 237 // matches --ra-text's near-white value
-  const v = Math.round(lo + riff.ownerFraction * (hi - lo))
-  return `rgb(${v}, ${v}, ${v})`
-}
 
 // Persisted locally (not in project files or app state) since it's a
 // per-person identity setting, not something that travels with a project —
@@ -1095,7 +1075,7 @@ export function LoreLibraryBrowser({
                                               ? '1px dashed var(--ra-text-3)'
                                               : '1px solid var(--ra-border)',
                                       padding: 0,
-                                      background: riffCircleColor(riff),
+                                      background: riffCircleColor(riff.ownerFraction),
                                       cursor: 'pointer'
                                     }}
                                   />
