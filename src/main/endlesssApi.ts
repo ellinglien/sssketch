@@ -1,6 +1,6 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type {
   LoreJam,
   LoreResolvedRiff,
@@ -365,15 +365,65 @@ function summarizeResolvedRiff(
   }
 }
 
-// Temporary stub -- replaced with a real implementation in a later task.
+function endlesssStemCachePath(source: 'shared' | 'jam', riffCID: string, stemCID: string): string {
+  return join(app.getPath('userData'), 'endlesss-cache', 'stems', source, riffCID, stemCID)
+}
+
+/** Downloads one stem's audio to its cache path, writing via a
+ * `.downloading` sibling then renaming into place so a killed/failed
+ * download never leaves a corrupt partial file -- same pattern as
+ * loreWarehouse.ts's own downloadOneStem. Returns false (never throws) on
+ * any failure. Deliberately does NOT go through fetchWithTimeout, unlike
+ * every metadata call in this module -- audio files are legitimately larger
+ * and slower than a JSON response, and loreWarehouse.ts's own
+ * downloadOneStem sets no timeout on its equivalent fetch either; applying
+ * the same fixed 8s budget here would make large/slow-connection stems fail
+ * spuriously for no real safety benefit. */
+async function downloadOneEndlesssStem(
+  path: string,
+  downloadUrl: string,
+  fetchImpl: FetchLike
+): Promise<boolean> {
+  try {
+    const res = await fetchImpl(downloadUrl)
+    if (!res.ok) {
+      console.error(`endlesssApi: stem download failed: HTTP ${res.status}`)
+      return false
+    }
+    const bytes = Buffer.from(await res.arrayBuffer())
+    mkdirSync(dirname(path), { recursive: true })
+    const tmpPath = `${path}.downloading`
+    writeFileSync(tmpPath, bytes)
+    renameSync(tmpPath, path)
+    return true
+  } catch (err) {
+    console.error('endlesssApi: stem download failed:', err)
+    return false
+  }
+}
+
+/** Downloads every not-yet-cached stem in `resolved` (path === null but a
+ * downloadUrl exists), returning a new LoreResolvedRiff with paths filled
+ * in for whichever succeeded. Shared by both the shared-feed and
+ * private-jam resolve paths -- `source` just partitions the cache
+ * directory so a riffCID collision between the two spaces (unlikely, but
+ * not impossible) can't overwrite the wrong file. */
 async function downloadMissingStemsFor(
-  _source: 'shared' | string,
-  _riffCID: string,
+  source: 'shared' | 'jam',
+  riffCID: string,
   resolved: LoreResolvedRiff,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- unused until the real impl lands in a later task
-  _fetchImpl: FetchLike
+  fetchImpl: FetchLike
 ): Promise<LoreResolvedRiff> {
-  return resolved
+  const stems = await Promise.all(
+    resolved.stems.map(async (stem) => {
+      if (stem.path !== null || !stem.downloadUrl) return stem
+      const path = endlesssStemCachePath(source, riffCID, stem.stemCID)
+      if (existsSync(path)) return { ...stem, path }
+      const ok = await downloadOneEndlesssStem(path, stem.downloadUrl, fetchImpl)
+      return ok ? { ...stem, path } : stem
+    })
+  )
+  return { ...resolved, stems }
 }
 
 // Populated by listSharedFeed, read by resolveSharedFeedRiff -- avoids a

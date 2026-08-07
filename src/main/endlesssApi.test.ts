@@ -546,3 +546,60 @@ describe('endlesssApi jam riff resolution', () => {
     expect(JSON.parse(calls[1].body!)).toEqual({ keys: ['stem_1'] })
   })
 })
+
+describe('endlesssApi stem downloading', () => {
+  let userDataDir: string
+
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-endlesss-test-'))
+    ;(globalThis as unknown as { __testUserDataDir: string }).__testUserDataDir = userDataDir
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('resolveJamRiff downloads a stem to the endlesss-cache dir and sets its path', async () => {
+    const { loginWithCredentials, resolveJamRiff } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    const audioBytes = new TextEncoder().encode('fake ogg bytes')
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('_all_docs')) {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+          { status: 200 }
+        )
+      }
+      if (url === 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc') {
+        return new Response(audioBytes, { status: 200 })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    })
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+    expect(resolved!.stems[0].path).not.toBeNull()
+    const { readFileSync: readFileSyncCheck } = await import('node:fs')
+    expect(readFileSyncCheck(resolved!.stems[0].path!).toString()).toBe('fake ogg bytes')
+  })
+})
