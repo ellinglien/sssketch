@@ -423,3 +423,35 @@ explicitly rather than silently assumed away:
 None of these block writing the plan — they're the kind of thing a first implementation task
 ("spike: confirm real API response shapes against a live account") resolves in minutes once
 someone's actually logged in, not open design questions.
+
+**Addendum (resolved during plan-writing, before any live account was needed):** OUROVEON's own
+C++ structs carry their exact wire-JSON field names via `CEREAL_NVP` macros — reading those
+directly resolved most of the above without needing a live login at all:
+
+- **#1 (jam ID mapping) — resolved.** The membership response is `{total_rows, rows: [{id, key}]}`
+  — `id` *is* the jam database ID directly, no second lookup.
+- **#2 (live stem doc fields) — resolved.** A raw stem doc is `{_id, cdn_attachments: {oggAudio?:
+  {bucket?, endpoint, key?, url, mime, length}, flacAudio?: {...}}, bps, length16ths,
+  originalPitch, barLength, presetName, creatorUserName, primaryColour, sampleRate, created,
+  isDrum?, isNote?, isBass?, isMic?}` — notably `cdn_attachments.oggAudio.url` is already a
+  complete download URL, so `stemDownloadUrl()` isn't even needed for the direct-API path (LORE
+  keeps using it since its SQLite columns don't store the pre-built URL).
+- **#6/#7 (shared-feed richness + null handling) — resolved, and more precise than assumed.** The
+  outer array is `data` (not `loops` as guessed), and each entry already embeds a full
+  `rifff: ResultRiffDocument` plus `loops: ResultStemDocument[]` (up to 8, unused slots are
+  literal `null` — this is where the null-filtering gotcha actually applies, inside each shared
+  riff's own `loops`, not the outer `data` array) — confirming no separate resolve call is needed
+  for shared-feed riffs. Entries also carry `is_private` (JSON key `"private"`), so the UI can
+  show a private/public badge on shared riffs directly.
+- **Also newly discovered, not in the original open-questions list:** the membership view alone
+  doesn't include a jam's display name (just `id`/`key`) — a per-jam `JamProfile` fetch (`GET
+  /user_appdata$<jamID>/Profile` → `{displayName, ...}`) is needed to show human-readable jam
+  names, one extra call per jam. And the riff-listing view (`rifffLoopsByCreateTime`) rows are
+  `{id, key (creation time), value: [stemID, ...]}` — lightweight, no embedded metadata, exactly
+  matching the "list then resolve" two-step the private-jam path already planned for.
+- **#3 (session "password" field) and #5 (rate limits) — still genuinely open**, unresolved by
+  source reading; #3 needs a real login response to inspect, #5 has no documented limit anywhere.
+  Both deferred to the manual walkthrough task at the end of the implementation plan, where
+  Elling — the only one with real Endlesss credentials — can confirm them directly.
+- **#4 (shared vs. forked browser UI)** remains an implementation-time judgment call as
+  originally written, unaffected by this research.
