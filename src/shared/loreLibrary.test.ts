@@ -3,6 +3,7 @@ import {
   instrumentMaskToSoundType,
   computeOwnerFraction,
   stemDownloadUrl,
+  resolveKeyName,
   LORE_USERNAME
 } from './loreLibrary'
 
@@ -85,5 +86,45 @@ describe('stemDownloadUrl', () => {
     ).toBe(
       'https://endlesss-dev.fra1.digitaloceanspaces.com/attachments/oggAudio/banddfeb9ee860/4a7630cfce7211e9b0cf020000000000'
     )
+  })
+})
+
+describe('resolveKeyName', () => {
+  it('resolves a valid root+scale pair to a key name string', () => {
+    // root=4 is E, scale=5 is Minor (Aeolian)
+    expect(resolveKeyName(4, 5)).toBe('E Minor (Aeolian)')
+  })
+
+  it('resolves Major (Ionian) scale correctly', () => {
+    // root=0 is C, scale=0 is Major (Ionian)
+    expect(resolveKeyName(0, 0)).toBe('C Major (Ionian)')
+  })
+
+  it('returns undefined when root is null', () => {
+    expect(resolveKeyName(null, 5)).toBeUndefined()
+  })
+
+  it('returns undefined when scale is null', () => {
+    expect(resolveKeyName(4, null)).toBeUndefined()
+  })
+
+  it('returns undefined when both root and scale are null', () => {
+    expect(resolveKeyName(null, null)).toBeUndefined()
+  })
+
+  it('returns undefined for an out-of-range root (negative)', () => {
+    expect(resolveKeyName(-1, 5)).toBeUndefined()
+  })
+
+  it('returns undefined for an out-of-range root (too large)', () => {
+    expect(resolveKeyName(12, 5)).toBeUndefined()
+  })
+
+  it('returns undefined for an out-of-range scale (negative)', () => {
+    expect(resolveKeyName(4, -1)).toBeUndefined()
+  })
+
+  it('returns undefined for an out-of-range scale (too large)', () => {
+    expect(resolveKeyName(4, 18)).toBeUndefined()
   })
 })

@@ -5,9 +5,11 @@ import type {
   LoreJam,
   LoreRiffSummary,
   LoreResolvedRiff,
-  LoreResolvedStem
+  LoreResolvedStem,
+  RiffFilters,
+  RiffPage
 } from '@shared/loreLibrary'
-import { computeOwnerFraction, stemDownloadUrl } from '@shared/loreLibrary'
+import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/loreLibrary'
 
 // Single-user, single-machine app — this is the actual synced folder on
 // Elling's machine. See the design spec's "Background" section for why this
@@ -83,46 +85,6 @@ export function listJams(filterText: string): LoreJam[] {
     )
     .all(`%${filterText}%`) as LoreJam[]
   return rows
-}
-
-export interface RiffFilters {
-  dateFrom?: number
-  dateTo?: number
-  bpm?: number
-  userName?: string
-  onlyFullyCached?: boolean
-  /** Whichever LORE username the renderer's "your username" setting is
-   * currently set to (see LoreLibraryBrowser) — drives both ownerFraction
-   * (below) and onlyContainsUser. Not the same field as `userName` above,
-   * which filters by the riff's own top-level owner; this instead affects
-   * how a riff's per-STEM authorship is scored, regardless of who owns it. */
-  targetUser?: string
-  /** Only riffs with at least one stem authored by targetUser (falls back to
-   * LORE_USERNAME if targetUser is unset). */
-  onlyContainsUser?: boolean
-  /** How many riffs (most-recent-first) to skip before this page — 0/undefined
-   * for the first page. Paired with RIFF_PAGE_SIZE so a jam with thousands of
-   * riffs (some of Elling's real jams have 20,000+) doesn't have to load or
-   * render them all at once. */
-  offset?: number
-  /** How many riffs to fetch, defaulting to RIFF_PAGE_SIZE when unset --
-   * normal jam browsing never sets this; the riff-ID jump feature uses a
-   * smaller value to fetch a tight centered window instead of a full page. */
-  limit?: number
-}
-
-export interface RiffPage {
-  riffs: LoreRiffSummary[]
-  /** True if the underlying query (before the onlyFullyCached post-filter)
-   * returned a full page — i.e. there's likely at least one more riff beyond
-   * this page, regardless of how many survived that filter. */
-  hasMore: boolean
-  /** The `offset` to pass for the next page. Tracks raw SQL rows consumed
-   * (offset + rows.length), NOT riffs.length — those diverge whenever
-   * onlyFullyCached filters some rows out of a page, and paging by
-   * riffs.length in that case would re-request (or skip) rows at the SQL
-   * level. */
-  nextOffset: number
 }
 
 interface RiffRow {
@@ -270,54 +232,6 @@ interface FullRiffRow extends RiffRow {
 // supports. "Major (Ionian)"/"Minor (Aeolian)" get their common pop name
 // alongside the mode name; every other entry is OUROVEON's own exact
 // string, used verbatim.
-export const LORE_ROOT_NAMES = [
-  'C',
-  'Db',
-  'D',
-  'Eb',
-  'E',
-  'F',
-  'F#',
-  'G',
-  'Ab',
-  'A',
-  'Bb',
-  'B'
-] as const
-
-const LORE_SCALE_NAMES = [
-  'Major (Ionian)',
-  'Dorian',
-  'Phrygian',
-  'Lydian',
-  'Mixolydian',
-  'Minor (Aeolian)',
-  'Locrian',
-  'Minor Pentatonic',
-  'Major Pentatonic',
-  'Suspended Pent.',
-  'Blues Minor Pent.',
-  'Blues Major Pent.',
-  'Harmonic Minor',
-  'Melodic Minor',
-  'Double Harmonic',
-  'Blues',
-  'Whole Tone',
-  'Chromatic'
-] as const
-
-/** Resolves a riff's Root/Scale columns to a display string like "E Minor
- * (Aeolian)" -- returns undefined for anything out of the known range
- * (including null, which the warehouse uses for riffs predating this
- * metadata being tracked) rather than guessing or showing a raw number. */
-function resolveKeyName(root: number | null, scale: number | null): string | undefined {
-  if (root === null || scale === null) return undefined
-  const rootName = LORE_ROOT_NAMES[root]
-  const scaleName = LORE_SCALE_NAMES[scale]
-  if (!rootName || !scaleName) return undefined
-  return `${rootName} ${scaleName}`
-}
-
 interface FullStemRow {
   StemCID: string
   CreatorUserName: string

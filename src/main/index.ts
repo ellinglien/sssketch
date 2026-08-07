@@ -32,14 +32,14 @@ import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
+import type { RiffFilters } from '@shared/loreLibrary'
 import {
   warehouseAvailable,
   listJams,
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
-  downloadMissingStems,
-  type RiffFilters
+  downloadMissingStems
 } from './loreWarehouse'
 import {
   listLibrarySketches,

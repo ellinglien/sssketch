@@ -44,6 +44,36 @@ export interface LoreResolvedStem {
   downloadUrl: string | null
 }
 
+export interface RiffFilters {
+  dateFrom?: number
+  dateTo?: number
+  bpm?: number
+  userName?: string
+  onlyFullyCached?: boolean
+  /** Whichever username the renderer's "your username" setting is currently
+   * set to — drives both ownerFraction and onlyContainsUser. Not the same
+   * field as `userName` above, which filters by the riff's own top-level
+   * owner; this instead affects how a riff's per-STEM authorship is scored,
+   * regardless of who owns it. */
+  targetUser?: string
+  /** Only riffs with at least one stem authored by targetUser (falls back to
+   * LORE_USERNAME if targetUser is unset). */
+  onlyContainsUser?: boolean
+  /** How many riffs (most-recent-first) to skip before this page — 0/undefined
+   * for the first page. */
+  offset?: number
+  /** How many riffs to fetch, defaulting to a per-backend default when unset. */
+  limit?: number
+}
+
+export interface RiffPage {
+  riffs: LoreRiffSummary[]
+  /** True if there's likely at least one more riff beyond this page. */
+  hasMore: boolean
+  /** The `offset` to pass for the next page. */
+  nextOffset: number
+}
+
 export interface LoreResolvedRiff {
   riffCID: string
   bpm: number
@@ -91,4 +121,64 @@ export function computeOwnerFraction(
   if (creatorUserNames.length === 0) return 0
   const matching = creatorUserNames.filter((u) => u === targetUser).length
   return matching / creatorUserNames.length
+}
+
+// Traced directly from OUROVEON's own source (endlesss/core.constants.h,
+// cRootNames), not guessed -- same "verify against the real reference
+// client" standard this file already applies. Root is a 12-tone chromatic
+// index; OUROVEON's own naming deliberately favors flats over sharps for the
+// black keys (Db, Eb, F#, Ab, Bb -- not a typo, that's genuinely the
+// reference client's own spelling choice, kept verbatim rather than "fixed"
+// to an enharmonic sharps-only convention).
+export const LORE_ROOT_NAMES = [
+  'C',
+  'Db',
+  'D',
+  'Eb',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'Ab',
+  'A',
+  'Bb',
+  'B'
+] as const
+
+// Traced directly from OUROVEON's own source (endlesss/core.constants.h,
+// cScaleNames), not guessed. 0-17 index covering the 7 diatonic modes plus
+// pentatonic/blues/whole-tone/chromatic scales Endlesss also supports.
+// "Major (Ionian)"/"Minor (Aeolian)" get their common pop name alongside the
+// mode name; every other entry is OUROVEON's own exact string, used verbatim.
+export const LORE_SCALE_NAMES = [
+  'Major (Ionian)',
+  'Dorian',
+  'Phrygian',
+  'Lydian',
+  'Mixolydian',
+  'Minor (Aeolian)',
+  'Locrian',
+  'Minor Pentatonic',
+  'Major Pentatonic',
+  'Suspended Pent.',
+  'Blues Minor Pent.',
+  'Blues Major Pent.',
+  'Harmonic Minor',
+  'Melodic Minor',
+  'Double Harmonic',
+  'Blues',
+  'Whole Tone',
+  'Chromatic'
+] as const
+
+/** Resolves a Root/Scale pair to a display string like "E Minor (Aeolian)" --
+ * returns undefined for anything out of the known range (including null,
+ * which means "no key metadata for this riff") rather than guessing or
+ * showing a raw number. */
+export function resolveKeyName(root: number | null, scale: number | null): string | undefined {
+  if (root === null || scale === null) return undefined
+  const rootName = LORE_ROOT_NAMES[root]
+  const scaleName = LORE_SCALE_NAMES[scale]
+  if (!rootName || !scaleName) return undefined
+  return `${rootName} ${scaleName}`
 }
