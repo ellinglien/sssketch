@@ -86,13 +86,15 @@ function fnv1a(str: string): number {
   return hash >>> 0
 }
 
-/** Deterministic "adjective noun <cid> LORE" display name for a LORE riff,
+/** Deterministic "adjective noun <cid> <suffix>" display name for a riff
+ * imported from an external source (LORE or the new direct-Endlesss path),
  * e.g. "green leopard 2f29c140 lore" -- same riffCID always produces the
  * same adjective/noun pair. The adjective and noun are hashed with
  * different salts so they don't covary (a riffCID that picks "green"
- * shouldn't be more or less likely to also pick "leopard"). */
-export function friendlyRiffName(riffCID: string): string {
+ * shouldn't be more or less likely to also pick "leopard"). `suffix`
+ * defaults to 'lore' to keep every existing call site's output identical. */
+export function friendlyRiffName(riffCID: string, suffix: 'lore' | 'endlesss' = 'lore'): string {
   const adjective = ADJECTIVES[fnv1a(riffCID + '|adjective') % ADJECTIVES.length]
   const noun = NOUNS[fnv1a(riffCID + '|noun') % NOUNS.length]
-  return `${adjective} ${noun} ${riffCID.slice(0, 8)} lore`
+  return `${adjective} ${noun} ${riffCID.slice(0, 8)} ${suffix}`
 }

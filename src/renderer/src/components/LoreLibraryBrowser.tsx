@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
-import { friendlyRiffName } from '@shared/friendlyRiffName'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import {
@@ -16,6 +15,7 @@ import { useBusy } from '../state/BusyContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { classifyStems } from '../audio/classifyStems'
+import { buildImportedRifff } from '../audio/importResolvedRiff'
 import { stemKey, type Rifff } from '@shared/types'
 import { formatBpm } from '@shared/format'
 
@@ -248,60 +248,26 @@ export function LoreLibraryBrowser({
    * ones weren't cached yet — re-importing via crypto.randomUUID() every
    * time just left the original incomplete tile sitting there and created
    * an unrelated duplicate alongside it, with no way back to a single
-   * complete one. */
+   * complete one.
+   *
+   * The actual build-vs-merge logic now lives in buildImportedRifff
+   * (audio/importResolvedRiff.ts), shared with the new Endlesss-direct
+   * browser — this is a thin wrapper that owns this component's own side
+   * effects (ADD_TO_SHELF, gain restoration, importedRiffGroupIds tracking,
+   * classifyStems). */
   function importResolvedRiff(
     riffCID: string,
     resolved: LoreResolvedRiff
   ): { groupId: string; rifff: Rifff } | null {
-    const cachedStems = resolved.stems.filter((s) => s.path !== null)
     const existingGroupId = importedRiffGroupIds.get(riffCID)
     const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
-    if (!existing && cachedStems.length === 0) return null
-
-    const existingSlots = new Set(existing?.stems.map((s) => s.slot) ?? [])
-    const newStems = cachedStems
-      .filter((s) => !existingSlots.has(s.slot))
-      .map((s) => ({
-        slot: s.slot,
-        author: s.creatorUserName,
-        name: s.presetName,
-        type:
-          instrumentMaskToSoundType(s.instrumentMask) ??
-          guessSoundTypeFromPresetName(s.presetName) ??
-          'fx',
-        path: s.path!,
-        durationSec: s.durationSec, // this stem's own bpm/bar-length, not the riff's — see resolveRiff
-        barLength: s.barLength
-      }))
-    if (existing && newStems.length === 0) return { groupId: existing.groupId, rifff: existing } // already fully up to date
-
-    const groupId = existing?.groupId ?? crypto.randomUUID()
-    const rifff = existing
-      ? // key ?? existing.key: a riff imported before this field existed
-        // (or before the warehouse row happened to have Root/Scale set)
-        // still picks it up on a later re-import/update, rather than
-        // staying permanently key-less just because the FIRST import
-        // predates this feature.
-        { ...existing, key: resolved.key ?? existing.key, stems: [...existing.stems, ...newStems] }
-      : {
-          groupId,
-          name: friendlyRiffName(riffCID),
-          bpm: resolved.bpm,
-          barLength: resolved.barLength,
-          key: resolved.key,
-          // Not a real folder — sourced from the LORE warehouse, not a drag-and-drop
-          // import. Inspector.tsx's existing "re-import from folder" link displays
-          // this field as-is; an empty string would render as a bare "/", so use a
-          // human-readable descriptor instead. Clicking that link on a LORE-imported
-          // rifff still works exactly like it does for any other rifff (opens a
-          // folder picker and re-imports from wherever the user points it) — this
-          // is display-only, not read back programmatically anywhere.
-          folderPath: 'lore library',
-          stems: newStems
-        }
+    const result = buildImportedRifff(riffCID, resolved, existing, 'lore', 'lore library')
+    if (!result) return null
+    const { groupId, rifff, newStemSlots } = result
+    if (newStemSlots.length === 0 && existing) return { groupId, rifff }
 
     dispatch({ type: 'ADD_TO_SHELF', rifff })
-    for (const stem of cachedStems) {
+    for (const stem of resolved.stems.filter((s) => s.path !== null)) {
       if (Math.abs(stem.gain - 1.0) > 1e-6) {
         dispatch({ type: 'SET_VOLUME', stemKey: stemKey(groupId, stem.slot), volume: stem.gain })
       }
@@ -314,6 +280,7 @@ export function LoreLibraryBrowser({
     // gets a second chance here, same as today's importer gives every stem.
     // Scoped to just the NEW stems on a merge — re-classifying an existing
     // stem here would silently overwrite any type the user picked by hand.
+    const newStems = rifff.stems.filter((s) => newStemSlots.includes(s.slot))
     classifyStems({ ...rifff, stems: newStems }, dispatch).catch((err) => {
       console.error('LoreLibraryBrowser: failed to classify stem types:', err)
     })
