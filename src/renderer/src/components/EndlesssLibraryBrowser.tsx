@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoreJam, LoreResolvedRiff, LoreRiffSummary } from '@shared/loreLibrary'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -30,6 +30,78 @@ type AuthStatus =
  * this tab is inherently "things this account made or was shared," so
  * varying brightness by ownership has no real information to carry. */
 const FEED_RIFF_CIRCLE_COLOR = 'rgb(148, 148, 148)'
+
+/** One riff's preview circle -- shared between the shared-feed and
+ * private-jams tabs so both get the same click/pulse/imported-badge
+ * behavior for free rather than reimplementing it twice. `playing` drives
+ * the fade-in/out brightness pulse (reuses RifffBlockRow.tsx's own
+ * `ra-rec-pulse` keyframe by name -- duplicate `@keyframes` declarations
+ * with identical rules are harmless, so this file mounts its own copy via
+ * <style> rather than depending on that component happening to have
+ * mounted first). Clicking toggles: selecting the already-selected riff
+ * calls onClick with the same riffCID again, and the CALLER (not this
+ * component) is responsible for turning that into a deselect -- see
+ * EndlesssLibraryBrowser's own onClick handlers below. */
+function RiffCircle({
+  title,
+  selected,
+  playing,
+  fullyCached,
+  imported,
+  onClick
+}: {
+  title: string
+  selected: boolean
+  playing: boolean
+  fullyCached: boolean
+  imported: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ position: 'relative', width: 18, height: 18 }}>
+      <button
+        onClick={onClick}
+        title={title}
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          // Same cue hierarchy as LoreLibraryBrowser's own riff circles:
+          // selection ring first, then "not everything's downloaded yet"
+          // (dashed), else a plain solid border -- see
+          // downloadMissingStemsFor, already wired to fetch whatever's
+          // missing the moment a riff is selected, so showing the circle
+          // before it's fully cached is safe.
+          border: selected
+            ? '2px solid var(--ra-playhead)'
+            : fullyCached
+              ? '1px solid var(--ra-border)'
+              : '1px dashed var(--ra-text-3)',
+          padding: 0,
+          background: FEED_RIFF_CIRCLE_COLOR,
+          cursor: 'pointer',
+          animation: playing ? 'ra-rec-pulse 1.4s ease-in-out infinite' : undefined
+        }}
+      />
+      {imported && (
+        <span
+          title="already imported"
+          style={{
+            position: 'absolute',
+            bottom: -2,
+            right: -2,
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: 'var(--ra-stretch-on)',
+            border: '1px solid var(--ra-bg-bar)',
+            pointerEvents: 'none'
+          }}
+        />
+      )}
+    </div>
+  )
+}
 
 export function EndlesssLibraryBrowser({
   onClose,
@@ -67,6 +139,27 @@ export function EndlesssLibraryBrowser({
   const [importedRiffGroupIds, setImportedRiffGroupIds] = useState<Map<string, string>>(new Map())
   const [busyRiffCID, setBusyRiffCID] = useState<string | null>(null)
   const previewTokenRef = useRef(0)
+  // Shared accumulator across BOTH resolve effects (shared-feed's and jam's)
+  // -- mirrors LoreLibraryBrowser.tsx's own previewSourcesRef exactly, and
+  // for the same reason: a per-effect-run closure over just that run's own
+  // `sources` array isn't enough. startPreviewLoop's decode is itself async,
+  // so a stale run (superseded by a newer riff selection before it finishes)
+  // can still land AFTER the newer run has already registered its own
+  // preview as "active" -- nothing would ever stop the stale run's sources,
+  // since unregisterActivePreview only clears whichever stop function is
+  // CURRENTLY registered, not ones a later run silently overwrote. Pushing
+  // every run's sources onto one shared, ref-stable array and having
+  // stopPreview() (called eagerly at the top of every new run, and on
+  // unmount) stop everything currently in it -- not just the latest run's
+  // own sources -- closes that gap: even a late-arriving stale resolve gets
+  // swept up the next time selection changes.
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+
+  const stopPreview = useCallback(() => {
+    stopPreviewSources(previewSourcesRef.current)
+    previewSourcesRef.current = []
+    unregisterActivePreview(previewTokenRef.current)
+  }, [])
 
   const [jams, setJams] = useState<LoreJam[]>([])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
@@ -167,6 +260,15 @@ export function EndlesssLibraryBrowser({
   }, [tab, effectiveUsername])
 
   useEffect(() => {
+    // Eager, unconditional stop -- fires every time selectedRiffCID changes
+    // (including to null, which is how clicking the already-selected riff
+    // again toggles playback off), matching LoreLibraryBrowser.tsx's own
+    // resolve effect exactly. This is what actually prevents overlapping
+    // previews: stopPreview() sweeps up EVERYTHING in the shared
+    // previewSourcesRef, including any not-yet-registered stale run whose
+    // startPreviewLoop only just resolved -- see previewSourcesRef's own
+    // doc comment for why a per-run closure alone isn't enough.
+    stopPreview()
     if (!selectedRiffCID) return
     let cancelled = false
     window.rifffApi
@@ -186,19 +288,21 @@ export function EndlesssLibraryBrowser({
           })),
           () => cancelled
         )
-        if (sources.length > 0) {
-          previewTokenRef.current = registerActivePreview(() => stopPreviewSources(sources))
-        }
+        previewSourcesRef.current.push(...sources)
+        if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssResolveSharedFeedRiff() failed:', err)
       })
     return () => {
       cancelled = true
-      unregisterActivePreview(previewTokenRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded, matching LoreLibraryBrowser.tsx's own established pattern for this exact kind of effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch/stopPreview intentionally excluded, matching LoreLibraryBrowser.tsx's own established pattern for this exact kind of effect
   }, [selectedRiffCID])
+
+  useEffect(() => {
+    return () => stopPreview()
+  }, [stopPreview])
 
   useEffect(() => {
     if (tab !== 'private-jams' || !authStatus.loggedIn) return
@@ -256,6 +360,10 @@ export function EndlesssLibraryBrowser({
   }
 
   useEffect(() => {
+    // Eager, unconditional stop -- see the shared-feed resolve effect's own
+    // doc comment for why this (not the cleanup below) is what actually
+    // prevents overlapping previews.
+    stopPreview()
     if (tab !== 'private-jams' || !selectedRiffCID || !selectedJamCID) return
     let cancelled = false
     window.rifffApi
@@ -275,16 +383,14 @@ export function EndlesssLibraryBrowser({
           })),
           () => cancelled
         )
-        if (sources.length > 0) {
-          previewTokenRef.current = registerActivePreview(() => stopPreviewSources(sources))
-        }
+        previewSourcesRef.current.push(...sources)
+        if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopPreview)
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssResolveRiff() failed:', err)
       })
     return () => {
       cancelled = true
-      unregisterActivePreview(previewTokenRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- matches the shared-feed resolve effect's own established exclusions
   }, [tab, selectedJamCID, selectedRiffCID])
@@ -348,6 +454,16 @@ export function EndlesssLibraryBrowser({
           flexDirection: 'column'
         }}
       >
+        {/* Same keyframe name as RifffBlockRow.tsx's own rec-dot pulse --
+            mounted here too (not shared) since RiffCircle needs it and this
+            component doesn't otherwise depend on that one having rendered
+            first; duplicate identical @keyframes rules are harmless. */}
+        <style>{`
+          @keyframes ra-rec-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.25; }
+          }
+        `}</style>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <div style={{ display: 'flex', gap: 10 }}>
             <button
@@ -468,48 +584,17 @@ export function EndlesssLibraryBrowser({
               }}
             >
               {feedRiffs.map((riff) => (
-                <div key={riff.riffCID} style={{ position: 'relative', width: 18, height: 18 }}>
-                  <button
-                    onClick={() => setSelectedRiffCID(riff.riffCID)}
-                    title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                    style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: '50%',
-                      // Same cue hierarchy as LoreLibraryBrowser's own riff
-                      // circles: selection ring first, then "not everything's
-                      // downloaded yet" (dashed), else a plain solid border --
-                      // see downloadMissingStemsFor, already wired to fetch
-                      // whatever's missing the moment a riff is selected, so
-                      // showing the circle before it's fully cached is safe.
-                      border:
-                        selectedRiffCID === riff.riffCID
-                          ? '2px solid var(--ra-playhead)'
-                          : riff.cachedStemCount < riff.stemCount
-                            ? '1px dashed var(--ra-text-3)'
-                            : '1px solid var(--ra-border)',
-                      padding: 0,
-                      background: FEED_RIFF_CIRCLE_COLOR,
-                      cursor: 'pointer'
-                    }}
-                  />
-                  {importedRiffGroupIds.has(riff.riffCID) && (
-                    <span
-                      title="already imported"
-                      style={{
-                        position: 'absolute',
-                        bottom: -2,
-                        right: -2,
-                        width: 6,
-                        height: 6,
-                        borderRadius: '50%',
-                        background: 'var(--ra-stretch-on)',
-                        border: '1px solid var(--ra-bg-bar)',
-                        pointerEvents: 'none'
-                      }}
-                    />
-                  )}
-                </div>
+                <RiffCircle
+                  key={riff.riffCID}
+                  title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                  selected={selectedRiffCID === riff.riffCID}
+                  playing={selectedRiffCID === riff.riffCID && resolvedRiff !== null}
+                  fullyCached={riff.cachedStemCount >= riff.stemCount}
+                  imported={importedRiffGroupIds.has(riff.riffCID)}
+                  onClick={() =>
+                    setSelectedRiffCID((prev) => (prev === riff.riffCID ? null : riff.riffCID))
+                  }
+                />
               ))}
               {feedRiffs.length === 0 && !feedLoading && (
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)', marginTop: 6 }}>
@@ -609,37 +694,25 @@ export function EndlesssLibraryBrowser({
                       overflowY: 'auto',
                       flex: 1,
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4
+                      flexWrap: 'wrap',
+                      alignContent: 'flex-start',
+                      gap: 5
                     }}
                   >
                     {jamRiffs.map((riff) => (
-                      <button
+                      <RiffCircle
                         key={riff.riffCID}
-                        onClick={() => setSelectedRiffCID(riff.riffCID)}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '6px 8px',
-                          fontSize: 11,
-                          border: 'none',
-                          borderRadius: 0,
-                          background:
-                            selectedRiffCID === riff.riffCID
-                              ? 'var(--ra-bg-row-active)'
-                              : 'transparent',
-                          color: 'var(--ra-text)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        <span>{new Date(riff.creationTime * 1000).toLocaleDateString()}</span>
-                        <span style={{ color: 'var(--ra-text-3)' }}>
-                          {riff.stemCount} stems
-                          {importedRiffGroupIds.has(riff.riffCID) ? ' · imported' : ''}
-                        </span>
-                      </button>
+                        title={`${new Date(riff.creationTime * 1000).toLocaleDateString()} · ${riff.stemCount} stems`}
+                        selected={selectedRiffCID === riff.riffCID}
+                        playing={selectedRiffCID === riff.riffCID && resolvedRiff !== null}
+                        fullyCached={riff.cachedStemCount >= riff.stemCount}
+                        imported={importedRiffGroupIds.has(riff.riffCID)}
+                        onClick={() =>
+                          setSelectedRiffCID((prev) =>
+                            prev === riff.riffCID ? null : riff.riffCID
+                          )
+                        }
+                      />
                     ))}
                   </div>
 
