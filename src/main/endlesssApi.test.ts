@@ -483,3 +483,66 @@ describe('endlesssApi riff listing in a jam', () => {
     expect(page.nextOffset).toBe(1)
   })
 })
+
+describe('endlesssApi jam riff resolution', () => {
+  async function loggedIn(): Promise<void> {
+    const { loginWithCredentials } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+  }
+
+  it('resolveJamRiff returns null when not logged in', async () => {
+    const { resolveJamRiff, logout } = await import('./endlesssApi')
+    logout()
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', vi.fn() as unknown as typeof fetch)
+    expect(resolved).toBeNull()
+  })
+
+  it('resolveJamRiff batch-fetches the riff doc then its stem docs', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const calls: { url: string; body?: string }[] = []
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body as string | undefined })
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({
+            total_rows: 1,
+            rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }]
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('_all_docs')) {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+          { status: 200 }
+        )
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    })
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+    expect(resolved).not.toBeNull()
+    expect(resolved!.stems).toHaveLength(1)
+    expect(resolved!.stems[0].stemCID).toBe('stem_1')
+    expect(calls[0].url).toBe(
+      'https://data.endlesss.fm/user_appdata$jam_abc/_all_docs?include_docs=true'
+    )
+    expect(JSON.parse(calls[0].body!)).toEqual({ keys: ['riff_1'] })
+    expect(JSON.parse(calls[1].body!)).toEqual({ keys: ['stem_1'] })
+  })
+})

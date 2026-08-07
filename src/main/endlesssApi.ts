@@ -613,3 +613,86 @@ export async function listRiffsInJam(
 
   return { riffs, hasMore: rows.length === limit, nextOffset: offset + rows.length }
 }
+
+interface RawDocsRow<T> {
+  id: string
+  doc: T
+}
+
+interface RawDocsResponse<T> {
+  total_rows: number
+  rows: RawDocsRow<T>[]
+}
+
+async function fetchDocsByKeys<T>(
+  jamId: string,
+  keys: string[],
+  session: EndlesssSession,
+  fetchImpl: FetchLike
+): Promise<Map<string, T>> {
+  const result = new Map<string, T>()
+  if (keys.length === 0) return result
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      fetchImpl,
+      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(jamId)}/_all_docs?include_docs=true`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: basicAuthHeader(session),
+          'Content-Type': 'application/json',
+          'User-Agent': userAgent()
+        },
+        body: JSON.stringify({ keys })
+      }
+    )
+  } catch (err) {
+    console.error('endlesssApi: fetchDocsByKeys network failure:', err)
+    return result
+  }
+  if (!res.ok) {
+    console.error(`endlesssApi: fetchDocsByKeys HTTP ${res.status}`)
+    return result
+  }
+  let body: RawDocsResponse<T>
+  try {
+    body = (await res.json()) as RawDocsResponse<T>
+  } catch (err) {
+    console.error('endlesssApi: fetchDocsByKeys malformed JSON:', err)
+    return result
+  }
+  for (const row of body.rows ?? []) {
+    if (row.doc) result.set(row.id, row.doc)
+  }
+  return result
+}
+
+/** Resolves one riff within a private jam: fetches the riff doc, extracts
+ * its referenced stem IDs from state.playback, batch-fetches those stem
+ * docs, then downloads whatever stems aren't already cached locally --
+ * mirroring downloadMissingStems' existing LORE-path contract exactly. */
+export async function resolveJamRiff(
+  jamId: string,
+  riffCID: string,
+  fetchImpl: FetchLike = fetch
+): Promise<LoreResolvedRiff | null> {
+  const session = activeSession()
+  if (!session) return null
+
+  const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, [riffCID], session, fetchImpl)
+  const riffDoc = riffDocs.get(riffCID)
+  if (!riffDoc) return null
+
+  const stemIds = riffDoc.state.playback
+    .map((slot) => slot.slot?.current)
+    .filter(
+      (current): current is { on: boolean; currentLoop?: string; gain: number } => !!current?.on
+    )
+    .map((current) => current.currentLoop)
+    .filter((id): id is string => typeof id === 'string')
+
+  const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, stemIds, session, fetchImpl)
+  const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.values()])
+  return downloadMissingStemsFor('jam', riffCID, resolved, fetchImpl)
+}
