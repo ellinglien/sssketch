@@ -312,7 +312,34 @@ const api = {
     riffCIDs: string[],
     targetUser: string
   ): Promise<Record<string, number>> =>
-    ipcRenderer.invoke('endlesss-list-riff-ownership', jamId, riffCIDs, targetUser)
+    ipcRenderer.invoke('endlesss-list-riff-ownership', jamId, riffCIDs, targetUser),
+  endlesssStartSyncSharedFeed: (userName: string): Promise<void> =>
+    ipcRenderer.invoke('endlesss-start-sync-shared-feed', userName),
+  endlesssStartSyncJam: (jamId: string): Promise<void> =>
+    ipcRenderer.invoke('endlesss-start-sync-jam', jamId),
+  endlesssSyncStatusSharedFeed: (
+    userName: string
+  ): Promise<{ riffCount: number; updatedAt: number; complete: boolean } | null> =>
+    ipcRenderer.invoke('endlesss-sync-status-shared-feed', userName),
+  endlesssSyncStatusJam: (
+    jamId: string
+  ): Promise<{ riffCount: number; updatedAt: number; complete: boolean } | null> =>
+    ipcRenderer.invoke('endlesss-sync-status-jam', jamId),
+  onEndlesssSyncProgress: (
+    callback: (progress: {
+      source: 'shared' | 'jam'
+      key: string
+      done: number
+      total: number
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      progress: { source: 'shared' | 'jam'; key: string; done: number; total: number }
+    ): void => callback(progress)
+    ipcRenderer.on('endlesss-sync-progress', listener)
+    return () => ipcRenderer.removeListener('endlesss-sync-progress', listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('rifffApi', api)

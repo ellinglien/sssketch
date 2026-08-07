@@ -52,6 +52,8 @@ import {
   resolveJamRiff,
   listRiffOwnership
 } from './endlesssApi'
+import { syncSharedFeed, syncJam } from './endlesssSync'
+import { getSyncStatus } from './endlesssSyncIndex'
 import {
   listLibrarySketches,
   libraryRootPath,
@@ -234,6 +236,28 @@ app.whenReady().then(async () => {
     (_event, jamId: string, riffCIDs: string[], targetUser: string) =>
       listRiffOwnership(jamId, riffCIDs, targetUser)
   )
+  ipcMain.handle('endlesss-start-sync-shared-feed', (event, userName: string) =>
+    syncSharedFeed(userName, (progress) => {
+      event.sender.send('endlesss-sync-progress', {
+        source: 'shared' as const,
+        key: userName,
+        ...progress
+      })
+    })
+  )
+  ipcMain.handle('endlesss-start-sync-jam', (event, jamId: string) =>
+    syncJam(jamId, (progress) => {
+      event.sender.send('endlesss-sync-progress', {
+        source: 'jam' as const,
+        key: jamId,
+        ...progress
+      })
+    })
+  )
+  ipcMain.handle('endlesss-sync-status-shared-feed', (_event, userName: string) =>
+    getSyncStatus('shared', userName)
+  )
+  ipcMain.handle('endlesss-sync-status-jam', (_event, jamId: string) => getSyncStatus('jam', jamId))
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
