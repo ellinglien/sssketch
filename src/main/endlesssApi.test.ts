@@ -427,3 +427,59 @@ describe('endlesssApi jam listing', () => {
     expect(jams).toEqual([{ jamCID: 'jam_abc', name: 'jam_abc', lastRiffTime: 0 }])
   })
 })
+
+describe('endlesssApi riff listing in a jam', () => {
+  it('listRiffsInJam returns [] when not logged in', async () => {
+    const { listRiffsInJam, logout } = await import('./endlesssApi')
+    logout()
+    const page = await listRiffsInJam('jam_abc', {}, vi.fn() as unknown as typeof fetch)
+    expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 0 })
+  })
+
+  it('listRiffsInJam parses the rifffLoopsByCreateTime view response', async () => {
+    const { loginWithCredentials, listRiffsInJam } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    const fakeFetch = vi.fn(async (url: string) => {
+      expect(url).toBe(
+        'https://data.endlesss.fm/user_appdata$jam_abc/_design/types/_view/rifffLoopsByCreateTime?descending=true&limit=50&skip=0'
+      )
+      return new Response(
+        JSON.stringify({
+          total_rows: 1,
+          rows: [{ id: 'riff_1', key: 1700000000000000000, value: ['stem_1', 'stem_2'] }]
+        }),
+        { status: 200 }
+      )
+    })
+    const page = await listRiffsInJam('jam_abc', { limit: 50 }, fakeFetch as typeof fetch)
+    expect(page.riffs).toEqual([
+      {
+        riffCID: 'riff_1',
+        creationTime: 1700000000,
+        bpm: 0,
+        barLength: 0,
+        userName: '',
+        stemCount: 2,
+        cachedStemCount: 0,
+        ownerFraction: 0
+      }
+    ])
+    expect(page.hasMore).toBe(false)
+    expect(page.nextOffset).toBe(1)
+  })
+})

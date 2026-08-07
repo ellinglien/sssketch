@@ -6,6 +6,7 @@ import type {
   LoreResolvedRiff,
   LoreResolvedStem,
   LoreRiffSummary,
+  RiffFilters,
   RiffPage
 } from '@shared/loreLibrary'
 import { resolveKeyName } from '@shared/loreLibrary'
@@ -538,4 +539,77 @@ export async function listJams(fetchImpl: FetchLike = fetch): Promise<LoreJam[]>
       lastRiffTime: 0
     }))
   )
+}
+
+interface RawRiffListRow {
+  id: string
+  key: number
+  value: string[]
+}
+
+interface RawRiffListResponse {
+  total_rows: number
+  rows: RawRiffListRow[]
+}
+
+const DEFAULT_RIFF_PAGE_SIZE = 200
+
+/** Lists riffs in one jam via the same rifffLoopsByCreateTime CouchDB view
+ * OUROVEON itself uses -- lightweight (id/creation-time/stem-IDs only, no
+ * per-riff metadata), matching the two-step "list then resolve" shape this
+ * whole path already uses. `key` is documented (ResultRiffAndStemIDs, see
+ * the design spec's Addendum) as unix NANOSECONDS -- divided by 1e9 here to
+ * match LoreRiffSummary's unix-SECONDS convention. Client-side filters
+ * (date/bpm/userName) from RiffFilters are NOT applied here -- the raw view
+ * doesn't expose that metadata without a per-riff resolve, unlike LORE's own
+ * SQL-backed listRiffs. This is a deliberate v1 scope trim (see the
+ * implementation plan) -- filtering can be layered on by resolving visible
+ * riffs client-side in a later pass if it turns out to matter in practice. */
+export async function listRiffsInJam(
+  jamId: string,
+  filters: RiffFilters,
+  fetchImpl: FetchLike = fetch
+): Promise<RiffPage> {
+  const session = activeSession()
+  const offset = filters.offset ?? 0
+  if (!session) return { riffs: [], hasMore: false, nextOffset: offset }
+
+  const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      fetchImpl,
+      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(jamId)}/_design/types/_view/rifffLoopsByCreateTime?descending=true&limit=${limit}&skip=${offset}`,
+      { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
+    )
+  } catch (err) {
+    console.error('endlesssApi: listRiffsInJam network failure:', err)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+  if (!res.ok) {
+    console.error(`endlesssApi: listRiffsInJam HTTP ${res.status}`)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+
+  let body: RawRiffListResponse
+  try {
+    body = (await res.json()) as RawRiffListResponse
+  } catch (err) {
+    console.error('endlesssApi: listRiffsInJam malformed JSON:', err)
+    return { riffs: [], hasMore: false, nextOffset: offset }
+  }
+
+  const rows = body.rows ?? []
+  const riffs: LoreRiffSummary[] = rows.map((row) => ({
+    riffCID: row.id,
+    creationTime: Math.floor(row.key / 1e9),
+    bpm: 0,
+    barLength: 0,
+    userName: '',
+    stemCount: row.value.length,
+    cachedStemCount: 0,
+    ownerFraction: 0
+  }))
+
+  return { riffs, hasMore: rows.length === limit, nextOffset: offset + rows.length }
 }
