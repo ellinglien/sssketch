@@ -290,6 +290,27 @@ export function EndlesssLibraryBrowser({
   // ownerFraction eagerly server-side (see endlesssApi.ts).
   const [jamOwnerFractions, setJamOwnerFractions] = useState<Map<string, number>>(new Map())
 
+  const [feedSyncStatus, setFeedSyncStatus] = useState<{
+    riffCount: number
+    updatedAt: number
+    complete: boolean
+  } | null>(null)
+  const [jamSyncStatus, setJamSyncStatus] = useState<{
+    riffCount: number
+    updatedAt: number
+    complete: boolean
+  } | null>(null)
+  // { done, total } while a sync for the CURRENTLY relevant source/jam is
+  // running, null otherwise. Filtered from the broadcast onEndlesssSyncProgress
+  // stream (which covers every source, not just whichever this component
+  // cares about right now) down to just shared-feed and the selected jam.
+  const [feedSyncProgress, setFeedSyncProgress] = useState<{ done: number; total: number } | null>(
+    null
+  )
+  const [jamSyncProgress, setJamSyncProgress] = useState<{ done: number; total: number } | null>(
+    null
+  )
+
   const playing = usePlaying()
   const dispatch = useDispatch()
   const state = useAppState()
@@ -466,6 +487,65 @@ export function EndlesssLibraryBrowser({
   useEffect(() => {
     return () => stopPreview()
   }, [stopPreview])
+
+  useEffect(() => {
+    return window.rifffApi.onEndlesssSyncProgress((progress) => {
+      if (progress.source === 'shared' && progress.key === effectiveUsername) {
+        setFeedSyncProgress({ done: progress.done, total: progress.total })
+        if (progress.done === progress.total) {
+          void window.rifffApi
+            .endlesssSyncStatusSharedFeed(effectiveUsername)
+            .then(setFeedSyncStatus)
+        }
+      }
+      if (progress.source === 'jam' && progress.key === selectedJamCID) {
+        setJamSyncProgress({ done: progress.done, total: progress.total })
+        if (progress.done === progress.total && selectedJamCID) {
+          void window.rifffApi.endlesssSyncStatusJam(selectedJamCID).then(setJamSyncStatus)
+        }
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveUsername/selectedJamCID intentionally excluded so this subscription is set up once; the callback reads their latest values via closure since it's re-created fresh each render but the subscription itself doesn't need to be torn down and rebuilt on every keystroke/selection change
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    if (tab !== 'shared-feed' || effectiveUsername === '') {
+      // Deferred through a microtask (not called directly) so this doesn't
+      // read as a synchronous setState-in-effect -- same established
+      // workaround as the AUTO_FILL effects above.
+      void Promise.resolve().then(() => {
+        if (!cancelled) setFeedSyncStatus(null)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    window.rifffApi.endlesssSyncStatusSharedFeed(effectiveUsername).then((status) => {
+      if (!cancelled) setFeedSyncStatus(status)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, effectiveUsername])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedJamCID) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) setJamSyncStatus(null)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    window.rifffApi.endlesssSyncStatusJam(selectedJamCID).then((status) => {
+      if (!cancelled) setJamSyncStatus(status)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedJamCID])
 
   useEffect(() => {
     if (tab !== 'private-jams' || !authStatus.loggedIn) return
@@ -956,6 +1036,33 @@ export function EndlesssLibraryBrowser({
               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                 {feedRiffs.length} riffs{feedHasMore ? '+' : ''}
               </span>
+              <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                {feedSyncStatus
+                  ? `synced: ${feedSyncStatus.riffCount} riffs${feedSyncStatus.complete ? '' : ' (partial)'}`
+                  : 'not yet synced'}
+              </span>
+              <button
+                onClick={() => {
+                  setFeedSyncProgress({ done: 0, total: 0 })
+                  void window.rifffApi.endlesssStartSyncSharedFeed(effectiveUsername)
+                }}
+                disabled={
+                  feedSyncProgress !== null && feedSyncProgress.done < feedSyncProgress.total
+                }
+                style={{
+                  height: 20,
+                  borderRadius: 0,
+                  padding: '0 8px',
+                  fontSize: 9,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                {feedSyncProgress !== null && feedSyncProgress.done < feedSyncProgress.total
+                  ? `syncing… ${feedSyncProgress.done}/${feedSyncProgress.total}`
+                  : 'sync for instant playback'}
+              </button>
             </div>
 
             <div
@@ -1135,6 +1242,35 @@ export function EndlesssLibraryBrowser({
               )}
               {selectedJamCID && (
                 <>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                      {jamSyncStatus
+                        ? `synced: ${jamSyncStatus.riffCount} riffs${jamSyncStatus.complete ? '' : ' (partial)'}`
+                        : 'not yet synced'}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setJamSyncProgress({ done: 0, total: 0 })
+                        void window.rifffApi.endlesssStartSyncJam(selectedJamCID)
+                      }}
+                      disabled={
+                        jamSyncProgress !== null && jamSyncProgress.done < jamSyncProgress.total
+                      }
+                      style={{
+                        height: 20,
+                        borderRadius: 0,
+                        padding: '0 8px',
+                        fontSize: 9,
+                        border: '1px solid var(--ra-border)',
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      {jamSyncProgress !== null && jamSyncProgress.done < jamSyncProgress.total
+                        ? `syncing… ${jamSyncProgress.done}/${jamSyncProgress.total}`
+                        : 'sync this jam for instant playback'}
+                    </button>
+                  </div>
                   <div
                     ref={jamGridRef}
                     onScroll={(e) => {
