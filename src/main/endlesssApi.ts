@@ -713,7 +713,11 @@ const DEFAULT_RIFF_PAGE_SIZE = 200
  * doesn't expose that metadata without a per-riff resolve, unlike LORE's own
  * SQL-backed listRiffs. This is a deliberate v1 scope trim (see the
  * implementation plan) -- filtering can be layered on by resolving visible
- * riffs client-side in a later pass if it turns out to matter in practice. */
+ * riffs client-side in a later pass if it turns out to matter in practice.
+ * Checks the local sync index first (see endlesssSyncIndex.ts) and serves
+ * straight from it, with zero network calls, whenever the requested range
+ * is already fully synced -- the CouchDB view below only ever runs for
+ * whatever isn't. */
 export async function listRiffsInJam(
   jamId: string,
   filters: RiffFilters,
@@ -827,7 +831,11 @@ async function fetchDocsByKeys<T>(
 /** Resolves one riff within a private jam: fetches the riff doc, extracts
  * its referenced stem IDs from state.playback, batch-fetches those stem
  * docs, then downloads whatever stems aren't already cached locally --
- * mirroring downloadMissingStems' existing LORE-path contract exactly. */
+ * mirroring downloadMissingStems' existing LORE-path contract exactly.
+ * Checks the local sync index first (see endlesssSyncIndex.ts) and returns
+ * straight from it, with zero network calls and no login required, when
+ * this riff is already fully synced -- everything below only ever runs for
+ * a riff that isn't. */
 export async function resolveJamRiff(
   jamId: string,
   riffCID: string,
