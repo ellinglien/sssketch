@@ -193,3 +193,152 @@ describe('syncSharedFeed', () => {
     await first
   })
 })
+
+describe('syncJam', () => {
+  let userDataDir: string
+
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-sync-test-'))
+    ;(globalThis as unknown as { __testUserDataDir: string }).__testUserDataDir = userDataDir
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  async function loggedIn(): Promise<void> {
+    const { loginWithCredentials } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+  }
+
+  function jamFakeFetch(audioBytes: Uint8Array<ArrayBuffer>): ReturnType<typeof vi.fn> {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('rifffLoopsByCreateTime')) {
+        return new Response(
+          JSON.stringify({
+            total_rows: 1,
+            rows: [{ id: 'riff_1', key: 1700000000000, value: ['stem_1'] }]
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({
+            total_rows: 1,
+            rows: [
+              {
+                id: 'riff_1',
+                doc: {
+                  _id: 'riff_1',
+                  state: {
+                    bps: 2.0,
+                    barLength: 4,
+                    playback: [
+                      { slot: { current: { on: true, currentLoop: 'stem_1', gain: 1 } } },
+                      ...Array.from({ length: 7 }, () => ({ slot: {} }))
+                    ]
+                  },
+                  userName: 'elling',
+                  created: 1700000000000,
+                  root: 0,
+                  scale: 5
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('_all_docs')) {
+        return new Response(
+          JSON.stringify({
+            total_rows: 1,
+            rows: [
+              {
+                id: 'stem_1',
+                doc: {
+                  _id: 'stem_1',
+                  cdn_attachments: {
+                    oggAudio: {
+                      endpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+                      key: 'attachments/oggAudio/1/stem_1',
+                      url: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/stem_1',
+                      length: 100
+                    }
+                  },
+                  bps: 2.0,
+                  length16ths: 64,
+                  presetName: 'Kick',
+                  creatorUserName: 'elling'
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      }
+      return new Response(audioBytes, { status: 200 })
+    })
+  }
+
+  it('syncs every new riff in a jam on a first-ever run and marks the index complete', async () => {
+    await loggedIn()
+    const fakeFetch = jamFakeFetch(new TextEncoder().encode('fake ogg bytes'))
+    const { syncJam } = await import('./endlesssSync')
+    const progressCalls: { done: number; total: number }[] = []
+    await syncJam(
+      'jam_abc',
+      (p) => progressCalls.push({ ...p }),
+      fakeFetch as unknown as typeof fetch
+    )
+
+    const { loadSyncIndex } = await import('./endlesssSyncIndex')
+    const index = loadSyncIndex('jam', 'jam_abc')
+    expect(index).not.toBeNull()
+    expect(index!.order).toEqual(['riff_1'])
+    expect(index!.complete).toBe(true)
+    expect(index!.riffs.riff_1.resolved.stems[0].path).not.toBeNull()
+    expect(progressCalls[progressCalls.length - 1]).toEqual({ done: 1, total: 1 })
+  })
+
+  it('does not start a second sync for the same jamId while one is already running', async () => {
+    await loggedIn()
+    let releaseGate: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve
+    })
+    let listCallCount = 0
+    const fakeFetch = vi.fn(async (url: string) => {
+      if (url.includes('rifffLoopsByCreateTime')) {
+        listCallCount++
+        await gate
+        return new Response(JSON.stringify({ total_rows: 0, rows: [] }), { status: 200 })
+      }
+      return new Response(new Uint8Array(), { status: 200 })
+    })
+    const { syncJam } = await import('./endlesssSync')
+    const first = syncJam('jam_abc', () => {}, fakeFetch as unknown as typeof fetch)
+    const second = syncJam('jam_abc', () => {}, fakeFetch as unknown as typeof fetch)
+    await second
+    expect(listCallCount).toBe(1)
+    releaseGate!()
+    await first
+  })
+})

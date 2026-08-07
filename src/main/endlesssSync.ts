@@ -1,4 +1,9 @@
-import { listSharedFeed, resolveSharedFeedRiff } from './endlesssApi'
+import {
+  listSharedFeed,
+  listRiffsInJam,
+  resolveSharedFeedRiff,
+  resolveJamRiff
+} from './endlesssApi'
 import type { FetchLike } from './endlesssApi'
 import { loadOrCreateSyncIndex, saveSyncIndex } from './endlesssSyncIndex'
 import type { LoreRiffSummary } from '@shared/loreLibrary'
@@ -121,6 +126,71 @@ export async function syncSharedFeed(
     if (reachedEnd) index.complete = true
     index.updatedAt = Date.now()
     saveSyncIndex('shared', userName, index)
+  } finally {
+    syncsInFlight.delete(key)
+  }
+}
+
+const SYNC_JAM_PAGE_SIZE = 200 // matches DEFAULT_RIFF_PAGE_SIZE in endlesssApi.ts
+
+/** Same shape as syncSharedFeed, walking a private jam via listRiffsInJam/
+ * resolveJamRiff instead. See syncSharedFeed's own doc comment for the
+ * full rationale (incremental resume, concurrency cap, why the walk phase
+ * also benefits from listRiffsInJam's own sync-index fast path). */
+export async function syncJam(
+  jamId: string,
+  onProgress: (progress: SyncProgress) => void,
+  fetchImpl: FetchLike = fetch
+): Promise<void> {
+  const key = `jam:${jamId}`
+  if (syncsInFlight.has(key)) return
+  syncsInFlight.add(key)
+  try {
+    const index = loadOrCreateSyncIndex('jam', jamId)
+    const alreadySynced = new Set(Object.keys(index.riffs))
+
+    const newSummaries: LoreRiffSummary[] = []
+    let offset = 0
+    let reachedEnd = false
+    for (;;) {
+      const page = await listRiffsInJam(jamId, { offset, limit: SYNC_JAM_PAGE_SIZE }, fetchImpl)
+      let hitBoundary = false
+      for (const summary of page.riffs) {
+        if (alreadySynced.has(summary.riffCID)) {
+          hitBoundary = true
+          break
+        }
+        newSummaries.push(summary)
+      }
+      if (hitBoundary) break
+      if (!page.hasMore) {
+        reachedEnd = true
+        break
+      }
+      offset = page.nextOffset
+    }
+
+    let done = 0
+    const total = newSummaries.length
+    onProgress({ done, total })
+    await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
+      const resolved = await resolveJamRiff(jamId, summary.riffCID, fetchImpl)
+      if (resolved) {
+        index.riffs[summary.riffCID] = { summary, resolved }
+        index.updatedAt = Date.now()
+        saveSyncIndex('jam', jamId, index)
+      }
+      done++
+      onProgress({ done, total })
+    })
+
+    const newlySyncedInOrder = newSummaries
+      .filter((s) => index.riffs[s.riffCID] !== undefined)
+      .map((s) => s.riffCID)
+    index.order = [...newlySyncedInOrder, ...index.order]
+    if (reachedEnd) index.complete = true
+    index.updatedAt = Date.now()
+    saveSyncIndex('jam', jamId, index)
   } finally {
     syncsInFlight.delete(key)
   }
