@@ -111,7 +111,8 @@ function groupRiffsByDateAndTempo(riffs: LoreRiffSummary[]): RiffDateGroup[] {
 
 export function LoreLibraryBrowser({
   onClose,
-  onImported
+  onImported,
+  onSwitchToEndlesss
 }: {
   onClose: () => void
   /** Called once import(s) succeed with every newly-created groupId (one for
@@ -124,6 +125,12 @@ export function LoreLibraryBrowser({
    * `state.rifffs`, which wouldn't yet reflect this batch's dispatches at
    * the point onImported fires (React hasn't re-rendered yet). */
   onImported: (groupIds: string[], rifffs?: Rifff[]) => void
+  /** Called when the user clicks the "endlesss" link -- App.tsx owns which
+   * browser component is actually mounted (see the App.tsx wiring task).
+   * Mirrors EndlesssLibraryBrowser's own single "lore library" back-link;
+   * EndlesssLibraryBrowser owns which of its two internal tabs (shared
+   * feed / private jams) opens by default when navigated to this way. */
+  onSwitchToEndlesss: () => void
 }): React.JSX.Element {
   const [available, setAvailable] = useState<boolean | null>(null)
   const [jamFilter, setJamFilter] = useState('')
@@ -749,7 +756,22 @@ export function LoreLibraryBrowser({
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span className="ra-eyebrow">lore library</span>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <span className="ra-eyebrow">lore library</span>
+            <button
+              onClick={onSwitchToEndlesss}
+              style={{
+                fontSize: 10,
+                color: 'var(--ra-text-3)',
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer'
+              }}
+            >
+              endlesss
+            </button>
+          </div>
           <button
             onClick={onClose}
             style={{

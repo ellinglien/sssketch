@@ -34,6 +34,7 @@ import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
+import { EndlesssLibraryBrowser } from './components/EndlesssLibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
@@ -851,6 +852,7 @@ function Frame(): React.JSX.Element {
   }, [persistedJson, currentSketch, state.rifffs])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
+  const [endlesssLibraryOpen, setEndlesssLibraryOpen] = useState(false)
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
@@ -1503,6 +1505,20 @@ function Frame(): React.JSX.Element {
           <LoreLibraryBrowser
             onClose={() => setLoreLibraryOpen(false)}
             onImported={handleLoreImported}
+            onSwitchToEndlesss={() => {
+              setLoreLibraryOpen(false)
+              setEndlesssLibraryOpen(true)
+            }}
+          />
+        )}
+        {endlesssLibraryOpen && (
+          <EndlesssLibraryBrowser
+            onClose={() => setEndlesssLibraryOpen(false)}
+            onImported={handleLoreImported}
+            onSwitchToLore={() => {
+              setEndlesssLibraryOpen(false)
+              setLoreLibraryOpen(true)
+            }}
           />
         )}
         {libraryBrowserOpen && (
