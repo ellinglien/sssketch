@@ -244,20 +244,16 @@ additive, not a rewrite: the existing on-demand resolve/download/preview machine
 fixes included) stays exactly as the fallback path, and becomes what fills in the local index in
 the first place during a sync run.
 
-### Trigger: explicit, not automatic (open question, but with a stated recommendation)
+### Trigger: explicit, opt-in only (confirmed)
 
 Per the Grounding section, even OUROVEON's own tool — covering more risk surface than this
 feature ever will — treats bulk stem downloading as something the person explicitly asks for,
-never something that happens silently on login or on scroll. Recommendation: a clearly-labeled,
-opt-in action per source (e.g. "sync my shared feed for instant playback" / "sync this jam"),
-with visible progress (X of Y riffs synced) while it runs, rather than an automatic background
-sync that starts the moment someone logs in or opens a tab. This avoids surprising someone with
-bandwidth/disk usage they didn't ask for, and avoids the same "uncapped background work
-competing with foreground clicks" class of bug already root-caused once. **This is the one
-genuinely open design question left in this spec** — Elling's own framing ("a full ahead of time
-local sync is doable") reads as enthusiastic about the idea in general; whether it should also be
-automatic is a separate question worth a direct answer before implementation starts, since it's
-a real UX/data-usage tradeoff, not something to guess silently.
+never something that happens silently on login or on scroll. **Confirmed with Elling**: a
+clearly-labeled, opt-in action per source (e.g. "sync my shared feed for instant playback" /
+"sync this jam"), with visible progress (X of Y riffs synced) while it runs — never an automatic
+background sync that starts the moment someone logs in or opens a tab. This avoids surprising
+someone with bandwidth/disk usage they didn't ask for, and avoids the same "uncapped background
+work competing with foreground clicks" class of bug already root-caused once this session.
 
 ### Scope discipline (why this isn't "building a second LORE")
 
