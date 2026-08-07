@@ -411,10 +411,17 @@ function Timeline({
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
+  lastSavedJsonRef,
   onOpenLibrary
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
+  /** Baseline to diff the live project against -- see App's own doc comment
+   * on this ref. A plain mutable ref (not state) passed down from App,
+   * which is the only place that knows every "this content is now durably
+   * saved" moment (initial load/recovery, the debounced library autosave,
+   * explicit Open) -- handleNew reads it, handleSave writes it. */
+  lastSavedJsonRef: React.RefObject<string | null>
   onOpenLibrary: () => void
 }): React.JSX.Element {
   const state = useAppState()
@@ -424,13 +431,22 @@ function ProjectMenu({
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
 
   async function handleNew(): Promise<void> {
-    if (
-      Object.keys(state.rifffs).length > 0 &&
-      !window.confirm('Discard the current project and start a new one?')
-    ) {
+    // Only worth interrupting for if there's actually something that would
+    // be lost: an empty project has nothing to discard, and a project whose
+    // current content already matches the last known-saved snapshot (an
+    // explicit Save, the debounced library autosave having already caught
+    // up, or simply never having been touched since it was opened) isn't
+    // going anywhere -- it's already sitting safely in the library/file.
+    // Previously this only checked "is there any content at all," which
+    // fired the confirm dialog constantly for projects that were, in fact,
+    // already fully saved.
+    const hasUnsavedChanges =
+      Object.keys(state.rifffs).length > 0 && serializeProject(state) !== lastSavedJsonRef.current
+    if (hasUnsavedChanges && !window.confirm('Discard the current project and start a new one?')) {
       return
     }
     dispatch({ type: 'LOAD_STATE', state: initialState })
+    lastSavedJsonRef.current = serializeProject(initialState)
     // Give the fresh sketch a real library name immediately, same as the
     // mount effect's own fresh-start path below -- otherwise currentSketch
     // stays null and the debounced autosave effect (gated on
@@ -456,6 +472,7 @@ function ProjectMenu({
       } else {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
+      lastSavedJsonRef.current = json
     } catch (err) {
       console.error('ProjectMenu: failed to save project:', err)
       window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -724,6 +741,21 @@ function Frame(): React.JSX.Element {
   }, [state])
 
   const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
+  // The last content actually known to be durably saved (library folder,
+  // external file, or -- immediately after a crash-recovery restore -- the
+  // just-recovered snapshot itself). Compared against the live, freshly
+  // serialized state in ProjectMenu's handleNew to decide whether there's
+  // anything real to lose -- see its own doc comment. Kept as a ref (not
+  // state) since nothing needs to re-render off it; it's read once, at
+  // click time.
+  const lastSavedJsonRef = useRef<string | null>(null)
+  // Guards the startup effect below against StrictMode's dev-only
+  // double-invoke: without this, both invocations independently call
+  // loadAutosave() before either gets to clearAutosave(), so a real
+  // crash-recovery snapshot triggers TWO "recover unsaved work?" prompts in
+  // a row for the same content -- confirmed live (clicking OK on the first
+  // immediately shows a second, identical one).
+  const startupResolvedRef = useRef(false)
 
   // Once, on mount: offer to restore a crash-recovery snapshot from a
   // previous session that never got explicitly saved (see projectFile.ts's
@@ -736,6 +768,8 @@ function Frame(): React.JSX.Element {
   // a brand-new library entry instead of writing back to the sketch the
   // recovered content actually came from.
   useEffect(() => {
+    if (startupResolvedRef.current) return
+    startupResolvedRef.current = true
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
       if (json && window.confirm('Recover unsaved work from a previous session?')) {
@@ -747,6 +781,7 @@ function Frame(): React.JSX.Element {
         setBusy('loading…')
         await warmStemCaches(loaded)
         dispatch({ type: 'LOAD_STATE', state: loaded })
+        lastSavedJsonRef.current = serializeProject(loaded)
         setBusy(null)
         const sketchJson = await window.rifffApi.loadAutosaveSketch()
         // The sketch-info sidecar can be missing/corrupted even when the
@@ -785,6 +820,7 @@ function Frame(): React.JSX.Element {
           setBusy('loading…')
           await warmStemCaches(loaded)
           dispatch({ type: 'LOAD_STATE', state: loaded })
+          lastSavedJsonRef.current = serializeProject(loaded)
           setBusy(null)
           setCurrentSketch(lastOpened)
           return
@@ -800,6 +836,7 @@ function Frame(): React.JSX.Element {
       // importing something right away already has somewhere real to land
       // (see the debounced autosave effect below, which writes straight to
       // this library entry once there's real content).
+      lastSavedJsonRef.current = serializeProject(initialState)
       setCurrentSketch({
         kind: 'library',
         name: await window.rifffApi.generateDefaultProjectName()
@@ -846,6 +883,7 @@ function Frame(): React.JSX.Element {
         Object.keys(state.rifffs).length > 0
       ) {
         void window.rifffApi.saveProjectToLibrary(currentSketch.name, persistedJson)
+        lastSavedJsonRef.current = persistedJson
       }
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
@@ -1389,6 +1427,7 @@ function Frame(): React.JSX.Element {
             <ProjectMenu
               currentSketch={currentSketch}
               setCurrentSketch={setCurrentSketch}
+              lastSavedJsonRef={lastSavedJsonRef}
               onOpenLibrary={() => setLibraryBrowserOpen(true)}
             />
           </div>
@@ -1534,6 +1573,7 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   await warmStemCaches(loaded)
                   dispatch({ type: 'LOAD_STATE', state: loaded })
+                  lastSavedJsonRef.current = serializeProject(loaded)
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
@@ -1555,6 +1595,7 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   await warmStemCaches(loaded)
                   dispatch({ type: 'LOAD_STATE', state: loaded })
+                  lastSavedJsonRef.current = serializeProject(loaded)
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
