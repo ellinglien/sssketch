@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { LoreResolvedRiff, LoreRiffSummary } from '@shared/loreLibrary'
+import type { LoreJam, LoreResolvedRiff, LoreRiffSummary } from '@shared/loreLibrary'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import {
@@ -59,6 +59,13 @@ export function EndlesssLibraryBrowser({
   const [busyRiffCID, setBusyRiffCID] = useState<string | null>(null)
   const previewTokenRef = useRef(0)
 
+  const [jams, setJams] = useState<LoreJam[]>([])
+  const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
+  const [jamRiffs, setJamRiffs] = useState<LoreRiffSummary[]>([])
+  const [jamRiffsHasMore, setJamRiffsHasMore] = useState(false)
+  const [jamRiffsNextOffset, setJamRiffsNextOffset] = useState(0)
+  const [jamRiffsLoading, setJamRiffsLoading] = useState(false)
+
   const playing = usePlaying()
   const dispatch = useDispatch()
   const state = useAppState()
@@ -106,8 +113,10 @@ export function EndlesssLibraryBrowser({
   // the SAME username would recompute the same feedKey the stale ref still
   // holds, so the reset below would silently fail to fire and leave a
   // stale selection/preview pointing at whatever was selected before the
-  // user left the tab. Only the reset *body* (clearing selection/preview
-  // state) is gated to the shared-feed tab -- the key tracking is not.
+  // user left the tab. Both tabs' reset *bodies* clear selection/preview
+  // state on entry (private-jams just skips the shared-feed-only
+  // feedLoading priming) -- symmetric on purpose, since a riff selected on
+  // one tab must never leak into the other tab's import panel.
   const [resetForFeedKey, setResetForFeedKey] = useState<string | null>(null)
   const feedKey = `${tab}:${effectiveUsername}`
   if (feedKey !== resetForFeedKey) {
@@ -116,6 +125,9 @@ export function EndlesssLibraryBrowser({
       setSelectedRiffCID(null)
       setResolvedRiff(null)
       setFeedLoading(effectiveUsername !== '')
+    } else if (tab === 'private-jams') {
+      setSelectedRiffCID(null)
+      setResolvedRiff(null)
     }
   }
 
@@ -175,19 +187,104 @@ export function EndlesssLibraryBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded, matching LoreLibraryBrowser.tsx's own established pattern for this exact kind of effect
   }, [selectedRiffCID])
 
+  useEffect(() => {
+    if (tab !== 'private-jams' || !authStatus.loggedIn) return
+    let cancelled = false
+    window.rifffApi
+      .endlesssListJams()
+      .then((jams) => {
+        if (cancelled) return
+        setJams(jams)
+      })
+      .catch((err) => {
+        console.error('EndlesssLibraryBrowser: endlesssListJams() failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, authStatus.loggedIn])
+
+  useEffect(() => {
+    if (!selectedJamCID) return
+    let cancelled = false
+    window.rifffApi
+      .endlesssListRiffs(selectedJamCID, {})
+      .then((page) => {
+        if (cancelled) return
+        setJamRiffs(page.riffs)
+        setJamRiffsHasMore(page.hasMore)
+        setJamRiffsNextOffset(page.nextOffset)
+      })
+      .catch((err) => {
+        console.error('EndlesssLibraryBrowser: endlesssListRiffs() failed:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setJamRiffsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedJamCID])
+
+  function loadMoreJamRiffs(): void {
+    if (!selectedJamCID || jamRiffsLoading) return
+    setJamRiffsLoading(true)
+    window.rifffApi
+      .endlesssListRiffs(selectedJamCID, { offset: jamRiffsNextOffset })
+      .then((page) => {
+        setJamRiffs((prev) => [...prev, ...page.riffs])
+        setJamRiffsHasMore(page.hasMore)
+        setJamRiffsNextOffset(page.nextOffset)
+      })
+      .catch((err) => {
+        console.error('EndlesssLibraryBrowser: endlesssListRiffs() (load more) failed:', err)
+      })
+      .finally(() => setJamRiffsLoading(false))
+  }
+
+  useEffect(() => {
+    if (tab !== 'private-jams' || !selectedRiffCID || !selectedJamCID) return
+    let cancelled = false
+    window.rifffApi
+      .endlesssResolveRiff(selectedJamCID, selectedRiffCID)
+      .then(async (resolved) => {
+        if (cancelled || !resolved) return
+        setResolvedRiff(resolved)
+        if (playing) dispatch({ type: 'PAUSE' })
+        const cachedStems = resolved.stems.filter((s) => s.path !== null)
+        const gain = sqrtGain(cachedStems.length)
+        const sources = await startPreviewLoop(
+          getAudioContext(),
+          cachedStems.map((s) => ({
+            path: s.path!,
+            gain: gain * s.gain,
+            durationSec: s.durationSec
+          })),
+          () => cancelled
+        )
+        if (sources.length > 0) {
+          previewTokenRef.current = registerActivePreview(() => stopPreviewSources(sources))
+        }
+      })
+      .catch((err) => {
+        console.error('EndlesssLibraryBrowser: endlesssResolveRiff() failed:', err)
+      })
+    return () => {
+      cancelled = true
+      unregisterActivePreview(previewTokenRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- matches the shared-feed resolve effect's own established exclusions
+  }, [tab, selectedJamCID, selectedRiffCID])
+
   function handleImport(riffCID: string, resolved: LoreResolvedRiff): void {
     setBusy('importing rifff…')
     setBusyRiffCID(riffCID)
     try {
       const existingGroupId = importedRiffGroupIds.get(riffCID)
       const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
-      const result = buildImportedRifff(
-        riffCID,
-        resolved,
-        existing,
-        'endlesss',
-        'endlesss shared feed'
-      )
+      const folderPathLabel =
+        tab === 'shared-feed' ? 'endlesss shared feed' : 'endlesss private jam'
+      const result = buildImportedRifff(riffCID, resolved, existing, 'endlesss', folderPathLabel)
       if (!result) return
       const { groupId, rifff, newStemSlots } = result
       if (newStemSlots.length > 0 || !existing) {
@@ -421,9 +518,129 @@ export function EndlesssLibraryBrowser({
           </div>
         )}
 
-        {tab === 'private-jams' && (
+        {tab === 'private-jams' && !authStatus.loggedIn && (
           <div style={{ marginTop: 10, fontSize: 11, color: 'var(--ra-text-3)' }}>
-            private jams tab implemented in a later task
+            log in above to see your private jams
+          </div>
+        )}
+
+        {tab === 'private-jams' && authStatus.loggedIn && (
+          <div style={{ display: 'flex', gap: 12, marginTop: 10, flex: 1, minHeight: 0 }}>
+            <div style={{ width: 200, flexShrink: 0, overflowY: 'auto' }}>
+              {jams.map((jam) => (
+                <button
+                  key={jam.jamCID}
+                  onClick={() => {
+                    setSelectedJamCID(jam.jamCID)
+                    setSelectedRiffCID(null)
+                    setResolvedRiff(null)
+                    setJamRiffsLoading(true)
+                  }}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '5px 6px',
+                    fontSize: 11,
+                    border: 'none',
+                    borderRadius: 0,
+                    background:
+                      selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
+                    color: 'var(--ra-text)'
+                  }}
+                >
+                  {jam.name}
+                </button>
+              ))}
+              {jams.length === 0 && (
+                <div style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>no jams found</div>
+              )}
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {!selectedJamCID && (
+                <div style={{ fontSize: 11, color: 'var(--ra-text-3)' }}>
+                  select a jam to browse its riffs
+                </div>
+              )}
+              {selectedJamCID && (
+                <>
+                  <div
+                    onScroll={(e) => {
+                      if (!jamRiffsHasMore || jamRiffsLoading) return
+                      const el = e.currentTarget
+                      if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) loadMoreJamRiffs()
+                    }}
+                    style={{
+                      overflowY: 'auto',
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4
+                    }}
+                  >
+                    {jamRiffs.map((riff) => (
+                      <button
+                        key={riff.riffCID}
+                        onClick={() => setSelectedRiffCID(riff.riffCID)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '6px 8px',
+                          fontSize: 11,
+                          border: 'none',
+                          borderRadius: 0,
+                          background:
+                            selectedRiffCID === riff.riffCID
+                              ? 'var(--ra-bg-row-active)'
+                              : 'transparent',
+                          color: 'var(--ra-text)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <span>{new Date(riff.creationTime * 1000).toLocaleDateString()}</span>
+                        <span style={{ color: 'var(--ra-text-3)' }}>
+                          {riff.stemCount} stems
+                          {importedRiffGroupIds.has(riff.riffCID) ? ' · imported' : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {resolvedRiff && selectedRiffCID && (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
+                        {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
+                        {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                      </div>
+                      <button
+                        onClick={() => handleImport(selectedRiffCID, resolvedRiff)}
+                        disabled={busyRiffCID !== null}
+                        style={{
+                          height: 24,
+                          borderRadius: 0,
+                          padding: '0 12px',
+                          fontSize: 10,
+                          border: '1px solid var(--ra-border-strong)',
+                          background: importedRiffGroupIds.has(selectedRiffCID)
+                            ? 'var(--ra-stretch-on-bg)'
+                            : 'var(--ra-bg-row-active)',
+                          color: importedRiffGroupIds.has(selectedRiffCID)
+                            ? 'var(--ra-stretch-on)'
+                            : 'var(--ra-text)'
+                        }}
+                      >
+                        {importedRiffGroupIds.has(selectedRiffCID)
+                          ? 'imported ✓ — import again'
+                          : 'import'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>
