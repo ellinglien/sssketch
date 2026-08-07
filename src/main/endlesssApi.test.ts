@@ -349,6 +349,58 @@ describe('endlesssApi shared feed', () => {
     })
   })
 
+  it('resolveSharedFeedRiff reconstructs downloadUrl from bucket/endpoint/key rather than trusting the embedded url field', async () => {
+    // Matches OUROVEON's own real client (types::Stem::fullEndpoint() +
+    // GET /{fileKey}, live.stem.cpp) -- it never trusts an embedded `url`
+    // field at all, only ever reconstructs from the endpoint/bucket/key
+    // components. This stem doc deliberately sets `url` to something else
+    // to prove reconstruction (not the raw field) wins.
+    const { listSharedFeed, resolveSharedFeedRiff } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                _id: 'shared_1',
+                doc_id: 'riff_1',
+                action_timestamp: 1700000000000,
+                title: 'x',
+                rifff: rawRiffDoc('stem_1'),
+                loops: [
+                  rawStemDoc({
+                    cdn_attachments: {
+                      oggAudio: {
+                        bucket: 'ndls-bucket-1',
+                        endpoint: 'fra1.digitaloceanspaces.com',
+                        key: 'attachments/oggAudio/1/abc',
+                        url: 'https://stale-or-wrong-host.example.com/nope',
+                        length: 12345
+                      }
+                    }
+                  }),
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null
+                ],
+                image: false
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    )
+    await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
+    const resolved = await resolveSharedFeedRiff('riff_1', fakeFetch as typeof fetch)
+    expect(resolved!.stems[0].downloadUrl).toBe(
+      'https://ndls-bucket-1.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc'
+    )
+  })
+
   it('resolveSharedFeedRiff returns null for a riff never returned by a prior listSharedFeed call', async () => {
     const { resolveSharedFeedRiff } = await import('./endlesssApi')
     const resolved = await resolveSharedFeedRiff('never_listed', vi.fn() as unknown as typeof fetch)
@@ -668,5 +720,158 @@ describe('endlesssApi stem downloading', () => {
     expect(resolved!.stems[0].path).not.toBeNull()
     const { readFileSync: readFileSyncCheck } = await import('node:fs')
     expect(readFileSyncCheck(resolved!.stems[0].path!).toString()).toBe('fake ogg bytes')
+  })
+
+  it('sends Host/User-Agent/Accept/Accept-Encoding headers on the stem CDN GET, with no auth header', async () => {
+    const { loginWithCredentials, resolveJamRiff } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    const audioBytes = new TextEncoder().encode('fake ogg bytes')
+    let cdnHeaders: Headers | undefined
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('_all_docs')) {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+          { status: 200 }
+        )
+      }
+      if (url === 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc') {
+        cdnHeaders = new Headers(init?.headers)
+        return new Response(audioBytes, { status: 200 })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    })
+    await resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+    // Traced from OUROVEON's own CDN fetch (Stem::attemptRemoteFetch,
+    // live.stem.cpp) -- no Authorization header, since the stem CDN URLs
+    // are unauthenticated regardless of Endlesss login state.
+    expect(cdnHeaders!.get('accept')).toBe('audio/ogg')
+    expect(cdnHeaders!.get('accept-encoding')).toBe('gzip, deflate, br')
+    expect(cdnHeaders!.get('user-agent')).toMatch(/sssketch/)
+    expect(cdnHeaders!.get('authorization')).toBeNull()
+  })
+
+  it('retries a failed stem download up to the retry limit before giving up', async () => {
+    vi.useFakeTimers()
+    try {
+      const { loginWithCredentials, resolveJamRiff } = await import('./endlesssApi')
+      await loginWithCredentials(
+        'elling',
+        'hunter2',
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                token: 't',
+                password: 'p',
+                user_id: 'u1',
+                expires: Date.now() + 1000 * 60 * 60 * 24
+              }),
+              { status: 200 }
+            )
+        ) as unknown as typeof fetch
+      )
+      let cdnAttempts = 0
+      const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+            { status: 200 }
+          )
+        }
+        if (url.includes('_all_docs')) {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+            { status: 200 }
+          )
+        }
+        if (url === 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc') {
+          cdnAttempts++
+          return new Response(null, { status: 503 })
+        }
+        throw new Error(`unexpected URL: ${url}`)
+      })
+      const resolvePromise = resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+      await vi.runAllTimersAsync()
+      const resolved = await resolvePromise
+      expect(resolved!.stems[0].path).toBeNull()
+      // Matches OUROVEON's own stable-connection retry count
+      // (NetConfiguration::getRequestRetries, api.h) -- 3 total attempts.
+      expect(cdnAttempts).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('succeeds on a later retry attempt after earlier ones fail', async () => {
+    vi.useFakeTimers()
+    try {
+      const { loginWithCredentials, resolveJamRiff } = await import('./endlesssApi')
+      await loginWithCredentials(
+        'elling',
+        'hunter2',
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                token: 't',
+                password: 'p',
+                user_id: 'u1',
+                expires: Date.now() + 1000 * 60 * 60 * 24
+              }),
+              { status: 200 }
+            )
+        ) as unknown as typeof fetch
+      )
+      const audioBytes = new TextEncoder().encode('fake ogg bytes')
+      let cdnAttempts = 0
+      const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+            { status: 200 }
+          )
+        }
+        if (url.includes('_all_docs')) {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+            { status: 200 }
+          )
+        }
+        if (url === 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc') {
+          cdnAttempts++
+          if (cdnAttempts < 2) return new Response(null, { status: 503 })
+          return new Response(audioBytes, { status: 200 })
+        }
+        throw new Error(`unexpected URL: ${url}`)
+      })
+      const resolvePromise = resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+      await vi.runAllTimersAsync()
+      const resolved = await resolvePromise
+      expect(resolved!.stems[0].path).not.toBeNull()
+      expect(cdnAttempts).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

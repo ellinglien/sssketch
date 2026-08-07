@@ -9,7 +9,7 @@ import type {
   RiffFilters,
   RiffPage
 } from '@shared/loreLibrary'
-import { computeOwnerFraction, resolveKeyName } from '@shared/loreLibrary'
+import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/loreLibrary'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -313,9 +313,29 @@ function stemFlagsToMask(stem: RawStemDoc): number {
 // rare" for a stem to lack ogg entirely. A stem with only flacAudio (no
 // oggAudio) is treated as undownloadable (downloadUrl: null) rather than
 // attempting a decode path that doesn't exist yet elsewhere in this app.
+// (OUROVEON's own client actually prefers flacAudio over oggAudio whenever
+// present -- see ResultStemDocument::CDNAttachments::getAudioFormat() -- but
+// that's irrelevant here since this app can only decode ogg regardless of
+// which format the real client would pick.)
+//
+// downloadUrl is RECONSTRUCTED from endpoint/bucket/key via the same
+// stemDownloadUrl() the LORE path already uses -- not read from the raw
+// `url` field embedded in the doc. Traced directly from OUROVEON's own
+// client (types::Stem::fullEndpoint() + a GET against `/{fileKey}`,
+// live.stem.cpp): it never trusts an embedded url field at all, only ever
+// builds the request URL from these three components. Falls back to the
+// embedded url only if `key` is missing (shouldn't happen in practice, but
+// cheaper than risking a null download for a defensively-optional field).
 function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreResolvedStem {
   const bpm = bpsToRoundedBpm(stem.bps)
   const barLength = stem.length16ths / 16
+  const ogg = stem.cdn_attachments.oggAudio
+  const downloadUrl =
+    ogg == null
+      ? null
+      : ogg.key
+        ? stemDownloadUrl(ogg.endpoint, ogg.bucket ?? '', ogg.key)
+        : (ogg.url ?? null)
   return {
     stemCID: stem._id,
     slot,
@@ -326,7 +346,7 @@ function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreRe
     instrumentMask: stemFlagsToMask(stem),
     durationSec: barLength * (60 / bpm) * 4,
     barLength,
-    downloadUrl: stem.cdn_attachments.oggAudio?.url ?? null
+    downloadUrl
   }
 }
 
@@ -375,37 +395,74 @@ function endlesssStemCachePath(source: 'shared' | 'jam', riffCID: string, stemCI
   return join(app.getPath('userData'), 'endlesss-cache', 'stems', source, riffCID, stemCID)
 }
 
+// Matches OUROVEON's own stem-audio retry loop (endlesss::live::Stem::fetch,
+// live.stem.cpp) on a stable connection: 3 total attempts. Its own comment
+// on why: "things can take a while to propogate to the CDN; wait longer
+// each cycle and try repeatedly" -- this is CDN-propagation-delay
+// tolerance, not generic flakiness tolerance, so the delay between
+// attempts escalates rather than staying fixed.
+const STEM_DOWNLOAD_RETRIES = 3
+
+/** Jittered, escalating delay between stem download attempts, matching
+ * OUROVEON's own formula exactly: a random 0-500ms plus 250ms per prior
+ * attempt, capped at 1000ms. */
+function stemRetryDelayMs(attempt: number): number {
+  return Math.min(Math.random() * 500 + attempt * 250, 1000)
+}
+
 /** Downloads one stem's audio to its cache path, writing via a
  * `.downloading` sibling then renaming into place so a killed/failed
  * download never leaves a corrupt partial file -- same pattern as
- * loreWarehouse.ts's own downloadOneStem. Returns false (never throws) on
- * any failure. Deliberately does NOT go through fetchWithTimeout, unlike
- * every metadata call in this module -- audio files are legitimately larger
- * and slower than a JSON response, and loreWarehouse.ts's own
+ * loreWarehouse.ts's own downloadOneStem. Returns false (never throws) if
+ * every attempt fails. Deliberately does NOT go through fetchWithTimeout,
+ * unlike every metadata call in this module -- audio files are legitimately
+ * larger and slower than a JSON response, and loreWarehouse.ts's own
  * downloadOneStem sets no timeout on its equivalent fetch either; applying
  * the same fixed 8s budget here would make large/slow-connection stems fail
- * spuriously for no real safety benefit. */
+ * spuriously for no real safety benefit.
+ *
+ * Headers and retry behavior traced directly from OUROVEON's own CDN fetch
+ * (Stem::attemptRemoteFetch, live.stem.cpp) -- no Authorization header (the
+ * stem CDN URLs are unauthenticated regardless of Endlesss login state),
+ * just Host/User-Agent/Accept/Accept-Encoding. `fetch` sets Host itself
+ * from the URL, so it's not set explicitly here. */
 async function downloadOneEndlesssStem(
   path: string,
   downloadUrl: string,
   fetchImpl: FetchLike
 ): Promise<boolean> {
-  try {
-    const res = await fetchImpl(downloadUrl)
-    if (!res.ok) {
-      console.error(`endlesssApi: stem download failed: HTTP ${res.status}`)
-      return false
+  for (let attempt = 0; attempt < STEM_DOWNLOAD_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, stemRetryDelayMs(attempt)))
     }
-    const bytes = Buffer.from(await res.arrayBuffer())
-    mkdirSync(dirname(path), { recursive: true })
-    const tmpPath = `${path}.downloading`
-    writeFileSync(tmpPath, bytes)
-    renameSync(tmpPath, path)
-    return true
-  } catch (err) {
-    console.error('endlesssApi: stem download failed:', err)
-    return false
+    try {
+      const res = await fetchImpl(downloadUrl, {
+        headers: {
+          'User-Agent': userAgent(),
+          Accept: 'audio/ogg',
+          'Accept-Encoding': 'gzip, deflate, br'
+        }
+      })
+      if (!res.ok) {
+        console.error(
+          `endlesssApi: stem download failed: HTTP ${res.status} (attempt ${attempt + 1}/${STEM_DOWNLOAD_RETRIES})`
+        )
+        continue
+      }
+      const bytes = Buffer.from(await res.arrayBuffer())
+      mkdirSync(dirname(path), { recursive: true })
+      const tmpPath = `${path}.downloading`
+      writeFileSync(tmpPath, bytes)
+      renameSync(tmpPath, path)
+      return true
+    } catch (err) {
+      console.error(
+        `endlesssApi: stem download failed (attempt ${attempt + 1}/${STEM_DOWNLOAD_RETRIES}):`,
+        err
+      )
+    }
   }
+  return false
 }
 
 /** Downloads every not-yet-cached stem in `resolved` (path === null but a
