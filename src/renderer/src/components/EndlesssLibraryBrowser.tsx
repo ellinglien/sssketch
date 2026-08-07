@@ -28,6 +28,18 @@ const SHARED_FEED_PAGE_SIZE = 30
 // resolve-then-download round trip on every click.
 const PREFETCH_COUNT = 3
 
+// Ceiling on how many riffs the fill-the-visible-area auto-load effects
+// (below) will fetch on their own before giving up and leaving the rest to
+// manual "load more"/scrolling. Without this, a tall modal against a feed
+// with hundreds of riffs (SHARED_FEED_PAGE_SIZE is only 30) chain-fetches
+// page after page in the background the moment a tab/jam opens -- confirmed
+// live as a real regression: clicking a riff while that chain is still
+// running visibly stalls (the click's own resolve queues behind the
+// in-flight background requests), so nothing plays until the chain finally
+// stops. 120 is enough to make a freshly opened tab look reasonably
+// populated without turning "fill the space" into "fetch the whole feed."
+const AUTO_FILL_MAX_RIFFS = 120
+
 type EndlesssTab = 'shared-feed' | 'private-jams'
 type AuthStatus =
   { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
@@ -71,13 +83,16 @@ function groupRiffsByDate(riffs: LoreRiffSummary[]): RiffDateGroup[] {
  * `ra-rec-pulse` keyframe by name -- duplicate `@keyframes` declarations
  * with identical rules are harmless, so this file mounts its own copy via
  * <style> rather than depending on that component happening to have
- * mounted first). Clicking toggles: selecting the already-selected riff
- * calls onClick with the same riffCID again, and the CALLER (not this
- * component) is responsible for turning that into a deselect -- see
- * EndlesssLibraryBrowser's own onClick handlers below. */
+ * mounted first). onClick receives the raw MouseEvent (not just a plain
+ * callback) so the CALLER can read shiftKey/metaKey/ctrlKey for
+ * shift/cmd-click multi-select -- see EndlesssLibraryBrowser's own
+ * handleRiffClick, mirroring LoreLibraryBrowser.tsx's identical pattern. A
+ * plain click toggles: selecting the already-selected riff calls onClick
+ * with the same riffCID again, and the caller turns that into a deselect. */
 function RiffCircle({
   title,
   selected,
+  multiSelected,
   playing,
   fullyCached,
   imported,
@@ -86,6 +101,9 @@ function RiffCircle({
 }: {
   title: string
   selected: boolean
+  /** In the batch (shift/cmd-click) selection but NOT the anchor -- gets
+   * its own, weaker ring than `selected`'s. See handleRiffClick. */
+  multiSelected: boolean
   playing: boolean
   fullyCached: boolean
   imported: boolean
@@ -95,7 +113,7 @@ function RiffCircle({
    * embeds full stem docs; the private-jam path fills it in progressively
    * as riffs get resolved/prefetched -- see jamOwnerFractions). */
   ownerFraction: number
-  onClick: () => void
+  onClick: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   return (
     <div style={{ position: 'relative', width: 18, height: 18 }}>
@@ -107,16 +125,18 @@ function RiffCircle({
           height: 18,
           borderRadius: '50%',
           // Same cue hierarchy as LoreLibraryBrowser's own riff circles:
-          // selection ring first, then "not everything's downloaded yet"
-          // (dashed), else a plain solid border -- see
-          // downloadMissingStemsFor, already wired to fetch whatever's
-          // missing the moment a riff is selected, so showing the circle
-          // before it's fully cached is safe.
+          // anchor selection ring, then batch-selection ring, then "not
+          // everything's downloaded yet" (dashed), else a plain solid
+          // border -- see downloadMissingStemsFor, already wired to fetch
+          // whatever's missing the moment a riff is selected, so showing
+          // the circle before it's fully cached is safe.
           border: selected
             ? '2px solid var(--ra-playhead)'
-            : fullyCached
-              ? '1px solid var(--ra-border)'
-              : '1px dashed var(--ra-text-3)',
+            : multiSelected
+              ? '2px solid var(--ra-stretch-on)'
+              : fullyCached
+                ? '1px solid var(--ra-border)'
+                : '1px dashed var(--ra-text-3)',
           padding: 0,
           background: riffCircleColor(ownerFraction),
           cursor: 'pointer',
@@ -180,6 +200,12 @@ export function EndlesssLibraryBrowser({
   const jamGridRef = useRef<HTMLDivElement>(null)
 
   const [selectedRiffCID, setSelectedRiffCID] = useState<string | null>(null)
+  // The batch/multi-selection (shift-click range, cmd/ctrl-click toggle) --
+  // separate from selectedRiffCID, which remains the "anchor" riff that
+  // drives preview/detail-line exactly as before. A plain click always
+  // collapses this back down to just that one riff (or empty, on
+  // toggle-off). Mirrors LoreLibraryBrowser.tsx's own selectedRiffCIDs.
+  const [selectedRiffCIDs, setSelectedRiffCIDs] = useState<Set<string>>(new Set())
   const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
   // Which riffCID, if any, actually has live audio sources playing right
   // now -- NOT the same thing as "a riff is resolved/selected". Resolving
@@ -299,10 +325,12 @@ export function EndlesssLibraryBrowser({
     setResetForFeedKey(feedKey)
     if (tab === 'shared-feed') {
       setSelectedRiffCID(null)
+      setSelectedRiffCIDs(new Set())
       setResolvedRiff(null)
       setFeedLoading(effectiveUsername !== '')
     } else if (tab === 'private-jams') {
       setSelectedRiffCID(null)
+      setSelectedRiffCIDs(new Set())
       setResolvedRiff(null)
     }
   }
@@ -340,6 +368,7 @@ export function EndlesssLibraryBrowser({
   // setState-in-effect.
   useEffect(() => {
     if (tab !== 'shared-feed' || !feedHasMore || feedLoading) return
+    if (feedRiffs.length >= AUTO_FILL_MAX_RIFFS) return
     const el = feedGridRef.current
     if (!el || el.scrollHeight > el.clientHeight) return
     void Promise.resolve().then(() => loadFeed(feedNextOffset, true))
@@ -424,11 +453,14 @@ export function EndlesssLibraryBrowser({
         // everything, this direct path is specifically for browsing WITHOUT
         // LORE). Per direct feedback: narrow this list down to jams that are
         // actually this person's own -- by Endlesss convention, a personal
-        // jam's default name already contains the owner's username, which
-        // reliably tells apart "my own space" from "a jam I'm merely a
-        // member of" without needing any extra API call.
+        // jam's default (never-renamed) name is EXACTLY the owner's
+        // username, nothing else. An earlier version of this filter matched
+        // any jam whose name merely CONTAINED the username, which still let
+        // through every collab/remix jam that happens to mention them by
+        // name ("Elling's House of Pies", "Remix Inspo: Elling", etc.) --
+        // exact match is what actually isolates the one real personal jam.
         const lower = username.toLowerCase()
-        setJams(jams.filter((jam) => jam.name.toLowerCase().includes(lower)))
+        setJams(jams.filter((jam) => jam.name.toLowerCase() === lower))
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListJams() failed:', err)
@@ -446,22 +478,47 @@ export function EndlesssLibraryBrowser({
   // effects below, which only run once a riff is actually clicked -- every
   // circle read as an identical flat gray "mystery dot" until then, per
   // direct feedback ("hunting in the dark... clicking something hoping it
-  // turns white"). Fire-and-forget: a failure here just leaves those
-  // riffs' circles flat gray, no worse than before this existed.
-  function fetchOwnershipFor(jamId: string, riffCIDs: string[]): void {
-    if (!authStatus.loggedIn || riffCIDs.length === 0) return
+  // turns white").
+  //
+  // Queued and drained one at a time (ownershipInFlightRef), NOT fired
+  // concurrently per page -- clicking "load more" repeatedly used to launch
+  // a new heavy _all_docs batch on top of whatever was already in flight,
+  // and confirmed live that this is exactly what made clicking a riff to
+  // preview it stall: the click's own resolve request queued up behind a
+  // pile of still-running ownership fetches on the same host. Capping
+  // concurrency to 1 here keeps the wire free enough for an actual
+  // click-to-play request to get through promptly; the queue still gets
+  // through every page eventually, just serially instead of all at once.
+  const ownershipQueueRef = useRef<{ jamId: string; riffCIDs: string[] }[]>([])
+  const ownershipInFlightRef = useRef(false)
+
+  function drainOwnershipQueue(): void {
+    if (ownershipInFlightRef.current || !authStatus.loggedIn) return
+    const next = ownershipQueueRef.current.shift()
+    if (!next) return
+    ownershipInFlightRef.current = true
     window.rifffApi
-      .endlesssListRiffOwnership(jamId, riffCIDs, authStatus.username)
+      .endlesssListRiffOwnership(next.jamId, next.riffCIDs, authStatus.username)
       .then((fractions) => {
         setJamOwnerFractions((prev) => {
-          const next = new Map(prev)
-          for (const [riffCID, fraction] of Object.entries(fractions)) next.set(riffCID, fraction)
-          return next
+          const merged = new Map(prev)
+          for (const [riffCID, fraction] of Object.entries(fractions)) merged.set(riffCID, fraction)
+          return merged
         })
       })
       .catch((err) => {
         console.error('EndlesssLibraryBrowser: endlesssListRiffOwnership() failed:', err)
       })
+      .finally(() => {
+        ownershipInFlightRef.current = false
+        drainOwnershipQueue()
+      })
+  }
+
+  function fetchOwnershipFor(jamId: string, riffCIDs: string[]): void {
+    if (!authStatus.loggedIn || riffCIDs.length === 0) return
+    ownershipQueueRef.current.push({ jamId, riffCIDs })
+    drainOwnershipQueue()
   }
 
   useEffect(() => {
@@ -517,6 +574,7 @@ export function EndlesssLibraryBrowser({
   // because it happens to have fewer riffs than that.
   useEffect(() => {
     if (!selectedJamCID || !jamRiffsHasMore || jamRiffsLoading) return
+    if (jamRiffs.length >= AUTO_FILL_MAX_RIFFS) return
     const el = jamGridRef.current
     if (!el || el.scrollHeight > el.clientHeight) return
     void Promise.resolve().then(() => loadMoreJamRiffs())
@@ -595,35 +653,138 @@ export function EndlesssLibraryBrowser({
     }
   }, [tab, selectedJamCID, selectedRiffCID, jamRiffs, authStatus])
 
+  /** Shared core of both single-riff Import and the cmd/shift-click batch
+   * Import below -- builds the Rifff, dispatches it onto the shelf (and its
+   * per-stem volume overrides) if there's anything new to add, and tracks
+   * the riffCID -> groupId mapping either way. Deliberately does NOT call
+   * onImported or touch busy state itself, since the batch path needs to
+   * accumulate every riff's result across a loop before firing onImported
+   * once at the end, rather than once per riff. */
+  function importOneResolved(
+    riffCID: string,
+    resolved: LoreResolvedRiff
+  ): { groupId: string; rifff: Rifff } | null {
+    const existingGroupId = importedRiffGroupIds.get(riffCID)
+    const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
+    const folderPathLabel = tab === 'shared-feed' ? 'endlesss shared feed' : 'endlesss private jam'
+    const result = buildImportedRifff(riffCID, resolved, existing, 'endlesss', folderPathLabel)
+    if (!result) return null
+    const { groupId, rifff, newStemSlots } = result
+    if (newStemSlots.length > 0 || !existing) {
+      dispatch({ type: 'ADD_TO_SHELF', rifff })
+      for (const stem of resolved.stems.filter((s) => s.path !== null)) {
+        if (Math.abs(stem.gain - 1.0) > 1e-6) {
+          dispatch({
+            type: 'SET_VOLUME',
+            stemKey: stemKey(groupId, stem.slot),
+            volume: stem.gain
+          })
+        }
+      }
+      setImportedRiffGroupIds((prev) => new Map(prev).set(riffCID, groupId))
+    }
+    return { groupId, rifff }
+  }
+
   function handleImport(riffCID: string, resolved: LoreResolvedRiff): void {
     setBusy('importing rifff…')
     setBusyRiffCID(riffCID)
     try {
-      const existingGroupId = importedRiffGroupIds.get(riffCID)
-      const existing = existingGroupId ? state.rifffs[existingGroupId] : undefined
-      const folderPathLabel =
-        tab === 'shared-feed' ? 'endlesss shared feed' : 'endlesss private jam'
-      const result = buildImportedRifff(riffCID, resolved, existing, 'endlesss', folderPathLabel)
+      const result = importOneResolved(riffCID, resolved)
       if (!result) return
-      const { groupId, rifff, newStemSlots } = result
-      if (newStemSlots.length > 0 || !existing) {
-        dispatch({ type: 'ADD_TO_SHELF', rifff })
-        for (const stem of resolved.stems.filter((s) => s.path !== null)) {
-          if (Math.abs(stem.gain - 1.0) > 1e-6) {
-            dispatch({
-              type: 'SET_VOLUME',
-              stemKey: stemKey(groupId, stem.slot),
-              volume: stem.gain
-            })
-          }
-        }
-        setImportedRiffGroupIds((prev) => new Map(prev).set(riffCID, groupId))
-      }
-      onImported([groupId], [rifff])
+      onImported([result.groupId], [result.rifff])
     } finally {
       setBusy(null)
       setBusyRiffCID(null)
     }
+  }
+
+  /** Batch import for shift/cmd-click multi-selection -- mirrors
+   * LoreLibraryBrowser.tsx's own handleImportSelected. The anchor riff
+   * (selectedRiffCID) reuses its already-resolved data (resolvedRiff, from
+   * the preview effect) rather than re-fetching it; every other selected
+   * riff is resolved on demand here, sequentially -- a handful of riffs
+   * from one shift-click doesn't need anything fancier, and sequential
+   * keeps per-riff failures easy to reason about (one bad riff logs and the
+   * rest still import). Resolving differs by tab (shared-feed vs. a
+   * specific jam), unlike LORE which only ever has one riff source. */
+  async function handleImportSelected(): Promise<void> {
+    if (tab === 'private-jams' && !selectedJamCID) return
+    setBusy('importing rifffs…')
+    try {
+      const groupIds: string[] = []
+      const rifffs: Rifff[] = []
+      for (const riffCID of selectedRiffCIDs) {
+        try {
+          const resolved =
+            riffCID === selectedRiffCID && resolvedRiff
+              ? resolvedRiff
+              : tab === 'shared-feed'
+                ? await window.rifffApi.endlesssResolveSharedFeedRiff(riffCID)
+                : await window.rifffApi.endlesssResolveRiff(selectedJamCID!, riffCID)
+          if (resolved) {
+            const result = importOneResolved(riffCID, resolved)
+            if (result) {
+              groupIds.push(result.groupId)
+              rifffs.push(result.rifff)
+            }
+          }
+        } catch (err) {
+          console.error(
+            `EndlesssLibraryBrowser: failed to import riff ${riffCID} during batch import:`,
+            err
+          )
+        }
+      }
+      if (groupIds.length > 0) onImported(groupIds, rifffs)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** Standard file-browser multi-select convention, mirroring
+   * LoreLibraryBrowser.tsx's own handleRiffClick exactly: plain click
+   * selects just this one riff (and becomes the new anchor/preview, or
+   * deselects if it's already the anchor -- the toggle-to-stop behavior
+   * this component already had); shift-click extends a contiguous range
+   * from the current anchor to this riff, based on order in `riffList`
+   * (the tab's own flat riff array -- feedRiffs or jamRiffs, NOT the
+   * date-grouped view, though both share the same underlying order);
+   * cmd/ctrl-click toggles this one riff in or out of the selection
+   * without disturbing the rest, and moves the anchor to it. */
+  function handleRiffClick(
+    e: React.MouseEvent,
+    riffCID: string,
+    riffList: LoreRiffSummary[]
+  ): void {
+    if (e.shiftKey && selectedRiffCID) {
+      const anchorIndex = riffList.findIndex((r) => r.riffCID === selectedRiffCID)
+      const clickedIndex = riffList.findIndex((r) => r.riffCID === riffCID)
+      if (anchorIndex === -1 || clickedIndex === -1) {
+        setSelectedRiffCID(riffCID)
+        setSelectedRiffCIDs(new Set([riffCID]))
+        return
+      }
+      const [start, end] =
+        anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
+      setSelectedRiffCIDs(new Set(riffList.slice(start, end + 1).map((r) => r.riffCID)))
+      // Anchor deliberately stays put -- repeated shift-clicks keep
+      // extending/shrinking the range from the same starting point.
+      return
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedRiffCIDs((prev) => {
+        const next = new Set(prev)
+        if (next.has(riffCID)) next.delete(riffCID)
+        else next.add(riffCID)
+        return next
+      })
+      setSelectedRiffCID(riffCID)
+      return
+    }
+    const toggled = selectedRiffCID === riffCID ? null : riffCID
+    setSelectedRiffCID(toggled)
+    setSelectedRiffCIDs(toggled ? new Set([toggled]) : new Set())
   }
 
   return (
@@ -801,17 +962,16 @@ export function EndlesssLibraryBrowser({
                         key={riff.riffCID}
                         title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
                         selected={selectedRiffCID === riff.riffCID}
+                        multiSelected={
+                          selectedRiffCID !== riff.riffCID && selectedRiffCIDs.has(riff.riffCID)
+                        }
                         playing={
                           selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID
                         }
                         fullyCached={riff.cachedStemCount >= riff.stemCount}
                         imported={importedRiffGroupIds.has(riff.riffCID)}
                         ownerFraction={riff.ownerFraction}
-                        onClick={() =>
-                          setSelectedRiffCID((prev) =>
-                            prev === riff.riffCID ? null : riff.riffCID
-                          )
-                        }
+                        onClick={(e) => handleRiffClick(e, riff.riffCID, feedRiffs)}
                       />
                     ))}
                   </div>
@@ -859,7 +1019,13 @@ export function EndlesssLibraryBrowser({
                     )}
                 </div>
                 <button
-                  onClick={() => handleImport(selectedRiffCID, resolvedRiff)}
+                  onClick={() => {
+                    if (selectedRiffCIDs.size > 1) {
+                      void handleImportSelected()
+                    } else {
+                      handleImport(selectedRiffCID, resolvedRiff)
+                    }
+                  }}
                   disabled={busyRiffCID !== null}
                   style={{
                     height: 24,
@@ -875,9 +1041,11 @@ export function EndlesssLibraryBrowser({
                       : 'var(--ra-text)'
                   }}
                 >
-                  {importedRiffGroupIds.has(selectedRiffCID)
-                    ? 'imported ✓ — import again'
-                    : 'import'}
+                  {selectedRiffCIDs.size > 1
+                    ? `import ${selectedRiffCIDs.size} riffs`
+                    : importedRiffGroupIds.has(selectedRiffCID)
+                      ? 'imported ✓ — import again'
+                      : 'import'}
                 </button>
               </div>
             )}
@@ -899,6 +1067,7 @@ export function EndlesssLibraryBrowser({
                   onClick={() => {
                     setSelectedJamCID(jam.jamCID)
                     setSelectedRiffCID(null)
+                    setSelectedRiffCIDs(new Set())
                     setResolvedRiff(null)
                     setJamRiffsLoading(true)
                   }}
@@ -964,6 +1133,10 @@ export function EndlesssLibraryBrowser({
                               key={riff.riffCID}
                               title={`${new Date(riff.creationTime * 1000).toLocaleDateString()} · ${riff.stemCount} stems`}
                               selected={selectedRiffCID === riff.riffCID}
+                              multiSelected={
+                                selectedRiffCID !== riff.riffCID &&
+                                selectedRiffCIDs.has(riff.riffCID)
+                              }
                               playing={
                                 selectedRiffCID === riff.riffCID && playingRiffCID === riff.riffCID
                               }
@@ -972,11 +1145,7 @@ export function EndlesssLibraryBrowser({
                               ownerFraction={
                                 jamOwnerFractions.get(riff.riffCID) ?? riff.ownerFraction
                               }
-                              onClick={() =>
-                                setSelectedRiffCID((prev) =>
-                                  prev === riff.riffCID ? null : riff.riffCID
-                                )
-                              }
+                              onClick={(e) => handleRiffClick(e, riff.riffCID, jamRiffs)}
                             />
                           ))}
                         </div>
@@ -1018,7 +1187,13 @@ export function EndlesssLibraryBrowser({
                           )}
                       </div>
                       <button
-                        onClick={() => handleImport(selectedRiffCID, resolvedRiff)}
+                        onClick={() => {
+                          if (selectedRiffCIDs.size > 1) {
+                            void handleImportSelected()
+                          } else {
+                            handleImport(selectedRiffCID, resolvedRiff)
+                          }
+                        }}
                         disabled={busyRiffCID !== null}
                         style={{
                           height: 24,
@@ -1034,9 +1209,11 @@ export function EndlesssLibraryBrowser({
                             : 'var(--ra-text)'
                         }}
                       >
-                        {importedRiffGroupIds.has(selectedRiffCID)
-                          ? 'imported ✓ — import again'
-                          : 'import'}
+                        {selectedRiffCIDs.size > 1
+                          ? `import ${selectedRiffCIDs.size} riffs`
+                          : importedRiffGroupIds.has(selectedRiffCID)
+                            ? 'imported ✓ — import again'
+                            : 'import'}
                       </button>
                     </div>
                   )}
