@@ -1,3 +1,8 @@
+import { listSharedFeed, resolveSharedFeedRiff } from './endlesssApi'
+import type { FetchLike } from './endlesssApi'
+import { loadOrCreateSyncIndex, saveSyncIndex } from './endlesssSyncIndex'
+import type { LoreRiffSummary } from '@shared/loreLibrary'
+
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
  * flight at once -- a small fixed-size worker pool, not a full queue
  * library. Each of `limit` "lanes" pulls the next unclaimed item off a
@@ -22,4 +27,101 @@ export async function runWithConcurrency<T>(
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => lane()))
+}
+
+export interface SyncProgress {
+  done: number
+  total: number
+}
+
+const SYNC_CONCURRENCY = 3
+const SYNC_SHARED_FEED_PAGE_SIZE = 100
+
+// Prevents two overlapping sync runs for the same source+key -- e.g.
+// double-clicking the sync button, or clicking it again while a prior run
+// is still going. Keyed the same way the sync index file itself is.
+const syncsInFlight = new Set<string>()
+
+/** Walks the account's own shared feed from the front (newest first,
+ * matching listSharedFeed's own order) until either the live API says
+ * there's nothing more, or a riff already present in the local sync index
+ * is reached -- the second condition is what makes a REPEAT sync fast,
+ * since it only ever has to walk past genuinely new content. Newly
+ * discovered riffs are resolved (full stem download included, reusing
+ * resolveSharedFeedRiff exactly as the on-demand path already does --
+ * retries, URL reconstruction, and headers all included) through a
+ * concurrency-capped pool, with each riff's resolved detail saved to the
+ * index as soon as it completes so an interrupted sync resumes cleanly
+ * next time. No-ops if a sync for this exact userName is already running.
+ *
+ * Note: since listSharedFeed itself now has a sync-index fast path (see
+ * endlesssApi.ts), the walk phase above transparently benefits from
+ * whatever's already synced on a repeat/resumed run -- pages fully within
+ * the already-known range serve instantly with no network call, and only
+ * the genuinely new boundary triggers a live fetch. This is intentional,
+ * not a coincidence to work around. */
+export async function syncSharedFeed(
+  userName: string,
+  onProgress: (progress: SyncProgress) => void,
+  fetchImpl: FetchLike = fetch
+): Promise<void> {
+  const key = `shared:${userName}`
+  if (syncsInFlight.has(key)) return
+  syncsInFlight.add(key)
+  try {
+    const index = loadOrCreateSyncIndex('shared', userName)
+    const alreadySynced = new Set(Object.keys(index.riffs))
+
+    const newSummaries: LoreRiffSummary[] = []
+    let offset = 0
+    let reachedEnd = false
+    for (;;) {
+      const page = await listSharedFeed(userName, offset, SYNC_SHARED_FEED_PAGE_SIZE, fetchImpl)
+      let hitBoundary = false
+      for (const summary of page.riffs) {
+        if (alreadySynced.has(summary.riffCID)) {
+          hitBoundary = true
+          break
+        }
+        newSummaries.push(summary)
+      }
+      if (hitBoundary) break
+      if (!page.hasMore) {
+        reachedEnd = true
+        break
+      }
+      offset = page.nextOffset
+    }
+
+    let done = 0
+    const total = newSummaries.length
+    onProgress({ done, total })
+    await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
+      const resolved = await resolveSharedFeedRiff(summary.riffCID, fetchImpl)
+      if (resolved) {
+        index.riffs[summary.riffCID] = { summary, resolved }
+        index.updatedAt = Date.now()
+        saveSyncIndex('shared', userName, index)
+      }
+      done++
+      onProgress({ done, total })
+    })
+
+    // Deterministic newest-first order, applied once at the end in the
+    // original walk order -- individual index.riffs[...] entries above
+    // already persisted incrementally per-riff for resumability; `order`
+    // is just the display sequence and doesn't need that same
+    // per-riff granularity (concurrent workers completing in
+    // nondeterministic order would otherwise make a per-riff unshift here
+    // produce a nondeterministic order).
+    const newlySyncedInOrder = newSummaries
+      .filter((s) => index.riffs[s.riffCID] !== undefined)
+      .map((s) => s.riffCID)
+    index.order = [...newlySyncedInOrder, ...index.order]
+    if (reachedEnd) index.complete = true
+    index.updatedAt = Date.now()
+    saveSyncIndex('shared', userName, index)
+  } finally {
+    syncsInFlight.delete(key)
+  }
 }
