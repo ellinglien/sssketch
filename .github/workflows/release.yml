@@ -41,6 +41,13 @@ jobs:
           cmake -B build
           cmake --build build --config Release
 
+      # Installed here, before Test -- render-parity.test.ts spawns the real
+      # `rubberband` CLI (see src/main/rubberband.ts), and the runner has no
+      # Homebrew install of its own by default. Vendoring (below) needs the
+      # same install, so this one covers both rather than installing twice.
+      - name: Install rubberband
+        run: brew install rubberband
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -55,9 +62,7 @@ jobs:
       # why this isn't committed) so tempo stretching works out of the box
       # for testers with no Homebrew install of their own.
       - name: Vendor rubberband
-        run: |
-          brew install rubberband
-          bash scripts/vendor-rubberband.sh
+        run: bash scripts/vendor-rubberband.sh
 
       # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
       # itself -- imports into a temporary keychain internally, no manual
