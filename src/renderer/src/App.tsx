@@ -713,7 +713,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     selector: '[data-tour-id="tour-mode"]',
     title: 'sketch / arranger',
-    body: 'sketch is a quick rough layout; arranger is the full timeline.'
+    body: 'sketch is a quick rough layout; arranger is the basic timeline.'
   }
 ]
 
@@ -862,7 +862,18 @@ function Frame(): React.JSX.Element {
     startupResolvedRef.current = true
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
-      if (json && window.confirm('Recover unsaved work from a previous session?')) {
+      // "unsaved work" means real content, not just any autosave file --
+      // a totally untouched launch still ends up with one 4s after mount
+      // (the mount effect above unconditionally adds a recording channel
+      // when state.recordingChannelIds is empty, which it always is on
+      // initialState, and that alone is enough to make serializeProject
+      // differ from blank). Without this check, a tester who launches,
+      // waits a few seconds, and quits normally gets asked to "recover"
+      // on their very next launch for content that was never really
+      // there. Matches the same Object.keys(...).length > 0 definition
+      // of "real" already used by the New-project dirty check above.
+      const hasRealContent = json !== null && Object.keys(JSON.parse(json).rifffs ?? {}).length > 0
+      if (hasRealContent && window.confirm('Recover unsaved work from a previous session?')) {
         const loaded = deserializeProject(JSON.parse(json))
         // Same pre-warm-before-LOAD_STATE reasoning as the library
         // browser's onSelect/onOpenFromDisk handlers below -- avoids the
