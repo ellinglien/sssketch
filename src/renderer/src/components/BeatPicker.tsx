@@ -502,7 +502,13 @@ export function BeatPicker({
     // never throws (its own try/catch swallows and logs), so this can
     // always safely run through to completion.
     commitAndCloseRef.current = async () => {
-      if (pendingBakeRef.current !== null && rifff) {
+      // steps === 0 means "loop starts right where the file already does" —
+      // rotationSecondsForStem(0, ...) is always exactly 0 for every stem, so
+      // baking would just rewrite each file with identical content (and, for
+      // LORE-sourced stems, spawn the whole native engine to do it). Real bug
+      // this fixed: an accidental click on the very first beat still counted
+      // as "something was picked" and rebaked on close, every time.
+      if (pendingBakeRef.current !== null && pendingBakeRef.current !== 0 && rifff) {
         // A wrong pick on a brand-new import is easy to make without
         // realizing (Escape/click-outside is an easy accidental close) and
         // harder to notice/fix later once it's baked into the file — confirm
@@ -631,6 +637,22 @@ export function BeatPicker({
   const lanesHeight = stemSpectrograms?.length
     ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
     : 140
+
+  /** The "cancel import" button's handler (isNewImport only — see its render
+   * site below). Unlike commitAndCloseRef/onClose, this discards the rifff(s)
+   * entirely rather than leaving them on the shelf: real gap this fixed, the
+   * picker previously had no way to back out of an import at all, only close
+   * (which kept whatever was imported sitting on the shelf regardless of
+   * whether the user actually wanted it). Removes every rifff in the batch,
+   * not just the one currently shown — a batch import is one decision ("import
+   * these together"), so backing out of it is a batch-level undo too, not a
+   * per-riff one. */
+  function cancelImport(): void {
+    const idsToRemove = batchGroupIds && batchGroupIds.length > 1 ? batchGroupIds : [groupId]
+    stopPreview()
+    dispatch({ type: 'DELETE_RIFFFS', groupIds: idsToRemove })
+    onClose()
+  }
 
   function toggleFreePlay(): void {
     if (isFreePlaying) {
@@ -821,20 +843,54 @@ export function BeatPicker({
               </button>
             </div>
           )}
-          <button
-            onClick={() => commitAndCloseRef.current()}
-            style={{
-              height: 22,
-              borderRadius: 0,
-              padding: '0 10px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)'
-            }}
-          >
-            close
-          </button>
+          {isNewImport ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={cancelImport}
+                title="discard this import — removes it from the shelf"
+                style={{
+                  height: 22,
+                  borderRadius: 0,
+                  padding: '0 10px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                cancel import
+              </button>
+              <button
+                onClick={() => commitAndCloseRef.current()}
+                style={{
+                  height: 22,
+                  borderRadius: 0,
+                  padding: '0 10px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                continue
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => commitAndCloseRef.current()}
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              close
+            </button>
+          )}
         </div>
 
         <div
