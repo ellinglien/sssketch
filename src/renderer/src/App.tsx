@@ -40,6 +40,7 @@ import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
+import { NewProjectModal } from './components/NewProjectModal'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
@@ -429,6 +430,7 @@ function ProjectMenu({
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
+  const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
 
   async function handleNew(): Promise<void> {
     // Only worth interrupting for if there's actually something that would
@@ -445,19 +447,14 @@ function ProjectMenu({
     if (hasUnsavedChanges && !window.confirm('Discard the current project and start a new one?')) {
       return
     }
+    setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
+  }
+
+  function commitNewProject(name: string): void {
     dispatch({ type: 'LOAD_STATE', state: initialState })
     lastSavedJsonRef.current = serializeProject(initialState)
-    // Give the fresh sketch a real library name immediately, same as the
-    // mount effect's own fresh-start path below -- otherwise currentSketch
-    // stays null and the debounced autosave effect (gated on
-    // currentSketch.kind === 'library') never fires no matter what gets
-    // imported afterward, and the top bar shows the same generic
-    // "untitled sketch" placeholder as before, making New look like it did
-    // nothing.
-    setCurrentSketch({
-      kind: 'library',
-      name: await window.rifffApi.generateDefaultProjectName()
-    })
+    setCurrentSketch({ kind: 'library', name })
+    setNewProjectModal(null)
   }
 
   async function handleSave(): Promise<void> {
@@ -645,6 +642,13 @@ function ProjectMenu({
             { label: 'export ableton', onClick: handleExportAbleton }
           ]}
           onClose={() => setExportMenu(null)}
+        />
+      )}
+      {newProjectModal && (
+        <NewProjectModal
+          defaultName={newProjectModal.defaultName}
+          onCreate={commitNewProject}
+          onCancel={() => setNewProjectModal(null)}
         />
       )}
     </div>
