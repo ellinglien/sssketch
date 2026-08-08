@@ -1,12 +1,13 @@
 import {
   listSharedFeed,
   listRiffsInJam,
-  resolveSharedFeedRiff,
-  resolveJamRiff
+  resolveJamRiff,
+  downloadMissingStemsFor,
+  peekSharedFeedCache
 } from './endlesssApi'
 import type { FetchLike } from './endlesssApi'
 import { loadOrCreateSyncIndex, saveSyncIndex } from './endlesssSyncIndex'
-import type { LoreRiffSummary } from '@shared/loreLibrary'
+import type { LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
  * flight at once -- a small fixed-size worker pool, not a full queue
@@ -51,15 +52,27 @@ const syncsInFlight = new Set<string>()
  * matching listSharedFeed's own order) until either the live API says
  * there's nothing more, or a riff already present in the local sync index
  * is reached -- the second condition is what makes a REPEAT sync fast,
- * since it only ever has to walk past genuinely new content. Newly
- * discovered riffs are resolved (full stem download included, reusing
- * resolveSharedFeedRiff exactly as the on-demand path already does --
- * retries, URL reconstruction, and headers all included) through a
- * concurrency-capped pool, with each riff's resolved detail saved to the
- * index as soon as it completes so an interrupted sync resumes cleanly
- * next time. No-ops if a sync for this exact userName is already running.
+ * since it only ever has to walk past genuinely new content. No-ops if a
+ * sync for this exact userName is already running.
  *
- * Note: since listSharedFeed itself now has a sync-index fast path (see
+ * Each walked page's full riff+stem detail is captured immediately via
+ * peekSharedFeedCache, right after that page's listSharedFeed call --
+ * mirroring OUROVEON's own Shares::taskFetchLatest, which processes each
+ * page's data as it's fetched rather than deferring to a separate pass
+ * over the whole set. This matters here for a real reason, not just
+ * consistency: listSharedFeed's cache reflects only the MOST RECENTLY
+ * fetched page, so deferring resolution to a later phase (as an earlier
+ * version of this function did) meant every page except the last one
+ * silently failed to resolve once the walk moved on -- confirmed live,
+ * where a first-ever sync walked all the way back to 2020 correctly, but
+ * only that final, oldest page's ~46 riffs actually made it into the
+ * index, with `complete` wrongly left true and every more-recent riff
+ * quietly dropped. Stem downloads (downloadMissingStemsFor) still happen
+ * afterward through the concurrency-capped pool, same as before -- only
+ * the lookup of each riff's base resolved data moved earlier, before it
+ * can be evicted.
+ *
+ * Note: since listSharedFeed itself has a sync-index fast path (see
  * endlesssApi.ts), the walk phase above transparently benefits from
  * whatever's already synced on a repeat/resumed run -- pages fully within
  * the already-known range serve instantly with no network call, and only
@@ -78,10 +91,13 @@ export async function syncSharedFeed(
     const alreadySynced = new Set(Object.keys(index.riffs))
 
     const newSummaries: LoreRiffSummary[] = []
+    const baseResolvedByCID = new Map<string, LoreResolvedRiff>()
     let offset = 0
     let reachedEnd = false
     for (;;) {
       const page = await listSharedFeed(userName, offset, SYNC_SHARED_FEED_PAGE_SIZE, fetchImpl)
+      const pageResolved = peekSharedFeedCache(page.riffs.map((r) => r.riffCID))
+      for (const [riffCID, resolved] of pageResolved) baseResolvedByCID.set(riffCID, resolved)
       let hitBoundary = false
       for (const summary of page.riffs) {
         if (alreadySynced.has(summary.riffCID)) {
@@ -102,7 +118,10 @@ export async function syncSharedFeed(
     const total = newSummaries.length
     onProgress({ done, total })
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
-      const resolved = await resolveSharedFeedRiff(summary.riffCID, fetchImpl)
+      const baseResolved = baseResolvedByCID.get(summary.riffCID)
+      const resolved = baseResolved
+        ? await downloadMissingStemsFor('shared', summary.riffCID, baseResolved, fetchImpl)
+        : null
       if (resolved) {
         index.riffs[summary.riffCID] = { summary, resolved }
         index.updatedAt = Date.now()

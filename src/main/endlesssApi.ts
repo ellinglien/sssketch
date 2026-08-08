@@ -471,8 +471,11 @@ async function downloadOneEndlesssStem(
  * in for whichever succeeded. Shared by both the shared-feed and
  * private-jam resolve paths -- `source` just partitions the cache
  * directory so a riffCID collision between the two spaces (unlikely, but
- * not impossible) can't overwrite the wrong file. */
-async function downloadMissingStemsFor(
+ * not impossible) can't overwrite the wrong file. Exported for
+ * endlesssSync.ts's own use -- see peekSharedFeedCache's doc comment for
+ * why syncSharedFeed needs to call this directly rather than going through
+ * resolveSharedFeedRiff. */
+export async function downloadMissingStemsFor(
   source: 'shared' | 'jam',
   riffCID: string,
   resolved: LoreResolvedRiff,
@@ -496,7 +499,35 @@ async function downloadMissingStemsFor(
 // private-jam path, which genuinely needs list-then-resolve). Cleared and
 // repopulated on every listSharedFeed call; a resolve for a riff outside the
 // most recently listed page returns null rather than guessing stale data.
+//
+// This single-page-lifetime cache is exactly right for on-demand UI use
+// (resolve whatever's on the page currently being browsed) but WRONG for
+// syncSharedFeed's own multi-page walk: each listSharedFeed call during the
+// walk overwrites this cache with just that page's entries, so by the time
+// the walk finishes and a later resolve phase runs, only the LAST walked
+// page's riffs are still present here -- every earlier page's riffs
+// silently fail to resolve. Confirmed live: a first-ever sync walked all
+// the way to the true end of the account's history (correctly reaching
+// June/July 2020), but only that final, oldest page's ~46 riffs actually
+// ended up in the synced index, with `complete` wrongly left true --
+// permanently hiding everything more recent behind a "fully synced" index
+// that was nowhere close. peekSharedFeedCache lets syncSharedFeed snapshot
+// each page's entries into ITS OWN accumulator immediately after listing
+// that page, before the next page's listSharedFeed call evicts them here.
 let sharedFeedCache = new Map<string, LoreResolvedRiff>()
+
+/** Snapshots whichever of `riffCIDs` are currently present in the
+ * shared-feed listing cache -- see sharedFeedCache's own doc comment for
+ * why this exists. Read-only; does not affect the cache or trigger any
+ * network activity. */
+export function peekSharedFeedCache(riffCIDs: string[]): Map<string, LoreResolvedRiff> {
+  const result = new Map<string, LoreResolvedRiff>()
+  for (const riffCID of riffCIDs) {
+    const cached = sharedFeedCache.get(riffCID)
+    if (cached) result.set(riffCID, cached)
+  }
+  return result
+}
 
 export async function listSharedFeed(
   userName: string,

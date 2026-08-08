@@ -140,6 +140,46 @@ describe('syncSharedFeed', () => {
     expect(progressCalls[progressCalls.length - 1]).toEqual({ done: 2, total: 2 })
   })
 
+  it('syncs riffs from EVERY walked page, not just the last one', async () => {
+    // Reproduces a real bug found live: listSharedFeed's module-level
+    // sharedFeedCache is overwritten by every call, so a multi-page walk
+    // used to leave only the LAST page's riffs resolvable by the time the
+    // resolve phase ran -- everything from earlier pages silently failed
+    // to resolve (resolved === null) and got dropped from the index, while
+    // `done` still ticked up to `total` normally, making a badly-truncated
+    // sync look like it had completed cleanly. This test walks exactly two
+    // pages (100 then 2, matching SYNC_SHARED_FEED_PAGE_SIZE=100) and
+    // asserts riffs from BOTH pages end up synced.
+    const audioBytes = new TextEncoder().encode('fake ogg bytes')
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      sharedFeedEntry(`page1_riff_${i}`, `page1_stem_${i}`)
+    )
+    const page2 = [
+      sharedFeedEntry('page2_riff_0', 'page2_stem_0'),
+      sharedFeedEntry('page2_riff_1', 'page2_stem_1')
+    ]
+    const fakeFetch = vi.fn(async (url: string) => {
+      if (url.includes('shared_by')) {
+        const from = new URL(url).searchParams.get('from')
+        const data = from === '0' ? page1 : page2
+        return new Response(JSON.stringify({ data }), { status: 200 })
+      }
+      return new Response(audioBytes, { status: 200 })
+    })
+    const { syncSharedFeed } = await import('./endlesssSync')
+    await syncSharedFeed('elling', () => {}, fakeFetch as unknown as typeof fetch)
+
+    const { loadSyncIndex } = await import('./endlesssSyncIndex')
+    const index = loadSyncIndex('shared', 'elling')
+    expect(index).not.toBeNull()
+    expect(index!.order).toHaveLength(102)
+    expect(index!.complete).toBe(true)
+    expect(index!.riffs['page1_riff_0']).toBeDefined()
+    expect(index!.riffs['page1_riff_99']).toBeDefined()
+    expect(index!.riffs['page2_riff_0']).toBeDefined()
+    expect(index!.riffs['page1_riff_0'].resolved.stems[0].path).not.toBeNull()
+  })
+
   it('a second sync run only processes riffs newer than what is already indexed', async () => {
     const audioBytes = new TextEncoder().encode('fake ogg bytes')
     let feedCallCount = 0
