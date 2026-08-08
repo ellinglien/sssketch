@@ -32,9 +32,16 @@ Two ways to bring stems into a project:
 
 ## Installing
 
-No signed release build yet — until one's published, run sssketch from source (see below).
-Once a release is cut, built `.dmg` installers will be attached to this repo's
-[Releases](../../releases) page.
+No signed release build yet — a `.dmg` built locally (`npm run dist:mac`) is unsigned, so macOS
+Gatekeeper blocks a normal double-click open. Right-click the app in Applications and choose
+**Open** the first time instead. Once a real release is cut, signed/notarized `.dmg` installers
+will be attached to this repo's [Releases](../../releases) page and won't need this step.
+
+Drag `sssketch.app` from the `.dmg` into Applications to install.
+
+**Uninstalling:** drag `sssketch.app` to the Trash — nothing else is installed system-wide. Your
+saved sketches live in `~/Music/sssketch Library` and aren't touched; delete that folder too if
+you want them gone. App preferences/caches live in `~/Library/Application Support/sssketch`.
 
 ## Running from source
 
