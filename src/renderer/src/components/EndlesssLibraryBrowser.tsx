@@ -1060,13 +1060,15 @@ export function EndlesssLibraryBrowser({
                 />
               )}
               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                {feedRiffs.length} riffs{feedHasMore ? '+' : ''}
+                {feedRiffs.length} rifffs{feedHasMore ? '+' : ''}
               </span>
               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                 {feedSyncing
-                  ? `synced: ${feedSyncBaseCount + (feedSyncProgress?.done ?? 0)} riffs so far`
+                  ? feedSyncProgress && feedSyncProgress.done === 0 && feedSyncProgress.total > 0
+                    ? `discovering… ${feedSyncProgress.total} found`
+                    : `synced: ${feedSyncBaseCount + (feedSyncProgress?.done ?? 0)} rifffs so far`
                   : feedSyncStatus
-                    ? `synced: ${feedSyncStatus.riffCount} riffs${feedSyncStatus.complete ? '' : ' (partial)'}`
+                    ? `synced: ${feedSyncStatus.riffCount} rifffs${feedSyncStatus.complete ? '' : ' (partial)'}`
                     : 'not yet synced'}
               </span>
               <button
@@ -1102,7 +1104,7 @@ export function EndlesssLibraryBrowser({
                     ? `syncing… ${feedSyncProgress.done}/${feedSyncProgress.total}`
                     : 'syncing…'
                   : feedSyncStatus?.complete
-                    ? 'check for new riffs'
+                    ? 'check for new rifffs'
                     : 'sync for instant playback'}
               </button>
             </div>
@@ -1139,7 +1141,7 @@ export function EndlesssLibraryBrowser({
                     {group.riffs.map((riff) => (
                       <RiffCircle
                         key={riff.riffCID}
-                        title={`${riff.userName || 'shared riff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                        title={`${riff.userName || 'shared rifff'} · ${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
                         selected={selectedRiffCID === riff.riffCID}
                         multiSelected={
                           selectedRiffCID !== riff.riffCID && selectedRiffCIDs.has(riff.riffCID)
@@ -1160,7 +1162,7 @@ export function EndlesssLibraryBrowser({
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)', marginTop: 6 }}>
                   {effectiveUsername === ''
                     ? 'enter a username above to browse its shared feed'
-                    : 'no shared riffs found'}
+                    : 'no shared rifffs found'}
                 </div>
               )}
             </div>
@@ -1209,7 +1211,7 @@ export function EndlesssLibraryBrowser({
                       )}
                   </>
                 ) : (
-                  <span style={{ color: 'var(--ra-text-3)' }}>select a riff to preview</span>
+                  <span style={{ color: 'var(--ra-text-3)' }}>select a rifff to preview</span>
                 )}
               </div>
               <button
@@ -1239,7 +1241,7 @@ export function EndlesssLibraryBrowser({
                 }}
               >
                 {selectedRiffCIDs.size > 1
-                  ? `import ${selectedRiffCIDs.size} riffs`
+                  ? `import ${selectedRiffCIDs.size} rifffs`
                   : selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                     ? 'imported ✓ — import again'
                     : 'import'}
@@ -1291,7 +1293,7 @@ export function EndlesssLibraryBrowser({
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               {!selectedJamCID && (
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)' }}>
-                  select a jam to browse its riffs
+                  select a jam to browse its rifffs
                 </div>
               )}
               {selectedJamCID && (
@@ -1299,9 +1301,11 @@ export function EndlesssLibraryBrowser({
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                       {jamSyncing
-                        ? `synced: ${jamSyncBaseCount + (jamSyncProgress?.done ?? 0)} riffs so far`
+                        ? jamSyncProgress && jamSyncProgress.done === 0 && jamSyncProgress.total > 0
+                          ? `discovering… ${jamSyncProgress.total} found`
+                          : `synced: ${jamSyncBaseCount + (jamSyncProgress?.done ?? 0)} rifffs so far`
                         : jamSyncStatus
-                          ? `synced: ${jamSyncStatus.riffCount} riffs${jamSyncStatus.complete ? '' : ' (partial)'}`
+                          ? `synced: ${jamSyncStatus.riffCount} rifffs${jamSyncStatus.complete ? '' : ' (partial)'}`
                           : 'not yet synced'}
                     </span>
                     <button
@@ -1337,7 +1341,7 @@ export function EndlesssLibraryBrowser({
                           ? `syncing… ${jamSyncProgress.done}/${jamSyncProgress.total}`
                           : 'syncing…'
                         : jamSyncStatus?.complete
-                          ? 'check for new riffs'
+                          ? 'check for new rifffs'
                           : 'sync this jam for instant playback'}
                     </button>
                   </div>
@@ -1446,7 +1450,7 @@ export function EndlesssLibraryBrowser({
                             )}
                         </>
                       ) : (
-                        <span style={{ color: 'var(--ra-text-3)' }}>select a riff to preview</span>
+                        <span style={{ color: 'var(--ra-text-3)' }}>select a rifff to preview</span>
                       )}
                     </div>
                     <button
@@ -1476,7 +1480,7 @@ export function EndlesssLibraryBrowser({
                       }}
                     >
                       {selectedRiffCIDs.size > 1
-                        ? `import ${selectedRiffCIDs.size} riffs`
+                        ? `import ${selectedRiffCIDs.size} rifffs`
                         : selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                           ? 'imported ✓ — import again'
                           : 'import'}

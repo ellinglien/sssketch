@@ -849,7 +849,7 @@ export function LoreLibraryBrowser({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleGoToRiffId()
                     }}
-                    placeholder="go to riff ID..."
+                    placeholder="go to rifff ID..."
                     style={{
                       flex: 1,
                       height: 24,
@@ -910,7 +910,7 @@ export function LoreLibraryBrowser({
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               {selectedJamCID === null && (
                 <div style={{ fontSize: 11, color: 'var(--ra-text-3)', marginTop: 6 }}>
-                  select a jam to browse its riffs
+                  select a jam to browse its rifffs
                 </div>
               )}
               {selectedJamCID !== null && (
@@ -1035,7 +1035,7 @@ export function LoreLibraryBrowser({
                       only mine
                     </label>
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                      {riffs.length} riffs{hasMoreRiffs ? '+' : ''}
+                      {riffs.length} rifffs{hasMoreRiffs ? '+' : ''}
                     </span>
                   </div>
 
@@ -1240,7 +1240,7 @@ export function LoreLibraryBrowser({
                         }}
                       >
                         {selectedRiffCIDs.size > 1
-                          ? `import ${selectedRiffCIDs.size} riffs`
+                          ? `import ${selectedRiffCIDs.size} rifffs`
                           : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
                             ? 'imported ✓ — import again'
                             : 'import'}
