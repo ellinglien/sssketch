@@ -260,6 +260,9 @@ const api = {
     return () => ipcRenderer.removeListener('engine-link-tempo-changed', listener)
   },
   loreWarehouseAvailable: (): Promise<boolean> => ipcRenderer.invoke('lore-warehouse-available'),
+  loreWarehouseRoot: (): Promise<string> => ipcRenderer.invoke('lore-warehouse-root'),
+  loreSetWarehouseRoot: (newRoot: string): Promise<void> =>
+    ipcRenderer.invoke('lore-set-warehouse-root', newRoot),
   loreListJams: (filterText: string): Promise<LoreJam[]> =>
     ipcRenderer.invoke('lore-list-jams', filterText),
   loreListRiffs: (

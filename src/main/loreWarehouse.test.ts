@@ -1,10 +1,12 @@
-import { describe, expect, it, afterEach, vi } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   warehouseAvailable,
+  warehouseRootPath,
+  setWarehouseRoot,
   resolveStemPath,
   setWarehouseRootForTests,
   listJams,
@@ -14,6 +16,14 @@ import {
   downloadMissingStems
 } from './loreWarehouse'
 import { stemDownloadUrl } from '@shared/loreLibrary'
+
+let userDataDir: string
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => userDataDir
+  }
+}))
 
 function createFixtureWarehouse(root: string): void {
   mkdirSync(join(root, 'cache', 'common'), { recursive: true })
@@ -40,8 +50,14 @@ function createFixtureWarehouse(root: string): void {
 describe('loreWarehouse', () => {
   let root: string
 
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-test-'))
+  })
+
   afterEach(() => {
     if (root) rmSync(root, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+    setWarehouseRootForTests(null)
   })
 
   it('warehouseAvailable() is false when the root directory does not exist', () => {
@@ -53,6 +69,36 @@ describe('loreWarehouse', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
     setWarehouseRootForTests(root)
+    expect(warehouseAvailable()).toBe(true)
+  })
+
+  it('warehouseRootPath() falls back to the legacy default when no prefs file exists', () => {
+    setWarehouseRootForTests(null)
+    expect(warehouseRootPath()).toBe('/Volumes/Elling-Lien/ENDLESSS')
+  })
+
+  it('setWarehouseRoot() persists a new root that warehouseRootPath() then returns', () => {
+    setWarehouseRootForTests(null)
+    setWarehouseRoot('/Users/someone/Music/EndlesssSync')
+    expect(warehouseRootPath()).toBe('/Users/someone/Music/EndlesssSync')
+    const prefs = JSON.parse(
+      readFileSync(join(userDataDir, 'loreWarehousePrefs.json'), 'utf-8')
+    ) as { root: string }
+    expect(prefs).toEqual({ root: '/Users/someone/Music/EndlesssSync' })
+  })
+
+  it('setWarehouseRoot() picks up a real warehouse at the new root immediately', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createFixtureWarehouse(root)
+    // Point somewhere real first so the cached DB handle is non-null --
+    // this is what actually exercises setWarehouseRoot's closeWarehouseDb()
+    // call; starting from a null override risks a false pass on Elling's
+    // own dev machine, where the legacy default happens to be real and
+    // mounted too.
+    setWarehouseRootForTests('/no/such/path/at/all')
+    expect(warehouseAvailable()).toBe(false)
+    setWarehouseRootForTests(null)
+    setWarehouseRoot(root)
     expect(warehouseAvailable()).toBe(true)
   })
 

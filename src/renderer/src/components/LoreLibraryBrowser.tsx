@@ -121,6 +121,8 @@ export function LoreLibraryBrowser({
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
   const [available, setAvailable] = useState<boolean | null>(null)
+  const [warehouseRoot, setWarehouseRootState] = useState<string | null>(null)
+  const [changingWarehouseRoot, setChangingWarehouseRoot] = useState(false)
   const [jamFilter, setJamFilter] = useState('')
   const [jams, setJams] = useState<LoreJam[]>([])
   // Real Endlesss account membership, fetched once on mount if the person
@@ -549,6 +551,42 @@ export function LoreLibraryBrowser({
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .loreWarehouseRoot()
+      .then((root) => {
+        if (!cancelled) setWarehouseRootState(root)
+      })
+      .catch((err) => {
+        console.error('LoreLibraryBrowser: loreWarehouseRoot() failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [available])
+
+  /** Opens the OS folder picker and points LORE at the chosen folder --
+   * needed since the warehouse root defaults to Elling's own synced folder
+   * (see loreWarehouse.ts) and is otherwise permanently unavailable for
+   * anyone else. Re-checks availability against the new root immediately
+   * so picking a folder that isn't actually a LORE sync target still shows
+   * an honest result rather than a stale "connected". */
+  async function handleChooseWarehouseFolder(): Promise<void> {
+    setChangingWarehouseRoot(true)
+    try {
+      const picked = await window.rifffApi.pickFolder()
+      if (!picked) return
+      await window.rifffApi.loreSetWarehouseRoot(picked)
+      setWarehouseRootState(picked)
+      setAvailable(await window.rifffApi.loreWarehouseAvailable())
+    } catch (err) {
+      console.error('LoreLibraryBrowser: handleChooseWarehouseFolder() failed:', err)
+    } finally {
+      setChangingWarehouseRoot(false)
+    }
+  }
+
+  useEffect(() => {
     if (!available) return
     let cancelled = false
     window.rifffApi
@@ -814,8 +852,35 @@ export function LoreLibraryBrowser({
         </div>
 
         {available === false && (
-          <div style={{ marginTop: 20, fontSize: 11, color: 'var(--ra-text-2)' }}>
-            library not available — is the drive mounted?
+          <div
+            style={{
+              marginTop: 20,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              alignItems: 'flex-start'
+            }}
+          >
+            <div style={{ fontSize: 11, color: 'var(--ra-text-2)' }}>
+              library not available at {warehouseRoot ?? '...'} — this is a local LORE sync folder
+              (see OUROVEON/LORE), not something sssketch creates itself. is the drive mounted, or
+              point this at your own synced folder:
+            </div>
+            <button
+              onClick={handleChooseWarehouseFolder}
+              disabled={changingWarehouseRoot}
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              {changingWarehouseRoot ? 'checking...' : 'choose folder'}
+            </button>
           </div>
         )}
 

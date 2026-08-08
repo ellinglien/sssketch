@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { app } from 'electron'
 import Database from 'better-sqlite3'
 import type {
   LoreJam,
@@ -11,25 +12,66 @@ import type {
 } from '@shared/loreLibrary'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/loreLibrary'
 
-// Single-user, single-machine app — this is the actual synced folder on
-// Elling's machine. See the design spec's "Background" section for why this
-// is hardcoded rather than configurable.
-let warehouseRoot = '/Volumes/Elling-Lien/ENDLESSS'
+const WAREHOUSE_PREFS_FILENAME = 'loreWarehousePrefs.json'
+
+function warehousePrefsPath(): string {
+  return join(app.getPath('userData'), WAREHOUSE_PREFS_FILENAME)
+}
+
+// The actual synced folder on Elling's own machine -- kept as the fallback
+// default so his existing setup keeps working with zero extra steps now
+// that this is user-configurable (see setWarehouseRoot). Every other user
+// points this at their own LORE-synced folder via the folder picker in
+// LoreLibraryBrowser.tsx.
+const LEGACY_DEFAULT_WAREHOUSE_ROOT = '/Volumes/Elling-Lien/ENDLESSS'
 
 /** Test-only seam: points the module at a fixture warehouse instead of the
- * real one. Also resets the cached connection, since a previously-opened DB
+ * real one, bypassing prefs entirely. Pass null to clear the override and
+ * fall back to reading prefs again (for tests exercising warehouseRootPath
+ * itself). Also resets the cached connection, since a previously-opened DB
  * handle would otherwise keep pointing at the old root. */
-export function setWarehouseRootForTests(root: string): void {
-  warehouseRoot = root
+let warehouseRootOverride: string | null = null
+export function setWarehouseRootForTests(root: string | null): void {
+  warehouseRootOverride = root
+  closeWarehouseDb()
+}
+
+/** Where the user's LORE-synced folder lives -- user-relocatable (see
+ * setWarehouseRoot), defaulting to Elling's own historical path. Read fresh
+ * every call rather than cached, matching projectLibrary.ts's own
+ * libraryRootPath convention. */
+export function warehouseRootPath(): string {
+  if (warehouseRootOverride !== null) return warehouseRootOverride
+  const path = warehousePrefsPath()
+  if (!existsSync(path)) return LEGACY_DEFAULT_WAREHOUSE_ROOT
+  try {
+    const prefs = JSON.parse(readFileSync(path, 'utf-8')) as { root?: string }
+    return prefs.root ?? LEGACY_DEFAULT_WAREHOUSE_ROOT
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`warehouseRootPath: failed to read ${path}: ${message}`)
+    return LEGACY_DEFAULT_WAREHOUSE_ROOT
+  }
+}
+
+/** Persists a new warehouse root and closes the cached DB connection, since
+ * it would otherwise keep pointing at the old root's file. */
+export function setWarehouseRoot(newRoot: string): void {
+  try {
+    writeFileSync(warehousePrefsPath(), JSON.stringify({ root: newRoot }, null, 2), 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`setWarehouseRoot: failed to write ${warehousePrefsPath()}: ${message}`)
+  }
   closeWarehouseDb()
 }
 
 function warehouseDbPath(): string {
-  return join(warehouseRoot, 'cache', 'common', 'warehouse.db3')
+  return join(warehouseRootPath(), 'cache', 'common', 'warehouse.db3')
 }
 
 function stemCacheRoot(): string {
-  return join(warehouseRoot, 'cache', 'common', 'stem_v2')
+  return join(warehouseRootPath(), 'cache', 'common', 'stem_v2')
 }
 
 let cachedDb: Database.Database | null = null

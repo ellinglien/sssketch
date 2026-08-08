@@ -37,6 +37,8 @@ import { listFavouriteRiffCIDs, toggleFavouriteRiff } from './riffFavourites'
 import type { RiffFilters } from '@shared/loreLibrary'
 import {
   warehouseAvailable,
+  warehouseRootPath,
+  setWarehouseRoot,
   listJams,
   listRiffs,
   resolveRiff,
@@ -205,6 +207,10 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
+
+  ipcMain.handle('lore-warehouse-root', () => warehouseRootPath())
+
+  ipcMain.handle('lore-set-warehouse-root', (_event, newRoot: string) => setWarehouseRoot(newRoot))
 
   ipcMain.handle('lore-list-jams', (_event, filterText: string) => listJams(filterText))
 
