@@ -25,6 +25,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # loreWarehouse.test.ts (uses better-sqlite3) crashes its vitest
+      # worker on this runner even alone, during import -- but the same
+      # native addon loads fine via a bare top-level `node -e require`.
+      # 3 fixes at the Vitest/pool level (maxWorkers cap, 'threads' pool,
+      # explicit server.deps.external) all failed to change that. Next
+      # hypothesis: npm's downloaded PREBUILT binary for this exact
+      # runner/Node pairing is subtly ABI-mismatched in a way that only
+      # breaks under a worker-spawn's memory/threading conditions, even
+      # though basic top-level use works. Forcing a real from-source
+      # rebuild (needs node-gyp + Xcode CLT, both already confirmed
+      # present -- the native engine's own cmake/AppleClang build works)
+      # tests that theory directly. TEMPORARY: remove the diagnostic step
+      # below once root-caused either way.
+      - name: Rebuild better-sqlite3 from source
+        run: npm rebuild better-sqlite3 --build-from-source
+
+      - name: Diagnose loreWarehouse.test.ts in isolation
+        run: npx vitest run src/main/loreWarehouse.test.ts --reporter=verbose || true
+
       # JUCE (fetched via CMake's FetchContent, pinned to git tag 8.0.4 in
       # native-engine/CMakeLists.txt) takes 10-15 minutes to fetch+build from
       # scratch -- this cache keeps that a one-time cost per JUCE version /
