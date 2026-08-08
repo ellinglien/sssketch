@@ -23,6 +23,8 @@ extraResources:
   # of requiring every tester to `brew install rubberband` themselves.
   - from: resources/rubberband
     to: rubberband
+  - from: resources/demo-rifff
+    to: demo-rifff
 win:
   executableName: sssketch
 nsis:

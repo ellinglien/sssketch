@@ -524,6 +524,7 @@ export function TransportBar({
         }}
         aria-label="More arranger options"
         title="tidy up / tidy view"
+        data-tour-id="tour-tidy"
         style={{
           height: 22,
           borderRadius: 0,

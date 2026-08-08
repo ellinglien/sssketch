@@ -43,6 +43,7 @@ import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { OnboardingModal } from './components/OnboardingModal'
+import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
@@ -693,6 +694,29 @@ const AUTOSAVE_DEBOUNCE_MS = 4000
 
 const ONBOARDING_SEEN_STORAGE_KEY = 'sssketch:onboardingSeen'
 
+const TOUR_STEPS: TourStep[] = [
+  {
+    selector: '[data-tour-id="tour-import"]',
+    title: 'getting audio in',
+    body: 'drag a rifff folder onto the shelf, or click import to browse Endlesss directly.'
+  },
+  {
+    selector: '[data-rifff-clip]',
+    title: 'the timeline',
+    body: 'drag a clip to move it, drag its edges to resize.'
+  },
+  {
+    selector: '[data-tour-id="tour-tidy"]',
+    title: 'tidy up',
+    body: 'groups similar-sounding stems onto shared tracks automatically.'
+  },
+  {
+    selector: '[data-tour-id="tour-mode"]',
+    title: 'sketch / arranger',
+    body: 'sketch is a quick rough layout; arranger is the full timeline.'
+  }
+]
+
 /** Sketch mode only: while playing, the Inspector automatically shows
  * whichever rifff currently contains the playhead — no manual click
  * needed to follow along. Scoped to sketch mode specifically because it's
@@ -981,6 +1005,30 @@ function Frame(): React.JSX.Element {
       // localStorage unavailable (e.g. private mode) -- just means it'll
       // show again next launch, not worth surfacing as an error.
     }
+  }
+
+  const [tourStepIndex, setTourStepIndex] = useState<number | null>(null)
+  // The demo rifff's own groupId, once imported -- tracked so endTour can
+  // delete exactly that rifff (and nothing the user may have added mid-
+  // tour) rather than assuming it's the only thing on the timeline.
+  const tourDemoGroupIdRef = useRef<string | null>(null)
+
+  async function startTour(): Promise<void> {
+    dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
+    const rifff = await window.rifffApi.importDemoRifff()
+    if (!rifff) return
+    tourDemoGroupIdRef.current = rifff.groupId
+    dispatch({ type: 'ADD_TO_SHELF', rifff })
+    dispatch({ type: 'PLACE_ON_TIMELINE', groupId: rifff.groupId, startBar: 0 })
+    setTourStepIndex(0)
+  }
+
+  function endTour(): void {
+    if (tourDemoGroupIdRef.current) {
+      dispatch({ type: 'DELETE_RIFFFS', groupIds: [tourDemoGroupIdRef.current] })
+      tourDemoGroupIdRef.current = null
+    }
+    setTourStepIndex(null)
   }
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
@@ -1715,11 +1763,31 @@ function Frame(): React.JSX.Element {
         )}
         {showOnboarding && (
           <OnboardingModal
+            hasExistingContent={Object.keys(state.rifffs).length > 0}
             onDismiss={dismissOnboarding}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
               setEndlesssLibraryOpen(true)
             }}
+            onStartTour={(dontShowAgain) => {
+              dismissOnboarding(dontShowAgain)
+              void startTour()
+            }}
+          />
+        )}
+        {tourStepIndex !== null && (
+          <TourOverlay
+            steps={TOUR_STEPS}
+            stepIndex={tourStepIndex}
+            onNext={() => {
+              if (tourStepIndex >= TOUR_STEPS.length - 1) {
+                endTour()
+                return
+              }
+              setTourStepIndex(tourStepIndex + 1)
+            }}
+            onBack={() => setTourStepIndex(Math.max(0, tourStepIndex - 1))}
+            onSkip={endTour}
           />
         )}
       </div>

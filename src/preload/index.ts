@@ -7,6 +7,7 @@ import type { PluginCatalog } from '../main/pluginCatalog'
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-rifff', paths),
+  importDemoRifff: (): Promise<Rifff | null> => ipcRenderer.invoke('import-demo-rifff'),
   importOneShot: (path: string): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-one-shot', path),
   // loopBars, when passed, is a gated-recording take's own loop-region

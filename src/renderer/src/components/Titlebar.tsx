@@ -134,6 +134,7 @@ export function Titlebar({
         <button
           onClick={onCycleMode}
           aria-label="Cycle arranger mode"
+          data-tour-id="tour-mode"
           title={
             mode === 'normal' && !sketchEligible
               ? 'mode: arranger (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'

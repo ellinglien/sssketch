@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { importRifff } from './importRifff'
+import { importDemoRifff } from './demoRifff'
 import { importOneShot, importRecordedTake, importRecordedStem } from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
@@ -189,6 +190,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('import-rifff', (_event, paths: string[]) => {
     return importRifff(paths)
   })
+
+  ipcMain.handle('import-demo-rifff', () => importDemoRifff())
 
   ipcMain.handle('import-one-shot', (_event, path: string) => {
     return importOneShot(path)

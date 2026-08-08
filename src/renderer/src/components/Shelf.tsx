@@ -344,6 +344,7 @@ export function Shelf({
         </div>
         <button
           onClick={onOpenLibrary}
+          data-tour-id="tour-import"
           style={{
             height: 18,
             borderRadius: 0,

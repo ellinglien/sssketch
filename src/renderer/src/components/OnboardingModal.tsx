@@ -6,9 +6,16 @@ import { useState } from 'react'
  * deliberately short -- a paragraph-per-concept explainer would wear thin
  * fast if it's the first thing you see every time you open the app. */
 export function OnboardingModal({
+  hasExistingContent,
   onDismiss,
-  onOpenEndlesss
+  onOpenEndlesss,
+  onStartTour
 }: {
+  /** Hides "take the tour" -- the tour imports a demo rifff onto the
+   * timeline, which only makes sense on an empty sketch. A returning user
+   * who already has real content shouldn't risk it landing next to (or
+   * getting confused with) their own work. */
+  hasExistingContent: boolean
   /** dontShowAgain reflects the checkbox at the moment of dismissal --
    * App.tsx only persists the opt-out when true, so leaving it unchecked
    * means this shows again next launch. */
@@ -17,6 +24,8 @@ export function OnboardingModal({
    * the shortest path from "just opened this" to "have real audio in the
    * timeline" for anyone with an Endlesss account already. */
   onOpenEndlesss: (dontShowAgain: boolean) => void
+  /** Dismisses AND starts the guided tour (see TourOverlay.tsx). */
+  onStartTour: (dontShowAgain: boolean) => void
 }): React.JSX.Element {
   const [dontShowAgain, setDontShowAgain] = useState(false)
 
@@ -102,6 +111,22 @@ export function OnboardingModal({
             >
               start sketching
             </button>
+            {!hasExistingContent && (
+              <button
+                onClick={() => onStartTour(dontShowAgain)}
+                style={{
+                  height: 22,
+                  borderRadius: 0,
+                  padding: '0 10px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                take the tour
+              </button>
+            )}
             <button
               onClick={() => onOpenEndlesss(dontShowAgain)}
               style={{
