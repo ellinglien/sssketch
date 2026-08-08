@@ -11,6 +11,20 @@ import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 
+// EngineClient.sendAndAwaitType's own default (30000ms) is right for the
+// fast control round-trips it's normally used for (position queries, arm/
+// disarm, etc.) but wrong here: render-export runs the WHOLE offline mix
+// synchronously in the engine, block by block through every channel's
+// plugin chain, with no progress reporting or cancellation and no cap tied
+// to project size -- a real user hit "timed out waiting for
+// render-export-result after 30000ms" on export, and reading
+// RenderExport.cpp/PlaybackEngine::renderBlock found no obvious hang, just
+// real synchronous work that scales with project length x channel count x
+// plugin cost. 30s is simply too short a ceiling for that; this is
+// generous enough to cover a genuinely large/complex project while still
+// eventually surfacing an error if the engine really is wedged.
+const RENDER_EXPORT_TIMEOUT_MS = 10 * 60 * 1000
+
 // Mirrors src/renderer/src/state/selectors.ts's loopLengthBars (re-implemented
 // here rather than imported wholesale, since that module also exports React-
 // adjacent selectors that assume renderer context).
@@ -67,7 +81,8 @@ export async function nativeExport(state: AppState): Promise<Uint8Array> {
     const result = (await client.sendAndAwaitType(
       'render-export',
       { outputPath: tempPath, durationBars },
-      'render-export-result'
+      'render-export-result',
+      RENDER_EXPORT_TIMEOUT_MS
     )) as { success: boolean; error?: string }
 
     if (!result.success) {
@@ -156,7 +171,8 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
       const result = (await client.sendAndAwaitType(
         'render-export',
         { outputPath, durationBars },
-        'render-export-result'
+        'render-export-result',
+        RENDER_EXPORT_TIMEOUT_MS
       )) as { success: boolean; error?: string }
 
       if (!result.success) {
