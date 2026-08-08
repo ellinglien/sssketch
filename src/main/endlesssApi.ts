@@ -150,17 +150,37 @@ function userAgent(): string {
 // feature that isn't hit at any real frequency.
 const REQUEST_TIMEOUT_MS = 8000
 
+// Stem audio is legitimately larger/slower than a JSON response, so this is
+// far more generous than REQUEST_TIMEOUT_MS -- but it must still be finite.
+// A real sync hung indefinitely on a packaged build with no error surfaced
+// and no way to recover short of relaunching, root-caused to exactly one
+// stem's fetch() call never settling (TCP connection opens, response never
+// arrives) with nothing bounding it: downloadMissingStemsFor's Promise.all
+// waited on it forever, which meant runWithConcurrency's own lane never
+// advanced, which meant syncSharedFeed's top-level await never returned,
+// which meant the renderer's "syncing…" state (driven by that promise
+// resolving) never cleared. STEM_DOWNLOAD_RETRIES's own retry loop can't
+// help either -- it only runs after a rejection/non-ok response, neither of
+// which a hung request ever produces. 60s comfortably covers even a large
+// stem over a slow connection while guaranteeing the retry loop actually
+// gets a turn.
+const STEM_DOWNLOAD_TIMEOUT_MS = 60000
+
 /** Wraps `fetchImpl` with a hard timeout via AbortController -- every
  * network call in this module goes through this rather than calling
  * `fetchImpl` directly, so the "no hung request" guarantee applies
- * everywhere without each call site re-implementing it. */
+ * everywhere without each call site re-implementing it. `timeoutMs`
+ * defaults to REQUEST_TIMEOUT_MS (right for small JSON responses);
+ * downloadOneEndlesssStem passes STEM_DOWNLOAD_TIMEOUT_MS instead, since
+ * audio payloads are legitimately larger/slower. */
 async function fetchWithTimeout(
   fetchImpl: FetchLike,
   url: string,
-  init?: RequestInit
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<Response> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal })
   } finally {
@@ -422,12 +442,11 @@ function stemRetryDelayMs(attempt: number): number {
  * `.downloading` sibling then renaming into place so a killed/failed
  * download never leaves a corrupt partial file -- same pattern as
  * loreWarehouse.ts's own downloadOneStem. Returns false (never throws) if
- * every attempt fails. Deliberately does NOT go through fetchWithTimeout,
- * unlike every metadata call in this module -- audio files are legitimately
- * larger and slower than a JSON response, and loreWarehouse.ts's own
- * downloadOneStem sets no timeout on its equivalent fetch either; applying
- * the same fixed 8s budget here would make large/slow-connection stems fail
- * spuriously for no real safety benefit.
+ * every attempt fails. Goes through fetchWithTimeout with
+ * STEM_DOWNLOAD_TIMEOUT_MS (not the default REQUEST_TIMEOUT_MS) -- see that
+ * constant's own doc comment for why an earlier version of this function
+ * used no timeout at all, and why that turned out to be a real bug rather
+ * than a safe simplification.
  *
  * Headers and retry behavior traced directly from OUROVEON's own CDN fetch
  * (Stem::attemptRemoteFetch, live.stem.cpp) -- no Authorization header (the
@@ -444,13 +463,18 @@ async function downloadOneEndlesssStem(
       await new Promise((resolve) => setTimeout(resolve, stemRetryDelayMs(attempt)))
     }
     try {
-      const res = await fetchImpl(downloadUrl, {
-        headers: {
-          'User-Agent': userAgent(),
-          Accept: 'audio/ogg',
-          'Accept-Encoding': 'gzip, deflate, br'
-        }
-      })
+      const res = await fetchWithTimeout(
+        fetchImpl,
+        downloadUrl,
+        {
+          headers: {
+            'User-Agent': userAgent(),
+            Accept: 'audio/ogg',
+            'Accept-Encoding': 'gzip, deflate, br'
+          }
+        },
+        STEM_DOWNLOAD_TIMEOUT_MS
+      )
       if (!res.ok) {
         console.error(
           `endlesssApi: stem download failed: HTTP ${res.status} (attempt ${attempt + 1}/${STEM_DOWNLOAD_RETRIES})`

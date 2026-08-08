@@ -824,6 +824,68 @@ describe('endlesssApi stem downloading', () => {
     }
   })
 
+  it('a stem download that never resolves is bounded by a timeout, not hung forever', async () => {
+    // Regression test for a real bug: an earlier version of this fetch had
+    // no timeout at all, so a genuinely stalled CDN connection (TCP opens,
+    // response never arrives -- a real, if uncommon, failure mode) hung the
+    // whole sync forever with no error and no way to recover short of
+    // relaunching the app. The mock below never resolves on its own, only
+    // reacting to the AbortSignal firing -- matching real fetch's own
+    // contract when its controller aborts -- so this test fails (times out)
+    // if the timeout is ever removed again.
+    vi.useFakeTimers()
+    try {
+      const { loginWithCredentials, resolveJamRiff } = await import('./endlesssApi')
+      await loginWithCredentials(
+        'elling',
+        'hunter2',
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                token: 't',
+                password: 'p',
+                user_id: 'u1',
+                expires: Date.now() + 1000 * 60 * 60 * 24
+              }),
+              { status: 200 }
+            )
+        ) as unknown as typeof fetch
+      )
+      let cdnAttempts = 0
+      const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+            { status: 200 }
+          )
+        }
+        if (url.includes('_all_docs')) {
+          return new Response(
+            JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: rawStemDoc() }] }),
+            { status: 200 }
+          )
+        }
+        if (url === 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc') {
+          cdnAttempts++
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'))
+            })
+          })
+        }
+        throw new Error(`unexpected URL: ${url}`)
+      })
+      const resolvePromise = resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+      await vi.runAllTimersAsync()
+      const resolved = await resolvePromise
+      expect(resolved!.stems[0].path).toBeNull()
+      expect(cdnAttempts).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('succeeds on a later retry attempt after earlier ones fail', async () => {
     vi.useFakeTimers()
     try {
