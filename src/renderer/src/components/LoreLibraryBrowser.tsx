@@ -1303,11 +1303,12 @@ export function LoreLibraryBrowser({
                         // that fetch fails and truly nothing ends up cached.
                         disabled={downloadingRiffCID !== null}
                         style={{
-                          height: 24,
+                          height: 34,
                           borderRadius: 0,
-                          padding: '0 12px',
-                          fontSize: 10,
-                          border: '1px solid var(--ra-border-strong)',
+                          padding: '0 20px',
+                          fontSize: 13,
+                          fontWeight: 700,
+                          border: '2px solid var(--ra-border-strong)',
                           background:
                             selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
                               ? 'var(--ra-stretch-on-bg)'

@@ -618,10 +618,10 @@ export function BeatPicker({
   // loop identity stem in a 16-bar rifff).
   const totalBeats = rifff.barLength * 4
   // How many clickable grid positions make up one quarter-note beat, driven
-  // by the same global snap-grid setting the transport bar's "snap 1/N"
-  // button controls (SNAP_DIVS = [4, 8, 16, 32], always a multiple of 4) --
-  // see docs/superpowers/specs/2026-08-02-beatpicker-grid-resolution-design.md.
-  // 1 at snapDiv=4 (today's quarter-note-only grid), up to 8 at snapDiv=32.
+  // by this same modal's own "grid" selector below (SNAP_DIVS = [4, 8, 16],
+  // always a multiple of 4) -- see
+  // docs/superpowers/specs/2026-08-02-beatpicker-grid-resolution-design.md.
+  // 1 at snapDiv=4 (quarter-note grid), up to 4 at snapDiv=16.
   const subdivisionsPerBeat = snapDiv / 4
   const totalSubdivisions = totalBeats * subdivisionsPerBeat
   // One offsetSteps unit IS one subdivision by definition (both are exactly
@@ -843,54 +843,6 @@ export function BeatPicker({
               </button>
             </div>
           )}
-          {isNewImport ? (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={cancelImport}
-                title="discard this import — removes it from the shelf"
-                style={{
-                  height: 22,
-                  borderRadius: 0,
-                  padding: '0 10px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
-                }}
-              >
-                cancel import
-              </button>
-              <button
-                onClick={() => commitAndCloseRef.current()}
-                style={{
-                  height: 22,
-                  borderRadius: 0,
-                  padding: '0 10px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
-                }}
-              >
-                continue
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => commitAndCloseRef.current()}
-              style={{
-                height: 22,
-                borderRadius: 0,
-                padding: '0 10px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              close
-            </button>
-          )}
         </div>
 
         <div
@@ -901,22 +853,47 @@ export function BeatPicker({
             marginTop: 10
           }}
         >
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 10,
-              color: 'var(--ra-text-2)'
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={previewAll}
-              onChange={(e) => setPreviewAll(e.target.checked)}
-            />
-            preview all stems
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 10,
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={previewAll}
+                onChange={(e) => setPreviewAll(e.target.checked)}
+              />
+              preview all stems
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>grid</span>
+              {SNAP_DIVS.map((div, idx) => (
+                <button
+                  key={div}
+                  onClick={() => dispatch({ type: 'SET_SNAP_IDX', snapIdx: idx as 0 | 1 | 2 })}
+                  title={`snap grid to 1/${div} notes`}
+                  style={{
+                    height: 22,
+                    minWidth: 30,
+                    borderRadius: 0,
+                    padding: '0 6px',
+                    fontSize: 10,
+                    border: '1px solid var(--ra-border-strong)',
+                    background:
+                      state.snapIdx === idx ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
+                    color: state.snapIdx === idx ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+                  }}
+                >
+                  1/{div}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setMetronomeOn((v) => !v)}
@@ -1155,6 +1132,60 @@ export function BeatPicker({
           {stemSpectrograms
             ? `loop begins at beat ${currentBeat + 1} of ${totalBeats}`
             : 'decoding stems and analyzing…'}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+          {isNewImport ? (
+            <>
+              <button
+                onClick={cancelImport}
+                title="discard this import — removes it from the shelf"
+                style={{
+                  height: 34,
+                  borderRadius: 0,
+                  padding: '0 20px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: '2px solid var(--ra-border-strong)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                cancel import
+              </button>
+              <button
+                onClick={() => commitAndCloseRef.current()}
+                style={{
+                  height: 34,
+                  borderRadius: 0,
+                  padding: '0 20px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: '2px solid var(--ra-border-strong)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)'
+                }}
+              >
+                continue
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => commitAndCloseRef.current()}
+              style={{
+                height: 34,
+                borderRadius: 0,
+                padding: '0 20px',
+                fontSize: 13,
+                fontWeight: 700,
+                border: '2px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
+              }}
+            >
+              close
+            </button>
+          )}
         </div>
       </div>
     </div>

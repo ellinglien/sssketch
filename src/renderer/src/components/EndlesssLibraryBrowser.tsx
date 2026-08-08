@@ -1246,11 +1246,12 @@ export function EndlesssLibraryBrowser({
                 }}
                 disabled={busyRiffCID !== null || !resolvedRiff || !selectedRiffCID}
                 style={{
-                  height: 24,
+                  height: 34,
                   borderRadius: 0,
-                  padding: '0 12px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border-strong)',
+                  padding: '0 20px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: '2px solid var(--ra-border-strong)',
                   background:
                     selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                       ? 'var(--ra-stretch-on-bg)'

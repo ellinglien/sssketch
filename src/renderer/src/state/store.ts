@@ -320,6 +320,7 @@ export type Action =
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
   | { type: 'CYCLE_SNAP' }
+  | { type: 'SET_SNAP_IDX'; snapIdx: 0 | 1 | 2 }
   | { type: 'NUDGE_OFFSET'; key: string; delta: number }
   | { type: 'ZERO_OFFSET'; key: string }
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
@@ -567,6 +568,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'CYCLE_SNAP':
       return { ...state, snapIdx: ((state.snapIdx + 1) % 3) as AppState['snapIdx'] }
+
+    case 'SET_SNAP_IDX':
+      return { ...state, snapIdx: action.snapIdx }
 
     case 'NUDGE_OFFSET': {
       const current = state.off[action.key] ?? 0
