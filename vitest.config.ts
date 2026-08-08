@@ -9,20 +9,23 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'native-engine/test/**/*.test.ts', 'scripts/**/*.test.ts'],
     passWithNoTests: true,
-    // Root-caused via a real CI run: loreWarehouse.test.ts (the only file
-    // using the better-sqlite3 native addon) crashed its whole vitest
-    // worker on GitHub's macOS runner even run completely alone, during
-    // the IMPORT phase (0 tests started) -- not resource contention (ruled
-    // out: capping maxWorkers didn't help) and not a binding/ABI mismatch
-    // (better-sqlite3 loads fine via a bare top-level `node -e require`
-    // on that same runner). That combination -- fine in the main process,
-    // crashes the instant it's loaded inside a forked child -- is the
-    // classic signature of a native addon that isn't fork-safe (internal
-    // locks/threading state initialized before fork() can leave the child
-    // in a broken state immediately). vitest's default 'forks' pool uses
-    // child_process.fork() for worker isolation; 'threads' uses
-    // worker_threads instead, which share the process rather than forking
-    // it, sidestepping this whole class of problem.
-    pool: 'threads'
+    // Root-caused via 2 real CI runs: loreWarehouse.test.ts (the only file
+    // using the better-sqlite3 native addon) crashes on GitHub's macOS
+    // runner even run completely alone, during the IMPORT phase -- not
+    // resource contention (capping maxWorkers didn't help) and not a
+    // binding/ABI mismatch (better-sqlite3 loads fine via a bare top-level
+    // `node -e require` on that same runner). Switching vitest's pool from
+    // 'forks' to 'threads' made it categorically worse (a full process
+    // segfault instead of one worker dying), proving this isn't a
+    // fork-vs-thread mechanism problem -- it crashes under both pooling
+    // strategies, but not as a bare unmanaged process. The common factor is
+    // Vitest's own module transform/SSR pipeline touching the native
+    // addon; explicitly externalizing it (plain require(), never
+    // transformed/bundled) is the standard fix for exactly this signature.
+    server: {
+      deps: {
+        external: ['better-sqlite3']
+      }
+    }
   }
 })
