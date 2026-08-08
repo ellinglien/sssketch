@@ -10,7 +10,13 @@ import {
   unregisterActivePreview
 } from '../audio/previewLoop'
 import { buildImportedRifff } from '../audio/importResolvedRiff'
-import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
+import {
+  usePlaying,
+  useDispatch,
+  useAppState,
+  useRiffFavourites,
+  useRiffFavouritesActions
+} from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { formatBpm } from '@shared/format'
 import type { Rifff } from '@shared/types'
@@ -113,7 +119,9 @@ function RiffCircle({
   fullyCached,
   imported,
   ownerFraction,
-  onClick
+  favorited,
+  onClick,
+  onContextMenu
 }: {
   title: string
   selected: boolean
@@ -129,12 +137,18 @@ function RiffCircle({
    * embeds full stem docs; the private-jam path fills it in progressively
    * as riffs get resolved/prefetched -- see jamOwnerFractions). */
   ownerFraction: number
+  /** Right-click toggled, persisted independently of source (see
+   * riffFavourites.ts) -- overrides the ownerFraction grayscale fill with
+   * solid purple when true. */
+  favorited: boolean
   onClick: (e: React.MouseEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   return (
     <div style={{ position: 'relative', width: 18, height: 18 }}>
       <button
         onClick={onClick}
+        onContextMenu={onContextMenu}
         title={title}
         style={{
           width: 18,
@@ -154,7 +168,7 @@ function RiffCircle({
                 ? '1px solid var(--ra-border)'
                 : '1px dashed var(--ra-text-3)',
           padding: 0,
-          background: riffCircleColor(ownerFraction),
+          background: favorited ? 'var(--ra-recording-live)' : riffCircleColor(ownerFraction),
           cursor: 'pointer',
           animation: playing ? 'ra-rec-pulse 1.4s ease-in-out infinite' : undefined
         }}
@@ -191,6 +205,8 @@ export function EndlesssLibraryBrowser({
    * task). */
   onSwitchToLore: () => void
 }): React.JSX.Element {
+  const riffFavourites = useRiffFavourites()
+  const { toggleRiffFavourite } = useRiffFavouritesActions()
   const [tab, setTab] = useState<EndlesssTab>('shared-feed')
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
 
@@ -1152,7 +1168,12 @@ export function EndlesssLibraryBrowser({
                         fullyCached={riff.cachedStemCount >= riff.stemCount}
                         imported={importedRiffGroupIds.has(riff.riffCID)}
                         ownerFraction={riff.ownerFraction}
+                        favorited={riffFavourites.has(riff.riffCID)}
                         onClick={(e) => handleRiffClick(e, riff.riffCID, feedRiffs)}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          toggleRiffFavourite(riff.riffCID)
+                        }}
                       />
                     ))}
                   </div>
@@ -1390,7 +1411,12 @@ export function EndlesssLibraryBrowser({
                               ownerFraction={
                                 jamOwnerFractions.get(riff.riffCID) ?? riff.ownerFraction
                               }
+                              favorited={riffFavourites.has(riff.riffCID)}
                               onClick={(e) => handleRiffClick(e, riff.riffCID, jamRiffs)}
+                              onContextMenu={(e) => {
+                                e.preventDefault()
+                                toggleRiffFavourite(riff.riffCID)
+                              }}
                             />
                           ))}
                         </div>
