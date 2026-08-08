@@ -25,6 +25,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # TEMPORARY diagnostic: src/main/loreWarehouse.test.ts (uses the
+      # better-sqlite3 native addon) crashes its whole vitest worker fork
+      # with no test-level error on this runner ("Worker exited
+      # unexpectedly") while passing clean locally -- classic native-binding
+      # ABI/arch mismatch symptom. Vitest's own wrapper swallows the real
+      # native error; this surfaces it directly before guessing at a fix.
+      # Remove once root-caused.
+      - name: Diagnose better-sqlite3 native binding
+        run: |
+          node -e "console.log('node', process.version, process.arch, process.platform)"
+          node -e "const db = require('better-sqlite3'); console.log('better-sqlite3 required OK:', db)"
+
       # JUCE (fetched via CMake's FetchContent, pinned to git tag 8.0.4 in
       # native-engine/CMakeLists.txt) takes 10-15 minutes to fetch+build from
       # scratch -- this cache keeps that a one-time cost per JUCE version /
