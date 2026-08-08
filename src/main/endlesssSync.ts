@@ -106,6 +106,15 @@ export async function syncSharedFeed(
         }
         newSummaries.push(summary)
       }
+      // Reports progress as riffs are DISCOVERED, not just as they're
+      // resolved/downloaded -- without this, a jam/feed needing many pages
+      // to walk shows a bare "syncing…" with no moving number for however
+      // long the walk takes, which reads as stalled/unresponsive (confirmed
+      // live). done stays 0 here since nothing's been downloaded yet; total
+      // grows page by page. The very last of these calls reports the same
+      // {done:0, total} the old pre-resolve-phase call used to, so that
+      // call is removed below rather than duplicated.
+      onProgress({ done: 0, total: newSummaries.length })
       if (hitBoundary) break
       if (!page.hasMore) {
         reachedEnd = true
@@ -116,7 +125,6 @@ export async function syncSharedFeed(
 
     let done = 0
     const total = newSummaries.length
-    onProgress({ done, total })
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
       const baseResolved = baseResolvedByCID.get(summary.riffCID)
       const resolved = baseResolved
@@ -181,6 +189,9 @@ export async function syncJam(
         }
         newSummaries.push(summary)
       }
+      // See syncSharedFeed's identical call for why this reports progress
+      // during discovery, not just resolution.
+      onProgress({ done: 0, total: newSummaries.length })
       if (hitBoundary) break
       if (!page.hasMore) {
         reachedEnd = true
@@ -191,7 +202,6 @@ export async function syncJam(
 
     let done = 0
     const total = newSummaries.length
-    onProgress({ done, total })
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
       const resolved = await resolveJamRiff(jamId, summary.riffCID, fetchImpl)
       if (resolved) {

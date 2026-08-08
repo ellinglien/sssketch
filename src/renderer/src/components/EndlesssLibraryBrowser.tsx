@@ -17,6 +17,7 @@ import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { EndlesssLoginPanel } from './EndlesssLoginPanel'
 import { riffCircleColor } from '../theme/riffCircleColor'
+import { LoadingLoader } from './LoadingLoader'
 
 const SHARED_FEED_STORAGE_KEY = 'sssketch:endlesssSharedFeedUsername'
 const SHARED_FEED_PAGE_SIZE = 30
@@ -310,6 +311,20 @@ export function EndlesssLibraryBrowser({
   const [jamSyncProgress, setJamSyncProgress] = useState<{ done: number; total: number } | null>(
     null
   )
+  // Whether a sync is currently believed to be in flight -- deliberately
+  // separate from feedSyncProgress/jamSyncProgress's {done,total} shape.
+  // Confirmed live: the walk phase (paging through listSharedFeed/
+  // listRiffsInJam to find what's new) can take real time with zero
+  // progress events, since total isn't known until the walk finishes and
+  // the resolve phase starts. Driving "is syncing" off the optimistic
+  // {done:0, total:0} set on click via `done < total` reads as false
+  // (0 < 0), so the button silently reverted to its idle label the instant
+  // it was clicked and looked entirely unresponsive for however long the
+  // walk took -- this flag stays true from click until the matching
+  // progress event actually reports done === total, independent of what
+  // those numbers are.
+  const [feedSyncing, setFeedSyncing] = useState(false)
+  const [jamSyncing, setJamSyncing] = useState(false)
 
   const playing = usePlaying()
   const dispatch = useDispatch()
@@ -493,6 +508,7 @@ export function EndlesssLibraryBrowser({
       if (progress.source === 'shared' && progress.key === effectiveUsername) {
         setFeedSyncProgress({ done: progress.done, total: progress.total })
         if (progress.done === progress.total) {
+          setFeedSyncing(false)
           void window.rifffApi
             .endlesssSyncStatusSharedFeed(effectiveUsername)
             .then(setFeedSyncStatus)
@@ -501,6 +517,7 @@ export function EndlesssLibraryBrowser({
       if (progress.source === 'jam' && progress.key === selectedJamCID) {
         setJamSyncProgress({ done: progress.done, total: progress.total })
         if (progress.done === progress.total && selectedJamCID) {
+          setJamSyncing(false)
           void window.rifffApi.endlesssSyncStatusJam(selectedJamCID).then(setJamSyncStatus)
         }
       }
@@ -1043,12 +1060,17 @@ export function EndlesssLibraryBrowser({
               </span>
               <button
                 onClick={() => {
-                  setFeedSyncProgress({ done: 0, total: 0 })
-                  void window.rifffApi.endlesssStartSyncSharedFeed(effectiveUsername)
+                  setFeedSyncing(true)
+                  setFeedSyncProgress(null)
+                  window.rifffApi.endlesssStartSyncSharedFeed(effectiveUsername).catch((err) => {
+                    console.error(
+                      'EndlesssLibraryBrowser: endlesssStartSyncSharedFeed() failed:',
+                      err
+                    )
+                    setFeedSyncing(false)
+                  })
                 }}
-                disabled={
-                  feedSyncProgress !== null && feedSyncProgress.done < feedSyncProgress.total
-                }
+                disabled={feedSyncing}
                 style={{
                   height: 20,
                   borderRadius: 0,
@@ -1056,11 +1078,17 @@ export function EndlesssLibraryBrowser({
                   fontSize: 9,
                   border: '1px solid var(--ra-border)',
                   background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
+                  color: 'var(--ra-text-2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
                 }}
               >
-                {feedSyncProgress !== null && feedSyncProgress.done < feedSyncProgress.total
-                  ? `syncing… ${feedSyncProgress.done}/${feedSyncProgress.total}`
+                {feedSyncing && <LoadingLoader size={16} />}
+                {feedSyncing
+                  ? feedSyncProgress !== null
+                    ? `syncing… ${feedSyncProgress.done}/${feedSyncProgress.total}`
+                    : 'syncing…'
                   : 'sync for instant playback'}
               </button>
             </div>
@@ -1142,55 +1170,67 @@ export function EndlesssLibraryBrowser({
               </button>
             )}
 
-            {resolvedRiff && selectedRiffCID && (
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
-                  {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
-                  {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
-                  {resolvedRiff.stems.length > 0 &&
-                    previewAttemptedForCID === selectedRiffCID &&
-                    playingRiffCID !== selectedRiffCID && (
-                      <span style={{ color: 'var(--ra-mute-on)' }}>
-                        {' '}
-                        · no audio available (
-                        {resolvedRiff.stems.every((s) => s.path === null)
-                          ? 'stems failed to download'
-                          : 'cached but failed to play'}
-                        )
-                      </span>
-                    )}
-                </div>
-                <button
-                  onClick={() => {
-                    if (selectedRiffCIDs.size > 1) {
-                      void handleImportSelected()
-                    } else {
-                      handleImport(selectedRiffCID, resolvedRiff)
-                    }
-                  }}
-                  disabled={busyRiffCID !== null}
-                  style={{
-                    height: 24,
-                    borderRadius: 0,
-                    padding: '0 12px',
-                    fontSize: 10,
-                    border: '1px solid var(--ra-border-strong)',
-                    background: importedRiffGroupIds.has(selectedRiffCID)
+            {/* Always rendered at a fixed height (not conditionally mounted)
+                so this area doesn't appear/disappear as selection changes --
+                confirmed live that a popping-in-and-out details bar reads as
+                the whole panel flickering/jumping every time a riff gets
+                selected or deselected. */}
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', height: 24 }}>
+              <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
+                {resolvedRiff && selectedRiffCID ? (
+                  <>
+                    {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
+                    {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                    {resolvedRiff.stems.length > 0 &&
+                      previewAttemptedForCID === selectedRiffCID &&
+                      playingRiffCID !== selectedRiffCID && (
+                        <span style={{ color: 'var(--ra-mute-on)' }}>
+                          {' '}
+                          · no audio available (
+                          {resolvedRiff.stems.every((s) => s.path === null)
+                            ? 'stems failed to download'
+                            : 'cached but failed to play'}
+                          )
+                        </span>
+                      )}
+                  </>
+                ) : (
+                  <span style={{ color: 'var(--ra-text-3)' }}>select a riff to preview</span>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  if (!selectedRiffCID || !resolvedRiff) return
+                  if (selectedRiffCIDs.size > 1) {
+                    void handleImportSelected()
+                  } else {
+                    handleImport(selectedRiffCID, resolvedRiff)
+                  }
+                }}
+                disabled={busyRiffCID !== null || !resolvedRiff || !selectedRiffCID}
+                style={{
+                  height: 24,
+                  borderRadius: 0,
+                  padding: '0 12px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border-strong)',
+                  background:
+                    selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                       ? 'var(--ra-stretch-on-bg)'
                       : 'var(--ra-bg-row-active)',
-                    color: importedRiffGroupIds.has(selectedRiffCID)
+                  color:
+                    selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                       ? 'var(--ra-stretch-on)'
                       : 'var(--ra-text)'
-                  }}
-                >
-                  {selectedRiffCIDs.size > 1
-                    ? `import ${selectedRiffCIDs.size} riffs`
-                    : importedRiffGroupIds.has(selectedRiffCID)
-                      ? 'imported ✓ — import again'
-                      : 'import'}
-                </button>
-              </div>
-            )}
+                }}
+              >
+                {selectedRiffCIDs.size > 1
+                  ? `import ${selectedRiffCIDs.size} riffs`
+                  : selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
+                    ? 'imported ✓ — import again'
+                    : 'import'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -1250,12 +1290,17 @@ export function EndlesssLibraryBrowser({
                     </span>
                     <button
                       onClick={() => {
-                        setJamSyncProgress({ done: 0, total: 0 })
-                        void window.rifffApi.endlesssStartSyncJam(selectedJamCID)
+                        setJamSyncing(true)
+                        setJamSyncProgress(null)
+                        window.rifffApi.endlesssStartSyncJam(selectedJamCID).catch((err) => {
+                          console.error(
+                            'EndlesssLibraryBrowser: endlesssStartSyncJam() failed:',
+                            err
+                          )
+                          setJamSyncing(false)
+                        })
                       }}
-                      disabled={
-                        jamSyncProgress !== null && jamSyncProgress.done < jamSyncProgress.total
-                      }
+                      disabled={jamSyncing}
                       style={{
                         height: 20,
                         borderRadius: 0,
@@ -1263,11 +1308,17 @@ export function EndlesssLibraryBrowser({
                         fontSize: 9,
                         border: '1px solid var(--ra-border)',
                         background: 'var(--ra-bg-row-active)',
-                        color: 'var(--ra-text-2)'
+                        color: 'var(--ra-text-2)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
                       }}
                     >
-                      {jamSyncProgress !== null && jamSyncProgress.done < jamSyncProgress.total
-                        ? `syncing… ${jamSyncProgress.done}/${jamSyncProgress.total}`
+                      {jamSyncing && <LoadingLoader size={16} />}
+                      {jamSyncing
+                        ? jamSyncProgress !== null
+                          ? `syncing… ${jamSyncProgress.done}/${jamSyncProgress.total}`
+                          : 'syncing…'
                         : 'sync this jam for instant playback'}
                     </button>
                   </div>
@@ -1344,55 +1395,74 @@ export function EndlesssLibraryBrowser({
                     </button>
                   )}
 
-                  {resolvedRiff && selectedRiffCID && (
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
-                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
-                        {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
-                        {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
-                        {resolvedRiff.stems.length > 0 &&
-                          previewAttemptedForCID === selectedRiffCID &&
-                          playingRiffCID !== selectedRiffCID && (
-                            <span style={{ color: 'var(--ra-mute-on)' }}>
-                              {' '}
-                              · no audio available (
-                              {resolvedRiff.stems.every((s) => s.path === null)
-                                ? 'stems failed to download'
-                                : 'cached but failed to play'}
-                              )
-                            </span>
-                          )}
-                      </div>
-                      <button
-                        onClick={() => {
-                          if (selectedRiffCIDs.size > 1) {
-                            void handleImportSelected()
-                          } else {
-                            handleImport(selectedRiffCID, resolvedRiff)
-                          }
-                        }}
-                        disabled={busyRiffCID !== null}
-                        style={{
-                          height: 24,
-                          borderRadius: 0,
-                          padding: '0 12px',
-                          fontSize: 10,
-                          border: '1px solid var(--ra-border-strong)',
-                          background: importedRiffGroupIds.has(selectedRiffCID)
+                  {/* Always rendered at a fixed height once a jam is
+                      selected -- see the shared-feed tab's identical block
+                      for why this stays mounted instead of appearing/
+                      disappearing with riff selection. */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 10,
+                      alignItems: 'center',
+                      marginTop: 8,
+                      height: 24
+                    }}
+                  >
+                    <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
+                      {resolvedRiff && selectedRiffCID ? (
+                        <>
+                          {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
+                          {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                          {resolvedRiff.stems.length > 0 &&
+                            previewAttemptedForCID === selectedRiffCID &&
+                            playingRiffCID !== selectedRiffCID && (
+                              <span style={{ color: 'var(--ra-mute-on)' }}>
+                                {' '}
+                                · no audio available (
+                                {resolvedRiff.stems.every((s) => s.path === null)
+                                  ? 'stems failed to download'
+                                  : 'cached but failed to play'}
+                                )
+                              </span>
+                            )}
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--ra-text-3)' }}>select a riff to preview</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (!selectedRiffCID || !resolvedRiff) return
+                        if (selectedRiffCIDs.size > 1) {
+                          void handleImportSelected()
+                        } else {
+                          handleImport(selectedRiffCID, resolvedRiff)
+                        }
+                      }}
+                      disabled={busyRiffCID !== null || !resolvedRiff || !selectedRiffCID}
+                      style={{
+                        height: 24,
+                        borderRadius: 0,
+                        padding: '0 12px',
+                        fontSize: 10,
+                        border: '1px solid var(--ra-border-strong)',
+                        background:
+                          selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                             ? 'var(--ra-stretch-on-bg)'
                             : 'var(--ra-bg-row-active)',
-                          color: importedRiffGroupIds.has(selectedRiffCID)
+                        color:
+                          selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
                             ? 'var(--ra-stretch-on)'
                             : 'var(--ra-text)'
-                        }}
-                      >
-                        {selectedRiffCIDs.size > 1
-                          ? `import ${selectedRiffCIDs.size} riffs`
-                          : importedRiffGroupIds.has(selectedRiffCID)
-                            ? 'imported ✓ — import again'
-                            : 'import'}
-                      </button>
-                    </div>
-                  )}
+                      }}
+                    >
+                      {selectedRiffCIDs.size > 1
+                        ? `import ${selectedRiffCIDs.size} riffs`
+                        : selectedRiffCID && importedRiffGroupIds.has(selectedRiffCID)
+                          ? 'imported ✓ — import again'
+                          : 'import'}
+                    </button>
+                  </div>
                 </>
               )}
             </div>
