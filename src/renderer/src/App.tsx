@@ -43,6 +43,7 @@ import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { OnboardingModal } from './components/OnboardingModal'
+import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
@@ -693,6 +694,10 @@ function ProjectMenu({
 const AUTOSAVE_DEBOUNCE_MS = 4000
 
 const ONBOARDING_SEEN_STORAGE_KEY = 'sssketch:onboardingSeen'
+// Separate flag from onboarding's own -- this is a real one-time setup
+// decision (where do sketches live), not a recurring reminder, so it
+// never shows again once dismissed, unlike the welcome modal.
+const LIBRARY_LOCATION_SEEN_STORAGE_KEY = 'sssketch:libraryLocationSeen'
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -992,6 +997,43 @@ function Frame(): React.JSX.Element {
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [endlesssLibraryOpen, setEndlesssLibraryOpen] = useState(false)
+  // First-launch-only "where do sketches save?" step -- shown BEFORE the
+  // welcome modal (suppresses it below while this is up), since knowing
+  // where your work lives is more foundational than a feature tour. Never
+  // reappears once dismissed, unlike the welcome modal.
+  const [showLibraryLocationSetup, setShowLibraryLocationSetup] = useState(() => {
+    try {
+      return localStorage.getItem(LIBRARY_LOCATION_SEEN_STORAGE_KEY) === null
+    } catch {
+      return false
+    }
+  })
+  const [libraryRootForSetup, setLibraryRootForSetup] = useState<string | null>(null)
+  useEffect(() => {
+    if (!showLibraryLocationSetup) return
+    window.rifffApi
+      .getLibraryRoot()
+      .then(setLibraryRootForSetup)
+      .catch((err) => {
+        console.error('Frame: getLibraryRoot() failed:', err)
+      })
+  }, [showLibraryLocationSetup])
+  function dismissLibraryLocationSetup(): void {
+    setShowLibraryLocationSetup(false)
+    try {
+      localStorage.setItem(LIBRARY_LOCATION_SEEN_STORAGE_KEY, '1')
+    } catch {
+      // localStorage unavailable -- just means this shows again next
+      // launch too, not worth surfacing as an error.
+    }
+  }
+  async function handleChooseLibraryFolderAtSetup(): Promise<void> {
+    const picked = await window.rifffApi.pickFolder()
+    if (!picked) return
+    await window.rifffApi.setLibraryRoot(picked)
+    setLibraryRootForSetup(picked)
+  }
+
   // Shown on every launch by default (per machine, matching loreUsername's
   // own localStorage-persisted convention in LoreLibraryBrowser.tsx) --
   // only stops once "don't show this again" is checked. Read lazily in
@@ -1772,7 +1814,14 @@ function Frame(): React.JSX.Element {
             onClose={() => setContextMenu(null)}
           />
         )}
-        {showOnboarding && (
+        {showLibraryLocationSetup && (
+          <LibraryLocationModal
+            libraryRoot={libraryRootForSetup}
+            onChooseFolder={() => void handleChooseLibraryFolderAtSetup()}
+            onContinue={dismissLibraryLocationSetup}
+          />
+        )}
+        {!showLibraryLocationSetup && showOnboarding && (
           <OnboardingModal
             hasExistingContent={Object.keys(state.rifffs).length > 0}
             onDismiss={dismissOnboarding}

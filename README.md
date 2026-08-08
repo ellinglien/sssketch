@@ -40,7 +40,8 @@ will be attached to this repo's [Releases](../../releases) page and won't need t
 Drag `sssketch.app` from the `.dmg` into Applications to install.
 
 **Uninstalling:** drag `sssketch.app` to the Trash — nothing else is installed system-wide. Your
-saved sketches live in `~/Music/sssketch Library` and aren't touched; delete that folder too if
+saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and aren't
+touched; delete that folder too if
 you want them gone. App preferences/caches live in `~/Library/Application Support/sssketch`.
 
 ## Running from source
