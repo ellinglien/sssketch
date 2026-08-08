@@ -79,7 +79,12 @@ describe('live reschedule: load-project while already playing', () => {
 
     try {
       serverProcess = spawn(ENGINE_BINARY, ['--serve', String(TEST_PORT)])
-      await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 5000)
+      // 15s, not 5s: on a loaded CI runner, several other tests in this same
+      // parallel run also spawn+kill real engine processes (one measured at
+      // 4365ms just to become ready even in a quiet run) -- a cold spawn
+      // genuinely taking >5s under that contention isn't a hang, just real
+      // startup time under load. Caught for real via a failed release build.
+      await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 15000)
 
       client = new EngineClient()
       await client.connect(TEST_PORT)
@@ -123,5 +128,5 @@ describe('live reschedule: load-project while already playing', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 15000)
+  }, 30000)
 })
