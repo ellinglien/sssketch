@@ -127,9 +127,7 @@ export async function syncSharedFeed(
     const total = newSummaries.length
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
       const baseResolved = baseResolvedByCID.get(summary.riffCID)
-      const resolved = baseResolved
-        ? await downloadMissingStemsFor(baseResolved, fetchImpl)
-        : null
+      const resolved = baseResolved ? await downloadMissingStemsFor(baseResolved, fetchImpl) : null
       if (resolved) {
         // summary.cachedStemCount is always 0 at listing time (listing
         // never touches disk) -- persisting that stale value here would
