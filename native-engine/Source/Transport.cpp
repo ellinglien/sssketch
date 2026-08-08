@@ -89,6 +89,26 @@ namespace sssketch
         return type->getDeviceNames(true); // true = input names
     }
 
+    int Transport::roundTripLatencySamples() const
+    {
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            const int total = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
+            if (total > 0)
+                return total;
+        }
+        return deviceBlockSize * 2;
+    }
+
+    double Transport::latencySamplesToBars(int latencySamples, double sampleRate, double bpmValue)
+    {
+        if (sampleRate <= 0.0 || bpmValue <= 0.0)
+            return 0.0;
+        const double seconds = (double) latencySamples / sampleRate;
+        const double secPerBarLocal = (60.0 / bpmValue) * 4.0;
+        return seconds / secPerBarLocal;
+    }
+
     juce::String Transport::setRecordingInputDevice(const juce::String& deviceName)
     {
         // Short-circuit: skip the expensive teardown/reopen below entirely
@@ -143,7 +163,14 @@ namespace sssketch
         setup.inputDeviceName = deviceName;
         setup.useDefaultInputChannels = false;
         setup.inputChannels = juce::BigInteger();
-        setup.inputChannels.setBit(0); // request just channel 0 -- LoopRecorder downmixes whatever it's given, but there's no reason to request more than one channel already
+        // Request channels 0 AND 1 -- both LoopRecorder and GatedLoopRecorder
+        // now capture real stereo (see their own doc comments), so the
+        // device itself needs channel 1 actually opened, not just channel 0.
+        // A mono-only device (e.g. a single-channel mic) simply won't have a
+        // bit 1 to give back; the recorders themselves handle however many
+        // channels they're actually handed.
+        setup.inputChannels.setBit(0);
+        setup.inputChannels.setBit(1);
         // Deliberately clearing sampleRate AND bufferSize to 0/0 (not
         // carrying over whatever the PREVIOUS setup happened to have, e.g.
         // 44100/some-default from initialiseWithDefaultDevices' own
@@ -224,18 +251,33 @@ namespace sssketch
 
         // pos is normally kept within [loopStart, loopEnd) by this
         // function's own wrap below -- except right after a loop first
-        // becomes active, its bounds change (e.g. the user drags the
-        // region while playing), or a manual seek lands outside them.
-        // Snap straight to loopStart in that case rather than either
-        // playing straight through unwrapped until pos happens to reach
-        // loopEnd from below (pos < loopStart), or racing arbitrarily far
-        // past loopEnd before the split-index clamp below catches it
-        // (pos >= loopEnd) -- both were confusing in practice ("I moved
-        // the loop but playback just... didn't," reported during manual
-        // testing): a loop that's active should always mean "play from
-        // here," immediately, not "eventually get wrapped into once
-        // reached."
-        if (pos < loopStart || pos >= loopEnd)
+        // becomes active, its bounds change, or a manual seek lands
+        // outside them. Two different cases, two different treatments, per
+        // direct feedback:
+        //   - pos is AHEAD of the loop (pos < loopStart, the loop is still
+        //     somewhere in front of the playhead): play straight through
+        //     UNWRAPPED, exactly like the loopBars<=0 case above, letting
+        //     playback arrive at the loop naturally instead of teleporting
+        //     the playhead there the instant the region is set -- setting
+        //     a loop region (e.g. double-clicking a clip, or pressing the
+        //     rec dot) should never yank playback away from wherever it
+        //     currently sits. Once pos organically advances into
+        //     [loopStart, loopEnd) on some later block, the branch below
+        //     takes over from there and it starts looping for real.
+        //   - pos is BEHIND the loop (pos >= loopEnd, already past it):
+        //     there's no "keep playing forward and arrive" story for a
+        //     region that's already in the past relative to a forward-only
+        //     playhead, so this case still snaps straight to loopStart --
+        //     the only case this file's own history note above still
+        //     applies to ("a loop that's active should always mean 'play
+        //     from here'" -- true when there's nowhere else to arrive
+        //     FROM).
+        if (pos < loopStart)
+        {
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+            return pos + blockDurationBars;
+        }
+        if (pos >= loopEnd)
             pos = loopStart;
 
         const double distToEnd = loopEnd - pos;
@@ -332,6 +374,42 @@ namespace sssketch
             const double recEnd = recordingLoopEndBar.load();
             if (recEnd > recStart)
                 recorder->writeBlock(inputChannelData, numInputChannels, 0, numSamples);
+        }
+
+        // Gated (threshold-triggered) recording capture -- same
+        // "independent of play/pause/halt-fade state" reasoning as the
+        // unconditional block just above: "always listening" means
+        // always, not just while transport output happens to be actively
+        // playing. Computes its own loop-relative wrap position rather
+        // than calling renderLoopAware (that function is about OUTPUT
+        // rendering with its own fade/split-render concerns this capture
+        // path has no reason to share) -- both read the SAME positionBars
+        // value before anything below mutates it, so they stay in sync:
+        // whatever moment is being captured here is the same moment
+        // renderLoopAware renders further down.
+        if (auto* gated = gatedRecorder.load())
+        {
+            const double recStart = recordingLoopStartBar.load();
+            const double recEnd = recordingLoopEndBar.load();
+            if (recEnd > recStart)
+            {
+                const double loopPos = positionBars.load();
+                // Only capture once playback has ACTUALLY reached the loop
+                // region -- matches renderLoopAware's own "don't jump the
+                // playhead, let it arrive naturally" behavior below (see
+                // its own comment) rather than the snap-to-recStart this
+                // used to unconditionally do. Before pos genuinely reaches
+                // recStart, loopPos < recStart doesn't correspond to any
+                // real position within the take's own bounds -- writing
+                // here would incorrectly stamp whatever's playing
+                // beforehand onto the START of the loop, the exact
+                // "recorded a thing... didn't seem to record anything [in
+                // the right place]" class of bug this class's own gate was
+                // built to avoid in the first place.
+                if (loopPos >= recStart && loopPos < recEnd)
+                    gated->writeBlock(inputChannelData, numInputChannels, 0, numSamples,
+                                       loopPos - recStart);
+            }
         }
 
         if (playRequested.exchange(false))

@@ -4,6 +4,7 @@
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
 #include "LoopRecorder.h"
+#include "GatedLoopRecorder.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
 
@@ -87,6 +88,26 @@ namespace sssketch
          * message" convention rather than throwing. */
         juce::String setRecordingInputDevice(const juce::String& deviceName);
 
+        /** Round-trip audio I/O latency (input + output) in samples, as
+         * reported by the currently-open device -- captured audio is
+         * delayed by roughly this much relative to when the performer
+         * actually played it, since neither the record path nor the
+         * committed take's timeline placement compensates for it
+         * otherwise (see IpcServer's disarm-recording handler, the only
+         * caller). Falls back to twice the callback block size (one
+         * buffer's worth each direction) when the device reports zero for
+         * both -- some CoreAudio devices do that despite a real round
+         * trip still existing, and 0 bars of compensation would be worse
+         * than an estimate. */
+        int roundTripLatencySamples() const;
+
+        /** Pure unit conversion, deliberately static and free of device/
+         * transport state so it's unit-testable head-less (no open audio
+         * device needed) -- see roundTripLatencySamples() for where the
+         * sample count itself comes from. Returns 0.0 rather than NaN/inf
+         * if sampleRate or bpmValue is non-positive. */
+        static double latencySamplesToBars(int latencySamples, double sampleRate, double bpmValue);
+
         // 0 (the default) disables wrapping entirely — positionBars advances
         // monotonically forever, same as before this existed. Set from
         // load-project's own loopLengthBars field (see EngineProject.h) so
@@ -123,6 +144,17 @@ namespace sssketch
         // deletes it.
         void setLoopRecorder(LoopRecorder* recorder) { loopRecorder.store(recorder); }
 
+        // Same attach/detach contract as setLoopRecorder above, for the
+        // Endlesss-style threshold-gated recording feature (see
+        // GatedLoopRecorder's own doc comment) -- independent of
+        // loopRecorder above; both can coexist attached at once (each just
+        // writes into its own buffer), though the renderer's own UI is not
+        // expected to ever arm both at the same time. Reuses the SAME
+        // recordingLoopStartBar/EndBar fields above as "the currently
+        // selected loop region" -- conceptually one active recording-loop
+        // region regardless of which recording mechanism is using it.
+        void setGatedRecorder(GatedLoopRecorder* recorder) { gatedRecorder.store(recorder); }
+
         // juce::AudioIODeviceCallback
         void audioDeviceIOCallbackWithContext(
             const float* const* inputChannelData, int numInputChannels,
@@ -153,6 +185,7 @@ namespace sssketch
         std::atomic<double> recordingLoopStartBar { 0.0 };
         std::atomic<double> recordingLoopEndBar { 0.0 }; // <= start = disabled
         std::atomic<LoopRecorder*> loopRecorder { nullptr }; // nullptr = nothing armed
+        std::atomic<GatedLoopRecorder*> gatedRecorder { nullptr }; // nullptr = gated recording mode off
         std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
         // `playing` stays true for the entire duration of a halt fade (only
         // finalization, once the fade completes, sets it false) — so it

@@ -53,12 +53,17 @@ namespace sssketch
     public:
         LoopRecorder(double sampleRate);
 
-        /** Feeds one block of live input (mono downmix from however many
-         * input channels the device provided -- a recording channel
-         * doesn't need stereo capture for v1, matching this feature's own
-         * "one pass, one clip" simplicity elsewhere). Appends starting at
-         * the current write position; stops (silently truncating, not
-         * overflowing) once the pre-allocated ceiling is reached. */
+        /** Feeds one block of live input, captured as real stereo -- the
+         * first two input channels JUCE gives us are written straight to
+         * this recorder's own left/right channels; a mono (single-channel)
+         * device instead has that one channel duplicated to both, so a
+         * mono mic still produces a valid, non-silent stereo file rather
+         * than one channel of the take going empty. (v1 of this feature
+         * downmixed everything to mono -- per direct feedback ("is it
+         * recording in stereo? it seems like mono"), that's gone.) Appends
+         * starting at the current write position; stops (silently
+         * truncating, not overflowing) once the pre-allocated ceiling is
+         * reached. */
         void writeBlock(const float* const* inputChannelData, int numInputChannels, int startSample, int numSamples);
 
         /** True once writeBlock() has captured at least one real sample --
@@ -115,7 +120,7 @@ namespace sssketch
         std::vector<float> peaksFixedWindow(double bucketDurationSec) const;
 
         /** Writes whatever's been captured so far (writePos samples, not
-         * the full pre-allocated buffer) to a 16-bit mono WAV file at the
+         * the full pre-allocated buffer) to a 16-bit stereo WAV file at the
          * given path. Returns false (and leaves outputPath untouched) on
          * failure -- mirrors RenderExport.cpp's own
          * WavAudioFormat::createWriterFor error-handling convention (null

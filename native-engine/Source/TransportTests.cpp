@@ -211,12 +211,17 @@ namespace sssketch
                 tone.deleteFile();
             }
 
-            beginTest("playback snaps straight to the recording loop's start when position "
-                      "starts outside its bounds, in both directions -- regression test for a "
-                      "real bug found during manual testing: dragging the loop's start edge "
-                      "while position hadn't reached it yet just let playback pass straight "
-                      "through, never entering the loop until it happened to reach the OLD "
-                      "loopEnd from below");
+            beginTest("playback plays straight through unwrapped when position starts BEHIND "
+                      "the recording loop (hasn't reached it yet), only starting to loop once "
+                      "it naturally arrives -- but still snaps immediately when position starts "
+                      "PAST the loop's own end, since there's no 'keep playing forward and "
+                      "arrive' story for a region already behind a forward-only playhead. "
+                      "Per direct feedback: setting/moving a loop region (e.g. double-clicking "
+                      "a clip, or pressing the rec dot) should never yank the playhead there --"
+                      " an earlier version of this same test asserted the OPPOSITE for the "
+                      "'starts before loopStart' case (immediate snap), which is what direct "
+                      "feedback asked to change; the 'starts past loopEnd' case's own snap "
+                      "expectation is unchanged from that same original regression test.");
             {
                 auto tone = writeConstantToneWav("sssketch_transport_snap.wav", 44100);
 
@@ -241,7 +246,8 @@ namespace sssketch
                 std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
                 float* channels[2] = { l.data(), r.data() };
 
-                // Case 1: position starts BEFORE loopStart.
+                // Case 1: position starts BEFORE loopStart -- plays straight
+                // through, unwrapped, rather than jumping.
                 {
                     PluginChain masterChain(kNumMasterChainSlots);
                     ChannelChainRegistry channelChains;
@@ -252,10 +258,23 @@ namespace sssketch
 
                     transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
                     const double posAfterFirstBlock = transport.currentPositionBars();
-                    // Old behavior: still ~0 (or barely advanced), climbing
-                    // linearly toward 2.0 rather than being there already.
-                    expect(posAfterFirstBlock >= 2.0);
-                    expect(posAfterFirstBlock < 3.0);
+                    // NOT snapped to loopStart(2.0) -- just advanced by one
+                    // ordinary block's worth of unwrapped playback, same as
+                    // if no recording loop were active at all.
+                    expect(posAfterFirstBlock > 0.0);
+                    expect(posAfterFirstBlock < 0.1);
+
+                    // Keep feeding blocks until position actually arrives at
+                    // the loop -- confirms playback naturally reaches it (and
+                    // starts looping from there) rather than running past it
+                    // forever unwrapped. 2000 blocks is a generous ceiling
+                    // (well under 12 bars' worth at this bpm/sample rate,
+                    // comfortably more than the 2.0 bars actually needed).
+                    for (int i = 0; i < 2000 && transport.currentPositionBars() < 2.0; ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2,
+                                                                    numSamples, {});
+                    expect(transport.currentPositionBars() >= 2.0);
+                    expect(transport.currentPositionBars() < 3.0);
                 }
 
                 // Case 2: position starts AFTER loopEnd.
@@ -327,6 +346,25 @@ namespace sssketch
                 expect(sawAWrap);
 
                 tone.deleteFile();
+            }
+
+            beginTest("latencySamplesToBars converts a device round-trip latency (input + "
+                      "output samples) into a bar offset from bpm/sampleRate alone -- pure "
+                      "conversion, no Transport instance or open device needed, so this is "
+                      "testable in a headless CI environment with no real audio hardware");
+            {
+                // 120 bpm -> secPerBar = 2.0s. At 44100 samples/sec, 4410 samples = 0.1s =
+                // 0.05 bars.
+                expectWithinAbsoluteError(
+                    Transport::latencySamplesToBars(4410, 44100.0, 120.0), 0.05, 1.0e-9);
+
+                // Zero bpm or zero sample rate must not divide by zero -- degrades to 0 bars
+                // of compensation instead of NaN/inf poisoning the placed take's startBar.
+                expect(Transport::latencySamplesToBars(4410, 0.0, 120.0) == 0.0);
+                expect(Transport::latencySamplesToBars(4410, 44100.0, 0.0) == 0.0);
+
+                // Zero latency samples -> zero bars regardless of tempo.
+                expect(Transport::latencySamplesToBars(0, 44100.0, 120.0) == 0.0);
             }
         }
     };

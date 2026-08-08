@@ -195,6 +195,54 @@ namespace sssketch
                 expect(recorder.peaksFixedWindow(0.01).empty());
             }
 
+            beginTest("writeBlock duplicates a mono (single-channel) input onto BOTH output "
+                      "channels, rather than leaving channel 1 silent -- per direct feedback "
+                      "(\"is it recording in stereo? it seems like mono\"), this recorder's "
+                      "own output is always stereo now regardless of what the input device "
+                      "provides");
+            {
+                LoopRecorder recorder(48000.0);
+                std::vector<float> inputData(1000, 0.4f);
+                const float* channels[] = { inputData.data() };
+                recorder.writeBlock(channels, 1, 0, 1000);
+
+                juce::File tmp = juce::File::createTempFile(".wav");
+                expect(recorder.writeToWavFile(tmp.getFullPathName()));
+
+                StemBufferCache cache;
+                expect(cache.load(tmp.getFullPathName()));
+                auto* readBack = cache.get(tmp.getFullPathName());
+                expect(readBack != nullptr);
+                expectEquals(readBack->getNumChannels(), 2);
+                expectWithinAbsoluteError(readBack->getSample(0, 0), 0.4f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(1, 0), 0.4f, 0.01f);
+
+                tmp.deleteFile();
+            }
+
+            beginTest("writeBlock captures real stereo -- two distinct input channels land on "
+                      "their own matching output channel, not averaged/downmixed together");
+            {
+                LoopRecorder recorder(48000.0);
+                std::vector<float> left(1000, 0.2f);
+                std::vector<float> right(1000, 0.8f);
+                const float* channels[] = { left.data(), right.data() };
+                recorder.writeBlock(channels, 2, 0, 1000);
+
+                juce::File tmp = juce::File::createTempFile(".wav");
+                expect(recorder.writeToWavFile(tmp.getFullPathName()));
+
+                StemBufferCache cache;
+                expect(cache.load(tmp.getFullPathName()));
+                auto* readBack = cache.get(tmp.getFullPathName());
+                expect(readBack != nullptr);
+                expectEquals(readBack->getNumChannels(), 2);
+                expectWithinAbsoluteError(readBack->getSample(0, 0), 0.2f, 0.01f);
+                expectWithinAbsoluteError(readBack->getSample(1, 0), 0.8f, 0.01f);
+
+                tmp.deleteFile();
+            }
+
             beginTest("peaksFixedWindow is append-only -- a bucket already returned by an "
                       "earlier call keeps the exact same value on a later call, even once more "
                       "audio has since been captured (the live capture overlay draws each bar "

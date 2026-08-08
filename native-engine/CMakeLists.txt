@@ -13,6 +13,39 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
+# Ableton Link -- header-only, cross-app tempo/beat sync (see LinkSession.h).
+# Consumed the lightweight way: only its own AbletonLinkConfig.cmake is
+# included (defines the Ableton::Link IMPORTED INTERFACE target, pulling in
+# its own asio-standalone submodule dependency too), NOT add_subdirectory()
+# on the whole repo -- that would also build Link's own example apps/test
+# suite (a separate Catch2-based harness this project has no use for), pure
+# overhead we don't want. Pinned to the Link-4.0 tag (not a moving branch)
+# for reproducible builds. GIT_SUBMODULES fetches exactly the one submodule
+# ConfigureAsioStandalone.cmake actually needs (modules/asio-standalone,
+# a header-only vendored copy of chriskohlhoff/asio -- NOT Boost.Asio),
+# rather than recursing into every submodule the full repo declares.
+FetchContent_Declare(
+  ableton_link
+  GIT_REPOSITORY https://github.com/Ableton/link.git
+  GIT_TAG        Link-4.0
+  GIT_SUBMODULES modules/asio-standalone
+  GIT_SHALLOW    TRUE
+)
+# FetchContent_Populate (the declared-details form used here, not the
+# deprecated single-call form) is CMake's only way to fetch a dependency's
+# source WITHOUT also add_subdirectory()-ing it -- exactly what's wanted
+# above. CMake >=3.30 warns this spelling is deprecated in favor of a
+# newer EXCLUDE_FROM_ALL-based pattern that isn't available until CMake
+# 3.28+; this project's own cmake_minimum_required is still 3.22 (see top
+# of this file), so pin policy CMP0169 to OLD explicitly here rather than
+# bump the whole project's minimum version just for this. Revisit once the
+# minimum is raised past 3.28.
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+FetchContent_Populate(ableton_link)
+include(${ableton_link_SOURCE_DIR}/AbletonLinkConfig.cmake)
+
 # Was juce_add_console_app -- switched to juce_add_gui_app so this process
 # gets full NSApplication/window-server integration on macOS, needed to host
 # a real plugin editor window (see PluginChain::openEditorWindow). This is
@@ -71,6 +104,10 @@ target_sources(sssketch_engine PRIVATE
   Source/BakeStemTests.cpp
   Source/LoopRecorder.cpp
   Source/LoopRecorderTests.cpp
+  Source/GatedLoopRecorder.cpp
+  Source/GatedLoopRecorderTests.cpp
+  Source/LinkSession.cpp
+  Source/LinkSessionTests.cpp
   Source/LiveParamOverrides.cpp
   Source/LiveParamOverridesTests.cpp
 )
@@ -97,4 +134,5 @@ target_link_libraries(sssketch_engine PRIVATE
   juce::juce_audio_processors
   juce::juce_audio_basics
   juce::juce_audio_utils
+  Ableton::Link
 )

@@ -12,16 +12,22 @@ namespace sssketch
         // completing a loop pass at all -- see this class's own doc
         // comment. 10 minutes at typical sample rates is comfortably more
         // than any realistic "jam a take, disarm" session, while still
-        // keeping the upfront allocation modest (mono float32 at 48kHz:
-        // 10 * 60 * 48000 * 4 bytes =~ 115MB).
+        // keeping the upfront allocation modest (stereo float32 at 48kHz:
+        // 2 * 10 * 60 * 48000 * 4 bytes =~ 230MB).
         constexpr double kMaxRecordingSeconds = 600.0;
+
+        // Number of channels this recorder's own buffer/WAV output always
+        // has, regardless of how many the input device actually provides --
+        // see writeBlock's own doc comment on how fewer (mono) or more
+        // input channels get mapped onto this.
+        constexpr int kOutputChannels = 2;
     }
 
     LoopRecorder::LoopRecorder(double sr)
         : sampleRate(sr)
     {
         const int numSamples = std::max(1, (int) std::lround(kMaxRecordingSeconds * sampleRate));
-        buffer.setSize(1, numSamples);
+        buffer.setSize(kOutputChannels, numSamples);
         buffer.clear();
     }
 
@@ -29,21 +35,23 @@ namespace sssketch
                                    int startSample, int numSamples)
     {
         if (numInputChannels <= 0 || inputChannelData == nullptr) return;
-        auto* dest = buffer.getWritePointer(0);
         const int bufferSamples = buffer.getNumSamples();
         const int startPos = writePos.load(std::memory_order_relaxed);
-        for (int i = 0; i < numSamples; ++i)
+        for (int destCh = 0; destCh < kOutputChannels; ++destCh)
         {
-            const int destIndex = startPos + i;
-            if (destIndex >= bufferSamples) break; // hit the generous ceiling -- stop capturing rather than overflow; not expected in normal use
-            // Mono downmix -- average every input channel JUCE gave us.
-            // Loopback devices are commonly stereo (2ch), a mic commonly
-            // mono (1ch); averaging handles both without a separate path.
-            float sample = 0.0f;
-            for (int ch = 0; ch < numInputChannels; ++ch)
-                sample += inputChannelData[ch][startSample + i];
-            sample /= (float) numInputChannels;
-            dest[destIndex] = sample;
+            // A mono (single-channel) device has its one channel duplicated
+            // onto both output channels; a device with 2+ channels maps its
+            // first two straight across -- see this method's own doc
+            // comment.
+            const int srcCh = std::min(destCh, numInputChannels - 1);
+            auto* dest = buffer.getWritePointer(destCh);
+            const auto* src = inputChannelData[srcCh];
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const int destIndex = startPos + i;
+                if (destIndex >= bufferSamples) break; // hit the generous ceiling -- stop capturing rather than overflow; not expected in normal use
+                dest[destIndex] = src[startSample + i];
+            }
         }
         // Release store: publishes both the samples just written above AND
         // this new index in one handoff, so peaksSoFar's acquire load on
@@ -55,7 +63,6 @@ namespace sssketch
     std::vector<float> LoopRecorder::peaksSoFar(int numBuckets) const
     {
         std::vector<float> result(numBuckets, 0.0f);
-        const auto* data = buffer.getReadPointer(0);
         // Acquire load, paired with writeBlock's release store above.
         const int currentWritePos = writePos.load(std::memory_order_acquire);
         if (currentWritePos <= 0) return result;
@@ -64,8 +71,15 @@ namespace sssketch
             const int bucketStart = (int) ((double) b / numBuckets * currentWritePos);
             const int bucketEnd = (int) ((double) (b + 1) / numBuckets * currentWritePos);
             float peak = 0.0f;
-            for (int i = bucketStart; i < bucketEnd; ++i)
-                peak = std::max(peak, std::abs(data[i]));
+            // Peak across BOTH channels -- this is just a coarse live
+            // overview bar, not a true stereo waveform, so the louder of
+            // the two channels per bucket is enough.
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                const auto* data = buffer.getReadPointer(ch);
+                for (int i = bucketStart; i < bucketEnd; ++i)
+                    peak = std::max(peak, std::abs(data[i]));
+            }
             result[b] = peak;
         }
         return result;
@@ -74,7 +88,6 @@ namespace sssketch
     std::vector<float> LoopRecorder::peaksFixedWindow(double bucketDurationSec) const
     {
         std::vector<float> result;
-        const auto* data = buffer.getReadPointer(0);
         // Acquire load, paired with writeBlock's release store, same as
         // peaksSoFar above.
         const int currentWritePos = writePos.load(std::memory_order_acquire);
@@ -88,8 +101,13 @@ namespace sssketch
             const int start = b * samplesPerBucket;
             const int end = start + samplesPerBucket;
             float peak = 0.0f;
-            for (int i = start; i < end; ++i)
-                peak = std::max(peak, std::abs(data[i]));
+            // Peak across both channels -- same reasoning as peaksSoFar above.
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                const auto* data = buffer.getReadPointer(ch);
+                for (int i = start; i < end; ++i)
+                    peak = std::max(peak, std::abs(data[i]));
+            }
             result.push_back(peak);
         }
         return result;
@@ -105,7 +123,7 @@ namespace sssketch
 
         juce::WavAudioFormat wavFormat;
         std::unique_ptr<juce::AudioFormatWriter> writer(
-            wavFormat.createWriterFor(out.get(), sampleRate, 1, 16, {}, 0));
+            wavFormat.createWriterFor(out.get(), sampleRate, buffer.getNumChannels(), 16, {}, 0));
         if (writer == nullptr) return false;
         out.release(); // writer now owns the stream, matching RenderExport.cpp's own ownership handoff
 
