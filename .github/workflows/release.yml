@@ -41,6 +41,26 @@ jobs:
           cmake -B build
           cmake --build build --config Release
 
+      # A separate x86_64-only build (see native-engine-bridge/CMakeLists.txt's
+      # own doc comment) that lets the arm64 engine retry scanning Intel-only
+      # VST3/AU plugins under Rosetta. electron-builder.yml's extraResources
+      # references its .app bundle directly -- packaging fails outright if
+      # this was never built (caught for real: a release run got all the way
+      # through every other step and failed here with a confusing
+      # "not a file" error once electron-builder tried to copy a
+      # nonexistent path). Its own separate JUCE fetch, so its own cache key.
+      - name: Cache native engine bridge build
+        uses: actions/cache@v4
+        with:
+          path: native-engine-bridge/build
+          key: native-engine-bridge-${{ runner.os }}-juce-8.0.4-${{ hashFiles('native-engine-bridge/CMakeLists.txt', 'native-engine-bridge/Source/**', 'native-engine/Source/SharedRingBuffer.*', 'native-engine/Source/SharedAudioChannel.*', 'native-engine/Source/PluginArchitecture.*', 'native-engine/Source/PluginScanning.*') }}
+
+      - name: Build native engine bridge
+        working-directory: native-engine-bridge
+        run: |
+          cmake -B build
+          cmake --build build --config Release
+
       # Installed here, before Test -- render-parity.test.ts spawns the real
       # `rubberband` CLI (see src/main/rubberband.ts), and the runner has no
       # Homebrew install of its own by default. Vendoring (below) needs the
