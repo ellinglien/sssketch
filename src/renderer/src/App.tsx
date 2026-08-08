@@ -41,6 +41,7 @@ import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
+import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
@@ -413,7 +414,8 @@ function ProjectMenu({
   currentSketch,
   setCurrentSketch,
   lastSavedJsonRef,
-  onOpenLibrary
+  onOpenLibrary,
+  onOpenClusterStems
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
@@ -424,6 +426,11 @@ function ProjectMenu({
    * explicit Open) -- handleNew reads it, handleSave writes it. */
   lastSavedJsonRef: React.RefObject<string | null>
   onOpenLibrary: () => void
+  /** Opens the "tidy up" browser -- the same callback TransportBar.tsx's
+   * own tidy-up button already uses (wired to setClusterStemsOpen(true) in
+   * App.tsx's Frame). Reused here for the export-time nudge's "tidy up
+   * first" button. */
+  onOpenClusterStems: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -431,6 +438,7 @@ function ProjectMenu({
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
+  const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
 
   async function handleNew(): Promise<void> {
     // Only worth interrupting for if there's actually something that would
@@ -527,7 +535,7 @@ function ProjectMenu({
     }
   }
 
-  async function handleExportAbleton(): Promise<void> {
+  async function runExportAbleton(): Promise<void> {
     setExporting(true)
     try {
       if (currentSketch !== null && currentSketch.kind === 'library') {
@@ -564,6 +572,14 @@ function ProjectMenu({
     } finally {
       setExporting(false)
     }
+  }
+
+  function handleExportAbleton(): void {
+    if (Object.keys(state.busOf).length === 0) {
+      setTidyUpNudgeOpen(true)
+      return
+    }
+    void runExportAbleton()
   }
 
   const buttonStyle = {
@@ -649,6 +665,18 @@ function ProjectMenu({
           defaultName={newProjectModal.defaultName}
           onCreate={commitNewProject}
           onCancel={() => setNewProjectModal(null)}
+        />
+      )}
+      {tidyUpNudgeOpen && (
+        <TidyUpNudgeModal
+          onTidyUp={() => {
+            setTidyUpNudgeOpen(false)
+            onOpenClusterStems()
+          }}
+          onExportAnyway={() => {
+            setTidyUpNudgeOpen(false)
+            void runExportAbleton()
+          }}
         />
       )}
     </div>
@@ -1433,6 +1461,7 @@ function Frame(): React.JSX.Element {
               setCurrentSketch={setCurrentSketch}
               lastSavedJsonRef={lastSavedJsonRef}
               onOpenLibrary={() => setLibraryBrowserOpen(true)}
+              onOpenClusterStems={() => setClusterStemsOpen(true)}
             />
           </div>
         </div>
