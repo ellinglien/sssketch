@@ -85,7 +85,12 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
 
     serverProcess = spawn(ENGINE_BINARY, ['--serve', String(TEST_PORT)])
     const serverOutput = collectOutput(serverProcess)
-    await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 5000)
+    // 15s, not 5s -- same fix as liveReschedule.test.ts: on a loaded CI
+    // runner, other tests in this same parallel run also spawn+kill real
+    // engine processes, and a cold spawn genuinely taking >5s under that
+    // contention isn't a hang, just real startup time under load. Caught
+    // via a real release build timing out here.
+    await waitForLogLine(serverProcess, `serving on 127.0.0.1:${TEST_PORT}`, 15000)
 
     const clientOutput: string[] = []
     await new Promise<void>((resolve, reject) => {
@@ -121,5 +126,5 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
 
     expect(serverOutput.text()).toContain('client connected')
     rmSync(dir, { recursive: true, force: true })
-  }, 10000)
+  }, 30000)
 })
