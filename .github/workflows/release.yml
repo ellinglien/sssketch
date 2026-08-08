@@ -25,22 +25,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # TEMPORARY diagnostic: loreWarehouse.test.ts's whole vitest worker
-      # dies with no test-level error on this runner ("Worker exited
-      # unexpectedly") across 3 consecutive real runs -- always this exact
-      # file, unaffected by capping maxWorkers -- while passing clean
-      # locally, and better-sqlite3 (its native addon) loads fine standalone
-      # here. This isolates the file from every other test (no other file
-      # sharing its worker, no native-engine build needed) to tell apart
-      # "crashes even alone on this runner" from "only crashes alongside
-      # other subprocess-spawning tests" before guessing at a real fix.
-      # Placed before the slow native build for fast iteration. Remove once
-      # root-caused. Verbose reporter + `|| true` so a crash here doesn't
-      # fail the job early -- we want its raw output, not the job's
-      # normal test run to change.
-      - name: Diagnose loreWarehouse.test.ts in isolation
-        run: npx vitest run src/main/loreWarehouse.test.ts --reporter=verbose || true
-
       # JUCE (fetched via CMake's FetchContent, pinned to git tag 8.0.4 in
       # native-engine/CMakeLists.txt) takes 10-15 minutes to fetch+build from
       # scratch -- this cache keeps that a one-time cost per JUCE version /

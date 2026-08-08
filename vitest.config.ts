@@ -9,17 +9,20 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'native-engine/test/**/*.test.ts', 'scripts/**/*.test.ts'],
     passWithNoTests: true,
-    // A handful of test files (playbackEngineLifecycle, engineProcess,
-    // liveReschedule, ipc-roundtrip, bakeOffset, render-parity) each spawn a
-    // real subprocess (the JUCE engine binary, or the rubberband CLI) --
-    // vitest's default fork pool runs many test files concurrently across
-    // workers, and on a CPU-constrained CI runner that's enough concurrent
-    // real subprocess spawning to crash an entire worker fork outright (no
-    // test-level error, just "Worker exited unexpectedly") -- confirmed via
-    // a real release build: better-sqlite3 (the native addon in the test
-    // file whose worker died) loads perfectly fine standalone on that exact
-    // runner, ruling out a binding/ABI mismatch. Capping concurrency trades
-    // some wall-clock time for not overwhelming a small number of cores.
-    maxWorkers: 4
+    // Root-caused via a real CI run: loreWarehouse.test.ts (the only file
+    // using the better-sqlite3 native addon) crashed its whole vitest
+    // worker on GitHub's macOS runner even run completely alone, during
+    // the IMPORT phase (0 tests started) -- not resource contention (ruled
+    // out: capping maxWorkers didn't help) and not a binding/ABI mismatch
+    // (better-sqlite3 loads fine via a bare top-level `node -e require`
+    // on that same runner). That combination -- fine in the main process,
+    // crashes the instant it's loaded inside a forked child -- is the
+    // classic signature of a native addon that isn't fork-safe (internal
+    // locks/threading state initialized before fork() can leave the child
+    // in a broken state immediately). vitest's default 'forks' pool uses
+    // child_process.fork() for worker isolation; 'threads' uses
+    // worker_threads instead, which share the process rather than forking
+    // it, sidestepping this whole class of problem.
+    pool: 'threads'
   }
 })
