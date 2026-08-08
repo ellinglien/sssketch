@@ -325,6 +325,15 @@ export function EndlesssLibraryBrowser({
   // those numbers are.
   const [feedSyncing, setFeedSyncing] = useState(false)
   const [jamSyncing, setJamSyncing] = useState(false)
+  // Snapshot of feedSyncStatus/jamSyncStatus's riffCount taken the moment a
+  // sync starts -- lets the "synced: N riffs" status line count up live
+  // (baseCount + progress.done) as riffs actually land in the index during
+  // the resolve phase, without polling endlesssSyncStatus*() on every
+  // single progress event (that re-reads and re-parses the WHOLE index
+  // file off disk each call -- fine once at the end, wasteful dozens/
+  // hundreds of times over the course of one sync).
+  const [feedSyncBaseCount, setFeedSyncBaseCount] = useState(0)
+  const [jamSyncBaseCount, setJamSyncBaseCount] = useState(0)
 
   const playing = usePlaying()
   const dispatch = useDispatch()
@@ -1054,14 +1063,17 @@ export function EndlesssLibraryBrowser({
                 {feedRiffs.length} riffs{feedHasMore ? '+' : ''}
               </span>
               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                {feedSyncStatus
-                  ? `synced: ${feedSyncStatus.riffCount} riffs${feedSyncStatus.complete ? '' : ' (partial)'}`
-                  : 'not yet synced'}
+                {feedSyncing
+                  ? `synced: ${feedSyncBaseCount + (feedSyncProgress?.done ?? 0)} riffs so far`
+                  : feedSyncStatus
+                    ? `synced: ${feedSyncStatus.riffCount} riffs${feedSyncStatus.complete ? '' : ' (partial)'}`
+                    : 'not yet synced'}
               </span>
               <button
                 onClick={() => {
                   setFeedSyncing(true)
                   setFeedSyncProgress(null)
+                  setFeedSyncBaseCount(feedSyncStatus?.riffCount ?? 0)
                   window.rifffApi.endlesssStartSyncSharedFeed(effectiveUsername).catch((err) => {
                     console.error(
                       'EndlesssLibraryBrowser: endlesssStartSyncSharedFeed() failed:',
@@ -1284,14 +1296,17 @@ export function EndlesssLibraryBrowser({
                 <>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                      {jamSyncStatus
-                        ? `synced: ${jamSyncStatus.riffCount} riffs${jamSyncStatus.complete ? '' : ' (partial)'}`
-                        : 'not yet synced'}
+                      {jamSyncing
+                        ? `synced: ${jamSyncBaseCount + (jamSyncProgress?.done ?? 0)} riffs so far`
+                        : jamSyncStatus
+                          ? `synced: ${jamSyncStatus.riffCount} riffs${jamSyncStatus.complete ? '' : ' (partial)'}`
+                          : 'not yet synced'}
                     </span>
                     <button
                       onClick={() => {
                         setJamSyncing(true)
                         setJamSyncProgress(null)
+                        setJamSyncBaseCount(jamSyncStatus?.riffCount ?? 0)
                         window.rifffApi.endlesssStartSyncJam(selectedJamCID).catch((err) => {
                           console.error(
                             'EndlesssLibraryBrowser: endlesssStartSyncJam() failed:',
