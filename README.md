@@ -59,6 +59,9 @@ sssketch needs the engine built at least once before it'll play any audio; after
 anything under `native-engine/`, rebuild it and fully quit and relaunch the app — a renderer
 reload alone won't pick up the new engine binary.
 
+Tempo stretching needs the `rubberband` CLI (`brew install rubberband`) in dev mode — packaged
+release builds bundle it, so end users don't need this.
+
 ### Other useful commands
 
 ```bash
@@ -69,10 +72,11 @@ npm test              # vitest (TypeScript/shared logic)
 
 ## Known issues
 
-- Exporting stems from a very large project can crash the app.
-- Rendering a full mix (not stems) can occasionally time out.
+None tracked right now — [open an issue](../../issues) if you hit something.
 
-If you hit something not listed here, [open an issue](../../issues).
+## License
+
+[GPL-3.0-or-later](LICENSE).
 
 ## Recommended IDE setup
 
