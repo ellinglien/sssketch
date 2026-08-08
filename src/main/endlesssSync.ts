@@ -128,7 +128,7 @@ export async function syncSharedFeed(
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
       const baseResolved = baseResolvedByCID.get(summary.riffCID)
       const resolved = baseResolved
-        ? await downloadMissingStemsFor('shared', summary.riffCID, baseResolved, fetchImpl)
+        ? await downloadMissingStemsFor(baseResolved, fetchImpl)
         : null
       if (resolved) {
         // summary.cachedStemCount is always 0 at listing time (listing

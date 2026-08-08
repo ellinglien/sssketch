@@ -392,8 +392,15 @@ function summarizeResolvedRiff(
   }
 }
 
-function endlesssStemCachePath(source: 'shared' | 'jam', riffCID: string, stemCID: string): string {
-  return join(app.getPath('userData'), 'endlesss-cache', 'stems', source, riffCID, stemCID)
+// One-hex-char shard, mirroring LORE's own warehouse convention
+// (resolveStemPath in loreWarehouse.ts: cache/common/stem_v2/<JamCID>/
+// <first-hex-char>/<StemCID>) rather than inventing a new scheme. Keyed by
+// stemCID alone -- it's Endlesss's own content identifier, so the same
+// audio always lands at the same path regardless of which riff or jam
+// referenced it, unlike the old source-partitioned scheme this replaces
+// (see docs/superpowers/specs/2026-08-08-endlesss-cache-disk-efficiency-design.md).
+function endlesssStemCachePath(stemCID: string): string {
+  return join(app.getPath('userData'), 'endlesss-cache', 'stems', stemCID.slice(0, 1), stemCID)
 }
 
 // Matches OUROVEON's own stem-audio retry loop (endlesss::live::Stem::fetch,
@@ -469,22 +476,17 @@ async function downloadOneEndlesssStem(
 /** Downloads every not-yet-cached stem in `resolved` (path === null but a
  * downloadUrl exists), returning a new LoreResolvedRiff with paths filled
  * in for whichever succeeded. Shared by both the shared-feed and
- * private-jam resolve paths -- `source` just partitions the cache
- * directory so a riffCID collision between the two spaces (unlikely, but
- * not impossible) can't overwrite the wrong file. Exported for
- * endlesssSync.ts's own use -- see peekSharedFeedCache's doc comment for
- * why syncSharedFeed needs to call this directly rather than going through
- * resolveSharedFeedRiff. */
+ * private-jam resolve paths. Exported for endlesssSync.ts's own use -- see
+ * peekSharedFeedCache's doc comment for why syncSharedFeed needs to call
+ * this directly rather than going through resolveSharedFeedRiff. */
 export async function downloadMissingStemsFor(
-  source: 'shared' | 'jam',
-  riffCID: string,
   resolved: LoreResolvedRiff,
   fetchImpl: FetchLike
 ): Promise<LoreResolvedRiff> {
   const stems = await Promise.all(
     resolved.stems.map(async (stem) => {
       if (stem.path !== null || !stem.downloadUrl) return stem
-      const path = endlesssStemCachePath(source, riffCID, stem.stemCID)
+      const path = endlesssStemCachePath(stem.stemCID)
       if (existsSync(path)) return { ...stem, path }
       const ok = await downloadOneEndlesssStem(path, stem.downloadUrl, fetchImpl)
       return ok ? { ...stem, path } : stem
@@ -631,7 +633,7 @@ export async function resolveSharedFeedRiff(
 ): Promise<LoreResolvedRiff | null> {
   const cached = sharedFeedCache.get(riffCID)
   if (!cached) return null
-  return downloadMissingStemsFor('shared', riffCID, cached, fetchImpl)
+  return downloadMissingStemsFor(cached, fetchImpl)
 }
 
 interface RawMembershipRow {
@@ -895,7 +897,7 @@ export async function resolveJamRiff(
 
   const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, stemIds, session, fetchImpl)
   const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.values()])
-  return downloadMissingStemsFor('jam', riffCID, resolved, fetchImpl)
+  return downloadMissingStemsFor(resolved, fetchImpl)
 }
 
 /** Ownership-only pass over a whole page of jam riffs at once, batched into
