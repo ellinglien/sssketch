@@ -1101,7 +1101,9 @@ export function EndlesssLibraryBrowser({
                   ? feedSyncProgress !== null
                     ? `syncing… ${feedSyncProgress.done}/${feedSyncProgress.total}`
                     : 'syncing…'
-                  : 'sync for instant playback'}
+                  : feedSyncStatus?.complete
+                    ? 'check for new riffs'
+                    : 'sync for instant playback'}
               </button>
             </div>
 
@@ -1334,7 +1336,9 @@ export function EndlesssLibraryBrowser({
                         ? jamSyncProgress !== null
                           ? `syncing… ${jamSyncProgress.done}/${jamSyncProgress.total}`
                           : 'syncing…'
-                        : 'sync this jam for instant playback'}
+                        : jamSyncStatus?.complete
+                          ? 'check for new riffs'
+                          : 'sync this jam for instant playback'}
                     </button>
                   </div>
                   <div
