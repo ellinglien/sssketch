@@ -241,9 +241,19 @@ export function BeatPicker({
   // separate per-stem spectrograms (rather than one combined mix) so the
   // layers are visible together instead of summed into one blur — the whole
   // point of "see where the loops happen in the melody" across all of them
-  // at once. A pure derivation of rifff/stem/buffers, so useMemo (not an
-  // effect writing to its own state) is the right tool.
-  const stemSpectrograms = useMemo<
+  // at once.
+  //
+  // Computed via an effect (not useMemo) specifically so each stem's work
+  // can be chunked with a real yield between stems: computeSpectrogram and
+  // computePitchContour are both plain synchronous nested loops (see their
+  // own files under src/shared/), and a rifff with several stems running
+  // all of them back-to-back in one synchronous pass blocks the main thread
+  // long enough to visibly stutter the "loading…" animation below —
+  // confirmed live. `await new Promise((r) => setTimeout(r, 0))` between
+  // stems hands control back to the browser to paint/animate before the
+  // next stem's computation starts; a microtask (Promise.resolve().then)
+  // would NOT do this, since only a macrotask actually yields to rendering.
+  const [stemSpectrograms, setStemSpectrograms] = useState<
     | {
         stem: Stem
         spectrogram: Spectrogram
@@ -258,10 +268,18 @@ export function BeatPicker({
         tileBoundaryPcts: number[]
       }[]
     | null
-  >(() => {
-    if (!rifff || !stem) return null
+  >(null)
+  useEffect(() => {
+    let cancelled = false
+    // Reset deferred through a microtask (not called directly) so this
+    // doesn't read as a synchronous setState-in-effect -- same established
+    // workaround as EndlesssLibraryBrowser.tsx's own sync-status effects.
+    void Promise.resolve().then(() => {
+      if (!cancelled) setStemSpectrograms(null)
+    })
+    if (!rifff || !stem) return
     const identityBuf = buffers[stem.slot]
-    if (!identityBuf) return null
+    if (!identityBuf) return
     const secPerBar = stem.durationSec / stem.barLength
     const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
     const results: {
@@ -270,53 +288,62 @@ export function BeatPicker({
       pitchPathD: string
       tileBoundaryPcts: number[]
     }[] = []
-    for (const s of rifff.stems) {
-      const buf = buffers[s.slot]
-      if (!buf) continue
-      const data = buf.getChannelData(0)
-      if (data.length === 0) continue
-      const tileBoundaryPcts: number[] = []
-      for (let boundary = data.length; boundary < totalSamples; boundary += data.length) {
-        tileBoundaryPcts.push((boundary / totalSamples) * 100)
-      }
-      const tiled = new Float32Array(totalSamples)
-      for (let i = 0; i < totalSamples; i++) {
-        tiled[i] = data[i % data.length]
-      }
-      const spectrogram = computeSpectrogram(tiled, buf.sampleRate, {
-        minFreqHz: SPECTROGRAM_MIN_FREQ_HZ,
-        maxFreqHz: SPECTROGRAM_MAX_FREQ_HZ,
-        numFreqBins: SPECTROGRAM_NUM_FREQ_BINS,
-        dynamicRangeDb: SPECTROGRAM_DYNAMIC_RANGE_DB
-      })
+    ;(async () => {
+      for (const s of rifff.stems) {
+        if (cancelled) return
+        const buf = buffers[s.slot]
+        if (buf) {
+          const data = buf.getChannelData(0)
+          if (data.length > 0) {
+            const tileBoundaryPcts: number[] = []
+            for (let boundary = data.length; boundary < totalSamples; boundary += data.length) {
+              tileBoundaryPcts.push((boundary / totalSamples) * 100)
+            }
+            const tiled = new Float32Array(totalSamples)
+            for (let i = 0; i < totalSamples; i++) {
+              tiled[i] = data[i % data.length]
+            }
+            const spectrogram = computeSpectrogram(tiled, buf.sampleRate, {
+              minFreqHz: SPECTROGRAM_MIN_FREQ_HZ,
+              maxFreqHz: SPECTROGRAM_MAX_FREQ_HZ,
+              numFreqBins: SPECTROGRAM_NUM_FREQ_BINS,
+              dynamicRangeDb: SPECTROGRAM_DYNAMIC_RANGE_DB
+            })
 
-      // A melody-contour line drawn on top of the spectrogram — built as a
-      // single SVG path (multiple "M" subpaths at gaps, rather than one
-      // <path>/<circle> per frame) so it stays cheap to render even at a
-      // long rifff's frame count. Unpitched frames (freqHz 0 — see
-      // computePitchContour's own confidence-threshold doc comment) break
-      // the line rather than being interpolated across, since a percussive
-      // gap really isn't "on" any pitch.
-      const pitch = computePitchContour(tiled, buf.sampleRate, { hopSize: PITCH_HOP_SIZE })
-      let pitchPathD = ''
-      let drawing = false
-      for (let t = 0; t < pitch.numFrames; t++) {
-        const f = pitch.freqHz[t]
-        if (f <= 0) {
-          drawing = false
-          continue
+            // A melody-contour line drawn on top of the spectrogram — built as a
+            // single SVG path (multiple "M" subpaths at gaps, rather than one
+            // <path>/<circle> per frame) so it stays cheap to render even at a
+            // long rifff's frame count. Unpitched frames (freqHz 0 — see
+            // computePitchContour's own confidence-threshold doc comment) break
+            // the line rather than being interpolated across, since a percussive
+            // gap really isn't "on" any pitch.
+            const pitch = computePitchContour(tiled, buf.sampleRate, { hopSize: PITCH_HOP_SIZE })
+            let pitchPathD = ''
+            let drawing = false
+            for (let t = 0; t < pitch.numFrames; t++) {
+              const f = pitch.freqHz[t]
+              if (f <= 0) {
+                drawing = false
+                continue
+              }
+              const xPct = ((t * PITCH_HOP_SIZE) / totalSamples) * 100
+              const yPct = freqToTopPct(f)
+              pitchPathD += drawing
+                ? ` L ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
+                : `M ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
+              drawing = true
+            }
+
+            results.push({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts })
+          }
         }
-        const xPct = ((t * PITCH_HOP_SIZE) / totalSamples) * 100
-        const yPct = freqToTopPct(f)
-        pitchPathD += drawing
-          ? ` L ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
-          : `M ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
-        drawing = true
+        await new Promise((resolve) => setTimeout(resolve, 0))
       }
-
-      results.push({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts })
+      if (!cancelled) setStemSpectrograms(results)
+    })()
+    return () => {
+      cancelled = true
     }
-    return results
   }, [rifff, stem, buffers])
 
   // Decoded here (not just getPeaks' 128-bucket summary) since previewing
