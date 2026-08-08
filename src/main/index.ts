@@ -616,9 +616,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('list-riff-favourites', () => listFavouriteRiffCIDs())
 
-  ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) =>
-    toggleFavouriteRiff(riffCID)
-  )
+  ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) => toggleFavouriteRiff(riffCID))
 
   createWindow()
 

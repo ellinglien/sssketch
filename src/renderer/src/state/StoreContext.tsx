@@ -115,6 +115,11 @@ const PluginCatalogActionsCtx = createContext<{
   toggleFavourite: (id: string) => void
 }>({ triggerScan: () => {}, toggleFavourite: () => {} })
 
+const RiffFavouritesCtx = createContext<Set<string>>(new Set())
+const RiffFavouritesActionsCtx = createContext<{
+  toggleRiffFavourite: (riffCID: string) => void
+}>({ toggleRiffFavourite: () => {} })
+
 // The 5 plugins the old hardcoded allowlist (src/shared/masterChainAllowlist.ts,
 // deleted once the scan-based catalog replaced it) used to reference by these
 // exact slugs. A pre-existing project save's masterChain array may still
@@ -217,6 +222,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     void window.rifffApi.getPluginCatalog().then(setPluginCatalog)
   }, [])
 
+  const [riffFavourites, setRiffFavourites] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    void window.rifffApi.listRiffFavourites().then((ids) => setRiffFavourites(new Set(ids)))
+  }, [])
+
   useEffect(() => {
     return window.rifffApi.onScanProgress((progress) => setScanProgress(progress))
   }, [])
@@ -239,6 +250,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     () => ({ triggerScan, toggleFavourite }),
     [triggerScan, toggleFavourite]
   )
+
+  const toggleRiffFavourite = useCallback((riffCID: string) => {
+    void window.rifffApi.toggleRiffFavourite(riffCID).then((ids) => setRiffFavourites(new Set(ids)))
+  }, [])
+
+  const riffFavouritesActions = useMemo(() => ({ toggleRiffFavourite }), [toggleRiffFavourite])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -723,7 +740,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
                         <PluginCatalogCtx.Provider value={pluginCatalog}>
                           <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
                             <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                              {children}
+                              <RiffFavouritesCtx.Provider value={riffFavourites}>
+                                <RiffFavouritesActionsCtx.Provider value={riffFavouritesActions}>
+                                  {children}
+                                </RiffFavouritesActionsCtx.Provider>
+                              </RiffFavouritesCtx.Provider>
                             </PluginCatalogActionsCtx.Provider>
                           </PluginScanStateCtx.Provider>
                         </PluginCatalogCtx.Provider>
@@ -845,4 +866,14 @@ export function usePluginCatalogActions(): {
   toggleFavourite: (id: string) => void
 } {
   return useContext(PluginCatalogActionsCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useRiffFavourites(): Set<string> {
+  return useContext(RiffFavouritesCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useRiffFavouritesActions(): { toggleRiffFavourite: (riffCID: string) => void } {
+  return useContext(RiffFavouritesActionsCtx)
 }
