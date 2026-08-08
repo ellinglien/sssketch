@@ -22,7 +22,8 @@ import {
   saveProjectInPlace,
   openLibrarySketch,
   duplicateSketchAsNewVersion,
-  generateDefaultProjectName
+  generateDefaultProjectName,
+  renameExternalSketchFile
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav, exportStemsToWavs } from './exportMix'
@@ -60,7 +61,8 @@ import {
   listLibrarySketches,
   libraryRootPath,
   setLibraryRootPath,
-  shouldWarnBeforeOverwrite
+  shouldWarnBeforeOverwrite,
+  renameSketch
 } from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -359,6 +361,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('duplicate-sketch', (_event, currentName: string) =>
     duplicateSketchAsNewVersion(currentName)
+  )
+
+  ipcMain.handle('rename-sketch', (_event, oldName: string, newName: string) =>
+    renameSketch(oldName, newName)
+  )
+
+  ipcMain.handle('rename-external-sketch-file', (_event, oldPath: string, newName: string) =>
+    renameExternalSketchFile(oldPath, newName)
   )
 
   ipcMain.handle('list-library-sketches', () => listLibrarySketches())

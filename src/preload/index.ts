@@ -81,6 +81,16 @@ const api = {
     ipcRenderer.invoke('open-library-sketch', name),
   duplicateSketch: (currentName: string): Promise<{ name: string; path: string } | null> =>
     ipcRenderer.invoke('duplicate-sketch', currentName),
+  renameSketch: (
+    oldName: string,
+    newName: string
+  ): Promise<{ ok: true; name: string } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('rename-sketch', oldName, newName),
+  renameExternalSketchFile: (
+    oldPath: string,
+    newName: string
+  ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('rename-external-sketch-file', oldPath, newName),
   listLibrarySketches: (): Promise<{ name: string; mtimeMs: number }[]> =>
     ipcRenderer.invoke('list-library-sketches'),
   getLibraryRoot: (): Promise<string> => ipcRenderer.invoke('get-library-root'),
