@@ -131,7 +131,16 @@ export async function syncSharedFeed(
         ? await downloadMissingStemsFor('shared', summary.riffCID, baseResolved, fetchImpl)
         : null
       if (resolved) {
-        index.riffs[summary.riffCID] = { summary, resolved }
+        // summary.cachedStemCount is always 0 at listing time (listing
+        // never touches disk) -- persisting that stale value here would
+        // permanently show this riff's circle as uncached even once its
+        // stems are genuinely on disk, since the index-fast-path browse
+        // path re-serves this exact summary forever afterward.
+        const syncedSummary = {
+          ...summary,
+          cachedStemCount: resolved.stems.filter((s) => s.path !== null).length
+        }
+        index.riffs[summary.riffCID] = { summary: syncedSummary, resolved }
         index.updatedAt = Date.now()
         saveSyncIndex('shared', userName, index)
       }
@@ -205,7 +214,13 @@ export async function syncJam(
     await runWithConcurrency(newSummaries, SYNC_CONCURRENCY, async (summary) => {
       const resolved = await resolveJamRiff(jamId, summary.riffCID, fetchImpl)
       if (resolved) {
-        index.riffs[summary.riffCID] = { summary, resolved }
+        // See syncSharedFeed's identical fixup for why this can't just
+        // reuse the listing-time summary as-is.
+        const syncedSummary = {
+          ...summary,
+          cachedStemCount: resolved.stems.filter((s) => s.path !== null).length
+        }
+        index.riffs[summary.riffCID] = { summary: syncedSummary, resolved }
         index.updatedAt = Date.now()
         saveSyncIndex('jam', jamId, index)
       }

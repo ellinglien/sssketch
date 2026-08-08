@@ -137,6 +137,11 @@ describe('syncSharedFeed', () => {
     expect(index!.order).toEqual(['riff_1', 'riff_2'])
     expect(index!.complete).toBe(true)
     expect(index!.riffs.riff_1.resolved.stems[0].path).not.toBeNull()
+    // The summary saved into the index must reflect the ACTUAL download
+    // result, not the listing-time summary (which always reports 0 --
+    // listing never touches disk) -- otherwise every synced riff's circle
+    // permanently shows as uncached even once its stems are really on disk.
+    expect(index!.riffs.riff_1.summary.cachedStemCount).toBe(1)
     expect(progressCalls[progressCalls.length - 1]).toEqual({ done: 2, total: 2 })
   })
 
@@ -355,6 +360,8 @@ describe('syncJam', () => {
     expect(index!.order).toEqual(['riff_1'])
     expect(index!.complete).toBe(true)
     expect(index!.riffs.riff_1.resolved.stems[0].path).not.toBeNull()
+    // Same real-download-result requirement as syncSharedFeed's own test.
+    expect(index!.riffs.riff_1.summary.cachedStemCount).toBe(1)
     expect(progressCalls[progressCalls.length - 1]).toEqual({ done: 1, total: 1 })
   })
 
