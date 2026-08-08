@@ -14,8 +14,7 @@ running underneath for playback and plugin hosting.
 
 Two ways to bring stems into a project:
 
-- **Drag and drop** — any rifff export folder (or its loose stem files) onto the shelf at the
-  bottom of the window.
+- **Drag and drop** — any rifff export folder (or its loose stem files) onto the shelf.
 - **Log into Endlesss** — click "import" in the shelf, sign in with your Endlesss account, and
   browse your shared feed or private jams directly. No separate export step needed.
 
