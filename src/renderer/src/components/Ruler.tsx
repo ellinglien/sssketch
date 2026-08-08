@@ -1,6 +1,5 @@
-import { useDispatch, usePlaying } from '../state/StoreContext'
+import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { startPointerDrag } from './dragUtils'
-import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
 import type { LoopRegion } from '../state/store'
 
@@ -19,9 +18,9 @@ export function Ruler({
   loopRegion: LoopRegion
   onSetLoopRegion: (region: LoopRegion) => void
 }): React.JSX.Element {
+  const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
-  const frameScale = useFrameScale()
   const bars = Array.from({ length: barCount }, (_, i) => i + 1)
 
   // Click or drag along the ruler to scrub the playhead — free (unsnapped)
@@ -42,16 +41,10 @@ export function Ruler({
 
   function handleScrubStart(e: React.MouseEvent<HTMLDivElement>): void {
     const rect = e.currentTarget.getBoundingClientRect()
-    // getBoundingClientRect()/clientX/startPointerDrag's deltaX all report
-    // real screen pixels, but ppb is defined in logical, pre-scale pixels --
-    // see FrameScaleContext's own doc comment. Without dividing out
-    // frameScale first, both the initial click and the continued drag
-    // silently drift off target the moment the window isn't at its default
-    // size.
-    const startBar = Math.max(0, toLogicalX(e.clientX - rect.left, frameScale) / ppb)
+    const startBar = Math.max(0, (e.clientX - rect.left) / ppb)
     seekTo(startBar)
     startPointerDrag(e, (deltaX) => {
-      seekTo(startBar + toLogicalX(deltaX, frameScale) / ppb)
+      seekTo(startBar + deltaX / ppb)
     })
   }
 
@@ -59,8 +52,7 @@ export function Ruler({
   // ruler's own background (not on an existing region's edge handles,
   // which have their own onMouseDown below and stop propagation so this
   // handler never also fires underneath them). Mirrors handleScrubStart's
-  // own real-pixel-to-bar conversion exactly, including the frameScale
-  // correction -- see its own comment for why that matters.
+  // own real-pixel-to-bar conversion exactly.
   //
   // Falls back to a plain scrub if the mouse never actually moved (a bare
   // click, not a drag) -- startPointerDrag's onEnd(moved) tells us this.
@@ -81,11 +73,11 @@ export function Ruler({
     // unsnapped positioning above, a loop region drawn to record into
     // should land on the same grid the rest of the arranger uses, not an
     // arbitrary sub-bar float.
-    const startBar = Math.max(0, Math.round(toLogicalX(e.clientX - rect.left, frameScale) / ppb))
+    const startBar = Math.max(0, Math.round((e.clientX - rect.left) / ppb))
     startPointerDrag(
       e,
       (deltaX) => {
-        const dragEndBar = Math.max(0, Math.round(startBar + toLogicalX(deltaX, frameScale) / ppb))
+        const dragEndBar = Math.max(0, Math.round(startBar + deltaX / ppb))
         const lo = Math.min(startBar, dragEndBar)
         const hi = Math.max(startBar, dragEndBar)
         onSetLoopRegion({ startBar: lo, endBar: hi })
@@ -119,10 +111,7 @@ export function Ruler({
     const draggedStartBar = edge === 'start' ? loopRegion.startBar : loopRegion.endBar
     startPointerDrag(e, (deltaX) => {
       // Same whole-bar snap as handleLoopDragStart above.
-      const draggedBar = Math.max(
-        0,
-        Math.round(draggedStartBar + toLogicalX(deltaX, frameScale) / ppb)
-      )
+      const draggedBar = Math.max(0, Math.round(draggedStartBar + deltaX / ppb))
       const lo = Math.min(fixedBar, draggedBar)
       const hi = Math.max(fixedBar, draggedBar)
       onSetLoopRegion({ startBar: lo, endBar: hi })
@@ -203,7 +192,12 @@ export function Ruler({
             straddling each boundary (6px wide, centered on the edge via
             left offset), wide enough to grab without the same "hit target
             too small" problem the fade dots/resize handles had earlier
-            this session. */}
+            this session. Pulses (same ra-rec-pulse keyframe as
+            TransportBar's own rec dot) only while gated recording is
+            enabled AND transport is actually playing -- not just armed --
+            matching TransportBar's own rec dot, since "listening" is only
+            true while the transport is actually moving through the loop
+            region (see GatedLoopRecorder's own gate). */}
         {loopRegion && (
           <div
             style={{
@@ -216,9 +210,19 @@ export function Ruler({
               borderTop: '2px solid var(--ra-recording-live)',
               borderLeft: '2px solid var(--ra-recording-live)',
               borderRight: '2px solid var(--ra-recording-live)',
-              pointerEvents: 'none'
+              pointerEvents: 'none',
+              animation:
+                state.gatedRecordingEnabled && playing
+                  ? 'ra-rec-pulse 1.4s ease-in-out infinite'
+                  : undefined
             }}
           >
+            <style>{`
+              @keyframes ra-rec-pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.25; }
+              }
+            `}</style>
             <div
               onMouseDown={(e) => handleLoopEdgeDragStart(e, 'start')}
               title="drag to move loop start"

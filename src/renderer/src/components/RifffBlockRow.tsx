@@ -8,7 +8,6 @@ import { clipGeometryFromFields } from '../state/selectors'
 import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
-import { useFrameScale } from '../state/FrameScaleContext'
 import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 
 export const NAME_BAR_HEIGHT = 18
@@ -52,7 +51,6 @@ export function RifffBlockRow({
   const expanded = expandedFlag && !isOneShot
   const color = identityColor(rifff)
   const ppb = useZoom()
-  const frameScale = useFrameScale()
   const geo = clipGeometryFromFields({
     startBar: rifff.startBar ?? 0,
     offsetSteps,
@@ -87,7 +85,7 @@ export function RifffBlockRow({
         onDragStart={(e) => {
           suppressNextSyntheticClick()
           e.dataTransfer.setData('text/rifff-group-id', groupId)
-          const mouseBar = mouseBarFromDragEvent(e, ppb, frameScale)
+          const mouseBar = mouseBarFromDragEvent(e, ppb)
           if (mouseBar !== null) {
             setGrabOffsetBars(computeGrabOffsetBars(mouseBar, rifff.startBar ?? 0))
           }

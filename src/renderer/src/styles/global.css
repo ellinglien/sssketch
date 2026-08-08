@@ -102,48 +102,31 @@ textarea {
   font-family: inherit;
 }
 
-/* Fills the real window and anchors .ra-frame's centering point within it.
-   Deliberately NOT flexbox centering -- justify-content/align-items:center
-   on a child whose OWN unscaled layout box is larger than the viewport (at
-   small window sizes, before the transform:scale() below shrinks it
-   visually) is a real, documented Chromium quirk: centering math done
-   against an overflowing flex item doesn't always split the overflow
-   symmetrically, producing exactly the "gap on one axis, not the other"
-   effect this was fixing a report of. position:relative + .ra-frame's own
-   absolute top/left:50% + a translate(-50%,-50%) baked into the same
-   transform as the scale (see App.tsx's Frame component) sidesteps flex
-   layout entirely -- pure percentage-of-container math, immune to that
-   class of overflow-centering bug. overflow:hidden still needed: .ra-frame's
-   unscaled footprint still extends past the viewport at small sizes, and
-   without this that registers as page overflow (scrollbars) even though
-   nothing is actually visually cut off once the transform is applied. */
+/* Fills the real window with a fixed 8px gutter on every side -- the window
+   is now genuinely resizable (see index.ts), and .ra-frame below just fills
+   whatever's left inside that gutter at real, 1:1 pixels. This replaced a
+   fixed 1512x982 "design canvas" scaled via CSS transform to match the
+   window size (App.tsx's old FrameScaleContext) -- that scheme required
+   every click/drag coordinate calculation to divide out the scale factor,
+   and was the root cause of at least three separate misclick bugs before
+   each was traced back to a missing correction. Removing the scale
+   entirely removes that whole bug class outright: real screen pixels ARE
+   logical pixels here, always, with nothing to divide out. Only the
+   arranger's own flex:1 scroll area (Frame component, App.tsx) actually
+   grows/shrinks with the window as a result -- every other row (titlebar,
+   shelf, transport bar, inspector) is sized by its own content, same as
+   any ordinary flex layout. */
 .ra-viewport {
   width: 100%;
   height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
   overflow: hidden;
-  position: relative;
 }
 
 .ra-frame {
-  /* Fixed "design canvas" size -- an 8px gutter inset from the app's
-     default 1512x982 window (see index.ts, the current MacBook Pro's own
-     logical resolution) on every side. App.tsx's Frame component applies a
-     CSS transform:scale() on top of this based on the CURRENT window size,
-     so every fixed-pixel child (panel widths, fonts, buttons) shrinks/grows
-     together in the same proportion rather than reflowing independently.
-     A plain vh-relative height doesn't work here: it would keep tracking
-     the ALREADY-shrunk real viewport on top of the transform's OWN scale
-     factor, shrinking twice. */
-  width: 1496px;
-  height: 966px;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  /* translate(-50%,-50%) (baked into the same inline transform as the JS
-     scale -- see App.tsx) shifts back by exactly half of THIS box's own
-     unscaled width/height, landing its center precisely on the viewport's
-     center regardless of window size -- then scale() shrinks/grows it
-     around that same center point (the default transform-origin). */
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--ra-bg-frame);
