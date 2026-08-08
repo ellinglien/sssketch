@@ -32,6 +32,7 @@ import type { ExportedStem } from '@shared/types'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
+import { listFavouriteRiffCIDs, toggleFavouriteRiff } from './riffFavourites'
 import type { RiffFilters } from '@shared/loreLibrary'
 import {
   warehouseAvailable,
@@ -612,6 +613,12 @@ app.whenReady().then(async () => {
     toggleFavourite(id)
     return loadCatalog()
   })
+
+  ipcMain.handle('list-riff-favourites', () => listFavouriteRiffCIDs())
+
+  ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) =>
+    toggleFavouriteRiff(riffCID)
+  )
 
   createWindow()
 

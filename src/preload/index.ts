@@ -161,6 +161,9 @@ const api = {
   getPluginCatalog: (): Promise<PluginCatalog> => ipcRenderer.invoke('get-plugin-catalog'),
   togglePluginFavourite: (id: string): Promise<PluginCatalog> =>
     ipcRenderer.invoke('toggle-plugin-favourite', id),
+  listRiffFavourites: (): Promise<string[]> => ipcRenderer.invoke('list-riff-favourites'),
+  toggleRiffFavourite: (riffCID: string): Promise<string[]> =>
+    ipcRenderer.invoke('toggle-riff-favourite', riffCID),
   onScanProgress: (callback: (progress: { done: number; total: number }) => void): (() => void) => {
     const listener = (_event: unknown, progress: { done: number; total: number }): void =>
       callback(progress)
