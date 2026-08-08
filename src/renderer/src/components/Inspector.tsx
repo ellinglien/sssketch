@@ -7,6 +7,25 @@ import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar, typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
 import { formatBpm } from '@shared/format'
+import type { Stem } from '@shared/types'
+
+// A short, real summary of what's actually IN this rifff -- "drums, bass"
+// -- rather than its arbitrary, often LORE-auto-generated name ("ivory
+// osprey"), which carries no information about the clip's actual content.
+// Same "most common types first, capped so it stays short" shape as
+// buildAlsXml.ts's own summarizeSoundTypes, kept as a separate small copy
+// here rather than a shared import -- that one runs in the main process
+// against export data, this one's a presentational helper for a single
+// component, and the two have no other reason to be coupled.
+function summarizeStemTypes(stems: Stem[]): string {
+  const counts = new Map<string, number>()
+  for (const s of stems) counts.set(s.type, (counts.get(s.type) ?? 0) + 1)
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([type]) => type)
+    .join(', ')
+}
 
 // A finer, snap-division-independent nudge step: 1ms of real time at this
 // rifff's own bpm, computed with the same formula offsetLabels() itself uses
@@ -49,6 +68,7 @@ export function Inspector({
 
   const rifff = state.rifffs[groupId]
   const color = stemColorVar(rifff.stems[0])
+  const stemTypeSummary = summarizeStemTypes(rifff.stems)
   const stretchOn = state.stretch[groupId] ?? true
   const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
   const ratio = stretchRatio(state, groupId)
@@ -74,35 +94,23 @@ export function Inspector({
     >
       {section(
         <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="ra-eyebrow">inspector</span>
-            {rifff.startBar !== undefined && (
-              <button
-                onClick={() => dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })}
-                title="remove from timeline (Delete)"
-                style={{
-                  height: 20,
-                  borderRadius: 0,
-                  padding: '0 6px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
-                }}
-              >
-                remove from timeline
-              </button>
-            )}
-          </div>
+          {/* The "remove from timeline" button that used to live here was
+              redundant with the Delete key (which already does the exact
+              same REMOVE_FROM_TIMELINE dispatch, see App.tsx's keydown
+              handler) -- removed rather than kept as a second way to do
+              the same thing. */}
+          <span className="ra-eyebrow">inspector</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <PolarGlyph stems={rifff.stems} identityColor={color} size={34} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <EditableText
-                value={rifff.name}
-                onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
-                title="click to rename"
-                style={{ fontSize: 14, fontWeight: 700 }}
-              />
+              {/* Real, non-arbitrary info leads -- what's actually IN this
+                  clip, not its (often LORE-auto-generated, meaningless)
+                  name. The name is still right here and still editable,
+                  just visually secondary now -- see EditableText below. */}
+              <div style={{ fontSize: 11, fontWeight: 700 }}>
+                {rifff.stems.length} stem{rifff.stems.length === 1 ? '' : 's'}
+                {stemTypeSummary && ` — ${stemTypeSummary}`}
+              </div>
               {/* Only ever populated for LORE-sourced riffs (see Rifff.key's
                   own doc comment) -- absent for one-shots, recordings,
                   folder drag-and-drops, anything without that provenance. */}
@@ -111,6 +119,12 @@ export function Inspector({
                   {rifff.key}
                 </div>
               )}
+              <EditableText
+                value={rifff.name}
+                onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
+                title="click to rename"
+                style={{ fontSize: 10, fontWeight: 400, color: 'var(--ra-text-3)', marginTop: 2 }}
+              />
             </div>
           </div>
           <div
@@ -154,9 +168,9 @@ export function Inspector({
               }}
             >
               <div>
-                <span style={{ fontSize: 19, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
-                <span style={{ margin: '0 6px' }}>→</span>
-                <span style={{ fontSize: 19, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
+                <span style={{ fontSize: 11, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
+                <span style={{ margin: '0 6px', fontSize: 11 }}>→</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
               </div>
               <button
                 onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}
@@ -191,99 +205,104 @@ export function Inspector({
               1ms/step
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-            <button
-              onClick={() =>
-                dispatch({
-                  type: 'NUDGE_OFFSET',
-                  key: groupOffsetKey,
-                  delta: -fineNudgeDelta(state.bpm, snapDiv)
-                })
-              }
-              style={{
-                width: 26,
-                height: 24,
-                borderRadius: 0,
-                border: '1px solid var(--ra-border-strong)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
-              }}
-            >
-              −
-            </button>
-            <div style={{ flex: 1, textAlign: 'center', fontSize: 9, color: 'var(--ra-text-4)' }}>
-              1ms steps
-            </div>
-            <button
-              onClick={() =>
-                dispatch({
-                  type: 'NUDGE_OFFSET',
-                  key: groupOffsetKey,
-                  delta: fineNudgeDelta(state.bpm, snapDiv)
-                })
-              }
-              style={{
-                width: 26,
-                height: 24,
-                borderRadius: 0,
-                border: '1px solid var(--ra-border-strong)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
-              }}
-            >
-              +
-            </button>
-          </div>
+          {/* No repeated "1ms steps" caption here -- the header row right
+              above already says "1ms/step" once; stating it a second time
+              between the buttons was pure redundancy, not information. */}
           <div
             style={{
               display: 'flex',
-              alignItems: 'baseline',
+              alignItems: 'center',
               justifyContent: 'space-between',
               marginTop: 8
             }}
           >
-            <div>
-              <span
-                style={{
-                  fontSize: 16,
-                  fontWeight: 700,
-                  color: groupOffsetSteps ? color : 'var(--ra-text-2)'
-                }}
-              >
-                {labels.ms}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <button
-                onClick={() => onOpenBeatPicker(groupId)}
-                title="downbeat correction is normally handled once, right at import — reopen this only if it drifted or needs redoing"
+                onClick={() =>
+                  dispatch({
+                    type: 'NUDGE_OFFSET',
+                    key: groupOffsetKey,
+                    delta: -fineNudgeDelta(state.bpm, snapDiv)
+                  })
+                }
                 style={{
-                  height: 20,
+                  width: 26,
+                  height: 24,
                   borderRadius: 0,
-                  padding: '0 6px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
+                  border: '1px solid var(--ra-border-strong)',
                   background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
+                  color: 'var(--ra-text)'
                 }}
               >
-                re-pick beat
+                −
               </button>
               <button
-                onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
+                onClick={() =>
+                  dispatch({
+                    type: 'NUDGE_OFFSET',
+                    key: groupOffsetKey,
+                    delta: fineNudgeDelta(state.bpm, snapDiv)
+                  })
+                }
                 style={{
-                  height: 20,
+                  width: 26,
+                  height: 24,
                   borderRadius: 0,
-                  padding: '0 6px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
+                  border: '1px solid var(--ra-border-strong)',
                   background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
+                  color: 'var(--ra-text)'
                 }}
               >
-                zero
+                +
               </button>
             </div>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: groupOffsetSteps ? color : 'var(--ra-text-2)'
+              }}
+            >
+              {labels.ms}
+            </span>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 6,
+              marginTop: 8
+            }}
+          >
+            <button
+              onClick={() => onOpenBeatPicker(groupId)}
+              title="loop start is normally picked once, right at import — reopen this only if it drifted or needs redoing"
+              style={{
+                height: 20,
+                borderRadius: 0,
+                padding: '0 6px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              pick loop start
+            </button>
+            <button
+              onClick={() => dispatch({ type: 'ZERO_OFFSET', key: groupOffsetKey })}
+              style={{
+                height: 20,
+                borderRadius: 0,
+                padding: '0 6px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              zero
+            </button>
           </div>
         </>
       )}

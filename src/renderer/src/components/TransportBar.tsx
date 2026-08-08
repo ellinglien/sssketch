@@ -89,22 +89,6 @@ function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX
   )
 }
 
-// Same hand-drawn-glyph convention as MetronomeIcon above -- a circle plus
-// 8 radial ticks reads as a gear/settings symbol without pulling in an icon
-// library or using the (font-dependent, arguably-an-emoji) ⚙ character.
-function GearIcon(): React.JSX.Element {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor">
-      <circle cx="8" cy="8" r="3.2" strokeWidth="1.3" />
-      <path
-        d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 export function TransportBar({
   onOpenClusterStems,
   onEnableGatedRecording,
@@ -522,6 +506,22 @@ export function TransportBar({
       {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
       <button
+        onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
+        title="add another recording channel (/)"
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border)',
+          color: 'var(--ra-text-2)'
+        }}
+      >
+        + rec channel
+      </button>
+
+      <button
         onClick={(e) => {
           // Toggles closed if already open, rather than always re-opening/
           // repositioning -- without this, clicking the same trigger
@@ -543,17 +543,15 @@ export function TransportBar({
         title="tidy up / tidy view"
         style={{
           height: 22,
-          width: 22,
           borderRadius: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          padding: '0 8px',
+          fontSize: 10,
           background: state.tidiedView ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
           border: `1px solid ${state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
           color: state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        <GearIcon />
+        tidy
       </button>
       {gearMenu && (
         <ContextMenu
@@ -570,22 +568,6 @@ export function TransportBar({
         />
       )}
 
-      <button
-        onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
-        title="add another recording channel (/)"
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 10,
-          color: 'var(--ra-text)',
-          background: 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-border-strong)',
-          padding: '5px 10px',
-          cursor: 'pointer',
-          textTransform: 'lowercase'
-        }}
-      >
-        + rec channel
-      </button>
       <select
         value={selectedInputDevice ?? ''}
         disabled={isAnyChannelArmed}

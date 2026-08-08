@@ -20,10 +20,15 @@ const TILE_SIZE = 42
 
 export function Shelf({
   onImported,
-  onOpenLoreLibrary
+  onOpenLibrary
 }: {
   onImported: (groupId: string) => void
-  onOpenLoreLibrary: () => void
+  /** Opens whichever library browser is the default entry point -- the
+   * Endlesss login tab, not LORE, per direct feedback (LORE's warehouse
+   * path only ever resolves on one specific machine; Endlesss login works
+   * for anyone). LORE stays reachable via that browser's own "switch to
+   * lore" link. */
+  onOpenLibrary: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -144,25 +149,11 @@ export function Shelf({
     })
   }
 
-  async function handleDrop(e: DragEvent<HTMLDivElement>): Promise<void> {
-    e.preventDefault()
-    setDragOver(false)
-    // Electron no longer augments dropped File objects with a real `.path` (removed
-    // as of Electron 32+); resolve each one's filesystem path via the preload bridge.
-    const paths = Array.from(e.dataTransfer.files).map((f) => window.rifffApi.getPathForFile(f))
-    if (paths.length === 0) {
-      // Diagnostic only, not a fix: some source apps (e.g. Endlesss) may not put
-      // real OS file entries on the drag at all, in which case dataTransfer.files
-      // is empty and there's nothing we can import. Logging what the drag actually
-      // carried makes that distinguishable from "we dropped it wrong" next time.
-      console.warn(
-        'Shelf: drop had no usable files. dataTransfer.types:',
-        e.dataTransfer.types,
-        'items:',
-        Array.from(e.dataTransfer.items).map((i) => ({ kind: i.kind, type: i.type }))
-      )
-      return
-    }
+  // Shared by both import entry points below (drag-drop and the "+" tile's
+  // own file-dialog click) -- everything past "we have some paths" is
+  // identical either way.
+  async function importFromPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return
     try {
       const rifff = await window.rifffApi.importRifff(paths)
       if (rifff) {
@@ -188,6 +179,32 @@ export function Shelf({
     }
   }
 
+  async function handleDrop(e: DragEvent<HTMLDivElement>): Promise<void> {
+    e.preventDefault()
+    setDragOver(false)
+    // Electron no longer augments dropped File objects with a real `.path` (removed
+    // as of Electron 32+); resolve each one's filesystem path via the preload bridge.
+    const paths = Array.from(e.dataTransfer.files).map((f) => window.rifffApi.getPathForFile(f))
+    if (paths.length === 0) {
+      // Diagnostic only, not a fix: some source apps (e.g. Endlesss) may not put
+      // real OS file entries on the drag at all, in which case dataTransfer.files
+      // is empty and there's nothing we can import. Logging what the drag actually
+      // carried makes that distinguishable from "we dropped it wrong" next time.
+      console.warn(
+        'Shelf: drop had no usable files. dataTransfer.types:',
+        e.dataTransfer.types,
+        'items:',
+        Array.from(e.dataTransfer.items).map((i) => ({ kind: i.kind, type: i.type }))
+      )
+      return
+    }
+    await importFromPaths(paths)
+  }
+
+  async function handlePickImport(): Promise<void> {
+    await importFromPaths(await window.rifffApi.pickRifffImportPaths())
+  }
+
   const detailRifff = state.rifffs[hoverId ?? state.sel ?? ''] ?? null
 
   return (
@@ -211,20 +228,6 @@ export function Shelf({
             · {detailRifff.barLength} bars
           </span>
         )}
-        <button
-          onClick={onOpenLoreLibrary}
-          style={{
-            height: 18,
-            borderRadius: 0,
-            padding: '0 6px',
-            fontSize: 9,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text-2)'
-          }}
-        >
-          browse lore library
-        </button>
       </div>
       <div
         onMouseLeave={() => setHoverId(null)}
@@ -321,7 +324,9 @@ export function Shelf({
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
-          title="drop rifff folders, or stems straight from endlesss"
+          onClick={() => void handlePickImport()}
+          role="button"
+          title="drop rifff folders or stems straight from endlesss, or click to pick from disk"
           style={{
             flex: 1,
             minWidth: 150,
@@ -331,11 +336,26 @@ export function Shelf({
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: 15,
-            color: 'var(--ra-text-4)'
+            color: 'var(--ra-text-4)',
+            cursor: 'pointer'
           }}
         >
           +
         </div>
+        <button
+          onClick={onOpenLibrary}
+          style={{
+            height: 18,
+            borderRadius: 0,
+            padding: '0 6px',
+            fontSize: 9,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          import
+        </button>
       </div>
     </div>
   )

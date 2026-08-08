@@ -1499,7 +1499,7 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
-        <Shelf onImported={handleImported} onOpenLoreLibrary={() => setLoreLibraryOpen(true)} />
+        <Shelf onImported={handleImported} onOpenLibrary={() => setEndlesssLibraryOpen(true)} />
         <TransportBar
           onOpenClusterStems={() => setClusterStemsOpen(true)}
           onEnableGatedRecording={() => void enableGatedRecording()}
