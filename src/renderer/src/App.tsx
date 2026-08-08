@@ -781,6 +781,38 @@ function Frame(): React.JSX.Element {
   // state) since nothing needs to re-render off it; it's read once, at
   // click time.
   const lastSavedJsonRef = useRef<string | null>(null)
+  const [renameError, setRenameError] = useState<string | null>(null)
+
+  async function handleRename(newName: string): Promise<void> {
+    setRenameError(null)
+    if (currentSketch === null) {
+      try {
+        const json = serializeProject(state)
+        await window.rifffApi.saveProjectToLibrary(newName, json)
+        setCurrentSketch({ kind: 'library', name: newName })
+        lastSavedJsonRef.current = json
+      } catch (err) {
+        console.error('Frame: failed to save project under new name:', err)
+        setRenameError(err instanceof Error ? err.message : String(err))
+      }
+      return
+    }
+    if (currentSketch.kind === 'library') {
+      const result = await window.rifffApi.renameSketch(currentSketch.name, newName)
+      if (!result.ok) {
+        setRenameError(result.reason)
+        return
+      }
+      setCurrentSketch({ kind: 'library', name: newName })
+      return
+    }
+    const result = await window.rifffApi.renameExternalSketchFile(currentSketch.path, newName)
+    if (!result.ok) {
+      setRenameError(result.reason)
+      return
+    }
+    setCurrentSketch({ kind: 'external', path: result.path })
+  }
   // Guards the startup effect below against StrictMode's dev-only
   // double-invoke: without this, both invocations independently call
   // loadAutosave() before either gets to clearAutosave(), so a real
@@ -1453,6 +1485,8 @@ function Frame(): React.JSX.Element {
               onCycleMode={() =>
                 dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
               }
+              onRename={(newName) => void handleRename(newName)}
+              renameError={renameError}
             />
           </div>
           <div style={{ paddingRight: 14 }}>
