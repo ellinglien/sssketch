@@ -1,15 +1,19 @@
 // src/main/projectLibrary.test.ts
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 let userDataDir: string
 let musicDir: string
+let trashItemMock: Mock
 
 vi.mock('electron', () => ({
   app: {
     getPath: (name: string) => (name === 'music' ? musicDir : userDataDir)
+  },
+  shell: {
+    trashItem: (path: string) => trashItemMock(path)
   }
 }))
 
@@ -17,6 +21,7 @@ describe('projectLibrary', () => {
   beforeEach(() => {
     userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-userdata-test-'))
     musicDir = mkdtempSync(join(tmpdir(), 'sssketch-music-test-'))
+    trashItemMock = vi.fn(async () => {})
   })
 
   afterEach(() => {
@@ -238,6 +243,33 @@ describe('projectLibrary', () => {
       const result = renameSketch('old-name', 'taken-name')
       expect(result.ok).toBe(false)
       expect(existsSync(sketchDir('old-name'))).toBe(true)
+    })
+  })
+
+  describe('deleteSketch', () => {
+    it('returns ok:false when the sketch does not exist', async () => {
+      const { deleteSketch } = await import('./projectLibrary')
+      const result = await deleteSketch('does-not-exist')
+      expect(result).toEqual({ ok: false, reason: 'no sketch named "does-not-exist"' })
+      expect(trashItemMock).not.toHaveBeenCalled()
+    })
+
+    it('moves the sketch directory to the trash and returns ok:true', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { deleteSketch, sketchDir } = await import('./projectLibrary')
+      saveProjectToLibrary('to-delete', '{"rifffs":{}}')
+      const result = await deleteSketch('to-delete')
+      expect(result).toEqual({ ok: true })
+      expect(trashItemMock).toHaveBeenCalledWith(sketchDir('to-delete'))
+    })
+
+    it('returns ok:false with the error reason when trashItem fails', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { deleteSketch } = await import('./projectLibrary')
+      saveProjectToLibrary('to-delete-2', '{"rifffs":{}}')
+      trashItemMock.mockRejectedValueOnce(new Error('permission denied'))
+      const result = await deleteSketch('to-delete-2')
+      expect(result).toEqual({ ok: false, reason: 'permission denied' })
     })
   })
 })

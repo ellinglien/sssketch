@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createHash } from 'node:crypto'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 
 const LIBRARY_PREFS_FILENAME = 'libraryPrefs.json'
 
@@ -237,4 +237,25 @@ export function renameSketch(
     renameSync(oldAlsPath, join(sketchAbletonDir(newName), `${newName}.als`))
   }
   return { ok: true, name: newName }
+}
+
+/**
+ * Deletes a library sketch by moving its whole directory to the OS trash
+ * (shell.trashItem) rather than permanently removing it -- recoverable if
+ * the wrong one gets deleted, and the user can still empty their own trash
+ * whenever they actually want the space back.
+ */
+export async function deleteSketch(
+  name: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!existsSync(sketchDir(name))) {
+    return { ok: false, reason: `no sketch named "${name}"` }
+  }
+  try {
+    await shell.trashItem(sketchDir(name))
+    return { ok: true }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, reason: message }
+  }
 }
