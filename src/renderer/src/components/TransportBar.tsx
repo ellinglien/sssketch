@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
-import { SNAP_DIVS } from '../state/store'
 import { loopLengthBars } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
@@ -452,22 +451,6 @@ export function TransportBar({
         }}
       >
         link{linkStatus.enabled && linkStatus.numPeers > 0 ? ` · ${linkStatus.numPeers}` : ''}
-      </button>
-
-      <button
-        onClick={() => dispatch({ type: 'CYCLE_SNAP' })}
-        aria-label="Cycle snap grid"
-        style={{
-          height: 22,
-          borderRadius: 0,
-          border: '1px solid var(--ra-border)',
-          background: 'var(--ra-bg-row-active)',
-          color: 'var(--ra-text-2)',
-          fontSize: 10,
-          padding: '0 8px'
-        }}
-      >
-        snap 1/{SNAP_DIVS[state.snapIdx]}
       </button>
 
       <button
