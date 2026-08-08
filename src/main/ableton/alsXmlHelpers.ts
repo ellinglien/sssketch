@@ -57,6 +57,17 @@ export function setAttr(node: AlsNode, name: string, value: string): void {
   else node[':@'] = { [name]: value }
 }
 
+/** Sets a track/group/clip's `<Color Value="N" />` child to one of Ableton's
+ * own fixed palette indices (0-69ish) -- the same self-closing
+ * `<Tag Value="..." />` shape as CurrentStart/IsWarped/etc, so this is just
+ * setAttr on the Color child, named separately since "which node has a
+ * Color child" is a distinct enough concept from an arbitrary attribute set
+ * to be worth its own name at call sites (see buildAlsXml.ts's bus-color
+ * coding). */
+export function setColor(nodeBody: AlsNode[], colorIndex: number): void {
+  setAttr(findChild(nodeBody, 'Color')!, '@_Value', String(colorIndex))
+}
+
 /** Deep-clones a node subtree -- used to duplicate the template's canonical
  * AudioTrack/GroupTrack once per stem/channel. structuredClone is safe here
  * because every value in this document shape (strings, plain objects,

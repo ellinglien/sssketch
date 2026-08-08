@@ -160,8 +160,14 @@ describe('buildAlsXml', () => {
     const groupEffName = findChild(childArray(groupName, 'Name'), 'EffectiveName')!
     // Grouping is now by bus, not by channel -- with no busOf entry for
     // this stem, it falls back to 'aux' (see the 'bus clustering' describe
-    // block below for dedicated bus-naming/grouping coverage).
-    expect(attrs(groupEffName)['@_Value']).toBe('aux')
+    // block below for dedicated bus-naming/grouping coverage). The group's
+    // own name also carries a sound-type summary -- "AUX — DRUMS" here,
+    // since drumsRifff()'s stem is type 'drums' -- a genuinely useful
+    // signal that a drums-typed stem ended up unassigned in the fallback
+    // bus, not just the bare bus id (see the 'bus clustering' > 'names
+    // groups...' tests below for dedicated coverage of this summary).
+    // Upper-cased -- purely decorative, see busGroupName's own doc comment.
+    expect(attrs(groupEffName)['@_Value']).toBe('AUX — DRUMS')
   })
 
   it('links the stem track to its group via TrackGroupId', () => {
@@ -836,7 +842,8 @@ describe('buildAlsXml', () => {
       })
       // Fixed bus order (drums, bass, lead, backing, aux), only non-empty
       // buses emitted -- 'drums' before 'bass' regardless of input order.
-      expect(groupNames).toEqual(['drums', 'bass'])
+      // Upper-cased -- purely decorative, see busGroupName's own doc comment.
+      expect(groupNames).toEqual(['DRUMS', 'BASS'])
       expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(2)
     })
 
@@ -853,8 +860,13 @@ describe('buildAlsXml', () => {
       const { tracks } = tracksOf(xml)
       const groupTrack = findChild(tracks, 'GroupTrack')!
       const nameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
+      // "AUX — DRUMS", not bare "aux" -- drumsRifff()'s stem is type
+      // 'drums', and the group name summarizes what's actually in it (see
+      // the dedicated 'names groups with a sound-type summary' tests
+      // below), which is genuinely useful signal for an unassigned stem
+      // that landed in the fallback bus. Upper-cased, see busGroupName.
       expect(attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']).toBe(
-        'aux'
+        'AUX — DRUMS'
       )
     })
 
@@ -947,6 +959,155 @@ describe('buildAlsXml', () => {
       const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
       const { tracks } = tracksOf(xml)
       expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(2)
+    })
+
+    it('names a group with a sound-type summary when it differs from the bare bus id', () => {
+      // drumsRifff()'s one stem is type 'drums', assigned here to the
+      // 'lead' bus (a real, plausible outcome of manual/clustered bus
+      // assignment) -- the group name should say so, not just "lead".
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        busOf: { 'rifff-1:0': 'lead' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const groupTrack = findChild(tracks, 'GroupTrack')!
+      const nameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
+      // Upper-cased -- purely decorative, see busGroupName's own doc comment.
+      expect(attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']).toBe(
+        'LEAD — DRUMS'
+      )
+    })
+
+    it('colors the group, its track, and its clip all the same, per the assigned bus', () => {
+      // Colors are Ableton's own fixed palette indices -- bass=65 here is
+      // extracted directly from a real project the user hand-recolored in
+      // Ableton itself (see ABLETON_BUS_COLORS's own doc comment), not an
+      // arbitrary test value.
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        busOf: { 'rifff-1:0': 'bass' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+
+      const groupTrack = findChild(tracks, 'GroupTrack')!
+      expect(attrs(findChild(childArray(groupTrack, 'GroupTrack'), 'Color')!)['@_Value']).toBe('65')
+
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const audioTrackBody = childArray(audioTrack, 'AudioTrack')
+      expect(attrs(findChild(audioTrackBody, 'Color')!)['@_Value']).toBe('65')
+
+      const clip = findAudioClip(audioTrack)
+      expect(attrs(findChild(childArray(clip, 'AudioClip'), 'Color')!)['@_Value']).toBe('65')
+    })
+
+    it('colors different buses differently', () => {
+      const state = emptyAppState({
+        rifffs: {
+          'rifff-a': { ...drumsRifff(), groupId: 'rifff-a' },
+          'rifff-b': { ...drumsRifff(), groupId: 'rifff-b' }
+        },
+        channelOrder: ['rifff-a', 'rifff-b'],
+        channelOf: { 'rifff-a': 'rifff-a', 'rifff-b': 'rifff-b' },
+        busOf: { 'rifff-a:0': 'drums', 'rifff-b:0': 'lead' }
+      })
+      const stemFileNames = new Map([
+        ['rifff-a:0', 'a-kick.wav'],
+        ['rifff-b:0', 'b-kick.wav']
+      ])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+
+      const groupColors = findAllChildren(tracks, 'GroupTrack').map(
+        (g) => attrs(findChild(childArray(g, 'GroupTrack'), 'Color')!)['@_Value']
+      )
+      expect(new Set(groupColors)).toEqual(new Set(['0', '53'])) // drums, lead
+    })
+
+    it('sets UserName, not just EffectiveName, on both the group and its track', () => {
+      // Real bug, confirmed via a real Ableton project: EffectiveName alone
+      // is a computed/cached value Ableton silently recalculates (back to
+      // its own defaults, e.g. "1-Group" or the raw sample filename) the
+      // FIRST time the user saves inside Ableton itself -- only UserName
+      // actually persists through a save. A name set on EffectiveName but
+      // left with an empty UserName reads correctly in the freshly
+      // exported file, then gets discarded the moment Ableton saves it.
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        busOf: { 'rifff-1:0': 'drums' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+
+      const groupTrack = findChild(tracks, 'GroupTrack')!
+      const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
+      const groupNameBody = childArray(groupNameNode, 'Name')
+      const groupEffName = attrs(findChild(groupNameBody, 'EffectiveName')!)['@_Value']
+      const groupUserName = attrs(findChild(groupNameBody, 'UserName')!)['@_Value']
+      expect(groupUserName).toBe(groupEffName)
+      expect(groupUserName).not.toBe('')
+
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const trackNameNode = findChild(childArray(audioTrack, 'AudioTrack'), 'Name')!
+      const trackNameBody = childArray(trackNameNode, 'Name')
+      const trackEffName = attrs(findChild(trackNameBody, 'EffectiveName')!)['@_Value']
+      const trackUserName = attrs(findChild(trackNameBody, 'UserName')!)['@_Value']
+      expect(trackUserName).toBe(trackEffName)
+      expect(trackUserName).not.toBe('')
+    })
+
+    it('gives two separately-packed shared tracks under the same bus DISTINCT names, even with identical composition', () => {
+      // Two pairs of same-type ('drums'), same-bus stems -- within each
+      // pair the two stems don't overlap (so they pack onto one shared
+      // track together), but the pairs overlap EACH OTHER at both ends, so
+      // packIntoTracks must open two separate physical tracks. Both tracks
+      // end up with the exact same composition (2 'drums'-typed stems),
+      // which previously would have produced the IDENTICAL literal name
+      // "drums (shared)" on both -- indistinguishable in Ableton's own
+      // track list. The second one must now get a disambiguating suffix.
+      const a1: Rifff = { ...drumsRifff(), groupId: 'a1', startBar: 0 }
+      const a2: Rifff = { ...drumsRifff(), groupId: 'a2', startBar: 20 }
+      const b1: Rifff = { ...drumsRifff(), groupId: 'b1', startBar: 0 } // overlaps a1
+      const b2: Rifff = { ...drumsRifff(), groupId: 'b2', startBar: 20 } // overlaps a2
+      const state = emptyAppState({
+        rifffs: { a1, a2, b1, b2 },
+        channelOrder: ['a1', 'a2', 'b1', 'b2'],
+        channelOf: { a1: 'a1', a2: 'a2', b1: 'b1', b2: 'b2' },
+        busOf: { 'a1:0': 'drums', 'a2:0': 'drums', 'b1:0': 'drums', 'b2:0': 'drums' }
+      })
+      const stemFileNames = new Map([
+        ['a1:0', 'a1.wav'],
+        ['a2:0', 'a2.wav'],
+        ['b1:0', 'b1.wav'],
+        ['b2:0', 'b2.wav']
+      ])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTracks = findAllChildren(tracks, 'AudioTrack')
+      expect(audioTracks).toHaveLength(2) // two physical tracks, as expected
+
+      const names = audioTracks.map((t) => {
+        const nameNode = findChild(childArray(t, 'AudioTrack'), 'Name')!
+        return attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']
+      })
+      expect(names).toEqual(['drums (shared: drums)', 'drums (shared: drums) 2'])
+      // Genuinely distinct, not a coincidence of the test data.
+      expect(names[0]).not.toBe(names[1])
     })
   })
 })

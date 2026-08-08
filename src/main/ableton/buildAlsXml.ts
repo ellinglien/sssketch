@@ -1,7 +1,7 @@
 // src/main/ableton/buildAlsXml.ts
 import { join } from 'node:path'
 import type { AppState } from '../../renderer/src/state/store'
-import type { BusId, Rifff, Stem } from '@shared/types'
+import type { BusId, Rifff, Stem, SoundType } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { parseKeyToAbletonScale } from './scaleMapping'
 import { packIntoTracks } from '@shared/packIntoTracks'
@@ -12,6 +12,7 @@ import {
   childArray,
   attrs,
   setAttr,
+  setColor,
   cloneNode,
   renumberIds,
   type AlsNode
@@ -26,6 +27,30 @@ import {
 // risk).
 const WARP_MODE_BEATS = 0
 const WARP_MODE_COMPLEX_PRO = 5
+
+// Ableton's own fixed palette index (0-69ish) per bus, applied to every
+// group/track/clip that bus produces -- per direct feedback ("can we color
+// code the groups and clips"). bass/lead/backing are NOT guesses: extracted
+// directly from a real project the user hand-recolored in Ableton itself as
+// a reference (2026-08-05-plush-nectar3234 project) -- bass's group, track,
+// and every clip all used 65; backing's used 67 uniformly the same way;
+// lead's group+track used 53 (its own clips separately used 38, but this
+// export keeps ONE color per bus end to end, matching the bass/backing
+// majority pattern, rather than introducing a second "clip vs track" tier
+// only lead had). drums/aux have no reference in that project (it didn't
+// use either bus) -- picked as reasonably-distinct, unverified guesses
+// (0=a warm reddish tone, common "drums" convention in most DAWs; 16=a
+// cooler neutral tone for the catch-all aux bus), same "best-effort,
+// adjust by hand afterward" caveat this file's own WARP_MODE_BEATS/
+// WARP_MODE_COMPLEX_PRO constants already carry for a similarly
+// unverifiable Ableton enum.
+const ABLETON_BUS_COLORS: Record<BusId, number> = {
+  drums: 0,
+  bass: 65,
+  lead: 53,
+  backing: 67,
+  aux: 16
+}
 
 // Mirrors src/renderer/src/state/selectors.ts's resolvePlayedBars
 // (re-implemented here rather than imported wholesale, matching
@@ -275,6 +300,13 @@ function findCanonicalClip(canonicalAudioTrack: AlsNode): AlsNode {
 interface StemClipsResult {
   clips: AlsNode[]
   trackName: string
+  /** This stem's own SoundType (drums/notes/bass/etc, see @shared/types) --
+   * carried alongside the clip geometry purely so the bus/shared-track
+   * naming below (busGroupName/uniqueSharedTrackName) can summarize what's
+   * actually IN a bus, instead of just repeating the bare bus id on every
+   * group and an indistinguishable "<bus> (shared)" on every packed
+   * track. */
+  soundType: SoundType
   /** This stem's own OVERALL span, pre-mute-region-trimming (the clip's
    * full un-split extent, not the narrower bounds of its actual audible
    * segments) -- used as ONE indivisible packable unit by packIntoTracks.
@@ -309,7 +341,8 @@ function buildStemClips(
   leftCropBars: number,
   playedBars: number,
   projectBpm: number,
-  muteRegions: AppState['muteRegions']
+  muteRegions: AppState['muteRegions'],
+  colorIndex: number
 ): StemClipsResult {
   const trackName = `${rifff.name} - ${stem.name}`
   const nativeBpm = nativeBpmFor(stem)
@@ -377,6 +410,7 @@ function buildStemClips(
     setAttr(findChild(fileRefBody, 'RelativePath')!, '@_Value', relativePath)
 
     setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
+    setColor(clipBody, colorIndex)
 
     // Only write custom warp markers when the clip is actually warped -- for
     // a one-shot (isWarped=false), nativeBpm is meaningless (see
@@ -398,7 +432,33 @@ function buildStemClips(
     return segClip
   })
 
-  return { clips, trackName, startBeats: clipStartBeats, endBeats: clipEndBeats }
+  return {
+    clips,
+    trackName,
+    soundType: stem.type,
+    startBeats: clipStartBeats,
+    endBeats: clipEndBeats
+  }
+}
+
+/**
+ * Sets a track/group's display name -- on BOTH EffectiveName and UserName,
+ * not just EffectiveName alone. Confirmed the hard way (a real report, not
+ * a guess): EffectiveName is a computed/cached value Ableton freely
+ * recalculates from other data (the underlying sample's filename, or its
+ * own auto-numbering scheme) the moment it does its own internal
+ * normalize/save pass -- an exported name set only on EffectiveName reads
+ * correctly in the freshly-exported file, but gets silently discarded and
+ * replaced with Ableton's own defaults the moment the user saves inside
+ * Ableton itself. UserName is the actual persistent override -- confirmed
+ * by the ONE group a user manually renamed via Ableton's own UI (which
+ * sets both fields) surviving a save intact, while every group/track this
+ * export only set EffectiveName on did not.
+ */
+function setTrackName(nameNode: AlsNode, name: string): void {
+  const nameBody = childArray(nameNode, 'Name')
+  setAttr(findChild(nameBody, 'EffectiveName')!, '@_Value', name)
+  setAttr(findChild(nameBody, 'UserName')!, '@_Value', name)
 }
 
 /**
@@ -415,7 +475,8 @@ function buildSharedAudioTrack(
   nextId: () => number,
   groupTrackId: string,
   trackName: string,
-  clips: AlsNode[]
+  clips: AlsNode[],
+  colorIndex: number
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
@@ -423,8 +484,8 @@ function buildSharedAudioTrack(
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
-  const nameNode = findChild(trackBody, 'Name')!
-  setAttr(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!, '@_Value', trackName)
+  setTrackName(findChild(trackBody, 'Name')!, trackName)
+  setColor(trackBody, colorIndex)
 
   const deviceChain = findChild(trackBody, 'DeviceChain')!
   const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
@@ -434,6 +495,66 @@ function buildSharedAudioTrack(
   events['Events'] = clips
 
   return track
+}
+
+/** 'extInst' -> 'ext inst', 'audioIn' -> 'audio in' -- this app's own design
+ * system calls for lowercase UI copy everywhere (see CLAUDE.md); SoundType's
+ * own values are camelCase identifiers, not display text, so track names
+ * built from them need this conversion rather than using them raw. */
+function humanizeSoundType(type: SoundType): string {
+  return type.replace(/([A-Z])/g, ' $1').toLowerCase()
+}
+
+/** The most common sound type(s) among a set of stems, as a short
+ * human-readable summary -- e.g. "drums, notes" -- used to make bus/shared-
+ * track names actually say something about what's IN them (see
+ * busGroupName/uniqueSharedTrackName below), instead of just the bare bus
+ * id repeated on every group and an indistinguishable "<bus> (shared)" on
+ * every packed track. Capped at the top 3 types so a highly mixed bus
+ * doesn't produce an unreadably long name. */
+function summarizeSoundTypes(types: SoundType[]): string {
+  const counts = new Map<SoundType, number>()
+  for (const type of types) counts.set(type, (counts.get(type) ?? 0) + 1)
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  return sorted
+    .slice(0, 3)
+    .map(([type]) => humanizeSoundType(type))
+    .join(', ')
+}
+
+/** A bus's own GroupTrack name -- the bare bus id, plus a sound-type
+ * summary UNLESS that summary would just repeat the bus id back verbatim
+ * (e.g. a 'drums' bus made up entirely of 'drums'-typed stems gains nothing
+ * from "drums — drums"). Upper-cased -- purely decorative, so the 5 fixed
+ * bus groups stand out at a glance against the individual (lowercase)
+ * track names inside them; this is Ableton-side export flavor, not this
+ * app's own UI copy, so it doesn't conflict with sssketch's own
+ * lowercase-everywhere design system convention. */
+function busGroupName(busId: BusId, entries: StemClipsResult[]): string {
+  const summary = summarizeSoundTypes(entries.map((e) => e.soundType))
+  const name = summary === busId ? busId : `${busId} — ${summary}`
+  return name.toUpperCase()
+}
+
+/** Name for one physical track that several non-overlapping stems share
+ * (packIntoTracks packed them together) -- summarizes what's actually on
+ * THIS track, not the whole bus, so sibling shared tracks under the same
+ * bus read as distinct rather than all being the literal same string (a
+ * real usability problem: several "<bus> (shared)" tracks in Ableton's own
+ * track list are otherwise impossible to tell apart). `usedNames` is
+ * per-bus, threaded in by the caller, so a genuine remaining collision
+ * (two shared tracks with an identical type summary) still gets a
+ * disambiguating numeric suffix rather than silently duplicating a name. */
+function uniqueSharedTrackName(
+  busId: BusId,
+  trackEntries: StemClipsResult[],
+  usedNames: Map<string, number>
+): string {
+  const summary = summarizeSoundTypes(trackEntries.map((e) => e.soundType))
+  const base = `${busId} (shared: ${summary})`
+  const count = (usedNames.get(base) ?? 0) + 1
+  usedNames.set(base, count)
+  return count === 1 ? base : `${base} ${count}`
 }
 
 /**
@@ -508,6 +629,10 @@ export function buildAlsXml(
       const fileName = stemFileNames.get(key)
       if (!fileName) continue
 
+      // Computed before buildStemClips (not after, as this loop originally
+      // did) so its own colorIndex can be threaded straight into the call
+      // below -- see ABLETON_BUS_COLORS.
+      const busId = state.busOf[key] ?? DEFAULT_BUS
       const result = buildStemClips(
         canonicalClipTemplate,
         nextId,
@@ -518,11 +643,11 @@ export function buildAlsXml(
         leftCropBars,
         playedBars,
         state.bpm,
-        state.muteRegions
+        state.muteRegions,
+        ABLETON_BUS_COLORS[busId]
       )
       if (result.clips.length === 0) continue // fully muted -- nothing to place
 
-      const busId = state.busOf[key] ?? DEFAULT_BUS
       byBus.get(busId)!.push(result)
     }
   }
@@ -535,8 +660,9 @@ export function buildAlsXml(
     renumberIds(groupTrack, nextId)
     clearSends(groupTrack, 'GroupTrack')
     const groupTrackId = attrs(groupTrack)['@_Id']
-    const groupNameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
-    setAttr(findChild(childArray(groupNameNode, 'Name'), 'EffectiveName')!, '@_Value', busId)
+    const groupTrackBody = childArray(groupTrack, 'GroupTrack')
+    setTrackName(findChild(groupTrackBody, 'Name')!, busGroupName(busId, entries))
+    setColor(groupTrackBody, ABLETON_BUS_COLORS[busId])
     outTracks.push(groupTrack)
 
     const packed = packIntoTracks(
@@ -544,19 +670,24 @@ export function buildAlsXml(
       (e) => e.startBeats,
       (e) => e.endBeats
     )
+    const usedSharedTrackNames = new Map<string, number>()
     for (const trackEntries of packed) {
       const allClips = trackEntries.flatMap((e) => e.clips)
       // If only one stem landed on this physical track, use its own name
       // -- otherwise several stems share it (packed together because they
-      // don't overlap in time), and picking one arbitrarily would
-      // misrepresent what's actually on it.
-      const trackName = trackEntries.length === 1 ? trackEntries[0].trackName : `${busId} (shared)`
+      // don't overlap in time), so name it from what's actually on it
+      // instead of picking one arbitrarily.
+      const trackName =
+        trackEntries.length === 1
+          ? trackEntries[0].trackName
+          : uniqueSharedTrackName(busId, trackEntries, usedSharedTrackNames)
       const track = buildSharedAudioTrack(
         canonicalAudioTrack,
         nextId,
         groupTrackId,
         trackName,
-        allClips
+        allClips,
+        ABLETON_BUS_COLORS[busId]
       )
       outTracks.push(track)
     }

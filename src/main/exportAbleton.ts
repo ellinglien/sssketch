@@ -222,6 +222,36 @@ export async function exportAbletonToLibrary(state: AppState, libraryName: strin
 }
 
 /**
+ * Same no-dialog, always-named-after-the-project export as
+ * exportAbletonToLibrary above, for a sketch that's real and has a known
+ * file location but ISN'T a library sketch -- one opened from an external
+ * `.sssketchproj` path. Writes into an `Ableton/` folder next to that
+ * source file (mirroring the library convention's own `<sketch>/Ableton/`
+ * layout, just rooted at the external file's own directory instead of the
+ * library root), named identically to the project (its own file name,
+ * minus the `.sssketchproj` extension) -- what "the exported project
+ * should be... named the same as the project" actually asks for, once
+ * there's a real source file to be identical to.
+ *
+ * Clears `Ableton/Samples/Imported/` first, same reasoning as
+ * exportAbletonToLibrary: this specific `Ableton/` folder is one this
+ * export owns outright (freshly computed from the source path, not a
+ * user-chosen arbitrary folder), so stale removed-stem copies can be
+ * safely cleaned up before repopulating.
+ */
+export async function exportAbletonNextToSource(
+  state: AppState,
+  sourcePath: string
+): Promise<void> {
+  const projectName = basename(sourcePath, '.sssketchproj')
+  const abletonDir = join(dirname(sourcePath), 'Ableton')
+  mkdirSync(abletonDir, { recursive: true })
+  rmSync(join(abletonDir, 'Samples', 'Imported'), { recursive: true, force: true })
+  await buildAndWriteAlsProject(state, abletonDir, projectName)
+  await shell.openPath(abletonDir)
+}
+
+/**
  * Opens a save dialog (choosing the .als file's own name/location), then
  * builds the whole self-contained project folder around it -- the
  * "export a copy elsewhere" escape hatch, for sharing a fully standalone
@@ -233,11 +263,19 @@ export async function exportAbletonToLibrary(state: AppState, libraryName: strin
  * window.alerts for exactly this) -- deliberately not swallowed the way
  * exportMixToWav's write failure is. Opens the destination folder in
  * Finder on success, matching exportAbletonToLibrary's own behavior.
+ * `defaultName` pre-fills the save dialog's filename (no `.als` suffix) --
+ * the caller's own project name when one is known (an unsaved project has
+ * none, so the dialog falls back to a generic "sssketch-export"). Purely a
+ * starting suggestion; the user can still rename it in the dialog.
  */
-export async function exportAbleton(win: BrowserWindow, state: AppState): Promise<string | null> {
+export async function exportAbleton(
+  win: BrowserWindow,
+  state: AppState,
+  defaultName?: string
+): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'Ableton Live Set', extensions: ['als'] }],
-    defaultPath: 'sssketch-export.als'
+    defaultPath: `${defaultName ?? 'sssketch-export'}.als`
   })
   if (result.canceled || !result.filePath) return null
 
