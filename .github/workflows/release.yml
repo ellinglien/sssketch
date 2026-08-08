@@ -92,6 +92,20 @@ jobs:
       # true in electron-builder.yml (only set once real Apple credentials are
       # in place -- see the implementation plan's Task 11) is what actually
       # triggers notarization using the APPLE_* vars below.
+      #
+      # No signing secrets exist in this repo yet (real release still
+      # unsigned, see README's Installing section) -- but GitHub Actions sets
+      # a referenced-but-missing secret to an EMPTY STRING, not an omitted
+      # var. electron-builder's own CSC_LINK handling treats that non-null
+      # empty string as "resolve this as a real certificate file path"
+      # (its own code comment: "allow to specify as empty string"), which
+      # resolves to the checkout root itself and fails packaging outright
+      # with a confusing "not a file" error -- caught for real, traced into
+      # app-builder-lib's own source. `unset`-ing each var when blank
+      # restores afterSign.js's own already-correct "skip gracefully when
+      # not set" behavior at the electron-builder level too, and needs no
+      # changes once real secrets are added later (a non-empty secret just
+      # leaves `set +e`'s `[ -z ... ]` false and the var untouched).
       - name: Build, sign, notarize, and publish
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -102,5 +116,17 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # set +e here: this step's shell runs with `bash -e`, and
+          # `[ -z "$VAR" ]` evaluating false (VAR is actually set, the
+          # future case once real secrets exist) would otherwise abort the
+          # whole script under errexit even though nothing is wrong.
+          set +e
+          [ -z "$CSC_LINK" ] && unset CSC_LINK
+          [ -z "$CSC_KEY_PASSWORD" ] && unset CSC_KEY_PASSWORD
+          [ -z "$CSC_NAME" ] && unset CSC_NAME
+          [ -z "$APPLE_ID" ] && unset APPLE_ID
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && unset APPLE_APP_SPECIFIC_PASSWORD
+          [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID
+          set -e
           npx electron-vite build
           npx electron-builder --mac --publish always
