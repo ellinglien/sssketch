@@ -10,7 +10,13 @@ import {
   registerActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
-import { usePlaying, useDispatch, useAppState } from '../state/StoreContext'
+import {
+  usePlaying,
+  useDispatch,
+  useAppState,
+  useRiffFavourites,
+  useRiffFavouritesActions
+} from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
@@ -112,6 +118,8 @@ export function LoreLibraryBrowser({
    * feed / private jams) opens by default when navigated to this way. */
   onSwitchToEndlesss: () => void
 }): React.JSX.Element {
+  const riffFavourites = useRiffFavourites()
+  const { toggleRiffFavourite } = useRiffFavouritesActions()
   const [available, setAvailable] = useState<boolean | null>(null)
   const [jamFilter, setJamFilter] = useState('')
   const [jams, setJams] = useState<LoreJam[]>([])
@@ -1093,6 +1101,10 @@ export function LoreLibraryBrowser({
                                 >
                                   <button
                                     onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault()
+                                      toggleRiffFavourite(riff.riffCID)
+                                    }}
                                     title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
                                     style={{
                                       width: 18,
@@ -1112,7 +1124,9 @@ export function LoreLibraryBrowser({
                                               ? '1px dashed var(--ra-text-3)'
                                               : '1px solid var(--ra-border)',
                                       padding: 0,
-                                      background: riffCircleColor(riff.ownerFraction),
+                                      background: riffFavourites.has(riff.riffCID)
+                                        ? 'var(--ra-recording-live)'
+                                        : riffCircleColor(riff.ownerFraction),
                                       cursor: 'pointer'
                                     }}
                                   />
