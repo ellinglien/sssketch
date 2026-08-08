@@ -55,6 +55,7 @@ import {
 } from './endlesssApi'
 import { syncSharedFeed, syncJam } from './endlesssSync'
 import { getSyncStatus } from './endlesssSyncIndex'
+import { migrateEndlesssStemCache } from './stemCacheMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
@@ -154,6 +155,12 @@ if (is.dev) {
 app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
+
+  // One-time (idempotent) migration off the old source-partitioned Endlesss
+  // stem cache -- see stemCacheMigration.ts's own doc comment. Cheap once
+  // already migrated (a symlink-recognizing scan, no real work), so no need
+  // to gate this behind anything or run it off the main thread.
+  migrateEndlesssStemCache()
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
