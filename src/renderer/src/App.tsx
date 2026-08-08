@@ -526,8 +526,7 @@ function ProjectMenu({
   async function handleExportStems(): Promise<void> {
     setExporting(true)
     try {
-      const stems = await window.rifffApi.exportStemsNative(JSON.stringify(state))
-      await window.rifffApi.exportStems(stems)
+      await window.rifffApi.exportStemsNative(JSON.stringify(state))
     } catch (err) {
       console.error('ProjectMenu: failed to export stems:', err)
       window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)

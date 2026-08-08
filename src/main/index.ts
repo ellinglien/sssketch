@@ -26,10 +26,9 @@ import {
   renameExternalSketchFile
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
-import { exportMixToWav, exportStemsToWavs } from './exportMix'
+import { exportMixToWav } from './exportMix'
 import { exportAbleton, exportAbletonToLibrary, exportAbletonNextToSource } from './exportAbleton'
-import { nativeExport, nativeExportStems } from './nativeExport'
-import type { ExportedStem } from '@shared/types'
+import { nativeExport, nativeExportStemsToDisk } from './nativeExport'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
@@ -338,14 +337,10 @@ app.whenReady().then(async () => {
     return nativeExport(state)
   })
 
-  ipcMain.handle('export-stems-native', async (_event, stateJson: string) => {
-    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return nativeExportStems(state)
-  })
-
-  ipcMain.handle('export-stems', (event, stems: ExportedStem[]) => {
+  ipcMain.handle('export-stems-native', async (event, stateJson: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
-    return exportStemsToWavs(win, stems)
+    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+    return nativeExportStemsToDisk(win, state)
   })
 
   ipcMain.handle('export-als', async (event, stateJson: string, defaultName?: string) => {

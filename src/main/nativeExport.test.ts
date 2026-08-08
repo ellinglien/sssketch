@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AppState } from '../renderer/src/state/store'
@@ -31,7 +31,7 @@ import type { Rifff } from '../shared/types'
 // which set masterChain.
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
 
-import { loopLengthBarsFor, nativeExport, soloState } from './nativeExport'
+import { loopLengthBarsFor, nativeExport, renderStemsToDir, soloState } from './nativeExport'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -274,6 +274,107 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
       expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching Phase 1's parity test
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30000)
+})
+
+describe('renderStemsToDir', () => {
+  it('writes each stem straight to its own WAV file in destDir, never returning bytes', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'my rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick/snare',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifff } }
+
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      // Path separator in the stem name gets sanitized away, matching
+      // sanitizeFileNamePart's own rules — a real reported concern given
+      // Endlesss preset names are free text.
+      expect(fileNames).toEqual(['my rifff-kick_snare.wav'])
+      expect(existsSync(join(destDir, 'my rifff-kick_snare.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('disambiguates two stems that would otherwise share a filename', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const stemAPath = join(srcDir, 'a.wav')
+      const stemBPath = join(srcDir, 'b.wav')
+      writeConstantWav(stemAPath, 0.3, 4410)
+      writeConstantWav(stemBPath, 0.2, 4410)
+      const rifffA: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'b',
+            type: 'fx',
+            path: stemAPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const rifffB: Rifff = {
+        groupId: 'r2',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 1,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'b',
+            type: 'fx',
+            path: stemBPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifffA, r2: rifffB } }
+
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      expect(fileNames).toEqual(['a-b.wav', 'a-b-2.wav'])
+      expect(existsSync(join(destDir, 'a-b.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'a-b-2.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
     }
   }, 30000)
 })

@@ -89,8 +89,3 @@ export interface Rifff {
 export function stemKey(groupId: string, slot: number): string {
   return `${groupId}:${slot}`
 }
-
-export interface ExportedStem {
-  fileName: string
-  bytes: Uint8Array
-}

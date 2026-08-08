@@ -2,9 +2,10 @@ import { readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
-import { stemKey, type ExportedStem } from '@shared/types'
+import { stemKey } from '@shared/types'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
@@ -95,8 +96,21 @@ function sanitizeFileNamePart(name: string): string {
  * mute state in `state` (the point is isolating each stem, not reproducing
  * today's mix). Reuses the same engine process and render-export command as
  * nativeExport, just called once per stem instead of once for the mixdown.
+ *
+ * Writes each stem STRAIGHT to its final path inside destDir — never reads
+ * the rendered bytes back into the main process, let alone across IPC. This
+ * replaces an earlier design that rendered every stem to a temp file, read
+ * ALL of them into memory as Uint8Arrays, sent the whole batch to the
+ * renderer over IPC, and then had the renderer immediately send the exact
+ * same bytes straight back to main to write to disk — a completely
+ * pointless double round-trip (the bytes never needed to leave the main
+ * process) that reproducibly crashed Electron on a real large multi-stem
+ * project: root-caused via crash report analysis to EXC_BREAKPOINT inside
+ * v8::ValueSerializer::WriteValue, consistent with structured-clone
+ * choking on the combined size of every stem's raw audio in one IPC
+ * message. Returns the filenames actually written, in render order.
  */
-export async function nativeExportStems(state: AppState): Promise<ExportedStem[]> {
+export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   const targets: { key: string; rifffName: string; stemName: string }[] = []
   for (const rifff of placed) {
@@ -120,7 +134,7 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
   const durationBars = loopLengthBarsFor(state)
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
-  const results: ExportedStem[] = []
+  const fileNames: string[] = []
   const pluginCatalog = loadCatalog()
 
   try {
@@ -135,30 +149,52 @@ export async function nativeExportStems(state: AppState): Promise<ExportedStem[]
         resolveStretchedForExport,
         pluginCatalog
       )
-      const tempPath = join(tmpdir(), `sssketch-export-${randomUUID()}.wav`)
+      const fileName = uniqueFileName(target.rifffName, target.stemName)
+      const outputPath = join(destDir, fileName)
 
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
         'render-export',
-        { outputPath: tempPath, durationBars },
+        { outputPath, durationBars },
         'render-export-result'
       )) as { success: boolean; error?: string }
 
       if (!result.success) {
-        rmSync(tempPath, { force: true })
         throw new Error(
           `native export failed for stem "${target.stemName}": ${result.error ?? 'unknown error'}`
         )
       }
 
-      const bytes = readFileSync(tempPath)
-      rmSync(tempPath, { force: true })
-      results.push({ fileName: uniqueFileName(target.rifffName, target.stemName), bytes })
+      fileNames.push(fileName)
     }
 
-    return results
+    return fileNames
   } finally {
     client.disconnect()
     engineHandle.stop()
   }
+}
+
+/**
+ * Opens a folder picker, then renders every stem straight into it via
+ * renderStemsToDir — mirrors exportMixToWav/exportStemsToWavs's own
+ * cancel/failure handling (resolves null on a cancelled dialog) and opens
+ * the destination in Finder on success. Asking for the destination BEFORE
+ * rendering (rather than after, which the old bytes-over-IPC design did)
+ * also means a cancelled dialog costs nothing — no wasted render time.
+ */
+export async function nativeExportStemsToDisk(
+  win: BrowserWindow,
+  state: AppState
+): Promise<string | null> {
+  const result = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose a folder for the exported stems'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  const dir = result.filePaths[0]
+  await renderStemsToDir(state, dir)
+  await shell.openPath(dir)
+  return dir
 }
