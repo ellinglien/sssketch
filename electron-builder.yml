@@ -17,6 +17,12 @@ extraResources:
     to: native-engine/sssketch-engine.app
   - from: native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app
     to: native-engine-bridge/sssketch-bridge.app
+  # Produced by scripts/vendor-rubberband.sh (run in CI before packaging,
+  # see release.yml) -- a relocatable copy of the rubberband CLI + its
+  # dylib dependencies, so tempo stretching works with zero setup instead
+  # of requiring every tester to `brew install rubberband` themselves.
+  - from: resources/rubberband
+    to: rubberband
 win:
   executableName: sssketch
 nsis:

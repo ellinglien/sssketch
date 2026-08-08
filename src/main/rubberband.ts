@@ -23,7 +23,17 @@ const CANDIDATE_PATHS = [
   'rubberband' // fall back to PATH
 ]
 
+/** Packaged mode: prefer the vendored, self-contained copy shipped as an
+ * extraResource (see electron-builder.yml + scripts/vendor-rubberband.sh) —
+ * mirrors engineProcess.ts's own dev-vs-packaged defaultBinaryPath()
+ * pattern exactly. Falls back to CANDIDATE_PATHS's Homebrew lookup if the
+ * vendored copy is somehow missing (e.g. a local unsigned --dir build that
+ * skipped the vendor step) rather than hard-failing. */
 function findRubberband(): string {
+  if (app.isPackaged) {
+    const bundled = join(process.resourcesPath, 'rubberband', 'bin', 'rubberband')
+    if (existsSync(bundled)) return bundled
+  }
   for (const path of CANDIDATE_PATHS) {
     if (path === 'rubberband' || existsSync(path)) return path
   }

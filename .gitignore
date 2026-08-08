@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-electron/
 out/
+resources/rubberband/
 .DS_Store
 .eslintcache
 *.log*

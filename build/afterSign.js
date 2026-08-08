@@ -66,4 +66,28 @@ exports.default = async function afterSign(context) {
       { stdio: 'inherit' }
     )
   }
+
+  // The vendored rubberband binary + its dylibs (see
+  // scripts/vendor-rubberband.sh) are plain Mach-O files, not .app bundles
+  // -- no entitlements needed (no plugin hosting, just a CLI reading/
+  // writing files), but each one still needs its own valid signature for
+  // notarization, same as every other executable/dylib nested inside the
+  // signed outer app. vendor-rubberband.sh ad-hoc-signs these already (for
+  // an unsigned local run); this replaces that with the real identity.
+  const rubberbandDir = path.join(appPath, 'Contents/Resources/rubberband')
+  if (fs.existsSync(rubberbandDir)) {
+    const binPath = path.join(rubberbandDir, 'bin/rubberband')
+    const libDir = path.join(rubberbandDir, 'lib')
+    const filesToSign = [binPath, ...fs.readdirSync(libDir).map((name) => path.join(libDir, name))]
+    for (const filePath of filesToSign) {
+      console.log(`afterSign: signing vendored file at ${filePath}`)
+      execFileSync(
+        'codesign',
+        ['--force', '--options', 'runtime', '--sign', identity, filePath],
+        { stdio: 'inherit' }
+      )
+    }
+  } else {
+    console.log(`afterSign: ${rubberbandDir} not found, skipping (not vendored this run)`)
+  }
 }
