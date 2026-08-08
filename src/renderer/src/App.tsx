@@ -42,6 +42,7 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
+import { OnboardingModal } from './components/OnboardingModal'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { warmStemCaches } from './audio/warmStemCaches'
@@ -691,6 +692,8 @@ function ProjectMenu({
 // against with a separate max-interval ceiling.
 const AUTOSAVE_DEBOUNCE_MS = 4000
 
+const ONBOARDING_SEEN_STORAGE_KEY = 'sssketch:onboardingSeen'
+
 /** Sketch mode only: while playing, the Inspector automatically shows
  * whichever rifff currently contains the playhead — no manual click
  * needed to follow along. Scoped to sketch mode specifically because it's
@@ -955,6 +958,26 @@ function Frame(): React.JSX.Element {
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [endlesssLibraryOpen, setEndlesssLibraryOpen] = useState(false)
+  // Shown once on first-ever launch (per machine, matching loreUsername's
+  // own localStorage-persisted convention in LoreLibraryBrowser.tsx) --
+  // read lazily in useState's initializer, not an effect, so it can't
+  // flash open-then-closed on the very first render.
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try {
+      return localStorage.getItem(ONBOARDING_SEEN_STORAGE_KEY) === null
+    } catch {
+      return false
+    }
+  })
+  function dismissOnboarding(): void {
+    setShowOnboarding(false)
+    try {
+      localStorage.setItem(ONBOARDING_SEEN_STORAGE_KEY, '1')
+    } catch {
+      // localStorage unavailable (e.g. private mode) -- just means it'll
+      // show again next launch, not worth surfacing as an error.
+    }
+  }
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
@@ -1684,6 +1707,15 @@ function Frame(): React.JSX.Element {
             y={contextMenu.y}
             items={contextMenu.items}
             onClose={() => setContextMenu(null)}
+          />
+        )}
+        {showOnboarding && (
+          <OnboardingModal
+            onDismiss={dismissOnboarding}
+            onOpenEndlesss={() => {
+              dismissOnboarding()
+              setEndlesssLibraryOpen(true)
+            }}
           />
         )}
       </div>
