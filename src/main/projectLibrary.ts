@@ -7,6 +7,7 @@ import {
   readdirSync,
   copyFileSync,
   mkdirSync,
+  renameSync,
   constants
 } from 'node:fs'
 import { join, basename } from 'node:path'
@@ -204,4 +205,36 @@ export function shouldWarnBeforeOverwrite(name: string): boolean {
   const meta = readSketchMeta(name)
   if (meta.lastExportAlsMtimeMs === undefined) return false
   return statSync(alsPath).mtimeMs !== meta.lastExportAlsMtimeMs
+}
+
+/**
+ * Renames a library sketch in place -- a real directory+file rename (single
+ * renameSync per piece, same volume), never a copy, matching the disk-
+ * efficiency work already in flight elsewhere in this codebase. A library
+ * sketch is a whole directory (sketchDir) containing <name>.sssketchproj,
+ * .sssketch-meta.json, and an optional Ableton/<name>.als -- the project
+ * file and .als are both keyed by name (not fixed filenames like the meta
+ * file), so a plain directory rename alone would leave them stale. See
+ * docs/superpowers/specs/2026-08-08-project-workflow-polish-design.md.
+ */
+export function renameSketch(
+  oldName: string,
+  newName: string
+): { ok: true; name: string } | { ok: false; reason: string } {
+  if (!existsSync(sketchDir(oldName))) {
+    return { ok: false, reason: `no sketch named "${oldName}"` }
+  }
+  if (existsSync(sketchDir(newName))) {
+    return { ok: false, reason: `a sketch named "${newName}" already exists` }
+  }
+  renameSync(sketchDir(oldName), sketchDir(newName))
+  const oldProjectPath = join(sketchDir(newName), `${oldName}.sssketchproj`)
+  if (existsSync(oldProjectPath)) {
+    renameSync(oldProjectPath, sketchProjectPath(newName))
+  }
+  const oldAlsPath = join(sketchAbletonDir(newName), `${oldName}.als`)
+  if (existsSync(oldAlsPath)) {
+    renameSync(oldAlsPath, join(sketchAbletonDir(newName), `${newName}.als`))
+  }
+  return { ok: true, name: newName }
 }

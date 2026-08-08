@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, renameSync } from 'fs'
+import { dirname, join } from 'path'
 import { dialog, BrowserWindow, app } from 'electron'
 import {
   sketchDir,
@@ -43,7 +43,28 @@ const ADJECTIVES = [
   'muted',
   'radiant',
   'rusty',
-  'sleepy'
+  'sleepy',
+  'sleve',
+  'onson',
+  'darryl',
+  'anatoli',
+  'rey',
+  'glenallen',
+  'mario',
+  'raul',
+  'kevin',
+  'tony',
+  'bobson',
+  'willie',
+  'jeromy',
+  'scott',
+  'shown',
+  'dean',
+  'mike',
+  'dwigt',
+  'tim',
+  'karl',
+  'todd'
 ]
 
 const NOUNS = [
@@ -76,7 +97,29 @@ const NOUNS = [
   'pebble',
   'quartz',
   'raven',
-  'summit'
+  'summit',
+  'mcdichael',
+  'sweemey',
+  'archideld',
+  'smorin',
+  'mcsriff',
+  'mixon',
+  'mcrlwain',
+  'chamgerlain',
+  'nogilny',
+  'smehrik',
+  'dugnutt',
+  'dustice',
+  'gride',
+  'dourque',
+  'furcotte',
+  'wesrey',
+  'truk',
+  'rortugal',
+  'sandaele',
+  'dandleton',
+  'sernandez',
+  'bonzalez'
 ]
 
 // Matches ADJECTIVES/NOUNS's own tasteful, music/creative tone above.
@@ -108,6 +151,18 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
+/** A random "adjective noun" pair off the same word lists above (e.g.
+ * "groovy sparrow") -- the shared building block behind
+ * generateDefaultProjectName's own filename below, and reused as-is for
+ * naming other auto-generated, personality-bearing things in the app (see
+ * importOneShot.ts's recorded-take naming) that want the same tasteful,
+ * on-theme randomness without a project filename's date/emoji trappings. */
+export function randomAdjectiveNoun(): string {
+  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
+  return `${adjective} ${noun}`
+}
+
 /** Generates a default project filename (without extension), following the
  * pattern `YYYY-MM-DD-adjective-noun-emoji` -- e.g.
  * "2026-08-01-groovy-sparrow-🌙". `date` is injectable for deterministic
@@ -118,9 +173,11 @@ function pad2(n: number): string {
 export function generateDefaultProjectName(date: Date = new Date()): string {
   const dateStr = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
   const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)]
-  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
-  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `${dateStr}-${adjective}-${noun}-${emoji}`
+  // randomAdjectiveNoun() returns a space-joined pair ("groovy sparrow") --
+  // this filename's own pattern needs hyphens instead, so split and rejoin
+  // rather than duplicating the word-list-picking logic here.
+  const adjectiveNoun = randomAdjectiveNoun().replace(' ', '-')
+  return `${dateStr}-${adjectiveNoun}-${emoji}`
 }
 
 /**
@@ -169,6 +226,22 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
 export function saveProjectInPlace(path: string, json: string): void {
   writeFileSync(path, json, 'utf-8')
   clearAutosave()
+}
+
+/** Renames an explicitly-opened (non-library) sketch file in place -- same
+ * directory, same .sssketchproj extension, just a new basename. Mirrors
+ * renameSketch's library-directory rename (projectLibrary.ts) for a sketch
+ * that was never saved into the library at all. */
+export function renameExternalSketchFile(
+  oldPath: string,
+  newName: string
+): { ok: true; path: string } | { ok: false; reason: string } {
+  const newPath = join(dirname(oldPath), `${newName}.sssketchproj`)
+  if (existsSync(newPath)) {
+    return { ok: false, reason: `a file named "${newName}.sssketchproj" already exists there` }
+  }
+  renameSync(oldPath, newPath)
+  return { ok: true, path: newPath }
 }
 
 /** Routine, no-dialog save for a library-resident sketch -- creates the
@@ -339,6 +412,67 @@ export async function openProject(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`openProject: failed to read project from ${path}: ${message}`)
+    return null
+  }
+}
+
+/** Reads back a project file at a KNOWN path, no dialog -- the
+ * dialog-free counterpart to openProject, mirroring openLibrarySketch's own
+ * "by name, no dialog" convention but for an 'external' (non-library)
+ * .sssketchproj file. Used by App.tsx's startup restore of the last-opened
+ * project (see writeLastOpenedSketch below) when that sketch was an
+ * external file rather than a library entry. Returns null (not a thrown
+ * error) if the file no longer exists or can't be read -- e.g. it was
+ * moved/deleted since it was last opened -- matching openProject/
+ * openLibrarySketch's own "not found is a normal outcome" convention. */
+export function openProjectFromPath(path: string): { path: string; json: string } | null {
+  if (!existsSync(path)) return null
+  try {
+    return { path, json: readFileSync(path, 'utf-8') }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`openProjectFromPath: failed to read ${path}: ${message}`)
+    return null
+  }
+}
+
+const LAST_OPENED_SKETCH_FILENAME = 'lastOpenedSketch.json'
+
+function lastOpenedSketchPath(): string {
+  return join(app.getPath('userData'), LAST_OPENED_SKETCH_FILENAME)
+}
+
+/** Persists which sketch is currently open -- an opaque JSON blob, same
+ * "main doesn't need to understand the renderer's own CurrentSketch shape"
+ * convention as writeAutosaveSketchInfo -- so the NEXT app launch can open
+ * straight back into it (see App.tsx's own mount effect) instead of always
+ * starting a brand-new sketch. Unlike writeAutosaveSketchInfo/writeAutosave
+ * (crash-recovery only, cleared once offered), this is never cleared -- it
+ * always reflects the most recently opened/created sketch, persisting
+ * across ordinary quits, not just crashes. Written from App.tsx whenever
+ * currentSketch changes to a real (non-null) location. */
+export function writeLastOpenedSketch(json: string): void {
+  try {
+    writeFileSync(lastOpenedSketchPath(), json, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`writeLastOpenedSketch: failed to write ${lastOpenedSketchPath()}: ${message}`)
+  }
+}
+
+/** Reads back the last-opened-sketch pointer, if one exists -- checked at
+ * startup (after the one-shot crash-recovery prompt) so the app can open
+ * straight back into it. Returns null (not a thrown error) both when
+ * nothing was ever written (a fresh install, or a build from before this
+ * existed) and when reading one fails. */
+export function loadLastOpenedSketch(): string | null {
+  const path = lastOpenedSketchPath()
+  if (!existsSync(path)) return null
+  try {
+    return readFileSync(path, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`loadLastOpenedSketch: failed to read ${path}: ${message}`)
     return null
   }
 }

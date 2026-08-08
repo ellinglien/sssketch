@@ -1,6 +1,6 @@
 // src/main/projectLibrary.test.ts
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -195,6 +195,49 @@ describe('projectLibrary', () => {
       writeFileSync(alsPath, 'fake als bytes')
       writeSketchMeta('touched-sketch', { lastExportAlsMtimeMs: 1 }) // deliberately stale
       expect(shouldWarnBeforeOverwrite('touched-sketch')).toBe(true)
+    })
+  })
+
+  describe('renameSketch', () => {
+    it('renames the sketch directory and its inner .sssketchproj file', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { renameSketch, sketchDir, sketchProjectPath } = await import('./projectLibrary')
+      saveProjectToLibrary('old-name', '{"rifffs":{}}')
+      const result = renameSketch('old-name', 'new-name')
+      expect(result).toEqual({ ok: true, name: 'new-name' })
+      expect(existsSync(sketchDir('old-name'))).toBe(false)
+      expect(existsSync(sketchProjectPath('new-name'))).toBe(true)
+      expect(readFileSync(sketchProjectPath('new-name'), 'utf-8')).toBe('{"rifffs":{}}')
+    })
+
+    it('renames an existing Ableton/<name>.als alongside it', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { renameSketch, sketchAbletonDir } = await import('./projectLibrary')
+      saveProjectToLibrary('old-name', '{"rifffs":{}}')
+      mkdirSync(sketchAbletonDir('old-name'), { recursive: true })
+      writeFileSync(join(sketchAbletonDir('old-name'), 'old-name.als'), 'fake als bytes')
+      renameSketch('old-name', 'new-name')
+      expect(existsSync(join(sketchAbletonDir('new-name'), 'new-name.als'))).toBe(true)
+      expect(existsSync(join(sketchAbletonDir('new-name'), 'old-name.als'))).toBe(false)
+    })
+
+    it('leaves a sketch with no .als yet untouched on that front', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { renameSketch, sketchAbletonDir } = await import('./projectLibrary')
+      saveProjectToLibrary('old-name', '{"rifffs":{}}')
+      const result = renameSketch('old-name', 'new-name')
+      expect(result).toEqual({ ok: true, name: 'new-name' })
+      expect(existsSync(sketchAbletonDir('new-name'))).toBe(false)
+    })
+
+    it('rejects when the target name already exists, leaving the original untouched', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { renameSketch, sketchDir } = await import('./projectLibrary')
+      saveProjectToLibrary('old-name', '{"rifffs":{}}')
+      saveProjectToLibrary('taken-name', '{"rifffs":{}}')
+      const result = renameSketch('old-name', 'taken-name')
+      expect(result.ok).toBe(false)
+      expect(existsSync(sketchDir('old-name'))).toBe(true)
     })
   })
 })

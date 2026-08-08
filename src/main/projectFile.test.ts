@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { generateDefaultProjectName } from './projectFile'
+import { generateDefaultProjectName, randomAdjectiveNoun } from './projectFile'
 
 // vi.mock calls are hoisted to the top of the file by vitest's own
 // transform, but ONLY when they're a top-level statement (not nested
@@ -43,6 +43,17 @@ describe('generateDefaultProjectName', () => {
       Array.from({ length: 30 }, () => generateDefaultProjectName(date).split('-').pop())
     )
     expect(emojis.size).toBeGreaterThan(1)
+  })
+})
+
+describe('randomAdjectiveNoun', () => {
+  it('formats as "adjective noun", space-joined not hyphenated', () => {
+    expect(randomAdjectiveNoun()).toMatch(/^[a-z]+ [a-z]+$/)
+  })
+
+  it('varies across calls (not a fixed pair)', () => {
+    const names = new Set(Array.from({ length: 20 }, () => randomAdjectiveNoun()))
+    expect(names.size).toBeGreaterThan(1)
   })
 })
 
@@ -99,6 +110,39 @@ describe('library-aware project functions', () => {
     })
   })
 
+  describe('openProjectFromPath', () => {
+    it('reads back a project file at a known path, no dialog', async () => {
+      const { openProjectFromPath } = await import('./projectFile')
+      const path = join(userDataDir, 'external.sssketchproj')
+      writeFileSync(path, '{"bpm":95}')
+      const result = openProjectFromPath(path)
+      expect(result).not.toBeNull()
+      expect(result!.path).toBe(path)
+      expect(result!.json).toBe('{"bpm":95}')
+    })
+
+    it('returns null for a path that does not exist', async () => {
+      const { openProjectFromPath } = await import('./projectFile')
+      expect(openProjectFromPath(join(userDataDir, 'nope.sssketchproj'))).toBeNull()
+    })
+  })
+
+  describe('last-opened sketch pointer', () => {
+    it('round-trips through writeLastOpenedSketch/loadLastOpenedSketch', async () => {
+      const { writeLastOpenedSketch, loadLastOpenedSketch } = await import('./projectFile')
+      expect(loadLastOpenedSketch()).toBeNull()
+      writeLastOpenedSketch('{"kind":"library","name":"my-sketch"}')
+      expect(loadLastOpenedSketch()).toBe('{"kind":"library","name":"my-sketch"}')
+    })
+
+    it('a later write overwrites the earlier pointer, not appends', async () => {
+      const { writeLastOpenedSketch, loadLastOpenedSketch } = await import('./projectFile')
+      writeLastOpenedSketch('{"kind":"library","name":"first"}')
+      writeLastOpenedSketch('{"kind":"library","name":"second"}')
+      expect(loadLastOpenedSketch()).toBe('{"kind":"library","name":"second"}')
+    })
+  })
+
   describe('duplicateSketchAsNewVersion', () => {
     it('copies the current sketch json into a new -2 named sketch', async () => {
       const { saveProjectToLibrary, duplicateSketchAsNewVersion, openLibrarySketch } =
@@ -115,5 +159,37 @@ describe('library-aware project functions', () => {
       const { duplicateSketchAsNewVersion } = await import('./projectFile')
       expect(duplicateSketchAsNewVersion('does-not-exist')).toBeNull()
     })
+  })
+})
+
+describe('renameExternalSketchFile', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sssketch-external-rename-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('renames the file in place, keeping its directory and extension', async () => {
+    const { renameExternalSketchFile } = await import('./projectFile')
+    const oldPath = join(dir, 'old-name.sssketchproj')
+    writeFileSync(oldPath, '{"rifffs":{}}')
+    const result = renameExternalSketchFile(oldPath, 'new-name')
+    expect(result).toEqual({ ok: true, path: join(dir, 'new-name.sssketchproj') })
+    expect(existsSync(oldPath)).toBe(false)
+    expect(readFileSync(join(dir, 'new-name.sssketchproj'), 'utf-8')).toBe('{"rifffs":{}}')
+  })
+
+  it('rejects when the target filename already exists', async () => {
+    const { renameExternalSketchFile } = await import('./projectFile')
+    const oldPath = join(dir, 'old-name.sssketchproj')
+    writeFileSync(oldPath, '{"rifffs":{}}')
+    writeFileSync(join(dir, 'taken-name.sssketchproj'), '{}')
+    const result = renameExternalSketchFile(oldPath, 'taken-name')
+    expect(result.ok).toBe(false)
+    expect(existsSync(oldPath)).toBe(true)
   })
 })
