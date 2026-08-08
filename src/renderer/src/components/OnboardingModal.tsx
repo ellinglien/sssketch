@@ -1,10 +1,23 @@
 import { useState } from 'react'
 
+const buttonStyle: React.CSSProperties = {
+  height: 'auto',
+  minHeight: 22,
+  borderRadius: 0,
+  padding: '4px 10px',
+  fontSize: 10,
+  whiteSpace: 'nowrap',
+  border: '1px solid var(--ra-border)',
+  background: 'var(--ra-bg-row-active)',
+  color: 'var(--ra-text-2)'
+}
+
 /** Shown on every launch by default (see App.tsx's Frame -- persisted via
  * localStorage, same convention as LoreLibraryBrowser.tsx's own
- * loreUsername setting) until "don't show this again" is checked. Kept
- * deliberately short -- a paragraph-per-concept explainer would wear thin
- * fast if it's the first thing you see every time you open the app. */
+ * loreUsername setting) until "don't show this again" is checked. Just
+ * the one-line pitch, not a feature explainer -- per direct feedback,
+ * anything longer wears thin fast as the first thing you see every time
+ * you open the app. */
 export function OnboardingModal({
   hasExistingContent,
   onDismiss,
@@ -43,106 +56,49 @@ export function OnboardingModal({
     >
       <div
         style={{
-          width: 'min(420px, 90vw)',
+          width: 'min(360px, 90vw)',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
           borderRadius: 0,
-          padding: 20
+          padding: 18
         }}
       >
         <span className="ra-eyebrow">welcome</span>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 6 }}>
-          sssketch turns Endlesss stems into a real arrangement
+        <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, lineHeight: 1.4 }}>
+          sketch out tracks using stems from Endlesss.
         </div>
 
-        <ul
-          style={{
-            margin: '12px 0 0',
-            padding: '0 0 0 16px',
-            fontSize: 11,
-            color: 'var(--ra-text-2)',
-            lineHeight: 1.6
-          }}
-        >
-          <li>
-            drag in a rifff folder, or click <span style={{ color: 'var(--ra-text)' }}>import</span>{' '}
-            to browse Endlesss directly
-          </li>
-          <li>tidy up groups similar-sounding stems onto shared tracks automatically</li>
-          <li>sketch mode for a quick rough layout, arranger for the full timeline</li>
-        </ul>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
+          <button onClick={() => onDismiss(dontShowAgain)} style={buttonStyle}>
+            start sketching
+          </button>
+          {!hasExistingContent && (
+            <button onClick={() => onStartTour(dontShowAgain)} style={buttonStyle}>
+              take the tour
+            </button>
+          )}
+          <button onClick={() => onOpenEndlesss(dontShowAgain)} style={buttonStyle}>
+            log into endlesss
+          </button>
+        </div>
 
-        <div
+        <label
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
-            marginTop: 18
+            gap: 5,
+            fontSize: 10,
+            color: 'var(--ra-text-3)',
+            marginTop: 14
           }}
         >
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              fontSize: 10,
-              color: 'var(--ra-text-3)'
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={(e) => setDontShowAgain(e.target.checked)}
-            />
-            don&apos;t show this again
-          </label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={() => onDismiss(dontShowAgain)}
-              style={{
-                height: 22,
-                borderRadius: 0,
-                padding: '0 10px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              start sketching
-            </button>
-            {!hasExistingContent && (
-              <button
-                onClick={() => onStartTour(dontShowAgain)}
-                style={{
-                  height: 22,
-                  borderRadius: 0,
-                  padding: '0 10px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
-                }}
-              >
-                take the tour
-              </button>
-            )}
-            <button
-              onClick={() => onOpenEndlesss(dontShowAgain)}
-              style={{
-                height: 22,
-                borderRadius: 0,
-                padding: '0 10px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              log into endlesss
-            </button>
-          </div>
-        </div>
+          <input
+            type="checkbox"
+            checked={dontShowAgain}
+            onChange={(e) => setDontShowAgain(e.target.checked)}
+          />
+          don&apos;t show this again
+        </label>
       </div>
     </div>
   )
