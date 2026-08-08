@@ -1630,6 +1630,9 @@ function Frame(): React.JSX.Element {
         {libraryBrowserOpen && (
           <ProjectLibraryBrowser
             onClose={() => setLibraryBrowserOpen(false)}
+            currentLibraryName={
+              currentSketch !== null && currentSketch.kind === 'library' ? currentSketch.name : null
+            }
             onSelect={(name) => {
               void (async () => {
                 setBusy('opening project…')

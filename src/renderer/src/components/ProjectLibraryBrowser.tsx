@@ -31,14 +31,50 @@ function formatMtime(mtimeMs: number): string {
 
 export function ProjectLibraryBrowser({
   onSelect,
-  onClose
+  onOpenFromDisk,
+  onClose,
+  currentLibraryName
 }: {
   onSelect: (name: string) => void
+  /** The "open" toolbar button now opens straight to this browser (the
+   * library is the primary way to find a project) -- this is the escape
+   * hatch for the less common case of opening a project that was never
+   * saved to the library at all (e.g. shared from elsewhere on disk).
+   * Expected to close this modal itself once it's done (mirrors onSelect
+   * above, which also closes via its own onClose() call rather than this
+   * component closing on the caller's behalf). */
+  onOpenFromDisk: () => void
   onClose: () => void
+  /** The library name of whatever's currently open in the arranger, if
+   * anything -- used to disable that row's delete button. Deleting the
+   * sketch you're actively working in out from under yourself would leave
+   * the app referencing files that no longer exist. */
+  currentLibraryName: string | null
 }): React.JSX.Element {
   const [sketches, setSketches] = useState<LibrarySketchSummary[] | null>(null)
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
   const [changingLocation, setChangingLocation] = useState(false)
+  // Two-step delete: first click on a row's delete button arms it (armed
+  // name stored here, only one row at a time), second click on that SAME
+  // button actually deletes. Clicking anywhere else in the modal disarms
+  // it -- see the panel's own onClick below -- so an armed button can't
+  // linger and get triggered by an unrelated later click.
+  const [deleteArmedName, setDeleteArmedName] = useState<string | null>(null)
+
+  async function handleDeleteClick(name: string): Promise<void> {
+    if (deleteArmedName !== name) {
+      setDeleteArmedName(name)
+      return
+    }
+    setDeleteArmedName(null)
+    const result = await window.rifffApi.deleteSketch(name)
+    if (!result.ok) {
+      console.error('ProjectLibraryBrowser: deleteSketch failed:', result.reason)
+      window.alert(`Couldn't delete "${name}": ${result.reason}`)
+      return
+    }
+    setSketches(await window.rifffApi.listLibrarySketches())
+  }
 
   useEffect(() => {
     window.rifffApi
@@ -91,7 +127,10 @@ export function ProjectLibraryBrowser({
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          setDeleteArmedName(null)
+        }}
         style={{
           background: 'var(--ra-bg-row-active)',
           border: '1px solid var(--ra-border)',
@@ -114,9 +153,14 @@ export function ProjectLibraryBrowser({
           }}
         >
           <span style={{ color: 'var(--ra-text-2)' }}>project library</span>
-          <button onClick={onClose} aria-label="Close project library" style={buttonStyle()}>
-            ×
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={onOpenFromDisk} style={buttonStyle()}>
+              open from disk…
+            </button>
+            <button onClick={onClose} aria-label="Close project library" style={buttonStyle()}>
+              ×
+            </button>
+          </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
           {sketches === null && (
@@ -137,19 +181,41 @@ export function ProjectLibraryBrowser({
                 padding: '4px 0'
               }}
             >
-              <span style={{ flex: 1, color: 'var(--ra-text)' }}>{sketch.name}</span>
-              <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>
-                {formatMtime(sketch.mtimeMs)}
-              </span>
-              <button
+              <span
                 onClick={() => {
                   onSelect(sketch.name)
                   onClose()
                 }}
+                role="button"
                 aria-label={`open ${sketch.name}`}
-                style={buttonStyle()}
+                style={{ flex: 1, color: 'var(--ra-text)', cursor: 'pointer' }}
               >
-                open
+                {sketch.name}
+              </span>
+              <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>
+                {formatMtime(sketch.mtimeMs)}
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handleDeleteClick(sketch.name)
+                }}
+                disabled={sketch.name === currentLibraryName}
+                title={
+                  sketch.name === currentLibraryName
+                    ? "can't delete the sketch you're currently working in"
+                    : deleteArmedName === sketch.name
+                      ? 'click again to delete (moves to trash)'
+                      : 'delete (moves to trash)'
+                }
+                aria-label={
+                  deleteArmedName === sketch.name
+                    ? `confirm delete ${sketch.name}`
+                    : `delete ${sketch.name}`
+                }
+                style={buttonStyle(sketch.name === currentLibraryName)}
+              >
+                {deleteArmedName === sketch.name ? 'delete?' : '×'}
               </button>
             </div>
           ))}
