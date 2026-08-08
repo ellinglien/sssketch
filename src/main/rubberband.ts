@@ -1,5 +1,13 @@
 import { execFile } from 'child_process'
-import { existsSync, mkdirSync, readFileSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  utimesSync
+} from 'fs'
 import { join } from 'path'
 import { createHash } from 'crypto'
 import { app } from 'electron'
@@ -23,13 +31,55 @@ function findRubberband(): string {
 }
 
 function cacheDir(): string {
-  // No eviction policy — like the imported-stem library, this grows unbounded across
-  // a session (every distinct tempo experiment x every stem = one more uncompressed
-  // WAV). Acceptable v1 simplification, consistent with the rest of the app, but
-  // worth revisiting before this ships broadly.
   const dir = join(app.getPath('userData'), 'stretch-cache')
   mkdirSync(dir, { recursive: true })
   return dir
+}
+
+// A fixed constant rather than user-configurable, matching this codebase's
+// existing convention for tuning knobs like STEM_DOWNLOAD_RETRIES in
+// endlesssApi.ts.
+const MAX_STRETCH_CACHE_BYTES = 1024 * 1024 * 1024 // 1GB
+
+interface CacheEntry {
+  path: string
+  size: number
+  mtimeMs: number
+}
+
+/** Pure sizing logic, kept separate from the real fs scan in
+ * enforceStretchCacheLimit below so it's testable without touching disk --
+ * given a cache's current entries and a byte cap, returns which paths to
+ * delete (oldest mtime first) to bring the total back under the cap. */
+export function pathsToEvict(entries: CacheEntry[], maxBytes: number): string[] {
+  const sorted = [...entries].sort((a, b) => a.mtimeMs - b.mtimeMs)
+  let total = entries.reduce((sum, e) => sum + e.size, 0)
+  const toEvict: string[] = []
+  for (const entry of sorted) {
+    if (total <= maxBytes) break
+    toEvict.push(entry.path)
+    total -= entry.size
+  }
+  return toEvict
+}
+
+function enforceStretchCacheLimit(dir: string): void {
+  const entries: CacheEntry[] = readdirSync(dir).map((name) => {
+    const path = join(dir, name)
+    const stat = statSync(path)
+    return { path, size: stat.size, mtimeMs: stat.mtimeMs }
+  })
+  for (const path of pathsToEvict(entries, MAX_STRETCH_CACHE_BYTES)) {
+    unlinkSync(path)
+  }
+}
+
+// Marks a cache HIT as recently used. Without this, LRU-by-mtime would
+// evict frequently-reused-but-never-re-rendered files first, since their
+// mtime never updates on a hit -- backwards from correct LRU behavior.
+function touchCacheEntry(path: string): void {
+  const now = new Date()
+  utimesSync(path, now, now)
 }
 
 // Exported for testing — pure, no fs/process access.
@@ -64,7 +114,9 @@ export async function renderStretched(stemPath: string, ratio: number): Promise<
   }
 
   const outPath = join(cacheDir(), cacheKey(stemPath, ratio))
-  if (!existsSync(outPath)) {
+  if (existsSync(outPath)) {
+    touchCacheEntry(outPath)
+  } else {
     const binary = findRubberband()
     // --tempo <X> means "change tempo by multiple X": X>1 speeds up (shorter output),
     // X<1 slows down (longer output) — confirmed against the real installed binary
@@ -75,6 +127,7 @@ export async function renderStretched(stemPath: string, ratio: number): Promise<
     // still exits 0 and produces correct output; keeps the main process's execFile
     // buffer small regardless of how long a stem's render takes).
     await execFileAsync(binary, ['-q', '--tempo', ratio.toFixed(6), stemPath, outPath])
+    enforceStretchCacheLimit(cacheDir())
   }
   return { path: outPath, durationSec: readWavDurationSeconds(readFileSync(outPath)) }
 }
