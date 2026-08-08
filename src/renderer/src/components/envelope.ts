@@ -71,3 +71,52 @@ export function buildEnvelopePath(
 ): string {
   return `${envelopeCurveD(width, height, fadeInPx, fadeOutPx, plateauY)} Z`
 }
+
+/** Builds an SVG path `d` for one axis-aligned rectangular hole per muted
+ * region (full row height). Combined with a base "show color here" shape
+ * via clip-path's evenodd fill rule (see combinedClipPath below) so a
+ * muted span shows the always-visible gray layer underneath instead of
+ * color -- the same "gray means quieter/off" visual language the envelope
+ * clip already uses for reduced volume, rather than a separate hatched-
+ * stripe treatment drawn on top. */
+function muteHolesPath(
+  regions: { startBar: number; endBar: number }[],
+  ppb: number,
+  leftPx: number,
+  height: number
+): string {
+  return regions
+    .map((r) => {
+      const x0 = r.startBar * ppb - leftPx
+      const x1 = r.endBar * ppb - leftPx
+      return `M${x0},0 L${x1},0 L${x1},${height} L${x0},${height} Z`
+    })
+    .join(' ')
+}
+
+/** The full clip-path CSS value for a waveform's color layer, combining
+ * whatever "show color here" base shape is in effect (the envelope curve
+ * while volume-drag mode is engaged, otherwise a plain full-size rect) with
+ * muteHolesPath's rectangular holes for any muted regions -- via evenodd, so
+ * overlapping shapes subtract rather than union. Returns undefined (no
+ * clip-path at all) when there's nothing to clip, matching this codebase's
+ * existing behavior of leaving the color layer unclipped/at full height so
+ * it doesn't read as dimmed just because volume happens to be below unity. */
+export function combinedClipPath(
+  width: number,
+  height: number,
+  envelopeClipActive: boolean,
+  fadeInPx: number,
+  fadeOutPx: number,
+  plateauY: number,
+  muteRegions: { startBar: number; endBar: number }[],
+  ppb: number,
+  leftPx: number
+): string | undefined {
+  if (!envelopeClipActive && muteRegions.length === 0) return undefined
+  const base = envelopeClipActive
+    ? buildEnvelopePath(width, height, fadeInPx, fadeOutPx, plateauY)
+    : `M0,0 L${width},0 L${width},${height} L0,${height} Z`
+  const holes = muteHolesPath(muteRegions, ppb, leftPx, height)
+  return `path(evenodd, "${base}${holes ? ` ${holes}` : ''}")`
+}

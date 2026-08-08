@@ -13,7 +13,6 @@ import { Waveform } from './Waveform'
 import { startPointerDrag } from './dragUtils'
 import { scheduleLiveParamSync } from './liveParamSync'
 import { mouseBarFromDragEvent } from './dragGrabOffset'
-import { useFrameScale } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
 import {
   FADE_MAX,
@@ -22,7 +21,7 @@ import {
   TOOLTIP_GAP,
   envelopeKnees,
   envelopeCurveD,
-  buildEnvelopePath
+  combinedClipPath
 } from './envelope'
 
 export const ROW_HEIGHT = 44
@@ -42,7 +41,6 @@ export function StemWaveformRow({
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
-  const frameScale = useFrameScale()
   const key = stemKey(groupId, slot)
   // Each field read individually via useAppSelector, not one broad
   // useAppState() call -- see
@@ -155,7 +153,17 @@ export function StemWaveformRow({
   const fadeInPx = displayedFadeIn * ppb
   const fadeOutPx = displayedFadeOut * ppb
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
-  const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const colorClipPath = combinedClipPath(
+    widthPx,
+    ROW_HEIGHT,
+    volumeDragMode,
+    fadeInPx,
+    fadeOutPx,
+    plateauY,
+    muteRegions,
+    ppb,
+    leftPx
+  )
   const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
   // Volume tooltip's vertical position, clamped directly into the row's
@@ -322,7 +330,7 @@ export function StemWaveformRow({
       handleVolumeStart(e)
       return
     }
-    const mouseBar = mouseBarFromDragEvent(e, ppb, frameScale)
+    const mouseBar = mouseBarFromDragEvent(e, ppb)
     if (mouseBar === null) return
 
     const existingRegion = muteRegions.find((r) => mouseBar >= r.startBar && mouseBar < r.endBar)
@@ -439,17 +447,21 @@ export function StemWaveformRow({
           {/* Full-color layer on top — suppressed entirely while muted, since
               mute always wins over the envelope. Clipped to the envelope
               (showing the gray layer above the volume line) only while
-              envelope drag mode is engaged; otherwise unclipped/full height,
-              so the waveform reads normally instead of looking dimmed
-              whenever volume is below unity. Same tiling as the gray layer
-              underneath, so the two stay in visual sync at every tile
-              boundary. */}
+              envelope drag mode is engaged, and additionally punched through
+              wherever a mute region sits (regardless of envelope drag mode) --
+              see combinedClipPath's own doc comment for why holing out the
+              color layer, rather than drawing a separate hatch on top, is the
+              same "gray means quieter/off" visual language the envelope
+              clipping already uses. Otherwise unclipped/full height, so the
+              waveform reads normally instead of looking dimmed whenever
+              volume is below unity. Same tiling as the gray layer underneath,
+              so the two stay in visual sync at every tile boundary. */}
           {!muted && (
             <div
               style={{
                 position: 'absolute',
                 inset: 0,
-                clipPath: volumeDragMode ? `path("${envelopePath}")` : undefined
+                clipPath: colorClipPath
               }}
             >
               {tileOffsets.map((left) => (
@@ -697,30 +709,6 @@ export function StemWaveformRow({
               zIndex: 2
             }}
           />
-
-          {/* Muted regions: a diagonal hatch replacing the waveform for that
-              span. Purely visual (pointerEvents none) -- handleRegionMouseDown
-              on the full-body surface above already does its own bar-based
-              lookup against muteRegions, so this never needs its own
-              separate mousedown handler. Positioned relative to the clip's
-              own left edge (leftPx), matching every other per-pixel overlay
-              in this component (fade dots, envelope curve). */}
-          {muteRegions.map((region, i) => (
-            <div
-              key={i}
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: region.startBar * ppb - leftPx,
-                width: (region.endBar - region.startBar) * ppb,
-                background:
-                  'repeating-linear-gradient(45deg, color-mix(in srgb, var(--ra-mute-on) 55%, transparent) 0 3px, transparent 3px 8px)',
-                zIndex: 1,
-                pointerEvents: 'none'
-              }}
-            />
-          ))}
 
           {/* Live/pending region selection -- shown while dragging, and
               after release until Delete/Backspace commits it or it's

@@ -18,11 +18,10 @@ import {
   TOOLTIP_GAP,
   envelopeKnees,
   envelopeCurveD,
-  buildEnvelopePath
+  combinedClipPath
 } from './envelope'
 import { startPointerDrag } from './dragUtils'
 import { scheduleLiveParamSync } from './liveParamSync'
-import { useFrameScale, toLogicalX } from '../state/FrameScaleContext'
 import { markManualSeek } from '../state/manualSeek'
 import {
   trimRightEdge,
@@ -107,7 +106,6 @@ export function CollapsedRifffRow({
   // uses -- see zoomMath.ts/useZoom's own doc comments for what this value
   // actually is (base PPB * the current zoom multiplier).
   const PPB = useZoom()
-  const frameScale = useFrameScale()
   // Each field read individually via useAppSelector, not one broad
   // useAppState() call -- see
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
@@ -288,7 +286,17 @@ export function CollapsedRifffRow({
   const fadeInPx = displayedFadeIn * PPB
   const fadeOutPx = displayedFadeOut * PPB
   const plateauY = ROW_HEIGHT * (1 - displayedVolume)
-  const envelopePath = buildEnvelopePath(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
+  const colorClipPath = combinedClipPath(
+    widthPx,
+    ROW_HEIGHT,
+    volumeDragMode,
+    fadeInPx,
+    fadeOutPx,
+    plateauY,
+    muteRegions,
+    PPB,
+    leftPx
+  )
   const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
   const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
   const tooltipTop = Math.max(
@@ -576,11 +584,7 @@ export function CollapsedRifffRow({
       return
     }
     const rect = e.currentTarget.getBoundingClientRect()
-    // getBoundingClientRect()/clientX report real screen pixels, but leftPx
-    // and PPB are both logical, pre-scale pixels -- see FrameScaleContext's
-    // own doc comment. Dividing the raw real pixel offset by frameScale
-    // first recovers its logical equivalent before combining it with leftPx.
-    const startBar = Math.max(0, leftPx / PPB + toLogicalX(e.clientX - rect.left, frameScale) / PPB)
+    const startBar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
 
     const stemKeys = rifff.stems.map((s) => stemKey(groupId, s.slot))
     const existingRegion = muteRegions.find((r) => startBar >= r.startBar && startBar < r.endBar)
@@ -689,14 +693,17 @@ export function CollapsedRifffRow({
               sets all of them at once) still suppresses that one stem's own
               layer. Clipped by the shared group envelope, same "full color
               under the curve" idea as StemWaveformRow's own color layer —
-              but only while envelope drag mode is engaged; otherwise
-              unclipped, so the waveform reads normally instead of looking
-              dimmed whenever volume is below unity. */}
+              only while envelope drag mode is engaged for that part -- plus
+              a hole for any muted region regardless of drag mode, same "gray
+              means quieter/off" language as the envelope itself (see
+              combinedClipPath). Otherwise unclipped, so the waveform reads
+              normally instead of looking dimmed whenever volume is below
+              unity. */}
           <div
             style={{
               position: 'absolute',
               inset: 0,
-              clipPath: volumeDragMode ? `path("${envelopePath}")` : undefined
+              clipPath: colorClipPath
             }}
           >
             {isOneShot && oneShotStem
@@ -931,32 +938,6 @@ export function CollapsedRifffRow({
               zIndex: 2
             }}
           />
-
-          {/* Muted regions: a diagonal hatch replacing the waveform for that
-              span. Purely visual (pointerEvents none) --
-              handleRegionMouseDown on the full-body surface above already
-              does its own bar-based lookup against muteRegions, so this
-              never needs its own separate mousedown handler. Positioned
-              relative to the clip's own left edge (leftPx), matching every
-              other per-pixel overlay in this component (fade dots, envelope
-              curve). muteRegions here is the UNION across every stem in this
-              rifff -- see its own doc comment above. */}
-          {muteRegions.map((region, i) => (
-            <div
-              key={i}
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: region.startBar * PPB - leftPx,
-                width: (region.endBar - region.startBar) * PPB,
-                background:
-                  'repeating-linear-gradient(45deg, color-mix(in srgb, var(--ra-mute-on) 55%, transparent) 0 3px, transparent 3px 8px)',
-                zIndex: 1,
-                pointerEvents: 'none'
-              }}
-            />
-          ))}
 
           {/* Live/pending region selection -- shown while dragging, and
               after release until Delete/Backspace commits it or it's
