@@ -703,7 +703,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     selector: '[data-rifff-clip]',
     title: 'the timeline',
-    body: 'drag a clip to move it, drag its edges to resize.'
+    body: 'drag a clip to move it, drag its edges to crop.'
   },
   {
     selector: '[data-tour-id="tour-tidy"]',
