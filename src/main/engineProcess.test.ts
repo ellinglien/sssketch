@@ -40,6 +40,15 @@ afterEach(() => {
 const noBridgeBinaryPath = '/no/such/bridge/binary'
 
 describe('spawnEngine', () => {
+  // Every test in this file that spawns the real engine binary gets an
+  // explicit 15s timeout, not vitest's 5000ms default -- that default
+  // exactly matches spawnEngine's own internal readiness timeout
+  // (engineProcess.ts), so any real spawn slowness under CI contention
+  // (other engine-spawning tests in this same parallel run) has zero
+  // margin before the test itself fails first. Caught for real via a
+  // release run: "stop() terminates the process" timed out here despite
+  // nothing being wrong, same class of flake as liveReschedule.test.ts/
+  // ipc-roundtrip.test.ts already fixed this same way.
   it('spawns the engine, waits for readiness, and returns a connected port', async () => {
     handle = await spawnEngine({
       binaryPathOverride: realBinaryPath,
@@ -47,7 +56,7 @@ describe('spawnEngine', () => {
     })
     expect(handle.port).toBeGreaterThan(0)
     expect(handle.process.exitCode).toBeNull() // still running
-  })
+  }, 15000)
 
   it('stop() terminates the process', async () => {
     handle = await spawnEngine({
@@ -70,7 +79,7 @@ describe('spawnEngine', () => {
     expect(proc.exitCode !== null || proc.signalCode !== null).toBe(true)
     expect(proc.signalCode).toBe('SIGKILL')
     handle = undefined // already stopped, don't double-stop in afterEach
-  })
+  }, 15000)
 
   it('rejects if the engine binary does not exist at the resolved path', async () => {
     await expect(spawnEngine({ binaryPathOverride: '/no/such/binary' })).rejects.toThrow()
@@ -89,7 +98,7 @@ describe('spawnEngine', () => {
       bridgeBinaryPathOverride: realBinaryPath // reusing the real engine binary as a stand-in "exists" path
     })
     expect(handle.port).toBeGreaterThan(0)
-  })
+  }, 15000)
 
   it('still starts normally when nothing exists at the given bridge binary override path', async () => {
     handle = await spawnEngine({
@@ -97,5 +106,5 @@ describe('spawnEngine', () => {
       bridgeBinaryPathOverride: '/definitely/does/not/exist/sssketch-bridge'
     })
     expect(handle.port).toBeGreaterThan(0)
-  })
+  }, 15000)
 })
