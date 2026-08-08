@@ -28,14 +28,16 @@ Two ways to bring stems into a project:
 - **sketch mode** — a simplified, linear view of the arrangement for quickly laying out a rough
   structure before switching back to the full timeline ("arranger" mode) to fine-tune it.
 - **Ableton export** — writes a real `.als` project file, with your bus groupings mapped onto
-  Ableton tracks and colors.
+  Ableton tracks and colors. Requires Ableton Live 12 or later — the exported project file's
+  format isn't backward-compatible with older versions.
 
 ## Installing
 
-No signed release build yet — a `.dmg` built locally (`npm run dist:mac`) is unsigned, so macOS
-Gatekeeper blocks a normal double-click open. Right-click the app in Applications and choose
-**Open** the first time instead. Once a real release is cut, signed/notarized `.dmg` installers
-will be attached to this repo's [Releases](../../releases) page and won't need this step.
+**[Download sssketch 1.0.0 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.0.0/sssketch-1.0.0.dmg)**
+— or see the [Releases](../../releases) page for other versions.
+
+No signed release build yet, so macOS Gatekeeper blocks a normal double-click open — right-click
+the app in Applications and choose **Open** the first time instead.
 
 Drag `sssketch.app` from the `.dmg` into Applications to install.
 
