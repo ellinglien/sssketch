@@ -957,19 +957,24 @@ function Frame(): React.JSX.Element {
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
   const [endlesssLibraryOpen, setEndlesssLibraryOpen] = useState(false)
-  // Shown once on first-ever launch (per machine, matching loreUsername's
+  // Shown on every launch by default (per machine, matching loreUsername's
   // own localStorage-persisted convention in LoreLibraryBrowser.tsx) --
-  // read lazily in useState's initializer, not an effect, so it can't
-  // flash open-then-closed on the very first render.
+  // only stops once "don't show this again" is checked. Read lazily in
+  // useState's initializer, not an effect, so it can't flash open-then-
+  // closed on the very first render.
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try {
-      return localStorage.getItem(ONBOARDING_SEEN_STORAGE_KEY) === null
+      return localStorage.getItem(ONBOARDING_SEEN_STORAGE_KEY) !== '1'
     } catch {
-      return false
+      // localStorage unavailable (e.g. private mode) -- an opt-out could
+      // never be persisted either, so keep showing rather than silently
+      // hiding it forever.
+      return true
     }
   })
-  function dismissOnboarding(): void {
+  function dismissOnboarding(dontShowAgain: boolean): void {
     setShowOnboarding(false)
+    if (!dontShowAgain) return
     try {
       localStorage.setItem(ONBOARDING_SEEN_STORAGE_KEY, '1')
     } catch {
@@ -1711,8 +1716,8 @@ function Frame(): React.JSX.Element {
         {showOnboarding && (
           <OnboardingModal
             onDismiss={dismissOnboarding}
-            onOpenEndlesss={() => {
-              dismissOnboarding()
+            onOpenEndlesss={(dontShowAgain) => {
+              dismissOnboarding(dontShowAgain)
               setEndlesssLibraryOpen(true)
             }}
           />
