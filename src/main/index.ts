@@ -62,7 +62,8 @@ import {
   libraryRootPath,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
-  renameSketch
+  renameSketch,
+  deleteSketch
 } from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -370,6 +371,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('rename-external-sketch-file', (_event, oldPath: string, newName: string) =>
     renameExternalSketchFile(oldPath, newName)
   )
+
+  ipcMain.handle('delete-sketch', (_event, name: string) => deleteSketch(name))
 
   ipcMain.handle('list-library-sketches', () => listLibrarySketches())
 
