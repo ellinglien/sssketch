@@ -65,6 +65,7 @@ import {
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
 import { getWarehouseSyncStatus } from './loreWarehouseWriter'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
+import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
@@ -172,6 +173,12 @@ app.whenReady().then(async () => {
   // already migrated (a symlink-recognizing scan, no real work), so no need
   // to gate this behind anything or run it off the main thread.
   migrateEndlesssStemCache()
+
+  // One-time-in-spirit, idempotent migration of favourites off the old
+  // flat-JSON file onto the new warehouse's Tags table -- see
+  // riffFavouritesMigration.ts's own doc comment for why this is safe to
+  // run unconditionally on every startup.
+  migrateLegacyFavourites(openOwnWarehouseDb())
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
