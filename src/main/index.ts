@@ -33,7 +33,6 @@ import { nativeExport, nativeExportStemsToDisk } from './nativeExport'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
-import { listFavouriteRiffCIDs, toggleFavouriteRiff } from './riffFavourites'
 import type { RiffFilters } from '@shared/loreLibrary'
 import {
   warehouseAvailable,
@@ -63,7 +62,11 @@ import {
   syncJam as syncJamToWarehouse
 } from './loreWarehouseSync'
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
-import { getWarehouseSyncStatus } from './loreWarehouseWriter'
+import {
+  getWarehouseSyncStatus,
+  listWarehouseFavourites,
+  toggleWarehouseFavourite
+} from './loreWarehouseWriter'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import {
@@ -673,9 +676,11 @@ app.whenReady().then(async () => {
     return loadCatalog()
   })
 
-  ipcMain.handle('list-riff-favourites', () => listFavouriteRiffCIDs())
+  ipcMain.handle('list-riff-favourites', () => listWarehouseFavourites(openOwnWarehouseDb()))
 
-  ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) => toggleFavouriteRiff(riffCID))
+  ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) =>
+    toggleWarehouseFavourite(openOwnWarehouseDb(), riffCID)
+  )
 
   createWindow()
 
