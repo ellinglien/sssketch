@@ -712,6 +712,24 @@ export function BeatPicker({
     setIsFreePlaying(true)
   }
 
+  /** The play/stop button's own click handler — separate from toggleFreePlay
+   * because "stop" needs to cover BOTH ways this picker can be making noise:
+   * free-play (isFreePlaying) and a specific beat preview (previewingBeat,
+   * started by clicking a gridline). Before this, the button only ever
+   * reflected/controlled isFreePlaying — clicking it while a beat preview
+   * was looping did nothing to silence it, it just started a NEW free-play
+   * loop instead (stopPreview() runs first, so no overlap, but there was no
+   * way to just go quiet short of re-clicking the exact same thin gridline
+   * button again). Real gap this fixed: no obvious way to stop the audio at
+   * all once a beat pick was playing. */
+  function handlePlayStopClick(): void {
+    if (isFreePlaying || previewingBeat !== null) {
+      stopPreview()
+      return
+    }
+    toggleFreePlay()
+  }
+
   function pickBeat(beatIndex: number): void {
     // A second click on the currently-playing beat just stops it — commit/bake
     // already happened on the first click, nothing new to do.
@@ -927,19 +945,29 @@ export function BeatPicker({
               </svg>
             </button>
             <button
-              onClick={toggleFreePlay}
-              title="click a beat below, or play and hit space where the loop begins"
+              onClick={handlePlayStopClick}
+              title={
+                isFreePlaying || previewingBeat !== null
+                  ? 'stop preview audio'
+                  : 'click a beat below, or play and hit space where the loop begins'
+              }
               style={{
                 height: 22,
                 borderRadius: 0,
                 padding: '0 10px',
                 fontSize: 10,
                 border: '1px solid var(--ra-border-strong)',
-                background: isFreePlaying ? 'var(--ra-play-on)' : 'var(--ra-bg-row-active)',
-                color: isFreePlaying ? 'var(--ra-play-on-ink)' : 'var(--ra-text)'
+                background:
+                  isFreePlaying || previewingBeat !== null
+                    ? 'var(--ra-play-on)'
+                    : 'var(--ra-bg-row-active)',
+                color:
+                  isFreePlaying || previewingBeat !== null
+                    ? 'var(--ra-play-on-ink)'
+                    : 'var(--ra-text)'
               }}
             >
-              {isFreePlaying ? '■ stop' : '▶ play'}
+              {isFreePlaying || previewingBeat !== null ? '■ stop' : '▶ play'}
             </button>
           </div>
         </div>
