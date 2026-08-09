@@ -110,6 +110,21 @@ describe('loreWarehouse', () => {
       '/Volumes/Elling-Lien/ENDLESSS/cache/common/stem_v2/bandABC123/d/dc857530d08e11ecb5304f35d712ecc6'
     )
   })
+
+  it('resolveStemPath uses the content-addressed endlesss-cache layout for the self-built warehouse', async () => {
+    const { ownWarehouseRoot } = await import('./loreWarehouseSchema')
+    setWarehouseRootForTests(ownWarehouseRoot())
+    expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
+      join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem_abc123')
+    )
+  })
+
+  it('resolveStemPath still uses the jam-sharded stem_v2 layout for an external warehouse', () => {
+    setWarehouseRootForTests('/some/external/lore-folder')
+    expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
+      join('/some/external/lore-folder', 'cache', 'common', 'stem_v2', 'jam_1', 's', 'stem_abc123')
+    )
+  })
 })
 
 function createSeededFixtureWarehouse(root: string): void {

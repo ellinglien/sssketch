@@ -106,11 +106,26 @@ export function warehouseAvailable(): boolean {
   return getWarehouseDb() !== null
 }
 
-/** Stem audio is sharded by jam and by the first hex character of the
- * StemCID: cache/common/stem_v2/<JamCID>/<first-hex-char>/<StemCID>, no file
- * extension. Traced from real LORE-synced data, not guessed. */
+/** Stem audio lives in one of two places depending on which warehouse is
+ * currently active:
+ *
+ * - An EXTERNAL, real OUROVEON-synced folder: sharded by jam and by the
+ *   first hex character of the StemCID --
+ *   cache/common/stem_v2/<JamCID>/<first-hex-char>/<StemCID>, no file
+ *   extension. Traced from real LORE-synced data, not guessed.
+ * - sssketch's OWN self-built warehouse: loreWarehouseSync.ts's sync
+ *   downloads stem audio via endlesssApi.ts's downloadMissingStemsFor,
+ *   which reuses that module's own existing content-addressed cache
+ *   (endlesss-cache/stems/<first-hex-char>/<StemCID>, keyed by stemCID
+ *   alone, no jam-sharding) rather than duplicating storage into a second,
+ *   jam-sharded layout nothing else needs. jamCID is accepted but unused in
+ *   this branch, kept for signature parity with the external case.
+ */
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
+  if (warehouseRootPath() === ownWarehouseRoot()) {
+    return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
+  }
   return join(stemCacheRoot(), jamCID, shard, stemCID)
 }
 
