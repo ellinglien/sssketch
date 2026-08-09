@@ -232,3 +232,36 @@ export function getWarehouseSyncStatus(
   }
   return { riffCount: n, complete: jam.SyncComplete === 1 }
 }
+
+/** Every currently-favourited riffCID, in no particular order -- the
+ * renderer sorts/displays them however it needs. */
+export function listWarehouseFavourites(db: Database.Database): string[] {
+  const rows = db.prepare(`SELECT RiffCID FROM Tags WHERE Favour = 1`).all() as {
+    RiffCID: string
+  }[]
+  return rows.map((r) => r.RiffCID)
+}
+
+/** Toggles one riff's favourite status and returns the updated full list,
+ * matching riffFavourites.ts's old toggleFavouriteRiff contract exactly (so
+ * the IPC handler/renderer side needs no changes beyond which function it
+ * calls). Looks up the riff's OwnerJamCID from Riffs if it's already synced
+ * -- if it's not (e.g. favourited via the old on-demand browsing path that
+ * never got warehouse-synced), OwnerJamCID is left NULL rather than
+ * blocking the favourite; Tags.OwnerJamCID is nullable for exactly this
+ * reason. */
+export function toggleWarehouseFavourite(db: Database.Database, riffCID: string): string[] {
+  const existing = db.prepare(`SELECT Favour FROM Tags WHERE RiffCID = ?`).get(riffCID) as
+    { Favour: number } | undefined
+  if (existing?.Favour === 1) {
+    db.prepare(`UPDATE Tags SET Favour = 0 WHERE RiffCID = ?`).run(riffCID)
+  } else {
+    const jamRow = db.prepare(`SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?`).get(riffCID) as
+      { OwnerJamCID: string } | undefined
+    db.prepare(
+      `INSERT INTO Tags (RiffCID, OwnerJamCID, Favour) VALUES (?, ?, 1)
+       ON CONFLICT(RiffCID) DO UPDATE SET Favour = 1, OwnerJamCID = excluded.OwnerJamCID`
+    ).run(riffCID, jamRow?.OwnerJamCID ?? null)
+  }
+  return listWarehouseFavourites(db)
+}

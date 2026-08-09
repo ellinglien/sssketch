@@ -11,7 +11,9 @@ import {
   isStemLedgered,
   getWarehouseSyncStatus,
   areAllResolved,
-  filterUnresolved
+  filterUnresolved,
+  toggleWarehouseFavourite,
+  listWarehouseFavourites
 } from './loreWarehouseWriter'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
@@ -36,7 +38,7 @@ function freshDb(): Database.Database {
       FileEndpoint TEXT, FileBucket TEXT, FileKey TEXT, BPMrnd REAL, Instrument INTEGER,
       Length16s REAL, PresetName TEXT, CreatorUserName TEXT
     );
-    CREATE TABLE Tags (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Favour INTEGER NOT NULL DEFAULT 0, Note TEXT);
+    CREATE TABLE Tags (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT, Favour INTEGER NOT NULL DEFAULT 0, Note TEXT);
     CREATE TABLE StemLedger (StemCID TEXT PRIMARY KEY, Type TEXT NOT NULL, Note TEXT);
   `)
   return db
@@ -278,5 +280,47 @@ describe('loreWarehouseWriter', () => {
 
   it('filterUnresolved returns an empty list for empty input', () => {
     expect(filterUnresolved(db, [])).toEqual([])
+  })
+
+  it('toggleWarehouseFavourite favourites a riff not yet in Tags, looking up its OwnerJamCID from Riffs if known', () => {
+    upsertJam(db, 'jam_1', 'Jam')
+    writeRiffDetail(db, 'jam_1', { creationTime: 100, userName: 'elling' }, resolvedRiffFixture())
+    const ids = toggleWarehouseFavourite(db, 'riff_1')
+    expect(ids).toEqual(['riff_1'])
+    const row = db
+      .prepare('SELECT OwnerJamCID, Favour FROM Tags WHERE RiffCID = ?')
+      .get('riff_1') as {
+      OwnerJamCID: string
+      Favour: number
+    }
+    expect(row).toEqual({ OwnerJamCID: 'jam_1', Favour: 1 })
+  })
+
+  it('toggleWarehouseFavourite favourites a riff with unknown jam as null OwnerJamCID', () => {
+    const ids = toggleWarehouseFavourite(db, 'unsynced_riff')
+    expect(ids).toEqual(['unsynced_riff'])
+    const row = db
+      .prepare('SELECT OwnerJamCID FROM Tags WHERE RiffCID = ?')
+      .get('unsynced_riff') as {
+      OwnerJamCID: string | null
+    }
+    expect(row.OwnerJamCID).toBeNull()
+  })
+
+  it('toggleWarehouseFavourite un-favourites an already-favourited riff', () => {
+    toggleWarehouseFavourite(db, 'riff_1')
+    const ids = toggleWarehouseFavourite(db, 'riff_1')
+    expect(ids).toEqual([])
+    const row = db.prepare('SELECT Favour FROM Tags WHERE RiffCID = ?').get('riff_1') as {
+      Favour: number
+    }
+    expect(row.Favour).toBe(0)
+  })
+
+  it('listWarehouseFavourites returns only riffCIDs with Favour = 1', () => {
+    toggleWarehouseFavourite(db, 'riff_1')
+    toggleWarehouseFavourite(db, 'riff_2')
+    toggleWarehouseFavourite(db, 'riff_2') // un-favourite
+    expect(listWarehouseFavourites(db).sort()).toEqual(['riff_1'])
   })
 })
