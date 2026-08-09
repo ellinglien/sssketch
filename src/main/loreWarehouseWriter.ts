@@ -176,6 +176,22 @@ export function isStemLedgered(db: Database.Database, stemCID: string): boolean 
   return db.prepare(`SELECT 1 FROM StemLedger WHERE StemCID = ?`).get(stemCID) !== undefined
 }
 
+/** True iff every one of `riffCIDs` already has a non-NULL AppVersion in
+ * `Riffs` -- i.e., nothing in this list is a gap. Used by the sync engine's
+ * per-page "is there anything left to do here" stop-check, distinct from
+ * findRiffsNeedingDetail (which returns the gaps themselves, not a
+ * yes/no over a specific candidate set). */
+export function areAllResolved(db: Database.Database, riffCIDs: string[]): boolean {
+  if (riffCIDs.length === 0) return true
+  const placeholders = riffCIDs.map(() => '?').join(',')
+  const rows = db
+    .prepare(
+      `SELECT RiffCID FROM Riffs WHERE RiffCID IN (${placeholders}) AND AppVersion IS NOT NULL`
+    )
+    .all(...riffCIDs) as { RiffCID: string }[]
+  return rows.length === riffCIDs.length
+}
+
 export interface WarehouseSyncStatus {
   riffCount: number
   complete: boolean

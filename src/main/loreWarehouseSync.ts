@@ -11,7 +11,8 @@ import {
   markJamSyncComplete,
   upsertRiffSkeletons,
   writeRiffDetail,
-  markStemDownloadFailed
+  markStemDownloadFailed,
+  areAllResolved
 } from './loreWarehouseWriter'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
@@ -74,13 +75,7 @@ export async function syncSharedFeed(
       }
 
       const cids = page.riffs.map((r) => r.riffCID)
-      const placeholders = cids.map(() => '?').join(',')
-      const alreadyDoneRows = db
-        .prepare(
-          `SELECT RiffCID FROM Riffs WHERE RiffCID IN (${placeholders}) AND AppVersion IS NOT NULL`
-        )
-        .all(...cids) as { RiffCID: string }[]
-      const pageFullyDone = alreadyDoneRows.length === cids.length
+      const pageFullyDone = areAllResolved(db, cids)
 
       upsertRiffSkeletons(
         db,

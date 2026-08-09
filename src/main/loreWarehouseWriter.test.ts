@@ -9,7 +9,8 @@ import {
   findRiffsNeedingDetail,
   markStemDownloadFailed,
   isStemLedgered,
-  getWarehouseSyncStatus
+  getWarehouseSyncStatus,
+  areAllResolved
 } from './loreWarehouseWriter'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
@@ -237,5 +238,26 @@ describe('loreWarehouseWriter', () => {
 
   it('getWarehouseSyncStatus returns null for an unknown jam', () => {
     expect(getWarehouseSyncStatus(db, 'nope')).toBeNull()
+  })
+
+  it('areAllResolved is true only when every given riffCID has a non-NULL AppVersion', () => {
+    upsertJam(db, 'jam_1', 'Jam')
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 1, userName: 'elling' },
+      resolvedRiffFixture({ riffCID: 'r1' })
+    )
+    upsertRiffSkeletons(db, 'jam_1', [{ riffCID: 'r2', creationTime: 2 }])
+
+    expect(areAllResolved(db, ['r1'])).toBe(true)
+    expect(areAllResolved(db, ['r1', 'r2'])).toBe(false)
+    expect(areAllResolved(db, ['r2'])).toBe(false)
+    // Unknown riffCID (not even skeleton-inserted) also counts as a gap.
+    expect(areAllResolved(db, ['r1', 'nope'])).toBe(false)
+  })
+
+  it('areAllResolved is true for an empty list', () => {
+    expect(areAllResolved(db, [])).toBe(true)
   })
 })
