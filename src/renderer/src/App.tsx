@@ -33,8 +33,7 @@ import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
-import { LoreLibraryBrowser } from './components/LoreLibraryBrowser'
-import { EndlesssLibraryBrowser } from './components/EndlesssLibraryBrowser'
+import { LibraryBrowser } from './components/LibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
@@ -995,8 +994,7 @@ function Frame(): React.JSX.Element {
     return () => window.clearTimeout(id)
   }, [persistedJson, currentSketch, state.rifffs])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
-  const [loreLibraryOpen, setLoreLibraryOpen] = useState(false)
-  const [endlesssLibraryOpen, setEndlesssLibraryOpen] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -1627,7 +1625,7 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
-        <Shelf onImported={handleImported} onOpenLibrary={() => setEndlesssLibraryOpen(true)} />
+        <Shelf onImported={handleImported} onOpenLibrary={() => setLibraryOpen(true)} />
         <TransportBar
           onOpenClusterStems={() => setClusterStemsOpen(true)}
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -1717,7 +1715,7 @@ function Frame(): React.JSX.Element {
               const wasBatchImport = pickerBatchGroupIds.length > 1
               setPickerGroupId(null)
               setPickerBatchGroupIds([])
-              if (wasBatchImport) setLoreLibraryOpen(false)
+              if (wasBatchImport) setLibraryOpen(false)
             }}
             onBaked={(steps) => {
               const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
@@ -1735,25 +1733,8 @@ function Frame(): React.JSX.Element {
             }}
           />
         )}
-        {loreLibraryOpen && (
-          <LoreLibraryBrowser
-            onClose={() => setLoreLibraryOpen(false)}
-            onImported={handleLoreImported}
-            onSwitchToEndlesss={() => {
-              setLoreLibraryOpen(false)
-              setEndlesssLibraryOpen(true)
-            }}
-          />
-        )}
-        {endlesssLibraryOpen && (
-          <EndlesssLibraryBrowser
-            onClose={() => setEndlesssLibraryOpen(false)}
-            onImported={handleLoreImported}
-            onSwitchToLore={() => {
-              setEndlesssLibraryOpen(false)
-              setLoreLibraryOpen(true)
-            }}
-          />
+        {libraryOpen && (
+          <LibraryBrowser onClose={() => setLibraryOpen(false)} onImported={handleLoreImported} />
         )}
         {libraryBrowserOpen && (
           <ProjectLibraryBrowser
@@ -1827,7 +1808,7 @@ function Frame(): React.JSX.Element {
             onDismiss={dismissOnboarding}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
-              setEndlesssLibraryOpen(true)
+              setLibraryOpen(true)
             }}
             onStartTour={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
