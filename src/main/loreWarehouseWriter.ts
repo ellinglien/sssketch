@@ -146,7 +146,12 @@ export function writeRiffDetail(
  * for it -- whether because this is the first time it's being processed, or
  * because a prior sync run was interrupted before it got there. Batched
  * (`limit`) so a single call can't try to resolve an unbounded backlog at
- * once. */
+ * once. Not currently called by syncSharedFeed/syncJam (loreWarehouseSync.ts) --
+ * they check per-page candidate sets via areAllResolved/filterUnresolved
+ * instead, since they already have the page's riffCIDs in hand. This
+ * function is here for a future standalone "resume without re-walking"
+ * pass or UI-facing "N riffs still need syncing" query, which don't have a
+ * candidate set to check against and need to scan for gaps directly. */
 export function findRiffsNeedingDetail(
   db: Database.Database,
   jamCID: string,
@@ -205,6 +210,13 @@ export function filterUnresolved(db: Database.Database, riffCIDs: string[]): str
 
 export interface WarehouseSyncStatus {
   riffCount: number
+  /** True once the walk has reached the true end of the feed/jam's history
+   * (or a page that's entirely already-resolved) -- NOT a guarantee that
+   * every riff in `riffCount` is itself fully resolved. A riff can still be
+   * a gap (AppVersion IS NULL) after `complete` is true, e.g. one whose
+   * resolveJamRiff/downloadMissingStemsFor call failed on the final walked
+   * page -- the next sync run will find and retry it via the same
+   * pageFullyDone logic, but this flag alone doesn't promise zero gaps. */
   complete: boolean
 }
 

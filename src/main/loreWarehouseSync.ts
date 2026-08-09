@@ -19,10 +19,13 @@ import {
 } from './loreWarehouseWriter'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
- * flight at once. Moved here verbatim from the old endlesssSync.ts (which
- * this module replaces) -- same worker-pool shape, same rationale (see its
- * own prior doc comment): a sync run touching hundreds of riffs needs a
- * concurrency cap so it doesn't compete with foreground UI clicks. */
+ * flight at once. Copied here from endlesssSync.ts's own identical helper --
+ * NOT a move: endlesssSync.ts is still live and unmodified (this plan is
+ * additive only, see its own Scope note), so both copies currently exist.
+ * Same worker-pool shape, same rationale (see endlesssSync.ts's own doc
+ * comment): a sync run touching hundreds of riffs needs a concurrency cap so
+ * it doesn't compete with foreground UI clicks. Once Plan 2 retires
+ * endlesssSync.ts, this should move to src/shared/ as the single copy. */
 export async function runWithConcurrency<T>(
   items: T[],
   limit: number,
