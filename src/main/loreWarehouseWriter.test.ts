@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import type { LoreResolvedRiff } from '@shared/loreLibrary'
 import {
@@ -152,6 +152,48 @@ describe('loreWarehouseWriter', () => {
       CreatorUserName: string
     }
     expect(stem.CreatorUserName).toBe('elling')
+  })
+
+  it('a mid-write failure inside writeRiffDetail leaves nothing committed (AppVersion stays a gap)', () => {
+    upsertJam(db, 'jam_1', 'Jam')
+    const fixture = resolvedRiffFixture()
+    const riff = resolvedRiffFixture({
+      stems: [
+        { ...fixture.stems[0], stemCID: 'stem_1', slot: 1 },
+        { ...fixture.stems[0], stemCID: 'stem_2', slot: 2 }
+      ]
+    })
+
+    // Simulate the second stem's UPDATE throwing partway through the
+    // function -- e.g. a real disk-full/interrupt scenario -- by spying on
+    // db.prepare and making the "UPDATE Stems" statement's run() throw once
+    // it sees stem_2. The first stem's writes (and the Riffs upsert before
+    // it) must not survive this: the whole function is one transaction.
+    const originalPrepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const stmt = originalPrepare(sql)
+      if (sql.startsWith('UPDATE Stems')) {
+        const originalRun = stmt.run.bind(stmt)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(stmt as any).run = (...args: any[]) => {
+          if (args[0]?.stemCID === 'stem_2') throw new Error('simulated mid-write failure')
+          return originalRun(...args)
+        }
+      }
+      return stmt
+    })
+
+    expect(() =>
+      writeRiffDetail(db, 'jam_1', { creationTime: 100, userName: 'elling' }, riff)
+    ).toThrow('simulated mid-write failure')
+
+    vi.restoreAllMocks()
+
+    const riffRow = db.prepare('SELECT AppVersion FROM Riffs WHERE RiffCID = ?').get(riff.riffCID)
+    expect(riffRow).toBeUndefined()
+    const stem1Row = db.prepare('SELECT * FROM Stems WHERE StemCID = ?').get('stem_1')
+    expect(stem1Row).toBeUndefined()
+    expect(findRiffsNeedingDetail(db, 'jam_1', 10)).toEqual([])
   })
 
   it('findRiffsNeedingDetail returns only rows with a NULL AppVersion, scoped to the jam', () => {

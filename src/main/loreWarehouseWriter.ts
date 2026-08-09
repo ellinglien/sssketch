@@ -48,21 +48,23 @@ interface RiffDetailMeta {
  * -- AppVersion = 1 on the Riffs row is what marks it "no longer a gap" for
  * findRiffsNeedingDetail. Also skeleton-inserts (INSERT ... DO NOTHING) each
  * referenced stem before filling in its detail, so a stem shared across
- * riffs that hasn't been seen via any OTHER riff yet still gets a row. */
+ * riffs that hasn't been seen via any OTHER riff yet still gets a row.
+ *
+ * The Riffs upsert and the Stems skeleton+detail loop are wrapped in ONE
+ * db.transaction so the whole function is all-or-nothing: if the process is
+ * interrupted (crash/force-quit) or any statement throws partway through,
+ * nothing commits -- AppVersion stays NULL and findRiffsNeedingDetail will
+ * correctly pick this riff up again next pass. Splitting this into two
+ * separately-committing operations would let AppVersion = 1 commit while
+ * some/all of this riff's Stems rows are still bare (uninitialized)
+ * skeletons, which is indistinguishable from "done" to every reader. */
 export function writeRiffDetail(
   db: Database.Database,
   jamCID: string,
   meta: RiffDetailMeta,
   resolved: LoreResolvedRiff
 ): void {
-  const slots: (string | null)[] = Array.from({ length: 8 }, (_, i) => {
-    const stem = resolved.stems.find((s) => s.slot === i + 1)
-    return stem?.stemCID ?? null
-  })
-  const gains: Record<string, number> = {}
-  for (const stem of resolved.stems) gains[String(stem.slot)] = stem.gain
-
-  db.prepare(
+  const upsertRiffRow = db.prepare(
     `INSERT INTO Riffs (
        RiffCID, OwnerJamCID, CreationTime, Root, Scale, BPMrnd, BarLength, UserName,
        StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8,
@@ -80,26 +82,7 @@ export function writeRiffDetail(
        StemCID_5 = excluded.StemCID_5, StemCID_6 = excluded.StemCID_6,
        StemCID_7 = excluded.StemCID_7, StemCID_8 = excluded.StemCID_8,
        GainsJSON = excluded.GainsJSON, AppVersion = 1`
-  ).run({
-    riffCID: resolved.riffCID,
-    jamCID,
-    creationTime: meta.creationTime,
-    root: resolved.root ?? null,
-    scale: resolved.scale ?? null,
-    bpm: resolved.bpm,
-    barLength: resolved.barLength,
-    userName: meta.userName,
-    s1: slots[0],
-    s2: slots[1],
-    s3: slots[2],
-    s4: slots[3],
-    s5: slots[4],
-    s6: slots[5],
-    s7: slots[6],
-    s8: slots[7],
-    gainsJson: JSON.stringify(gains)
-  })
-
+  )
   const insertStemSkeleton = db.prepare(
     `INSERT INTO Stems (StemCID, OwnerJamCID) VALUES (?, ?) ON CONFLICT(StemCID) DO NOTHING`
   )
@@ -110,8 +93,36 @@ export function writeRiffDetail(
        PresetName = @presetName, CreatorUserName = @creatorUserName
      WHERE StemCID = @stemCID`
   )
-  const txn = db.transaction((stems: LoreResolvedRiff['stems']) => {
-    for (const stem of stems) {
+
+  const txn = db.transaction((riff: LoreResolvedRiff) => {
+    const slots: (string | null)[] = Array.from({ length: 8 }, (_, i) => {
+      const stem = riff.stems.find((s) => s.slot === i + 1)
+      return stem?.stemCID ?? null
+    })
+    const gains: Record<string, number> = {}
+    for (const stem of riff.stems) gains[String(stem.slot)] = stem.gain
+
+    upsertRiffRow.run({
+      riffCID: riff.riffCID,
+      jamCID,
+      creationTime: meta.creationTime,
+      root: riff.root ?? null,
+      scale: riff.scale ?? null,
+      bpm: riff.bpm,
+      barLength: riff.barLength,
+      userName: meta.userName,
+      s1: slots[0],
+      s2: slots[1],
+      s3: slots[2],
+      s4: slots[3],
+      s5: slots[4],
+      s6: slots[5],
+      s7: slots[6],
+      s8: slots[7],
+      gainsJson: JSON.stringify(gains)
+    })
+
+    for (const stem of riff.stems) {
       insertStemSkeleton.run(stem.stemCID, jamCID)
       updateStemDetail.run({
         stemCID: stem.stemCID,
@@ -127,7 +138,7 @@ export function writeRiffDetail(
       })
     }
   })
-  txn(resolved.stems)
+  txn(resolved)
 }
 
 /** The whole resumability mechanism: a riff whose AppVersion is still NULL
