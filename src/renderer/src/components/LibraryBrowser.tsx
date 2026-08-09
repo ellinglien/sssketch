@@ -105,11 +105,6 @@ const RIFF_ID_JUMP_WINDOW_SIZE = 20
 // button with plain infinite scroll.
 const SCROLL_LOAD_MORE_THRESHOLD_PX = 200
 
-// How many riffs past the one just selected to warm the local stem cache
-// for in the background -- see EndlesssLibraryBrowser.tsx's own
-// PREFETCH_COUNT doc comment for the full rationale (unchanged here).
-const PREFETCH_COUNT = 3
-
 export function LibraryBrowser({
   onClose,
   onImported
@@ -330,6 +325,7 @@ export function LibraryBrowser({
     for (const jam of membershipJams ?? []) byId.set(jam.jamCID, jam)
     for (const jam of syncedJams) byId.set(jam.jamCID, jam)
     const merged = [...byId.values()]
+    merged.sort((a, b) => b.lastRiffTime - a.lastRiffTime)
     if (jamFilter.trim() === '') return merged
     const needle = jamFilter.trim().toLowerCase()
     return merged.filter((j) => j.name.toLowerCase().includes(needle))
@@ -870,53 +866,499 @@ export function LibraryBrowser({
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  // This task (data/logic layer only) deliberately ships a placeholder
-  // render below -- Task 3 replaces it with the real modal layout, at which
-  // point every one of these becomes a genuine JSX/prop/handler reference
-  // and this block goes away outright. It exists only because this
-  // project's tsconfig has noUnusedLocals/noUnusedParameters on (see
-  // tsconfig.web.json -> @electron-toolkit/tsconfig), which errors --
-  // doesn't just warn -- on a declared-but-unread local, so a
-  // fully-wired-but-not-yet-rendered component can't typecheck without
-  // something like this in between.
-  void [
-    riffFavourites,
-    toggleRiffFavourite,
-    setAuthStatus,
-    available,
-    warehouseRoot,
-    changingWarehouseRoot,
-    setJamFilter,
-    syncStatus,
-    syncProgress,
-    syncing,
-    syncBaseCount,
-    riffGroups,
-    hasMoreRiffs,
-    gridRef,
-    setRiffIdInput,
-    riffIdNotFound,
-    setLoreUsername,
-    playingRiffCID,
-    downloadingRiffCID,
-    handleStartSync,
-    handleChooseWarehouseFolder,
-    handleLoadMore,
-    handleGoToRiffId,
-    handleRiffClick,
-    handleImport,
-    handleImportSelected,
-    formatBpm,
-    instrumentMaskToSoundType,
-    guessSoundTypeFromPresetName,
-    typeColorVar,
-    PolarGlyph,
-    RiffCircle,
-    EndlesssLoginPanel,
-    LoadingLoader,
-    SCROLL_LOAD_MORE_THRESHOLD_PX,
-    PREFETCH_COUNT
-  ]
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000
+      }}
+      onClick={onClose}
+    >
+      <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
+      <div
+        style={{
+          width: 900,
+          height: 600,
+          background: 'var(--ra-bg-bar)',
+          border: '1px solid var(--ra-border-strong)',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--ra-border)'
+          }}
+        >
+          <span style={{ textTransform: 'lowercase' }}>library</span>
+          <button onClick={onClose}>close</button>
+        </div>
 
-  return <div>LibraryBrowser (WIP -- full render added in the next task)</div>
+        <EndlesssLoginPanel onStatusChange={setAuthStatus} />
+
+        {available === false ? (
+          <div style={{ padding: 24 }}>
+            <p>library not available at {warehouseRoot}</p>
+            <button disabled={changingWarehouseRoot} onClick={handleChooseWarehouseFolder}>
+              choose folder
+            </button>
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <div
+              style={{ width: 220, overflowY: 'auto', borderRight: '1px solid var(--ra-border)' }}
+            >
+              <input
+                type="text"
+                value={jamFilter}
+                onChange={(e) => setJamFilter(e.target.value)}
+                placeholder="filter jams..."
+                style={{
+                  height: 24,
+                  fontSize: 11,
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)',
+                  border: '1px solid var(--ra-border)',
+                  borderRadius: 0,
+                  padding: '0 6px',
+                  width: '100%',
+                  boxSizing: 'border-box'
+                }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="text"
+                    value={riffIdInput}
+                    onChange={(e) => {
+                      setRiffIdInput(e.target.value)
+                      setRiffIdNotFound(false)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleGoToRiffId()
+                    }}
+                    placeholder="go to rifff ID..."
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      padding: '0 6px'
+                    }}
+                  />
+                  <button
+                    onClick={handleGoToRiffId}
+                    style={{
+                      height: 24,
+                      padding: '0 8px',
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    go
+                  </button>
+                </div>
+                {riffIdNotFound && (
+                  <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>
+                    not found in local warehouse
+                  </span>
+                )}
+              </div>
+              {visibleJams.map((jam) => (
+                <button
+                  key={jam.jamCID}
+                  onClick={() => setSelectedJamCID(jam.jamCID)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    background:
+                      selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
+                    padding: '4px 8px'
+                  }}
+                >
+                  {jam.name}
+                  {syncedJams.some((s) => s.jamCID === jam.jamCID) ? '' : ' (not synced)'}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {selectedJamCID === null && (
+                <div style={{ fontSize: 11, color: 'var(--ra-text-3)', margin: 12 }}>
+                  select a jam to browse its rifffs
+                </div>
+              )}
+              {selectedJamCID !== null && (
+                <>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      margin: '8px 12px 0'
+                    }}
+                  >
+                    <input
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      title="from date"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <input
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
+                      title="to date"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <input
+                      type="number"
+                      value={bpmFilter}
+                      onChange={(e) => setBpmFilter(e.target.value)}
+                      placeholder="bpm"
+                      style={{
+                        width: 60,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      value={userNameFilter}
+                      onChange={(e) => setUserNameFilter(e.target.value)}
+                      placeholder="username"
+                      style={{
+                        width: 100,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={onlyFullyCached}
+                        onChange={(e) => setOnlyFullyCached(e.target.checked)}
+                      />
+                      only fully cached
+                    </label>
+                    <span
+                      style={{
+                        width: 1,
+                        alignSelf: 'stretch',
+                        background: 'var(--ra-border)'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      value={loreUsername}
+                      onChange={(e) => setLoreUsername(e.target.value)}
+                      placeholder="your username"
+                      title="your LORE username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
+                      style={{
+                        width: 100,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={onlyContainsMe}
+                        onChange={(e) => setOnlyContainsMe(e.target.checked)}
+                      />
+                      only mine
+                    </label>
+                    <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                      {riffs.length} rifffs{hasMoreRiffs ? '+' : ''}
+                    </span>
+                    {authStatus.loggedIn && selectedJamCID && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                          {syncStatus
+                            ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
+                            : 'not synced yet'}
+                        </span>
+                        <button onClick={handleStartSync} disabled={syncing}>
+                          {syncing ? <LoadingLoader /> : 'sync'}
+                        </button>
+                        {syncing && syncProgress && (
+                          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                            synced {syncBaseCount + syncProgress.done} so far
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    ref={gridRef}
+                    onScroll={(e) => {
+                      // Fires more auto-loading than a bottom-edge-only check
+                      // would strictly need, but handleLoadMore's own
+                      // loadingMoreRiffs guard already makes repeat calls a
+                      // no-op while a page is in flight, so there's no real
+                      // cost to checking on every scroll event rather than
+                      // debouncing.
+                      if (!hasMoreRiffs || loadingMoreRiffs) return
+                      const el = e.currentTarget
+                      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+                      if (distanceFromBottom < SCROLL_LOAD_MORE_THRESHOLD_PX) handleLoadMore()
+                    }}
+                    style={{
+                      margin: '10px 12px 0',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      overflowY: 'auto',
+                      flex: 1
+                    }}
+                  >
+                    {riffGroups.map((group) => (
+                      <div key={group.label}>
+                        <span
+                          className="ra-eyebrow"
+                          style={{ fontSize: 8, display: 'block', marginBottom: 4 }}
+                        >
+                          {group.label}
+                        </span>
+                        {group.tempoGroups.map((tempoGroup) => (
+                          <div key={tempoGroup.bpm} style={{ marginBottom: 6 }}>
+                            <span
+                              style={{
+                                fontSize: 8,
+                                color: 'var(--ra-text-3)',
+                                display: 'block',
+                                marginBottom: 3
+                              }}
+                            >
+                              {tempoGroup.bpm} BPM
+                            </span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                              {tempoGroup.riffs.map((riff) => (
+                                <div
+                                  key={riff.riffCID}
+                                  ref={(el) => {
+                                    if (el) riffNodeRefs.current.set(riff.riffCID, el)
+                                    else riffNodeRefs.current.delete(riff.riffCID)
+                                  }}
+                                >
+                                  <RiffCircle
+                                    title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                    selected={selectedRiffCID === riff.riffCID}
+                                    multiSelected={
+                                      selectedRiffCID !== riff.riffCID &&
+                                      selectedRiffCIDs.has(riff.riffCID)
+                                    }
+                                    playing={
+                                      selectedRiffCID === riff.riffCID &&
+                                      playingRiffCID === riff.riffCID
+                                    }
+                                    fullyCached={riff.cachedStemCount >= riff.stemCount}
+                                    imported={importedRiffGroupIds.has(riff.riffCID)}
+                                    ownerFraction={riff.ownerFraction}
+                                    favorited={riffFavourites.has(riff.riffCID)}
+                                    onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault()
+                                      toggleRiffFavourite(riff.riffCID)
+                                    }}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {/* Loading more happens automatically on scroll (see the
+                        container's own onScroll above) — this is feedback
+                        only, not a control. */}
+                    {loadingMoreRiffs && (
+                      <span
+                        style={{
+                          alignSelf: 'flex-start',
+                          fontSize: 9,
+                          color: 'var(--ra-text-3)'
+                        }}
+                      >
+                        loading…
+                      </span>
+                    )}
+                  </div>
+
+                  {resolvedRiff && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'center',
+                        margin: '10px 12px'
+                      }}
+                    >
+                      <PolarGlyph
+                        stems={resolvedRiff.stems
+                          .filter((s) => s.path !== null)
+                          .map((s) => ({
+                            slot: s.slot,
+                            author: s.creatorUserName,
+                            name: s.presetName,
+                            type:
+                              instrumentMaskToSoundType(s.instrumentMask) ??
+                              guessSoundTypeFromPresetName(s.presetName) ??
+                              'fx',
+                            path: s.path!,
+                            durationSec: s.durationSec,
+                            barLength: s.barLength
+                          }))}
+                        identityColor={typeColorVar('fx')}
+                        size={40}
+                      />
+                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
+                        {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
+                        {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                        <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
+                          {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
+                        </div>
+                      </div>
+                      {resolvedRiff.stems.some((s) => s.path === null) && (
+                        <button
+                          onClick={() => {
+                            if (!selectedRiffCID) return
+                            setBusy('downloading stems…')
+                            void ensureStemsDownloaded(selectedRiffCID, resolvedRiff).finally(() =>
+                              setBusy(null)
+                            )
+                          }}
+                          disabled={downloadingRiffCID !== null}
+                          title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"
+                          style={{
+                            height: 24,
+                            borderRadius: 0,
+                            padding: '0 10px',
+                            fontSize: 10,
+                            border: '1px solid var(--ra-border)',
+                            background: 'var(--ra-bg-row-active)',
+                            color:
+                              downloadingRiffCID !== null ? 'var(--ra-text-4)' : 'var(--ra-text-2)'
+                          }}
+                        >
+                          {downloadingRiffCID === selectedRiffCID
+                            ? 'downloading…'
+                            : 'download missing stems'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (selectedRiffCIDs.size > 1) {
+                            void handleImportSelected()
+                          } else {
+                            void handleImport()
+                          }
+                        }}
+                        // No longer disabled just because nothing's cached yet — Import
+                        // itself now auto-fetches missing stems first (ensureStemsDownloaded
+                        // above), so a riff with zero cached stems is still importable, just
+                        // slower. importResolvedRiff already no-ops safely (returns null) if
+                        // that fetch fails and truly nothing ends up cached.
+                        disabled={downloadingRiffCID !== null}
+                        style={{
+                          height: 34,
+                          borderRadius: 0,
+                          padding: '0 20px',
+                          fontSize: 13,
+                          fontWeight: 700,
+                          border: '2px solid var(--ra-border-strong)',
+                          background:
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on-bg)'
+                              : 'var(--ra-bg-row-active)',
+                          color:
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on)'
+                              : 'var(--ra-text)'
+                        }}
+                      >
+                        {selectedRiffCIDs.size > 1
+                          ? `import ${selectedRiffCIDs.size} rifffs`
+                          : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                            ? 'imported ✓ — import again'
+                            : 'import'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
