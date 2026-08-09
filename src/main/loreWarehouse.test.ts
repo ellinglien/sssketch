@@ -72,9 +72,10 @@ describe('loreWarehouse', () => {
     expect(warehouseAvailable()).toBe(true)
   })
 
-  it('warehouseRootPath() falls back to the legacy default when no prefs file exists', () => {
-    setWarehouseRootForTests(null)
-    expect(warehouseRootPath()).toBe('/Volumes/Elling-Lien/ENDLESSS')
+  it('warehouseRootPath defaults to the self-built warehouse root when no prefs file exists', async () => {
+    const { ownWarehouseRoot } = await import('./loreWarehouseSchema')
+    setWarehouseRootForTests(null) // clear the test override this file's other tests rely on
+    expect(warehouseRootPath()).toBe(ownWarehouseRoot())
   })
 
   it('setWarehouseRoot() persists a new root that warehouseRootPath() then returns', () => {

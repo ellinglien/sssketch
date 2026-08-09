@@ -11,19 +11,13 @@ import type {
   RiffPage
 } from '@shared/loreLibrary'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/loreLibrary'
+import { ownWarehouseRoot } from './loreWarehouseSchema'
 
 const WAREHOUSE_PREFS_FILENAME = 'loreWarehousePrefs.json'
 
 function warehousePrefsPath(): string {
   return join(app.getPath('userData'), WAREHOUSE_PREFS_FILENAME)
 }
-
-// The actual synced folder on Elling's own machine -- kept as the fallback
-// default so his existing setup keeps working with zero extra steps now
-// that this is user-configurable (see setWarehouseRoot). Every other user
-// points this at their own LORE-synced folder via the folder picker in
-// LoreLibraryBrowser.tsx.
-const LEGACY_DEFAULT_WAREHOUSE_ROOT = '/Volumes/Elling-Lien/ENDLESSS'
 
 /** Test-only seam: points the module at a fixture warehouse instead of the
  * real one, bypassing prefs entirely. Pass null to clear the override and
@@ -36,21 +30,28 @@ export function setWarehouseRootForTests(root: string | null): void {
   closeWarehouseDb()
 }
 
-/** Where the user's LORE-synced folder lives -- user-relocatable (see
- * setWarehouseRoot), defaulting to Elling's own historical path. Read fresh
+/** Where the user's LORE-style warehouse lives -- user-relocatable (see
+ * setWarehouseRoot). Defaults to sssketch's own self-built warehouse
+ * (ownWarehouseRoot(), populated by loreWarehouseSync.ts's background sync)
+ * until a user explicitly points this at a real, externally-managed
+ * OUROVEON-synced folder via the folder picker -- see the design spec's
+ * Favourites + external-warehouse compatibility section
+ * (docs/superpowers/specs/2026-08-09-lore-warehouse-sync-design.md).
+ * Once a prefs file exists, whatever root is saved there always wins; this
+ * default is only consulted on a genuinely first-ever launch. Read fresh
  * every call rather than cached, matching projectLibrary.ts's own
  * libraryRootPath convention. */
 export function warehouseRootPath(): string {
   if (warehouseRootOverride !== null) return warehouseRootOverride
   const path = warehousePrefsPath()
-  if (!existsSync(path)) return LEGACY_DEFAULT_WAREHOUSE_ROOT
+  if (!existsSync(path)) return ownWarehouseRoot()
   try {
     const prefs = JSON.parse(readFileSync(path, 'utf-8')) as { root?: string }
-    return prefs.root ?? LEGACY_DEFAULT_WAREHOUSE_ROOT
+    return prefs.root ?? ownWarehouseRoot()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`warehouseRootPath: failed to read ${path}: ${message}`)
-    return LEGACY_DEFAULT_WAREHOUSE_ROOT
+    return ownWarehouseRoot()
   }
 }
 
