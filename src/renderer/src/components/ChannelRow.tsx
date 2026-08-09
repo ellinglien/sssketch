@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
-import { linearWaveBarsRunningMax } from '@shared/visuals'
+import { linearWaveBars, linearWaveBarsRunningMax } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
@@ -83,6 +83,20 @@ function ChannelRowImpl({
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
   const bpm = useAppSelector((s) => s.bpm)
   const loopRegion = useAppSelector((s) => s.loopRegion)
+  const gatedRecordingEnabled = useAppSelector((s) => s.gatedRecordingEnabled)
+  // Only one channel is ever "the" gated-recording channel at a time -- the
+  // engine's own gated-recording-update push carries no channelId (unlike
+  // capture-level-update, which is scoped to whichever channel is armed),
+  // so this is how each ChannelRow decides whether IT is the one that
+  // should render the live overlay below. Reads gatedRecordingChannelId
+  // directly (see its own doc comment on AppState) rather than searching
+  // channelOrder for "the first recording channel" -- an earlier version
+  // did that, which broke the moment lock-in started minting a NEW
+  // recording channel per take (see App.tsx's lockInGatedRecording): the
+  // overlay got stuck on the original, permanently-empty channel forever,
+  // on the wrong row, and never cleared after a commit (real bug, caught
+  // via screenshot during manual testing).
+  const isGatedRecordingChannel = useAppSelector((s) => s.gatedRecordingChannelId === channelId)
   const playing = usePlaying()
   const ppb = useZoom()
 
@@ -222,15 +236,26 @@ function ChannelRowImpl({
             const liveState = getStateSnapshot()
             const previousTakeGroupId = Object.keys(liveState.rifffs).find(
               (id) =>
-                liveState.rifffs[id].startBar !== undefined &&
-                liveState.channelOf[id] === channelId
+                liveState.rifffs[id].startBar !== undefined && liveState.channelOf[id] === channelId
             )
             if (previousTakeGroupId)
               dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId: previousTakeGroupId })
+            // The engine reports how many bars of round-trip audio I/O
+            // latency it estimates for the device that was recording (see
+            // Transport::roundTripLatencySamples' doc comment) -- captured
+            // audio lands this much later than when it was actually played,
+            // so the take is placed that much EARLIER than the loop's own
+            // nominal start to compensate. Clamped at 0 rather than going
+            // negative for an edge case like a very short loop region on a
+            // high-latency device.
+            const compensatedStartBar = Math.max(
+              0,
+              (armedRegion?.startBar ?? 0) - (result.latencyCompensationBars ?? 0)
+            )
             dispatch({
               type: 'MOVE_TO_CHANNEL',
               groupId: rifff.groupId,
-              startBar: armedRegion?.startBar ?? 0,
+              startBar: compensatedStartBar,
               channelId
             })
           }
@@ -356,6 +381,27 @@ function ChannelRowImpl({
       setCapturePeaks([])
     }
   }, [isArmed, channelId])
+
+  // Same live-overlay pattern as capturePeaks above, adapted for
+  // GatedLoopRecorder's fixed-size buffer (see its own doc comment):
+  // unlike the arm-to-disarm LoopRecorder, this buffer never grows -- it
+  // always spans the WHOLE selected loop region from the moment gated
+  // recording is enabled, so the overlay's width is fixed too (derived
+  // from loopRegion, not from gatedPeaks.length) and uses linearWaveBars
+  // (plain whole-array normalization), not linearWaveBarsRunningMax --
+  // there's no "growing array retroactively rescaling" problem to guard
+  // against when the array's own length never changes.
+  const [gatedPeaks, setGatedPeaks] = useState<number[]>([])
+  useEffect(() => {
+    if (!gatedRecordingEnabled || !isGatedRecordingChannel) return
+    const unsubscribe = window.rifffApi.onGatedRecordingUpdate((peaks) => {
+      setGatedPeaks(peaks)
+    })
+    return () => {
+      unsubscribe()
+      setGatedPeaks([])
+    }
+  }, [gatedRecordingEnabled, isGatedRecordingChannel])
 
   return (
     <div
@@ -546,6 +592,42 @@ function ChannelRowImpl({
               Waveform.tsx's own linearWaveBars gives the finished clip. */}
           <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
             {linearWaveBarsRunningMax(capturePeaks).map((bar, i) => (
+              <rect
+                key={i}
+                x={bar.x}
+                y={bar.y}
+                width={bar.width}
+                height={bar.height}
+                fill="var(--ra-recording-live)"
+                shapeRendering="crispEdges"
+              />
+            ))}
+          </svg>
+        </div>
+      )}
+      {gatedRecordingEnabled && isGatedRecordingChannel && loopRegion && (
+        // Fixed position/width spanning the WHOLE loop region for the
+        // entire time gated recording is enabled -- unlike the armed
+        // overlay above (which grows from a start point as capture
+        // proceeds), GatedLoopRecorder's own buffer is bounded to exactly
+        // one loop pass from the start, so there's no "how far has it
+        // gotten" position to track, just "redraw the whole fixed span on
+        // every poll." Same NAME_BAR_HEIGHT/ROW_HEIGHT lane and
+        // --ra-recording-live color as the armed overlay, for one
+        // continuous "this is live capture" color language across both
+        // recording paths.
+        <div
+          style={{
+            position: 'absolute',
+            left: loopRegion.startBar * ppb,
+            width: (loopRegion.endBar - loopRegion.startBar) * ppb,
+            top: NAME_BAR_HEIGHT,
+            height: ROW_HEIGHT,
+            pointerEvents: 'none'
+          }}
+        >
+          <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
+            {linearWaveBars(gatedPeaks).map((bar, i) => (
               <rect
                 key={i}
                 x={bar.x}
