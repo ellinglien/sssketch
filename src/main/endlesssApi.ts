@@ -10,7 +10,6 @@ import type {
   RiffPage
 } from '@shared/loreLibrary'
 import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/loreLibrary'
-import { loadSyncIndex, sliceSyncedPage, sliceSyncedRiff } from './endlesssSyncIndex'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -567,25 +566,6 @@ export async function listSharedFeed(
   count: number,
   fetchImpl: FetchLike = fetch
 ): Promise<RiffPage> {
-  const syncIndex = loadSyncIndex('shared', userName)
-  if (syncIndex) {
-    const syncedPage = sliceSyncedPage(syncIndex, offset, count)
-    if (syncedPage) {
-      // Warm sharedFeedCache from the WHOLE synced index (not just this
-      // page) so resolveSharedFeedRiff can resolve any riff currently
-      // rendered from a synced page, not just the very last one fetched --
-      // strictly better than the live path's own "only the last page is
-      // resolvable" limitation, and free since the index is already loaded
-      // into memory to slice it.
-      const newCache = new Map<string, LoreResolvedRiff>()
-      for (const riffCID of syncIndex.order) {
-        newCache.set(riffCID, syncIndex.riffs[riffCID].resolved)
-      }
-      sharedFeedCache = newCache
-      return syncedPage
-    }
-  }
-
   const session = activeSession()
   const headers: Record<string, string> = { 'User-Agent': userAgent() }
   if (session) headers.Authorization = bearerAuthHeader(session)
@@ -776,11 +756,7 @@ const DEFAULT_RIFF_PAGE_SIZE = 200
  * doesn't expose that metadata without a per-riff resolve, unlike LORE's own
  * SQL-backed listRiffs. This is a deliberate v1 scope trim (see the
  * implementation plan) -- filtering can be layered on by resolving visible
- * riffs client-side in a later pass if it turns out to matter in practice.
- * Checks the local sync index first (see endlesssSyncIndex.ts) and serves
- * straight from it, with zero network calls, whenever the requested range
- * is already fully synced -- the CouchDB view below only ever runs for
- * whatever isn't. */
+ * riffs client-side in a later pass if it turns out to matter in practice. */
 export async function listRiffsInJam(
   jamId: string,
   filters: RiffFilters,
@@ -788,12 +764,6 @@ export async function listRiffsInJam(
 ): Promise<RiffPage> {
   const offset = filters.offset ?? 0
   const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
-
-  const syncIndex = loadSyncIndex('jam', jamId)
-  if (syncIndex) {
-    const syncedPage = sliceSyncedPage(syncIndex, offset, limit)
-    if (syncedPage) return syncedPage
-  }
 
   const session = activeSession()
   if (!session) return { riffs: [], hasMore: false, nextOffset: offset }
@@ -894,22 +864,12 @@ async function fetchDocsByKeys<T>(
 /** Resolves one riff within a private jam: fetches the riff doc, extracts
  * its referenced stem IDs from state.playback, batch-fetches those stem
  * docs, then downloads whatever stems aren't already cached locally --
- * mirroring downloadMissingStems' existing LORE-path contract exactly.
- * Checks the local sync index first (see endlesssSyncIndex.ts) and returns
- * straight from it, with zero network calls and no login required, when
- * this riff is already fully synced -- everything below only ever runs for
- * a riff that isn't. */
+ * mirroring downloadMissingStems' existing LORE-path contract exactly. */
 export async function resolveJamRiff(
   jamId: string,
   riffCID: string,
   fetchImpl: FetchLike = fetch
 ): Promise<LoreResolvedRiff | null> {
-  const syncIndex = loadSyncIndex('jam', jamId)
-  if (syncIndex) {
-    const synced = sliceSyncedRiff(syncIndex, riffCID)
-    if (synced) return synced
-  }
-
   const session = activeSession()
   if (!session) return null
 

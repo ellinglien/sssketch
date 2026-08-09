@@ -55,8 +55,6 @@ import {
   resolveJamRiff,
   listRiffOwnership
 } from './endlesssApi'
-import { syncSharedFeed, syncJam } from './endlesssSync'
-import { getSyncStatus } from './endlesssSyncIndex'
 import {
   syncSharedFeed as syncSharedFeedToWarehouse,
   syncJam as syncJamToWarehouse
@@ -271,29 +269,6 @@ app.whenReady().then(async () => {
     (_event, jamId: string, riffCIDs: string[], targetUser: string) =>
       listRiffOwnership(jamId, riffCIDs, targetUser)
   )
-  ipcMain.handle('endlesss-start-sync-shared-feed', (event, userName: string) =>
-    syncSharedFeed(userName, (progress) => {
-      event.sender.send('endlesss-sync-progress', {
-        source: 'shared' as const,
-        key: userName,
-        ...progress
-      })
-    })
-  )
-  ipcMain.handle('endlesss-start-sync-jam', (event, jamId: string) =>
-    syncJam(jamId, (progress) => {
-      event.sender.send('endlesss-sync-progress', {
-        source: 'jam' as const,
-        key: jamId,
-        ...progress
-      })
-    })
-  )
-  ipcMain.handle('endlesss-sync-status-shared-feed', (_event, userName: string) =>
-    getSyncStatus('shared', userName)
-  )
-  ipcMain.handle('endlesss-sync-status-jam', (_event, jamId: string) => getSyncStatus('jam', jamId))
-
   ipcMain.handle('lore-sync-start-shared-feed', (event, userName: string) =>
     syncSharedFeedToWarehouse(userName, (progress) => {
       event.sender.send('lore-sync-progress', {
