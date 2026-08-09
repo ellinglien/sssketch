@@ -71,10 +71,6 @@ function warehouseDbPath(): string {
   return join(warehouseRootPath(), 'cache', 'common', 'warehouse.db3')
 }
 
-function stemCacheRoot(): string {
-  return join(warehouseRootPath(), 'cache', 'common', 'stem_v2')
-}
-
 let cachedDb: Database.Database | null = null
 
 /** Lazily opens the warehouse DB read-only, with a busy-timeout so a moment
@@ -123,10 +119,11 @@ export function warehouseAvailable(): boolean {
  */
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
-  if (warehouseRootPath() === ownWarehouseRoot()) {
+  const root = warehouseRootPath()
+  if (root === ownWarehouseRoot()) {
     return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
   }
-  return join(stemCacheRoot(), jamCID, shard, stemCID)
+  return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)
 }
 
 export function listJams(filterText: string): LoreJam[] {
