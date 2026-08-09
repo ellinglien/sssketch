@@ -34,6 +34,13 @@ export interface LoreResolvedStem {
   instrumentMask: number
   durationSec: number // computed from this stem's own BPMrnd/BarLength, not the riff's
   barLength: number // this stem's own loop length — may differ from the riff's own barLength if the stem tiles
+  /** This stem's own BPM (already the OUROVEON-matching rounded value, see
+   * bpsToRoundedBpm) — kept separately from durationSec/barLength (which are
+   * DERIVED from it) so a warehouse writer can persist it as its own BPMrnd
+   * column, matching loreWarehouse.ts's own Stems.BPMrnd. Undefined only for
+   * a construction site that doesn't have it (loreWarehouse.ts's own
+   * resolveRiff, reading an external warehouse, doesn't set this). */
+  bpm?: number
   /** Direct, unauthenticated HTTPS URL for this stem's audio — the actual
    * stem blobs turn out to be public DigitalOcean Spaces objects (verified
    * against the real warehouse; the login LORE asks for is only for the
@@ -42,6 +49,20 @@ export interface LoreResolvedStem {
    * populated slot). Present even when path is already non-null — a caller
    * downloading only cares about the ones where path is null. */
   downloadUrl: string | null
+  /** Raw components behind downloadUrl (endpoint/bucket/key -- see
+   * stemDownloadUrl), kept separately rather than only the combined URL, so
+   * a SQLite warehouse writer can persist them as their own
+   * FileEndpoint/FileBucket/FileKey columns matching loreWarehouse.ts's own
+   * Stems table, and reconstruct the URL the same way loreWarehouse.ts's
+   * resolveRiff already does. Undefined when downloadUrl itself is null
+   * (no oggAudio at all) or for a construction site that doesn't have raw
+   * components available (loreWarehouse.ts's own resolveRiff). fileBucket
+   * is specifically undefined (not empty string) when the real endpoint had
+   * no separate bucket subdomain -- matches stemDownloadUrl's own
+   * fileBucket-is-optional contract. */
+  fileEndpoint?: string
+  fileBucket?: string
+  fileKey?: string
 }
 
 export interface RiffFilters {
@@ -82,6 +103,13 @@ export interface LoreResolvedRiff {
    * Scale columns (see loreWarehouse.ts's resolveKeyName). Undefined for
    * riffs predating this metadata, not every riff has it. */
   key?: string
+  /** Raw Root/Scale ints behind `key` (see resolveKeyName) -- kept
+   * separately so a warehouse writer can persist them as their own
+   * Root/Scale columns rather than only the derived display string.
+   * Undefined for a construction site that doesn't have them
+   * (loreWarehouse.ts's own resolveRiff only derives `key`, not these). */
+  root?: number
+  scale?: number
   stems: LoreResolvedStem[]
 }
 

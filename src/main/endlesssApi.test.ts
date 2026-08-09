@@ -350,6 +350,39 @@ describe('endlesssApi shared feed', () => {
     })
   })
 
+  it('resolveSharedFeedRiff carries raw root/scale and stem file components, not just derived values', async () => {
+    const { listSharedFeed, resolveSharedFeedRiff } = await import('./endlesssApi')
+    const fakeFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                _id: 'shared_1',
+                doc_id: 'riff_1',
+                action_timestamp: 1700000000000,
+                rifff: rawRiffDoc('stem_1', { root: 4, scale: 5 }),
+                loops: [rawStemDoc(), null, null, null, null, null, null, null],
+                image: false
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    )
+    await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
+    const resolved = await resolveSharedFeedRiff('riff_1', fakeFetch as typeof fetch)
+    expect(resolved).not.toBeNull()
+    expect(resolved!.root).toBe(4)
+    expect(resolved!.scale).toBe(5)
+    expect(resolved!.stems[0]).toMatchObject({
+      bpm: 120,
+      fileEndpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+      fileKey: 'attachments/oggAudio/1/abc'
+    })
+    expect(resolved!.stems[0].fileBucket).toBeUndefined()
+  })
+
   it('resolveSharedFeedRiff reconstructs downloadUrl from bucket/endpoint/key rather than trusting the embedded url field', async () => {
     // Matches OUROVEON's own real client (types::Stem::fullEndpoint() +
     // GET /{fileKey}, live.stem.cpp) -- it never trusts an embedded `url`

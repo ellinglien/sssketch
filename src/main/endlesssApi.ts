@@ -367,7 +367,11 @@ function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreRe
     instrumentMask: stemFlagsToMask(stem),
     durationSec: barLength * (60 / bpm) * 4,
     barLength,
-    downloadUrl
+    bpm,
+    downloadUrl,
+    fileEndpoint: ogg?.endpoint,
+    fileBucket: ogg?.bucket,
+    fileKey: ogg?.key
   }
 }
 
@@ -389,6 +393,8 @@ function buildResolvedRiff(
     bpm: bpsToRoundedBpm(riffDoc.state.bps),
     barLength: riffDoc.state.barLength,
     key: resolveKeyName(riffDoc.root, riffDoc.scale),
+    root: riffDoc.root,
+    scale: riffDoc.scale,
     stems
   }
 }
