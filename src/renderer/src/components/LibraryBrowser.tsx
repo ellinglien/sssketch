@@ -145,6 +145,12 @@ export function LibraryBrowser({
   const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncBaseCount, setSyncBaseCount] = useState(0)
+  // Bumped whenever a sync completes for the currently-selected jam, purely
+  // to give the riff-fetch effect below a dependency that changes on sync
+  // completion -- selectedJamCID itself doesn't change when a sync finishes,
+  // so without this the riff grid would stay empty after a first-ever sync
+  // until the user picked a different jam and back.
+  const [riffRefreshToken, setRiffRefreshToken] = useState(0)
 
   // Riff list + pagination (single flat list -- no more per-tab duplication)
   const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
@@ -363,12 +369,24 @@ export function LibraryBrowser({
 
   useEffect(() => {
     return window.rifffApi.onLoreSyncProgress((progress) => {
-      if (progress.key !== selectedJamCID) return
+      // lore-sync-start-shared-feed's IPC handler sends progress events keyed
+      // by the bare username (not the synthetic `shared:<username>` jamCID
+      // used in this component's own jam list/selection) -- see
+      // sharedFeedEntry above. Strip the prefix before comparing so shared-
+      // feed progress is ever recognized as relevant; the status re-fetch
+      // below still needs the real, prefixed key since that's the actual
+      // Jams table lookup.
+      if (!selectedJamCID) return
+      const expectedKey = selectedJamCID.startsWith('shared:')
+        ? selectedJamCID.slice('shared:'.length)
+        : selectedJamCID
+      if (progress.key !== expectedKey) return
       setSyncProgress(progress)
       if (progress.done === progress.total) {
         setSyncing(false)
+        setRiffRefreshToken((t) => t + 1)
         window.rifffApi
-          .loreSyncStatus(progress.key)
+          .loreSyncStatus(selectedJamCID)
           .then(setSyncStatus)
           .catch((err) => {
             console.error('LibraryBrowser: loreSyncStatus() failed:', err)
@@ -496,7 +514,12 @@ export function LibraryBrowser({
     userNameFilter,
     onlyFullyCached,
     loreUsername,
-    onlyContainsMe
+    onlyContainsMe,
+    // Bumped by the sync-progress effect once a sync completes for the
+    // currently-selected jam -- re-runs this same fetch (from offset 0) so
+    // the grid actually shows the newly-synced riffs, since nothing else in
+    // this dependency list changes when a sync finishes.
+    riffRefreshToken
   ])
 
   function handleLoadMore(): void {
