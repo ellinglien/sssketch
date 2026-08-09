@@ -303,65 +303,7 @@ const api = {
   endlesssAuthStatus: (): Promise<
     { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
-  endlesssListSharedFeed: (
-    userName: string,
-    offset: number,
-    count: number
-  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
-    ipcRenderer.invoke('endlesss-list-shared-feed', userName, offset, count),
-  endlesssResolveSharedFeedRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
-    ipcRenderer.invoke('endlesss-resolve-shared-feed-riff', riffCID),
   endlesssListJams: (): Promise<LoreJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
-  endlesssListRiffs: (
-    jamId: string,
-    filters: {
-      dateFrom?: number
-      dateTo?: number
-      bpm?: number
-      userName?: string
-      onlyFullyCached?: boolean
-      targetUser?: string
-      onlyContainsUser?: boolean
-      offset?: number
-      limit?: number
-    }
-  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
-    ipcRenderer.invoke('endlesss-list-riffs', jamId, filters),
-  endlesssResolveRiff: (jamId: string, riffCID: string): Promise<LoreResolvedRiff | null> =>
-    ipcRenderer.invoke('endlesss-resolve-riff', jamId, riffCID),
-  endlesssListRiffOwnership: (
-    jamId: string,
-    riffCIDs: string[],
-    targetUser: string
-  ): Promise<Record<string, number>> =>
-    ipcRenderer.invoke('endlesss-list-riff-ownership', jamId, riffCIDs, targetUser),
-  endlesssStartSyncSharedFeed: (userName: string): Promise<void> =>
-    ipcRenderer.invoke('endlesss-start-sync-shared-feed', userName),
-  endlesssStartSyncJam: (jamId: string): Promise<void> =>
-    ipcRenderer.invoke('endlesss-start-sync-jam', jamId),
-  endlesssSyncStatusSharedFeed: (
-    userName: string
-  ): Promise<{ riffCount: number; updatedAt: number; complete: boolean } | null> =>
-    ipcRenderer.invoke('endlesss-sync-status-shared-feed', userName),
-  endlesssSyncStatusJam: (
-    jamId: string
-  ): Promise<{ riffCount: number; updatedAt: number; complete: boolean } | null> =>
-    ipcRenderer.invoke('endlesss-sync-status-jam', jamId),
-  onEndlesssSyncProgress: (
-    callback: (progress: {
-      source: 'shared' | 'jam'
-      key: string
-      done: number
-      total: number
-    }) => void
-  ): (() => void) => {
-    const listener = (
-      _event: unknown,
-      progress: { source: 'shared' | 'jam'; key: string; done: number; total: number }
-    ): void => callback(progress)
-    ipcRenderer.on('endlesss-sync-progress', listener)
-    return () => ipcRenderer.removeListener('endlesss-sync-progress', listener)
-  },
   loreSyncStartSharedFeed: (userName: string): Promise<void> =>
     ipcRenderer.invoke('lore-sync-start-shared-feed', userName),
   loreSyncStartJam: (jamId: string, jamName: string): Promise<void> =>

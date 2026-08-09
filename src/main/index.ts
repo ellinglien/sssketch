@@ -48,12 +48,7 @@ import {
   loginWithCredentials,
   logout as endlesssLogout,
   getAuthStatus as getEndlesssAuthStatus,
-  listSharedFeed,
-  resolveSharedFeedRiff,
-  listJams as listEndlesssJams,
-  listRiffsInJam,
-  resolveJamRiff,
-  listRiffOwnership
+  listJams as listEndlesssJams
 } from './endlesssApi'
 import {
   syncSharedFeed as syncSharedFeedToWarehouse,
@@ -249,26 +244,7 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle('endlesss-logout', () => endlesssLogout())
   ipcMain.handle('endlesss-auth-status', () => getEndlesssAuthStatus())
-  ipcMain.handle(
-    'endlesss-list-shared-feed',
-    (_event, userName: string, offset: number, count: number) =>
-      listSharedFeed(userName, offset, count)
-  )
-  ipcMain.handle('endlesss-resolve-shared-feed-riff', (_event, riffCID: string) =>
-    resolveSharedFeedRiff(riffCID)
-  )
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
-  ipcMain.handle('endlesss-list-riffs', (_event, jamId: string, filters: RiffFilters) =>
-    listRiffsInJam(jamId, filters)
-  )
-  ipcMain.handle('endlesss-resolve-riff', (_event, jamId: string, riffCID: string) =>
-    resolveJamRiff(jamId, riffCID)
-  )
-  ipcMain.handle(
-    'endlesss-list-riff-ownership',
-    (_event, jamId: string, riffCIDs: string[], targetUser: string) =>
-      listRiffOwnership(jamId, riffCIDs, targetUser)
-  )
   ipcMain.handle('lore-sync-start-shared-feed', (event, userName: string) =>
     syncSharedFeedToWarehouse(userName, (progress) => {
       event.sender.send('lore-sync-progress', {
