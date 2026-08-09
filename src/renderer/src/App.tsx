@@ -994,7 +994,7 @@ function Frame(): React.JSX.Element {
     return () => window.clearTimeout(id)
   }, [persistedJson, currentSketch, state.rifffs])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
-  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -1033,7 +1033,7 @@ function Frame(): React.JSX.Element {
   }
 
   // Shown on every launch by default (per machine, matching loreUsername's
-  // own localStorage-persisted convention in LoreLibraryBrowser.tsx) --
+  // own localStorage-persisted convention in LibraryBrowser.tsx) --
   // only stops once "don't show this again" is checked. Read lazily in
   // useState's initializer, not an effect, so it can't flash open-then-
   // closed on the very first render.
@@ -1115,7 +1115,7 @@ function Frame(): React.JSX.Element {
     setPickerIsNewImport(true)
   }
 
-  function handleLoreImported(groupIds: string[], rifffs?: Rifff[]): void {
+  function handleLibraryImported(groupIds: string[], rifffs?: Rifff[]): void {
     if (groupIds.length === 0) return
     // Default to whichever imported rifff looks easiest to pick a downbeat
     // against (see reOneScoring.ts) rather than just "whatever imported
@@ -1625,7 +1625,7 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
-        <Shelf onImported={handleImported} onOpenLibrary={() => setLibraryOpen(true)} />
+        <Shelf onImported={handleImported} onOpenLibrary={() => setRiffLibraryOpen(true)} />
         <TransportBar
           onOpenClusterStems={() => setClusterStemsOpen(true)}
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -1715,7 +1715,7 @@ function Frame(): React.JSX.Element {
               const wasBatchImport = pickerBatchGroupIds.length > 1
               setPickerGroupId(null)
               setPickerBatchGroupIds([])
-              if (wasBatchImport) setLibraryOpen(false)
+              if (wasBatchImport) setRiffLibraryOpen(false)
             }}
             onBaked={(steps) => {
               const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
@@ -1733,8 +1733,11 @@ function Frame(): React.JSX.Element {
             }}
           />
         )}
-        {libraryOpen && (
-          <LibraryBrowser onClose={() => setLibraryOpen(false)} onImported={handleLoreImported} />
+        {riffLibraryOpen && (
+          <LibraryBrowser
+            onClose={() => setRiffLibraryOpen(false)}
+            onImported={handleLibraryImported}
+          />
         )}
         {libraryBrowserOpen && (
           <ProjectLibraryBrowser
@@ -1808,7 +1811,7 @@ function Frame(): React.JSX.Element {
             onDismiss={dismissOnboarding}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
-              setLibraryOpen(true)
+              setRiffLibraryOpen(true)
             }}
             onStartTour={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
