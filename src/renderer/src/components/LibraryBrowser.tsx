@@ -901,15 +901,47 @@ export function LibraryBrowser({
           }}
         >
           <span style={{ textTransform: 'lowercase' }}>library</span>
-          <button onClick={onClose}>close</button>
+          <button
+            onClick={onClose}
+            style={{
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            close
+          </button>
         </div>
 
         <EndlesssLoginPanel onStatusChange={setAuthStatus} />
 
+        {/* available === false in practice only happens for a misconfigured
+            or unmounted EXTERNAL folder -- the self-built warehouse is
+            created during app startup, before this component can ever
+            mount, so that path is guaranteed to exist by the time we get
+            here. If that startup guarantee ever changes, this copy (and the
+            choose-folder-only recovery path below) would need to account
+            for the self-built case too. */}
         {available === false ? (
           <div style={{ padding: 24 }}>
-            <p>library not available at {warehouseRoot}</p>
-            <button disabled={changingWarehouseRoot} onClick={handleChooseWarehouseFolder}>
+            <p>library not available at {warehouseRoot ?? '...'}</p>
+            <button
+              disabled={changingWarehouseRoot}
+              onClick={handleChooseWarehouseFolder}
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
               choose folder
             </button>
           </div>
@@ -989,9 +1021,13 @@ export function LibraryBrowser({
                     display: 'block',
                     width: '100%',
                     textAlign: 'left',
+                    padding: '5px 6px',
+                    fontSize: 11,
+                    border: 'none',
+                    borderRadius: 0,
                     background:
                       selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
-                    padding: '4px 8px'
+                    color: 'var(--ra-text)'
                   }}
                 >
                   {jam.name}
@@ -1145,8 +1181,23 @@ export function LibraryBrowser({
                             ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
                             : 'not synced yet'}
                         </span>
-                        <button onClick={handleStartSync} disabled={syncing}>
-                          {syncing ? <LoadingLoader /> : 'sync'}
+                        <button
+                          onClick={handleStartSync}
+                          disabled={syncing}
+                          style={{
+                            height: 20,
+                            borderRadius: 0,
+                            padding: '0 8px',
+                            fontSize: 9,
+                            border: '1px solid var(--ra-border)',
+                            background: 'var(--ra-bg-row-active)',
+                            color: 'var(--ra-text-2)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6
+                          }}
+                        >
+                          {syncing ? <LoadingLoader size={16} /> : 'sync'}
                         </button>
                         {syncing && syncProgress && (
                           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
