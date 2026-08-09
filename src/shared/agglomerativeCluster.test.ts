@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeMergeSequence, cutAtK } from './agglomerativeCluster'
+import { computeMergeSequence, cutAtK, cutAtKWithIds, splitNode } from './agglomerativeCluster'
 
 describe('computeMergeSequence', () => {
   it('produces exactly n-1 merges for n input vectors', () => {
@@ -103,5 +103,115 @@ describe('cutAtK', () => {
       const allIndices = clusters.flat().sort((a, b) => a - b)
       expect(allIndices).toEqual([0, 1, 2, 3, 4])
     }
+  })
+})
+
+describe('cutAtKWithIds', () => {
+  it('returns the same member partition as cutAtK, just with each cluster tagged by its own dendrogram node id', () => {
+    const vectors = [
+      [0, 0],
+      [0.1, 0],
+      [50, 0],
+      [50.1, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    const plain = cutAtK(merges, vectors.length, 2)
+    const withIds = cutAtKWithIds(merges, vectors.length, 2)
+    expect(withIds).toHaveLength(2)
+    const plainSorted = plain.map((c) => [...c].sort((a, b) => a - b))
+    const idSorted = withIds.map((c) => [...c.members].sort((a, b) => a - b))
+    expect(new Set(idSorted.map((c) => JSON.stringify(c)))).toEqual(
+      new Set(plainSorted.map((c) => JSON.stringify(c)))
+    )
+  })
+
+  it('assigns ids >= n to any cluster formed by at least one merge, and ids < n only to untouched singletons', () => {
+    const vectors = [
+      [0, 0],
+      [0.1, 0],
+      [50, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    const withIds = cutAtKWithIds(merges, vectors.length, 2)
+    for (const cluster of withIds) {
+      if (cluster.members.length > 1) {
+        expect(cluster.id).toBeGreaterThanOrEqual(vectors.length)
+      } else {
+        expect(cluster.id).toBeLessThan(vectors.length)
+      }
+    }
+  })
+})
+
+describe('splitNode', () => {
+  it('splits a merged cluster into exactly the two children it was formed from', () => {
+    const vectors = [
+      [0, 0],
+      [0.1, 0],
+      [50, 0],
+      [50.1, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    const withIds = cutAtKWithIds(merges, vectors.length, 1) // one cluster containing everything
+    const [{ id: rootId, members: rootMembers }] = withIds
+    expect(rootMembers.sort((a, b) => a - b)).toEqual([0, 1, 2, 3])
+
+    const children = splitNode(merges, vectors.length, rootId)
+    expect(children).not.toBeNull()
+    const [childA, childB] = children!
+    const allChildMembers = [...childA.members, ...childB.members].sort((a, b) => a - b)
+    expect(allChildMembers).toEqual([0, 1, 2, 3])
+    // The two children shouldn't overlap, and neither should be empty --
+    // otherwise "splitting" would be a no-op or a data-loss bug.
+    expect(childA.members.length).toBeGreaterThan(0)
+    expect(childB.members.length).toBeGreaterThan(0)
+    expect(new Set(childA.members).size + new Set(childB.members).size).toBe(4)
+  })
+
+  it('returns null for an original singleton (nothing to split further)', () => {
+    const vectors = [
+      [0, 0],
+      [50, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    expect(splitNode(merges, vectors.length, 0)).toBeNull()
+    expect(splitNode(merges, vectors.length, 1)).toBeNull()
+  })
+
+  it('returns null for an id with no corresponding merge step (out of range)', () => {
+    const vectors = [
+      [0, 0],
+      [50, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    expect(splitNode(merges, vectors.length, 999)).toBeNull()
+  })
+
+  it('splitting repeatedly down to singletons recovers every original index exactly once', () => {
+    const vectors = [
+      [0, 0],
+      [0.1, 0],
+      [0.2, 0],
+      [50, 0]
+    ]
+    const merges = computeMergeSequence(vectors)
+    const [{ id: rootId }] = cutAtKWithIds(merges, vectors.length, 1)
+
+    // Recursively split every node all the way down to singletons and
+    // collect their member arrays.
+    const leaves: number[][] = []
+    function expand(id: number): void {
+      const children = splitNode(merges, vectors.length, id)
+      if (!children) {
+        leaves.push([id])
+        return
+      }
+      expand(children[0].id)
+      expand(children[1].id)
+    }
+    expand(rootId)
+
+    const allIndices = leaves.flat().sort((a, b) => a - b)
+    expect(allIndices).toEqual([0, 1, 2, 3])
   })
 })
