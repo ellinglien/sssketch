@@ -505,9 +505,9 @@ async function downloadOneEndlesssStem(
 /** Downloads every not-yet-cached stem in `resolved` (path === null but a
  * downloadUrl exists), returning a new LoreResolvedRiff with paths filled
  * in for whichever succeeded. Shared by both the shared-feed and
- * private-jam resolve paths. Exported for endlesssSync.ts's own use -- see
- * peekSharedFeedCache's doc comment for why syncSharedFeed needs to call
- * this directly rather than going through resolveSharedFeedRiff. */
+ * private-jam resolve paths. Exported for loreWarehouseSync.ts's own use --
+ * see peekSharedFeedCache's doc comment for why syncSharedFeed needs to
+ * call this directly rather than going through resolveSharedFeedRiff. */
 export async function downloadMissingStemsFor(
   resolved: LoreResolvedRiff,
   fetchImpl: FetchLike
