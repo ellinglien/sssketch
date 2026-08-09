@@ -36,10 +36,18 @@ Two ways to bring stems into a project:
 **[Download sssketch 1.0.0 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.0.0/sssketch-1.0.0.dmg)**
 — or see the [Releases](../../releases) page for other versions.
 
-No signed release build yet, so macOS Gatekeeper blocks a normal double-click open — right-click
-the app in Applications and choose **Open** the first time instead.
-
 Drag `sssketch.app` from the `.dmg` into Applications to install.
+
+No signed release build yet, so macOS Gatekeeper will refuse to open it — on current macOS this
+usually shows up as **"sssketch" is damaged and can't be opened**, not the older, friendlier
+"unidentified developer" prompt, and right-clicking → Open doesn't fix it. The app isn't actually
+damaged; it just isn't notarized. Clear the quarantine flag from Terminal instead:
+
+```bash
+xattr -cr /Applications/sssketch.app
+```
+
+Then open it normally. You only need to do this once per install.
 
 **Uninstalling:** drag `sssketch.app` to the Trash — nothing else is installed system-wide. Your
 saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and aren't
