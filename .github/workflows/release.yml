@@ -25,6 +25,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # npm ci's own postinstall (electron-builder install-app-deps) just
+      # rebuilt better-sqlite3's native binary against ELECTRON's ABI, not
+      # plain Node's -- but Typecheck/Lint/Test below run under plain Node
+      # (electron-vite/vitest, no Electron runtime involved). Loading an
+      # Electron-ABI native binary from plain Node crashes outright: every
+      # vitest worker fork that touches better-sqlite3 (loreWarehouse*.test.ts,
+      # riffFavouritesMigration.test.ts) dies with a bare "Worker exited
+      # unexpectedly", silently dropping their test files from the run
+      # instead of a catchable per-test failure -- caught for real, traced
+      # via a real release run losing exactly those files twice in a row.
+      # Rebuilding for plain Node here (no ELECTRON_* env vars set, so this
+      # targets whatever's actually running these steps) fixes the mismatch
+      # for the test phase; the mirroring rebuild-for-Electron step below,
+      # right before packaging, flips it back -- electron-builder.yml's own
+      # npmRebuild: false means nothing else will do that for us, and
+      # shipping a Node-ABI better-sqlite3 inside the actual .app would
+      # crash it at runtime instead.
+      - name: Rebuild native deps for Node (tests)
+        run: npm rebuild better-sqlite3
+
       # JUCE (fetched via CMake's FetchContent, pinned to git tag 8.0.4 in
       # native-engine/CMakeLists.txt) takes 10-15 minutes to fetch+build from
       # scratch -- this cache keeps that a one-time cost per JUCE version /
@@ -83,6 +103,13 @@ jobs:
       # for testers with no Homebrew install of their own.
       - name: Vendor rubberband
         run: bash scripts/vendor-rubberband.sh
+
+      # Undoes the plain-Node rebuild above -- the packaged app runs under
+      # Electron, so better-sqlite3's native binary needs to be back on
+      # Electron's ABI before electron-builder bundles it. electron-builder.yml
+      # sets npmRebuild: false specifically so this doesn't happen twice.
+      - name: Rebuild native deps for Electron (packaging)
+        run: npx electron-builder install-app-deps
 
       # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
       # itself -- imports into a temporary keychain internally, no manual
