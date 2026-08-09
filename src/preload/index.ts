@@ -361,6 +361,27 @@ const api = {
     ): void => callback(progress)
     ipcRenderer.on('endlesss-sync-progress', listener)
     return () => ipcRenderer.removeListener('endlesss-sync-progress', listener)
+  },
+  loreSyncStartSharedFeed: (userName: string): Promise<void> =>
+    ipcRenderer.invoke('lore-sync-start-shared-feed', userName),
+  loreSyncStartJam: (jamId: string, jamName: string): Promise<void> =>
+    ipcRenderer.invoke('lore-sync-start-jam', jamId, jamName),
+  loreSyncStatus: (jamCID: string): Promise<{ riffCount: number; complete: boolean } | null> =>
+    ipcRenderer.invoke('lore-sync-status', jamCID),
+  onLoreSyncProgress: (
+    callback: (progress: {
+      source: 'shared' | 'jam'
+      key: string
+      done: number
+      total: number
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      progress: { source: 'shared' | 'jam'; key: string; done: number; total: number }
+    ): void => callback(progress)
+    ipcRenderer.on('lore-sync-progress', listener)
+    return () => ipcRenderer.removeListener('lore-sync-progress', listener)
   }
 }
 

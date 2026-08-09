@@ -58,6 +58,12 @@ import {
 } from './endlesssApi'
 import { syncSharedFeed, syncJam } from './endlesssSync'
 import { getSyncStatus } from './endlesssSyncIndex'
+import {
+  syncSharedFeed as syncSharedFeedToWarehouse,
+  syncJam as syncJamToWarehouse
+} from './loreWarehouseSync'
+import { openOwnWarehouseDb } from './loreWarehouseSchema'
+import { getWarehouseSyncStatus } from './loreWarehouseWriter'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import {
   listLibrarySketches,
@@ -277,6 +283,28 @@ app.whenReady().then(async () => {
     getSyncStatus('shared', userName)
   )
   ipcMain.handle('endlesss-sync-status-jam', (_event, jamId: string) => getSyncStatus('jam', jamId))
+
+  ipcMain.handle('lore-sync-start-shared-feed', (event, userName: string) =>
+    syncSharedFeedToWarehouse(userName, (progress) => {
+      event.sender.send('lore-sync-progress', {
+        source: 'shared' as const,
+        key: userName,
+        ...progress
+      })
+    })
+  )
+  ipcMain.handle('lore-sync-start-jam', (event, jamId: string, jamName: string) =>
+    syncJamToWarehouse(jamId, jamName, (progress) => {
+      event.sender.send('lore-sync-progress', {
+        source: 'jam' as const,
+        key: jamId,
+        ...progress
+      })
+    })
+  )
+  ipcMain.handle('lore-sync-status', (_event, jamCID: string) =>
+    getWarehouseSyncStatus(openOwnWarehouseDb(), jamCID)
+  )
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
