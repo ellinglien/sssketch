@@ -173,3 +173,109 @@ describe('syncSharedFeed', () => {
     expect(pageCalls).toBe(1)
   })
 })
+
+function rawRiffListRow(riffCID: string, key: number): Record<string, unknown> {
+  return { id: riffCID, key, value: [`stem_${riffCID}`] }
+}
+
+function rawJamRiffDoc(riffCID: string): Record<string, unknown> {
+  return {
+    _id: riffCID,
+    state: {
+      bps: 2.0,
+      barLength: 4,
+      playback: [
+        { slot: { current: { on: true, currentLoop: `stem_${riffCID}`, gain: 1 } } },
+        ...Array.from({ length: 7 }, () => ({ slot: {} }))
+      ]
+    },
+    userName: 'elling',
+    created: 1700000000000,
+    root: 0,
+    scale: 0
+  }
+}
+
+function rawJamStemDoc(riffCID: string): Record<string, unknown> {
+  return {
+    _id: `stem_${riffCID}`,
+    cdn_attachments: {
+      oggAudio: { endpoint: 'cdn.example.com', key: `k_${riffCID}`, url: 'unused', length: 1 }
+    },
+    bps: 2.0,
+    length16ths: 64,
+    presetName: 'preset',
+    creatorUserName: 'elling'
+  }
+}
+
+describe('syncJam', () => {
+  it('walks the jam, resolves every riff via _all_docs, and marks it complete', async () => {
+    vi.resetModules()
+    // A logged-in session is required for the private-jam endpoints
+    // (listRiffsInJam/resolveJamRiff both call activeSession() internally)
+    // -- loginWithCredentials persists it into the same in-memory module
+    // state syncJam's own endlesssApi.ts import will read.
+    const { loginWithCredentials } = await import('./endlesssApi')
+    const { syncJam } = await import('./loreWarehouseSync')
+    const db = freshDb()
+
+    const loginFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: 't',
+            password: 'p',
+            user_id: 'u1',
+            expires: Date.now() + 100000
+          }),
+          {
+            status: 200
+          }
+        )
+    )
+    await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com'))
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      if (url.includes('rifffLoopsByCreateTime')) {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [rawRiffListRow('r1', 1700000000000)] }),
+          {
+            status: 200
+          }
+        )
+      }
+      if (url.includes('_all_docs') && init?.method === 'POST') {
+        const body = JSON.parse(init.body as string) as { keys: string[] }
+        const isStemBatch = body.keys[0]?.startsWith('stem_')
+        const rows = body.keys.map((id) => ({
+          id,
+          doc: isStemBatch ? rawJamStemDoc('r1') : rawJamRiffDoc('r1')
+        }))
+        return new Response(JSON.stringify({ total_rows: rows.length, rows }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+
+    await syncJam('jam_1', 'Test Jam', () => {}, fetchImpl as unknown as typeof fetch, db)
+
+    const riff = db
+      .prepare('SELECT AppVersion, StemCID_1 FROM Riffs WHERE RiffCID = ?')
+      .get('r1') as {
+      AppVersion: number
+      StemCID_1: string
+    }
+    expect(riff.AppVersion).toBe(1)
+    expect(riff.StemCID_1).toBe('stem_r1')
+    const jam = db
+      .prepare('SELECT SyncComplete, PublicName FROM Jams WHERE JamCID = ?')
+      .get('jam_1') as {
+      SyncComplete: number
+      PublicName: string
+    }
+    expect(jam.SyncComplete).toBe(1)
+    expect(jam.PublicName).toBe('Test Jam')
+  })
+})

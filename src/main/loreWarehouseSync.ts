@@ -3,6 +3,8 @@ import {
   listSharedFeed,
   peekSharedFeedCache,
   downloadMissingStemsFor,
+  listRiffsInJam,
+  resolveJamRiff,
   type FetchLike
 } from './endlesssApi'
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
@@ -12,7 +14,8 @@ import {
   upsertRiffSkeletons,
   writeRiffDetail,
   markStemDownloadFailed,
-  areAllResolved
+  areAllResolved,
+  filterUnresolved
 } from './loreWarehouseWriter'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
@@ -114,5 +117,79 @@ export async function syncSharedFeed(
     }
   } finally {
     syncsInFlight.delete(key)
+  }
+}
+
+const SYNC_JAM_PAGE_SIZE = 200 // matches DEFAULT_RIFF_PAGE_SIZE in endlesssApi.ts
+
+/** Same shape as syncSharedFeed, walking a private jam via listRiffsInJam/
+ * resolveJamRiff instead -- see syncSharedFeed's own doc comment for the
+ * full rationale (pageFullyDone stop condition, why re-discovering an
+ * already-done riff is a safe no-op). Unlike the shared feed, a jam's raw
+ * listing view carries no per-riff BPM/userName/stem detail at all (see
+ * listRiffsInJam's own doc comment in endlesssApi.ts) -- every
+ * not-yet-resolved riff genuinely needs its own resolveJamRiff network
+ * call, which IS what runWithConcurrency below is capping. */
+export async function syncJam(
+  jamId: string,
+  jamName: string,
+  onProgress: (progress: SyncProgress) => void,
+  fetchImpl: FetchLike = fetch,
+  db: Database.Database = openOwnWarehouseDb()
+): Promise<void> {
+  if (syncsInFlight.has(jamId)) return
+  syncsInFlight.add(jamId)
+  try {
+    upsertJam(db, jamId, jamName)
+    let offset = 0
+    let resolvedCount = 0
+    for (;;) {
+      const page = await listRiffsInJam(jamId, { offset, limit: SYNC_JAM_PAGE_SIZE }, fetchImpl)
+      if (page.riffs.length === 0) {
+        markJamSyncComplete(db, jamId)
+        break
+      }
+
+      const cids = page.riffs.map((r) => r.riffCID)
+      const needsResolve = filterUnresolved(db, cids)
+      const pageFullyDone = needsResolve.length === 0
+
+      upsertRiffSkeletons(
+        db,
+        jamId,
+        page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
+      )
+
+      await runWithConcurrency(needsResolve, SYNC_CONCURRENCY, async (riffCID) => {
+        const resolved = await resolveJamRiff(jamId, riffCID, fetchImpl)
+        if (resolved) {
+          const summary = page.riffs.find((r) => r.riffCID === riffCID)!
+          // listRiffsInJam's raw view never carries a per-riff userName
+          // (see its own doc comment in endlesssApi.ts) -- summary.userName
+          // is always '' here, a known, pre-existing limitation of the jam
+          // listing endpoint itself, not something introduced by this sync.
+          writeRiffDetail(
+            db,
+            jamId,
+            { creationTime: summary.creationTime, userName: summary.userName },
+            resolved
+          )
+          for (const stem of resolved.stems) {
+            if (stem.path === null && stem.downloadUrl !== null)
+              markStemDownloadFailed(db, stem.stemCID)
+          }
+        }
+        resolvedCount++
+        onProgress({ done: resolvedCount, total: resolvedCount })
+      })
+
+      if (pageFullyDone || !page.hasMore) {
+        markJamSyncComplete(db, jamId)
+        break
+      }
+      offset = page.nextOffset
+    }
+  } finally {
+    syncsInFlight.delete(jamId)
   }
 }

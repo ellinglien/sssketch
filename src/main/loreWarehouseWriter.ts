@@ -192,6 +192,22 @@ export function areAllResolved(db: Database.Database, riffCIDs: string[]): boole
   return rows.length === riffCIDs.length
 }
 
+/** Which of `riffCIDs` do NOT yet have a resolved (non-NULL AppVersion)
+ * Riffs row -- the complement of areAllResolved, but returning the actual
+ * subset rather than a single boolean, for callers that need to know WHICH
+ * ones still need resolving (not just whether any do). */
+export function filterUnresolved(db: Database.Database, riffCIDs: string[]): string[] {
+  if (riffCIDs.length === 0) return []
+  const placeholders = riffCIDs.map(() => '?').join(',')
+  const resolvedRows = db
+    .prepare(
+      `SELECT RiffCID FROM Riffs WHERE RiffCID IN (${placeholders}) AND AppVersion IS NOT NULL`
+    )
+    .all(...riffCIDs) as { RiffCID: string }[]
+  const resolvedSet = new Set(resolvedRows.map((r) => r.RiffCID))
+  return riffCIDs.filter((cid) => !resolvedSet.has(cid))
+}
+
 export interface WarehouseSyncStatus {
   riffCount: number
   complete: boolean

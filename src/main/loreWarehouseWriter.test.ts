@@ -10,7 +10,8 @@ import {
   markStemDownloadFailed,
   isStemLedgered,
   getWarehouseSyncStatus,
-  areAllResolved
+  areAllResolved,
+  filterUnresolved
 } from './loreWarehouseWriter'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
@@ -259,5 +260,23 @@ describe('loreWarehouseWriter', () => {
 
   it('areAllResolved is true for an empty list', () => {
     expect(areAllResolved(db, [])).toBe(true)
+  })
+
+  it('filterUnresolved returns only the riffCIDs without a resolved Riffs row', () => {
+    upsertJam(db, 'jam_1', 'Jam')
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 1, userName: 'elling' },
+      resolvedRiffFixture({ riffCID: 'r1' })
+    )
+    upsertRiffSkeletons(db, 'jam_1', [{ riffCID: 'r2', creationTime: 2 }])
+
+    expect(filterUnresolved(db, ['r1', 'r2', 'nope'])).toEqual(['r2', 'nope'])
+    expect(filterUnresolved(db, ['r1'])).toEqual([])
+  })
+
+  it('filterUnresolved returns an empty list for empty input', () => {
+    expect(filterUnresolved(db, [])).toEqual([])
   })
 })
