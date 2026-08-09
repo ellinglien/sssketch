@@ -1,4 +1,5 @@
-import { stemKey, type Rifff, type Stem } from '@shared/types'
+import { stemKey, type BusId, type Rifff, type Stem } from '@shared/types'
+import { packIntoTracks } from '@shared/packIntoTracks'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
 /** The played-bars override/fallback logic on its own, so a caller that
@@ -58,6 +59,8 @@ export interface Channel {
  * placedRifffsInOrder below -- safe for every other consumer of this
  * selector, which only ever cares about placed clips. */
 export function channelsInOrder(state: AppState): Channel[] {
+  if (state.tidiedView) return tidiedChannelsInOrder(state)
+
   const byChannel = new Map<string, Rifff[]>()
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
@@ -90,6 +93,69 @@ export function channelsInOrder(state: AppState): Channel[] {
     }
   }
   return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId) ?? [] }))
+}
+
+const TIDIED_BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+
+/** A rifff's own bus, for tidied-view grouping purposes only -- busOf itself
+ * is per-stem (a rifff's stems can be split across buses), but the arranger
+ * groups whole rifffs onto a row, so this picks whichever bus the most of
+ * a rifff's stems are assigned to (ties broken by TIDIED_BUS_ORDER), same
+ * "aux is the fallback" convention buildAlsXml.ts already uses for a stem
+ * with no assignment at all. */
+function busForRifff(state: AppState, rifff: Rifff): BusId {
+  const counts: Partial<Record<BusId, number>> = {}
+  for (const stem of rifff.stems) {
+    const bus = state.busOf[stemKey(rifff.groupId, stem.slot)] ?? 'aux'
+    counts[bus] = (counts[bus] ?? 0) + 1
+  }
+  let best: BusId = 'aux'
+  let bestCount = -1
+  for (const bus of TIDIED_BUS_ORDER) {
+    const count = counts[bus] ?? 0
+    if (count > bestCount) {
+      bestCount = count
+      best = bus
+    }
+  }
+  return best
+}
+
+/** channelsInOrder's tidied-view layout: every placed rifff bucketed by its
+ * own bus (busForRifff), then packed onto the minimum number of shared rows
+ * within that bus via packIntoTracks -- the same interval-partitioning
+ * buildAlsXml.ts already uses to build the Ableton export, so this is a
+ * preview of that grouping rather than a second, potentially-diverging
+ * algorithm. Purely a computed overlay: channelIds here (`tidied:<bus>:<n>`)
+ * are synthetic and never written back to state.channelOf/channelOrder --
+ * see App.tsx's resolveDrop, which refuses to dispatch MOVE_TO_CHANNEL while
+ * tidiedView is on, specifically so a drag never lands on one of these.
+ * Recording channels are deliberately omitted -- they're not placed rifffs
+ * and have no bus to sort by; flip back to the normal view to see one. */
+function tidiedChannelsInOrder(state: AppState): Channel[] {
+  const byBus = new Map<BusId, Rifff[]>()
+  for (const rifff of Object.values(state.rifffs)) {
+    if (rifff.startBar === undefined) continue
+    const bus = busForRifff(state, rifff)
+    const list = byBus.get(bus)
+    if (list) list.push(rifff)
+    else byBus.set(bus, [rifff])
+  }
+
+  const channels: Channel[] = []
+  for (const bus of TIDIED_BUS_ORDER) {
+    const rifffs = byBus.get(bus)
+    if (!rifffs) continue
+    const tracks = packIntoTracks(
+      rifffs,
+      (r) => r.startBar as number,
+      (r) => (r.startBar as number) + resolvePlayedBars(state, r.groupId)
+    )
+    tracks.forEach((trackRifffs, i) => {
+      channels.push({ channelId: `tidied:${bus}:${i}`, rifffs: trackRifffs })
+    })
+  }
+  return channels
 }
 
 /** Every placed rifff, flattened out of channelsInOrder — channel by

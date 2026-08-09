@@ -390,6 +390,79 @@ describe('channelsInOrder', () => {
     expect(channels[0].channelId).toBe('rec-1')
     expect(channels[0].rifffs).toEqual([])
   })
+
+  describe('with tidiedView on', () => {
+    it('packs non-overlapping same-bus rifffs onto one shared row instead of one row each', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, startBar: undefined }
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, groupId: 'r2', startBar: undefined }
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 8 }) // r1 is 8 bars long -- adjacent, not overlapping
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r1:1'], busId: 'drums' })
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r2:1'], busId: 'drums' })
+      state = { ...state, tidiedView: true }
+
+      const channels = channelsInOrder(state)
+      expect(channels).toHaveLength(1)
+      expect(channels[0].channelId).toBe('tidied:drums:0')
+      expect(channels[0].rifffs.map((r) => r.groupId)).toEqual(['r1', 'r2'])
+    })
+
+    it('splits overlapping same-bus rifffs onto separate tidied rows', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, startBar: undefined }
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, groupId: 'r2', startBar: undefined }
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 2 }) // overlaps r1 (bars [0,8))
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r1:1'], busId: 'drums' })
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r2:1'], busId: 'drums' })
+      state = { ...state, tidiedView: true }
+
+      const channels = channelsInOrder(state)
+      expect(channels).toHaveLength(2)
+      expect(channels[0].channelId).toBe('tidied:drums:0')
+      expect(channels[1].channelId).toBe('tidied:drums:1')
+    })
+
+    it('groups rifffs into separate rows per bus, unassigned stems falling back to aux', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, startBar: undefined }
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, groupId: 'r2', startBar: undefined }
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r1:1'], busId: 'bass' })
+      // r2 gets no bus assignment at all -- falls back to aux.
+      state = { ...state, tidiedView: true }
+
+      const channels = channelsInOrder(state)
+      expect(channels.map((c) => c.channelId)).toEqual(['tidied:bass:0', 'tidied:aux:0'])
+      expect(channels[0].rifffs.map((r) => r.groupId)).toEqual(['r1'])
+      expect(channels[1].rifffs.map((r) => r.groupId)).toEqual(['r2'])
+    })
+
+    it('excludes unplaced rifffs and recording channels from the tidied layout', () => {
+      let state = reducer(initialState, { type: 'ADD_RECORDING_CHANNEL', channelId: 'rec-1' })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: { ...rifff, startBar: undefined } })
+      state = { ...state, tidiedView: true }
+
+      expect(channelsInOrder(state)).toEqual([])
+    })
+  })
 })
 
 describe('isSketchEligible', () => {
