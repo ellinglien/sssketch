@@ -912,15 +912,25 @@ function Frame(): React.JSX.Element {
       }
       if (json) void window.rifffApi.clearAutosave()
 
-      // Nothing to recover (or recovery declined) -- open straight back
-      // into whatever was last opened (see writeLastOpenedSketch, kept
-      // updated by the effect below), same pattern as the library
-      // browser's own onSelect/onOpenFromDisk handlers, rather than always
-      // starting a brand-new sketch. Per direct feedback ("sssketch should
-      // open with the last opened file").
+      // Nothing to recover (or recovery declined) -- offer to reopen
+      // whatever was last opened (see writeLastOpenedSketch, kept updated
+      // by the effect below), same pattern as the library browser's own
+      // onSelect/onOpenFromDisk handlers, rather than always starting a
+      // brand-new sketch. Asks first (declining falls straight through to
+      // the fresh-start block below) rather than silently reopening it --
+      // per direct feedback, launching straight into a possibly-large old
+      // project isn't always what's wanted. Same window.confirm() pattern
+      // as the crash-recovery prompt just above, for the same "startup
+      // decision, not worth a custom modal" reasoning.
       const lastOpenedJson = await window.rifffApi.loadLastOpenedSketch()
       const lastOpened = lastOpenedJson ? (JSON.parse(lastOpenedJson) as CurrentSketch) : null
-      if (lastOpened) {
+      const lastOpenedLabel =
+        lastOpened?.kind === 'library'
+          ? lastOpened.name
+          : lastOpened
+            ? basenameWithoutProjectExt(lastOpened.path)
+            : null
+      if (lastOpened && window.confirm(`Open the last project, "${lastOpenedLabel}"?`)) {
         const result =
           lastOpened.kind === 'library'
             ? await window.rifffApi.openLibrarySketch(lastOpened.name)

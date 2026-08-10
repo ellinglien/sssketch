@@ -612,6 +612,20 @@ export function BeatPicker({
     // to disk). Guarded by `applying` against a rapid double-click
     // re-entering mid-flight (same pattern as ChannelRow.tsx's own
     // togglingArm), since this is async (native bake round-trip).
+    //
+    // For a fresh import, a successful confirm closes the picker itself
+    // (stopPreview + onClose) instead of just clearing pendingSteps and
+    // leaving the modal open on a second screen -- real bug this fixed: with
+    // hasPendingChange flipping false the moment the bake resolved, the
+    // button row swapped from cancel/confirm-change to continue/close(+
+    // cancel import), which read as a SECOND picker having appeared (same
+    // spectrogram, different buttons), forcing a second click to actually
+    // finish -- and clicking "cancel import" there, thinking it was this
+    // "new" screen's cancel, deleted the rifff that had just been correctly
+    // baked. Scoped to isNewImport only: editing an already-placed rifff's
+    // loop start (Inspector's re-pick) has no cancel-import button to
+    // mis-click and wasn't part of what broke, so it keeps its existing
+    // explicit close step.
     confirmPendingRef.current = () => {
       if (applying || pendingSteps === null) return
       const target = pendingSteps
@@ -624,9 +638,16 @@ export function BeatPicker({
       }
       setApplying(true)
       void applyOffset(target, before)
-        .then(() => onBaked?.(target))
-        .finally(() => {
+        .then(() => {
+          onBaked?.(target)
+          if (isNewImport) {
+            stopPreview()
+            onClose()
+            return
+          }
           setPendingSteps(null)
+        })
+        .finally(() => {
           setApplying(false)
         })
     }
