@@ -93,6 +93,13 @@ export interface RiffPage {
   hasMore: boolean
   /** The `offset` to pass for the next page. */
   nextOffset: number
+  /** The jam's total riff count, when the backend's own response happens to
+   * carry one (endlesssApi.ts's listRiffsInJam gets this for free from the
+   * CouchDB view's total_rows -- see its own doc comment) -- undefined for
+   * backends that don't expose it (the local warehouse's own listRiffs, the
+   * shared-feed listing). Used to warn before syncing a particularly large
+   * jam, not for pagination itself. */
+  totalCount?: number
 }
 
 export interface LoreResolvedRiff {

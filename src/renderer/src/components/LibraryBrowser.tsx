@@ -105,6 +105,13 @@ const RIFF_ID_JUMP_WINDOW_SIZE = 20
 // button with plain infinite scroll.
 const SCROLL_LOAD_MORE_THRESHOLD_PX = 200
 
+// Above this many riffs, starting a sync warns first rather than just
+// diving in — a judgment call, not a measured number: syncJam's own
+// SYNC_CONCURRENCY (loreWarehouseSync.ts) is 3, and a jam this size is
+// enough riffs that "I didn't realize this would take a while" becomes a
+// real risk, not enough that it's obviously huge either way.
+const LARGE_JAM_RIFF_THRESHOLD = 300
+
 export function LibraryBrowser({
   onClose,
   onImported
@@ -145,6 +152,15 @@ export function LibraryBrowser({
   const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncBaseCount, setSyncBaseCount] = useState(0)
+  // The jam's live riff count straight from Endlesss (not the local
+  // warehouse) -- fetched below whenever a private jam is selected, purely
+  // to warn before starting a sync that's going to take a while. null both
+  // before the fetch resolves and for a shared-feed selection (no jam id to
+  // ask about), and jamRiffCount's own "never throws" convention means a
+  // failed fetch also just leaves this null -- either way, the warning
+  // below simply doesn't fire rather than blocking sync on this being
+  // unavailable.
+  const [liveJamRiffCount, setLiveJamRiffCount] = useState<number | null>(null)
   // Bumped whenever a sync completes for the currently-selected jam, purely
   // to give the riff-fetch effect below a dependency that changes on sync
   // completion -- selectedJamCID itself doesn't change when a sync finishes,
@@ -367,6 +383,32 @@ export function LibraryBrowser({
     }
   }, [selectedJamCID])
 
+  // See liveJamRiffCount's own doc comment above -- shared-feed selections
+  // (jamCID prefixed "shared:") have no real jam id to ask Endlesss about,
+  // so this only fires for an actual private jam.
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedJamCID || selectedJamCID.startsWith('shared:')) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) setLiveJamRiffCount(null)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    window.rifffApi
+      .endlesssJamRiffCount(selectedJamCID)
+      .then((count) => {
+        if (!cancelled) setLiveJamRiffCount(count)
+      })
+      .catch((err) => {
+        console.error('LibraryBrowser: endlesssJamRiffCount() failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedJamCID])
+
   useEffect(() => {
     return window.rifffApi.onLoreSyncProgress((progress) => {
       // lore-sync-start-shared-feed's IPC handler sends progress events keyed
@@ -397,6 +439,22 @@ export function LibraryBrowser({
 
   const handleStartSync = useCallback(() => {
     if (!selectedJamCID) return
+    // A rough, deliberately hedged estimate ("+", not a promise) -- there's
+    // no reliable way to know from here how much of a jam's audio is
+    // already cached locally vs. needs downloading, which dominates real
+    // sync time far more than this per-riff constant does. 0.3s/riff is a
+    // conservative floor assuming mostly-cached content; a jam needing lots
+    // of fresh downloads will take substantially longer than this suggests.
+    if (liveJamRiffCount !== null && liveJamRiffCount > LARGE_JAM_RIFF_THRESHOLD) {
+      const estimatedMinutes = Math.max(1, Math.round((liveJamRiffCount * 0.3) / 60))
+      if (
+        !window.confirm(
+          `this jam has ~${liveJamRiffCount} riffs — syncing could take ${estimatedMinutes}+ minutes depending on how much needs downloading. continue?`
+        )
+      ) {
+        return
+      }
+    }
     setSyncing(true)
     setSyncBaseCount(syncStatus?.riffCount ?? 0)
     setSyncProgress(null)
@@ -410,7 +468,7 @@ export function LibraryBrowser({
       console.error('LibraryBrowser: sync failed:', err)
       setSyncing(false)
     })
-  }, [selectedJamCID, syncStatus, visibleJams])
+  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount])
 
   /** Opens the OS folder picker and points LORE at the chosen folder --
    * needed since the warehouse root defaults to sssketch's own self-built
@@ -1067,6 +1125,68 @@ export function LibraryBrowser({
               )}
               {selectedJamCID !== null && (
                 <>
+                  {/* Jam name + its sync trigger, right beside "where" this
+                      content lives -- previously the sync button sat down in
+                      the filter bar with everything else, easy to miss on a
+                      never-synced jam since nothing about its position said
+                      "this belongs to the jam you just picked." */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      flexWrap: 'wrap',
+                      margin: '10px 12px 0'
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ra-text)' }}>
+                      {visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ?? selectedJamCID}
+                    </span>
+                    {authStatus.loggedIn && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                          {syncStatus
+                            ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
+                            : 'not synced yet'}
+                        </span>
+                        <button
+                          onClick={handleStartSync}
+                          disabled={syncing}
+                          // Matches the import button's own "primary action" weight
+                          // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
+                          // rather than the tiny filter-bar utility styling this used
+                          // to share with the "only fully cached" checkbox next to
+                          // it — sync is the main thing this page does before you
+                          // can browse anything at all, not a minor filter toggle.
+                          // Highlighted (var(--ra-play-on)) specifically for the
+                          // never-synced case, where clicking it isn't optional.
+                          style={{
+                            height: 34,
+                            borderRadius: 0,
+                            padding: '0 16px',
+                            fontSize: 13,
+                            fontWeight: 700,
+                            border: '2px solid var(--ra-border-strong)',
+                            background: syncStatus
+                              ? 'var(--ra-bg-row-active)'
+                              : 'var(--ra-play-on)',
+                            color: syncStatus ? 'var(--ra-text)' : 'var(--ra-play-on-ink)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8
+                          }}
+                        >
+                          {syncing ? <LoadingLoader size={16} /> : 'sync'}
+                        </button>
+                        {syncing && syncProgress && (
+                          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                            synced {syncBaseCount + syncProgress.done} so far
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div
                     style={{
                       display: 'flex',
@@ -1197,49 +1317,6 @@ export function LibraryBrowser({
                     <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                       {riffs.length} rifffs{hasMoreRiffs ? '+' : ''}
                     </span>
-                    {authStatus.loggedIn && selectedJamCID && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                          {syncStatus
-                            ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
-                            : 'not synced yet'}
-                        </span>
-                        <button
-                          onClick={handleStartSync}
-                          disabled={syncing}
-                          // Matches the import button's own "primary action" weight
-                          // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
-                          // rather than the tiny filter-bar utility styling this used
-                          // to share with the "only fully cached" checkbox next to
-                          // it — sync is the main thing this page does before you
-                          // can browse anything at all, not a minor filter toggle.
-                          // Highlighted (var(--ra-play-on)) specifically for the
-                          // never-synced case, where clicking it isn't optional.
-                          style={{
-                            height: 34,
-                            borderRadius: 0,
-                            padding: '0 16px',
-                            fontSize: 13,
-                            fontWeight: 700,
-                            border: '2px solid var(--ra-border-strong)',
-                            background: syncStatus
-                              ? 'var(--ra-bg-row-active)'
-                              : 'var(--ra-play-on)',
-                            color: syncStatus ? 'var(--ra-text)' : 'var(--ra-play-on-ink)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8
-                          }}
-                        >
-                          {syncing ? <LoadingLoader size={16} /> : 'sync'}
-                        </button>
-                        {syncing && syncProgress && (
-                          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                            synced {syncBaseCount + syncProgress.done} so far
-                          </span>
-                        )}
-                      </div>
-                    )}
                   </div>
 
                   <div
@@ -1431,10 +1508,10 @@ export function LibraryBrowser({
                         }}
                       >
                         {selectedRiffCIDs.size > 1
-                          ? `import ${selectedRiffCIDs.size} rifffs`
+                          ? `import ${selectedRiffCIDs.size} rifffs to project`
                           : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
-                            ? 'imported ✓ — import again'
-                            : 'import'}
+                            ? 'imported to project ✓ — import again'
+                            : 'import to project'}
                       </button>
                     </div>
                   )}

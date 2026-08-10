@@ -440,6 +440,46 @@ describe('endlesssApi riff listing in a jam', () => {
     ])
     expect(page.hasMore).toBe(false)
     expect(page.nextOffset).toBe(1)
+    expect(page.totalCount).toBe(1)
+  })
+
+  it("jamRiffCount returns the view's total_rows without paging through any riffs", async () => {
+    const { loginWithCredentials, jamRiffCount } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 1000 * 60 * 60 * 24
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    const fakeFetch = vi.fn(async (url: string) => {
+      expect(url).toContain('limit=1')
+      return new Response(
+        JSON.stringify({
+          total_rows: 842,
+          rows: [{ id: 'riff_1', key: 1700000000000, value: [] }]
+        }),
+        { status: 200 }
+      )
+    })
+    const count = await jamRiffCount('jam_abc', fakeFetch as typeof fetch)
+    expect(count).toBe(842)
+  })
+
+  it('jamRiffCount returns null when not logged in', async () => {
+    const { jamRiffCount, logout } = await import('./endlesssApi')
+    logout()
+    const count = await jamRiffCount('jam_abc', vi.fn() as unknown as typeof fetch)
+    expect(count).toBeNull()
   })
 })
 

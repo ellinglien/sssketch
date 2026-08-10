@@ -48,7 +48,8 @@ import {
   loginWithCredentials,
   logout as endlesssLogout,
   getAuthStatus as getEndlesssAuthStatus,
-  listJams as listEndlesssJams
+  listJams as listEndlesssJams,
+  jamRiffCount
 } from './endlesssApi'
 import {
   syncSharedFeed as syncSharedFeedToWarehouse,
@@ -245,6 +246,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('endlesss-logout', () => endlesssLogout())
   ipcMain.handle('endlesss-auth-status', () => getEndlesssAuthStatus())
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
+  ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))
   ipcMain.handle('lore-sync-start-shared-feed', (event, userName: string) =>
     syncSharedFeedToWarehouse(userName, (progress) => {
       event.sender.send('lore-sync-progress', {

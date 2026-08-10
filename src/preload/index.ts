@@ -310,6 +310,8 @@ const api = {
     { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
   endlesssListJams: (): Promise<LoreJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
+  endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
+    ipcRenderer.invoke('endlesss-jam-riff-count', jamId),
   loreSyncStartSharedFeed: (userName: string): Promise<void> =>
     ipcRenderer.invoke('lore-sync-start-shared-feed', userName),
   loreSyncStartJam: (jamId: string, jamName: string): Promise<void> =>

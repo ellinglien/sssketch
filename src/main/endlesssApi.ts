@@ -791,7 +791,28 @@ export async function listRiffsInJam(
     ownerFraction: 0
   }))
 
-  return { riffs, hasMore: rows.length === limit, nextOffset: offset + rows.length }
+  return {
+    riffs,
+    hasMore: rows.length === limit,
+    nextOffset: offset + rows.length,
+    totalCount: body.total_rows
+  }
+}
+
+/** How many riffs a private jam has, without paging through any of them --
+ * a bare limit:1 listRiffsInJam call, keeping only its totalCount (the
+ * CouchDB view's own total_rows, free on every call regardless of page
+ * size). Used to warn before starting a sync on a particularly large jam;
+ * returns null if the count isn't available (not logged in, network
+ * failure -- listRiffsInJam's own "never throws" convention means an empty
+ * page with no totalCount is indistinguishable from "truly zero riffs"
+ * here, so callers should treat null as "unknown," not "empty"). */
+export async function jamRiffCount(
+  jamId: string,
+  fetchImpl: FetchLike = fetch
+): Promise<number | null> {
+  const page = await listRiffsInJam(jamId, { limit: 1 }, fetchImpl)
+  return page.totalCount ?? null
 }
 
 interface RawDocsRow<T> {
