@@ -147,7 +147,7 @@ export function OnboardingModal({
         </div>
 
         <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}>
-          sketch out tracks using stems from endlesss.
+          a track sketching tool
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
