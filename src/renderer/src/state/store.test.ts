@@ -232,16 +232,20 @@ describe('reducer', () => {
     expect(reducer(initialState, { type: 'SET_TEMPO', bpm: 120 }).bpm).toBe(120)
   })
 
-  it('cycles snap index through 0..2 and wraps', () => {
-    // SNAP_DIVS is [4, 8, 16] -- capped at 1/16 (1/32 removed, was finer
-    // than anyone needed in practice).
-    let state = initialState // snapIdx starts at 2
+  it('cycles snap index through 0..4 and wraps', () => {
+    // SNAP_DIVS is [1, 2, 4, 8, 16] -- 1/16 on the fine end (1/32 removed,
+    // was finer than anyone needed), 1/1 and 1/2 added on the coarse end.
+    let state = initialState // snapIdx starts at 4 (1/16, the old default)
     state = reducer(state, { type: 'CYCLE_SNAP' })
     expect(state.snapIdx).toBe(0) // wraps past the end of the array
     state = reducer(state, { type: 'CYCLE_SNAP' })
     expect(state.snapIdx).toBe(1)
     state = reducer(state, { type: 'CYCLE_SNAP' })
-    expect(state.snapIdx).toBe(2) // back to start, full cycle confirmed
+    expect(state.snapIdx).toBe(2)
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(3)
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(4) // back to start, full cycle confirmed
   })
 
   it('clamps nudged offset to -8..8', () => {

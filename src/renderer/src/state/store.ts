@@ -1,10 +1,17 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 
-// Capped at 1/16 -- 1/32 existed here before but was finer than anyone
-// actually needed in practice (per direct user feedback: "it can get so
-// fine but it doesn't need to be").
-export const SNAP_DIVS = [4, 8, 16] as const
+// Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
+// than anyone actually needed in practice (per direct user feedback: "it
+// can get so fine but it doesn't need to be"). 1 and 2 (whole-bar/half-bar)
+// were added on the coarse end so BeatPicker's grid can cover a rifff where
+// beat-level precision is unnecessary noise -- a long ambient loop where
+// only "which bar" matters, not "which sixteenth." Same array both drives
+// BeatPicker's own click grid AND (via SNAP_DIVS[state.snapIdx] at every
+// other read site: clipGeometry, drag handlers, Inspector's nudge) how
+// EVERY clip's offsetSteps is currently interpreted -- see this file's own
+// snapIdx doc comment.
+export const SNAP_DIVS = [1, 2, 4, 8, 16] as const
 
 // A played length of 0 would never schedule any audio (and risks a divide-
 // by-zero downstream) — unlike a stem position of 0, which is meaningful.
@@ -48,7 +55,18 @@ export type LoopRegion = { startBar: number; endBar: number } | null
 
 export interface AppState {
   bpm: number
-  snapIdx: 0 | 1 | 2
+  // Index into SNAP_DIVS -- a single GLOBAL setting, not scoped to whichever
+  // BeatPicker session happens to be open. Every offsetSteps value in the
+  // project (state.off) is expressed in units of 1/SNAP_DIVS[snapIdx] of a
+  // bar and re-interpreted against whatever this CURRENTLY is (see
+  // clipGeometryFromFields's offsetPx and rotationSecondsForStem) -- an
+  // already-baked clip is immune (APPLY_BAKE always resets its off entry to
+  // exactly 0), but a still-unbaked offset (mid-pick, or a legacy
+  // never-baked LORE offset -- see BeatPicker.tsx's rebakeRifff doc
+  // comment) would render/bake against the wrong grid if this changes out
+  // from under it. Pre-existing property of this field, not something
+  // widening SNAP_DIVS changes.
+  snapIdx: 0 | 1 | 2 | 3 | 4
   vol: Record<string, number>
   mute: Record<string, boolean>
   off: Record<string, number>
@@ -264,7 +282,11 @@ export interface AppState {
 
 export const initialState: AppState = {
   bpm: 80,
-  snapIdx: 2,
+  // Index 4 = SNAP_DIVS[4] = 16 (1/16, the finest option) -- SNAP_DIVS grew
+  // two coarser entries at the FRONT of the array (see its own doc
+  // comment), so this index moved from 2 to 4 to keep the actual default
+  // grid unchanged.
+  snapIdx: 4,
   vol: {},
   mute: {},
   off: {},
@@ -320,7 +342,7 @@ export type Action =
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
   | { type: 'CYCLE_SNAP' }
-  | { type: 'SET_SNAP_IDX'; snapIdx: 0 | 1 | 2 }
+  | { type: 'SET_SNAP_IDX'; snapIdx: 0 | 1 | 2 | 3 | 4 }
   | { type: 'NUDGE_OFFSET'; key: string; delta: number }
   | { type: 'ZERO_OFFSET'; key: string }
   | { type: 'SET_OFFSET_STEPS'; key: string; steps: number }
@@ -567,7 +589,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, bpm: Math.min(200, Math.max(40, action.bpm)) }
 
     case 'CYCLE_SNAP':
-      return { ...state, snapIdx: ((state.snapIdx + 1) % 3) as AppState['snapIdx'] }
+      return { ...state, snapIdx: ((state.snapIdx + 1) % 5) as AppState['snapIdx'] }
 
     case 'SET_SNAP_IDX':
       return { ...state, snapIdx: action.snapIdx }

@@ -118,13 +118,21 @@ function snapBarLengthNoise(rifffs: AppState['rifffs']): AppState['rifffs'] {
 export function deserializeProject(data: PersistedProject | LegacyPersistedProject): AppState {
   const migrated = 'channelOrder' in data ? {} : migrateTrackOrder(data.trackOrder)
   const state = { ...initialState, ...data, ...migrated }
-  // SNAP_DIVS was capped from [4,8,16,32] to [4,8,16] -- an old save with
-  // snapIdx: 3 (1/32) is still valid AppState at the type level (this
-  // function's own input isn't runtime-validated against the current
-  // union), but SNAP_DIVS[3] is undefined at every read site once loaded.
-  // Clamp to the new coarsest-available index rather than let that surface
-  // as a silent NaN/undefined somewhere in the snap-grid UI.
-  if (state.snapIdx > 2) state.snapIdx = 2
+  // SNAP_DIVS has grown/shrunk twice now: [4,8,16,32] -> [4,8,16] (dropped
+  // the finest option), then -> [1,2,4,8,16] (two new, COARSER options
+  // added at the front -- see its own doc comment). There's no persisted
+  // format-version field to tell "this snapIdx was saved under an older
+  // array shape" apart from "already the current one", so -- matching the
+  // first change's own precedent below -- this doesn't attempt a real
+  // index remap, just clamps out-of-range values. An old save's snapIdx
+  // landing on a different divisor than it meant when saved (specifically:
+  // the front-insertion silently reinterprets old 0/1/2 as 1/2/4 instead of
+  // their original 4/8/16) only affects a rifff with a currently-UNBAKED
+  // nonzero offsetSteps at the moment of upgrade -- already-baked clips are
+  // immune (APPLY_BAKE always resets their off entry to 0) -- and even then
+  // only shifts which beat that rifff's spectrogram grid highlights until
+  // it's re-picked, not anything already committed to audio.
+  if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
   return isSketchEligible(state) ? state : { ...state, mode: 'normal' }
 }

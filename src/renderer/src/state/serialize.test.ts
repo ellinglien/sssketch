@@ -121,18 +121,18 @@ describe('deserializeProject mode fallback', () => {
 })
 
 describe('deserializeProject snapIdx clamp', () => {
-  it('clamps an old save with snapIdx 3 (pre-cap 1/32) down to 2 (1/16, the new coarsest)', () => {
-    // SNAP_DIVS was [4, 8, 16, 32] before the 1/32 division was removed; it's
-    // now [4, 8, 16] (see store.ts), so a save from before that cap can carry
-    // snapIdx: 3, which is out of range for the current SNAP_DIVS and would
-    // read back as undefined everywhere SNAP_DIVS[state.snapIdx] is used.
+  it('clamps an out-of-range snapIdx down to 4 (1/16, the current array bound)', () => {
+    // SNAP_DIVS is now [1, 2, 4, 8, 16] (see store.ts) -- a save carrying an
+    // out-of-range snapIdx (e.g. a pre-1/32-cap save's snapIdx: 3, from back
+    // when SNAP_DIVS was [4, 8, 16, 32]) would read back as undefined
+    // everywhere SNAP_DIVS[state.snapIdx] is used without this clamp.
     const persisted = {
       ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
-      snapIdx: 3
+      snapIdx: 7
     } as unknown as import('./serialize').PersistedProject
 
     const restored = deserializeProject(persisted)
-    expect(restored.snapIdx).toBe(2)
+    expect(restored.snapIdx).toBe(4)
   })
 })
 

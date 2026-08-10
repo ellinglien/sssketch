@@ -203,11 +203,29 @@ export function BeatPicker({
   const [playheadPct, setPlayheadPct] = useState<number | null>(null)
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const freeStartTimeRef = useRef(0)
-  // The latest un-baked pick (offset steps), or null once baked/if nothing's been
-  // picked this session. Only baking on close — not on every pick — means
-  // auditioning several candidate beats doesn't rewrite the file each time; only
-  // whichever one you actually leave it on when you close does.
-  const pendingBakeRef = useRef<number | null>(null)
+  // The latest clicked-but-not-yet-confirmed pick (offset steps), or null
+  // whenever nothing's staged. Deliberately NOT dispatched to state.off (or
+  // baked) the moment a beat is clicked — only confirmPending below does
+  // that — so auditioning several candidate beats doesn't touch live state
+  // at all until the user explicitly commits to one via "confirm change",
+  // and "cancel" is a true no-op when nothing was ever confirmed. See
+  // docs/superpowers/specs/2026-08-10-beatpicker-confirm-cancel-design.md
+  // -- ok if that doc doesn't exist, this comment is the design record.
+  const [pendingSteps, setPendingSteps] = useState<number | null>(null)
+  // What state.off[groupId] was the moment this picker started showing THIS
+  // riff (captured once per groupId, below) — cancelPending's revert
+  // target. Deliberately captured once per groupId, not re-read on every
+  // render: a confirm earlier in this same visit changes state.off, and
+  // cancelPending needs to know the value from BEFORE that confirm, not
+  // "whatever's current," to be able to undo it too (see cancelPending's
+  // own doc comment).
+  const initialStepsRef = useRef(0)
+  // Guards confirmPending/cancelPending against a rapid double-click
+  // re-entering mid-flight (same reasoning/pattern as ChannelRow.tsx's own
+  // togglingArm) — both are async (native bake round-trip), and both
+  // mutate state.off, so two overlapping calls could race and leave it on
+  // neither value cleanly.
+  const [applying, setApplying] = useState(false)
 
   // Runs once, right when this picker opens (mount) — real bug this fixed:
   // previewing a riff in the LORE library browser, then importing it, left
@@ -407,6 +425,33 @@ export function BeatPicker({
     return () => stopPreview()
   }, [groupId, stopPreview])
 
+  // Discards any unconfirmed pick and re-captures this visit's revert
+  // baseline whenever groupId changes — covers both a fresh mount AND
+  // navigating within a batch (see navigateRef below). Real gap this
+  // closes: without this, an unconfirmed pick on riff A would silently
+  // carry over and still be sitting there (pendingSteps still set) if the
+  // user navigates to riff B without confirming or cancelling it first —
+  // navigating away is meant to abandon it, same as never having picked
+  // anything. Deliberately keyed only on [groupId], not state.off — this
+  // is meant to capture "what state.off[groupId] was the moment THIS visit
+  // to this riff began," once, not track it live as it changes (which
+  // would corrupt cancelPending's own "revert to before this visit" target
+  // into "revert to whatever's current" the moment a confirm changes it).
+  useEffect(() => {
+    initialStepsRef.current = state.off[groupId] ?? 0
+    // Deferred through a microtask (not called directly) so this doesn't
+    // read as a synchronous setState-in-effect -- same established
+    // workaround as this file's own stemSpectrograms reset effect above.
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (!cancelled) setPendingSteps(null)
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed only on groupId, not state.off -- see this effect's own doc comment above
+  }, [groupId])
+
   // Sweeps a vertical marker across the waveform whenever anything from this
   // picker is playing — free-play (isFreePlaying) OR a specific clicked beat
   // (previewingBeat) — so where the loop currently is has a visual answer,
@@ -473,6 +518,20 @@ export function BeatPicker({
     }
   }, [metronomeOn, isFreePlaying, previewingBeat, stem, rifff])
 
+  // Shared by confirmPendingRef/cancelPendingRef below — dispatches the
+  // target steps value live, then (unless it's already what's live, e.g.
+  // re-confirming an unchanged pick) bakes it for real. Async because
+  // bakeStems is a native round-trip; callers own the `applying` guard
+  // around it (see that state's own doc comment above) since both callers
+  // need slightly different behavior around it (cancel also needs to skip
+  // the bake entirely when nothing was ever confirmed this visit).
+  async function applyOffset(target: number, before: number): Promise<void> {
+    dispatch({ type: 'SET_OFFSET_STEPS', key: groupId, steps: target })
+    if (target !== before && rifff) {
+      await bakeStems(dispatch, rifff.groupId, target, SNAP_DIVS[state.snapIdx], rifff.stems)
+    }
+  }
+
   // commitAndClose is a fresh function every render (it closes over onClose/rifff/
   // state), so depending on it directly would re-run this effect — and fire its
   // stopPreview() cleanup — on every unrelated re-render, including the one
@@ -483,6 +542,15 @@ export function BeatPicker({
   const commitAndCloseRef = useRef<() => void>(() => {})
   const markDownbeatRef = useRef<() => void>(() => {})
   const navigateRef = useRef<(delta: number) => void>(() => {})
+  const confirmPendingRef = useRef<() => void>(() => {})
+  const cancelPendingRef = useRef<() => void>(() => {})
+  // Escape and click-outside both route through this rather than straight
+  // to commitAndCloseRef — with a pick staged but not yet resolved, they
+  // should cancel it (same "back out of what I was doing" convention as
+  // RegionMute's own Escape-to-cancel), not silently do nothing (blocked)
+  // or silently bake it (implicit confirm) — see this feature's own design
+  // discussion.
+  const escapeRef = useRef<() => void>(() => {})
   // Space's own behavior depends on whether free-play is already running —
   // first press starts it, every press after that marks the downbeat at
   // the current playhead instead (real bug this fixed: Space used to only
@@ -490,49 +558,22 @@ export function BeatPicker({
   // playing yet, so hitting Space before pressing Play did nothing at all).
   const spaceRef = useRef<() => void>(() => {})
   useEffect(() => {
-    // Async, deliberately — this used to fire bakeStems without awaiting it,
-    // then immediately call onBaked/stopPreview/onClose in the same tick.
-    // The picker would visibly close (and, in a batch import, move on to
-    // the NEXT riff via onBaked) while the actual file rotation + write was
-    // still in flight in the background, with nothing waiting for it to
-    // land. Real bug this fixed: the user closing the picker (or a batch
-    // flow advancing) before a slower bake genuinely finished, sometimes
-    // reading as "the rotation didn't take" or racing a second bake against
-    // the first one's still-pending APPLY_BAKE dispatch. bakeStems itself
-    // never throws (its own try/catch swallows and logs), so this can
-    // always safely run through to completion.
-    commitAndCloseRef.current = async () => {
-      // steps === 0 means "loop starts right where the file already does" —
-      // rotationSecondsForStem(0, ...) is always exactly 0 for every stem, so
-      // baking would just rewrite each file with identical content (and, for
-      // LORE-sourced stems, spawn the whole native engine to do it). Real bug
-      // this fixed: an accidental click on the very first beat still counted
-      // as "something was picked" and rebaked on close, every time.
-      if (pendingBakeRef.current !== null && pendingBakeRef.current !== 0 && rifff) {
-        // A wrong pick on a brand-new import is easy to make without
-        // realizing (Escape/click-outside is an easy accidental close) and
-        // harder to notice/fix later once it's baked into the file — confirm
-        // before committing. Re-picks via the Inspector's own button are a
-        // deliberate correction the user already meant to make, so those
-        // close without asking, same as before this existed.
-        if (isNewImport && !window.confirm('Bake this downbeat pick into the audio file?')) {
-          return
-        }
-        const steps = pendingBakeRef.current
-        pendingBakeRef.current = null
-        await bakeStems(dispatch, rifff.groupId, steps, SNAP_DIVS[state.snapIdx], rifff.stems)
-        onBaked?.(steps)
-      }
+    // Close only when nothing's staged — a pick sitting unconfirmed forces
+    // an explicit confirm or cancel first (see confirmPendingRef/
+    // cancelPendingRef below) rather than letting continue/close silently
+    // carry it through or silently drop it. The bottom "continue"/"close"
+    // button mirrors this same guard in its own disabled state.
+    commitAndCloseRef.current = () => {
+      if (pendingSteps !== null && pendingSteps !== (state.off[groupId] ?? 0)) return
       stopPreview()
       onClose()
     }
 
     // Wraps around at either end — a small batch (however many riffs the
     // LORE import pulled in together) doesn't need dead-end prev/next
-    // buttons. Purely a "look at a different one" gesture: doesn't touch
-    // pendingBakeRef, so a pick already made on the riff being left behind
-    // still bakes (onto whichever riff is current when the picker actually
-    // closes — see commitAndCloseRef above) rather than being discarded.
+    // buttons. Purely a "look at a different one" gesture: an unconfirmed
+    // pick on the riff being left behind is discarded, not carried over —
+    // see the [groupId]-keyed reset effect above.
     navigateRef.current = (delta) => {
       if (!batchGroupIds || !onNavigate || batchGroupIds.length < 2) return
       const currentIndex = batchGroupIds.indexOf(groupId)
@@ -542,14 +583,14 @@ export function BeatPicker({
     }
 
     // Captures the playhead's position within the current free-play loop and marks
-    // (but doesn't yet bake) whichever beat that falls on — the tap-along
+    // (but doesn't yet confirm) whichever beat that falls on — the tap-along
     // alternative to clicking a specific gridline. Self-contained (re-derives
     // totalBeats/offsetKey/snapDiv from rifff/stem/state rather than closing over
     // the consts declared below the early-return guard) — this effect is
     // registered before that guard, same as every other hook here, so it can't
     // depend on bindings that only exist when the guard doesn't fire.
     markDownbeatRef.current = () => {
-      if (!isFreePlaying || !rifff || !stem) return
+      if (applying || !isFreePlaying || !rifff || !stem) return
       // Spans the whole rifff, not just the identity stem's own duration —
       // same reasoning as peaks/totalBeats above. Matches the click grid's
       // own resolution (see Task 1's subdivisionsPerBeat) so tapping along
@@ -564,13 +605,56 @@ export function BeatPicker({
       const secPerSubdivision = riffDurationSec / subdivisionsInLoop
       const subdivisionIndex = Math.round(elapsedInLoop / secPerSubdivision) % subdivisionsInLoop
       const beatIndex = subdivisionIndex / subdivisionsPerBeatNow
-      const steps = offsetStepsForBeatIndex(beatIndex, snapDivNow)
-      dispatch({
-        type: 'SET_OFFSET_STEPS',
-        key: groupId,
-        steps
-      })
-      pendingBakeRef.current = steps
+      setPendingSteps(offsetStepsForBeatIndex(beatIndex, snapDivNow))
+    }
+
+    // "confirm change" — commits pendingSteps for real (live state + baked
+    // to disk). Guarded by `applying` against a rapid double-click
+    // re-entering mid-flight (same pattern as ChannelRow.tsx's own
+    // togglingArm), since this is async (native bake round-trip).
+    confirmPendingRef.current = () => {
+      if (applying || pendingSteps === null) return
+      const target = pendingSteps
+      const before = state.off[groupId] ?? 0
+      if (target === before) {
+        // Nothing actually changed (e.g. re-clicking the already-confirmed
+        // beat) -- just clear the stale pending marker, no bake needed.
+        setPendingSteps(null)
+        return
+      }
+      setApplying(true)
+      void applyOffset(target, before)
+        .then(() => onBaked?.(target))
+        .finally(() => {
+          setPendingSteps(null)
+          setApplying(false)
+        })
+    }
+
+    // "cancel" — reverts all the way to initialStepsRef.current, the value
+    // in effect when this visit to THIS riff began (see that ref's own doc
+    // comment), not just "undo the latest click." If an earlier pick this
+    // same visit was already confirmed (state.off no longer equals
+    // initialStepsRef.current), this re-bakes back to it too -- "cancel"
+    // discards the whole editing session, not just the newest unconfirmed
+    // click, per this feature's own design discussion.
+    cancelPendingRef.current = () => {
+      if (applying) return
+      stopPreview()
+      setPendingSteps(null)
+      const before = state.off[groupId] ?? 0
+      const target = initialStepsRef.current
+      if (target === before) return // nothing was actually confirmed this visit -- true no-op
+      setApplying(true)
+      void applyOffset(target, before).finally(() => setApplying(false))
+    }
+
+    escapeRef.current = () => {
+      if (pendingSteps !== null) {
+        cancelPendingRef.current()
+      } else {
+        commitAndCloseRef.current()
+      }
     }
 
     spaceRef.current = () => {
@@ -585,7 +669,7 @@ export function BeatPicker({
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
-        commitAndCloseRef.current()
+        escapeRef.current()
         return
       }
       if (e.code === 'Space') {
@@ -611,6 +695,12 @@ export function BeatPicker({
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const offsetKey = groupId
   const currentSteps = state.off[offsetKey] ?? 0
+  // A pick that's been clicked but not yet confirmed (see pendingSteps'
+  // own doc comment) previews as if it were already picked -- the grid
+  // highlight and "loop begins at beat X" line below both read this,
+  // falling back to currentSteps once nothing's staged.
+  const displaySteps = pendingSteps ?? currentSteps
+  const hasPendingChange = pendingSteps !== null && pendingSteps !== currentSteps
   // Matches peaks' own span (the whole rifff, not just the identity stem's
   // own duration) — see its doc comment for why. Using stem.barLength here
   // instead would mis-space the gridlines against that wider waveform
@@ -618,16 +708,19 @@ export function BeatPicker({
   // loop identity stem in a 16-bar rifff).
   const totalBeats = rifff.barLength * 4
   // How many clickable grid positions make up one quarter-note beat, driven
-  // by this same modal's own "grid" selector below (SNAP_DIVS = [4, 8, 16],
-  // always a multiple of 4) -- see
+  // by this same modal's own "grid" selector below (SNAP_DIVS =
+  // [1, 2, 4, 8, 16], always a divisor or multiple of 4) -- see
   // docs/superpowers/specs/2026-08-02-beatpicker-grid-resolution-design.md.
-  // 1 at snapDiv=4 (quarter-note grid), up to 4 at snapDiv=16.
+  // 0.25 at snapDiv=1 (whole-bar grid) up to 4 at snapDiv=16 -- always <1
+  // for the two coarse additions, meaning each clickable cell spans several
+  // beats rather than subdividing one; totalSubdivisions below still comes
+  // out as a whole number since totalBeats is always a multiple of 4.
   const subdivisionsPerBeat = snapDiv / 4
   const totalSubdivisions = totalBeats * subdivisionsPerBeat
   // One offsetSteps unit IS one subdivision by definition (both are exactly
   // 1/snapDiv of a bar), so recovering which subdivision is currently picked
   // needs no scaling -- just sign-flip and round defensively.
-  const currentSubdivisionIndex = Math.round(-currentSteps)
+  const currentSubdivisionIndex = Math.round(-displaySteps)
   // Fractional quarter-note-equivalent value for display (e.g. 3.5) --
   // separate from currentSubdivisionIndex, which is what the grid's
   // highlight comparison below actually uses.
@@ -731,14 +824,23 @@ export function BeatPicker({
   }
 
   function pickBeat(beatIndex: number): void {
-    // A second click on the currently-playing beat just stops it — commit/bake
-    // already happened on the first click, nothing new to do.
+    // Blocked while a previous pick is still being confirmed/cancelled
+    // (native bake round-trip in flight) -- picking a new beat mid-flight
+    // would stage a value the in-flight dispatch/bake knows nothing about.
+    if (applying) return
+    // A second click on the currently-playing beat just stops it — the
+    // pending pick from the first click is untouched (still staged, still
+    // needs confirm/cancel), nothing new to do here.
     const wasPlayingThis = previewingBeat === beatIndex
     stopPreview()
     if (wasPlayingThis) return
 
     const steps = offsetStepsForBeatIndex(beatIndex, snapDiv)
-    dispatch({ type: 'SET_OFFSET_STEPS', key: offsetKey, steps })
+    // Staged locally, not dispatched -- see pendingSteps' own doc comment.
+    // The preview below plays the rotated audio directly from `steps`, so
+    // nothing about auditioning this pick actually needs state.off to be
+    // set at all; only confirmPendingRef commits it for real.
+    setPendingSteps(steps)
     // Same reasoning as toggleFreePlay: this also starts a looped preview,
     // so pause the main arrangement rather than let both play at once.
     if (playing) dispatch({ type: 'PAUSE' })
@@ -788,12 +890,11 @@ export function BeatPicker({
       previewSourcesRef.current.push(source)
     }
     setPreviewingBeat(beatIndex)
-    pendingBakeRef.current = steps
   }
 
   return (
     <div
-      onClick={() => commitAndCloseRef.current()}
+      onClick={() => escapeRef.current()}
       style={{
         position: 'fixed',
         inset: 0,
@@ -893,7 +994,9 @@ export function BeatPicker({
               {SNAP_DIVS.map((div, idx) => (
                 <button
                   key={div}
-                  onClick={() => dispatch({ type: 'SET_SNAP_IDX', snapIdx: idx as 0 | 1 | 2 })}
+                  onClick={() =>
+                    dispatch({ type: 'SET_SNAP_IDX', snapIdx: idx as 0 | 1 | 2 | 3 | 4 })
+                  }
                   title={`snap grid to 1/${div} notes`}
                   style={{
                     height: 22,
@@ -1158,16 +1261,44 @@ export function BeatPicker({
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
           {stemSpectrograms
-            ? `loop begins at beat ${currentBeat + 1} of ${totalBeats}`
+            ? hasPendingChange
+              ? `loop would begin at beat ${currentBeat + 1} of ${totalBeats} — confirm to apply`
+              : `loop begins at beat ${currentBeat + 1} of ${totalBeats}`
             : 'decoding stems and analyzing…'}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-          {isNewImport ? (
+          {isNewImport && (
+            <button
+              onClick={cancelImport}
+              disabled={applying}
+              title="discard this import — removes it from the shelf"
+              style={{
+                height: 34,
+                borderRadius: 0,
+                padding: '0 20px',
+                fontSize: 13,
+                fontWeight: 700,
+                border: '2px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)',
+                opacity: applying ? 0.5 : 1,
+                cursor: applying ? 'not-allowed' : 'pointer'
+              }}
+            >
+              cancel import
+            </button>
+          )}
+          {hasPendingChange ? (
+            // Replaces continue/close entirely while a pick is staged but
+            // not yet resolved -- forces an explicit choice rather than
+            // letting continue/close silently carry it through (blocked,
+            // see commitAndCloseRef) or leaving no way to back out.
             <>
               <button
-                onClick={cancelImport}
-                title="discard this import — removes it from the shelf"
+                onClick={() => cancelPendingRef.current()}
+                disabled={applying}
+                title="discard this pick, back to how it was before"
                 style={{
                   height: 34,
                   borderRadius: 0,
@@ -1176,25 +1307,31 @@ export function BeatPicker({
                   fontWeight: 700,
                   border: '2px solid var(--ra-border-strong)',
                   background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
+                  color: 'var(--ra-text-2)',
+                  opacity: applying ? 0.5 : 1,
+                  cursor: applying ? 'not-allowed' : 'pointer'
                 }}
               >
-                cancel import
+                cancel
               </button>
               <button
-                onClick={() => commitAndCloseRef.current()}
+                onClick={() => confirmPendingRef.current()}
+                disabled={applying}
+                title="bake this pick into the audio file"
                 style={{
                   height: 34,
                   borderRadius: 0,
                   padding: '0 20px',
                   fontSize: 13,
                   fontWeight: 700,
-                  border: '2px solid var(--ra-border-strong)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text)'
+                  border: '2px solid var(--ra-play-on)',
+                  background: 'var(--ra-play-on)',
+                  color: 'var(--ra-play-on-ink)',
+                  opacity: applying ? 0.5 : 1,
+                  cursor: applying ? 'not-allowed' : 'pointer'
                 }}
               >
-                continue
+                {applying ? 'confirming…' : 'confirm change'}
               </button>
             </>
           ) : (
@@ -1211,7 +1348,7 @@ export function BeatPicker({
                 color: 'var(--ra-text)'
               }}
             >
-              close
+              {isNewImport ? 'continue' : 'close'}
             </button>
           )}
         </div>
