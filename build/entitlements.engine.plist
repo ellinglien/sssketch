@@ -8,12 +8,6 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
-    <!-- Required for loading third-party VST3 plugins (unsigned by us,
-         arbitrary vendor code) at runtime -- hardened runtime blocks
-         loading unsigned/differently-signed code without this. Not present
-         on the OUTER app's own entitlements.mac.plist because the outer
-         Electron process never loads plugin code itself; only this nested
-         engine process does. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
   </dict>

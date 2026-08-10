@@ -32,6 +32,19 @@ exports.default = async function afterSign(context) {
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+  // entitlements.engine.plist carries com.apple.security.cs.disable-
+  // library-validation -- required for loading third-party VST3 plugins
+  // (unsigned by us, arbitrary vendor code) at runtime; hardened runtime
+  // blocks loading unsigned/differently-signed code without it. Not
+  // present in entitlements.mac.plist (the OUTER app's own entitlements)
+  // because the outer Electron process never loads plugin code itself,
+  // only this nested engine process does.
+  //
+  // The plist itself must stay comment-free: codesign's AMFI entitlements
+  // parser doesn't reliably handle XML comments (`<!-- -->`) inside an
+  // entitlements plist, even though they're valid XML/plist syntax
+  // elsewhere -- a real `AMFIUnserializeXML: syntax error` from a comment
+  // that was here once, not a hypothetical concern.
   const entitlementsPath = path.join(__dirname, 'entitlements.engine.plist')
 
   const bundlesToSign = [
