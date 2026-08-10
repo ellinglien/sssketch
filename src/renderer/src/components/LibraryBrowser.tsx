@@ -375,20 +375,17 @@ export function LibraryBrowser({
           name: 'Shared Feed',
           lastRiffTime: 0
         }
-        // Narrowed to "your own stuff" rather than every jam the account has
-        // ever joined -- per direct feedback, endlesssListJams() returns the
-        // account's FULL membership history (every public jam ever joined,
-        // potentially dozens), which drowned out the two jams that actually
-        // matter by default. The own-jam match is by name equality against
-        // the logged-in username (case-insensitive/trimmed, since display
-        // names can vary in casing) -- if it isn't found (e.g. account has no
-        // personal jam, or it's not named the expected way), only Shared Feed
-        // shows; syncedJams (already-synced local warehouse data, further
-        // down) still covers anything synced before this change.
+        // Full membership list -- every jam the account has ever joined or
+        // participated in (per endlesssListJams' own contract), not narrowed
+        // down. Separately, still pick out the account's own private jam
+        // (name equality against the logged-in username, case-insensitive/
+        // trimmed) purely so it -- along with Shared Feed -- can be pinned
+        // to the top of the sidebar and auto-synced on login (see ownJam's
+        // own doc comment above and the two auto-sync effects further
+        // down); it stays IN the full list too, not pulled out of it.
         const needle = authStatus.username.trim().toLowerCase()
-        const foundOwnJam = liveJams.find((j) => j.name.trim().toLowerCase() === needle) ?? null
-        setOwnJam(foundOwnJam)
-        setMembershipJams(foundOwnJam ? [sharedFeedEntry, foundOwnJam] : [sharedFeedEntry])
+        setOwnJam(liveJams.find((j) => j.name.trim().toLowerCase() === needle) ?? null)
+        setMembershipJams([sharedFeedEntry, ...liveJams])
       })
       .catch((err) => {
         console.error('LibraryBrowser: endlesssListJams() failed:', err)
