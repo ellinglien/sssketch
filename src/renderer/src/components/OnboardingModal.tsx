@@ -19,16 +19,10 @@ const buttonStyle: React.CSSProperties = {
  * anything longer wears thin fast as the first thing you see every time
  * you open the app. */
 export function OnboardingModal({
-  hasExistingContent,
   onDismiss,
   onOpenEndlesss,
   onStartTour
 }: {
-  /** Hides "take the tour" -- the tour imports a demo rifff onto the
-   * timeline, which only makes sense on an empty sketch. A returning user
-   * who already has real content shouldn't risk it landing next to (or
-   * getting confused with) their own work. */
-  hasExistingContent: boolean
   /** dontShowAgain reflects the checkbox at the moment of dismissal --
    * App.tsx only persists the opt-out when true, so leaving it unchecked
    * means this shows again next launch. */
@@ -37,7 +31,11 @@ export function OnboardingModal({
    * the shortest path from "just opened this" to "have real audio in the
    * timeline" for anyone with an Endlesss account already. */
   onOpenEndlesss: (dontShowAgain: boolean) => void
-  /** Dismisses AND starts the guided tour (see TourOverlay.tsx). */
+  /** Dismisses AND starts the guided tour (see TourOverlay.tsx) -- always
+   * shown, even for a returning user with existing content (previously
+   * hidden then, since the tour imports a demo rifff onto the timeline).
+   * App.tsx's own handler confirms first when there's real content to
+   * protect, so this component doesn't need to know about that itself. */
   onStartTour: (dontShowAgain: boolean) => void
 }): React.JSX.Element {
   const [dontShowAgain, setDontShowAgain] = useState(false)
@@ -72,11 +70,9 @@ export function OnboardingModal({
           <button onClick={() => onDismiss(dontShowAgain)} style={buttonStyle}>
             start sketching
           </button>
-          {!hasExistingContent && (
-            <button onClick={() => onStartTour(dontShowAgain)} style={buttonStyle}>
-              take the tour
-            </button>
-          )}
+          <button onClick={() => onStartTour(dontShowAgain)} style={buttonStyle}>
+            take the tour
+          </button>
           <button onClick={() => onOpenEndlesss(dontShowAgain)} style={buttonStyle}>
             log into endlesss
           </button>

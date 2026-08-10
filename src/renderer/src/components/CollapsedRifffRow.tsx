@@ -939,6 +939,27 @@ export function CollapsedRifffRow({
             }}
           />
 
+          {/* Already-committed mute regions (union across every stem -- see
+              this file's own muteRegions useMemo above) -- a border only, in
+              the same semantic mute-red as StemWaveformRow's identical
+              treatment, so a muted span reads as "audio used to be here"
+              rather than a flat gray patch. */}
+          {muteRegions.map((r, i) => (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: r.startBar * PPB - leftPx,
+                width: (r.endBar - r.startBar) * PPB,
+                border: '1px solid var(--ra-mute-on)',
+                zIndex: 1,
+                pointerEvents: 'none'
+              }}
+            />
+          ))}
+
           {/* Live/pending region selection -- shown while dragging, and
               after release until Delete/Backspace commits it or it's
               cancelled. Visible whenever the active selection touches ANY of

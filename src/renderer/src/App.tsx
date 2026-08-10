@@ -1058,6 +1058,20 @@ function Frame(): React.JSX.Element {
     }
   }
 
+  /** Settings-menu entry point -- clears the persisted "don't show again"
+   * opt-out (so it resumes showing on every future launch, matching what
+   * "re-enable" implies) AND reopens it immediately, rather than only doing
+   * one or the other. */
+  function showWelcomeAgain(): void {
+    try {
+      localStorage.removeItem(ONBOARDING_SEEN_STORAGE_KEY)
+    } catch {
+      // localStorage unavailable -- it just won't auto-show again next
+      // launch either way; still open it now.
+    }
+    setShowOnboarding(true)
+  }
+
   const [tourStepIndex, setTourStepIndex] = useState<number | null>(null)
   // The demo rifff's own groupId, once imported -- tracked so endTour can
   // delete exactly that rifff (and nothing the user may have added mid-
@@ -1631,6 +1645,8 @@ function Frame(): React.JSX.Element {
           onEnableGatedRecording={() => void enableGatedRecording()}
           onDisableGatedRecording={() => void disableGatedRecording()}
           onStop={() => void handleStop()}
+          onShowWelcome={showWelcomeAgain}
+          onOpenEndlesss={() => setRiffLibraryOpen(true)}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
@@ -1807,13 +1823,19 @@ function Frame(): React.JSX.Element {
         )}
         {!showLibraryLocationSetup && showOnboarding && (
           <OnboardingModal
-            hasExistingContent={Object.keys(state.rifffs).length > 0}
             onDismiss={dismissOnboarding}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
               setRiffLibraryOpen(true)
             }}
             onStartTour={(dontShowAgain) => {
+              const hasExistingContent = Object.keys(state.rifffs).length > 0
+              if (
+                hasExistingContent &&
+                !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+              ) {
+                return
+              }
               dismissOnboarding(dontShowAgain)
               void startTour()
             }}

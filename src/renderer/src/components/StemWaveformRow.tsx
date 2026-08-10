@@ -710,6 +710,28 @@ export function StemWaveformRow({
             }}
           />
 
+          {/* Already-committed mute regions -- a border only (the grey fill
+              itself already comes from combinedClipPath's own gray-layer
+              cutout above), in the same semantic mute-red as the "mute"
+              volume tooltip below, so a muted span reads as "audio used to
+              be here" rather than just a flat gray patch indistinguishable
+              from e.g. a quiet fade. */}
+          {muteRegions.map((r, i) => (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: r.startBar * ppb - leftPx,
+                width: (r.endBar - r.startBar) * ppb,
+                border: '1px solid var(--ra-mute-on)',
+                zIndex: 1,
+                pointerEvents: 'none'
+              }}
+            />
+          ))}
+
           {/* Live/pending region selection -- shown while dragging, and
               after release until Delete/Backspace commits it or it's
               cancelled. */}

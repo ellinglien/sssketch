@@ -52,6 +52,42 @@ function MetronomeIcon(): React.JSX.Element {
   )
 }
 
+// Simplified 6-tooth cog silhouette, same hand-drawn-glyph/no-icon-library
+// convention as MetronomeIcon above -- outer ring + hole drawn as strokes,
+// teeth as small rects rotated around the same center. Distinct from the
+// "tidy" button next to it (internally still named gearMenu below, a
+// pre-existing misnomer -- that one is scoped to tidy-up options only, not
+// a general settings surface).
+function SettingsGearIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="7" cy="7" r="4" />
+      <circle cx="7" cy="7" r="1.2" fill="currentColor" stroke="none" />
+      {[0, 60, 120, 180, 240, 300].map((deg) => (
+        <rect
+          key={deg}
+          x="6.1"
+          y="0.4"
+          width="1.8"
+          height="2"
+          fill="currentColor"
+          stroke="none"
+          transform={`rotate(${deg} 7 7)`}
+        />
+      ))}
+    </svg>
+  )
+}
+
 // Plain filled circle, same hand-drawn-glyph convention as MetronomeIcon --
 // a record-button dot. Drawn as SVG geometry (not a CSS border-radius div)
 // since this design system otherwise forbids border-radius everywhere else
@@ -92,7 +128,9 @@ export function TransportBar({
   onOpenClusterStems,
   onEnableGatedRecording,
   onDisableGatedRecording,
-  onStop
+  onStop,
+  onShowWelcome,
+  onOpenEndlesss
 }: {
   onOpenClusterStems: () => void
   onEnableGatedRecording: () => void
@@ -102,6 +140,14 @@ export function TransportBar({
   // comment), which needs state this component doesn't have direct access
   // to construct itself.
   onStop: () => void
+  /** Settings menu's "show welcome screen" entry -- see App.tsx's
+   * showWelcomeAgain for what "re-enable" actually does (clears the
+   * persisted opt-out AND reopens it now). */
+  onShowWelcome: () => void
+  /** Settings menu's "log into endlesss" entry, shown only when logged out
+   * -- opens the same library browser the onboarding modal's own "log into
+   * endlesss" button does, rather than duplicating a login form here. */
+  onOpenEndlesss: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -109,6 +155,15 @@ export function TransportBar({
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
   const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
+  const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
+  // Fetched fresh each time the settings menu opens (see the trigger
+  // button below) rather than kept live -- the menu is only open for a
+  // few seconds at most, and this avoids a persistent poll/subscription
+  // just for a label two clicks deep.
+  const [endlesssStatus, setEndlesssStatus] = useState<{
+    loggedIn: boolean
+    username?: string
+  } | null>(null)
 
   const availableInputDevices = state.availableInputDevices
   const selectedInputDevice = state.selectedInputDevice
@@ -160,6 +215,43 @@ export function TransportBar({
     if (selectedInputDevice === null) fetchAndRestoreInputDevices()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAndRestoreInputDevices is stable in spirit (closes over dispatch, which useDispatch guarantees is stable) and deliberately excluded to avoid re-running on every render; the intent is "re-fire only when selectedInputDevice transitions to null"
   }, [selectedInputDevice])
+
+  // Opens the native folder picker and, unless cancelled, repoints where
+  // every future sketch save/duplicate/list lands -- same pickFolder +
+  // setLibraryRoot pair ProjectLibraryBrowser.tsx's own "change location…"
+  // uses, just reachable from the settings menu too without opening that
+  // whole modal first.
+  async function handleChangeSaveLocation(): Promise<void> {
+    try {
+      const newRoot = await window.rifffApi.pickFolder()
+      if (!newRoot) return
+      await window.rifffApi.setLibraryRoot(newRoot)
+    } catch (err) {
+      console.error('TransportBar: handleChangeSaveLocation() failed:', err)
+    }
+  }
+
+  // Fetches auth status fresh right before opening -- see endlesssStatus's
+  // own doc comment for why this isn't kept live instead.
+  function handleOpenSettingsMenu(e: React.MouseEvent<HTMLButtonElement>): void {
+    if (settingsMenu) {
+      setSettingsMenu(null)
+      return
+    }
+    const rect = e.currentTarget.getBoundingClientRect()
+    setSettingsMenu({ x: rect.left, y: rect.bottom + 4 })
+    void window.rifffApi
+      .endlesssAuthStatus()
+      .then((status) =>
+        setEndlesssStatus(
+          status.loggedIn ? { loggedIn: true, username: status.username } : { loggedIn: false }
+        )
+      )
+      .catch((err) => {
+        console.error('TransportBar: endlesssAuthStatus() failed:', err)
+        setEndlesssStatus(null)
+      })
+  }
 
   // Ableton Link (https://github.com/Ableton/link) status -- fetched
   // on-demand and re-polled on a slow timer, not pushed continuously by
@@ -549,6 +641,44 @@ export function TransportBar({
             }
           ]}
           onClose={() => setGearMenu(null)}
+        />
+      )}
+
+      <button
+        onClick={handleOpenSettingsMenu}
+        aria-label="Settings"
+        title="settings"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 22,
+          width: 22,
+          borderRadius: 0,
+          padding: 0,
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border)',
+          color: 'var(--ra-text-2)'
+        }}
+      >
+        <SettingsGearIcon />
+      </button>
+      {settingsMenu && (
+        <ContextMenu
+          x={settingsMenu.x}
+          y={settingsMenu.y}
+          items={[
+            { label: 'show welcome screen', onClick: onShowWelcome },
+            { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
+            endlesssStatus?.loggedIn
+              ? {
+                  label: `log out of endlesss (${endlesssStatus.username})`,
+                  onClick: () => void window.rifffApi.endlesssLogout(),
+                  danger: true
+                }
+              : { label: 'log into endlesss', onClick: onOpenEndlesss }
+          ]}
+          onClose={() => setSettingsMenu(null)}
         />
       )}
 
