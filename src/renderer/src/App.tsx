@@ -717,8 +717,8 @@ const TOUR_STEPS: TourStep[] = [
   },
   {
     selector: '[data-tour-id="tour-mode"]',
-    title: 'sketch / arranger',
-    body: 'sketch is a quick rough layout; arranger is the basic timeline.'
+    title: 'sketch / arrange',
+    body: 'sketch is a quick rough layout; arrange is the basic timeline.'
   }
 ]
 

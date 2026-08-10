@@ -152,7 +152,7 @@ function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX
 // visible text and its tooltip. Moved here from Titlebar.tsx along with the
 // button itself -- see the button's own render site below for why.
 function modeLabel(mode: 'normal' | 'sketch'): string {
-  return mode === 'normal' ? 'arranger' : mode
+  return mode === 'normal' ? 'arrange' : mode
 }
 
 export function TransportBar({
@@ -612,15 +612,15 @@ export function TransportBar({
         data-tour-id="tour-mode"
         title={
           mode === 'normal' && !sketchEligible
-            ? 'mode: arranger (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
+            ? 'mode: arrange (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
             : `mode: ${modeLabel(mode)} (Tab)`
         }
         style={{
           height: 22,
-          // Fixed, not content-width -- "arranger" and "sketch" are
+          // Fixed, not content-width -- "arrange" and "sketch" are
           // different lengths, and per direct feedback the button itself
           // shouldn't visibly resize when the mode flips. Sized to fit
-          // "arranger" (the longer label) comfortably.
+          // "arrange" (the longer label) comfortably.
           width: 64,
           borderRadius: 0,
           padding: '0 8px',
