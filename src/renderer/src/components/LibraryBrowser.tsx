@@ -112,6 +112,16 @@ const SCROLL_LOAD_MORE_THRESHOLD_PX = 200
 // real risk, not enough that it's obviously huge either way.
 const LARGE_JAM_RIFF_THRESHOLD = 300
 
+// The lore-sync-progress IPC channel keys shared-feed events by the bare
+// username (see lore-sync-start-shared-feed's handler in src/main/index.ts),
+// not the synthetic `shared:<username>` jamCID this component's own jam
+// list/selection uses -- strip the prefix so a jamCID can always be turned
+// into the same key the progress events themselves use, for both syncing
+// state (syncingKeys) and progress display (syncProgressByKey).
+function syncKeyFor(jamCID: string): string {
+  return jamCID.startsWith('shared:') ? jamCID.slice('shared:'.length) : jamCID
+}
+
 export function LibraryBrowser({
   onClose,
   onImported
@@ -145,13 +155,35 @@ export function LibraryBrowser({
   const [membershipJams, setMembershipJams] = useState<LoreJam[] | null>(null)
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
 
-  // Per-jam sync status/trigger
+  // Per-jam sync status/trigger. syncStatus itself stays a single value (it's
+  // "the detail pane's own fetch for whichever jam is selected", re-fetched
+  // by the effect below whenever selectedJamCID changes) but syncingKeys/
+  // syncProgressByKey/syncBaseCountByKey are keyed by jam (via syncKeyFor),
+  // not single shared values -- real bug this fixed: with a single global
+  // `syncing` boolean, starting a sync on jam A and then merely SELECTING
+  // jam B (without starting anything) left `syncing` stuck true forever,
+  // since the progress listener's completion check only ever compared
+  // against whichever jam was CURRENTLY selected, so jam A's own completion
+  // event stopped matching the instant selection moved on. That left the
+  // sync button disabled for every jam, permanently, until you switched back
+  // to A. The backend (loreWarehouseSync.ts's syncsInFlight, keyed per jam)
+  // already supported multiple jams syncing at once -- this was purely a
+  // renderer-side state-shape bug. Real prior art checked directly against
+  // LORE itself (OUROVEON's own Endlesss warehouse sync tool, this app's own
+  // design precedent -- see doc/LORE.warehouse.MD in github.com/OUROcorp/
+  // OUROVEON): its Data Warehouse table shows live "riffs (+N remaining)"
+  // progress per JAM ROW regardless of which jam you're viewing, which is
+  // the same "don't lose visibility into a jam once you look away from it"
+  // property the per-jam keying below (plus the sidebar row indicator further
+  // down) is aiming for here.
   const [syncStatus, setSyncStatus] = useState<{ riffCount: number; complete: boolean } | null>(
     null
   )
-  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null)
-  const [syncing, setSyncing] = useState(false)
-  const [syncBaseCount, setSyncBaseCount] = useState(0)
+  const [syncingKeys, setSyncingKeys] = useState<Set<string>>(new Set())
+  const [syncProgressByKey, setSyncProgressByKey] = useState<
+    Record<string, { done: number; total: number }>
+  >({})
+  const [syncBaseCountByKey, setSyncBaseCountByKey] = useState<Record<string, number>>({})
   // The jam's live riff count straight from Endlesss (not the local
   // warehouse) -- fetched below whenever a private jam is selected, purely
   // to warn before starting a sync that's going to take a while. null both
@@ -411,34 +443,44 @@ export function LibraryBrowser({
 
   useEffect(() => {
     return window.rifffApi.onLoreSyncProgress((progress) => {
-      // lore-sync-start-shared-feed's IPC handler sends progress events keyed
-      // by the bare username (not the synthetic `shared:<username>` jamCID
-      // used in this component's own jam list/selection) -- see
-      // sharedFeedEntry above. Strip the prefix before comparing so shared-
-      // feed progress is ever recognized as relevant; the status re-fetch
-      // below still needs the real, prefixed key since that's the actual
-      // Jams table lookup.
-      if (!selectedJamCID) return
-      const expectedKey = selectedJamCID.startsWith('shared:')
-        ? selectedJamCID.slice('shared:'.length)
-        : selectedJamCID
-      if (progress.key !== expectedKey) return
-      setSyncProgress(progress)
-      if (progress.done === progress.total) {
-        setSyncing(false)
-        setRiffRefreshToken((t) => t + 1)
-        window.rifffApi
-          .loreSyncStatus(selectedJamCID)
-          .then(setSyncStatus)
-          .catch((err) => {
-            console.error('LibraryBrowser: loreSyncStatus() failed:', err)
-          })
-      }
+      // Always updates the per-key progress/syncing maps, regardless of
+      // what's currently selected -- see this component's own per-jam sync
+      // state doc comment (near syncingKeys' declaration) for why. Only the
+      // detail-pane refresh below (syncStatus/riffRefreshToken) is scoped to
+      // the currently-selected jam.
+      setSyncProgressByKey((prev) => ({ ...prev, [progress.key]: progress }))
+      if (progress.done !== progress.total) return
+      setSyncingKeys((prev) => {
+        if (!prev.has(progress.key)) return prev
+        const next = new Set(prev)
+        next.delete(progress.key)
+        return next
+      })
+      // Keeps the sidebar's "(not synced)" labels accurate even for a jam
+      // that finished syncing in the background while a different jam was
+      // selected -- without this, only the jam you happened to be looking
+      // at when it finished ever lost its "(not synced)" suffix.
+      window.rifffApi
+        .loreListJams(jamFilter)
+        .then(setSyncedJams)
+        .catch((err) => {
+          console.error('LibraryBrowser: loreListJams() refresh failed:', err)
+        })
+      if (!selectedJamCID || syncKeyFor(selectedJamCID) !== progress.key) return
+      setRiffRefreshToken((t) => t + 1)
+      window.rifffApi
+        .loreSyncStatus(selectedJamCID)
+        .then(setSyncStatus)
+        .catch((err) => {
+          console.error('LibraryBrowser: loreSyncStatus() failed:', err)
+        })
     })
-  }, [selectedJamCID])
+  }, [selectedJamCID, jamFilter])
 
   const handleStartSync = useCallback(() => {
     if (!selectedJamCID) return
+    const key = syncKeyFor(selectedJamCID)
+    if (syncingKeys.has(key)) return
     // A rough, deliberately hedged estimate ("+", not a promise) -- there's
     // no reliable way to know from here how much of a jam's audio is
     // already cached locally vs. needs downloading, which dominates real
@@ -455,9 +497,14 @@ export function LibraryBrowser({
         return
       }
     }
-    setSyncing(true)
-    setSyncBaseCount(syncStatus?.riffCount ?? 0)
-    setSyncProgress(null)
+    setSyncingKeys((prev) => new Set(prev).add(key))
+    setSyncBaseCountByKey((prev) => ({ ...prev, [key]: syncStatus?.riffCount ?? 0 }))
+    setSyncProgressByKey((prev) => {
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
     const promise = selectedJamCID.startsWith('shared:')
       ? window.rifffApi.loreSyncStartSharedFeed(selectedJamCID.slice('shared:'.length))
       : window.rifffApi.loreSyncStartJam(
@@ -466,9 +513,13 @@ export function LibraryBrowser({
         )
     promise.catch((err) => {
       console.error('LibraryBrowser: sync failed:', err)
-      setSyncing(false)
+      setSyncingKeys((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
     })
-  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount])
+  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount, syncingKeys])
 
   /** Opens the OS folder picker and points LORE at the chosen folder --
    * needed since the warehouse root defaults to sssketch's own self-built
@@ -935,6 +986,16 @@ export function LibraryBrowser({
     }
   }
 
+  // Derived per-key lookups for whichever jam the detail pane is currently
+  // showing -- selectedJamCID can be null (nothing selected), so this stays
+  // undefined/false rather than throwing in that case.
+  const selectedSyncKey = selectedJamCID ? syncKeyFor(selectedJamCID) : null
+  const selectedSyncingHere = selectedSyncKey !== null && syncingKeys.has(selectedSyncKey)
+  const selectedSyncProgress =
+    selectedSyncKey !== null ? syncProgressByKey[selectedSyncKey] : undefined
+  const selectedSyncBaseCount =
+    (selectedSyncKey !== null ? syncBaseCountByKey[selectedSyncKey] : undefined) ?? 0
+
   // ---------------------------------------------------------------------
   // Escape-to-close
   // ---------------------------------------------------------------------
@@ -1094,27 +1155,49 @@ export function LibraryBrowser({
                   </span>
                 )}
               </div>
-              {visibleJams.map((jam) => (
-                <button
-                  key={jam.jamCID}
-                  onClick={() => setSelectedJamCID(jam.jamCID)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '5px 6px',
-                    fontSize: 11,
-                    border: 'none',
-                    borderRadius: 0,
-                    background:
-                      selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
-                    color: 'var(--ra-text)'
-                  }}
-                >
-                  {jam.name}
-                  {syncedJams.some((s) => s.jamCID === jam.jamCID) ? '' : ' (not synced)'}
-                </button>
-              ))}
+              {visibleJams.map((jam) => {
+                // Live per-row progress, visible regardless of which jam is
+                // currently selected -- matches LORE's own Data Warehouse
+                // table (doc/LORE.warehouse.MD in OUROVEON), which shows a
+                // "riffs (+N remaining)" count in every syncing jam's own row
+                // rather than only for whichever one you're looking at. This
+                // is what makes a background sync visible at all instead of
+                // reading as an opaque "black box" the moment you click
+                // elsewhere.
+                const jamKey = syncKeyFor(jam.jamCID)
+                const isJamSyncing = syncingKeys.has(jamKey)
+                const jamProgress = syncProgressByKey[jamKey]
+                return (
+                  <button
+                    key={jam.jamCID}
+                    onClick={() => setSelectedJamCID(jam.jamCID)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '5px 6px',
+                      fontSize: 11,
+                      border: 'none',
+                      borderRadius: 0,
+                      background:
+                        selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
+                      color: 'var(--ra-text)'
+                    }}
+                  >
+                    {isJamSyncing && <LoadingLoader size={10} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {jam.name}
+                      {isJamSyncing
+                        ? ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`
+                        : syncedJams.some((s) => s.jamCID === jam.jamCID)
+                          ? ''
+                          : ' (not synced)'}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
 
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -1151,7 +1234,14 @@ export function LibraryBrowser({
                         </span>
                         <button
                           onClick={handleStartSync}
-                          disabled={syncing}
+                          // Only disabled by THIS jam's own in-flight sync, not
+                          // any other jam's -- see this component's own per-jam
+                          // sync state doc comment (near syncingKeys'
+                          // declaration) for the bug this fixed (a global
+                          // `syncing` boolean left every jam's sync button
+                          // disabled forever once you switched away from
+                          // whichever jam happened to be syncing).
+                          disabled={selectedSyncingHere}
                           // Matches the import button's own "primary action" weight
                           // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
                           // rather than the tiny filter-bar utility styling this used
@@ -1176,11 +1266,11 @@ export function LibraryBrowser({
                             gap: 8
                           }}
                         >
-                          {syncing ? <LoadingLoader size={16} /> : 'sync'}
+                          {selectedSyncingHere ? <LoadingLoader size={16} /> : 'sync'}
                         </button>
-                        {syncing && syncProgress && (
+                        {selectedSyncingHere && selectedSyncProgress && (
                           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                            synced {syncBaseCount + syncProgress.done} so far
+                            synced {selectedSyncBaseCount + selectedSyncProgress.done} so far
                           </span>
                         )}
                       </div>
