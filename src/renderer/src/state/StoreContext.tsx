@@ -475,7 +475,15 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // audio through that channel's chain until some OTHER tracked field
     // happens to change too, same class of bug as the SET_PLAYED_BARS gap
     // documented above.
-    state.channelOf
+    state.channelOf,
+    // Same class of gap as state.playedBars/state.leftCrop above, just never
+    // caught by RegionMute's own manual verification pass: ADD_MUTE_REGION/
+    // REMOVE_MUTE_REGION update state.muteRegions fine (StemWaveformRow
+    // re-renders the muted span correctly from it), but without this dep
+    // this effect never re-runs to actually re-send the project — the
+    // native engine keeps playing the pre-mute audio in that span until some
+    // OTHER tracked field happens to change and trigger a resync first.
+    state.muteRegions
   ])
 
   // Inbound half of the same bidirectional relationship as the outbound
