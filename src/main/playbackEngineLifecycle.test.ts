@@ -16,6 +16,15 @@ describe('startPlaybackEngine', () => {
     handle = undefined
   })
 
+  // This is the first real engine spawn of the whole test run -- a cold
+  // spawn (first time this freshly-built binary has ever been launched
+  // this run) is measurably slower than every later spawn in this same
+  // file (700ms-1.7s once warm), and occasionally exceeds vitest's default
+  // 5000ms on a loaded CI runner -- caught for real on a GitHub Actions
+  // run, not hypothetical (this test's later siblings, which spawn again
+  // after the process is already warm, never needed this). Matches the
+  // explicit timeout the crash/respawn tests below already carry for the
+  // same class of reason.
   it('spawns the engine and the returned client can send load-project without throwing', async () => {
     handle = await startPlaybackEngine()
     // A minimal, valid empty project — proves the connection is live and the
@@ -25,7 +34,7 @@ describe('startPlaybackEngine', () => {
     // the native side already handles it) — just confirm send() doesn't throw
     // (i.e. the socket is genuinely connected).
     expect(handle.client).toBeDefined()
-  })
+  }, 20000)
 
   it('remembers the last project sent via sendLoadProject, for crash-recovery resend', async () => {
     handle = await startPlaybackEngine()
