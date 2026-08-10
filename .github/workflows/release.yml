@@ -87,25 +87,29 @@ jobs:
       # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
       # itself -- imports into a temporary keychain internally, no manual
       # `security import`/keychain scripting needed here. CSC_NAME selects
-      # which identity to use (also read directly by build/afterSign.js for
-      # signing the nested engine bundle -- see build/afterSign.js). notarize:
-      # true in electron-builder.yml (only set once real Apple credentials are
-      # in place -- see the implementation plan's Task 11) is what actually
-      # triggers notarization using the APPLE_* vars below.
+      # which identity to use -- must be the bare common name (e.g. "Elling
+      # Lien (TEAMID)"), NOT prefixed with "Developer ID Application:" (a
+      # real electron-builder rejection hit once: "Please remove prefix
+      # ... — appropriate certificate will be chosen automatically"). Also
+      # read directly by build/afterPack.js for signing the nested engine
+      # bundle with its own entitlements (see that hook's own doc comment
+      # for why it runs in afterPack, not afterSign, and why
+      # mac.signIgnore in electron-builder.yml has to pair with it).
+      # notarize: true in electron-builder.yml is what actually triggers
+      # notarization using the APPLE_* vars below.
       #
-      # No signing secrets exist in this repo yet (real release still
-      # unsigned, see README's Installing section) -- but GitHub Actions sets
-      # a referenced-but-missing secret to an EMPTY STRING, not an omitted
-      # var. electron-builder's own CSC_LINK handling treats that non-null
-      # empty string as "resolve this as a real certificate file path"
-      # (its own code comment: "allow to specify as empty string"), which
-      # resolves to the checkout root itself and fails packaging outright
-      # with a confusing "not a file" error -- caught for real, traced into
-      # app-builder-lib's own source. `unset`-ing each var when blank
-      # restores afterSign.js's own already-correct "skip gracefully when
-      # not set" behavior at the electron-builder level too, and needs no
-      # changes once real secrets are added later (a non-empty secret just
-      # leaves `set +e`'s `[ -z ... ]` false and the var untouched).
+      # GitHub Actions sets a referenced-but-missing secret to an EMPTY
+      # STRING, not an omitted var, even once real secrets exist for SOME
+      # of these names but not others. electron-builder's own CSC_LINK
+      # handling treats a non-null empty string as "resolve this as a real
+      # certificate file path" (its own code comment: "allow to specify as
+      # empty string"), which resolves to the checkout root itself and
+      # fails packaging outright with a confusing "not a file" error --
+      # caught for real, traced into app-builder-lib's own source.
+      # `unset`-ing each var when blank keeps afterPack.js's own "skip
+      # gracefully when not set" behavior correct at the electron-builder
+      # level too, regardless of which subset of these secrets happen to
+      # be configured at any given time.
       - name: Build, sign, notarize, and publish
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}

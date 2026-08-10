@@ -1,33 +1,66 @@
-// build/afterSign.js
+// build/afterPack.js
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 
-// Signs the nested sssketch-engine.app bundle (the native JUCE audio engine,
-// copied into the outer Electron app's Resources/ dir -- see
-// electron-builder.yml's extraResources) with its own entitlements. Gatekeeper
-// and notarization both require every nested executable/bundle to carry a
-// valid Developer ID signature of its own -- see
+// Signs the nested sssketch-engine.app/sssketch-bridge.app bundles (the
+// native JUCE audio engine + its x86_64 plugin-scan bridge, copied into the
+// outer Electron app's Resources/ dir -- see electron-builder.yml's
+// extraResources) and the vendored rubberband binary/dylibs with their own
+// Developer ID signature. Gatekeeper and notarization both require every
+// nested executable/bundle to carry a valid signature of its own -- see
 // docs/superpowers/specs/2026-08-01-signed-notarized-auto-update-design.md's
 // "Code signing + entitlements" section for the full rationale, including why
 // the engine needs com.apple.security.cs.disable-library-validation (loading
 // third-party VST3 plugins at runtime) that the outer app's own entitlements
 // don't have.
 //
-// Runs as electron-builder's afterSign hook. CSC_NAME must be the exact
-// Developer ID Application identity string (e.g. "Developer ID Application:
-// Elling Lien (TEAMID)") -- set as an env var alongside electron-builder's
-// own CSC_LINK/CSC_KEY_PASSWORD signing vars.
+// Runs as electron-builder's afterPack hook -- NOT afterSign. This ordering
+// is load-bearing, found the hard way (a real "sssketch is damaged and can't
+// be opened" Gatekeeper rejection on a fully notarized v1.1.4 build):
+// electron-builder's own signing (macPackager's doSignAfterPack, which also
+// runs notarization immediately afterward when `mac.notarize: true`) walks
+// the ENTIRE Contents tree via @electron/osx-sign and re-signs every nested
+// .app/.framework it finds, unconditionally, BEFORE the afterSign hook ever
+// runs. So signing these bundles in afterSign made two things true at once:
+// (1) electron-builder's own pass had already sealed the outer .app's
+// resource manifest against the PRE-afterSign (unsigned) bytes of these
+// files, so re-signing them here changed their bytes and invalidated that
+// seal -- `codesign --verify --deep --strict` and Gatekeeper's own spctl
+// assessment both failed with "a sealed resource is missing or invalid",
+// even though `xcrun stapler validate` and notarsubmission both succeeded
+// (they don't re-verify the outer seal against current on-disk bytes the
+// way a real launch does); (2) electron-builder's own pass had ALSO already
+// re-signed these bundles once already, with entitlementsInherit's generic
+// entitlements (no disable-library-validation), before this hook could give
+// them their correct ones.
+//
+// Running in afterPack (before electron-builder's own sign+notarize step)
+// fixes half of this -- these bundles get their correct identity and
+// entitlements before the outer app is sealed, so the outer manifest is
+// computed against their FINAL bytes. But electron-builder's own signing
+// pass would still unconditionally re-sign (and re-break) them afterward,
+// since it walks and force-signs everything under Contents regardless of
+// whether this hook already touched it -- that's what mac.signIgnore in
+// electron-builder.yml is for: it tells electron-builder's own pass to
+// leave these exact paths alone entirely, so this hook's signature is the
+// only one that ever gets applied to them.
+//
+// CSC_NAME must be the exact Developer ID Application identity string (e.g.
+// "Elling Lien (TEAMID)", NOT prefixed with "Developer ID Application:" --
+// electron-builder's own CSC_NAME resolution rejects that prefix) -- set as
+// an env var alongside electron-builder's own CSC_LINK/CSC_KEY_PASSWORD
+// signing vars.
 //
 // Skips gracefully (not an error) when CSC_NAME isn't set, so an unsigned
 // local `--dir` build doesn't require signing credentials that don't exist
 // yet.
-exports.default = async function afterSign(context) {
+exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return
 
   const identity = process.env.CSC_NAME
   if (!identity) {
-    console.log('afterSign: CSC_NAME not set, skipping engine signing (unsigned/local build)')
+    console.log('afterPack: CSC_NAME not set, skipping engine signing (unsigned/local build)')
     return
   }
 
@@ -59,10 +92,10 @@ exports.default = async function afterSign(context) {
     // same "optional/degradable" philosophy as engineProcess.ts's own
     // existsSync check before passing --bridge-binary.
     if (!fs.existsSync(bundlePath)) {
-      console.log(`afterSign: ${bundlePath} not found, skipping (not built this run)`)
+      console.log(`afterPack: ${bundlePath} not found, skipping (not built this run)`)
       continue
     }
-    console.log(`afterSign: signing nested bundle at ${bundlePath}`)
+    console.log(`afterPack: signing nested bundle at ${bundlePath}`)
     execFileSync(
       'codesign',
       [
@@ -93,7 +126,7 @@ exports.default = async function afterSign(context) {
     const libDir = path.join(rubberbandDir, 'lib')
     const filesToSign = [binPath, ...fs.readdirSync(libDir).map((name) => path.join(libDir, name))]
     for (const filePath of filesToSign) {
-      console.log(`afterSign: signing vendored file at ${filePath}`)
+      console.log(`afterPack: signing vendored file at ${filePath}`)
       execFileSync(
         'codesign',
         ['--force', '--options', 'runtime', '--sign', identity, filePath],
@@ -101,6 +134,6 @@ exports.default = async function afterSign(context) {
       )
     }
   } else {
-    console.log(`afterSign: ${rubberbandDir} not found, skipping (not vendored this run)`)
+    console.log(`afterPack: ${rubberbandDir} not found, skipping (not vendored this run)`)
   }
 }

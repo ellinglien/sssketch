@@ -2,7 +2,7 @@ appId: com.ellinglien.sssketch
 productName: sssketch
 directories:
   buildResources: build
-afterSign: build/afterSign.js
+afterPack: build/afterPack.js
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -39,6 +39,23 @@ mac:
       arch:
         - arm64
   entitlementsInherit: build/entitlements.mac.plist
+  # Paths build/afterPack.js already signs itself (with its own distinct
+  # entitlements.engine.plist, not this file's entitlementsInherit -- see
+  # that hook's own doc comment for the full rationale). Without this,
+  # electron-builder's own signing pass (which runs AFTER afterPack, right
+  # before notarizing) walks the entire Contents tree via @electron/osx-sign
+  # and unconditionally re-signs every nested .app/.framework/Mach-O it
+  # finds -- including these -- with the generic inherited entitlements,
+  # silently overwriting afterPack.js's own signature and stripping the
+  # engine's disable-library-validation entitlement right before the app
+  # gets sealed and notarized. signIgnore tells that pass to leave these
+  # exact paths alone, so afterPack.js's signature is the only one that
+  # ever gets applied to them, and the outer app's own seal (computed after
+  # signIgnore skips over them) is self-consistent.
+  signIgnore:
+    - 'Contents/Resources/native-engine/'
+    - 'Contents/Resources/native-engine-bridge/'
+    - 'Contents/Resources/rubberband/'
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
