@@ -1207,17 +1207,28 @@ export function LibraryBrowser({
                         <button
                           onClick={handleStartSync}
                           disabled={syncing}
+                          // Matches the import button's own "primary action" weight
+                          // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
+                          // rather than the tiny filter-bar utility styling this used
+                          // to share with the "only fully cached" checkbox next to
+                          // it — sync is the main thing this page does before you
+                          // can browse anything at all, not a minor filter toggle.
+                          // Highlighted (var(--ra-play-on)) specifically for the
+                          // never-synced case, where clicking it isn't optional.
                           style={{
-                            height: 20,
+                            height: 34,
                             borderRadius: 0,
-                            padding: '0 8px',
-                            fontSize: 9,
-                            border: '1px solid var(--ra-border)',
-                            background: 'var(--ra-bg-row-active)',
-                            color: 'var(--ra-text-2)',
+                            padding: '0 16px',
+                            fontSize: 13,
+                            fontWeight: 700,
+                            border: '2px solid var(--ra-border-strong)',
+                            background: syncStatus
+                              ? 'var(--ra-bg-row-active)'
+                              : 'var(--ra-play-on)',
+                            color: syncStatus ? 'var(--ra-text)' : 'var(--ra-play-on-ink)',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: 6
+                            gap: 8
                           }}
                         >
                           {syncing ? <LoadingLoader size={16} /> : 'sync'}
