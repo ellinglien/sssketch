@@ -154,6 +154,16 @@ export function LibraryBrowser({
   const [jamFilter, setJamFilter] = useState('')
   const [syncedJams, setSyncedJams] = useState<LoreJam[]>([])
   const [membershipJams, setMembershipJams] = useState<LoreJam[] | null>(null)
+  // The account's own personal jam -- by Endlesss convention, every account
+  // has exactly one private jam named identically to its own username,
+  // distinct from any group jams it has joined. Tracked separately from
+  // membershipJams (rather than just filtering membershipJams inline
+  // wherever needed) since the auto-sync effect below needs it as a stable
+  // dependency, and needs the jam's name (for loreSyncStartJam) without
+  // depending on visibleJams -- which is itself filtered by jamFilter, so a
+  // `.find()` against it could miss the own jam entirely while the user has
+  // something typed into the jam search box.
+  const [ownJam, setOwnJam] = useState<LoreJam | null>(null)
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
 
   // Per-jam sync status/trigger. syncStatus itself stays a single value (it's
@@ -347,7 +357,10 @@ export function LibraryBrowser({
       // jamSyncStatus effects use for this exact shape (early-return branch
       // that just wants to reset state to null).
       void Promise.resolve().then(() => {
-        if (!cancelled) setMembershipJams(null)
+        if (!cancelled) {
+          setMembershipJams(null)
+          setOwnJam(null)
+        }
       })
       return () => {
         cancelled = true
@@ -362,7 +375,20 @@ export function LibraryBrowser({
           name: 'Shared Feed',
           lastRiffTime: 0
         }
-        setMembershipJams([sharedFeedEntry, ...liveJams])
+        // Narrowed to "your own stuff" rather than every jam the account has
+        // ever joined -- per direct feedback, endlesssListJams() returns the
+        // account's FULL membership history (every public jam ever joined,
+        // potentially dozens), which drowned out the two jams that actually
+        // matter by default. The own-jam match is by name equality against
+        // the logged-in username (case-insensitive/trimmed, since display
+        // names can vary in casing) -- if it isn't found (e.g. account has no
+        // personal jam, or it's not named the expected way), only Shared Feed
+        // shows; syncedJams (already-synced local warehouse data, further
+        // down) still covers anything synced before this change.
+        const needle = authStatus.username.trim().toLowerCase()
+        const foundOwnJam = liveJams.find((j) => j.name.trim().toLowerCase() === needle) ?? null
+        setOwnJam(foundOwnJam)
+        setMembershipJams(foundOwnJam ? [sharedFeedEntry, foundOwnJam] : [sharedFeedEntry])
       })
       .catch((err) => {
         console.error('LibraryBrowser: endlesssListJams() failed:', err)
@@ -387,18 +413,23 @@ export function LibraryBrowser({
   }, [syncedJams, membershipJams, jamFilter])
 
   // Sidebar-only ordering -- pulls whichever jams are actively syncing to
-  // the top so a background sync stays visible without hunting through the
-  // list, while visibleJams itself (used elsewhere for name lookups) stays
-  // sorted by lastRiffTime. Stable within each group.
+  // the very top (so a background sync stays visible without hunting
+  // through the list), then Shared Feed and the account's own private jam
+  // (see ownJam) right after -- these two are the ones auto-synced below,
+  // so they're also the two most likely to matter on any given visit.
+  // visibleJams itself (used elsewhere for name lookups) stays sorted by
+  // lastRiffTime, unaffected. Stable within each group.
   const sidebarJams = useMemo(() => {
     const syncing: LoreJam[] = []
+    const pinned: LoreJam[] = []
     const rest: LoreJam[] = []
     for (const jam of visibleJams) {
       if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
+      else if (jam.jamCID.startsWith('shared:') || jam.jamCID === ownJam?.jamCID) pinned.push(jam)
       else rest.push(jam)
     }
-    return [...syncing, ...rest]
-  }, [visibleJams, syncingKeys])
+    return [...syncing, ...pinned, ...rest]
+  }, [visibleJams, syncingKeys, ownJam])
 
   // ---------------------------------------------------------------------
   // Sync status + trigger
@@ -515,10 +546,39 @@ export function LibraryBrowser({
     [jamFilter]
   )
 
+  // Core sync trigger, decoupled from selection -- shared by handleStartSync
+  // (the button click, gated on the large-jam confirm dialog below) and the
+  // auto-sync effects further down (shared feed + the account's own private
+  // jam, triggered on login with no button click and no confirm dialog --
+  // see those effects' own comments for why a confirmation prompt would be
+  // wrong there).
+  const startSyncForJam = useCallback(
+    (jamCID: string, jamName: string, baseCount: number) => {
+      const key = syncKeyFor(jamCID)
+      if (syncingKeys.has(key)) return
+      setSyncingKeys((prev) => new Set(prev).add(key))
+      setSyncBaseCountByKey((prev) => ({ ...prev, [key]: baseCount }))
+      setSyncProgressByKey((prev) => {
+        if (!(key in prev)) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      const promise = jamCID.startsWith('shared:')
+        ? window.rifffApi.loreSyncStartSharedFeed(jamCID.slice('shared:'.length))
+        : window.rifffApi.loreSyncStartJam(jamCID, jamName)
+      promise
+        .catch((err) => {
+          console.error('LibraryBrowser: sync failed:', err)
+        })
+        .then(() => finishSyncingKey(key, jamCID))
+    },
+    [syncingKeys, finishSyncingKey]
+  )
+
   const handleStartSync = useCallback(() => {
     if (!selectedJamCID) return
-    const key = syncKeyFor(selectedJamCID)
-    if (syncingKeys.has(key)) return
+    if (syncingKeys.has(syncKeyFor(selectedJamCID))) return
     // A rough, deliberately hedged estimate ("+", not a promise) -- there's
     // no reliable way to know from here how much of a jam's audio is
     // already cached locally vs. needs downloading, which dominates real
@@ -535,27 +595,52 @@ export function LibraryBrowser({
         return
       }
     }
-    setSyncingKeys((prev) => new Set(prev).add(key))
-    setSyncBaseCountByKey((prev) => ({ ...prev, [key]: syncStatus?.riffCount ?? 0 }))
-    setSyncProgressByKey((prev) => {
-      if (!(key in prev)) return prev
-      const next = { ...prev }
-      delete next[key]
-      return next
+    startSyncForJam(
+      selectedJamCID,
+      visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ?? selectedJamCID,
+      syncStatus?.riffCount ?? 0
+    )
+  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount, syncingKeys, startSyncForJam])
+
+  // Auto-syncs Shared Feed the moment the account logs in -- per direct
+  // feedback, these two (this one and the own-jam effect just below) are the
+  // ones that matter by default, so neither should need a manual sync click.
+  // No large-jam confirm dialog here (unlike handleStartSync) -- a
+  // window.confirm() firing unprompted right after login would be a jarring
+  // surprise, not a helpful warning; the shared feed is walked oldest-first
+  // in bounded pages besides; see syncSharedFeed's own doc comment.
+  useEffect(() => {
+    if (!authStatus.loggedIn) return
+    const username = authStatus.username
+    // Deferred through a microtask, same as this component's other
+    // early-resolve effects (see the membershipJams effect above) --
+    // startSyncForJam's setSyncingKeys call is a real setState, so calling
+    // it synchronously in the effect body trips the lint rule against
+    // synchronous setState-in-effect (cascading renders).
+    void Promise.resolve().then(() => {
+      startSyncForJam(`shared:${username}`, 'Shared Feed', 0)
     })
-    const viewingJamCID = selectedJamCID
-    const promise = selectedJamCID.startsWith('shared:')
-      ? window.rifffApi.loreSyncStartSharedFeed(selectedJamCID.slice('shared:'.length))
-      : window.rifffApi.loreSyncStartJam(
-          selectedJamCID,
-          visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ?? selectedJamCID
-        )
-    promise
-      .catch((err) => {
-        console.error('LibraryBrowser: sync failed:', err)
-      })
-      .then(() => finishSyncingKey(key, viewingJamCID))
-  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount, syncingKeys, finishSyncingKey])
+    // Intentionally fires once per login (authStatus.loggedIn/.username
+    // transition), not on every startSyncForJam identity change (which
+    // itself changes whenever syncingKeys does, or this would refire
+    // mid-sync).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus.loggedIn, authStatus.loggedIn ? authStatus.username : null])
+
+  // Same auto-sync, for the account's own private jam once it's been
+  // identified (see the membershipJams effect's own doc comment for how
+  // "own jam" is determined). Fires once ownJam transitions from null to a
+  // real value, not on every render.
+  useEffect(() => {
+    if (!ownJam) return
+    const jam = ownJam
+    void Promise.resolve().then(() => {
+      startSyncForJam(jam.jamCID, jam.name, 0)
+    })
+    // See the shared-feed auto-sync effect just above for why
+    // startSyncForJam is intentionally excluded here too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownJam])
 
   const handleAbortSync = useCallback(() => {
     if (!selectedJamCID) return
