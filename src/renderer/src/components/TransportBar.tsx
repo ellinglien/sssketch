@@ -5,6 +5,7 @@ import { loopLengthBars } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
 import { ContextMenu } from './ContextMenu'
+import { AudioDeviceModal } from './AudioDeviceModal'
 
 // Persisted per-machine (same pattern as LoreLibraryBrowser's own
 // loreUsername), not part of the project file -- selectedInputDevice/
@@ -197,6 +198,10 @@ export function TransportBar({
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
   const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
+  // The settings menu's "audio…" entry -- replaces the two dropdowns that
+  // used to sit directly in the transport bar (see AudioDeviceModal.tsx's
+  // own doc comment).
+  const [audioModalOpen, setAudioModalOpen] = useState(false)
   // Fetched fresh each time the settings menu opens (see the trigger
   // button below) rather than kept live -- the menu is only open for a
   // few seconds at most, and this avoids a persistent poll/subscription
@@ -789,6 +794,19 @@ export function TransportBar({
           items={[
             { label: 'show welcome screen', onClick: onShowWelcome },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
+            {
+              label: 'audio…',
+              onClick: () => {
+                // Re-scans both lists right as the modal opens -- matches
+                // the old inline dropdowns' own onFocus behavior (a device
+                // can be installed/started after launch, and both scans
+                // are cheap enough to redo rather than trust a stale first
+                // fetch).
+                fetchAndRestoreInputDevices()
+                fetchAndRestoreOutputDevices()
+                setAudioModalOpen(true)
+              }
+            },
             endlesssStatus?.loggedIn
               ? {
                   label: `log out of endlesss (${endlesssStatus.username})`,
@@ -801,89 +819,31 @@ export function TransportBar({
         />
       )}
 
-      <select
-        value={selectedInputDevice ?? ''}
-        disabled={isAnyChannelArmed}
-        title={
-          isAnyChannelArmed
-            ? 'disarm the current recording before changing the input device'
-            : undefined
-        }
-        onFocus={() => {
-          // Re-fetches on every focus, not just while the list is still
-          // empty -- a device (e.g. a loopback driver) can be
-          // installed/started after the app launched, and the engine's
-          // own scanForDevices() call (see Transport::
-          // availableInputDeviceNames) is cheap enough to redo each
-          // time rather than only ever trusting a stale first fetch.
-          fetchAndRestoreInputDevices()
-        }}
-        onChange={(e) => {
-          const device = e.target.value || null
-          dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device })
-          storeSelectedInputDevice(device)
-        }}
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 10,
-          color: 'var(--ra-text)',
-          background: 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-border)',
-          padding: '5px 8px',
-          cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer'
-        }}
-      >
-        <option value="">
-          {availableInputDevices.length === 0 ? 'no input devices found' : 'select input device...'}
-        </option>
-        {availableInputDevices.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={selectedOutputDevice ?? ''}
-        title="output device"
-        onFocus={() => {
-          // Same "re-scan on every focus, not just once" reasoning as the
-          // input-device dropdown's own onFocus above.
-          fetchAndRestoreOutputDevices()
-        }}
-        onChange={(e) => {
-          const device = e.target.value || null
-          if (device === null) return
-          void window.rifffApi.engineSetOutputDevice(device).then((result) => {
-            if (result.ok) {
-              setSelectedOutputDevice(device)
-              storeSelectedOutputDevice(device)
-            } else {
-              console.error('TransportBar: failed to set output device:', result.error)
-            }
-          })
-        }}
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 10,
-          color: 'var(--ra-text)',
-          background: 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-border)',
-          padding: '5px 8px',
-          cursor: 'pointer'
-        }}
-      >
-        <option value="">
-          {availableOutputDevices.length === 0
-            ? 'no output devices found'
-            : 'select output device...'}
-        </option>
-        {availableOutputDevices.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
+      {audioModalOpen && (
+        <AudioDeviceModal
+          onClose={() => setAudioModalOpen(false)}
+          availableInputDevices={availableInputDevices}
+          selectedInputDevice={selectedInputDevice}
+          isAnyChannelArmed={isAnyChannelArmed}
+          onChangeInput={(device) => {
+            dispatch({ type: 'SET_SELECTED_INPUT_DEVICE', device })
+            storeSelectedInputDevice(device)
+          }}
+          availableOutputDevices={availableOutputDevices}
+          selectedOutputDevice={selectedOutputDevice}
+          onChangeOutput={(device) => {
+            if (device === null) return
+            void window.rifffApi.engineSetOutputDevice(device).then((result) => {
+              if (result.ok) {
+                setSelectedOutputDevice(device)
+                storeSelectedOutputDevice(device)
+              } else {
+                console.error('TransportBar: failed to set output device:', result.error)
+              }
+            })
+          }}
+        />
+      )}
     </div>
   )
 }
