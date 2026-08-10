@@ -9,17 +9,34 @@
  *
  * `size` is interpreted as the loader's overall width; height and bar
  * thickness scale proportionally off the reference 60×9px/3px design, so
- * existing call sites (size=64, size=40) keep working unchanged. */
-export function LoadingLoader({ size = 64 }: { size?: number }): React.JSX.Element {
+ * existing call sites (size=64, size=40) keep working unchanged.
+ *
+ * `colors` gives each of the four bars its own color instead of the shared
+ * `--ra-text-2` grey — the same underlying technique (one `linear-gradient`
+ * background layer per bar), just one color per layer instead of a
+ * repeated one. Omit it and every call site keeps its current plain-grey
+ * look untouched; OnboardingModal.tsx's welcome mark is the one place that
+ * passes it, for the four-color "as coded in the '1a' welcome-modal design
+ * import" mark (see docs/superpowers/specs -- imported via claude_design
+ * MCP from "Sssketch Welcome.dc.html", 2026-08-10). */
+export function LoadingLoader({
+  size = 64,
+  colors
+}: {
+  size?: number
+  colors?: [string, string, string, string]
+}): React.JSX.Element {
   const height = Math.max(2, Math.round(size * (9 / 60)))
   const barThickness = Math.max(1, Math.round(size * (3 / 60)))
-  const bar = 'no-repeat linear-gradient(var(--ra-text-2) 0 0)'
+  const background = colors
+    ? colors.map((c) => `no-repeat linear-gradient(${c} 0 0)`).join(', ')
+    : Array(4).fill('no-repeat linear-gradient(var(--ra-text-2) 0 0)').join(', ')
   return (
     <div
       style={{
         height,
         width: size,
-        background: `${bar}, ${bar}, ${bar}, ${bar}`,
+        background,
         backgroundSize: `26% ${barThickness}px`,
         animation: 'ra-loader-bounce 1s infinite'
       }}

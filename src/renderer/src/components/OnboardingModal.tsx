@@ -1,15 +1,75 @@
 import { useState } from 'react'
+import { LoadingLoader } from './LoadingLoader'
+
+/** The "1a — marquee" welcome-modal variant, imported via claude_design MCP
+ * from the "Sssketch Welcome.dc.html" design project (claude.ai/design,
+ * 2026-08-10) and implemented as coded there: a big four-color loader mark
+ * over an eight-letter SSSKETCH wordmark that chases the same eight colors
+ * across itself, one hard color-step per letter rather than a gradient
+ * blend (see ssrainbow below). This exact 8-hex sequence and 4-color mark
+ * subset are the design's own purpose-built palette for this one
+ * animation -- not sourced from typeColorVar's SoundType palette (only 3
+ * of the 8 happen to coincide with existing tokens), so it stays local
+ * here rather than pretending to be a shared design-system table. */
+const PALETTE = [
+  '#5ec8b5',
+  '#5b95c4',
+  '#7f66c4',
+  '#c46389',
+  '#c56164',
+  '#d98b4e',
+  '#cbb85a',
+  '#5fae62'
+] as const
+// The mark's 4 bars, per the design's own "colour the SWAPPING PAIRS" note
+// on ra-loader-bounce -- these are PALETTE[0], PALETTE[3], PALETTE[6],
+// PALETTE[1] as coded in 1a, not an arbitrary pick.
+const MARK_COLORS: [string, string, string, string] = [
+  PALETTE[0],
+  PALETTE[3],
+  PALETTE[6],
+  PALETTE[1]
+]
+const WORDMARK = 'SSSKETCH'.split('')
 
 const buttonStyle: React.CSSProperties = {
-  height: 'auto',
-  minHeight: 22,
+  height: 36,
   borderRadius: 0,
-  padding: '4px 10px',
-  fontSize: 10,
+  padding: '0 18px',
+  fontSize: 11,
+  fontWeight: 700,
   whiteSpace: 'nowrap',
+  cursor: 'pointer'
+}
+
+const primaryButtonStyle: React.CSSProperties = {
+  ...buttonStyle,
+  border: '1px solid var(--ra-play-on)',
+  background: 'var(--ra-play-on)',
+  color: 'var(--ra-play-on-ink)'
+}
+
+const secondaryButtonStyle: React.CSSProperties = {
+  ...buttonStyle,
   border: '1px solid var(--ra-border)',
-  background: 'var(--ra-bg-row-active)',
+  background: 'var(--ra-bg-row)',
   color: 'var(--ra-text-2)'
+}
+
+// A plain text-link affordance, not a bordered button -- the tour trigger
+// isn't part of the 1a design's own two-button hero row (marquee only
+// ships "start sketching" + "log into endlesss"), so it stays visually
+// quieter than either CTA while remaining always-visible per direct
+// feedback (see this component's own onStartTour doc comment).
+const linkButtonStyle: React.CSSProperties = {
+  height: 36,
+  border: 'none',
+  background: 'transparent',
+  padding: '0 4px',
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'var(--ra-type-fx)',
+  cursor: 'pointer'
 }
 
 /** Shown on every launch by default (see App.tsx's Frame -- persisted via
@@ -54,38 +114,62 @@ export function OnboardingModal({
     >
       <div
         style={{
-          width: 'min(360px, 90vw)',
+          width: 'min(420px, 90vw)',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
           borderRadius: 0,
-          padding: 18
+          boxShadow: 'var(--ra-shadow-popover)',
+          padding: '32px 30px 24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 22,
+          alignItems: 'center',
+          textAlign: 'center'
         }}
       >
-        <span className="ra-eyebrow">welcome</span>
-        <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, lineHeight: 1.4 }}>
-          sketch out tracks using stems from Endlesss.
+        <LoadingLoader size={150} colors={MARK_COLORS} />
+
+        <div style={{ display: 'flex', gap: 1 }}>
+          {WORDMARK.map((ch, i) => (
+            <span
+              key={i}
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                lineHeight: 1,
+                animation: 'ss-onboarding-rainbow 12.8s steps(1,end) infinite',
+                animationDelay: `${(-i * 1.6).toFixed(1)}s`
+              }}
+            >
+              {ch}
+            </span>
+          ))}
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
-          <button onClick={() => onDismiss(dontShowAgain)} style={buttonStyle}>
+        <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}>
+          sketch out tracks using stems from endlesss.
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          <button onClick={() => onDismiss(dontShowAgain)} style={primaryButtonStyle}>
             start sketching
           </button>
-          <button onClick={() => onStartTour(dontShowAgain)} style={buttonStyle}>
-            take the tour
-          </button>
-          <button onClick={() => onOpenEndlesss(dontShowAgain)} style={buttonStyle}>
+          <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
             log into endlesss
           </button>
         </div>
+
+        <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
+          take the tour
+        </button>
 
         <label
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 5,
+            gap: 6,
             fontSize: 10,
-            color: 'var(--ra-text-3)',
-            marginTop: 14
+            color: 'var(--ra-text-3)'
           }}
         >
           <input
@@ -95,6 +179,25 @@ export function OnboardingModal({
           />
           don&apos;t show this again
         </label>
+
+        {/* Discrete color steps (not a blended gradient) per letter, each
+            span 1.6s out of phase with the last -- the same 8-hex sequence
+            as the mark's own STEMS subset, chasing left to right. Scoped
+            locally, same "component owns its own keyframe" pattern as
+            LoadingLoader's own ra-loader-bounce. */}
+        <style>{`
+          @keyframes ss-onboarding-rainbow {
+            0%   { color: ${PALETTE[0]} }
+            12%  { color: ${PALETTE[1]} }
+            25%  { color: ${PALETTE[2]} }
+            37%  { color: ${PALETTE[3]} }
+            50%  { color: ${PALETTE[4]} }
+            62%  { color: ${PALETTE[5]} }
+            75%  { color: ${PALETTE[6]} }
+            87%  { color: ${PALETTE[7]} }
+            100% { color: ${PALETTE[0]} }
+          }
+        `}</style>
       </div>
     </div>
   )
