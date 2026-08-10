@@ -386,6 +386,20 @@ export function LibraryBrowser({
     return merged.filter((j) => j.name.toLowerCase().includes(needle))
   }, [syncedJams, membershipJams, jamFilter])
 
+  // Sidebar-only ordering -- pulls whichever jams are actively syncing to
+  // the top so a background sync stays visible without hunting through the
+  // list, while visibleJams itself (used elsewhere for name lookups) stays
+  // sorted by lastRiffTime. Stable within each group.
+  const sidebarJams = useMemo(() => {
+    const syncing: LoreJam[] = []
+    const rest: LoreJam[] = []
+    for (const jam of visibleJams) {
+      if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
+      else rest.push(jam)
+    }
+    return [...syncing, ...rest]
+  }, [visibleJams, syncingKeys])
+
   // ---------------------------------------------------------------------
   // Sync status + trigger
   // ---------------------------------------------------------------------
@@ -1184,7 +1198,7 @@ export function LibraryBrowser({
                   </span>
                 )}
               </div>
-              {visibleJams.map((jam) => {
+              {sidebarJams.map((jam) => {
                 // Live per-row progress, visible regardless of which jam is
                 // currently selected -- matches LORE's own Data Warehouse
                 // table (doc/LORE.warehouse.MD in OUROVEON), which shows a
@@ -1192,10 +1206,13 @@ export function LibraryBrowser({
                 // rather than only for whichever one you're looking at. This
                 // is what makes a background sync visible at all instead of
                 // reading as an opaque "black box" the moment you click
-                // elsewhere.
+                // elsewhere. Syncing jams are also sorted to the top (see
+                // sidebarJams) so a background sync doesn't require hunting
+                // through the list to check on.
                 const jamKey = syncKeyFor(jam.jamCID)
                 const isJamSyncing = syncingKeys.has(jamKey)
                 const jamProgress = syncProgressByKey[jamKey]
+                const isSynced = syncedJams.some((s) => s.jamCID === jam.jamCID)
                 return (
                   <button
                     key={jam.jamCID}
@@ -1212,17 +1229,18 @@ export function LibraryBrowser({
                       borderRadius: 0,
                       background:
                         selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
-                      color: 'var(--ra-text)'
+                      // Never-synced jams sit a shade dimmer than synced ones
+                      // -- a color difference reads at a glance without the
+                      // "(not synced)" suffix competing with the name for
+                      // space, and synced/syncing jams keep full brightness.
+                      color: isSynced || isJamSyncing ? 'var(--ra-text)' : 'var(--ra-text-2)'
                     }}
                   >
                     {isJamSyncing && <LoadingLoader size={10} />}
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {jam.name}
-                      {isJamSyncing
-                        ? ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`
-                        : syncedJams.some((s) => s.jamCID === jam.jamCID)
-                          ? ''
-                          : ' (not synced)'}
+                      {isJamSyncing &&
+                        ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`}
                     </span>
                   </button>
                 )

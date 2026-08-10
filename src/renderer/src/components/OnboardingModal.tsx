@@ -6,20 +6,22 @@ import { LoadingLoader } from './LoadingLoader'
  * 2026-08-10) and implemented as coded there: a big four-color loader mark
  * over an eight-letter SSSKETCH wordmark that chases the same eight colors
  * across itself, one hard color-step per letter rather than a gradient
- * blend (see ssrainbow below). This exact 8-hex sequence and 4-color mark
- * subset are the design's own purpose-built palette for this one
- * animation -- not sourced from typeColorVar's SoundType palette (only 3
- * of the 8 happen to coincide with existing tokens), so it stays local
- * here rather than pretending to be a shared design-system table. */
+ * blend (see ssrainbow below). Originally an 8-hex rainbow sequence as
+ * imported from the design; switched to greyscale per direct feedback --
+ * this app's own design system spends color only on things that carry
+ * audio information (see CLAUDE.md's Design system section), and a color
+ * mark is the first thing anyone sees on launch. Kept as 8 distinct steps
+ * (not reused from tokens.css's 4-step --ra-text-N scale) so the chase
+ * animation still reads as motion rather than collapsing to 2-3 repeats. */
 const PALETTE = [
-  '#5ec8b5',
-  '#5b95c4',
-  '#7f66c4',
-  '#c46389',
-  '#c56164',
-  '#d98b4e',
-  '#cbb85a',
-  '#5fae62'
+  '#f2f2f2',
+  '#d9d9d9',
+  '#c2c2c2',
+  '#a8a8a8',
+  '#8f8f8f',
+  '#757575',
+  '#5c5c5c',
+  '#444444'
 ] as const
 // The mark's 4 bars, per the design's own "colour the SWAPPING PAIRS" note
 // on ra-loader-bounce -- these are PALETTE[0], PALETTE[3], PALETTE[6],
@@ -127,7 +129,7 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <LoadingLoader size={150} colors={MARK_COLORS} speedMs={6000} />
+        <LoadingLoader size={110} colors={MARK_COLORS} speedMs={6000} />
 
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
