@@ -123,11 +123,18 @@ jobs:
       # level too, regardless of which subset of these secrets happen to
       # be configured at any given time.
       - name: Import signing certificate
-        if: ${{ secrets.CSC_LINK != '' }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
+          # secrets can't be referenced directly in a step's `if:` (not an
+          # available context there), so the skip-when-unset guard lives
+          # here instead, matching the same pattern the next step uses.
+          if [ -z "$CSC_LINK" ]; then
+            echo "CSC_LINK not set, skipping certificate import (unsigned/local build)"
+            exit 0
+          fi
+
           CERT_PATH="$RUNNER_TEMP/signing-cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD=$(uuidgen)
@@ -144,6 +151,7 @@ jobs:
           # so both afterPack.js's plain `codesign --sign` call and
           # electron-builder's own later signing pass find the identity.
           EXISTING_KEYCHAINS=$(security list-keychains -d user | sed 's/"//g')
+          # shellcheck disable=SC2086  # word-splitting is intentional: each existing keychain is its own arg
           security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
 
           rm -f "$CERT_PATH"
