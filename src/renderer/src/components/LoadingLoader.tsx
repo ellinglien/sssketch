@@ -47,7 +47,14 @@ export function LoadingLoader({
         height,
         width: size,
         background,
-        backgroundSize: `26% ${barThickness}px`,
+        // Exactly 25% (not the design import's original 26%) -- with 4 bars
+        // positioned via calc(k*100%/3) for k=0..3, background-position's
+        // own formula places each bar's left edge at k/3 of the REMAINING
+        // space (100% - bar width), not k/3 of the full container. Bars
+        // only tile edge-to-edge with no gap and no overlap when width
+        // exactly equals 100%/(bar count); 26% overshot that by 1%,
+        // enough to visibly overlap adjacent bars at rest.
+        backgroundSize: `25% ${barThickness}px`,
         animation: `ra-loader-bounce ${speedMs}ms infinite`
       }}
     >
