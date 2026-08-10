@@ -71,6 +71,10 @@ namespace sssketch
          * succeeded, but defensive rather than assuming). */
         juce::StringArray availableInputDeviceNames() const;
 
+        /** Same as availableInputDeviceNames(), for output devices --
+         * used by the settings menu's output-device dropdown. */
+        juce::StringArray availableOutputDeviceNames() const;
+
         void setBpm(double bpmValue)
         {
             bpm = bpmValue;
@@ -87,6 +91,21 @@ namespace sssketch
          * mirrors openDefaultDevice()'s own "empty string vs. an error
          * message" convention rather than throwing. */
         juce::String setRecordingInputDevice(const juce::String& deviceName);
+
+        /** Switches the currently-open device's output side to the named
+         * device, keeping the existing input device unchanged -- the exact
+         * mirror of setRecordingInputDevice() above, same short-circuit and
+         * same 0/0 sampleRate/bufferSize auto-choose reasoning (see that
+         * function's own comments; not repeated here). Doesn't force
+         * specific output channels the way setRecordingInputDevice forces
+         * input channels 0+1 -- there's no fixed-channel-count requirement
+         * on the output side, so this leaves useDefaultOutputChannels/
+         * outputChannels exactly as openDefaultDevice()'s own initial
+         * initialiseWithDefaultDevices call already set them (JUCE's normal
+         * "give me however many channels this device offers, up to stereo"
+         * default). Returns an empty string on success, or a human-readable
+         * error, same convention as setRecordingInputDevice(). */
+        juce::String setOutputDevice(const juce::String& deviceName);
 
         /** Round-trip audio I/O latency (input + output) in samples, as
          * reported by the currently-open device -- captured audio is
@@ -221,5 +240,10 @@ namespace sssketch
         // short-circuit just because the OS-default device's name happens to
         // match what's requested.
         juce::String lastConfiguredRecordingInputDevice;
+
+        // Mirror of lastConfiguredRecordingInputDevice above, for
+        // setOutputDevice() -- same "not just whatever the live setup
+        // reports" safety reasoning.
+        juce::String lastConfiguredOutputDevice;
     };
 }

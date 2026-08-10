@@ -89,6 +89,15 @@ namespace sssketch
         return type->getDeviceNames(true); // true = input names
     }
 
+    juce::StringArray Transport::availableOutputDeviceNames() const
+    {
+        auto* type = deviceManager.getCurrentDeviceTypeObject();
+        if (type == nullptr) return {};
+        // Same fresh-scan reasoning as availableInputDeviceNames() above.
+        type->scanForDevices();
+        return type->getDeviceNames(false); // false = output names
+    }
+
     int Transport::roundTripLatencySamples() const
     {
         if (auto* device = deviceManager.getCurrentAudioDevice())
@@ -193,6 +202,40 @@ namespace sssketch
         auto error = deviceManager.setAudioDeviceSetup(setup, true);
         if (error.isEmpty())
             lastConfiguredRecordingInputDevice = deviceName;
+        return error;
+    }
+
+    juce::String Transport::setOutputDevice(const juce::String& deviceName)
+    {
+        // Mirrors setRecordingInputDevice's own three-part short-circuit --
+        // see that function's doc comment for the full "why THIS specific
+        // condition, not just comparing against the live setup" rationale.
+        if (deviceName.isNotEmpty()
+            && deviceName == lastConfiguredOutputDevice
+            && deviceManager.getAudioDeviceSetup().outputDeviceName == deviceName
+            && deviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            return {};
+        }
+
+        auto setup = deviceManager.getAudioDeviceSetup();
+        setup.outputDeviceName = deviceName;
+        // useDefaultOutputChannels/outputChannels deliberately left as-is --
+        // unlike setRecordingInputDevice, there's no fixed channel-count
+        // requirement to force here; JUCE's own default behaviour (however
+        // many channels the device offers, up to stereo) is exactly what's
+        // wanted, and openDefaultDevice()'s initial initialiseWithDefaultDevices
+        // call already established it.
+        //
+        // Same 0/0 clearing as setRecordingInputDevice, same reasoning: forces
+        // JUCE to auto-choose sample rate/buffer size based on the newly
+        // paired device combination's own actual capabilities, rather than
+        // carrying over whatever the PREVIOUS pairing happened to have.
+        setup.sampleRate = 0;
+        setup.bufferSize = 0;
+        auto error = deviceManager.setAudioDeviceSetup(setup, true);
+        if (error.isEmpty())
+            lastConfiguredOutputDevice = deviceName;
         return error;
     }
 

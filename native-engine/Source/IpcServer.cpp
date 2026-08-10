@@ -388,6 +388,39 @@ namespace sssketch
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }
+        else if (type == "list-output-devices")
+        {
+            // Mirrors list-input-devices above exactly, for the settings
+            // menu's output-device dropdown.
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            juce::Array<juce::var> namesVar;
+            for (const auto& name : transport.availableOutputDeviceNames())
+                namesVar.add(name);
+            payloadObj->setProperty("devices", namesVar);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "output-devices-list");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "set-output-device")
+        {
+            // Direct, standalone switch -- unlike setRecordingInputDevice
+            // (only ever called as part of arm-recording, bundled with
+            // starting a take), there's no "arm" concept on the output
+            // side, so this just applies immediately and reports success/
+            // error, same convention as bake-stem-result elsewhere in this
+            // file.
+            const auto deviceName =
+                payload.isObject() ? payload.getProperty("deviceName", "").toString() : juce::String();
+            const auto error = transport.setOutputDevice(deviceName);
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("success", error.isEmpty());
+            if (error.isNotEmpty()) payloadObj->setProperty("error", error);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "set-output-device-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "set-link-enabled")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);

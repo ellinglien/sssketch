@@ -121,6 +121,12 @@ const api = {
   engineSetLoopRegion: (startBar: number, endBar: number): Promise<void> =>
     ipcRenderer.invoke('engine-set-loop-region', startBar, endBar),
   engineListInputDevices: (): Promise<string[]> => ipcRenderer.invoke('engine-list-input-devices'),
+  engineListOutputDevices: (): Promise<string[]> =>
+    ipcRenderer.invoke('engine-list-output-devices'),
+  engineSetOutputDevice: (
+    deviceName: string
+  ): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('engine-set-output-device', deviceName),
   engineArmRecording: (
     channelId: string,
     deviceName: string,

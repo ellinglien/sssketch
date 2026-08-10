@@ -455,6 +455,40 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('engine-list-output-devices', async (): Promise<string[]> => {
+    if (!playbackEngine) return []
+    try {
+      const result = (await playbackEngine.client.sendAndAwaitType(
+        'list-output-devices',
+        undefined,
+        'output-devices-list'
+      )) as { devices: string[] }
+      return result.devices
+    } catch (err) {
+      console.error('engine-list-output-devices: failed:', err)
+      return []
+    }
+  })
+
+  ipcMain.handle(
+    'engine-set-output-device',
+    async (_event, deviceName: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+      if (!playbackEngine) return { ok: false, error: 'engine not running' }
+      try {
+        const result = (await playbackEngine.client.sendAndAwaitType(
+          'set-output-device',
+          { deviceName },
+          'set-output-device-result'
+        )) as { success: boolean; error?: string }
+        return result.success ? { ok: true } : { ok: false, error: result.error ?? 'unknown error' }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error('engine-set-output-device: failed:', err)
+        return { ok: false, error: message }
+      }
+    }
+  )
+
   ipcMain.handle(
     'engine-arm-recording',
     async (

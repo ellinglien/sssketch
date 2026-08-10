@@ -37,6 +37,29 @@ function storeSelectedInputDevice(device: string | null): void {
   }
 }
 
+// Mirrors INPUT_DEVICE_STORAGE_KEY above exactly, for output device --
+// component-local state rather than global reducer state (unlike
+// selectedInputDevice), since nothing outside this settings menu needs to
+// read which output device is active.
+const OUTPUT_DEVICE_STORAGE_KEY = 'sssketch:selectedOutputDevice'
+
+function loadStoredOutputDevice(): string | null {
+  try {
+    return localStorage.getItem(OUTPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeSelectedOutputDevice(device: string | null): void {
+  try {
+    if (device) localStorage.setItem(OUTPUT_DEVICE_STORAGE_KEY, device)
+    else localStorage.removeItem(OUTPUT_DEVICE_STORAGE_KEY)
+  } catch {
+    // localStorage unavailable -- same non-fatal fallback as input device.
+  }
+}
+
 // A plain triangle-body + pendulum-arm silhouette, monochrome via
 // currentColor -- matches this app's existing convention of drawing
 // transport glyphs directly (▶/■ elsewhere in this same file) rather than
@@ -165,6 +188,39 @@ export function TransportBar({
     username?: string
   } | null>(null)
 
+  // Output device: component-local (unlike selectedInputDevice, nothing
+  // outside this settings menu needs to read it) -- see
+  // OUTPUT_DEVICE_STORAGE_KEY's own doc comment.
+  const [availableOutputDevices, setAvailableOutputDevices] = useState<string[]>([])
+  const [selectedOutputDevice, setSelectedOutputDevice] = useState<string | null>(null)
+  const fetchingOutputDevicesRef = useRef(false)
+
+  // Unlike input (only ever applied at arm-recording time), an output
+  // device switch takes effect immediately -- so restoring the last-picked
+  // device on mount actually calls engineSetOutputDevice, not just updates
+  // the dropdown's own displayed value.
+  function fetchAndRestoreOutputDevices(): void {
+    if (fetchingOutputDevicesRef.current) return
+    fetchingOutputDevicesRef.current = true
+    void window.rifffApi
+      .engineListOutputDevices()
+      .then(async (devices) => {
+        setAvailableOutputDevices(devices)
+        const stored = loadStoredOutputDevice()
+        if (stored && devices.includes(stored) && selectedOutputDevice === null) {
+          const result = await window.rifffApi.engineSetOutputDevice(stored)
+          if (result.ok) setSelectedOutputDevice(stored)
+          else console.error('TransportBar: failed to restore output device:', result.error)
+        }
+      })
+      .catch((err) => {
+        console.error('TransportBar: failed to list output devices:', err)
+      })
+      .finally(() => {
+        fetchingOutputDevicesRef.current = false
+      })
+  }
+
   const availableInputDevices = state.availableInputDevices
   const selectedInputDevice = state.selectedInputDevice
   const isAnyChannelArmed = state.armedChannelId !== null
@@ -215,6 +271,15 @@ export function TransportBar({
     if (selectedInputDevice === null) fetchAndRestoreInputDevices()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAndRestoreInputDevices is stable in spirit (closes over dispatch, which useDispatch guarantees is stable) and deliberately excluded to avoid re-running on every render; the intent is "re-fire only when selectedInputDevice transitions to null"
   }, [selectedInputDevice])
+
+  // Runs once on mount -- unlike the input-device restore above, there's no
+  // "reset to null after loading a project" case to also react to, since
+  // selectedOutputDevice is local component state, never touched by
+  // project load/serialize at all.
+  useEffect(() => {
+    fetchAndRestoreOutputDevices()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only, same reasoning as the input-device effect above
+  }, [])
 
   // Opens the native folder picker and, unless cancelled, repoints where
   // every future sketch save/duplicate/list lands -- same pickFolder +
@@ -718,6 +783,48 @@ export function TransportBar({
           {availableInputDevices.length === 0 ? 'no input devices found' : 'select input device...'}
         </option>
         {availableInputDevices.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+
+      <select
+        value={selectedOutputDevice ?? ''}
+        title="output device"
+        onFocus={() => {
+          // Same "re-scan on every focus, not just once" reasoning as the
+          // input-device dropdown's own onFocus above.
+          fetchAndRestoreOutputDevices()
+        }}
+        onChange={(e) => {
+          const device = e.target.value || null
+          if (device === null) return
+          void window.rifffApi.engineSetOutputDevice(device).then((result) => {
+            if (result.ok) {
+              setSelectedOutputDevice(device)
+              storeSelectedOutputDevice(device)
+            } else {
+              console.error('TransportBar: failed to set output device:', result.error)
+            }
+          })
+        }}
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 10,
+          color: 'var(--ra-text)',
+          background: 'var(--ra-bg-row-active)',
+          border: '1px solid var(--ra-border)',
+          padding: '5px 8px',
+          cursor: 'pointer'
+        }}
+      >
+        <option value="">
+          {availableOutputDevices.length === 0
+            ? 'no output devices found'
+            : 'select output device...'}
+        </option>
+        {availableOutputDevices.map((name) => (
           <option key={name} value={name}>
             {name}
           </option>
