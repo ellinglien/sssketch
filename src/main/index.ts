@@ -53,7 +53,8 @@ import {
 } from './endlesssApi'
 import {
   syncSharedFeed as syncSharedFeedToWarehouse,
-  syncJam as syncJamToWarehouse
+  syncJam as syncJamToWarehouse,
+  abortSync as abortWarehouseSync
 } from './loreWarehouseSync'
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
 import {
@@ -268,6 +269,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('lore-sync-status', (_event, jamCID: string) =>
     getWarehouseSyncStatus(openOwnWarehouseDb(), jamCID)
   )
+  // `key` matches lore-sync-progress's own key convention (bare username for
+  // a shared-feed sync, jamId for a private jam) -- see abortSync's own doc
+  // comment in loreWarehouseSync.ts. Returns false, not an error, if nothing
+  // was running for that key (e.g. it already finished on its own).
+  ipcMain.handle('lore-sync-abort', (_event, key: string) => abortWarehouseSync(key))
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })

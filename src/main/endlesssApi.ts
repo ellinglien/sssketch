@@ -171,17 +171,28 @@ const STEM_DOWNLOAD_TIMEOUT_MS = 60000
  * everywhere without each call site re-implementing it. `timeoutMs`
  * defaults to REQUEST_TIMEOUT_MS (right for small JSON responses);
  * downloadOneEndlesssStem passes STEM_DOWNLOAD_TIMEOUT_MS instead, since
- * audio payloads are legitimately larger/slower. */
+ * audio payloads are legitimately larger/slower.
+ *
+ * `externalSignal`, when given, is combined with this function's own
+ * timeout-abort via AbortSignal.any -- lets loreWarehouseSync.ts's abort
+ * button actually cancel an in-flight request (not just stop new ones from
+ * starting), rather than only ever timing out on its own. Omitted call
+ * sites (one-off UI resolves with nothing to cancel against) keep working
+ * exactly as before. */
 async function fetchWithTimeout(
   fetchImpl: FetchLike,
   url: string,
   init?: RequestInit,
-  timeoutMs = REQUEST_TIMEOUT_MS
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  externalSignal?: AbortSignal
 ): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const signal = externalSignal
+    ? AbortSignal.any([externalSignal, controller.signal])
+    : controller.signal
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal })
+    return await fetchImpl(url, { ...init, signal })
   } finally {
     clearTimeout(timer)
   }
@@ -370,7 +381,8 @@ function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreRe
     downloadUrl,
     fileEndpoint: ogg?.endpoint,
     fileBucket: ogg?.bucket,
-    fileKey: ogg?.key
+    fileKey: ogg?.key,
+    sizeBytes: ogg?.length
   }
 }
 
@@ -446,12 +458,20 @@ function stemRetryDelayMs(attempt: number): number {
 /** Downloads one stem's audio to its cache path, writing via a
  * `.downloading` sibling then renaming into place so a killed/failed
  * download never leaves a corrupt partial file -- same pattern as
- * loreWarehouse.ts's own downloadOneStem. Returns false (never throws) if
- * every attempt fails. Goes through fetchWithTimeout with
- * STEM_DOWNLOAD_TIMEOUT_MS (not the default REQUEST_TIMEOUT_MS) -- see that
- * constant's own doc comment for why an earlier version of this function
- * used no timeout at all, and why that turned out to be a real bug rather
- * than a safe simplification.
+ * loreWarehouse.ts's own downloadOneStem. Returns null (never throws) if
+ * every attempt fails, or the real downloaded byte count on success (used
+ * by downloadMissingStemsFor's own onStemDownloaded callback for live
+ * data-amount progress -- see loreWarehouseSync.ts's SyncProgress.bytesDone).
+ * Goes through fetchWithTimeout with STEM_DOWNLOAD_TIMEOUT_MS (not the
+ * default REQUEST_TIMEOUT_MS) -- see that constant's own doc comment for why
+ * an earlier version of this function used no timeout at all, and why that
+ * turned out to be a real bug rather than a safe simplification.
+ *
+ * `signal`, when given and already aborted, skips straight to returning null
+ * without starting (or retrying) a request -- lets an in-progress sync's
+ * abort button actually stop between-retry, not just between-riff (combined
+ * with fetchWithTimeout's own signal handling, it also cancels whichever
+ * request is currently in flight).
  *
  * Headers and retry behavior traced directly from OUROVEON's own CDN fetch
  * (Stem::attemptRemoteFetch, live.stem.cpp) -- no Authorization header (the
@@ -461,9 +481,11 @@ function stemRetryDelayMs(attempt: number): number {
 async function downloadOneEndlesssStem(
   path: string,
   downloadUrl: string,
-  fetchImpl: FetchLike
-): Promise<boolean> {
+  fetchImpl: FetchLike,
+  signal?: AbortSignal
+): Promise<number | null> {
   for (let attempt = 0; attempt < STEM_DOWNLOAD_RETRIES; attempt++) {
+    if (signal?.aborted) return null
     if (attempt > 0) {
       await new Promise((resolve) => setTimeout(resolve, stemRetryDelayMs(attempt)))
     }
@@ -478,7 +500,8 @@ async function downloadOneEndlesssStem(
             'Accept-Encoding': 'gzip, deflate, br'
           }
         },
-        STEM_DOWNLOAD_TIMEOUT_MS
+        STEM_DOWNLOAD_TIMEOUT_MS,
+        signal
       )
       if (!res.ok) {
         console.error(
@@ -491,7 +514,7 @@ async function downloadOneEndlesssStem(
       const tmpPath = `${path}.downloading`
       writeFileSync(tmpPath, bytes)
       renameSync(tmpPath, path)
-      return true
+      return bytes.length
     } catch (err) {
       console.error(
         `endlesssApi: stem download failed (attempt ${attempt + 1}/${STEM_DOWNLOAD_RETRIES}):`,
@@ -499,7 +522,7 @@ async function downloadOneEndlesssStem(
       )
     }
   }
-  return false
+  return null
 }
 
 /** Downloads every not-yet-cached stem in `resolved` (path === null but a
@@ -507,18 +530,37 @@ async function downloadOneEndlesssStem(
  * in for whichever succeeded. Shared by both the shared-feed and
  * private-jam resolve paths. Exported for loreWarehouseSync.ts's own use --
  * see peekSharedFeedCache's doc comment for why syncSharedFeed needs to
- * call this directly rather than going through resolveSharedFeedRiff. */
+ * call this directly rather than going through resolveSharedFeedRiff.
+ *
+ * `signal` is threaded down to each real download's own fetch (see
+ * downloadOneEndlesssStem) for cancellation. `onStemDownloaded`, when given,
+ * fires once per stem that was ACTUALLY downloaded this call (not for one
+ * that was already cached, or had no downloadUrl at all) with its real byte
+ * count -- loreWarehouseSync.ts uses this to accumulate a running
+ * bytes-transferred total for its own progress reporting, deliberately
+ * counting only genuine network transfer, not "bytes now available
+ * locally" (which already-cached stems would inflate without actually
+ * costing any time or bandwidth this run). */
 export async function downloadMissingStemsFor(
   resolved: LoreResolvedRiff,
-  fetchImpl: FetchLike
+  fetchImpl: FetchLike,
+  signal?: AbortSignal,
+  onStemDownloaded?: (bytes: number) => void
 ): Promise<LoreResolvedRiff> {
   const stems = await Promise.all(
     resolved.stems.map(async (stem) => {
       if (stem.path !== null || !stem.downloadUrl) return stem
       const path = endlesssStemCachePath(stem.stemCID)
       if (existsSync(path)) return { ...stem, path }
-      const ok = await downloadOneEndlesssStem(path, stem.downloadUrl, fetchImpl)
-      return ok ? { ...stem, path } : stem
+      const downloadedBytes = await downloadOneEndlesssStem(
+        path,
+        stem.downloadUrl,
+        fetchImpl,
+        signal
+      )
+      if (downloadedBytes === null) return stem
+      onStemDownloaded?.(downloadedBytes)
+      return { ...stem, path }
     })
   )
   return { ...resolved, stems }
@@ -564,7 +606,8 @@ export async function listSharedFeed(
   userName: string,
   offset: number,
   count: number,
-  fetchImpl: FetchLike = fetch
+  fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal
 ): Promise<RiffPage> {
   const session = activeSession()
   const headers: Record<string, string> = { 'User-Agent': userAgent() }
@@ -575,7 +618,9 @@ export async function listSharedFeed(
     res = await fetchWithTimeout(
       fetchImpl,
       `${API_HOST}/api/v3/feed/shared_by/${encodeURIComponent(userName)}?size=${count}&from=${offset}`,
-      { headers }
+      { headers },
+      undefined,
+      signal
     )
   } catch (err) {
     console.error('endlesssApi: listSharedFeed network failure:', err)
@@ -747,7 +792,8 @@ const DEFAULT_RIFF_PAGE_SIZE = 200
 export async function listRiffsInJam(
   jamId: string,
   filters: RiffFilters,
-  fetchImpl: FetchLike = fetch
+  fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal
 ): Promise<RiffPage> {
   const offset = filters.offset ?? 0
   const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
@@ -760,7 +806,9 @@ export async function listRiffsInJam(
     res = await fetchWithTimeout(
       fetchImpl,
       `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(jamId)}/_design/types/_view/rifffLoopsByCreateTime?descending=true&limit=${limit}&skip=${offset}`,
-      { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
+      { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } },
+      undefined,
+      signal
     )
   } catch (err) {
     console.error('endlesssApi: listRiffsInJam network failure:', err)
@@ -829,7 +877,8 @@ async function fetchDocsByKeys<T>(
   jamId: string,
   keys: string[],
   session: EndlesssSession,
-  fetchImpl: FetchLike
+  fetchImpl: FetchLike,
+  signal?: AbortSignal
 ): Promise<Map<string, T>> {
   const result = new Map<string, T>()
   if (keys.length === 0) return result
@@ -846,7 +895,9 @@ async function fetchDocsByKeys<T>(
           'User-Agent': userAgent()
         },
         body: JSON.stringify({ keys })
-      }
+      },
+      undefined,
+      signal
     )
   } catch (err) {
     console.error('endlesssApi: fetchDocsByKeys network failure:', err)
@@ -872,16 +923,20 @@ async function fetchDocsByKeys<T>(
 /** Resolves one riff within a private jam: fetches the riff doc, extracts
  * its referenced stem IDs from state.playback, batch-fetches those stem
  * docs, then downloads whatever stems aren't already cached locally --
- * mirroring downloadMissingStems' existing LORE-path contract exactly. */
+ * mirroring downloadMissingStems' existing LORE-path contract exactly.
+ * `signal`/`onStemDownloaded` are passed straight through to
+ * fetchDocsByKeys/downloadMissingStemsFor -- see their own doc comments. */
 export async function resolveJamRiff(
   jamId: string,
   riffCID: string,
-  fetchImpl: FetchLike = fetch
+  fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
+  onStemDownloaded?: (bytes: number) => void
 ): Promise<LoreResolvedRiff | null> {
   const session = activeSession()
   if (!session) return null
 
-  const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, [riffCID], session, fetchImpl)
+  const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, [riffCID], session, fetchImpl, signal)
   const riffDoc = riffDocs.get(riffCID)
   if (!riffDoc) return null
 
@@ -893,7 +948,7 @@ export async function resolveJamRiff(
     .map((current) => current.currentLoop)
     .filter((id): id is string => typeof id === 'string')
 
-  const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, stemIds, session, fetchImpl)
+  const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, stemIds, session, fetchImpl, signal)
   const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.values()])
-  return downloadMissingStemsFor(resolved, fetchImpl)
+  return downloadMissingStemsFor(resolved, fetchImpl, signal, onStemDownloaded)
 }

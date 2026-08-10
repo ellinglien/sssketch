@@ -21,6 +21,7 @@ import {
 } from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { formatBpm } from '@shared/format'
+import { bytesLabel } from '@shared/visuals'
 import { stemKey, type Rifff } from '@shared/types'
 import { EndlesssLoginPanel } from './EndlesssLoginPanel'
 import { RiffCircle } from './RiffCircle'
@@ -181,7 +182,7 @@ export function LibraryBrowser({
   )
   const [syncingKeys, setSyncingKeys] = useState<Set<string>>(new Set())
   const [syncProgressByKey, setSyncProgressByKey] = useState<
-    Record<string, { done: number; total: number }>
+    Record<string, { done: number; total: number; bytesDone: number }>
   >({})
   const [syncBaseCountByKey, setSyncBaseCountByKey] = useState<Record<string, number>>({})
   // The jam's live riff count straight from Endlesss (not the local
@@ -441,19 +442,41 @@ export function LibraryBrowser({
     }
   }, [selectedJamCID])
 
+  // Purely a running display update -- does NOT drive completion. Real bug
+  // this fixed: loreWarehouseSync.ts's onProgress always calls back with
+  // `total` set equal to `done` (there's no cheap way to know a jam's real
+  // total riff count upfront -- see loreWarehouseSync.ts's own SyncProgress
+  // doc comment), so `progress.done === progress.total` is true on literally
+  // the FIRST riff resolved, not the last. The previous version of this
+  // effect used exactly that comparison to decide "the sync just finished,"
+  // which cleared the syncing indicator (and re-fetched syncStatus) after
+  // one riff while the backend kept working on hundreds more, invisibly --
+  // a real contributor to this feature reading as a black box. Completion
+  // is now driven by the sync's own start-promise resolving instead (see
+  // finishSyncingKey, called from handleStartSync's own .then()/.catch()),
+  // which is unambiguous: the async function returned, so the sync (or its
+  // abort) is genuinely done.
   useEffect(() => {
     return window.rifffApi.onLoreSyncProgress((progress) => {
-      // Always updates the per-key progress/syncing maps, regardless of
-      // what's currently selected -- see this component's own per-jam sync
-      // state doc comment (near syncingKeys' declaration) for why. Only the
-      // detail-pane refresh below (syncStatus/riffRefreshToken) is scoped to
-      // the currently-selected jam.
       setSyncProgressByKey((prev) => ({ ...prev, [progress.key]: progress }))
-      if (progress.done !== progress.total) return
+    })
+  }, [])
+
+  // Shared by handleStartSync's own .then()/.catch() below -- runs once a
+  // sync's start-promise has genuinely resolved (natural completion, an
+  // abort, or an error all funnel through one or the other), so it's the
+  // one place completion is actually detected, not the progress listener
+  // above (see that effect's own doc comment for why). `viewingJamCID` is
+  // whichever jam was selected at the moment handleStartSync was called for
+  // THIS key -- closed over per-call rather than read fresh, so switching
+  // selection mid-sync doesn't misdirect the detail-pane refresh to
+  // whatever jam happens to be selected when this actually fires.
+  const finishSyncingKey = useCallback(
+    (key: string, viewingJamCID: string) => {
       setSyncingKeys((prev) => {
-        if (!prev.has(progress.key)) return prev
+        if (!prev.has(key)) return prev
         const next = new Set(prev)
-        next.delete(progress.key)
+        next.delete(key)
         return next
       })
       // Keeps the sidebar's "(not synced)" labels accurate even for a jam
@@ -466,16 +489,17 @@ export function LibraryBrowser({
         .catch((err) => {
           console.error('LibraryBrowser: loreListJams() refresh failed:', err)
         })
-      if (!selectedJamCID || syncKeyFor(selectedJamCID) !== progress.key) return
+      if (syncKeyFor(viewingJamCID) !== key) return
       setRiffRefreshToken((t) => t + 1)
       window.rifffApi
-        .loreSyncStatus(selectedJamCID)
+        .loreSyncStatus(viewingJamCID)
         .then(setSyncStatus)
         .catch((err) => {
           console.error('LibraryBrowser: loreSyncStatus() failed:', err)
         })
-    })
-  }, [selectedJamCID, jamFilter])
+    },
+    [jamFilter]
+  )
 
   const handleStartSync = useCallback(() => {
     if (!selectedJamCID) return
@@ -505,21 +529,26 @@ export function LibraryBrowser({
       delete next[key]
       return next
     })
+    const viewingJamCID = selectedJamCID
     const promise = selectedJamCID.startsWith('shared:')
       ? window.rifffApi.loreSyncStartSharedFeed(selectedJamCID.slice('shared:'.length))
       : window.rifffApi.loreSyncStartJam(
           selectedJamCID,
           visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ?? selectedJamCID
         )
-    promise.catch((err) => {
-      console.error('LibraryBrowser: sync failed:', err)
-      setSyncingKeys((prev) => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
+    promise
+      .catch((err) => {
+        console.error('LibraryBrowser: sync failed:', err)
       })
+      .then(() => finishSyncingKey(key, viewingJamCID))
+  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount, syncingKeys, finishSyncingKey])
+
+  const handleAbortSync = useCallback(() => {
+    if (!selectedJamCID) return
+    window.rifffApi.loreSyncAbort(syncKeyFor(selectedJamCID)).catch((err) => {
+      console.error('LibraryBrowser: loreSyncAbort() failed:', err)
     })
-  }, [selectedJamCID, syncStatus, visibleJams, liveJamRiffCount, syncingKeys])
+  }, [selectedJamCID])
 
   /** Opens the OS folder picker and points LORE at the chosen folder --
    * needed since the warehouse root defaults to sssketch's own self-built
@@ -1268,9 +1297,27 @@ export function LibraryBrowser({
                         >
                           {selectedSyncingHere ? <LoadingLoader size={16} /> : 'sync'}
                         </button>
+                        {selectedSyncingHere && (
+                          <button
+                            onClick={handleAbortSync}
+                            style={{
+                              height: 34,
+                              borderRadius: 0,
+                              padding: '0 12px',
+                              fontSize: 11,
+                              border: '2px solid var(--ra-border-strong)',
+                              background: 'transparent',
+                              color: 'var(--ra-text)'
+                            }}
+                          >
+                            cancel
+                          </button>
+                        )}
                         {selectedSyncingHere && selectedSyncProgress && (
                           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                             synced {selectedSyncBaseCount + selectedSyncProgress.done} so far
+                            {selectedSyncProgress.bytesDone > 0 &&
+                              ` (${bytesLabel(selectedSyncProgress.bytesDone)})`}
                           </span>
                         )}
                       </div>

@@ -318,17 +318,29 @@ const api = {
     ipcRenderer.invoke('lore-sync-start-jam', jamId, jamName),
   loreSyncStatus: (jamCID: string): Promise<{ riffCount: number; complete: boolean } | null> =>
     ipcRenderer.invoke('lore-sync-status', jamCID),
+  // `key` is the SAME value onLoreSyncProgress's own events carry (bare
+  // username for a shared-feed sync, jamId for a private jam) -- see
+  // abortSync's own doc comment in loreWarehouseSync.ts. Resolves to false,
+  // not a rejection, if nothing was running for that key.
+  loreSyncAbort: (key: string): Promise<boolean> => ipcRenderer.invoke('lore-sync-abort', key),
   onLoreSyncProgress: (
     callback: (progress: {
       source: 'shared' | 'jam'
       key: string
       done: number
       total: number
+      bytesDone: number
     }) => void
   ): (() => void) => {
     const listener = (
       _event: unknown,
-      progress: { source: 'shared' | 'jam'; key: string; done: number; total: number }
+      progress: {
+        source: 'shared' | 'jam'
+        key: string
+        done: number
+        total: number
+        bytesDone: number
+      }
     ): void => callback(progress)
     ipcRenderer.on('lore-sync-progress', listener)
     return () => ipcRenderer.removeListener('lore-sync-progress', listener)

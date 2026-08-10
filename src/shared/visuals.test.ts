@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   dbLabel,
+  bytesLabel,
   offsetLabels,
   positionLabel,
   elapsedLabel,
@@ -57,6 +58,27 @@ describe('dbLabel', () => {
   })
   it('reads half gain as roughly -6dB', () => {
     expect(dbLabel(0.5)).toBe('−6.0')
+  })
+})
+
+describe('bytesLabel', () => {
+  it('shows raw bytes with no decimal below 1024', () => {
+    expect(bytesLabel(512)).toBe('512 B')
+  })
+  it('rounds bytes to the nearest whole number', () => {
+    expect(bytesLabel(512.6)).toBe('513 B')
+  })
+  it('shows one decimal in KB just above 1024 bytes', () => {
+    expect(bytesLabel(1536)).toBe('1.5 KB')
+  })
+  it('shows one decimal in MB for a multi-megabyte size', () => {
+    expect(bytesLabel(128.4 * 1024 * 1024)).toBe('128.4 MB')
+  })
+  it('shows one decimal in GB once past 1024 MB', () => {
+    expect(bytesLabel(2.5 * 1024 * 1024 * 1024)).toBe('2.5 GB')
+  })
+  it('caps at TB rather than climbing further', () => {
+    expect(bytesLabel(3 * 1024 * 1024 * 1024 * 1024)).toBe('3.0 TB')
   })
 })
 

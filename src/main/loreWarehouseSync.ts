@@ -25,15 +25,24 @@ import {
  * Same worker-pool shape, same rationale (see endlesssSync.ts's own doc
  * comment): a sync run touching hundreds of riffs needs a concurrency cap so
  * it doesn't compete with foreground UI clicks. Once Plan 2 retires
- * endlesssSync.ts, this should move to src/shared/ as the single copy. */
+ * endlesssSync.ts, this should move to src/shared/ as the single copy.
+ *
+ * `signal`, when given, is checked at the top of each lane's loop -- once
+ * aborted, no lane starts a NEW worker call, but whichever calls are already
+ * in flight are left to resolve on their own (worker itself is expected to
+ * pass the same signal down into its own network calls, per fetchWithTimeout
+ * in endlesssApi.ts, so those settle quickly via real cancellation rather
+ * than running to completion). */
 export async function runWithConcurrency<T>(
   items: T[],
   limit: number,
-  worker: (item: T) => Promise<void>
+  worker: (item: T) => Promise<void>,
+  signal?: AbortSignal
 ): Promise<void> {
   let cursor = 0
   async function lane(): Promise<void> {
     while (cursor < items.length) {
+      if (signal?.aborted) return
       const item = items[cursor++]
       await worker(item)
     }
@@ -44,12 +53,36 @@ export async function runWithConcurrency<T>(
 export interface SyncProgress {
   done: number
   total: number
+  /** Running total of real bytes downloaded this sync run -- only counts
+   * stems actually fetched over the network this call, not ones that were
+   * already cached locally (see downloadMissingStemsFor's own
+   * onStemDownloaded doc comment in endlesssApi.ts). Lets the UI show real
+   * data amounts (LibraryBrowser.tsx), not just a riff counter. */
+  bytesDone: number
 }
 
 const SYNC_CONCURRENCY = 3
 const SYNC_SHARED_FEED_PAGE_SIZE = 100
 
-const syncsInFlight = new Set<string>()
+// Keyed the same way onProgress/onLoreSyncProgress events already are (bare
+// username for a shared-feed sync, jamId for a private jam) -- was a plain
+// Set<string> until abortSync needed something to actually call .abort() on;
+// membership-checking behavior (a key present means "already running, don't
+// start a second one") is unchanged, just backed by a Map now.
+const syncsInFlight = new Map<string, AbortController>()
+
+/** Requests that whichever sync is currently running for `key` stop as soon
+ * as possible -- does NOT mark the jam as fully synced (see syncSharedFeed/
+ * syncJam's own page-loop abort checks, which skip markJamSyncComplete on
+ * abort), so a re-sync later picks up wherever this one left off, same as
+ * any other partial/interrupted sync. Returns false if nothing was running
+ * for this key (nothing to abort, not an error). */
+export function abortSync(key: string): boolean {
+  const controller = syncsInFlight.get(key)
+  if (!controller) return false
+  controller.abort()
+  return true
+}
 
 /** Walks the account's own shared feed from the front (newest first),
  * skeleton-inserting every riff it sees and resolving whichever of each
@@ -59,7 +92,9 @@ const syncsInFlight = new Set<string>()
  * is what the old JSON-index sync used and which could permanently skip a
  * riff that was seen but never resolved (see this plan's own header note
  * and the design spec's Background section). No-ops if a sync for this
- * exact userName is already running. */
+ * exact userName is already running. Stoppable mid-run via abortSync(key) --
+ * see the page-loop's own `controller.signal.aborted` check below for why
+ * an aborted run never calls markJamSyncComplete. */
 export async function syncSharedFeed(
   userName: string,
   onProgress: (progress: SyncProgress) => void,
@@ -68,13 +103,22 @@ export async function syncSharedFeed(
 ): Promise<void> {
   const key = `shared:${userName}`
   if (syncsInFlight.has(key)) return
-  syncsInFlight.add(key)
+  const controller = new AbortController()
+  syncsInFlight.set(key, controller)
   try {
     upsertJam(db, key, 'Shared Feed')
     let offset = 0
     let resolvedCount = 0
+    let bytesDone = 0
     for (;;) {
-      const page = await listSharedFeed(userName, offset, SYNC_SHARED_FEED_PAGE_SIZE, fetchImpl)
+      if (controller.signal.aborted) break
+      const page = await listSharedFeed(
+        userName,
+        offset,
+        SYNC_SHARED_FEED_PAGE_SIZE,
+        fetchImpl,
+        controller.signal
+      )
       if (page.riffs.length === 0) {
         markJamSyncComplete(db, key)
         break
@@ -95,23 +139,36 @@ export async function syncSharedFeed(
       // stem audio bytes (downloadMissingStemsFor), which IS worth
       // concurrency-capping since it's real per-riff network I/O.
       const pageResolved = [...peekSharedFeedCache(cids)]
-      await runWithConcurrency(pageResolved, SYNC_CONCURRENCY, async ([riffCID, baseResolved]) => {
-        const resolved = await downloadMissingStemsFor(baseResolved, fetchImpl)
-        const summary = page.riffs.find((r) => r.riffCID === riffCID)!
-        writeRiffDetail(
-          db,
-          key,
-          { creationTime: summary.creationTime, userName: summary.userName },
-          resolved
-        )
-        for (const stem of resolved.stems) {
-          if (stem.path === null && stem.downloadUrl !== null)
-            markStemDownloadFailed(db, stem.stemCID)
-        }
-        resolvedCount++
-        onProgress({ done: resolvedCount, total: resolvedCount })
-      })
+      await runWithConcurrency(
+        pageResolved,
+        SYNC_CONCURRENCY,
+        async ([riffCID, baseResolved]) => {
+          const resolved = await downloadMissingStemsFor(
+            baseResolved,
+            fetchImpl,
+            controller.signal,
+            (bytes) => {
+              bytesDone += bytes
+            }
+          )
+          const summary = page.riffs.find((r) => r.riffCID === riffCID)!
+          writeRiffDetail(
+            db,
+            key,
+            { creationTime: summary.creationTime, userName: summary.userName },
+            resolved
+          )
+          for (const stem of resolved.stems) {
+            if (stem.path === null && stem.downloadUrl !== null)
+              markStemDownloadFailed(db, stem.stemCID)
+          }
+          resolvedCount++
+          onProgress({ done: resolvedCount, total: resolvedCount, bytesDone })
+        },
+        controller.signal
+      )
 
+      if (controller.signal.aborted) break
       if (pageFullyDone || !page.hasMore) {
         markJamSyncComplete(db, key)
         break
@@ -141,13 +198,21 @@ export async function syncJam(
   db: Database.Database = openOwnWarehouseDb()
 ): Promise<void> {
   if (syncsInFlight.has(jamId)) return
-  syncsInFlight.add(jamId)
+  const controller = new AbortController()
+  syncsInFlight.set(jamId, controller)
   try {
     upsertJam(db, jamId, jamName)
     let offset = 0
     let resolvedCount = 0
+    let bytesDone = 0
     for (;;) {
-      const page = await listRiffsInJam(jamId, { offset, limit: SYNC_JAM_PAGE_SIZE }, fetchImpl)
+      if (controller.signal.aborted) break
+      const page = await listRiffsInJam(
+        jamId,
+        { offset, limit: SYNC_JAM_PAGE_SIZE },
+        fetchImpl,
+        controller.signal
+      )
       if (page.riffs.length === 0) {
         markJamSyncComplete(db, jamId)
         break
@@ -163,29 +228,43 @@ export async function syncJam(
         page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
       )
 
-      await runWithConcurrency(needsResolve, SYNC_CONCURRENCY, async (riffCID) => {
-        const resolved = await resolveJamRiff(jamId, riffCID, fetchImpl)
-        if (resolved) {
-          const summary = page.riffs.find((r) => r.riffCID === riffCID)!
-          // listRiffsInJam's raw view never carries a per-riff userName
-          // (see its own doc comment in endlesssApi.ts) -- summary.userName
-          // is always '' here, a known, pre-existing limitation of the jam
-          // listing endpoint itself, not something introduced by this sync.
-          writeRiffDetail(
-            db,
+      await runWithConcurrency(
+        needsResolve,
+        SYNC_CONCURRENCY,
+        async (riffCID) => {
+          const resolved = await resolveJamRiff(
             jamId,
-            { creationTime: summary.creationTime, userName: summary.userName },
-            resolved
+            riffCID,
+            fetchImpl,
+            controller.signal,
+            (bytes) => {
+              bytesDone += bytes
+            }
           )
-          for (const stem of resolved.stems) {
-            if (stem.path === null && stem.downloadUrl !== null)
-              markStemDownloadFailed(db, stem.stemCID)
+          if (resolved) {
+            const summary = page.riffs.find((r) => r.riffCID === riffCID)!
+            // listRiffsInJam's raw view never carries a per-riff userName
+            // (see its own doc comment in endlesssApi.ts) -- summary.userName
+            // is always '' here, a known, pre-existing limitation of the jam
+            // listing endpoint itself, not something introduced by this sync.
+            writeRiffDetail(
+              db,
+              jamId,
+              { creationTime: summary.creationTime, userName: summary.userName },
+              resolved
+            )
+            for (const stem of resolved.stems) {
+              if (stem.path === null && stem.downloadUrl !== null)
+                markStemDownloadFailed(db, stem.stemCID)
+            }
           }
-        }
-        resolvedCount++
-        onProgress({ done: resolvedCount, total: resolvedCount })
-      })
+          resolvedCount++
+          onProgress({ done: resolvedCount, total: resolvedCount, bytesDone })
+        },
+        controller.signal
+      )
 
+      if (controller.signal.aborted) break
       if (pageFullyDone || !page.hasMore) {
         markJamSyncComplete(db, jamId)
         break

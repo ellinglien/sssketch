@@ -246,6 +246,23 @@ export function dbLabel(v: number): string {
   return d >= -0.05 ? '0.0' : d.toFixed(1).replace('-', '−')
 }
 
+/** Human-readable byte count for LORE sync progress (LibraryBrowser.tsx) --
+ * one decimal from KB up, no decimal for raw bytes, matching the everyday
+ * "128.4 MB" convention rather than a strict binary-vs-decimal distinction
+ * (1024-based throughout, matching how Finder/Activity Monitor label file
+ * sizes on this app's own target platform, macOS). */
+export function bytesLabel(bytes: number): string {
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`
+}
+
 export interface OffsetLabels {
   grid: string
   ms: string

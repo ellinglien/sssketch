@@ -63,6 +63,16 @@ export interface LoreResolvedStem {
   fileEndpoint?: string
   fileBucket?: string
   fileKey?: string
+  /** The stem audio file's byte size, straight from Endlesss's own
+   * cdn_attachments metadata (RawStemDoc.cdn_attachments.oggAudio.length in
+   * endlesssApi.ts) -- known upfront, before any download starts, since it's
+   * embedded in the same doc as downloadUrl. Undefined when unavailable (no
+   * oggAudio, or a construction site that doesn't carry it, e.g.
+   * loreWarehouse.ts's own resolveRiff reading an external warehouse that
+   * never persisted a size column). Lets loreWarehouseSync.ts's progress
+   * reporting show real data amounts (see SyncProgress.bytesDone) without
+   * needing a separate metadata round trip. */
+  sizeBytes?: number
 }
 
 export interface RiffFilters {
