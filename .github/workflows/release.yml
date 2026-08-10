@@ -85,18 +85,30 @@ jobs:
         run: bash scripts/vendor-rubberband.sh
 
       # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
-      # itself -- imports into a temporary keychain internally, no manual
-      # `security import`/keychain scripting needed here. CSC_NAME selects
-      # which identity to use -- must be the bare common name (e.g. "Elling
-      # Lien (TEAMID)"), NOT prefixed with "Developer ID Application:" (a
-      # real electron-builder rejection hit once: "Please remove prefix
-      # ... — appropriate certificate will be chosen automatically"). Also
-      # read directly by build/afterPack.js for signing the nested engine
-      # bundle with its own entitlements (see that hook's own doc comment
-      # for why it runs in afterPack, not afterSign, and why
-      # mac.signIgnore in electron-builder.yml has to pair with it).
-      # notarize: true in electron-builder.yml is what actually triggers
-      # notarization using the APPLE_* vars below.
+      # itself for ITS OWN signing pass -- but only imports the cert into a
+      # keychain lazily, the first time that pass touches it
+      # (doSignAfterPack, which runs AFTER afterPack fires -- see
+      # app-builder-lib's macPackager.js, `codeSigningInfo` MemoLazy).
+      # build/afterPack.js's own `codesign` call runs BEFORE that (see its
+      # doc comment for why), so by the time it runs in CI, no keychain has
+      # the identity yet and it fails with "no identity found" -- never
+      # reproduces locally, where the real cert already sits in the login
+      # keychain. The "Import signing certificate" step below imports it
+      # ourselves, ahead of everything, so it's already available
+      # regardless of which signing pass touches it first. electron-builder
+      # importing the same cert again later into its own temporary keychain
+      # is redundant but harmless.
+      #
+      # CSC_NAME selects which identity to use -- must be the bare common
+      # name (e.g. "Elling Lien (TEAMID)"), NOT prefixed with "Developer ID
+      # Application:" (a real electron-builder rejection hit once: "Please
+      # remove prefix ... — appropriate certificate will be chosen
+      # automatically"). Also read directly by build/afterPack.js for
+      # signing the nested engine bundle with its own entitlements (see
+      # that hook's own doc comment for why it runs in afterPack, not
+      # afterSign, and why mac.signIgnore in electron-builder.yml has to
+      # pair with it). notarize: true in electron-builder.yml is what
+      # actually triggers notarization using the APPLE_* vars below.
       #
       # GitHub Actions sets a referenced-but-missing secret to an EMPTY
       # STRING, not an omitted var, even once real secrets exist for SOME
@@ -110,6 +122,33 @@ jobs:
       # gracefully when not set" behavior correct at the electron-builder
       # level too, regardless of which subset of these secrets happen to
       # be configured at any given time.
+      - name: Import signing certificate
+        if: ${{ secrets.CSC_LINK != '' }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/signing-cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+
+          echo -n "$CSC_LINK" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CSC_KEY_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to the search list (rather than relying on -k everywhere)
+          # so both afterPack.js's plain `codesign --sign` call and
+          # electron-builder's own later signing pass find the identity.
+          EXISTING_KEYCHAINS=$(security list-keychains -d user | sed 's/"//g')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
+
+          rm -f "$CERT_PATH"
+          echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
       - name: Build, sign, notarize, and publish
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -134,3 +173,14 @@ jobs:
           set -e
           npx electron-vite build
           npx electron-builder --mac --publish always
+
+      # The runner VM is destroyed after the job regardless, but deleting
+      # the keychain (and its search-list entry) explicitly is the
+      # standard hygiene for a manually-imported signing cert. if: always()
+      # so this still runs if an earlier step in the job failed.
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          if [ -n "$SIGNING_KEYCHAIN_PATH" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN_PATH" || true
+          fi
