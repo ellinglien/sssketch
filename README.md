@@ -33,7 +33,7 @@ Two ways to bring stems into a project:
 
 ## Installing
 
-**[Download sssketch 1.1.2 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.1.2/sssketch-1.1.2.dmg)**
+**[Download sssketch 1.1.3 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.1.3/sssketch-1.1.3.dmg)**
 — or see the [Releases](../../releases) page for other versions.
 
 Drag `sssketch.app` from the `.dmg` into Applications to install.
