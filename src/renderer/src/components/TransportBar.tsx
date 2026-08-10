@@ -38,28 +38,11 @@ function storeSelectedInputDevice(device: string | null): void {
   }
 }
 
-// Mirrors INPUT_DEVICE_STORAGE_KEY above exactly, for output device --
-// component-local state rather than global reducer state (unlike
-// selectedInputDevice), since nothing outside this settings menu needs to
-// read which output device is active.
-const OUTPUT_DEVICE_STORAGE_KEY = 'sssketch:selectedOutputDevice'
-
-function loadStoredOutputDevice(): string | null {
-  try {
-    return localStorage.getItem(OUTPUT_DEVICE_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
-function storeSelectedOutputDevice(device: string | null): void {
-  try {
-    if (device) localStorage.setItem(OUTPUT_DEVICE_STORAGE_KEY, device)
-    else localStorage.removeItem(OUTPUT_DEVICE_STORAGE_KEY)
-  } catch {
-    // localStorage unavailable -- same non-fatal fallback as input device.
-  }
-}
+// Deliberately NOT persisted across launches (unlike selectedInputDevice) --
+// see fetchOutputDevices's own doc comment for why an output
+// device is never auto-applied from a remembered name. component-local
+// state rather than global reducer state either way, since nothing outside
+// this settings menu needs to read which output device is active.
 
 // A plain triangle-body + pendulum-arm silhouette, monochrome via
 // currentColor -- matches this app's existing convention of drawing
@@ -197,7 +180,13 @@ export function TransportBar({
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
   const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
+  // Passed to ContextMenu as ignoreRef -- see that prop's own doc comment
+  // for why the trigger button needs to be exempted from the menu's
+  // capture-phase outside-click dismissal, not just guarded in this
+  // button's own onClick.
+  const gearButtonRef = useRef<HTMLButtonElement>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
   // The settings menu's "audio…" entry -- replaces the two dropdowns that
   // used to sit directly in the transport bar (see AudioDeviceModal.tsx's
   // own doc comment).
@@ -218,23 +207,26 @@ export function TransportBar({
   const [selectedOutputDevice, setSelectedOutputDevice] = useState<string | null>(null)
   const fetchingOutputDevicesRef = useRef(false)
 
-  // Unlike input (only ever applied at arm-recording time), an output
-  // device switch takes effect immediately -- so restoring the last-picked
-  // device on mount actually calls engineSetOutputDevice, not just updates
-  // the dropdown's own displayed value.
-  function fetchAndRestoreOutputDevices(): void {
+  // Unlike a name merely being *listed*, there's no way to confirm a device
+  // is actually the one physically in use right now (headphones unplugged
+  // but still enumerated, a stale Bluetooth pairing, etc.) -- auto-applying
+  // a stored name on every launch previously did exactly that: silently
+  // rerouted the engine's real output away from the speakers to a device
+  // that was valid-but-wrong, with nothing in the UI to show it had
+  // happened. Caught for real (native output device selection had just
+  // shipped, untested against real hardware) when it made an otherwise
+  // working project go completely silent, surviving both a renderer reload
+  // and a full quit/relaunch since the bad value lived in localStorage.
+  // Mirrors input's own already-established rule now: fetch the list for
+  // display, but only ever actually switch on an explicit user pick in the
+  // modal (see onChangeOutput below) -- never ambient, never on mount.
+  function fetchOutputDevices(): void {
     if (fetchingOutputDevicesRef.current) return
     fetchingOutputDevicesRef.current = true
     void window.rifffApi
       .engineListOutputDevices()
-      .then(async (devices) => {
+      .then((devices) => {
         setAvailableOutputDevices(devices)
-        const stored = loadStoredOutputDevice()
-        if (stored && devices.includes(stored) && selectedOutputDevice === null) {
-          const result = await window.rifffApi.engineSetOutputDevice(stored)
-          if (result.ok) setSelectedOutputDevice(stored)
-          else console.error('TransportBar: failed to restore output device:', result.error)
-        }
       })
       .catch((err) => {
         console.error('TransportBar: failed to list output devices:', err)
@@ -300,8 +292,7 @@ export function TransportBar({
   // selectedOutputDevice is local component state, never touched by
   // project load/serialize at all.
   useEffect(() => {
-    fetchAndRestoreOutputDevices()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only, same reasoning as the input-device effect above
+    fetchOutputDevices()
   }, [])
 
   // Opens the native folder picker and, unless cancelled, repoints where
@@ -721,16 +712,13 @@ export function TransportBar({
       </button>
 
       <button
+        ref={gearButtonRef}
         onClick={(e) => {
           // Toggles closed if already open, rather than always re-opening/
-          // repositioning -- without this, clicking the same trigger
-          // button again while the menu is already open raced against
-          // ContextMenu's own capture-phase outside-click dismissal (which
-          // fires first, since it's on window in the capture phase and this
-          // button's onClick runs in the bubble phase): the menu closed and
-          // then immediately re-opened in the same click, which visually
-          // read as "clicking the button again does nothing" instead of
-          // the expected close. Per direct feedback.
+          // repositioning. See ContextMenu's own ignoreRef doc comment for
+          // why the trigger also needs to be passed there -- this guard
+          // alone isn't enough to stop the menu reopening the instant it's
+          // dismissed by ContextMenu's own outside-click handling.
           if (gearMenu) {
             setGearMenu(null)
             return
@@ -757,6 +745,7 @@ export function TransportBar({
         <ContextMenu
           x={gearMenu.x}
           y={gearMenu.y}
+          ignoreRef={gearButtonRef}
           items={[
             { label: 'tidy up', onClick: onOpenClusterStems },
             {
@@ -769,6 +758,7 @@ export function TransportBar({
       )}
 
       <button
+        ref={settingsButtonRef}
         onClick={handleOpenSettingsMenu}
         aria-label="Settings"
         title="settings"
@@ -791,6 +781,7 @@ export function TransportBar({
         <ContextMenu
           x={settingsMenu.x}
           y={settingsMenu.y}
+          ignoreRef={settingsButtonRef}
           items={[
             { label: 'show welcome screen', onClick: onShowWelcome },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
@@ -803,7 +794,7 @@ export function TransportBar({
                 // are cheap enough to redo rather than trust a stale first
                 // fetch).
                 fetchAndRestoreInputDevices()
-                fetchAndRestoreOutputDevices()
+                fetchOutputDevices()
                 setAudioModalOpen(true)
               }
             },
@@ -836,7 +827,6 @@ export function TransportBar({
             void window.rifffApi.engineSetOutputDevice(device).then((result) => {
               if (result.ok) {
                 setSelectedOutputDevice(device)
-                storeSelectedOutputDevice(device)
               } else {
                 console.error('TransportBar: failed to set output device:', result.error)
               }

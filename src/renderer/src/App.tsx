@@ -439,7 +439,9 @@ function ProjectMenu({
   const dispatch = useDispatch()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
+  const saveButtonRef = useRef<HTMLButtonElement>(null)
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
 
@@ -600,12 +602,11 @@ function ProjectMenu({
         new
       </button>
       <button
+        ref={saveButtonRef}
         onClick={(e) => {
-          // Toggles closed if already open -- see TransportBar.tsx's own
-          // gear-menu button for why this matters (without it, re-clicking
-          // the trigger while the menu is open raced against ContextMenu's
-          // capture-phase outside-click dismissal and just reopened it in
-          // the same click).
+          // Toggles closed if already open -- see ContextMenu's own
+          // ignoreRef doc comment (and TransportBar.tsx's gear-menu button)
+          // for why the trigger also needs to be passed there.
           if (saveMenu) {
             setSaveMenu(null)
             return
@@ -621,6 +622,7 @@ function ProjectMenu({
         <ContextMenu
           x={saveMenu.x}
           y={saveMenu.y}
+          ignoreRef={saveButtonRef}
           items={[
             { label: 'save', onClick: handleSave },
             { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere },
@@ -635,9 +637,10 @@ function ProjectMenu({
         open
       </button>
       <button
+        ref={exportButtonRef}
         onClick={(e) => {
           // Toggles closed if already open -- see the save button above /
-          // TransportBar.tsx's gear-menu button for why.
+          // ContextMenu's own ignoreRef doc comment for why.
           if (exportMenu) {
             setExportMenu(null)
             return
@@ -654,6 +657,7 @@ function ProjectMenu({
         <ContextMenu
           x={exportMenu.x}
           y={exportMenu.y}
+          ignoreRef={exportButtonRef}
           items={[
             { label: 'export mix', onClick: handleExportMix },
             { label: 'export stems', onClick: handleExportStems },

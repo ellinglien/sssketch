@@ -18,13 +18,23 @@
  * look untouched; OnboardingModal.tsx's welcome mark is the one place that
  * passes it, for the four-color "as coded in the '1a' welcome-modal design
  * import" mark (see docs/superpowers/specs -- imported via claude_design
- * MCP from "Sssketch Welcome.dc.html", 2026-08-10). */
+ * MCP from "Sssketch Welcome.dc.html", 2026-08-10).
+ *
+ * `speedMs` is the full cycle duration, default 1s -- right for a "still
+ * working" indicator, but per direct feedback way too frantic for
+ * OnboardingModal.tsx's decorative welcome-screen mark, which isn't
+ * signalling a busy state at all. That call site passes 6000, slower than
+ * the loading-spinner default but faster than the design file's own
+ * explicit `ra-loader-bounce 8s` (per direct feedback, 8s read as too
+ * slow once seen live). */
 export function LoadingLoader({
   size = 64,
-  colors
+  colors,
+  speedMs = 1000
 }: {
   size?: number
   colors?: [string, string, string, string]
+  speedMs?: number
 }): React.JSX.Element {
   const height = Math.max(2, Math.round(size * (9 / 60)))
   const barThickness = Math.max(1, Math.round(size * (3 / 60)))
@@ -38,15 +48,18 @@ export function LoadingLoader({
         width: size,
         background,
         backgroundSize: `26% ${barThickness}px`,
-        animation: 'ra-loader-bounce 1s infinite'
+        animation: `ra-loader-bounce ${speedMs}ms infinite`
       }}
     >
       <style>{`
         @keyframes ra-loader-bounce {
-          0%, 70%, 100% { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
-          23.33% { background-position: calc(0*100%/3) 0, calc(1*100%/3) 100%, calc(2*100%/3) 0, calc(3*100%/3) 100%; }
-          46.67% { background-position: calc(1*100%/3) 0, calc(0*100%/3) 100%, calc(3*100%/3) 0, calc(2*100%/3) 100%; }
-          69.99% { background-position: calc(1*100%/3) 50%, calc(0*100%/3) 50%, calc(3*100%/3) 50%, calc(2*100%/3) 50%; }
+          0%, 3%      { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
+          11.67%      { background-position: calc(0*100%/3) 0, calc(1*100%/3) 100%, calc(2*100%/3) 0, calc(3*100%/3) 100%; }
+          23.33%      { background-position: calc(1*100%/3) 0, calc(0*100%/3) 100%, calc(3*100%/3) 0, calc(2*100%/3) 100%; }
+          35%, 53%    { background-position: calc(1*100%/3) 50%, calc(0*100%/3) 50%, calc(3*100%/3) 50%, calc(2*100%/3) 50%; }
+          61.67%      { background-position: calc(1*100%/3) 100%, calc(0*100%/3) 0, calc(3*100%/3) 100%, calc(2*100%/3) 0; }
+          73.33%      { background-position: calc(0*100%/3) 100%, calc(1*100%/3) 0, calc(2*100%/3) 100%, calc(3*100%/3) 0; }
+          85%, 100%   { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
         }
       `}</style>
     </div>

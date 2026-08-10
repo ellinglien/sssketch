@@ -127,7 +127,7 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <LoadingLoader size={150} colors={MARK_COLORS} />
+        <LoadingLoader size={150} colors={MARK_COLORS} speedMs={6000} />
 
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (

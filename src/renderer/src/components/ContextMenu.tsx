@@ -10,12 +10,27 @@ export function ContextMenu({
   x,
   y,
   items,
-  onClose
+  onClose,
+  ignoreRef
 }: {
   x: number
   y: number
   items: ContextMenuItem[]
   onClose: () => void
+  /** The trigger button that opened this menu, if the caller wants
+   * click-to-toggle on it. Exempts that element from the outside-click
+   * dismissal below, so a click on the trigger is handled ONLY by its own
+   * onClick (the toggle-if-open guard callers already write), not raced
+   * against this capture-phase listener too. Previously every caller's
+   * onClick guard (`if (menuState) close else open`) tried to win that race
+   * by reading a stale closure of menuState -- relying on this capture-phase
+   * setState NOT having resolved yet by the time the button's bubble-phase
+   * onClick ran. That assumption doesn't hold: the state update resolves in
+   * time, so the guard read the already-nulled value and reopened the menu,
+   * reproducing exactly the "clicking the trigger again does nothing" bug
+   * it was meant to fix. Excluding the trigger here removes the race
+   * entirely instead of trying to win it. */
+  ignoreRef?: React.RefObject<HTMLElement | null>
 }): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
   // Starts at the requested (x, y), then clamped once the menu's real
@@ -49,6 +64,7 @@ export function ContextMenu({
     // button's own onClick already calls onClose() itself after running).
     function handleDismiss(e: MouseEvent): void {
       if (menuRef.current?.contains(e.target as Node)) return
+      if (ignoreRef?.current?.contains(e.target as Node)) return
       onClose()
     }
     function handleKeyDown(e: KeyboardEvent): void {
@@ -68,7 +84,7 @@ export function ContextMenu({
       window.removeEventListener('contextmenu', handleDismiss, true)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [onClose])
+  }, [onClose, ignoreRef])
 
   return (
     <div
