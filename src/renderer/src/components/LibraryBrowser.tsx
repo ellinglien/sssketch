@@ -1221,43 +1221,71 @@ export function LibraryBrowser({
   }, [onClose])
 
   return (
-    <>
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000
+      }}
+      onClick={onClose}
+    >
+      <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
       <div
         style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0,0,0,0.6)',
+          width: 900,
+          height: 600,
+          background: 'var(--ra-bg-bar)',
+          border: '1px solid var(--ra-border-strong)',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
+          flexDirection: 'column'
         }}
-        onClick={onClose}
+        onClick={(e) => e.stopPropagation()}
       >
-        <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
         <div
           style={{
-            width: 900,
-            height: 600,
-            background: 'var(--ra-bg-bar)',
-            border: '1px solid var(--ra-border-strong)',
             display: 'flex',
-            flexDirection: 'column'
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--ra-border)'
           }}
-          onClick={(e) => e.stopPropagation()}
         >
-          <div
+          <span style={{ textTransform: 'lowercase' }}>library</span>
+          <button
+            onClick={onClose}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 12px',
-              borderBottom: '1px solid var(--ra-border)'
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)'
             }}
           >
-            <span style={{ textTransform: 'lowercase' }}>library</span>
+            close
+          </button>
+        </div>
+
+        <EndlesssLoginPanel onStatusChange={setAuthStatus} />
+
+        {/* available === false in practice only happens for a misconfigured
+            or unmounted EXTERNAL folder -- the self-built warehouse is
+            created during app startup, before this component can ever
+            mount, so that path is guaranteed to exist by the time we get
+            here. If that startup guarantee ever changes, this copy (and the
+            choose-folder-only recovery path below) would need to account
+            for the self-built case too. */}
+        {available === false ? (
+          <div style={{ padding: 24 }}>
+            <p>library not available at {warehouseRoot ?? '...'}</p>
             <button
-              onClick={onClose}
+              disabled={changingWarehouseRoot}
+              onClick={handleChooseWarehouseFolder}
               style={{
                 height: 22,
                 borderRadius: 0,
@@ -1268,77 +1296,259 @@ export function LibraryBrowser({
                 color: 'var(--ra-text-2)'
               }}
             >
-              close
+              choose folder
             </button>
           </div>
-
-          <EndlesssLoginPanel onStatusChange={setAuthStatus} />
-
-          {/* available === false in practice only happens for a misconfigured
-            or unmounted EXTERNAL folder -- the self-built warehouse is
-            created during app startup, before this component can ever
-            mount, so that path is guaranteed to exist by the time we get
-            here. If that startup guarantee ever changes, this copy (and the
-            choose-folder-only recovery path below) would need to account
-            for the self-built case too. */}
-          {available === false ? (
-            <div style={{ padding: 24 }}>
-              <p>library not available at {warehouseRoot ?? '...'}</p>
-              <button
-                disabled={changingWarehouseRoot}
-                onClick={handleChooseWarehouseFolder}
+        ) : (
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <div
+              style={{ width: 220, overflowY: 'auto', borderRight: '1px solid var(--ra-border)' }}
+            >
+              <input
+                type="text"
+                value={jamFilter}
+                onChange={(e) => setJamFilter(e.target.value)}
+                placeholder="filter jams..."
                 style={{
-                  height: 22,
-                  borderRadius: 0,
-                  padding: '0 10px',
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
+                  height: 24,
+                  fontSize: 11,
                   background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text-2)'
+                  color: 'var(--ra-text)',
+                  border: '1px solid var(--ra-border)',
+                  borderRadius: 0,
+                  padding: '0 6px',
+                  width: '100%',
+                  boxSizing: 'border-box'
                 }}
-              >
-                choose folder
-              </button>
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="text"
+                    value={riffIdInput}
+                    onChange={(e) => {
+                      setRiffIdInput(e.target.value)
+                      setRiffIdNotFound(false)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleGoToRiffId()
+                    }}
+                    placeholder="go to rifff ID..."
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      padding: '0 6px'
+                    }}
+                  />
+                  <button
+                    onClick={handleGoToRiffId}
+                    style={{
+                      height: 24,
+                      padding: '0 8px',
+                      fontSize: 11,
+                      background: 'var(--ra-bg-row-active)',
+                      color: 'var(--ra-text)',
+                      border: '1px solid var(--ra-border)',
+                      borderRadius: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    go
+                  </button>
+                </div>
+                {riffIdNotFound && (
+                  <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>
+                    not found in local warehouse
+                  </span>
+                )}
+              </div>
+              {sidebarJams.map((jam) => {
+                // Live per-row progress, visible regardless of which jam is
+                // currently selected -- matches LORE's own Data Warehouse
+                // table (doc/LORE.warehouse.MD in OUROVEON), which shows a
+                // "riffs (+N remaining)" count in every syncing jam's own row
+                // rather than only for whichever one you're looking at. This
+                // is what makes a background sync visible at all instead of
+                // reading as an opaque "black box" the moment you click
+                // elsewhere. Syncing jams are also sorted to the top (see
+                // sidebarJams) so a background sync doesn't require hunting
+                // through the list to check on.
+                const jamKey = syncKeyFor(jam.jamCID)
+                const isJamSyncing = syncingKeys.has(jamKey)
+                const jamProgress = syncProgressByKey[jamKey]
+                const isSynced = syncedJams.some((s) => s.jamCID === jam.jamCID)
+                return (
+                  <button
+                    key={jam.jamCID}
+                    onClick={() => setSelectedJamCID(jam.jamCID)}
+                    // Always attached, even for a jam this component's own
+                    // isSynced check doesn't (yet) think is synced --
+                    // syncedJams can lag reality (e.g. right after a sync
+                    // finishes elsewhere, or an inaccurate/never-populated
+                    // read on a jam that WAS actually synced in a past
+                    // session), and gating the menu on it entirely hid the
+                    // right-click affordance for real, previously-synced
+                    // jams. Choosing "remove from sync" for a jam that
+                    // truly has nothing synced is a safe, harmless no-op
+                    // (removeJamSync's own deleteJamRows just finds
+                    // nothing to delete), so there's no real downside to
+                    // always offering it.
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setJamContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        jamCID: jam.jamCID,
+                        jamName: jam.name
+                      })
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '5px 6px',
+                      fontSize: 11,
+                      border: 'none',
+                      borderRadius: 0,
+                      background:
+                        selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
+                      // Never-synced jams sit a shade dimmer than synced ones
+                      // -- a color difference reads at a glance without the
+                      // "(not synced)" suffix competing with the name for
+                      // space, and synced/syncing jams keep full brightness.
+                      color: isSynced || isJamSyncing ? 'var(--ra-text)' : 'var(--ra-text-2)'
+                    }}
+                  >
+                    {isJamSyncing && <LoadingLoader size={10} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {jam.name}
+                      {isJamSyncing &&
+                        ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
-          ) : (
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-              <div
-                style={{ width: 220, overflowY: 'auto', borderRight: '1px solid var(--ra-border)' }}
-              >
-                <input
-                  type="text"
-                  value={jamFilter}
-                  onChange={(e) => setJamFilter(e.target.value)}
-                  placeholder="filter jams..."
-                  style={{
-                    height: 24,
-                    fontSize: 11,
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)',
-                    border: '1px solid var(--ra-border)',
-                    borderRadius: 0,
-                    padding: '0 6px',
-                    width: '100%',
-                    boxSizing: 'border-box'
-                  }}
-                />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div style={{ display: 'flex', gap: 4 }}>
+
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {selectedJamCID === null && (
+                <div style={{ fontSize: 11, color: 'var(--ra-text-3)', margin: 12 }}>
+                  select a jam to browse its rifffs
+                </div>
+              )}
+              {selectedJamCID !== null && (
+                <>
+                  {/* Jam name + its sync trigger, right beside "where" this
+                      content lives -- previously the sync button sat down in
+                      the filter bar with everything else, easy to miss on a
+                      never-synced jam since nothing about its position said
+                      "this belongs to the jam you just picked." */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      flexWrap: 'wrap',
+                      margin: '10px 12px 0'
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ra-text)' }}>
+                      {visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ?? selectedJamCID}
+                    </span>
+                    {authStatus.loggedIn && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                          {syncStatus
+                            ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
+                            : 'not synced yet'}
+                        </span>
+                        <button
+                          onClick={handleStartSync}
+                          // Only disabled by THIS jam's own in-flight sync, not
+                          // any other jam's -- see this component's own per-jam
+                          // sync state doc comment (near syncingKeys'
+                          // declaration) for the bug this fixed (a global
+                          // `syncing` boolean left every jam's sync button
+                          // disabled forever once you switched away from
+                          // whichever jam happened to be syncing).
+                          disabled={selectedSyncingHere}
+                          // Matches the import button's own "primary action" weight
+                          // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
+                          // rather than the tiny filter-bar utility styling this used
+                          // to share with the "only fully cached" checkbox next to
+                          // it — sync is the main thing this page does before you
+                          // can browse anything at all, not a minor filter toggle.
+                          // Highlighted (var(--ra-play-on)) specifically for the
+                          // never-synced case, where clicking it isn't optional.
+                          style={{
+                            height: 34,
+                            borderRadius: 0,
+                            padding: '0 16px',
+                            fontSize: 13,
+                            fontWeight: 700,
+                            border: '2px solid var(--ra-border-strong)',
+                            background: syncStatus
+                              ? 'var(--ra-bg-row-active)'
+                              : 'var(--ra-play-on)',
+                            color: syncStatus ? 'var(--ra-text)' : 'var(--ra-play-on-ink)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8
+                          }}
+                        >
+                          {selectedSyncingHere ? <LoadingLoader size={16} /> : 'sync'}
+                        </button>
+                        {selectedSyncingHere && (
+                          <button
+                            onClick={handleAbortSync}
+                            style={{
+                              height: 34,
+                              borderRadius: 0,
+                              padding: '0 12px',
+                              fontSize: 11,
+                              border: '2px solid var(--ra-border-strong)',
+                              background: 'transparent',
+                              color: 'var(--ra-text)'
+                            }}
+                          >
+                            cancel
+                          </button>
+                        )}
+                        {selectedSyncingHere && selectedSyncProgress && (
+                          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                            synced {selectedSyncBaseCount + selectedSyncProgress.done} so far
+                            {selectedSyncProgress.bytesDone > 0 &&
+                              ` (${bytesLabel(selectedSyncProgress.bytesDone)})`}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      margin: '8px 12px 0'
+                    }}
+                  >
                     <input
-                      type="text"
-                      value={riffIdInput}
-                      onChange={(e) => {
-                        setRiffIdInput(e.target.value)
-                        setRiffIdNotFound(false)
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleGoToRiffId()
-                      }}
-                      placeholder="go to rifff ID..."
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      title="from date"
                       style={{
-                        flex: 1,
-                        height: 24,
-                        fontSize: 11,
+                        height: 22,
+                        fontSize: 10,
                         background: 'var(--ra-bg-row-active)',
                         color: 'var(--ra-text)',
                         border: '1px solid var(--ra-border)',
@@ -1346,531 +1556,325 @@ export function LibraryBrowser({
                         padding: '0 6px'
                       }}
                     />
-                    <button
-                      onClick={handleGoToRiffId}
+                    <input
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
+                      title="to date"
                       style={{
-                        height: 24,
-                        padding: '0 8px',
-                        fontSize: 11,
+                        height: 22,
+                        fontSize: 10,
                         background: 'var(--ra-bg-row-active)',
                         color: 'var(--ra-text)',
                         border: '1px solid var(--ra-border)',
                         borderRadius: 0,
-                        cursor: 'pointer'
+                        padding: '0 6px'
                       }}
-                    >
-                      go
-                    </button>
-                  </div>
-                  {riffIdNotFound && (
-                    <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>
-                      not found in local warehouse
-                    </span>
-                  )}
-                </div>
-                {sidebarJams.map((jam) => {
-                  // Live per-row progress, visible regardless of which jam is
-                  // currently selected -- matches LORE's own Data Warehouse
-                  // table (doc/LORE.warehouse.MD in OUROVEON), which shows a
-                  // "riffs (+N remaining)" count in every syncing jam's own row
-                  // rather than only for whichever one you're looking at. This
-                  // is what makes a background sync visible at all instead of
-                  // reading as an opaque "black box" the moment you click
-                  // elsewhere. Syncing jams are also sorted to the top (see
-                  // sidebarJams) so a background sync doesn't require hunting
-                  // through the list to check on.
-                  const jamKey = syncKeyFor(jam.jamCID)
-                  const isJamSyncing = syncingKeys.has(jamKey)
-                  const jamProgress = syncProgressByKey[jamKey]
-                  const isSynced = syncedJams.some((s) => s.jamCID === jam.jamCID)
-                  return (
-                    <button
-                      key={jam.jamCID}
-                      onClick={() => setSelectedJamCID(jam.jamCID)}
-                      // Always attached, even for a jam this component's own
-                      // isSynced check doesn't (yet) think is synced --
-                      // syncedJams can lag reality (e.g. right after a sync
-                      // finishes elsewhere, or an inaccurate/never-populated
-                      // read on a jam that WAS actually synced in a past
-                      // session), and gating the menu on it entirely hid the
-                      // right-click affordance for real, previously-synced
-                      // jams. Choosing "remove from sync" for a jam that
-                      // truly has nothing synced is a safe, harmless no-op
-                      // (removeJamSync's own deleteJamRows just finds
-                      // nothing to delete), so there's no real downside to
-                      // always offering it.
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setJamContextMenu({
-                          x: e.clientX,
-                          y: e.clientY,
-                          jamCID: jam.jamCID,
-                          jamName: jam.name
-                        })
-                      }}
+                    />
+                    <input
+                      type="number"
+                      value={bpmFilter}
+                      onChange={(e) => setBpmFilter(e.target.value)}
+                      placeholder="bpm"
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '5px 6px',
-                        fontSize: 11,
-                        border: 'none',
+                        width: 60,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
                         borderRadius: 0,
-                        background:
-                          selectedJamCID === jam.jamCID ? 'var(--ra-bg-row-active)' : 'transparent',
-                        // Never-synced jams sit a shade dimmer than synced ones
-                        // -- a color difference reads at a glance without the
-                        // "(not synced)" suffix competing with the name for
-                        // space, and synced/syncing jams keep full brightness.
-                        color: isSynced || isJamSyncing ? 'var(--ra-text)' : 'var(--ra-text-2)'
+                        padding: '0 6px'
                       }}
-                    >
-                      {isJamSyncing && <LoadingLoader size={10} />}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {jam.name}
-                        {isJamSyncing &&
-                          ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                {selectedJamCID === null && (
-                  <div style={{ fontSize: 11, color: 'var(--ra-text-3)', margin: 12 }}>
-                    select a jam to browse its rifffs
-                  </div>
-                )}
-                {selectedJamCID !== null && (
-                  <>
-                    {/* Jam name + its sync trigger, right beside "where" this
-                      content lives -- previously the sync button sat down in
-                      the filter bar with everything else, easy to miss on a
-                      never-synced jam since nothing about its position said
-                      "this belongs to the jam you just picked." */}
-                    <div
+                    />
+                    <input
+                      type="text"
+                      value={userNameFilter}
+                      onChange={(e) => setUserNameFilter(e.target.value)}
+                      placeholder="username"
+                      style={{
+                        width: 100,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <label
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 12,
-                        flexWrap: 'wrap',
-                        margin: '10px 12px 0'
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
                       }}
                     >
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ra-text)' }}>
-                        {visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ??
-                          selectedJamCID}
-                      </span>
-                      {authStatus.loggedIn && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                            {syncStatus
-                              ? `synced: ${syncStatus.riffCount} riffs${syncStatus.complete ? '' : ' (partial)'}`
-                              : 'not synced yet'}
-                          </span>
-                          <button
-                            onClick={handleStartSync}
-                            // Only disabled by THIS jam's own in-flight sync, not
-                            // any other jam's -- see this component's own per-jam
-                            // sync state doc comment (near syncingKeys'
-                            // declaration) for the bug this fixed (a global
-                            // `syncing` boolean left every jam's sync button
-                            // disabled forever once you switched away from
-                            // whichever jam happened to be syncing).
-                            disabled={selectedSyncingHere}
-                            // Matches the import button's own "primary action" weight
-                            // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
-                            // rather than the tiny filter-bar utility styling this used
-                            // to share with the "only fully cached" checkbox next to
-                            // it — sync is the main thing this page does before you
-                            // can browse anything at all, not a minor filter toggle.
-                            // Highlighted (var(--ra-play-on)) specifically for the
-                            // never-synced case, where clicking it isn't optional.
-                            style={{
-                              height: 34,
-                              borderRadius: 0,
-                              padding: '0 16px',
-                              fontSize: 13,
-                              fontWeight: 700,
-                              border: '2px solid var(--ra-border-strong)',
-                              background: syncStatus
-                                ? 'var(--ra-bg-row-active)'
-                                : 'var(--ra-play-on)',
-                              color: syncStatus ? 'var(--ra-text)' : 'var(--ra-play-on-ink)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8
-                            }}
-                          >
-                            {selectedSyncingHere ? <LoadingLoader size={16} /> : 'sync'}
-                          </button>
-                          {selectedSyncingHere && (
-                            <button
-                              onClick={handleAbortSync}
+                      <input
+                        type="checkbox"
+                        checked={onlyFullyCached}
+                        onChange={(e) => setOnlyFullyCached(e.target.checked)}
+                      />
+                      only fully cached
+                    </label>
+                    <span
+                      style={{
+                        width: 1,
+                        alignSelf: 'stretch',
+                        background: 'var(--ra-border)'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      value={loreUsername}
+                      onChange={(e) => setLoreUsername(e.target.value)}
+                      placeholder="your username"
+                      title="your LORE username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
+                      style={{
+                        width: 100,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={onlyContainsMe}
+                        onChange={(e) => setOnlyContainsMe(e.target.checked)}
+                      />
+                      only mine
+                    </label>
+                    <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                      {riffs.length} rifffs{hasMoreRiffs ? '+' : ''}
+                    </span>
+                  </div>
+
+                  <div
+                    ref={gridRef}
+                    onScroll={(e) => {
+                      // Fires more auto-loading than a bottom-edge-only check
+                      // would strictly need, but handleLoadMore's own
+                      // loadingMoreRiffs guard already makes repeat calls a
+                      // no-op while a page is in flight, so there's no real
+                      // cost to checking on every scroll event rather than
+                      // debouncing.
+                      if (!hasMoreRiffs || loadingMoreRiffs) return
+                      const el = e.currentTarget
+                      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+                      if (distanceFromBottom < SCROLL_LOAD_MORE_THRESHOLD_PX) handleLoadMore()
+                    }}
+                    style={{
+                      margin: '10px 12px 0',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      overflowY: 'auto',
+                      flex: 1
+                    }}
+                  >
+                    {riffGroups.map((group) => (
+                      <div key={group.label}>
+                        <span
+                          className="ra-eyebrow"
+                          style={{ fontSize: 8, display: 'block', marginBottom: 4 }}
+                        >
+                          {group.label}
+                        </span>
+                        {group.tempoGroups.map((tempoGroup) => (
+                          <div key={tempoGroup.bpm} style={{ marginBottom: 6 }}>
+                            <span
                               style={{
-                                height: 34,
-                                borderRadius: 0,
-                                padding: '0 12px',
-                                fontSize: 11,
-                                border: '2px solid var(--ra-border-strong)',
-                                background: 'transparent',
-                                color: 'var(--ra-text)'
+                                fontSize: 8,
+                                color: 'var(--ra-text-3)',
+                                display: 'block',
+                                marginBottom: 3
                               }}
                             >
-                              cancel
-                            </button>
-                          )}
-                          {selectedSyncingHere && selectedSyncProgress && (
-                            <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                              synced {selectedSyncBaseCount + selectedSyncProgress.done} so far
-                              {selectedSyncProgress.bytesDone > 0 &&
-                                ` (${bytesLabel(selectedSyncProgress.bytesDone)})`}
+                              {tempoGroup.bpm} BPM
                             </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        margin: '8px 12px 0'
-                      }}
-                    >
-                      <input
-                        type="date"
-                        value={dateFromFilter}
-                        onChange={(e) => setDateFromFilter(e.target.value)}
-                        title="from date"
-                        style={{
-                          height: 22,
-                          fontSize: 10,
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          border: '1px solid var(--ra-border)',
-                          borderRadius: 0,
-                          padding: '0 6px'
-                        }}
-                      />
-                      <input
-                        type="date"
-                        value={dateToFilter}
-                        onChange={(e) => setDateToFilter(e.target.value)}
-                        title="to date"
-                        style={{
-                          height: 22,
-                          fontSize: 10,
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          border: '1px solid var(--ra-border)',
-                          borderRadius: 0,
-                          padding: '0 6px'
-                        }}
-                      />
-                      <input
-                        type="number"
-                        value={bpmFilter}
-                        onChange={(e) => setBpmFilter(e.target.value)}
-                        placeholder="bpm"
-                        style={{
-                          width: 60,
-                          height: 22,
-                          fontSize: 10,
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          border: '1px solid var(--ra-border)',
-                          borderRadius: 0,
-                          padding: '0 6px'
-                        }}
-                      />
-                      <input
-                        type="text"
-                        value={userNameFilter}
-                        onChange={(e) => setUserNameFilter(e.target.value)}
-                        placeholder="username"
-                        style={{
-                          width: 100,
-                          height: 22,
-                          fontSize: 10,
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          border: '1px solid var(--ra-border)',
-                          borderRadius: 0,
-                          padding: '0 6px'
-                        }}
-                      />
-                      <label
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          fontSize: 10,
-                          color: 'var(--ra-text-2)'
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={onlyFullyCached}
-                          onChange={(e) => setOnlyFullyCached(e.target.checked)}
-                        />
-                        only fully cached
-                      </label>
-                      <span
-                        style={{
-                          width: 1,
-                          alignSelf: 'stretch',
-                          background: 'var(--ra-border)'
-                        }}
-                      />
-                      <input
-                        type="text"
-                        value={loreUsername}
-                        onChange={(e) => setLoreUsername(e.target.value)}
-                        placeholder="your username"
-                        title="your LORE username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
-                        style={{
-                          width: 100,
-                          height: 22,
-                          fontSize: 10,
-                          background: 'var(--ra-bg-row-active)',
-                          color: 'var(--ra-text)',
-                          border: '1px solid var(--ra-border)',
-                          borderRadius: 0,
-                          padding: '0 6px'
-                        }}
-                      />
-                      <label
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          fontSize: 10,
-                          color: 'var(--ra-text-2)'
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={onlyContainsMe}
-                          onChange={(e) => setOnlyContainsMe(e.target.checked)}
-                        />
-                        only mine
-                      </label>
-                      <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-                        {riffs.length} rifffs{hasMoreRiffs ? '+' : ''}
-                      </span>
-                    </div>
-
-                    <div
-                      ref={gridRef}
-                      onScroll={(e) => {
-                        // Fires more auto-loading than a bottom-edge-only check
-                        // would strictly need, but handleLoadMore's own
-                        // loadingMoreRiffs guard already makes repeat calls a
-                        // no-op while a page is in flight, so there's no real
-                        // cost to checking on every scroll event rather than
-                        // debouncing.
-                        if (!hasMoreRiffs || loadingMoreRiffs) return
-                        const el = e.currentTarget
-                        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-                        if (distanceFromBottom < SCROLL_LOAD_MORE_THRESHOLD_PX) handleLoadMore()
-                      }}
-                      style={{
-                        margin: '10px 12px 0',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 10,
-                        overflowY: 'auto',
-                        flex: 1
-                      }}
-                    >
-                      {riffGroups.map((group) => (
-                        <div key={group.label}>
-                          <span
-                            className="ra-eyebrow"
-                            style={{ fontSize: 8, display: 'block', marginBottom: 4 }}
-                          >
-                            {group.label}
-                          </span>
-                          {group.tempoGroups.map((tempoGroup) => (
-                            <div key={tempoGroup.bpm} style={{ marginBottom: 6 }}>
-                              <span
-                                style={{
-                                  fontSize: 8,
-                                  color: 'var(--ra-text-3)',
-                                  display: 'block',
-                                  marginBottom: 3
-                                }}
-                              >
-                                {tempoGroup.bpm} BPM
-                              </span>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                                {tempoGroup.riffs.map((riff) => (
-                                  <div
-                                    key={riff.riffCID}
-                                    ref={(el) => {
-                                      if (el) riffNodeRefs.current.set(riff.riffCID, el)
-                                      else riffNodeRefs.current.delete(riff.riffCID)
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                              {tempoGroup.riffs.map((riff) => (
+                                <div
+                                  key={riff.riffCID}
+                                  ref={(el) => {
+                                    if (el) riffNodeRefs.current.set(riff.riffCID, el)
+                                    else riffNodeRefs.current.delete(riff.riffCID)
+                                  }}
+                                >
+                                  <RiffCircle
+                                    title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                    selected={selectedRiffCID === riff.riffCID}
+                                    multiSelected={
+                                      selectedRiffCID !== riff.riffCID &&
+                                      selectedRiffCIDs.has(riff.riffCID)
+                                    }
+                                    playing={
+                                      selectedRiffCID === riff.riffCID &&
+                                      playingRiffCID === riff.riffCID
+                                    }
+                                    fullyCached={riff.cachedStemCount >= riff.stemCount}
+                                    imported={importedRiffGroupIds.has(riff.riffCID)}
+                                    ownerFraction={riff.ownerFraction}
+                                    favorited={riffFavourites.has(riff.riffCID)}
+                                    onClick={(e) => handleRiffClick(e, riff.riffCID)}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault()
+                                      toggleRiffFavourite(riff.riffCID)
                                     }}
-                                  >
-                                    <RiffCircle
-                                      title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
-                                      selected={selectedRiffCID === riff.riffCID}
-                                      multiSelected={
-                                        selectedRiffCID !== riff.riffCID &&
-                                        selectedRiffCIDs.has(riff.riffCID)
-                                      }
-                                      playing={
-                                        selectedRiffCID === riff.riffCID &&
-                                        playingRiffCID === riff.riffCID
-                                      }
-                                      fullyCached={riff.cachedStemCount >= riff.stemCount}
-                                      imported={importedRiffGroupIds.has(riff.riffCID)}
-                                      ownerFraction={riff.ownerFraction}
-                                      favorited={riffFavourites.has(riff.riffCID)}
-                                      onClick={(e) => handleRiffClick(e, riff.riffCID)}
-                                      onContextMenu={(e) => {
-                                        e.preventDefault()
-                                        toggleRiffFavourite(riff.riffCID)
-                                      }}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
+                                  />
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-                      ))}
-                      {/* Loading more happens automatically on scroll (see the
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {/* Loading more happens automatically on scroll (see the
                         container's own onScroll above) — this is feedback
                         only, not a control. */}
-                      {loadingMoreRiffs && (
-                        <span
-                          style={{
-                            alignSelf: 'flex-start',
-                            fontSize: 9,
-                            color: 'var(--ra-text-3)'
-                          }}
-                        >
-                          loading…
-                        </span>
-                      )}
-                    </div>
-
-                    {resolvedRiff && (
-                      <div
+                    {loadingMoreRiffs && (
+                      <span
                         style={{
-                          display: 'flex',
-                          gap: 10,
-                          alignItems: 'center',
-                          margin: '10px 12px'
+                          alignSelf: 'flex-start',
+                          fontSize: 9,
+                          color: 'var(--ra-text-3)'
                         }}
                       >
-                        <PolarGlyph
-                          stems={resolvedRiff.stems
-                            .filter((s) => s.path !== null)
-                            .map((s) => ({
-                              slot: s.slot,
-                              author: s.creatorUserName,
-                              name: s.presetName,
-                              type:
-                                instrumentMaskToSoundType(s.instrumentMask) ??
-                                guessSoundTypeFromPresetName(s.presetName) ??
-                                'fx',
-                              path: s.path!,
-                              durationSec: s.durationSec,
-                              barLength: s.barLength
-                            }))}
-                          identityColor={typeColorVar('fx')}
-                          size={40}
-                        />
-                        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
-                          {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
-                          {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
-                          <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
-                            {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
-                          </div>
+                        loading…
+                      </span>
+                    )}
+                  </div>
+
+                  {resolvedRiff && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'center',
+                        margin: '10px 12px'
+                      }}
+                    >
+                      <PolarGlyph
+                        stems={resolvedRiff.stems
+                          .filter((s) => s.path !== null)
+                          .map((s) => ({
+                            slot: s.slot,
+                            author: s.creatorUserName,
+                            name: s.presetName,
+                            type:
+                              instrumentMaskToSoundType(s.instrumentMask) ??
+                              guessSoundTypeFromPresetName(s.presetName) ??
+                              'fx',
+                            path: s.path!,
+                            durationSec: s.durationSec,
+                            barLength: s.barLength
+                          }))}
+                        identityColor={typeColorVar('fx')}
+                        size={40}
+                      />
+                      <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
+                        {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
+                        {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                        <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
+                          {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
                         </div>
-                        {resolvedRiff.stems.some((s) => s.path === null) && (
-                          <button
-                            onClick={() => {
-                              if (!selectedRiffCID) return
-                              setBusy('downloading stems…')
-                              void ensureStemsDownloaded(selectedRiffCID, resolvedRiff).finally(
-                                () => setBusy(null)
-                              )
-                            }}
-                            disabled={downloadingRiffCID !== null}
-                            title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"
-                            style={{
-                              height: 24,
-                              borderRadius: 0,
-                              padding: '0 10px',
-                              fontSize: 10,
-                              border: '1px solid var(--ra-border)',
-                              background: 'var(--ra-bg-row-active)',
-                              color:
-                                downloadingRiffCID !== null
-                                  ? 'var(--ra-text-4)'
-                                  : 'var(--ra-text-2)'
-                            }}
-                          >
-                            {downloadingRiffCID === selectedRiffCID
-                              ? 'downloading…'
-                              : 'download missing stems'}
-                          </button>
-                        )}
+                      </div>
+                      {resolvedRiff.stems.some((s) => s.path === null) && (
                         <button
                           onClick={() => {
-                            if (selectedRiffCIDs.size > 1) {
-                              void handleImportSelected()
-                            } else {
-                              void handleImport()
-                            }
+                            if (!selectedRiffCID) return
+                            setBusy('downloading stems…')
+                            void ensureStemsDownloaded(selectedRiffCID, resolvedRiff).finally(() =>
+                              setBusy(null)
+                            )
                           }}
-                          // No longer disabled just because nothing's cached yet — Import
-                          // itself now auto-fetches missing stems first (ensureStemsDownloaded
-                          // above), so a riff with zero cached stems is still importable, just
-                          // slower. importResolvedRiff already no-ops safely (returns null) if
-                          // that fetch fails and truly nothing ends up cached.
                           disabled={downloadingRiffCID !== null}
+                          title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"
                           style={{
-                            height: 34,
+                            height: 24,
                             borderRadius: 0,
-                            padding: '0 20px',
-                            fontSize: 13,
-                            fontWeight: 700,
-                            border: '2px solid var(--ra-border-strong)',
-                            background:
-                              selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
-                                ? 'var(--ra-stretch-on-bg)'
-                                : 'var(--ra-bg-row-active)',
+                            padding: '0 10px',
+                            fontSize: 10,
+                            border: '1px solid var(--ra-border)',
+                            background: 'var(--ra-bg-row-active)',
                             color:
-                              selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
-                                ? 'var(--ra-stretch-on)'
-                                : 'var(--ra-text)'
+                              downloadingRiffCID !== null ? 'var(--ra-text-4)' : 'var(--ra-text-2)'
                           }}
                         >
-                          {selectedRiffCIDs.size > 1
-                            ? `import ${selectedRiffCIDs.size} rifffs to project`
-                            : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
-                              ? 'imported to project ✓ — import again'
-                              : 'import to project'}
+                          {downloadingRiffCID === selectedRiffCID
+                            ? 'downloading…'
+                            : 'download missing stems'}
                         </button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (selectedRiffCIDs.size > 1) {
+                            void handleImportSelected()
+                          } else {
+                            void handleImport()
+                          }
+                        }}
+                        // No longer disabled just because nothing's cached yet — Import
+                        // itself now auto-fetches missing stems first (ensureStemsDownloaded
+                        // above), so a riff with zero cached stems is still importable, just
+                        // slower. importResolvedRiff already no-ops safely (returns null) if
+                        // that fetch fails and truly nothing ends up cached.
+                        disabled={downloadingRiffCID !== null}
+                        style={{
+                          height: 34,
+                          borderRadius: 0,
+                          padding: '0 20px',
+                          fontSize: 13,
+                          fontWeight: 700,
+                          border: '2px solid var(--ra-border-strong)',
+                          background:
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on-bg)'
+                              : 'var(--ra-bg-row-active)',
+                          color:
+                            selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                              ? 'var(--ra-stretch-on)'
+                              : 'var(--ra-text)'
+                        }}
+                      >
+                        {selectedRiffCIDs.size > 1
+                          ? `import ${selectedRiffCIDs.size} rifffs to project`
+                          : selectedRiffCID !== null && importedRiffGroupIds.has(selectedRiffCID)
+                            ? 'imported to project ✓ — import again'
+                            : 'import to project'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+      {/* Rendered INSIDE the modal's own zIndex:1000 stacking context
+            (not as a sibling of it) -- ContextMenu's own zIndex is only 20,
+            which is plenty to sit above everything else in here (nothing
+            else in this modal sets an explicit z-index), but is nowhere
+            near enough to beat the modal backdrop's 1000 if rendered as a
+            sibling instead. That was a real bug: the menu opened (state
+            updated, component mounted) but rendered fully hidden behind
+            the backdrop, reading as "right-click does nothing" even
+            though the handler itself was firing correctly. */}
       {jamContextMenu && (
         <ContextMenu
           x={jamContextMenu.x}
@@ -1891,6 +1895,6 @@ export function LibraryBrowser({
           ]}
         />
       )}
-    </>
+    </div>
   )
 }
