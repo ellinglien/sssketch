@@ -923,12 +923,16 @@ export function BeatPicker({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        // Higher than LoreLibraryBrowser's own overlay (zIndex 10): after a
-        // LORE import, BeatPicker can open while that panel is still open
+        // Higher than LibraryBrowser's own overlay (zIndex 1000): after a
+        // LORE import, BeatPicker opens while that panel is still open
         // behind it (the panel deliberately stays open across imports so
         // browsing isn't interrupted) — needs to render on top to actually
-        // be usable, not just visually present underneath.
-        zIndex: 20
+        // be usable, not just mounted-but-invisible underneath. Real bug
+        // this fixed: LibraryBrowser's own zIndex grew from 10 to 1000 at
+        // some point (see its own root style) without this getting bumped
+        // to match, so the picker silently opened UNDER the library panel
+        // -- clicking import looked like nothing happened at all.
+        zIndex: 1010
       }}
     >
       <div
