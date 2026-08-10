@@ -41,14 +41,16 @@ const noBridgeBinaryPath = '/no/such/bridge/binary'
 
 describe('spawnEngine', () => {
   // Every test in this file that spawns the real engine binary gets an
-  // explicit 15s timeout, not vitest's 5000ms default -- that default
-  // exactly matches spawnEngine's own internal readiness timeout
-  // (engineProcess.ts), so any real spawn slowness under CI contention
-  // (other engine-spawning tests in this same parallel run) has zero
-  // margin before the test itself fails first. Caught for real via a
-  // release run: "stop() terminates the process" timed out here despite
-  // nothing being wrong, same class of flake as liveReschedule.test.ts/
-  // ipc-roundtrip.test.ts already fixed this same way.
+  // explicit 15s timeout, not vitest's 5000ms default -- vitest's own
+  // per-test timeout is a separate mechanism from spawnEngine's internal
+  // readiness timeout (engineProcess.ts, now 10000ms -- raised from an
+  // original 5000ms that had ~zero margin under CI contention), and both
+  // need real margin: even a legitimately-slow-but-successful cold spawn
+  // can blow past vitest's 5000ms default before spawnEngine's own promise
+  // ever settles. Caught for real via a release run: "stop() terminates
+  // the process" timed out here despite nothing being wrong, same class of
+  // flake as liveReschedule.test.ts/ipc-roundtrip.test.ts already fixed
+  // this same way.
   it('spawns the engine, waits for readiness, and returns a connected port', async () => {
     handle = await spawnEngine({
       binaryPathOverride: realBinaryPath,

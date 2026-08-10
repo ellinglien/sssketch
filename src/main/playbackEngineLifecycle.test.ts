@@ -24,7 +24,11 @@ describe('startPlaybackEngine', () => {
   // run, not hypothetical (this test's later siblings, which spawn again
   // after the process is already warm, never needed this). Matches the
   // explicit timeout the crash/respawn tests below already carry for the
-  // same class of reason.
+  // same class of reason. Also needs margin above spawnEngine's own
+  // internal readiness timeout (engineProcess.ts, 10000ms) -- that promise
+  // rejects on its own regardless of how generous this outer test timeout
+  // is, so a too-tight inner timeout still fails the test even with room
+  // to spare here (raised from 5000ms after repeated real CI failures).
   it('spawns the engine and the returned client can send load-project without throwing', async () => {
     handle = await startPlaybackEngine()
     // A minimal, valid empty project — proves the connection is live and the

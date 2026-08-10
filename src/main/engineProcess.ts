@@ -105,12 +105,24 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
     // seen so far and test the running buffer instead.
     let stderrBuffer = ''
 
+    // 10000ms, not the original 5000ms -- a cold spawn of a freshly-built
+    // binary (first launch ever, or first launch since a rebuild -- macOS
+    // Gatekeeper/AMFI evaluates it before it can run) is measurably slower
+    // than a warm one, and on a loaded/shared CI runner the old 5000ms had
+    // ~zero margin: caught for real in CI, where this rejection fired
+    // repeatedly across otherwise-unrelated tests (bakeOffset.test.ts,
+    // playbackEngineLifecycle.test.ts) that each spawn the real engine.
+    // Every test file that spawns the real engine already carries its own
+    // generous outer vitest timeout (15000-20000ms) specifically to leave
+    // margin above this constant -- keep this comfortably under the
+    // smallest of those (see engineProcess.test.ts, playbackEngineLifecycle
+    // .test.ts) if it's ever raised again.
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
       proc.kill('SIGKILL')
       reject(new Error('timed out waiting for the native engine to report readiness'))
-    }, 5000)
+    }, 10000)
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       // TEMP DIAGNOSTIC -- forward everything the engine logs to stderr,
