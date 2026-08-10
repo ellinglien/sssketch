@@ -380,6 +380,7 @@ function Timeline({
           key={channel.channelId}
           channelId={channel.channelId}
           rifffs={channel.rifffs}
+          bus={channel.bus}
           onOpenContextMenu={onOpenClipMenu}
           onDropOnChannel={handleDropOnChannel}
         />
@@ -1620,11 +1621,6 @@ function Frame(): React.JSX.Element {
               }
               rifffCount={Object.keys(state.rifffs).length}
               stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
-              mode={state.mode}
-              sketchEligible={isSketchEligible(state)}
-              onCycleMode={() =>
-                dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
-              }
               onRename={(newName) => void handleRename(newName)}
               renameError={renameError}
             />
@@ -1647,6 +1643,9 @@ function Frame(): React.JSX.Element {
           onStop={() => void handleStop()}
           onShowWelcome={showWelcomeAgain}
           onOpenEndlesss={() => setRiffLibraryOpen(true)}
+          mode={state.mode}
+          sketchEligible={isSketchEligible(state)}
+          onCycleMode={() => dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/

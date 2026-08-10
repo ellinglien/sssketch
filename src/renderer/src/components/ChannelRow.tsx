@@ -1,11 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import type { Rifff } from '@shared/types'
+import type { BusId, Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { linearWaveBars, linearWaveBarsRunningMax } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { ROW_HEIGHT } from './StemWaveformRow'
+import { busColorHex } from '../theme/typeColor'
 import {
   getStateSnapshot,
   useAppSelector,
@@ -60,11 +61,18 @@ const LIVE_CAPTURE_BUCKET_SECONDS = 0.05
 function ChannelRowImpl({
   channelId,
   rifffs,
+  bus,
   onOpenContextMenu,
   onDropOnChannel
 }: {
   channelId: string
   rifffs: Rifff[]
+  /** Only set in tidied view (see selectors.ts's tidiedChannelsInOrder) --
+   * paints a left accent border in this bus's color so a tidied project
+   * visually groups its rows the same way the Ableton export's own
+   * per-bus track coloring does. Undefined in the normal (untidied) view,
+   * where channels aren't bus-partitioned at all. */
+  bus?: BusId
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
 }): React.JSX.Element {
@@ -409,7 +417,8 @@ function ChannelRowImpl({
       onDrop={(e) => onDropOnChannel(e, channelId)}
       style={{
         position: 'relative',
-        minHeight: rifffs.length === 0 ? EMPTY_CHANNEL_MIN_HEIGHT : undefined
+        minHeight: rifffs.length === 0 ? EMPTY_CHANNEL_MIN_HEIGHT : undefined,
+        borderLeft: bus ? `3px solid ${busColorHex(bus)}` : undefined
       }}
     >
       <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 5 }}>

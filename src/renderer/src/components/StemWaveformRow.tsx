@@ -705,17 +705,21 @@ export function StemWaveformRow({
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'crosshair',
+              cursor: volumeDragMode ? 'ns-resize' : 'default',
               zIndex: 2
             }}
           />
 
-          {/* Already-committed mute regions -- a border only (the grey fill
-              itself already comes from combinedClipPath's own gray-layer
-              cutout above), in the same semantic mute-red as the "mute"
-              volume tooltip below, so a muted span reads as "audio used to
-              be here" rather than just a flat gray patch indistinguishable
-              from e.g. a quiet fade. */}
+          {/* Already-committed mute regions -- a translucent red wash plus
+              border, same treatment as the live/pending region-selection
+              div below (just mute-red instead of white) rather than relying
+              solely on combinedClipPath's gray-layer cutout underneath.
+              Per an Ableton reference screenshot: its own clip selection
+              keeps the waveform peaks fully visible and instead tints the
+              BACKGROUND behind them a distinct pale color -- this wash
+              approximates that same "recolor the backdrop, don't hide the
+              peaks" language, layered on top of (not instead of) the
+              existing gray-waveform mute treatment. */}
           {muteRegions.map((r, i) => (
             <div
               key={i}
@@ -725,6 +729,7 @@ export function StemWaveformRow({
                 bottom: 0,
                 left: r.startBar * ppb - leftPx,
                 width: (r.endBar - r.startBar) * ppb,
+                background: 'color-mix(in srgb, var(--ra-mute-on) 20%, transparent)',
                 border: '1px solid var(--ra-mute-on)',
                 zIndex: 1,
                 pointerEvents: 'none'

@@ -35,6 +35,12 @@ export interface ClipGeometry {
 export interface Channel {
   channelId: string
   rifffs: Rifff[]
+  /** Only set in tidied view (see tidiedChannelsInOrder below) -- which bus
+   * this row's clips were grouped by, for ChannelRow.tsx to tint the row
+   * with, matching the same bus colors buildAlsXml.ts already applies to
+   * the Ableton export. undefined in normal/compact/sketch view, where
+   * rows aren't bus-grouped at all. */
+  bus?: BusId
 }
 
 /** Every channel that currently has at least one placed clip on it, in
@@ -152,7 +158,7 @@ function tidiedChannelsInOrder(state: AppState): Channel[] {
       (r) => (r.startBar as number) + resolvePlayedBars(state, r.groupId)
     )
     tracks.forEach((trackRifffs, i) => {
-      channels.push({ channelId: `tidied:${bus}:${i}`, rifffs: trackRifffs })
+      channels.push({ channelId: `tidied:${bus}:${i}`, rifffs: trackRifffs, bus })
     })
   }
   return channels

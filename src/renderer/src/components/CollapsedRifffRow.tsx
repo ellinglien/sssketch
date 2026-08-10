@@ -934,16 +934,17 @@ export function CollapsedRifffRow({
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'crosshair',
+              cursor: volumeDragMode ? 'ns-resize' : 'default',
               zIndex: 2
             }}
           />
 
           {/* Already-committed mute regions (union across every stem -- see
-              this file's own muteRegions useMemo above) -- a border only, in
-              the same semantic mute-red as StemWaveformRow's identical
-              treatment, so a muted span reads as "audio used to be here"
-              rather than a flat gray patch. */}
+              this file's own muteRegions useMemo above) -- same translucent
+              red wash + border treatment as StemWaveformRow's identical
+              region (see its own doc comment re: the Ableton reference this
+              is approximating), so a muted span reads as "audio used to be
+              here" rather than a flat gray patch. */}
           {muteRegions.map((r, i) => (
             <div
               key={i}
@@ -953,6 +954,7 @@ export function CollapsedRifffRow({
                 bottom: 0,
                 left: r.startBar * PPB - leftPx,
                 width: (r.endBar - r.startBar) * PPB,
+                background: 'color-mix(in srgb, var(--ra-mute-on) 20%, transparent)',
                 border: '1px solid var(--ra-mute-on)',
                 zIndex: 1,
                 pointerEvents: 'none'
