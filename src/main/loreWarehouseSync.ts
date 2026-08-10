@@ -5,6 +5,7 @@ import {
   downloadMissingStemsFor,
   listRiffsInJam,
   resolveJamRiff,
+  deleteStemFiles,
   type FetchLike
 } from './endlesssApi'
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
@@ -15,7 +16,8 @@ import {
   writeRiffDetail,
   markStemDownloadFailed,
   areAllResolved,
-  filterUnresolved
+  filterUnresolved,
+  deleteJamRows
 } from './loreWarehouseWriter'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
@@ -82,6 +84,40 @@ export function abortSync(key: string): boolean {
   if (!controller) return false
   controller.abort()
   return true
+}
+
+export interface RemoveJamSyncResult {
+  riffsRemoved: number
+  filesDeleted: number
+}
+
+/** Un-syncs a jam entirely -- deletes its Riffs/Tags rows and the Jams row
+ * itself (via deleteJamRows), and, if `deleteFiles`, also deletes whichever
+ * of its stems' local audio files aren't still referenced by a riff in some
+ * OTHER synced jam (deleteJamRows itself works out which stems those are;
+ * see its own doc comment for why that check -- not just wiping every stem
+ * this jam happened to "own" -- is necessary). Works the same way for a
+ * shared-feed key (`shared:<username>`) as a private jam, since both are
+ * stored under the same OwnerJamCID convention. Throws if a sync is
+ * currently running for this key -- deleting rows out from under an
+ * in-flight writer would be a real race (lost writes, a jam left in a
+ * half-deleted state), not just wasted work; the caller should offer
+ * abortSync first and let that sync's own promise resolve before retrying. */
+export function removeJamSync(
+  jamCID: string,
+  deleteFiles: boolean,
+  db: Database.Database = openOwnWarehouseDb()
+): RemoveJamSyncResult {
+  if (syncsInFlight.has(jamCID)) {
+    throw new Error(`cannot remove ${jamCID}: a sync is currently running for it`)
+  }
+  const before = db
+    .prepare(`SELECT COUNT(*) as n FROM Riffs WHERE OwnerJamCID = ?`)
+    .get(jamCID) as { n: number }
+  const orphanedStemCIDs = deleteJamRows(db, jamCID)
+  const filesDeleted =
+    deleteFiles && orphanedStemCIDs.length > 0 ? deleteStemFiles(orphanedStemCIDs) : 0
+  return { riffsRemoved: before.n, filesDeleted }
 }
 
 /** Walks the account's own shared feed from the front (newest first),

@@ -318,11 +318,26 @@ const api = {
     ipcRenderer.invoke('lore-sync-start-jam', jamId, jamName),
   loreSyncStatus: (jamCID: string): Promise<{ riffCount: number; complete: boolean } | null> =>
     ipcRenderer.invoke('lore-sync-status', jamCID),
-  // `key` is the SAME value onLoreSyncProgress's own events carry (bare
-  // username for a shared-feed sync, jamId for a private jam) -- see
-  // abortSync's own doc comment in loreWarehouseSync.ts. Resolves to false,
-  // not a rejection, if nothing was running for that key.
+  // `key` must match syncsInFlight's own internal key convention in
+  // loreWarehouseSync.ts -- `shared:<username>` for a shared-feed sync
+  // (same form as Jams/Riffs' OwnerJamCID storage), or the bare jamId for
+  // a private jam. NOT the same as onLoreSyncProgress's own event `key`
+  // field, which uses bare username for shared feed -- a separate,
+  // decoupled convention chosen for the renderer's own per-jam display
+  // state (syncingKeys/syncProgressByKey), see LibraryBrowser.tsx's
+  // syncKeyFor. Resolves to false, not a rejection, if nothing was running
+  // for that key.
   loreSyncAbort: (key: string): Promise<boolean> => ipcRenderer.invoke('lore-sync-abort', key),
+  // jamCID here uses the SAME convention as loreSyncAbort's own `key`
+  // param just above (shared:<username> for shared feed, not the bare
+  // form) -- matches Jams/Riffs.OwnerJamCID storage directly. Rejects if a
+  // sync is currently running for it; the renderer's right-click menu
+  // should offer abort first in that case.
+  loreRemoveJamSync: (
+    jamCID: string,
+    deleteFiles: boolean
+  ): Promise<{ riffsRemoved: number; filesDeleted: number }> =>
+    ipcRenderer.invoke('lore-remove-jam-sync', jamCID, deleteFiles),
   onLoreSyncProgress: (
     callback: (progress: {
       source: 'shared' | 'jam'

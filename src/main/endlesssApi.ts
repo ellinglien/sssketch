@@ -440,6 +440,27 @@ function endlesssStemCachePath(stemCID: string): string {
   return join(app.getPath('userData'), 'endlesss-cache', 'stems', stemCID.slice(0, 1), stemCID)
 }
 
+/** Deletes each of `stemCIDs`' downloaded audio from this content-addressed
+ * cache -- called from loreWarehouseSync.ts's removeJamSync, ONLY with
+ * stemCIDs that deleteJamRows (loreWarehouseWriter.ts) already confirmed
+ * aren't referenced by any riff in ANY other synced jam, since this cache
+ * is keyed by stemCID alone (not partitioned per jam -- see this
+ * function's own path convention just above), so the same file can be the
+ * only copy backing playback for other jams' riffs too. Missing files are
+ * silently skipped (nothing to delete is not an error here); returns how
+ * many were actually removed. */
+export function deleteStemFiles(stemCIDs: string[]): number {
+  let deleted = 0
+  for (const stemCID of stemCIDs) {
+    const path = endlesssStemCachePath(stemCID)
+    if (existsSync(path)) {
+      unlinkSync(path)
+      deleted++
+    }
+  }
+  return deleted
+}
+
 // Matches OUROVEON's own stem-audio retry loop (endlesss::live::Stem::fetch,
 // live.stem.cpp) on a stable connection: 3 total attempts. Its own comment
 // on why: "things can take a while to propogate to the CDN; wait longer

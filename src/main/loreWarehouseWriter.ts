@@ -208,6 +208,54 @@ export function filterUnresolved(db: Database.Database, riffCIDs: string[]): str
   return riffCIDs.filter((cid) => !resolvedSet.has(cid))
 }
 
+const STEM_SLOT_COLUMNS = Array.from({ length: 8 }, (_, i) => `StemCID_${i + 1}`)
+
+/** Deletes a jam's own warehouse rows (Riffs, Tags, and the Jams row
+ * itself) and returns whichever of its stems' StemCIDs are now safe to
+ * also delete from disk -- these are Stems rows removed here too. A stem
+ * can be "born" under one jam (Stems.OwnerJamCID is whichever jam's
+ * writeRiffDetail call happened to insert its skeleton row first -- see
+ * that function's own comment) yet still be genuinely referenced by a riff
+ * in a completely different jam, since Endlesss stems are real
+ * content-addressed audio, not scoped to a single jam. Deleting by
+ * Stems.OwnerJamCID alone would silently break playback for anything else
+ * still pointing at the same audio, so this instead walks every
+ * Riffs.StemCID_1..8 slot -- the actual source of truth for "is this stem
+ * still needed by ANY jam" -- checked only after this jam's own Riffs rows
+ * are already gone, so a stem this jam happened to discover first but that
+ * a different jam's riff also references is correctly kept. Returns []
+ * (having still deleted the jam's own rows) if nothing was synced for this
+ * jamCID to begin with. */
+export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
+  const slotSelect = STEM_SLOT_COLUMNS.join(', ')
+  const riffRows = db
+    .prepare(`SELECT ${slotSelect} FROM Riffs WHERE OwnerJamCID = ?`)
+    .all(jamCID) as Record<string, string | null>[]
+  const candidateStemCIDs = new Set<string>()
+  for (const row of riffRows) {
+    for (const column of STEM_SLOT_COLUMNS) {
+      const cid = row[column]
+      if (cid) candidateStemCIDs.add(cid)
+    }
+  }
+
+  db.transaction(() => {
+    db.prepare(`DELETE FROM Riffs WHERE OwnerJamCID = ?`).run(jamCID)
+    db.prepare(`DELETE FROM Tags WHERE OwnerJamCID = ?`).run(jamCID)
+    db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(jamCID)
+  })()
+
+  if (candidateStemCIDs.size === 0) return []
+  const stillReferencedWhere = STEM_SLOT_COLUMNS.map((c) => `${c} = @cid`).join(' OR ')
+  const checkStmt = db.prepare(`SELECT 1 FROM Riffs WHERE ${stillReferencedWhere} LIMIT 1`)
+  const orphanedStemCIDs = [...candidateStemCIDs].filter((cid) => !checkStmt.get({ cid }))
+  if (orphanedStemCIDs.length > 0) {
+    const placeholders = orphanedStemCIDs.map(() => '?').join(',')
+    db.prepare(`DELETE FROM Stems WHERE StemCID IN (${placeholders})`).run(...orphanedStemCIDs)
+  }
+  return orphanedStemCIDs
+}
+
 export interface WarehouseSyncStatus {
   riffCount: number
   /** True once the walk has reached the true end of the feed/jam's history

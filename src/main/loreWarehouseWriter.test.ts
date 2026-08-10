@@ -13,7 +13,8 @@ import {
   areAllResolved,
   filterUnresolved,
   toggleWarehouseFavourite,
-  listWarehouseFavourites
+  listWarehouseFavourites,
+  deleteJamRows
 } from './loreWarehouseWriter'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
@@ -322,5 +323,42 @@ describe('loreWarehouseWriter', () => {
     toggleWarehouseFavourite(db, 'riff_2')
     toggleWarehouseFavourite(db, 'riff_2') // un-favourite
     expect(listWarehouseFavourites(db).sort()).toEqual(['riff_1'])
+  })
+
+  it('deleteJamRows deletes the jam, its riffs, its tags, and orphaned stems', () => {
+    upsertJam(db, 'jam_1', 'Jam One')
+    writeRiffDetail(db, 'jam_1', { creationTime: 100, userName: 'elling' }, resolvedRiffFixture())
+    toggleWarehouseFavourite(db, 'riff_1')
+
+    const orphaned = deleteJamRows(db, 'jam_1')
+
+    expect(orphaned).toEqual(['stem_1'])
+    expect(db.prepare('SELECT * FROM Jams WHERE JamCID = ?').get('jam_1')).toBeUndefined()
+    expect(db.prepare('SELECT * FROM Riffs WHERE RiffCID = ?').get('riff_1')).toBeUndefined()
+    expect(db.prepare('SELECT * FROM Tags WHERE RiffCID = ?').get('riff_1')).toBeUndefined()
+    expect(db.prepare('SELECT * FROM Stems WHERE StemCID = ?').get('stem_1')).toBeUndefined()
+  })
+
+  it('deleteJamRows keeps a stem still referenced by a riff in a different jam', () => {
+    upsertJam(db, 'jam_1', 'Jam One')
+    upsertJam(db, 'jam_2', 'Jam Two')
+    writeRiffDetail(db, 'jam_1', { creationTime: 100, userName: 'elling' }, resolvedRiffFixture())
+    writeRiffDetail(
+      db,
+      'jam_2',
+      { creationTime: 200, userName: 'elling' },
+      resolvedRiffFixture({ riffCID: 'riff_2' })
+    )
+
+    const orphaned = deleteJamRows(db, 'jam_1')
+
+    expect(orphaned).toEqual([])
+    expect(db.prepare('SELECT * FROM Riffs WHERE RiffCID = ?').get('riff_1')).toBeUndefined()
+    expect(db.prepare('SELECT * FROM Riffs WHERE RiffCID = ?').get('riff_2')).toBeDefined()
+    expect(db.prepare('SELECT * FROM Stems WHERE StemCID = ?').get('stem_1')).toBeDefined()
+  })
+
+  it('deleteJamRows is a safe no-op (returns []) for a jamCID with nothing synced', () => {
+    expect(deleteJamRows(db, 'never_synced')).toEqual([])
   })
 })

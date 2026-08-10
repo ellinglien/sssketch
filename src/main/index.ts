@@ -54,7 +54,8 @@ import {
 import {
   syncSharedFeed as syncSharedFeedToWarehouse,
   syncJam as syncJamToWarehouse,
-  abortSync as abortWarehouseSync
+  abortSync as abortWarehouseSync,
+  removeJamSync as removeWarehouseJamSync
 } from './loreWarehouseSync'
 import { openOwnWarehouseDb } from './loreWarehouseSchema'
 import {
@@ -274,6 +275,14 @@ app.whenReady().then(async () => {
   // comment in loreWarehouseSync.ts. Returns false, not an error, if nothing
   // was running for that key (e.g. it already finished on its own).
   ipcMain.handle('lore-sync-abort', (_event, key: string) => abortWarehouseSync(key))
+  // Renderer already confirms with the user before calling this (see
+  // LibraryBrowser.tsx's right-click "remove from sync" menu) -- this
+  // handler just does the deletion. Rejects (rather than silently no-op)
+  // if a sync is currently running for this jamCID, matching
+  // removeJamSync's own doc comment in loreWarehouseSync.ts.
+  ipcMain.handle('lore-remove-jam-sync', (_event, jamCID: string, deleteFiles: boolean) =>
+    removeWarehouseJamSync(jamCID, deleteFiles)
+  )
 
   ipcMain.handle('pick-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
