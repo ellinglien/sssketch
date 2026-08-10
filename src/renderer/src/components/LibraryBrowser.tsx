@@ -594,13 +594,25 @@ export function LibraryBrowser({
     // sync time far more than this per-riff constant does. 0.3s/riff is a
     // conservative floor assuming mostly-cached content; a jam needing lots
     // of fresh downloads will take substantially longer than this suggests.
-    if (liveJamRiffCount !== null && liveJamRiffCount > LARGE_JAM_RIFF_THRESHOLD) {
-      const estimatedMinutes = Math.max(1, Math.round((liveJamRiffCount * 0.3) / 60))
-      if (
-        !window.confirm(
-          `this jam has ~${liveJamRiffCount} riffs — syncing could take ${estimatedMinutes}+ minutes depending on how much needs downloading. continue?`
-        )
-      ) {
+    //
+    // Gates on NEW riffs since the last sync (liveJamRiffCount minus
+    // whatever's already synced), not the jam's raw total -- syncStatus is
+    // only for the currently-selected jam, which is exactly the one this
+    // button acts on. A jam with 10,000 riffs that's already fully synced
+    // and just needs 3 new ones shouldn't get the same "this could take a
+    // while" warning as a genuinely large first-time sync; only an
+    // unsynced (or never-before-seen) jam sees the warning keyed off its
+    // full size.
+    const alreadySyncedCount = syncStatus?.riffCount ?? 0
+    const newRiffCount =
+      liveJamRiffCount !== null ? Math.max(0, liveJamRiffCount - alreadySyncedCount) : null
+    if (newRiffCount !== null && newRiffCount > LARGE_JAM_RIFF_THRESHOLD) {
+      const estimatedMinutes = Math.max(1, Math.round((newRiffCount * 0.3) / 60))
+      const message =
+        alreadySyncedCount > 0
+          ? `this jam has ~${newRiffCount} new riffs since your last sync — catching up could take ${estimatedMinutes}+ minutes depending on how much needs downloading. continue?`
+          : `this jam has ~${liveJamRiffCount} riffs — syncing could take ${estimatedMinutes}+ minutes depending on how much needs downloading. continue?`
+      if (!window.confirm(message)) {
         return
       }
     }
@@ -1375,23 +1387,27 @@ export function LibraryBrowser({
                     <button
                       key={jam.jamCID}
                       onClick={() => setSelectedJamCID(jam.jamCID)}
-                      // Only offered for a jam that's actually synced -- for
-                      // one that never has been, "remove from sync" would be
-                      // a confusing no-op (deleteJamRows just finds nothing
-                      // to delete).
-                      onContextMenu={
-                        isSynced
-                          ? (e) => {
-                              e.preventDefault()
-                              setJamContextMenu({
-                                x: e.clientX,
-                                y: e.clientY,
-                                jamCID: jam.jamCID,
-                                jamName: jam.name
-                              })
-                            }
-                          : undefined
-                      }
+                      // Always attached, even for a jam this component's own
+                      // isSynced check doesn't (yet) think is synced --
+                      // syncedJams can lag reality (e.g. right after a sync
+                      // finishes elsewhere, or an inaccurate/never-populated
+                      // read on a jam that WAS actually synced in a past
+                      // session), and gating the menu on it entirely hid the
+                      // right-click affordance for real, previously-synced
+                      // jams. Choosing "remove from sync" for a jam that
+                      // truly has nothing synced is a safe, harmless no-op
+                      // (removeJamSync's own deleteJamRows just finds
+                      // nothing to delete), so there's no real downside to
+                      // always offering it.
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setJamContextMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          jamCID: jam.jamCID,
+                          jamName: jam.name
+                        })
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
