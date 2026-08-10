@@ -1387,6 +1387,23 @@ function Frame(): React.JSX.Element {
     }
   }, [dispatch])
 
+  // Shared by the TransportBar mode button and the Tab shortcut below --
+  // nextArrangerMode already silently stays on 'normal' rather than landing
+  // on a mode it can't show, but that read as broken rather than
+  // unavailable: clicking (or hitting Tab) while ineligible visibly did
+  // nothing, with the reason only discoverable by hovering the button's own
+  // title text. This surfaces that same reason as an explicit explanation
+  // at the moment the attempt is actually made.
+  function handleCycleArrangerMode(): void {
+    if (state.mode === 'normal' && !isSketchEligible(state)) {
+      window.alert(
+        'sketch mode requires a plain, back-to-back arrangement — no fades, offsets, or gaps.'
+      )
+      return
+    }
+    dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
+  }
+
   // Tab cycles the arranger mode, Ableton-style: normal -> compact -> sketch
   // -> normal, skipping sketch when isSketchEligible(state) is false (see
   // nextArrangerMode). Skipped while focus is in a text input — Tab's native
@@ -1398,10 +1415,11 @@ function Frame(): React.JSX.Element {
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
-      dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
+      handleCycleArrangerMode()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleCycleArrangerMode is a fresh closure every render (reads state directly); listing it would re-register this listener every render for no behavioral difference, since it always reads the CURRENT closure's state anyway
   }, [state, dispatch])
 
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
@@ -1645,7 +1663,7 @@ function Frame(): React.JSX.Element {
           onOpenEndlesss={() => setRiffLibraryOpen(true)}
           mode={state.mode}
           sketchEligible={isSketchEligible(state)}
-          onCycleMode={() => dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })}
+          onCycleMode={handleCycleArrangerMode}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
