@@ -34,11 +34,28 @@ nsis:
   createDesktopShortcut: always
 mac:
   category: public.app-category.music
+  # Deliberately a bare target name, NOT `{ target: dmg, arch: [...] }` --
+  # a real, confirmed bug (not a guess) was caught by tracing
+  # app-builder-lib's own computeArchToTargetNamesMap (targets/
+  # targetFactory.js) AND by observing it live in a real CI run: when a
+  # target entry's own `arch` list is explicitly set (even to both archs),
+  # THAT list wins outright, regardless of the CLI's own --arm64/--x64
+  # flag -- so a matrix leg invoked with `--x64` still built BOTH arm64
+  # AND x64 DMGs, each leg's "wrong" arch pass silently pairing a
+  # correctly-fetched Electron shell for that arch with THAT SAME LEG's
+  # own single-arch native-engine build (only ever built for the leg's
+  # intended arch), producing a broken shell/engine architecture
+  # mismatch. Confirmed directly against the installed electron-builder
+  # source: computeArchToTargetNamesMap([{target:'dmg'}], ..., '--x64')
+  # correctly resolves to ONLY x64, while the same call with an explicit
+  # `arch: ['arm64','x64']` resolves to BOTH regardless of the CLI flag.
+  # Omitting `arch` here lets each leg's own CLI flag be the only source
+  # of truth, with no zip-collision risk either (verified the same way --
+  # an arch-less bare target resolves to exactly ['dmg'] for whichever
+  # arch the CLI specifies, never falling through to the framework's
+  # ['zip','dmg'] default).
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
+    - dmg
   # arm64 is the historical/default target -- pinning this keeps the arm64
   # DMG's filename unsuffixed (sssketch-X.Y.Z.dmg, unchanged from every
   # prior release, no broken download links) while the x64 leg
