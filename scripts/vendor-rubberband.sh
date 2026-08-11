@@ -24,9 +24,13 @@
 # rubberband's library.
 set -euo pipefail
 
-RUBBERBAND_BIN="$(command -v rubberband || true)"
+# $1, if given, is an explicit path to a rubberband binary to vendor (used by
+# the x64 CI leg, which fetches and relocates an x86_64 binary that's never
+# on PATH -- see scripts/fetch-x64-rubberband.py). Falls back to PATH
+# resolution otherwise, unchanged from before.
+RUBBERBAND_BIN="${1:-$(command -v rubberband || true)}"
 if [ -z "$RUBBERBAND_BIN" ]; then
-  echo "vendor-rubberband: 'rubberband' not found on PATH -- run 'brew install rubberband' first" >&2
+  echo "vendor-rubberband: no rubberband binary given and none found on PATH -- either pass a path as \$1 (e.g. the output of scripts/fetch-x64-rubberband.py) or run 'brew install rubberband' first" >&2
   exit 1
 fi
 
