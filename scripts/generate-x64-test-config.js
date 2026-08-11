@@ -55,5 +55,13 @@ config.extraResources = original
   .filter((r) => r.from !== RUBBERBAND_FROM)
   .map((r) => (r.from === ARM64_ENGINE_FROM ? { ...r, from: X64_ENGINE_FROM } : r))
 
+// electron-builder.yml never sets mac.defaultArch, so x64 is
+// electron-builder's implicit default arch (see builder-util's
+// defaultArchFromString) -- meaning getArchSuffix() gives an --x64 build NO
+// suffix at all, landing at dist/mac/ instead of dist/mac-x64/. Pin it here
+// so this generated config's build lands where build-x64-test.sh expects.
+config.mac = config.mac || {}
+config.mac.defaultArch = 'arm64'
+
 fs.writeFileSync(OUTPUT, yaml.dump(config))
 console.log(`generate-x64-test-config: wrote ${OUTPUT}`)
