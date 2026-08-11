@@ -1,0 +1,33 @@
+# electron-builder.x64-test.yml
+#
+# LOCAL-ONLY override for scripts/build-x64-test.sh -- NOT used by the real
+# release pipeline (release.yml only ever reads electron-builder.yml).
+#
+# Restates mac.extraResources in full rather than patching one entry:
+# electron-builder's config merging does not guarantee arrays deep-merge
+# across multiple -c sources, so partial overrides here would risk silently
+# dropping or duplicating entries. See docs/superpowers/specs/
+# 2026-08-11-intel-mac-test-build-design.md for the full rationale.
+#
+# Differences from electron-builder.yml's mac.extraResources:
+#   - native-engine points at build-x64/ (the x86_64 cross-compile output)
+#     instead of the normal arm64 build/ path.
+#   - native-engine-bridge is unchanged -- it's already always x86_64
+#     regardless of host architecture (see its own CMakeLists.txt), so the
+#     same build works for both the normal arm64 app and this x64 test.
+#   - the rubberband entry is dropped entirely, not just repointed -- there
+#     is no x86_64 vendored rubberband to point it at, and bundling the
+#     wrong-arch (arm64) copy would be found by rubberband.ts's
+#     findRubberband() before it ever reaches that function's existing
+#     Homebrew-on-PATH fallback, so it would fail outright instead of
+#     falling back gracefully. Install rubberband natively on the Intel Mac
+#     itself (`brew install rubberband`) if tempo-stretch needs testing.
+#   - demo-rifff is unchanged.
+mac:
+  extraResources:
+    - from: native-engine/build-x64/sssketch_engine_artefacts/sssketch-engine.app
+      to: native-engine/sssketch-engine.app
+    - from: native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app
+      to: native-engine-bridge/sssketch-bridge.app
+    - from: resources/demo-rifff
+      to: demo-rifff
