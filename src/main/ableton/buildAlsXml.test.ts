@@ -799,7 +799,7 @@ describe('buildAlsXml', () => {
     })
   })
 
-  describe('volume export', () => {
+  describe('volume/fade export', () => {
     it("writes the stem's volume into the clip's SampleVolume", () => {
       const state = emptyAppState({
         rifffs: { 'rifff-1': drumsRifff() },
@@ -833,6 +833,145 @@ describe('buildAlsXml', () => {
       const clipBody = childArray(clip, 'AudioClip')
 
       expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('1')
+    })
+
+    it('writes Fade + FadeInLength on the (only) segment when fadeInBars is set, as a sample count at the given sample rate', () => {
+      const rifff = drumsRifff() // bpm irrelevant here -- project bpm (120, from emptyAppState) drives the conversion
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        fadeIn: { 'rifff-1': 0.5 } // 0.5 bar (2 beats) at 120bpm = 1s -- 1 bar = 4 beats,
+        // matching this field's own established semantics elsewhere (see
+        // PlaybackEngineTests.cpp's "rifff.fadeInBars = 0.5; // fadeInSec =
+        // 0.5 * 4.0 = 2.0s" at bpm=60/secPerBar=4.0, and envelope.ts's
+        // "FADE_MAX = 4 // bars") -- NOT reinterpreted for this export.
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const stemSampleRates = new Map([['rifff-1:0', 48000]])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames, stemSampleRates)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const clip = findAudioClip(audioTrack)
+      const clipBody = childArray(clip, 'AudioClip')
+
+      expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('true')
+      const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
+      expect(attrs(findChild(fadesBody, 'FadeInLength')!)['@_Value']).toBe('48000') // 1s * 48000
+      expect(attrs(findChild(fadesBody, 'FadeOutLength')!)['@_Value']).toBe('0')
+    })
+
+    it('leaves Fade/FadeInLength/FadeOutLength at template defaults when no fade or sample rate is set', () => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const clip = findAudioClip(audioTrack)
+      const clipBody = childArray(clip, 'AudioClip')
+
+      expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('false')
+      const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
+      expect(attrs(findChild(fadesBody, 'FadeInLength')!)['@_Value']).toBe('0')
+      expect(attrs(findChild(fadesBody, 'FadeOutLength')!)['@_Value']).toBe('0')
+    })
+
+    it('writes fade-in only on the FIRST audible segment and fade-out only on the LAST, when muted regions split a stem into 3 segments', () => {
+      const rifff = drumsRifff() // startBar: 8, barLength: 4, stem barLength: 4
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        playedBars: { 'rifff-1': 8 }, // clip spans [8,16) bars = beats [32,64)
+        muteRegions: {
+          'rifff-1:0': [
+            { startBar: 9, endBar: 10 }, // beats [36,40)
+            { startBar: 12, endBar: 13 } // beats [48,52)
+          ]
+        }, // 3 audible segments: [8,9) [10,12) [13,16) bars
+        fadeIn: { 'rifff-1': 1 },
+        fadeOut: { 'rifff-1': 1 }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const stemSampleRates = new Map([['rifff-1:0', 48000]])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames, stemSampleRates)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const body = childArray(audioTrack, 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      const clips = findAllChildren(childArray(events, 'Events'), 'AudioClip')
+      expect(clips).toHaveLength(3)
+
+      function fadeLengths(clip: AlsNode): { fadeOn: string; fadeIn: string; fadeOut: string } {
+        const clipBody = childArray(clip, 'AudioClip')
+        const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
+        return {
+          fadeOn: attrs(findChild(clipBody, 'Fade')!)['@_Value'],
+          fadeIn: attrs(findChild(fadesBody, 'FadeInLength')!)['@_Value'],
+          fadeOut: attrs(findChild(fadesBody, 'FadeOutLength')!)['@_Value']
+        }
+      }
+
+      const first = fadeLengths(clips[0])
+      expect(first.fadeOn).toBe('true')
+      // Raw fade would be 1 bar (4 beats) at 120bpm = 2s, but this segment
+      // ([8,9) bars = 1 bar = 2s duration) is only 2s long -- FadeGain.cpp's
+      // own buildFadePoints clamps every fade to at most HALF the audible
+      // segment's own duration (1s here), so the export must match: 1s *
+      // 48000, not the naive (unclamped) 2s * 48000.
+      expect(first.fadeIn).toBe('48000')
+      expect(first.fadeOut).toBe('0')
+
+      const middle = fadeLengths(clips[1])
+      expect(middle.fadeOn).toBe('false')
+      expect(middle.fadeIn).toBe('0')
+      expect(middle.fadeOut).toBe('0')
+
+      const last = fadeLengths(clips[2])
+      expect(last.fadeOn).toBe('true')
+      expect(last.fadeIn).toBe('0')
+      expect(last.fadeOut).toBe('96000') // 1 bar (4 beats) at 120bpm = 2s * 48000
+    })
+
+    it('clamps an oversized fadeInBars to half the audible segment duration, matching FadeGain.cpp playback', () => {
+      // A single, unmuted 1-bar segment (playedBars overridden down to 1,
+      // well under rifff.barLength(4) -- the clip's own audible span is
+      // exactly this 1 bar, no mute regions to split it further) at
+      // 120bpm = 2s duration, half = 1s. fadeInBars: 10 is deliberately
+      // absurd (20s raw) to prove the clamp actually fires, not just
+      // happens to land under it by coincidence.
+      const rifff = drumsRifff() // startBar: 8, barLength: 4
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': rifff },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        playedBars: { 'rifff-1': 1 }, // segment span = 1 bar = 2s at 120bpm
+        fadeIn: { 'rifff-1': 10 }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+      const stemSampleRates = new Map([['rifff-1:0', 44100]])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames, stemSampleRates)
+      const { tracks } = tracksOf(xml)
+      const clip = findAudioClip(findChild(tracks, 'AudioTrack')!)
+      const clipBody = childArray(clip, 'AudioClip')
+      const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
+
+      // Naive (unclamped) would be 20s * 44100 = 882000 -- must NOT be that.
+      const fadeInLength = attrs(findChild(fadesBody, 'FadeInLength')!)['@_Value']
+      expect(fadeInLength).toBe('44100') // half of the 2s segment (1s) * 44100
+      expect(fadeInLength).not.toBe('882000')
     })
   })
 

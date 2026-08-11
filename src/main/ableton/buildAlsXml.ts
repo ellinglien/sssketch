@@ -28,6 +28,58 @@ import {
 const WARP_MODE_BEATS = 0
 const WARP_MODE_COMPLEX_PRO = 5
 
+const PROJECT_BEATS_PER_BAR = 4
+
+function secPerBarFor(projectBpm: number): number {
+  return projectBpm > 0 ? (60 / projectBpm) * PROJECT_BEATS_PER_BAR : 0
+}
+
+// HYPOTHESIS, not verified against real Ableton (no Ableton available in
+// the environment this was written in) -- see docs/superpowers/specs/
+// 2026-08-11-ableton-volume-fade-export-design.md's "Real open question"
+// section. Every OTHER timing field this file writes into a clip
+// (CurrentStart/CurrentEnd/Time/WarpMarker BeatTime) is in arrangement
+// beats, but FadeInLength/FadeOutLength are assumed here to be a
+// different unit convention entirely -- an absolute sample count at the
+// STEM'S OWN SOURCE FILE sample rate, a known Ableton .als XML quirk. If
+// this turns out wrong, fix is confined to this one function.
+function fadeSecToSampleCount(fadeSec: number, sampleRate: number): number {
+  return Math.round(fadeSec * sampleRate)
+}
+
+/** Writes Fade/FadeInLength (or FadeOutLength) onto a clip, only when
+ * there's an actual fade to write (fadeBars > 0) and a sample rate is
+ * known to convert it with -- otherwise the template's own defaults
+ * (Fade=false, length=0) are left untouched, which is exactly correct: no
+ * fade. See fadeSecToSampleCount's own doc comment for the sample-count
+ * unit caveat. */
+function applyFade(
+  clipBody: AlsNode[],
+  fadeBars: number,
+  projectBpm: number,
+  sampleRate: number | undefined,
+  segmentDurationBeats: number,
+  field: 'FadeInLength' | 'FadeOutLength'
+): void {
+  if (fadeBars <= 0 || sampleRate === undefined) return
+  // Matches FadeGain.cpp's own buildFadePoints halfDuration clamp -- real
+  // playback never fades past half an audible segment's own length, so
+  // the export shouldn't claim a longer fade than the clip could ever
+  // actually contain.
+  const segmentDurationSec =
+    (segmentDurationBeats * secPerBarFor(projectBpm)) / PROJECT_BEATS_PER_BAR
+  const maxFadeSec = segmentDurationSec / 2
+  setAttr(findChild(clipBody, 'Fade')!, '@_Value', 'true')
+  const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
+  setAttr(
+    findChild(fadesBody, field)!,
+    '@_Value',
+    String(
+      fadeSecToSampleCount(Math.min(fadeBars * secPerBarFor(projectBpm), maxFadeSec), sampleRate)
+    )
+  )
+}
+
 // Ableton's own fixed palette index (0-69ish) per bus, applied to every
 // group/track/clip that bus produces -- per direct feedback ("can we color
 // code the groups and clips"). bass/lead/backing are NOT guesses: extracted
@@ -343,7 +395,10 @@ function buildStemClips(
   projectBpm: number,
   muteRegions: AppState['muteRegions'],
   colorIndex: number,
-  volume: number
+  volume: number,
+  fadeInBars: number,
+  fadeOutBars: number,
+  sampleRate: number | undefined
 ): StemClipsResult {
   const trackName = `${rifff.name} - ${stem.name}`
   const nativeBpm = nativeBpmFor(stem)
@@ -371,7 +426,7 @@ function buildStemClips(
   const absolutePath = join(outputDir, relativePath)
   const tileLengthBeats = stem.barLength * 4
 
-  const clips = audibleSegments.map((segment) => {
+  const clips = audibleSegments.map((segment, segmentIndex) => {
     const segClip = cloneNode(canonicalClipTemplate)
     renumberIds(segClip, nextId)
 
@@ -413,6 +468,21 @@ function buildStemClips(
     setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
     setColor(clipBody, colorIndex)
     setAttr(findChild(clipBody, 'SampleVolume')!, '@_Value', String(volume))
+
+    const segmentDurationBeats = segment.segEndBeats - segment.segStartBeats
+    if (segmentIndex === 0) {
+      applyFade(clipBody, fadeInBars, projectBpm, sampleRate, segmentDurationBeats, 'FadeInLength')
+    }
+    if (segmentIndex === audibleSegments.length - 1) {
+      applyFade(
+        clipBody,
+        fadeOutBars,
+        projectBpm,
+        sampleRate,
+        segmentDurationBeats,
+        'FadeOutLength'
+      )
+    }
 
     // Only write custom warp markers when the clip is actually warped -- for
     // a one-shot (isWarped=false), nativeBpm is meaningless (see
@@ -573,7 +643,8 @@ export function buildAlsXml(
   templateXml: string,
   state: AppState,
   outputDir: string,
-  stemFileNames: Map<string, string>
+  stemFileNames: Map<string, string>,
+  stemSampleRates: Map<string, number> = new Map()
 ): string {
   const doc = parseAls(templateXml)
   const ableton = findChild(doc, 'Ableton')!
@@ -647,7 +718,10 @@ export function buildAlsXml(
         state.bpm,
         state.muteRegions,
         ABLETON_BUS_COLORS[busId],
-        state.vol[key] ?? 1
+        state.vol[key] ?? 1,
+        state.fadeIn[rifff.groupId] ?? 0,
+        state.fadeOut[rifff.groupId] ?? 0,
+        stemSampleRates.get(key)
       )
       if (result.clips.length === 0) continue // fully muted -- nothing to place
 
