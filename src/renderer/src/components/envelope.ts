@@ -33,11 +33,19 @@ export function envelopeKnees(
 }
 
 /** Builds the SVG path `d` for the envelope curve itself — an OPEN path from
- * (0,height) through the fade-in ease, the flat plateau, and the fade-out
- * ease, to (width,height). Shared by buildEnvelopePath (which closes it into
- * a fillable region for the clip-path mask below) and the thin stroke line
- * drawn directly on top of the waveform, so the mask and the visible line can
- * never drift apart the way two independently-maintained curves could. */
+ * (0,height) through the fade-in ramp, the flat plateau, and the fade-out
+ * ramp, to (width,height). A straight line, not a curve: the real audio
+ * fade (native-engine/Source/FadeGain.cpp's buildFadePoints) has always
+ * been a plain linear ramp — this used to draw a cosmetic cubic-Bezier
+ * S-curve here that never matched what was actually audible. Straight also
+ * matches Ableton's own default fade curve (FadeInCurveSkew/
+ * FadeInCurveSlope both 0) once volume/fade export writes real fade values
+ * (see buildAlsXml.ts's buildStemClips) — the picture, the sound, and the
+ * exported clip now all agree.
+ * Shared by buildEnvelopePath (which closes it into a fillable region for
+ * the clip-path mask below) and the thin stroke line drawn directly on top
+ * of the waveform, so the mask and the visible line can never drift apart
+ * the way two independently-maintained curves could. */
 export function envelopeCurveD(
   width: number,
   height: number,
@@ -46,16 +54,7 @@ export function envelopeCurveD(
   plateauY: number
 ): string {
   const { fiEnd, foStart } = envelopeKnees(width, fadeInPx, fadeOutPx)
-  const c1x = fiEnd * 0.35
-  const c2x = fiEnd * 0.65
-  const c3x = foStart + (width - foStart) * 0.35
-  const c4x = foStart + (width - foStart) * 0.65
-  return (
-    `M0,${height} ` +
-    `C${c1x},${height} ${c2x},${plateauY} ${fiEnd},${plateauY} ` +
-    `L${foStart},${plateauY} ` +
-    `C${c3x},${plateauY} ${c4x},${height} ${width},${height}`
-  )
+  return `M0,${height} L${fiEnd},${plateauY} L${foStart},${plateauY} L${width},${height}`
 }
 
 /** Builds the SVG path `d` for the "below the envelope" region — the curve
