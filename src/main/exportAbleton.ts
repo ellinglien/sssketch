@@ -30,6 +30,8 @@ import {
   sketchAbletonDir,
   writeSketchMeta
 } from './projectLibrary'
+import { readWavHeaderBytes } from './importRifff'
+import { findWavChunks } from '@shared/wavChunks'
 
 // Anything outside this set is unsafe (or at least unwelcome) in a filename
 // across macOS/Windows/Linux -- matches nativeExport.ts's own
@@ -184,8 +186,27 @@ export async function buildAndWriteAlsProject(
     engineHandle?.stop()
   }
 
+  // Read each successfully-materialized stem's real sample rate from its
+  // ACTUAL destination file (not the original source) -- needed to convert
+  // fadeInBars/fadeOutBars into buildAlsXml's fade-length unit (see that
+  // function's own fadeSecToSampleCount/applyFade doc comments for the
+  // unverified hypothesis this depends on). Iterating stemFileNames here
+  // (not stemEntries) naturally skips any stem whose materialize failed
+  // above (deleted from the map already) -- no separate failure tracking
+  // needed.
+  const stemSampleRates = new Map<string, number>()
+  for (const [key, fileName] of stemFileNames) {
+    try {
+      const destPath = join(samplesDir, fileName)
+      const { sampleRate } = findWavChunks(readWavHeaderBytes(destPath))
+      if (sampleRate > 0) stemSampleRates.set(key, sampleRate)
+    } catch (err) {
+      console.error(`buildAndWriteAlsProject: failed to read sample rate for ${fileName}:`, err)
+    }
+  }
+
   const templateXml = readFileSync(templatePath, 'utf-8')
-  const alsXml = buildAlsXml(templateXml, state, outputDir, stemFileNames)
+  const alsXml = buildAlsXml(templateXml, state, outputDir, stemFileNames, stemSampleRates)
   const gzipped = gzipSync(Buffer.from(alsXml, 'utf-8'))
   writeFileSync(join(outputDir, `${projectName}.als`), gzipped)
 }
