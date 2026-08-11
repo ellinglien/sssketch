@@ -94,19 +94,20 @@ None tracked right now — [open an issue](../../issues) if you hit something.
 ## Acknowledgments
 
 None of this exists without [Endlesss](https://endlesss.fm/) — thank you to the Endlesss team
-for building something this fun to jam in and generous enough to open up an API for tools like
-this to exist around it.
+for building something this fun to jam in.
 
 sssketch also owes a real debt to [OUROVEON](https://github.com/OUROcorp/OUROVEON), an
-open-source toolkit for the Endlesss ecosystem. Its LORE module was the original way to get a
-local, browsable copy of your riffs out of Endlesss — sssketch could read that database
-(`warehouse.db3`) before it could build one of its own. When sssketch grew its own local sync,
-it wasn't designed from scratch: the schema and the sync engine (a SQLite-native task queue
-where unfetched data is just left as `NULL` columns to be filled in later, rather than tracked
-separately) are both modeled directly on OUROVEON's, and several of the trickier fixes in
-sssketch's Endlesss integration — working around malformed API responses, corrupted CDN
-endpoint strings, missing keys — were traced from OUROVEON's real source rather than
-rediscovered the hard way. sssketch can still open an existing OUROVEON/LORE-synced
+open-source toolkit for the Endlesss ecosystem. Endlesss never published an official public
+API — OUROVEON's community reverse-engineering of the backend is what made tools like this
+possible at all. Its LORE module was the original way to get a local, browsable copy of your
+riffs out of Endlesss — sssketch could read that database (`warehouse.db3`) before it could
+build one of its own. When sssketch grew its own local sync, it wasn't designed from scratch:
+the schema and the sync engine (a SQLite-native task queue where unfetched data is just left as
+`NULL` columns to be filled in later, rather than tracked separately) are both modeled directly
+on OUROVEON's, and several of the trickier fixes in sssketch's Endlesss integration — working
+around malformed API responses, corrupted CDN endpoint strings, missing keys — were traced from
+OUROVEON's real source rather than rediscovered the hard way. sssketch can still open an
+existing OUROVEON/LORE-synced
 `warehouse.db3` directly, if you already have one.
 
 ## License
