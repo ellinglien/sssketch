@@ -718,7 +718,13 @@ export function buildAlsXml(
         state.bpm,
         state.muteRegions,
         ABLETON_BUS_COLORS[busId],
-        state.vol[key] ?? 1,
+        // A fully-muted stem exports its clip at SampleVolume 0, not
+        // whatever its own volume knob was -- rather than skipping the
+        // stem entirely (as a fully-covered mute REGION does, see
+        // muteRegions below), keeping it present at 0 lets it be
+        // re-enabled with a single fader move directly in Ableton, which
+        // isn't possible for a clip that was never exported.
+        state.mute[key] ? 0 : (state.vol[key] ?? 1),
         state.fadeIn[rifff.groupId] ?? 0,
         state.fadeOut[rifff.groupId] ?? 0,
         stemSampleRates.get(key)

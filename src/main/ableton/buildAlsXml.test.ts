@@ -835,6 +835,25 @@ describe('buildAlsXml', () => {
       expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('1')
     })
 
+    it('exports a fully-muted stem with SampleVolume 0, overriding whatever volume it also has, keeping the clip present (not skipped)', () => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        vol: { 'rifff-1:0': 0.8 },
+        mute: { 'rifff-1:0': true }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const clip = findAudioClip(audioTrack)
+      const clipBody = childArray(clip, 'AudioClip')
+
+      expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('0')
+    })
+
     it('writes Fade + FadeInLength on the (only) segment when fadeInBars is set, as a sample count at the given sample rate', () => {
       const rifff = drumsRifff() // bpm irrelevant here -- project bpm (120, from emptyAppState) drives the conversion
       const state = emptyAppState({
