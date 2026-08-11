@@ -71,7 +71,8 @@ import {
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
-  deleteSketch
+  deleteSketch,
+  toggleSketchFavourite
 } from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -385,6 +386,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('delete-sketch', (_event, name: string) => deleteSketch(name))
 
   ipcMain.handle('list-library-sketches', () => listLibrarySketches())
+
+  ipcMain.handle('toggle-sketch-favourite', (_event, name: string) => toggleSketchFavourite(name))
 
   ipcMain.handle('get-library-root', () => libraryRootPath())
 

@@ -97,8 +97,10 @@ const api = {
     ipcRenderer.invoke('rename-external-sketch-file', oldPath, newName),
   deleteSketch: (name: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
     ipcRenderer.invoke('delete-sketch', name),
-  listLibrarySketches: (): Promise<{ name: string; mtimeMs: number }[]> =>
+  listLibrarySketches: (): Promise<{ name: string; mtimeMs: number; favourite: boolean }[]> =>
     ipcRenderer.invoke('list-library-sketches'),
+  toggleSketchFavourite: (name: string): Promise<boolean> =>
+    ipcRenderer.invoke('toggle-sketch-favourite', name),
   getLibraryRoot: (): Promise<string> => ipcRenderer.invoke('get-library-root'),
   setLibraryRoot: (newRoot: string): Promise<void> =>
     ipcRenderer.invoke('set-library-root', newRoot),

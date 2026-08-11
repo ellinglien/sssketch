@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 interface LibrarySketchSummary {
   name: string
   mtimeMs: number
+  favourite: boolean
 }
 
 // See PluginCatalogBrowser.tsx's own buttonStyle doc comment -- buttons in
@@ -60,6 +61,15 @@ export function ProjectLibraryBrowser({
   // it -- see the panel's own onClick below -- so an armed button can't
   // linger and get triggered by an unrelated later click.
   const [deleteArmedName, setDeleteArmedName] = useState<string | null>(null)
+
+  async function handleToggleFavourite(name: string): Promise<void> {
+    await window.rifffApi.toggleSketchFavourite(name)
+    // Re-fetches rather than flipping the flag in local state -- the list
+    // also needs to RE-SORT (favourites always at the top, see
+    // listLibrarySketches), not just re-render the one row's star, and the
+    // main process is already the source of truth for that ordering.
+    setSketches(await window.rifffApi.listLibrarySketches())
+  }
 
   async function handleDeleteClick(name: string): Promise<void> {
     if (deleteArmedName !== name) {
@@ -181,6 +191,21 @@ export function ProjectLibraryBrowser({
                 padding: '4px 0'
               }}
             >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handleToggleFavourite(sketch.name)
+                }}
+                aria-label={`${sketch.favourite ? 'unfavourite' : 'favourite'} ${sketch.name}`}
+                title={sketch.favourite ? 'unfavourite' : 'favourite'}
+                style={{
+                  ...buttonStyle(),
+                  padding: '2px 6px',
+                  color: sketch.favourite ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+                }}
+              >
+                {sketch.favourite ? '★' : '☆'}
+              </button>
               <span
                 onClick={() => {
                   onSelect(sketch.name)

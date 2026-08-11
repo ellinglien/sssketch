@@ -116,13 +116,16 @@ export function cloneOrCopy(src: string, dest: string): void {
 export interface LibrarySketchSummary {
   name: string
   mtimeMs: number
+  favourite: boolean
 }
 
 /** Scans the library root for sketch subfolders -- a folder counts only if
  * it contains a `<name>.sssketchproj` matching its own folder name, which
  * excludes `.samples-cache` (no such file inside it) and any stray empty
- * folder without needing an explicit denylist. Newest-first, by the
- * project file's own mtime. */
+ * folder without needing an explicit denylist. Favourited sketches sort
+ * first (see toggleSketchFavourite), each group newest-first by the project
+ * file's own mtime -- matches the design's "favourites always at the top"
+ * requirement rather than leaving that ordering to the browser UI. */
 export function listLibrarySketches(): LibrarySketchSummary[] {
   const root = libraryRootPath()
   if (!existsSync(root)) return []
@@ -132,9 +135,16 @@ export function listLibrarySketches(): LibrarySketchSummary[] {
     if (!entry.isDirectory()) continue
     const projectPath = join(root, entry.name, `${entry.name}.sssketchproj`)
     if (!existsSync(projectPath)) continue
-    sketches.push({ name: entry.name, mtimeMs: statSync(projectPath).mtimeMs })
+    sketches.push({
+      name: entry.name,
+      mtimeMs: statSync(projectPath).mtimeMs,
+      favourite: readSketchMeta(entry.name).favourite ?? false
+    })
   }
-  return sketches.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return sketches.sort((a, b) => {
+    if (a.favourite !== b.favourite) return a.favourite ? -1 : 1
+    return b.mtimeMs - a.mtimeMs
+  })
 }
 
 /** Computes the next unused `<root>-N` name for "duplicate as new version",
@@ -167,6 +177,10 @@ export interface SketchMeta {
   /** The exported .als file's own mtime at the moment sssketch itself last
    * wrote it -- see shouldWarnBeforeOverwrite. */
   lastExportAlsMtimeMs?: number
+  /** User-starred in the project library browser -- see toggleSketchFavourite.
+   * Absent (not false) for every sketch that's never been touched, matching
+   * every other optional field in this interface. */
+  favourite?: boolean
 }
 
 export function readSketchMeta(name: string): SketchMeta {
@@ -189,6 +203,18 @@ export function writeSketchMeta(name: string, meta: SketchMeta): void {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`writeSketchMeta: failed to write ${sketchMetaPath(name)}: ${message}`)
   }
+}
+
+/** Flips a sketch's favourite flag and persists immediately, preserving
+ * every other meta field already on disk (a read-modify-write, same
+ * pattern as pluginCatalog.ts's toggleFavourite). Returns the new state so
+ * the IPC handler can report it straight back to the renderer without a
+ * second round-trip through readSketchMeta. */
+export function toggleSketchFavourite(name: string): boolean {
+  const meta = readSketchMeta(name)
+  const next = !meta.favourite
+  writeSketchMeta(name, { ...meta, favourite: next })
+  return next
 }
 
 /** True when a routine re-export would silently overwrite an .als that's

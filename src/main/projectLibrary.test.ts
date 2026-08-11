@@ -131,6 +131,54 @@ describe('projectLibrary', () => {
       const sketches = listLibrarySketches()
       expect(sketches.map((s) => s.name).sort()).toEqual(['sketch-a', 'sketch-b'])
     })
+
+    it('marks every sketch favourite: false by default', async () => {
+      const { listLibrarySketches, libraryRootPath } = await import('./projectLibrary')
+      const root = libraryRootPath()
+      mkdirSync(join(root, 'sketch-a'), { recursive: true })
+      writeFileSync(join(root, 'sketch-a', 'sketch-a.sssketchproj'), '{}')
+
+      const sketches = listLibrarySketches()
+      expect(sketches).toEqual([expect.objectContaining({ name: 'sketch-a', favourite: false })])
+    })
+
+    it('sorts favourited sketches before non-favourited ones, each group newest-first', async () => {
+      const { listLibrarySketches, libraryRootPath, toggleSketchFavourite } =
+        await import('./projectLibrary')
+      const root = libraryRootPath()
+      // Creation order also becomes mtime order here, oldest first: a, b, c, d.
+      for (const name of ['sketch-a', 'sketch-b', 'sketch-c', 'sketch-d']) {
+        mkdirSync(join(root, name), { recursive: true })
+        writeFileSync(join(root, name, `${name}.sssketchproj`), '{}')
+      }
+      // Favourite the two OLDER sketches (a, b) -- if favourite status were
+      // ignored, they'd sort last, not first.
+      toggleSketchFavourite('sketch-a')
+      toggleSketchFavourite('sketch-b')
+
+      const sketches = listLibrarySketches()
+      expect(sketches.map((s) => s.name)).toEqual(['sketch-b', 'sketch-a', 'sketch-d', 'sketch-c'])
+      expect(sketches.map((s) => s.favourite)).toEqual([true, true, false, false])
+    })
+  })
+
+  describe('toggleSketchFavourite', () => {
+    it('flips a sketch from not-favourited to favourited and back', async () => {
+      const { toggleSketchFavourite, readSketchMeta } = await import('./projectLibrary')
+      expect(readSketchMeta('a-sketch').favourite).toBeUndefined()
+      expect(toggleSketchFavourite('a-sketch')).toBe(true)
+      expect(readSketchMeta('a-sketch').favourite).toBe(true)
+      expect(toggleSketchFavourite('a-sketch')).toBe(false)
+      expect(readSketchMeta('a-sketch').favourite).toBe(false)
+    })
+
+    it('preserves other meta fields already recorded for the sketch', async () => {
+      const { toggleSketchFavourite, writeSketchMeta, readSketchMeta } =
+        await import('./projectLibrary')
+      writeSketchMeta('a-sketch', { lastExportAlsMtimeMs: 999 })
+      toggleSketchFavourite('a-sketch')
+      expect(readSketchMeta('a-sketch')).toEqual({ lastExportAlsMtimeMs: 999, favourite: true })
+    })
   })
 
   describe('nextVersionName', () => {
