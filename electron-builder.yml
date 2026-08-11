@@ -38,6 +38,15 @@ mac:
     - target: dmg
       arch:
         - arm64
+        - x64
+  # arm64 is the historical/default target -- pinning this keeps the arm64
+  # DMG's filename unsuffixed (sssketch-X.Y.Z.dmg, unchanged from every
+  # prior release, no broken download links) while the x64 leg
+  # automatically gets sssketch-X.Y.Z-x64.dmg. Traced directly in
+  # app-builder-lib's expandArtifactNamePattern: the arch suffix is
+  # omitted specifically when the built arch matches this configured
+  # default. See docs/superpowers/specs/2026-08-11-intel-permanent-release-target-design.md.
+  defaultArch: arm64
   entitlementsInherit: build/entitlements.mac.plist
   # Paths build/afterPack.js already signs itself (with its own distinct
   # entitlements.engine.plist, not this file's entitlementsInherit -- see
@@ -62,8 +71,6 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: true
-dmg:
-  artifactName: ${name}-${version}.${ext}
 linux:
   target:
     - AppImage
