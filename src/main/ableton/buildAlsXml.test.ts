@@ -799,6 +799,43 @@ describe('buildAlsXml', () => {
     })
   })
 
+  describe('volume export', () => {
+    it("writes the stem's volume into the clip's SampleVolume", () => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' },
+        vol: { 'rifff-1:0': 0.62 }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const clip = findAudioClip(audioTrack)
+      const clipBody = childArray(clip, 'AudioClip')
+
+      expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('0.62')
+    })
+
+    it('leaves SampleVolume at the template default (1) when no volume override is set', () => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        channelOrder: ['rifff-1'],
+        channelOf: { 'rifff-1': 'rifff-1' }
+      })
+      const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames)
+      const { tracks } = tracksOf(xml)
+      const audioTrack = findChild(tracks, 'AudioTrack')!
+      const clip = findAudioClip(audioTrack)
+      const clipBody = childArray(clip, 'AudioClip')
+
+      expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('1')
+    })
+  })
+
   describe('bus clustering', () => {
     it('groups tracks by bus instead of by channel, using the bus name for the GroupTrack', () => {
       const rifffA = { ...drumsRifff(), groupId: 'rifff-a', name: 'kick-loop' }

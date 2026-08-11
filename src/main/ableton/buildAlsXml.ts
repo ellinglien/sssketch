@@ -342,7 +342,8 @@ function buildStemClips(
   playedBars: number,
   projectBpm: number,
   muteRegions: AppState['muteRegions'],
-  colorIndex: number
+  colorIndex: number,
+  volume: number
 ): StemClipsResult {
   const trackName = `${rifff.name} - ${stem.name}`
   const nativeBpm = nativeBpmFor(stem)
@@ -411,6 +412,7 @@ function buildStemClips(
 
     setAttr(findChild(clipBody, 'WarpMode')!, '@_Value', String(warpModeFor(stem)))
     setColor(clipBody, colorIndex)
+    setAttr(findChild(clipBody, 'SampleVolume')!, '@_Value', String(volume))
 
     // Only write custom warp markers when the clip is actually warped -- for
     // a one-shot (isWarped=false), nativeBpm is meaningless (see
@@ -644,7 +646,8 @@ export function buildAlsXml(
         playedBars,
         state.bpm,
         state.muteRegions,
-        ABLETON_BUS_COLORS[busId]
+        ABLETON_BUS_COLORS[busId],
+        state.vol[key] ?? 1
       )
       if (result.clips.length === 0) continue // fully muted -- nothing to place
 
