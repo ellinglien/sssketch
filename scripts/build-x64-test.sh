@@ -65,7 +65,15 @@ echo "==> [7/7] Sanity-checking the packaged app"
 echo "-- engine binary architecture:"
 file "$APP_PATH/Contents/Resources/native-engine/sssketch-engine.app/Contents/MacOS/sssketch-engine"
 echo "-- signing status (expect: unsigned / adhoc, not a real Developer ID):"
-codesign -dvvv "$APP_PATH" 2>&1 | head -5
+# codesign exits non-zero on an unsigned binary ("code object is not signed
+# at all" IS that non-zero exit's message, not a separate error) -- under
+# this script's set -euo pipefail, that would otherwise abort the script
+# right here, before the resource listing and final "Done" message ever
+# run. Confirmed for real: caught when this script's own first live run
+# silently stopped right after this line. `|| true` since a non-zero exit
+# here is the expected, desired outcome for this specific check, not a
+# real failure.
+codesign -dvvv "$APP_PATH" 2>&1 | head -5 || true
 echo "-- bundled resources (expect: native-engine, native-engine-bridge, demo-rifff -- NOT rubberband):"
 ls "$APP_PATH/Contents/Resources"
 
