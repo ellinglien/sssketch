@@ -15,6 +15,10 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +37,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: native-engine/build
-          key: native-engine-${{ runner.os }}-juce-8.0.4-${{ hashFiles('native-engine/CMakeLists.txt', 'native-engine/Source/**') }}
+          key: native-engine-${{ runner.os }}-${{ matrix.arch }}-juce-8.0.4-${{ hashFiles('native-engine/CMakeLists.txt', 'native-engine/Source/**') }}
 
+      # Each matrix leg gets its own isolated runner VM, so native-engine
+      # builds into its normal path on every leg -- no separate build
+      # directory needed the way the local x64 test build required (that
+      # ran on one machine juggling both an arm64 dev build and an x64 test
+      # build at once; CI legs never share a machine). The arm64 leg builds
+      # natively (unchanged); the x64 leg cross-compiles via
+      # CMAKE_OSX_ARCHITECTURES, already proven to produce a genuine x86_64
+      # engine binary in this session's local test build.
       - name: Build native engine
         working-directory: native-engine
         run: |
-          cmake -B build
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            cmake -B build -DCMAKE_OSX_ARCHITECTURES=x86_64
+          else
+            cmake -B build
+          fi
           cmake --build build --config Release
 
       # A separate x86_64-only build (see native-engine-bridge/CMakeLists.txt's
@@ -81,8 +97,22 @@ jobs:
       # release -- see scripts/vendor-rubberband.sh's own doc comment for
       # why this isn't committed) so tempo stretching works out of the box
       # for testers with no Homebrew install of their own.
+      #
+      # arm64: vendor the same host-installed Homebrew binary as before
+      # (brew install rubberband ran earlier in this job, for Test).
+      # x64: GitHub's arm64 runners have no Rosetta 2 (confirmed against
+      # the current actions/runner-images README), so `arch -x86_64 brew
+      # install` isn't safe here -- fetch and relocate the x86_64 bottle
+      # directly instead (see scripts/fetch-x64-rubberband.py's own doc
+      # comment for the two real gotchas that mechanism required).
       - name: Vendor rubberband
-        run: bash scripts/vendor-rubberband.sh
+        run: |
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            RUBBERBAND_BIN="$(python3 scripts/fetch-x64-rubberband.py "$RUNNER_TEMP/rubberband-x64")"
+            bash scripts/vendor-rubberband.sh "$RUBBERBAND_BIN"
+          else
+            bash scripts/vendor-rubberband.sh
+          fi
 
       # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
       # itself for ITS OWN signing pass -- but only imports the cert into a
@@ -180,7 +210,7 @@ jobs:
           [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID
           set -e
           npx electron-vite build
-          npx electron-builder --mac --publish always
+          npx electron-builder --mac --publish always ${{ matrix.arch == 'x64' && '--x64' || '--arm64' }}
 
       # The runner VM is destroyed after the job regardless, but deleting
       # the keychain (and its search-list entry) explicitly is the
