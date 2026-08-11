@@ -12,9 +12,7 @@ describe('envelopeCurveD', () => {
     const d = envelopeCurveD(width, height, fadeInPx, fadeOutPx, plateauY)
 
     const { fiEnd, foStart } = envelopeKnees(width, fadeInPx, fadeOutPx)
-    expect(d).toBe(
-      `M0,${height} L${fiEnd},${plateauY} L${foStart},${plateauY} L${width},${height}`
-    )
+    expect(d).toBe(`M0,${height} L${fiEnd},${plateauY} L${foStart},${plateauY} L${width},${height}`)
     expect(d).not.toContain('C') // no Bezier curve commands
   })
 
