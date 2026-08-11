@@ -15,6 +15,11 @@ export default defineConfig(
       '**/docs',
       '**/fixtures',
       'native-engine/build',
+      // The local-only x64 test build's own cross-compile output (see
+      // scripts/build-x64-test.sh) -- never present in CI, only on a dev
+      // machine that's run that script, but needs the same exclusion as
+      // native-engine/build above once it exists locally.
+      'native-engine/build-x64',
       'native-engine-bridge/build',
       'build',
       '.worktrees'
@@ -39,6 +44,15 @@ export default defineConfig(
     rules: {
       ...eslintPluginReactHooks.configs.recommended.rules,
       ...eslintPluginReactRefresh.configs.vite.rules
+    }
+  },
+  {
+    // A bare `node scripts/generate-x64-test-config.js` CommonJS entry
+    // point (see scripts/build-x64-test.sh) -- not part of the TS/ESM
+    // build, so require() here is correct, not a style slip.
+    files: ['scripts/generate-x64-test-config.js'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
     }
   },
   eslintConfigPrettier
