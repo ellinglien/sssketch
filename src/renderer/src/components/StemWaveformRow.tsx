@@ -326,6 +326,13 @@ export function StemWaveformRow({
   // behind. Skipped while volumeDragMode is on, which repurposes this same
   // surface for volume dragging instead (unchanged from before).
   function handleRegionMouseDown(e: React.MouseEvent): void {
+    // Right-click (button 2) is handled entirely by onContextMenu above
+    // (handleWaveformContextMenu, toggling whole-stem mute) -- left
+    // unfiltered here, a right-click's own mousedown fell through to the
+    // click-to-scrub branch below (since a right-click doesn't move the
+    // mouse, `moved` stayed false), seeking the playhead as an unwanted
+    // side effect of what should have been a mute-only action.
+    if (e.button !== 0) return
     if (volumeDragMode) {
       handleVolumeStart(e)
       return
