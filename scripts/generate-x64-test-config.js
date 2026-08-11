@@ -50,6 +50,16 @@ if (!original.some((r) => r.from === ARM64_ENGINE_FROM)) {
     `electron-builder.yml's extraResources no longer contains the expected native-engine entry (${ARM64_ENGINE_FROM}) -- update ARM64_ENGINE_FROM/X64_ENGINE_FROM in this script to match`
   )
 }
+if (!original.some((r) => r.from === RUBBERBAND_FROM)) {
+  // Without this, a future rename/refactor of the rubberband extraResources
+  // entry would make the filter below silently a no-op -- bundling the
+  // wrong-arch (arm64) rubberband back in, which findRubberband() would
+  // find and fail on before ever reaching its own PATH fallback. Fail loud
+  // here instead, matching the check above.
+  throw new Error(
+    `electron-builder.yml's extraResources no longer contains the expected rubberband entry (${RUBBERBAND_FROM}) -- update RUBBERBAND_FROM in this script to match`
+  )
+}
 
 config.extraResources = original
   .filter((r) => r.from !== RUBBERBAND_FROM)

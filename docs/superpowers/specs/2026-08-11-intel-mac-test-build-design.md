@@ -113,27 +113,43 @@ every run, never committed).
 Worth stating explicitly since it's easy to misread: `--x64` doesn't just affect what gets
 copied into the bundle. `extraResources` are copied as-is regardless of arch — electron-builder
 has no idea our custom native binaries even have an architecture. What `--x64` actually controls
-is which Electron distribution (shell/Chromium/Node runtime) gets bundled, and it triggers
-`@electron/rebuild` to rebuild native Node addons (`better-sqlite3`) against that Electron
-build's ABI/arch. So the result is a genuinely all-x86_64 app — Electron shell, native engine,
-and bridge all native Intel — not an arm64 shell running a translated x64 subprocess.
+is which Electron distribution (shell/Chromium/Node runtime) gets bundled — giving a genuinely
+all-x86_64 app (Electron shell, native engine, and bridge all native Intel, not an arm64 shell
+running a translated x64 subprocess).
+
+**Correction, found during final review:** an earlier version of this doc claimed `--x64` also
+triggers `@electron/rebuild` to recompile native Node addons (`better-sqlite3`) for the new
+arch. That's not what happens in this repo: `electron-builder.yml` sets `npmRebuild: false`
+(confirmed live in a real build's log: `skipped dependencies rebuild reason=npmRebuild is set to
+false`), so no native-module rebuild step runs at all. `better-sqlite3` instead ships prebuilt
+binaries for every platform/arch it supports (`darwin-x64.node`, `darwin-arm64.node`, etc., all
+present under `app.asar.unpacked` in the packaged app) — the correct one is picked at runtime,
+nothing is compiled at packaging time. Corrected here so a future debugging session doesn't
+chase a rebuild-toolchain failure mode that isn't actually in play.
 
 ## Known risks — the actual point of this exercise
 
-In rough order of how likely each is to be the thing that breaks:
+In rough order of how likely each was expected to be the thing that breaks:
 
 1. **Does the full JUCE-based engine cross-compile correctly to x86_64?** The bridge only proves
    the toolchain handles a minimal, audio-I/O-free build. Real-time audio, CoreAudio device
-   binding, and plugin hosting in the full engine are unverified. The script's `file` check
-   catches "cross-compile silently no-opped and produced arm64 anyway"; it cannot catch deeper
-   runtime issues that only surface on real Intel hardware.
-2. **Does `better-sqlite3` (a native C++ Node addon) cross-compile for x64 via
-   `@electron/rebuild`, invoked by electron-builder on an arm64 host?** Unverified. If this
-   fails, it fails loudly during packaging on Elling's own machine — visible immediately, not
-   discovered later on the Intel Mac.
+   binding, and plugin hosting in the full engine were unverified going in. **Resolved:** it
+   does. A real end-to-end run produced a packaged `.app` whose engine binary, bridge binary, and
+   Electron shell are all confirmed `Mach-O 64-bit executable x86_64` — the packaging-level part
+   of this risk is fully retired. Whether the engine actually *runs* correctly (real-time audio,
+   CoreAudio device I/O) is still only verifiable on real Intel hardware — that's the one thing
+   left for Elling's own walkthrough.
+2. **Does `better-sqlite3` (a native C++ Node addon) need to cross-compile for x64?** Turned out
+   to be a non-issue, not because cross-compilation succeeded but because it never happens:
+   `electron-builder.yml` sets `npmRebuild: false`, so electron-builder never attempts a rebuild
+   step at all (confirmed in a real build's log: `skipped dependencies rebuild reason=npmRebuild
+   is set to false`). `better-sqlite3` instead ships prebuilt binaries for every platform/arch it
+   supports, and the correct one is picked at runtime — see the correction under "What `--x64`
+   actually controls" above. This was originally framed as a real risk; it wasn't one.
 3. Everything else — unsigned launch via `xattr -cr`, rubberband's existing PATH fallback,
-   Electron-to-engine IPC over a local socket — is either already-proven behavior (unsigned test
-   builds already worked earlier this release, same mechanism) or architecture-agnostic.
+   Electron-to-engine IPC over a local socket — was either already-proven behavior (unsigned test
+   builds already worked earlier this release, same mechanism) or architecture-agnostic, and
+   nothing here surfaced any issue during the real run.
 
 ## Validating success
 

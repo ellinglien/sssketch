@@ -58,12 +58,24 @@ echo "==> [5/7] Generating the x64-test electron-builder config"
 node scripts/generate-x64-test-config.js
 
 echo "==> [6/7] Packaging unsigned x64 .app"
+# Unset (not just CSC_IDENTITY_AUTO_DISCOVERY=false) so a CSC_NAME exported
+# in the caller's own shell for unrelated reasons can't sneak in -- afterPack.js
+# gates its own nested-bundle signing purely on CSC_NAME being set,
+# independent of CSC_IDENTITY_AUTO_DISCOVERY, so leaving a stray CSC_NAME set
+# would produce a confusing half-signed app (signed inner bundles, unsigned
+# outer shell) instead of the fully-unsigned build this script promises.
+unset CSC_NAME || true
 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --x64 --dir -c electron-builder.x64-test.generated.yml
 
 APP_PATH="dist/mac-x64/sssketch.app"
+PACKAGED_ENGINE_BIN="$APP_PATH/Contents/Resources/native-engine/sssketch-engine.app/Contents/MacOS/sssketch-engine"
 echo "==> [7/7] Sanity-checking the packaged app"
 echo "-- engine binary architecture:"
-file "$APP_PATH/Contents/Resources/native-engine/sssketch-engine.app/Contents/MacOS/sssketch-engine"
+file "$PACKAGED_ENGINE_BIN"
+if ! file "$PACKAGED_ENGINE_BIN" | grep -q x86_64; then
+  echo "ERROR: $PACKAGED_ENGINE_BIN is not x86_64 -- the packaged app doesn't actually contain the x64 build (check electron-builder.x64-test.generated.yml's extraResources)" >&2
+  exit 1
+fi
 echo "-- signing status (expect: unsigned / adhoc, not a real Developer ID):"
 # codesign exits non-zero on an unsigned binary ("code object is not signed
 # at all" IS that non-zero exit's message, not a separate error) -- under
