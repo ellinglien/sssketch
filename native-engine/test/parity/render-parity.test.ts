@@ -154,7 +154,24 @@ describe('native engine vs Web Audio export — render parity', () => {
     dir = mkdtempSync(join(tmpdir(), 'sssketch-parity-'))
     tonePath = join(dir, 'tone.wav')
     writeToneWav(tonePath, 4.0) // 4 seconds — exactly 1 bar at 60bpm
-  })
+
+    // Warm up ENGINE_BINARY before any individually-timed test below touches
+    // it. On the release CI matrix's x64 leg, this is a freshly cross-
+    // compiled x86_64 Mach-O executing on an arm64 runner -- observed for
+    // real on a live CI run: the FIRST test in this file to call
+    // execFileSync(ENGINE_BINARY, ...) timed out at vitest's default 5000ms,
+    // while every later invocation of that exact same binary in the same
+    // run completed in well under a second, meaning the cost is a one-time,
+    // first-execution thing (most likely the first-launch Rosetta
+    // translate-and-cache step for a binary that's never been run on this
+    // VM before), not a per-call cost. Paying it once here, inside
+    // beforeAll's own generous hook timeout, keeps every real test below at
+    // its normal fast timeout. Args are deliberately short (argc doesn't
+    // reach --render-test's own argc>4 dispatch check in Main.cpp) so this
+    // exits immediately after JUCE's init -- no real render happens, and
+    // none is needed; only the exec itself matters.
+    execFileSync(ENGINE_BINARY, ['--render-test'])
+  }, 30000)
 
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true })
