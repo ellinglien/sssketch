@@ -65,16 +65,25 @@ rubberband `extraResources` entry entirely for this build. If Elling wants tempo
 during testing, `brew install rubberband` directly on the Intel Mac — a completely native x86_64
 Homebrew install there, zero cross-compilation involved.
 
-### Packaging: local config override, not a change to electron-builder.yml
+### Packaging: a dynamically generated config override, not a static file
 
 `electron-builder.yml`'s `extraResources` hardcodes `native-engine/build/...` (the arm64 path).
-Rather than edit that file (it's the real release config), a new local-only override file,
-`electron-builder.x64-test.yml`, is passed via electron-builder's `-c` flag. It fully restates
-`mac.extraResources` (not a partial patch — array-valued config keys in electron-builder are not
-guaranteed to deep-merge across multiple `-c` files, so this file lists all resource entries
-explicitly rather than relying on merge semantics): the native-engine entry points at
-`native-engine/build-x64/...` instead of the arm64 path; the native-engine-bridge and
-`demo-rifff` entries are carried over unchanged; the rubberband entry is dropped per above.
+The initial design called for a small static override file passed via electron-builder's `-c`
+flag containing just the changed `extraResources` entries — **this was wrong and was corrected
+during implementation** after tracing electron-builder's actual config-loading code
+(`app-builder-lib/out/packager.js` and `util/config/load.js`): when `-c` is given a file path,
+electron-builder reads *only* that file as the entire config. It does **not** merge it with the
+auto-detected `electron-builder.yml` at all — a small override containing just `extraResources`
+would silently produce a config missing `appId`, `directories`, `afterPack`, `mac.category`, and
+everything else the real config defines.
+
+The corrected approach: `scripts/generate-x64-test-config.js` reads the real
+`electron-builder.yml` at build time, parses it, and produces a **complete** config — everything
+unchanged except `extraResources`, where the native-engine entry is repointed at
+`native-engine/build-x64/...` and the rubberband entry is dropped (derived from the real
+config's existing entries via filter/map, not hand-retyped, so it can't silently drift out of
+sync if `electron-builder.yml` changes later) — written to a gitignored temp file
+(`electron-builder.x64-test.generated.yml`) that the build script passes via `-c`.
 
 ### Orchestration script
 
@@ -88,13 +97,16 @@ producing something broken that only fails later on the Intel Mac:
 3. Build `native-engine-bridge` if its output doesn't already exist (normal one-time step, no
    changes to how it's built).
 4. `npx electron-vite build` (renderer/main bundle — plain JS/TS, arch-agnostic, no change).
-5. `CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --x64 --dir -c
-   electron-builder.x64-test.yml`.
-6. Sanity-check the packaged `.app`: confirm the bundled engine binary is x86_64, confirm the
+5. `node scripts/generate-x64-test-config.js` to produce the temp config (see above).
+6. `CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --x64 --dir -c
+   electron-builder.x64-test.generated.yml`.
+7. Sanity-check the packaged `.app`: confirm the bundled engine binary is x86_64, confirm the
    app is unsigned (`codesign -dvvv`), list `Contents/Resources` to confirm rubberband was *not*
    included and the other three resources were.
 
-`native-engine/.gitignore` gains `build-x64/` (currently only ignores `build/`).
+`native-engine/.gitignore` gains `build-x64/` (currently only ignores `build/`); the root
+`.gitignore` gains `electron-builder.x64-test.generated.yml` (a build artifact, regenerated
+every run, never committed).
 
 ### What `--x64` actually controls
 
