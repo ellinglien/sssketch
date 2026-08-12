@@ -1,12 +1,12 @@
 # sssketch
 
-sssketch turns [Endlesss](https://endlesss.fm/) stem exports ("rifffs") into a real arrangement:
-drop them onto a timeline, trim and offset them against each other, group similar-sounding
-stems together automatically, and export the whole thing as an Ableton Live project you can
-keep mixing in a proper DAW.
+sssketch turns [Endlesss](https://endlesss.fm/) stem exports ("rifffs") into a real arrangement.
+Import stems, place them on a timeline, trim and offset them against each other, group
+similar-sounding stems onto shared buses automatically, and export the result as an Ableton
+Live project for further mixing in a proper DAW.
 
-It's a desktop app for macOS (Apple Silicon), built on Electron with a real-time audio engine
-running underneath for playback and plugin hosting.
+sssketch is a desktop app for macOS (Apple Silicon), built on Electron, with a real-time native
+audio engine running underneath for playback and plugin hosting.
 
 **Status:** early beta. Expect rough edges — see [Known issues](#known-issues) below.
 
@@ -15,44 +15,35 @@ running underneath for playback and plugin hosting.
 Two ways to bring stems into a project:
 
 - **Drag and drop** — any rifff export folder (or its loose stem files) onto the shelf.
-- **Log into Endlesss** — click "import" in the shelf, sign in with your Endlesss account, and
-  browse your shared feed or private jams directly. No separate export step needed.
+- **Log into Endlesss** — click "import" in the shelf and sign in with your Endlesss account to
+  browse your shared feed or private jams directly, no separate export step required.
 
 ## The basics
 
 - **rifff** — a single Endlesss jam moment: up to 8 stems (drum, bass, mic, etc.) that were
   playing together.
-- **tidy up** — automatically groups similar-sounding stems onto shared buses (by real audio
-  analysis, not just instrument labels), so an arrangement doesn't turn into 30 overlapping
+- **tidy up** — groups similar-sounding stems onto shared buses, using real audio analysis
+  rather than instrument labels, so an arrangement doesn't turn into dozens of overlapping
   tracks.
-- **sketch mode** — a simplified, linear view of the arrangement for quickly laying out a rough
-  structure before switching back to the full timeline ("arranger" mode) to fine-tune it.
-- **Ableton export** — writes a real `.als` project file, with your bus groupings mapped onto
-  Ableton tracks and colors. Requires Ableton Live 12 or later — the exported project file's
-  format isn't backward-compatible with older versions.
+- **sketch mode** — a simplified, linear view of the arrangement for laying out a rough
+  structure quickly, before switching to the full timeline ("arranger" mode) to fine-tune it.
+- **Ableton export** — writes a real `.als` project file, with bus groupings mapped onto
+  Ableton tracks and colors. Requires Ableton Live 12 or later; the exported file's format
+  isn't backward-compatible with older versions.
 
 ## Installing
 
 **[Download sssketch 1.1.5 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.1.5/sssketch-1.1.5.dmg)**
 — or see the [Releases](../../releases) page for other versions.
 
-Drag `sssketch.app` from the `.dmg` into Applications to install.
+Drag `sssketch.app` from the `.dmg` into Applications to install. The app is signed and
+notarized under a real Apple Developer ID, so macOS Gatekeeper opens it normally with no
+extra steps.
 
-No signed release build yet, so macOS Gatekeeper will refuse to open it — on current macOS this
-usually shows up as **"sssketch" is damaged and can't be opened**, not the older, friendlier
-"unidentified developer" prompt, and right-clicking → Open doesn't fix it. The app isn't actually
-damaged; it just isn't notarized. Clear the quarantine flag from Terminal instead:
-
-```bash
-xattr -cr /Applications/sssketch.app
-```
-
-Then open it normally. You only need to do this once per install.
-
-**Uninstalling:** drag `sssketch.app` to the Trash — nothing else is installed system-wide. Your
-saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and aren't
-touched; delete that folder too if
-you want them gone. App preferences/caches live in `~/Library/Application Support/sssketch`.
+**Uninstalling:** drag `sssketch.app` to the Trash — nothing else is installed system-wide.
+Your saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and
+aren't touched; delete that folder too if you want them gone. App preferences and caches live
+in `~/Library/Application Support/sssketch`.
 
 ## Running from source
 
@@ -63,7 +54,7 @@ npm install
 npm run dev
 ```
 
-The audio engine is a separate native build (JUCE/C++), not part of `npm run dev`:
+The audio engine is a separate native build (JUCE/C++) and isn't part of `npm run dev`:
 
 ```bash
 cd native-engine
@@ -71,12 +62,12 @@ cmake -B build
 cmake --build build
 ```
 
-sssketch needs the engine built at least once before it'll play any audio; after that,
-`npm run dev` alone is enough for day-to-day work on the Electron/React side. If you change
-anything under `native-engine/`, rebuild it and fully quit and relaunch the app — a renderer
-reload alone won't pick up the new engine binary.
+sssketch needs the engine built at least once before it can play any audio. After that,
+`npm run dev` alone is enough for day-to-day work on the Electron/React side. The engine
+doesn't hot-reload — after changing anything under `native-engine/`, rebuild it, then fully
+quit and relaunch the app; a renderer reload alone won't pick up the new engine binary.
 
-Tempo stretching needs the `rubberband` CLI (`brew install rubberband`) in dev mode — packaged
+Tempo stretching needs the `rubberband` CLI (`brew install rubberband`) in dev mode. Packaged
 release builds bundle it, so end users don't need this.
 
 ### Other useful commands
@@ -107,8 +98,7 @@ the schema and the sync engine (a SQLite-native task queue where unfetched data 
 on OUROVEON's, and several of the trickier fixes in sssketch's Endlesss integration — working
 around malformed API responses, corrupted CDN endpoint strings, missing keys — were traced from
 OUROVEON's real source rather than rediscovered the hard way. sssketch can still open an
-existing OUROVEON/LORE-synced
-`warehouse.db3` directly, if you already have one.
+existing OUROVEON/LORE-synced `warehouse.db3` directly, if you already have one.
 
 ## License
 
