@@ -33,8 +33,13 @@ Two ways to bring stems into a project:
 
 ## Installing
 
-**[Download sssketch 1.1.5 for macOS (Apple Silicon)](https://github.com/ellinglien/sssketch/releases/download/v1.1.5/sssketch-1.1.5.dmg)**
-— or see the [Releases](../../releases) page for other versions.
+Download the `.dmg` for your Mac:
+
+- **[Apple Silicon (M1/M2/M3/M4)](https://github.com/ellinglien/sssketch/releases/download/v1.1.9/sssketch-1.1.9.dmg)**
+- **[Intel](https://github.com/ellinglien/sssketch/releases/download/v1.1.9/sssketch-1.1.9-x64.dmg)**
+
+Not sure which you have? Apple menu → About This Mac — it lists the chip. See the
+[Releases](../../releases) page for other versions.
 
 Drag `sssketch.app` from the `.dmg` into Applications to install. The app is signed and
 notarized under a real Apple Developer ID, so macOS Gatekeeper opens it normally with no
