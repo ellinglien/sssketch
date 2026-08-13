@@ -247,6 +247,18 @@ export function useGatedRecordingControls(): {
 
   async function disableGatedRecording(): Promise<void> {
     await confirmLockInIfRecording()
+    await stopGatedRecordingNative()
+  }
+
+  // The actual "turn recording mode off" side effects (native IPC + the
+  // three reducer dispatches that clear its state) -- factored out so
+  // lockInGatedRecording below can call it directly after a successful
+  // commit, matching disableGatedRecording's own effect exactly. Does NOT
+  // itself call confirmLockInIfRecording/lockInGatedRecording -- every
+  // caller either just finished committing (lockInGatedRecording) or has
+  // already handled that separately (disableGatedRecording,
+  // targetRifffForRecording).
+  async function stopGatedRecordingNative(): Promise<void> {
     await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0, '')
     dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: false })
     dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: null })
@@ -367,13 +379,26 @@ export function useGatedRecordingControls(): {
           startBar: compensatedStartBar,
           channelId: targetChannelId
         })
-        // Rotates the pin to a BRAND NEW empty channel for whatever the
-        // NEXT lock-in (or the live overlay, meanwhile) should target --
+        // Rotates the pin to a BRAND NEW empty channel before stopping --
         // the channel just used above now has a take on it, so it's no
-        // longer a valid destination.
+        // longer a valid destination, and this pre-provisioned empty one is
+        // what the NEXT enableGatedRecording() call will find and reuse
+        // (see its own "reuse an existing EMPTY recording channel" search)
+        // rather than minting yet another.
         const nextChannelId = crypto.randomUUID()
         dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: nextChannelId })
         dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: nextChannelId })
+        // Stops listening once a take actually lands -- per direct
+        // feedback, staying "always listening" after a successful \
+        // lock-in felt like being on a runaway train rather than a
+        // deliberate one-take-per-press action. Recording mode resumes
+        // with an explicit \ press again, same as a fresh
+        // enableGatedRecording. Deliberately NOT applied to the
+        // targeted-rifff path above (double-click a rifff, then \) --
+        // that flow's own "stays pinned, keep piling on more stems" design
+        // is a distinct, intentional accumulation feature, not the plain
+        // recording flow this feedback was about.
+        await stopGatedRecordingNative()
       }
     } else if (result.error) {
       window.alert(`Couldn't lock in recording: ${result.error}`)
@@ -407,8 +432,13 @@ export function useGatedRecordingControls(): {
     }
     if (state.gatedRecordingEnabled) {
       await confirmLockInIfRecording()
-      await window.rifffApi.engineSetGatedRecordingEnabled(false, 0, 0, '')
-      dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: false })
+      // confirmLockInIfRecording may have already fully stopped recording
+      // via lockInGatedRecording's own stop-after-lock-in below -- calling
+      // stopGatedRecordingNative again here is a harmless no-op in that
+      // case (the native side is idempotent, and the reducer dispatches
+      // just re-set already-cleared fields), simpler than tracking whether
+      // that already happened.
+      await stopGatedRecordingNative()
     }
     dispatch({ type: 'SET_LOOP_REGION', region })
     dispatch({ type: 'SET_GATED_RECORDING_CHANNEL', channelId: null })
