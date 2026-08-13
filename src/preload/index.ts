@@ -3,6 +3,7 @@ import type { Rifff, Stem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
 import type { PluginCatalog } from '../main/pluginCatalog'
+import type { BusCentroidStore } from '@shared/busCentroids'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -151,6 +152,9 @@ const api = {
     deviceName: string
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-output-device', deviceName),
+  getBusCentroids: (): Promise<BusCentroidStore> => ipcRenderer.invoke('get-bus-centroids'),
+  saveBusCentroids: (store: BusCentroidStore): Promise<void> =>
+    ipcRenderer.invoke('save-bus-centroids', store),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineSetBufferSize: (bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-buffer-size', bufferSize),

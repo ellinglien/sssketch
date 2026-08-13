@@ -8,10 +8,15 @@ import {
   computeMergeSequence,
   cutAtKWithIds,
   splitNode,
-  type CutNode,
-  type MergeStep
+  type CutNode
 } from '@shared/agglomerativeCluster'
-import { clusterProvenance } from '@shared/busProvenance'
+import { clusterProvenance, type BusProvenance } from '@shared/busProvenance'
+import {
+  emptyBusCentroidStore,
+  recordConfirmedStem,
+  suggestBus,
+  type BusCentroidStore
+} from '@shared/busCentroids'
 import { markManualSeek } from '../state/manualSeek'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
@@ -82,15 +87,22 @@ interface ClusterGroup {
 // indistinguishable from "this bus is assigned" (see 2026-08-05 screenshot
 // report: a plain keyboard-focused, UNassigned "aux" button looked "selected"
 // purely from the native focus outline).
-function buttonStyle(active?: boolean): React.CSSProperties {
+// state 'confirmed' matches the original boolean `active` meaning exactly
+// (this row's own busOf already agrees). 'suggested' is new -- a lighter,
+// dashed-border hint for a bus the centroid classifier proposed but the
+// user hasn't clicked yet, distinguishable from both "confirmed" and "just
+// one of the other four options."
+function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
+  const confirmed = state === 'confirmed'
+  const suggested = state === 'suggested'
   return {
     fontFamily: 'inherit',
     fontSize: 9,
     padding: '3px 8px',
-    background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
-    border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-    color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-    fontWeight: active ? 700 : 400,
+    background: confirmed ? 'var(--ra-stretch-on-bg)' : 'transparent',
+    border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+    color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',
+    fontWeight: confirmed ? 700 : 400,
     cursor: 'pointer',
     outline: 'none'
   }
@@ -117,6 +129,18 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // playing it normally.
   const mute = useAppSelector((s) => s.mute)
   const [muteSnapshot] = useState(() => mute)
+  const busOf = useAppSelector((s) => s.busOf)
+
+  // Global, cross-project classifier state (see busCentroids.ts) -- loaded
+  // once on mount. Starts empty (every suggestBus() call returns null,
+  // i.e. no suggestions at all) until enough real confirmations have
+  // trained it, which is the correct cold-start behavior: this modal falls
+  // straight back to its original all-DSP-clustering flow rather than ever
+  // blocking on the fetch.
+  const [centroidStore, setCentroidStore] = useState<BusCentroidStore>(emptyBusCentroidStore)
+  useEffect(() => {
+    void window.rifffApi.getBusCentroids().then(setCentroidStore)
+  }, [])
 
   function handleClose(): void {
     dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
@@ -176,15 +200,22 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   const [computed, setComputed] = useState<{
     forStems: ClusterableStem[]
     // The subset of `forStems` that successfully extracted features --
-    // everything downstream (rawVectors, mergeSequence, and clusters built
-    // via cutAtK below) is indexed against THIS array, not `forStems`
-    // itself, so a stem dropped for a failed extraction can't desync the
-    // index mapping. `forStems` is kept only as the staleness key against
-    // the outer `stems` memo (see `loading` below) -- it must stay the
-    // exact reference the effect was launched with, not the filtered
-    // subset, or a `stems` identity change would never be detected.
+    // everything downstream (rawVectorsByKey, suggestions, mergeSequence,
+    // and clusters built via cutAtK below) is indexed against THIS array,
+    // not `forStems` itself, so a stem dropped for a failed extraction
+    // can't desync the index mapping. `forStems` is kept only as the
+    // staleness key against the outer `stems` memo (see `loading` below)
+    // -- it must stay the exact reference the effect was launched with,
+    // not the filtered subset, or a `stems` identity change would never be
+    // detected.
     analyzedStems: ClusterableStem[]
-    mergeSequence: MergeStep[]
+    // RAW (unstandardized) feature vectors, keyed by stem -- kept
+    // separately from the DSP-clustering population's own standardized
+    // vectors below, since these are also what assignCluster feeds
+    // recordConfirmedStem to train the (raw-space) centroid store. See
+    // busCentroids.ts's own doc comment for why centroids are trained in
+    // raw space rather than this-run-standardized space.
+    rawVectorsByKey: Map<string, number[]>
   } | null>(null)
   const loading = computed === null || computed.forStems !== stems
   const [clusterCount, setClusterCount] = useState(DEFAULT_CLUSTER_COUNT)
@@ -209,11 +240,11 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
       )
       if (cancelled) return
       const analyzedStems: ClusterableStem[] = []
-      const rawVectors: number[][] = []
+      const rawVectorsByKey = new Map<string, number[]>()
       results.forEach((result, i) => {
         if (result.status === 'fulfilled') {
           analyzedStems.push(stems[i])
-          rawVectors.push(result.value)
+          rawVectorsByKey.set(stems[i].key, result.value)
         } else {
           console.error(
             'ClusterStemsBrowser: feature extraction failed for stem',
@@ -222,26 +253,64 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
           )
         }
       })
-      const standardized = standardizeFeatures(rawVectors)
-      setComputed({
-        forStems: stems,
-        analyzedStems,
-        mergeSequence: computeMergeSequence(standardized)
-      })
+      setComputed({ forStems: stems, analyzedStems, rawVectorsByKey })
     })().catch((err) => {
       if (!cancelled) {
-        console.error('ClusterStemsBrowser: feature extraction/clustering failed', err)
-        // Empty merge sequence still resolves `loading` to false (see the
-        // derivation above) -- cutAtK on an empty merge list just leaves
-        // every stem as its own singleton cluster, a reasonable fallback
-        // rather than leaving the modal stuck on "analyzing..." forever.
-        setComputed({ forStems: stems, analyzedStems: [], mergeSequence: [] })
+        console.error('ClusterStemsBrowser: feature extraction failed', err)
+        setComputed({ forStems: stems, analyzedStems: [], rawVectorsByKey: new Map() })
       }
     })
     return () => {
       cancelled = true
     }
   }, [stems])
+
+  // Splits the analyzed population in two: stems the centroid classifier
+  // confidently auto-slots (excluded from DSP clustering entirely, shown
+  // instead as their own "suggested" rows below) vs. everything else
+  // (already busOf-assigned, or no confident suggestion) which goes
+  // through the original DSP clustering exactly as before. Recomputed
+  // whenever busOf changes (accepting a suggestion or a DSP row removes
+  // that stem from `stems` -- wait, no, it stays placed; busOf just gains
+  // an entry, which flips that stem into the "already assigned" bucket on
+  // the next pass) or centroidStore changes (freshly loaded, or just
+  // trained by an assign). mergeSequence -- the expensive O(n^3) part --
+  // only ever re-runs when the actual DSP population changes, not on every
+  // keystroke elsewhere in the modal.
+  const partitioned = useMemo(() => {
+    if (!computed || computed.forStems !== stems) return null
+    const { analyzedStems, rawVectorsByKey } = computed
+    const suggestions = new Map<BusId, ClusterableStem[]>()
+    const dspStems: ClusterableStem[] = []
+    for (const stem of analyzedStems) {
+      if (busOf[stem.key] !== undefined) {
+        dspStems.push(stem)
+        continue
+      }
+      const raw = rawVectorsByKey.get(stem.key)
+      const suggestedBus = raw ? suggestBus(centroidStore, raw) : null
+      if (suggestedBus) {
+        const list = suggestions.get(suggestedBus) ?? []
+        list.push(stem)
+        suggestions.set(suggestedBus, list)
+      } else {
+        dspStems.push(stem)
+      }
+    }
+    const dspVectors = dspStems.map((s) => rawVectorsByKey.get(s.key)!)
+    return {
+      suggestions,
+      dspStems,
+      mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
+    }
+  }, [computed, stems, busOf, centroidStore])
+
+  const suggestedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
+    if (!partitioned) return []
+    return BUS_IDS.filter((busId) => (partitioned.suggestions.get(busId)?.length ?? 0) > 0).map(
+      (busId) => ({ busId, members: partitioned.suggestions.get(busId)! })
+    )
+  }, [partitioned])
 
   // Node ids the user has manually split further via a row's own "split"
   // button, layered on TOP of the slider's global cut (see clusters below)
@@ -253,12 +322,12 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   const [splitNodeIds, setSplitNodeIds] = useState<Set<number>>(() => new Set())
 
   const clusters = useMemo<ClusterGroup[]>(() => {
-    if (!computed || computed.forStems !== stems) return []
-    const { analyzedStems, mergeSequence } = computed
+    if (!partitioned) return []
+    const { dspStems, mergeSequence } = partitioned
     const baseCut = cutAtKWithIds(
       mergeSequence,
-      analyzedStems.length,
-      Math.min(clusterCount, analyzedStems.length)
+      dspStems.length,
+      Math.min(clusterCount, dspStems.length)
     )
 
     // Expand any node flagged for a manual split -- repeatedly, since a
@@ -271,7 +340,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
       const next: CutNode[] = []
       for (const node of nodes) {
         const children = splitNodeIds.has(node.id)
-          ? splitNode(mergeSequence, analyzedStems.length, node.id)
+          ? splitNode(mergeSequence, dspStems.length, node.id)
           : null
         if (children) {
           next.push(children[0], children[1])
@@ -284,9 +353,9 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     }
 
     return nodes
-      .map((node) => ({ id: node.id, members: node.members.map((i) => analyzedStems[i]) }))
+      .map((node) => ({ id: node.id, members: node.members.map((i) => dspStems[i]) }))
       .sort((a, b) => b.members.length - a.members.length)
-  }, [computed, stems, clusterCount, splitNodeIds])
+  }, [partitioned, clusterCount, splitNodeIds])
 
   // Stored focus index can point past the end once the row list shrinks
   // (slider moved to a lower cluster count) -- clamped inline at every read
@@ -363,6 +432,28 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     startPreview(new Set([stem.key]), stem.groupId, targetBar)
   }
 
+  // Folds every member's own raw feature vector into the centroid store
+  // and persists the result -- called from EVERY real confirm (both a
+  // suggestion accept and an ordinary DSP-cluster assign), so the
+  // classifier keeps learning from all real tidy-up activity, not just
+  // from the suggestion flow specifically. A no-op if `computed` hasn't
+  // resolved yet (shouldn't happen -- assignCluster is only reachable once
+  // rows are already showing, which implies feature extraction finished)
+  // or if every member is going to 'aux' (recordConfirmedStem's own no-op,
+  // see busCentroids.ts).
+  function trainCentroids(members: ClusterableStem[], busId: BusId): void {
+    if (!computed) return
+    let nextStore = centroidStore
+    for (const m of members) {
+      const raw = computed.rawVectorsByKey.get(m.key)
+      if (raw) nextStore = recordConfirmedStem(nextStore, busId, raw)
+    }
+    if (nextStore !== centroidStore) {
+      setCentroidStore(nextStore)
+      void window.rifffApi.saveBusCentroids(nextStore)
+    }
+  }
+
   // Assigning a bus no longer auto-advances/plays the next row -- that
   // read as the UI making a decision FOR you mid-listen. Instead a brief
   // celebratory pulse on the just-assigned row acknowledges the action
@@ -375,9 +466,43 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
 
   function assignCluster(rowIndex: number, members: ClusterableStem[], busId: BusId): void {
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
+    trainCentroids(members, busId)
     setCelebratingRow(rowIndex)
     window.setTimeout(() => {
       setCelebratingRow((current) => (current === rowIndex ? null : current))
+    }, 500)
+  }
+
+  // Suggested rows live in their own list, separate from the DSP
+  // dendrogram's own row indices -- own play-toggle/celebration state
+  // rather than reusing playRow/celebratingRow's numeric indices, which
+  // would otherwise collide (row 0 of "suggested" isn't row 0 of the DSP
+  // clusters below it).
+  const [celebratingSuggestedBus, setCelebratingSuggestedBus] = useState<BusId | null>(null)
+
+  function playSuggestedGroup(members: ClusterableStem[]): void {
+    const isThisGroupAlreadyPlaying =
+      playing &&
+      previewingKeys.size === members.length &&
+      members.every((m) => previewingKeys.has(m.key))
+    if (isThisGroupAlreadyPlaying) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    const targetBar = Math.min(...members.map((m) => m.startBar))
+    startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
+  }
+
+  function assignSuggestedGroup(
+    suggestedBus: BusId,
+    members: ClusterableStem[],
+    busId: BusId
+  ): void {
+    dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
+    trainCentroids(members, busId)
+    setCelebratingSuggestedBus(suggestedBus)
+    window.setTimeout(() => {
+      setCelebratingSuggestedBus((current) => (current === suggestedBus ? null : current))
     }, 500)
   }
 
@@ -540,6 +665,32 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
           </div>
         )}
 
+        {!loading && suggestedGroups.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
+              suggested from past tidy-ups -- click a bus to confirm, or pick a different one
+            </p>
+            {suggestedGroups.map(({ busId, members }) => (
+              <ClusterRow
+                key={`suggested-${busId}`}
+                members={members}
+                focused={false}
+                celebrating={celebratingSuggestedBus === busId}
+                provenanceOverride="suggested"
+                splittable={false}
+                suggestedBus={busId}
+                onAssign={(assignBusId) => assignSuggestedGroup(busId, members, assignBusId)}
+                onPlay={() => playSuggestedGroup(members)}
+                onSplit={() => {}}
+                onPreviewStem={previewStem}
+                previewingKeys={previewingKeys}
+                playing={playing}
+                pos={pos}
+              />
+            ))}
+          </div>
+        )}
+
         {!loading &&
           clusters.map(({ id, members }, i) => (
             <ClusterRow
@@ -571,7 +722,10 @@ function ClusterRow({
   playing,
   pos,
   focused,
-  celebrating
+  celebrating,
+  provenanceOverride,
+  splittable = true,
+  suggestedBus
 }: {
   members: ClusterableStem[]
   onAssign: (busId: BusId) => void
@@ -583,9 +737,21 @@ function ClusterRow({
   pos: number
   focused: boolean
   celebrating: boolean
+  /** Set explicitly for an auto-slot suggestion row, which has no
+   * name/clustering signal of its own for clusterProvenance to infer from
+   * -- overrides that inference entirely rather than feeding it a fake
+   * members list. */
+  provenanceOverride?: BusProvenance
+  /** False for a suggestion row -- there's no dendrogram behind it, so
+   * "split into closest sub-groups" has nothing to operate on. */
+  splittable?: boolean
+  /** The centroid classifier's own proposed bus for a suggestion row --
+   * drawn with buttonStyle's 'suggested' state until/unless the user
+   * clicks a bus (any bus, including this one) to actually confirm it. */
+  suggestedBus?: BusId
 }): React.JSX.Element {
   const busOf = useAppSelector((s) => s.busOf)
-  const provenance = clusterProvenance(members.map((m) => m.name))
+  const provenance = provenanceOverride ?? clusterProvenance(members.map((m) => m.name))
 
   // Derived from the REAL store state, not local component state -- so a
   // previously-confirmed assignment still shows as highlighted if the
@@ -645,7 +811,10 @@ function ClusterRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
         <button
           onClick={onPlay}
-          style={{ ...buttonStyle(rowIsPreviewing && playing), whiteSpace: 'nowrap' }}
+          style={{
+            ...buttonStyle(rowIsPreviewing && playing ? 'confirmed' : undefined),
+            whiteSpace: 'nowrap'
+          }}
           title="solo + play this whole cluster, from its own earliest clip"
         >
           {rowIsPreviewing && playing ? '■ playing' : '▶ play'}
@@ -662,7 +831,7 @@ function ClusterRow({
         {provenance !== 'clustered' && (
           <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 90 }}>{provenance}</span>
         )}
-        {members.length > 1 && (
+        {members.length > 1 && splittable && (
           <button
             onClick={onSplit}
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
@@ -676,7 +845,13 @@ function ClusterRow({
             <button
               key={busId}
               onClick={() => onAssign(busId)}
-              style={buttonStyle(assignedBus === busId)}
+              style={buttonStyle(
+                assignedBus === busId
+                  ? 'confirmed'
+                  : suggestedBus === busId
+                    ? 'suggested'
+                    : undefined
+              )}
               title={`press ${i + 1} while this row is focused`}
             >
               {busId}

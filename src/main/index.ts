@@ -42,6 +42,8 @@ import {
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
+import { loadBusCentroidStore, saveBusCentroidStore } from './busCentroidStore'
+import type { BusCentroidStore } from '@shared/busCentroids'
 import type { RiffFilters } from '@shared/loreLibrary'
 import {
   warehouseAvailable,
@@ -579,6 +581,12 @@ app.whenReady().then(async () => {
         return { ok: false, error: message }
       }
     }
+  )
+
+  ipcMain.handle('get-bus-centroids', (): BusCentroidStore => loadBusCentroidStore())
+
+  ipcMain.handle('save-bus-centroids', (_event, store: BusCentroidStore) =>
+    saveBusCentroidStore(store)
   )
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
