@@ -278,15 +278,45 @@ describe('listRiffs', () => {
     expect(riffs.map((r) => r.riffCID)).toEqual(['riff-3'])
   })
 
-  it('filters by bpm when provided', () => {
+  it('filters by a bpm range (bpmMin/bpmMax) when provided', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    const { riffs } = listRiffs('jam-techno', { bpm: 130 })
-    expect(riffs).toHaveLength(2)
-    expect(listRiffs('jam-techno', { bpm: 999 }).riffs).toHaveLength(0)
+    // Both riff-1 and riff-2 (jam-techno) are BPMrnd 130.
+    expect(listRiffs('jam-techno', { bpmMin: 130, bpmMax: 130 }).riffs).toHaveLength(2)
+    expect(listRiffs('jam-techno', { bpmMin: 999 }).riffs).toHaveLength(0)
+    expect(listRiffs('jam-techno', { bpmMax: 100 }).riffs).toHaveLength(0)
+    // A range wide enough to include jam-ambient's own 90bpm riff would still
+    // exclude it via the jam scoping condition -- bpmMin alone here just
+    // proves the >= half of the range is applied independently of bpmMax.
+    expect(listRiffs('jam-techno', { bpmMin: 100 }).riffs).toHaveLength(2)
+  })
+
+  it('filters by key (root + scale together) when provided', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setWarehouseRootForTests(root)
+
+    // Scoped to this test only (not the shared fixture) -- other tests in
+    // this file rely on riff-1 having no Root/Scale set at all.
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(`
+      UPDATE Riffs SET Root = 0, Scale = 0 WHERE RiffCID = 'riff-1';
+      UPDATE Riffs SET Root = 4, Scale = 5 WHERE RiffCID = 'riff-2';
+    `)
+    db.close()
+
+    // riff-1 is Root=0/Scale=0 (C Major), riff-2 is Root=4/Scale=5 (E Minor).
+    expect(listRiffs('jam-techno', { root: 0, scale: 0 }).riffs.map((r) => r.riffCID)).toEqual([
+      'riff-1'
+    ])
+    expect(listRiffs('jam-techno', { root: 4, scale: 5 }).riffs.map((r) => r.riffCID)).toEqual([
+      'riff-2'
+    ])
+    expect(listRiffs('jam-techno', { root: 7, scale: 2 }).riffs).toHaveLength(0)
   })
 
   it('filters by userName when provided', () => {

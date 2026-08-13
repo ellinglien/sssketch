@@ -78,7 +78,13 @@ export interface LoreResolvedStem {
 export interface RiffFilters {
   dateFrom?: number
   dateTo?: number
-  bpm?: number
+  bpmMin?: number
+  bpmMax?: number
+  /** Both filter against the same Root/Scale columns resolveKeyName reads --
+   * pass both together (a key is a root+scale pair) or neither; there's no
+   * "any scale in this root" partial-match mode. */
+  root?: number
+  scale?: number
   userName?: string
   onlyFullyCached?: boolean
   /** Whichever username the renderer's "your username" setting is currently

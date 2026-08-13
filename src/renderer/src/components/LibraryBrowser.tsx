@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LoreJam, LoreResolvedRiff, LoreRiffSummary, RiffFilters } from '@shared/loreLibrary'
-import { instrumentMaskToSoundType, LORE_USERNAME } from '@shared/loreLibrary'
+import {
+  instrumentMaskToSoundType,
+  LORE_USERNAME,
+  LORE_ROOT_NAMES,
+  LORE_SCALE_NAMES
+} from '@shared/loreLibrary'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -256,7 +261,13 @@ export function LibraryBrowser({
   const riffNodeRefs = useRef(new Map<string, HTMLDivElement>())
 
   // Filters (unchanged from LoreLibraryBrowser.tsx)
-  const [bpmFilter, setBpmFilter] = useState('')
+  const [bpmMinFilter, setBpmMinFilter] = useState('')
+  const [bpmMaxFilter, setBpmMaxFilter] = useState('')
+  // '' means "any" for both -- root/scale are only sent together (a key is
+  // a root+scale pair, see RiffFilters' own doc comment), so a lone pick on
+  // either side doesn't filter anything until both are set.
+  const [rootFilter, setRootFilter] = useState('')
+  const [scaleFilter, setScaleFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
   // Which LORE username "you" are, for ownerFraction (drives the ownership
@@ -771,7 +782,16 @@ export function LibraryBrowser({
     if (dateToFilter !== '') {
       filters.dateTo = Math.floor(new Date(`${dateToFilter}T23:59:59`).getTime() / 1000)
     }
-    if (bpmFilter.trim() !== '' && !Number.isNaN(Number(bpmFilter))) filters.bpm = Number(bpmFilter)
+    if (bpmMinFilter.trim() !== '' && !Number.isNaN(Number(bpmMinFilter))) {
+      filters.bpmMin = Number(bpmMinFilter)
+    }
+    if (bpmMaxFilter.trim() !== '' && !Number.isNaN(Number(bpmMaxFilter))) {
+      filters.bpmMax = Number(bpmMaxFilter)
+    }
+    if (rootFilter !== '' && scaleFilter !== '') {
+      filters.root = Number(rootFilter)
+      filters.scale = Number(scaleFilter)
+    }
     if (userNameFilter.trim() !== '') filters.userName = userNameFilter.trim()
     if (onlyFullyCached) filters.onlyFullyCached = true
     // Always sent (not just while the "only mine" filter is checked) — this
@@ -831,7 +851,10 @@ export function LibraryBrowser({
     selectedJamCID,
     dateFromFilter,
     dateToFilter,
-    bpmFilter,
+    bpmMinFilter,
+    bpmMaxFilter,
+    rootFilter,
+    scaleFilter,
     userNameFilter,
     onlyFullyCached,
     loreUsername,
@@ -875,7 +898,10 @@ export function LibraryBrowser({
         // centered window this jump is about to fetch.
         setDateFromFilter('')
         setDateToFilter('')
-        setBpmFilter('')
+        setBpmMinFilter('')
+        setBpmMaxFilter('')
+        setRootFilter('')
+        setScaleFilter('')
         setUserNameFilter('')
         setOnlyFullyCached(false)
         setOnlyContainsMe(false)
@@ -1573,9 +1599,9 @@ export function LibraryBrowser({
                     />
                     <input
                       type="number"
-                      value={bpmFilter}
-                      onChange={(e) => setBpmFilter(e.target.value)}
-                      placeholder="bpm"
+                      value={bpmMinFilter}
+                      onChange={(e) => setBpmMinFilter(e.target.value)}
+                      placeholder="bpm min"
                       style={{
                         width: 60,
                         height: 22,
@@ -1587,6 +1613,64 @@ export function LibraryBrowser({
                         padding: '0 6px'
                       }}
                     />
+                    <input
+                      type="number"
+                      value={bpmMaxFilter}
+                      onChange={(e) => setBpmMaxFilter(e.target.value)}
+                      placeholder="bpm max"
+                      style={{
+                        width: 60,
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 6px'
+                      }}
+                    />
+                    <select
+                      value={rootFilter}
+                      onChange={(e) => setRootFilter(e.target.value)}
+                      title="key filter -- root and scale must both be set"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 4px'
+                      }}
+                    >
+                      <option value="">key: any</option>
+                      {LORE_ROOT_NAMES.map((name, i) => (
+                        <option key={name} value={i}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={scaleFilter}
+                      onChange={(e) => setScaleFilter(e.target.value)}
+                      title="key filter -- root and scale must both be set"
+                      style={{
+                        height: 22,
+                        fontSize: 10,
+                        background: 'var(--ra-bg-row-active)',
+                        color: 'var(--ra-text)',
+                        border: '1px solid var(--ra-border)',
+                        borderRadius: 0,
+                        padding: '0 4px'
+                      }}
+                    >
+                      <option value="">scale: any</option>
+                      {LORE_SCALE_NAMES.map((name, i) => (
+                        <option key={name} value={i}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="text"
                       value={userNameFilter}

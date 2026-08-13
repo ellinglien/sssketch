@@ -189,9 +189,21 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
     conditions.push('CreationTime <= ?')
     params.push(filters.dateTo)
   }
-  if (filters.bpm !== undefined) {
-    conditions.push('ROUND(BPMrnd) = ?')
-    params.push(filters.bpm)
+  if (filters.bpmMin !== undefined) {
+    conditions.push('ROUND(BPMrnd) >= ?')
+    params.push(filters.bpmMin)
+  }
+  if (filters.bpmMax !== undefined) {
+    conditions.push('ROUND(BPMrnd) <= ?')
+    params.push(filters.bpmMax)
+  }
+  if (filters.root !== undefined) {
+    conditions.push('Root = ?')
+    params.push(filters.root)
+  }
+  if (filters.scale !== undefined) {
+    conditions.push('Scale = ?')
+    params.push(filters.scale)
   }
   if (filters.userName !== undefined) {
     conditions.push('UserName = ?')
