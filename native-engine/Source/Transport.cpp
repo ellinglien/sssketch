@@ -73,20 +73,10 @@ namespace sssketch
 
         deviceManager.addAudioCallback(this);
 
-        // Registers for real device-hotplug notifications (see
-        // audioDeviceListChanged's own doc comment below) -- must come
-        // after the device successfully opened above, since
-        // getCurrentDeviceTypeObject() has nothing to return before then.
-        // Paired with closeDevice()'s own removeListener; this function is
-        // only ever called once per Transport lifetime in practice (engine
-        // startup), so there's no double-registration to guard against.
-        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-            type->addListener(this);
-
         return true;
     }
 
-    juce::StringArray Transport::availableInputDeviceNames() const
+    juce::StringArray Transport::availableInputDeviceNames()
     {
         auto* type = deviceManager.getCurrentDeviceTypeObject();
         if (type == nullptr) return {};
@@ -98,16 +88,54 @@ namespace sssketch
         // enumeration) to redo on every request rather than trying to cache
         // + invalidate it ourselves.
         type->scanForDevices();
-        return type->getDeviceNames(true); // true = input names
+        auto names = type->getDeviceNames(true); // true = input names
+        // Real device-list-change detection for issue #187 (stale
+        // setRecordingInputDevice()/setOutputDevice() short-circuit cache
+        // surviving a physical unplug+replug of the same-named device) --
+        // replaces an EARLIER attempt at this that registered a
+        // juce::AudioIODeviceType::Listener at device-open time and cleared
+        // the caches from its audioDeviceListChanged() callback. That
+        // caused a real regression (recording captured silence, reported
+        // and root-caused 2026-08-13): registering that listener broke live
+        // input capture, most likely because scanForDevices() right above
+        // -- called on every list-input-devices/list-output-devices IPC
+        // request the renderer makes -- turns out to fire
+        // AudioIODeviceType::Listener callbacks even without a genuine
+        // hotplug, not only on one as the removed comment claimed. Diffing
+        // the scan result we already have here sidesteps that listener
+        // mechanism entirely while still catching the same real case: a
+        // hotplug changes what scanForDevices()/getDeviceNames() report,
+        // which this codepath already runs on every device-list request.
+        // Clears BOTH cached names (not just this list's own) since a
+        // hotplug on either side can show up in either input or output
+        // enumeration, and the recording/output short-circuits need to
+        // agree on "something changed" regardless of which list caught it.
+        if (names != lastKnownInputDeviceNames)
+        {
+            lastKnownInputDeviceNames = names;
+            lastConfiguredRecordingInputDevice.clear();
+            lastConfiguredOutputDevice.clear();
+        }
+        return names;
     }
 
-    juce::StringArray Transport::availableOutputDeviceNames() const
+    juce::StringArray Transport::availableOutputDeviceNames()
     {
         auto* type = deviceManager.getCurrentDeviceTypeObject();
         if (type == nullptr) return {};
         // Same fresh-scan reasoning as availableInputDeviceNames() above.
         type->scanForDevices();
-        return type->getDeviceNames(false); // false = output names
+        auto names = type->getDeviceNames(false); // false = output names
+        // Mirrors availableInputDeviceNames()'s own change-detection above
+        // -- see its doc comment for the full reasoning and the #187/
+        // silent-recording-regression history.
+        if (names != lastKnownOutputDeviceNames)
+        {
+            lastKnownOutputDeviceNames = names;
+            lastConfiguredRecordingInputDevice.clear();
+            lastConfiguredOutputDevice.clear();
+        }
+        return names;
     }
 
     int Transport::roundTripLatencySamples() const
@@ -274,32 +302,8 @@ namespace sssketch
 
     void Transport::closeDevice()
     {
-        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-            type->removeListener(this);
         deviceManager.removeAudioCallback(this);
         deviceManager.closeAudioDevice();
-    }
-
-    void Transport::audioDeviceListChanged()
-    {
-        // Fires on a REAL device hotplug (inserted/removed), independent of
-        // and in addition to AudioDeviceManager's own broader change
-        // broadcasts (which also fire for reasons like an explicit
-        // setAudioDeviceSetup call this class made itself, so it isn't
-        // useful as this particular signal). This is the one case
-        // setRecordingInputDevice's/setOutputDevice's own name-based
-        // short-circuit can't safely detect on its own: the device NAME
-        // can stay identical across a physical disconnect+reconnect, but
-        // the live AudioIODevice underneath it does not survive that --
-        // see each function's own short-circuit doc comment for the
-        // original coreaudiod-thrashing reason that guard exists at all,
-        // and issue #187 for the real gap this closes. Clearing both
-        // cached names forces the NEXT call for either all the way through
-        // the real reopen path instead of trusting a name match that's no
-        // longer meaningful, rather than removing the short-circuit
-        // entirely (which would reintroduce the thrashing).
-        lastConfiguredRecordingInputDevice.clear();
-        lastConfiguredOutputDevice.clear();
     }
 
     void Transport::play(double fromPositionBars)

@@ -18,7 +18,7 @@ namespace sssketch
      * below. */
     enum class HaltKind { None, Pause, Stop };
 
-    class Transport : public juce::AudioIODeviceCallback, private juce::AudioIODeviceType::Listener
+    class Transport : public juce::AudioIODeviceCallback
     {
     public:
         explicit Transport(PlaybackEngine& engine, PluginChain& masterChain, ChannelChainRegistry& channelChains);
@@ -68,12 +68,16 @@ namespace sssketch
          * active device type -- used by the renderer's input-device
          * dropdown (list-input-devices IPC). Empty if no device type is
          * open yet (shouldn't happen once openDefaultDevice() has
-         * succeeded, but defensive rather than assuming). */
-        juce::StringArray availableInputDeviceNames() const;
+         * succeeded, but defensive rather than assuming). Not const: also
+         * detects a real device-list change against the last scan and
+         * clears the recording-input/output short-circuit caches when one
+         * happened -- see lastKnownInputDeviceNames's own doc comment for
+         * why this replaced a juce::AudioIODeviceType::Listener. */
+        juce::StringArray availableInputDeviceNames();
 
         /** Same as availableInputDeviceNames(), for output devices --
          * used by the settings menu's output-device dropdown. */
-        juce::StringArray availableOutputDeviceNames() const;
+        juce::StringArray availableOutputDeviceNames();
 
         void setBpm(double bpmValue)
         {
@@ -202,14 +206,6 @@ namespace sssketch
         void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
         void audioDeviceStopped() override;
 
-        // juce::AudioIODeviceType::Listener -- see its own override's doc
-        // comment in Transport.cpp for what this exists to fix. Private
-        // inheritance (see the class declaration above) keeps this an
-        // implementation detail: nothing outside Transport should be able
-        // to call it directly or treat a Transport* as an
-        // AudioIODeviceType::Listener*.
-        void audioDeviceListChanged() override;
-
     private:
         // Renders numSamples starting at `pos`, transparently splitting the
         // render and declicking across a loop-boundary crossing if one falls
@@ -273,5 +269,17 @@ namespace sssketch
         // setOutputDevice() -- same "not just whatever the live setup
         // reports" safety reasoning.
         juce::String lastConfiguredOutputDevice;
+
+        // Device-list snapshots from the last availableInputDeviceNames()/
+        // availableOutputDeviceNames() call -- see those functions' own doc
+        // comments for why this replaced a juce::AudioIODeviceType::Listener
+        // registration (issue #187's original approach, which caused a real
+        // regression: recording captured silence, root-caused 2026-08-13 to
+        // registering that listener at all, most likely because
+        // scanForDevices() below -- called on every list-devices IPC
+        // request -- fires listener callbacks even without a genuine
+        // hotplug). Empty until the first scan.
+        juce::StringArray lastKnownInputDeviceNames;
+        juce::StringArray lastKnownOutputDeviceNames;
     };
 }
