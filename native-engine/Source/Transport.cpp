@@ -25,9 +25,10 @@ namespace sssketch
 
         // A standard doubling from the typical ~512-sample OS/driver default --
         // found during manual testing: the driver default produced audible
-        // crackling under load. Fixed for now (see docs/superpowers/specs/
-        // 2026-08-04-ruler-clear-loop-and-buffer-bump-design.md); a real
-        // user-adjustable setting is deferred follow-up work.
+        // crackling under load (see docs/superpowers/specs/
+        // 2026-08-04-ruler-clear-loop-and-buffer-bump-design.md). Just the
+        // STARTING value now -- Transport::setBufferSize lets the settings
+        // menu change it live.
         constexpr int kPreferredBufferSize = 1024;
     }
 
@@ -71,6 +72,17 @@ namespace sssketch
         }
 
         deviceManager.addAudioCallback(this);
+
+        // Registers for real device-hotplug notifications (see
+        // audioDeviceListChanged's own doc comment below) -- must come
+        // after the device successfully opened above, since
+        // getCurrentDeviceTypeObject() has nothing to return before then.
+        // Paired with closeDevice()'s own removeListener; this function is
+        // only ever called once per Transport lifetime in practice (engine
+        // startup), so there's no double-registration to guard against.
+        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+            type->addListener(this);
+
         return true;
     }
 
@@ -262,8 +274,32 @@ namespace sssketch
 
     void Transport::closeDevice()
     {
+        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+            type->removeListener(this);
         deviceManager.removeAudioCallback(this);
         deviceManager.closeAudioDevice();
+    }
+
+    void Transport::audioDeviceListChanged()
+    {
+        // Fires on a REAL device hotplug (inserted/removed), independent of
+        // and in addition to AudioDeviceManager's own broader change
+        // broadcasts (which also fire for reasons like an explicit
+        // setAudioDeviceSetup call this class made itself, so it isn't
+        // useful as this particular signal). This is the one case
+        // setRecordingInputDevice's/setOutputDevice's own name-based
+        // short-circuit can't safely detect on its own: the device NAME
+        // can stay identical across a physical disconnect+reconnect, but
+        // the live AudioIODevice underneath it does not survive that --
+        // see each function's own short-circuit doc comment for the
+        // original coreaudiod-thrashing reason that guard exists at all,
+        // and issue #187 for the real gap this closes. Clearing both
+        // cached names forces the NEXT call for either all the way through
+        // the real reopen path instead of trusting a name match that's no
+        // longer meaningful, rather than removing the short-circuit
+        // entirely (which would reintroduce the thrashing).
+        lastConfiguredRecordingInputDevice.clear();
+        lastConfiguredOutputDevice.clear();
     }
 
     void Transport::play(double fromPositionBars)

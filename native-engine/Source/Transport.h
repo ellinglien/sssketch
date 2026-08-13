@@ -18,7 +18,7 @@ namespace sssketch
      * below. */
     enum class HaltKind { None, Pause, Stop };
 
-    class Transport : public juce::AudioIODeviceCallback
+    class Transport : public juce::AudioIODeviceCallback, private juce::AudioIODeviceType::Listener
     {
     public:
         explicit Transport(PlaybackEngine& engine, PluginChain& masterChain, ChannelChainRegistry& channelChains);
@@ -201,6 +201,14 @@ namespace sssketch
             int numSamples, const juce::AudioIODeviceCallbackContext& context) override;
         void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
         void audioDeviceStopped() override;
+
+        // juce::AudioIODeviceType::Listener -- see its own override's doc
+        // comment in Transport.cpp for what this exists to fix. Private
+        // inheritance (see the class declaration above) keeps this an
+        // implementation detail: nothing outside Transport should be able
+        // to call it directly or treat a Transport* as an
+        // AudioIODeviceType::Listener*.
+        void audioDeviceListChanged() override;
 
     private:
         // Renders numSamples starting at `pos`, transparently splitting the
