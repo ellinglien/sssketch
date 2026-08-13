@@ -137,9 +137,27 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // trained it, which is the correct cold-start behavior: this modal falls
   // straight back to its original all-DSP-clustering flow rather than ever
   // blocking on the fetch.
+  //
+  // centroidStore keeps updating live (trainCentroids below writes to it on
+  // every real confirm, and persists it for future sessions) but
+  // centroidStoreSnapshot is set ONCE, the first time the real store loads,
+  // and never again -- `partitioned` below reads suggestions from the
+  // frozen snapshot, not the live store. Without this split, confirming
+  // ANY bus mid-tidy-up retrains the live store, which can immediately
+  // flip an unrelated, already-visible DSP-cluster stem into "suggested"
+  // and yank it out of the list the user is actively working through --
+  // reported as the suggestion UI feeling "jolting"/like it "took over."
+  // Freezing the snapshot means the suggested/DSP split for this session is
+  // decided once, at open time, and stays put no matter how much training
+  // happens while the user works.
   const [centroidStore, setCentroidStore] = useState<BusCentroidStore>(emptyBusCentroidStore)
+  const [centroidStoreSnapshot, setCentroidStoreSnapshot] =
+    useState<BusCentroidStore>(emptyBusCentroidStore)
   useEffect(() => {
-    void window.rifffApi.getBusCentroids().then(setCentroidStore)
+    void window.rifffApi.getBusCentroids().then((store) => {
+      setCentroidStore(store)
+      setCentroidStoreSnapshot(store)
+    })
   }, [])
 
   function handleClose(): void {
@@ -273,10 +291,12 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // whenever busOf changes (accepting a suggestion or a DSP row removes
   // that stem from `stems` -- wait, no, it stays placed; busOf just gains
   // an entry, which flips that stem into the "already assigned" bucket on
-  // the next pass) or centroidStore changes (freshly loaded, or just
-  // trained by an assign). mergeSequence -- the expensive O(n^3) part --
-  // only ever re-runs when the actual DSP population changes, not on every
-  // keystroke elsewhere in the modal.
+  // the next pass) or centroidStoreSnapshot changes -- which, deliberately,
+  // only happens once per modal session (see centroidStoreSnapshot's own
+  // doc comment above for why suggestions read the frozen snapshot rather
+  // than the live, continuously-training centroidStore). mergeSequence --
+  // the expensive O(n^3) part -- only ever re-runs when the actual DSP
+  // population changes, not on every keystroke elsewhere in the modal.
   const partitioned = useMemo(() => {
     if (!computed || computed.forStems !== stems) return null
     const { analyzedStems, rawVectorsByKey } = computed
@@ -288,7 +308,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
         continue
       }
       const raw = rawVectorsByKey.get(stem.key)
-      const suggestedBus = raw ? suggestBus(centroidStore, raw) : null
+      const suggestedBus = raw ? suggestBus(centroidStoreSnapshot, raw) : null
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -303,7 +323,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
       dspStems,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [computed, stems, busOf, centroidStore])
+  }, [computed, stems, busOf, centroidStoreSnapshot])
 
   const suggestedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
     if (!partitioned) return []
