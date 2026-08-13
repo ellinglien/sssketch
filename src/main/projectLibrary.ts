@@ -66,6 +66,14 @@ export function sketchAbletonDir(name: string): string {
   return join(sketchDir(name), 'Ableton')
 }
 
+export function sketchReaperDir(name: string): string {
+  return join(sketchDir(name), 'Reaper')
+}
+
+export function sketchStemsDir(name: string): string {
+  return join(sketchDir(name), 'Stems')
+}
+
 /** The one cache shared by every sketch's Ableton export, keyed by stem
  * identity (see stemCacheKey) -- see docs/superpowers/specs/
  * 2026-08-05-project-library-design.md for the full rationale. */

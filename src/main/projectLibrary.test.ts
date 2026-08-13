@@ -45,13 +45,22 @@ describe('projectLibrary', () => {
 
   describe('sketch path helpers', () => {
     it('derives every per-sketch path from the library root and sketch name', async () => {
-      const { sketchDir, sketchProjectPath, sketchMetaPath, sketchAbletonDir, samplesCacheDir } =
-        await import('./projectLibrary')
+      const {
+        sketchDir,
+        sketchProjectPath,
+        sketchMetaPath,
+        sketchAbletonDir,
+        sketchReaperDir,
+        sketchStemsDir,
+        samplesCacheDir
+      } = await import('./projectLibrary')
       const root = join(musicDir, 'sssketch')
       expect(sketchDir('my-sketch')).toBe(join(root, 'my-sketch'))
       expect(sketchProjectPath('my-sketch')).toBe(join(root, 'my-sketch', 'my-sketch.sssketchproj'))
       expect(sketchMetaPath('my-sketch')).toBe(join(root, 'my-sketch', '.sssketch-meta.json'))
       expect(sketchAbletonDir('my-sketch')).toBe(join(root, 'my-sketch', 'Ableton'))
+      expect(sketchReaperDir('my-sketch')).toBe(join(root, 'my-sketch', 'Reaper'))
+      expect(sketchStemsDir('my-sketch')).toBe(join(root, 'my-sketch', 'Stems'))
       expect(samplesCacheDir()).toBe(join(root, '.samples-cache'))
     })
   })
