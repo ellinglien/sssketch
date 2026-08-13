@@ -41,6 +41,7 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
+import { ExportFormatPicker } from './components/ExportFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
@@ -413,6 +414,8 @@ function Timeline({
   )
 }
 
+type ExportFormat = 'ableton' | 'reaper' | 'stems'
+
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
@@ -444,6 +447,8 @@ function ProjectMenu({
   const saveButtonRef = useRef<HTMLButtonElement>(null)
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
+  const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null)
+  const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
 
   async function handleNew(): Promise<void> {
     // Only worth interrupting for if there's actually something that would
@@ -527,63 +532,64 @@ function ProjectMenu({
     }
   }
 
-  async function handleExportStems(): Promise<void> {
-    setExporting(true)
-    try {
-      await window.rifffApi.exportStemsNative(JSON.stringify(state))
-    } catch (err) {
-      console.error('ProjectMenu: failed to export stems:', err)
-      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  async function runExportAbleton(): Promise<void> {
+  async function runExportProject(format: ExportFormat): Promise<void> {
     setExporting(true)
     try {
       if (currentSketch !== null && currentSketch.kind === 'library') {
-        const warn = await window.rifffApi.shouldWarnBeforeAbletonOverwrite(currentSketch.name)
-        if (
-          warn &&
-          !window.confirm(
-            "This sketch's Ableton export has been modified since the last export from sssketch (likely from mixing directly in Ableton). Exporting again will overwrite it. Continue?"
-          )
-        ) {
-          return
+        if (format === 'ableton') {
+          const warn = await window.rifffApi.shouldWarnBeforeAbletonOverwrite(currentSketch.name)
+          if (
+            warn &&
+            !window.confirm(
+              "This sketch's Ableton export has been modified since the last export from sssketch (likely from mixing directly in Ableton). Exporting again will overwrite it. Continue?"
+            )
+          ) {
+            return
+          }
+          await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
+        } else if (format === 'reaper') {
+          await window.rifffApi.exportRppToLibrary(JSON.stringify(state), currentSketch.name)
+        } else {
+          await window.rifffApi.exportStemsToLibrary(JSON.stringify(state), currentSketch.name)
         }
-        await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
       } else if (currentSketch !== null && currentSketch.kind === 'external') {
-        // A real, known project file exists on disk -- export directly
-        // next to it (an Ableton/ folder alongside the source
-        // .sssketchproj), named identically to the project, no dialog.
-        // Mirrors the library path's own no-dialog, always-named-after-
-        // the-project convention now that there's a real source file to
-        // be identical to.
-        await window.rifffApi.exportAlsNextToSource(JSON.stringify(state), currentSketch.path)
+        if (format === 'ableton') {
+          await window.rifffApi.exportAlsNextToSource(JSON.stringify(state), currentSketch.path)
+        } else if (format === 'reaper') {
+          await window.rifffApi.exportRppNextToSource(JSON.stringify(state), currentSketch.path)
+        } else {
+          await window.rifffApi.exportStemsNextToSource(JSON.stringify(state), currentSketch.path)
+        }
       } else {
-        // currentSketch === null: a project that's never been saved at all
-        // has no real file/location to name this export after -- keep the
-        // save dialog here (there's genuinely nothing to skip it FOR), but
-        // still suggest the same auto-generated name handleSave would give
-        // it, instead of the old generic "sssketch-export" default.
-        const defaultName = await window.rifffApi.generateDefaultProjectName()
-        await window.rifffApi.exportAls(JSON.stringify(state), defaultName)
+        // currentSketch === null: nothing saved yet, no real location to
+        // export next to -- Ableton/Reaper fall back to a save dialog
+        // (same as before); stems export already has its own dialog-based
+        // folder picker as its fallback (nativeExportStemsToDisk).
+        if (format === 'ableton') {
+          const defaultName = await window.rifffApi.generateDefaultProjectName()
+          await window.rifffApi.exportAls(JSON.stringify(state), defaultName)
+        } else if (format === 'reaper') {
+          const defaultName = await window.rifffApi.generateDefaultProjectName()
+          await window.rifffApi.exportRpp(JSON.stringify(state), defaultName)
+        } else {
+          await window.rifffApi.exportStemsNative(JSON.stringify(state))
+        }
       }
     } catch (err) {
-      console.error('ProjectMenu: failed to export to Ableton:', err)
+      console.error(`ProjectMenu: failed to export (${format}):`, err)
       window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
   }
 
-  function handleExportAbleton(): void {
+  function handleExportProject(format: ExportFormat): void {
     if (Object.keys(state.busOf).length === 0) {
+      setPendingExportFormat(format)
       setTidyUpNudgeOpen(true)
       return
     }
-    void runExportAbleton()
+    void runExportProject(format)
   }
 
   const buttonStyle = {
@@ -660,8 +666,7 @@ function ProjectMenu({
           ignoreRef={exportButtonRef}
           items={[
             { label: 'export mix', onClick: handleExportMix },
-            { label: 'export stems', onClick: handleExportStems },
-            { label: 'export ableton', onClick: handleExportAbleton }
+            { label: 'export project…', onClick: () => setExportFormatPickerOpen(true) }
           ]}
           onClose={() => setExportMenu(null)}
         />
@@ -673,6 +678,15 @@ function ProjectMenu({
           onCancel={() => setNewProjectModal(null)}
         />
       )}
+      {exportFormatPickerOpen && (
+        <ExportFormatPicker
+          onChoose={(format) => {
+            setExportFormatPickerOpen(false)
+            handleExportProject(format)
+          }}
+          onCancel={() => setExportFormatPickerOpen(false)}
+        />
+      )}
       {tidyUpNudgeOpen && (
         <TidyUpNudgeModal
           onTidyUp={() => {
@@ -681,7 +695,7 @@ function ProjectMenu({
           }}
           onExportAnyway={() => {
             setTidyUpNudgeOpen(false)
-            void runExportAbleton()
+            if (pendingExportFormat) void runExportProject(pendingExportFormat)
           }}
         />
       )}
