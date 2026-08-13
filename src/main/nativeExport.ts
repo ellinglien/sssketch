@@ -98,14 +98,6 @@ export async function nativeExport(state: AppState): Promise<Uint8Array> {
   }
 }
 
-// Anything outside this set is unsafe (or at least unwelcome) in a filename
-// across macOS/Windows/Linux — path separators, reserved Windows characters,
-// etc. Everything else (spaces, unicode names from Endlesss authors) is left
-// alone.
-function sanitizeFileNamePart(name: string): string {
-  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
-}
-
 // Mirrors exportAudioMaterialization.ts's materializeStemsForExport's own
 // "nothing placed" guard (same message, so App.tsx's runExportProject shows
 // an identical alert regardless of which export format the user picked) --
@@ -124,51 +116,47 @@ function assertHasPlacedRifffs(state: AppState): void {
 }
 
 /**
- * Renders each stem across the whole arrangement to its own WAV, soloed —
- * i.e. every OTHER stem muted for that render, regardless of its current
- * mute state in `state` (the point is isolating each stem, not reproducing
- * today's mix). Reuses the same engine process and render-export command as
- * nativeExport, just called once per stem instead of once for the mixdown.
+ * Renders one mixed-down WAV per bus that has at least one placed stem on
+ * it — i.e. "export the tidied tracks", the same shape as soloing each bus
+ * in Ableton and exporting that selection, not a file per individual stem.
+ * Every stem assigned to a bus (via state.busOf, falling back to
+ * DEFAULT_STEMS_BUS) is soloed together for that bus's render — reuses
+ * soloState's existing multi-target support (see its own "a bus solo, not
+ * just a single stem" doc comment), so within-bus balance (relative volume/
+ * fades/placement) is preserved exactly as tidied, just isolated from every
+ * OTHER bus for this one file. A bus with nothing assigned to it produces
+ * no file at all, rather than an empty/silent one. Named directly
+ * `<busId>.wav` in destDir -- BusId's own values are already safe, fixed,
+ * lowercase identifiers, so no sanitization or disambiguation is needed the
+ * way per-stem filenames used to require.
  *
- * Writes each stem STRAIGHT to its final path inside destDir — never reads
- * the rendered bytes back into the main process, let alone across IPC. This
- * replaces an earlier design that rendered every stem to a temp file, read
- * ALL of them into memory as Uint8Arrays, sent the whole batch to the
- * renderer over IPC, and then had the renderer immediately send the exact
- * same bytes straight back to main to write to disk — a completely
- * pointless double round-trip (the bytes never needed to leave the main
- * process) that reproducibly crashed Electron on a real large multi-stem
- * project: root-caused via crash report analysis to EXC_BREAKPOINT inside
- * v8::ValueSerializer::WriteValue, consistent with structured-clone
- * choking on the combined size of every stem's raw audio in one IPC
- * message. Returns the filenames actually written, in render order.
+ * Reuses the same engine process and render-export command as nativeExport,
+ * just called once per bus instead of once for the whole mixdown. Writes
+ * each bus's WAV STRAIGHT to its final path inside destDir — never reads
+ * the rendered bytes back into the main process, let alone across IPC (see
+ * git history for why: an earlier per-stem design that round-tripped bytes
+ * through IPC reproducibly crashed Electron on a large project). Returns
+ * the filenames actually written, in bus order (BUS_ORDER, not discovery
+ * order).
  */
 const DEFAULT_STEMS_BUS: BusId = 'aux'
+const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
 
 export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
   assertHasPlacedRifffs(state)
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-  const targets: { key: string; rifffName: string; stemName: string; busId: BusId }[] = []
+
+  const keysByBus = new Map<BusId, string[]>()
+  for (const busId of BUS_ORDER) keysByBus.set(busId, [])
   for (const rifff of placed) {
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
-      targets.push({
-        key,
-        rifffName: rifff.name,
-        stemName: stem.name,
-        busId: state.busOf[key] ?? DEFAULT_STEMS_BUS
-      })
+      const busId = state.busOf[key] ?? DEFAULT_STEMS_BUS
+      keysByBus.get(busId)!.push(key)
     }
   }
 
-  const usedNames = new Map<string, number>()
-  function uniqueFileName(rifffName: string, stemName: string): string {
-    const base = `${sanitizeFileNamePart(rifffName)}-${sanitizeFileNamePart(stemName)}`
-    const count = (usedNames.get(base) ?? 0) + 1
-    usedNames.set(base, count)
-    return count === 1 ? `${base}.wav` : `${base}-${count}.wav`
-  }
-
+  const allKeys = [...keysByBus.values()].flat()
   const durationBars = loopLengthBarsFor(state)
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
@@ -178,19 +166,14 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
   try {
     await client.connect(engineHandle.port)
 
-    const allKeys = targets.map((t) => t.key)
-    for (const target of targets) {
-      const targetState = soloState(state, new Set([target.key]), allKeys)
+    for (const busId of BUS_ORDER) {
+      const busKeys = keysByBus.get(busId)!
+      if (busKeys.length === 0) continue
 
-      const project = await buildEngineProject(
-        targetState,
-        resolveStretchedForExport,
-        pluginCatalog
-      )
-      const fileName = uniqueFileName(target.rifffName, target.stemName)
-      const busDir = join(destDir, target.busId)
-      mkdirSync(busDir, { recursive: true })
-      const outputPath = join(busDir, fileName)
+      const busState = soloState(state, new Set(busKeys), allKeys)
+      const project = await buildEngineProject(busState, resolveStretchedForExport, pluginCatalog)
+      const fileName = `${busId}.wav`
+      const outputPath = join(destDir, fileName)
 
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
@@ -202,7 +185,7 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
 
       if (!result.success) {
         throw new Error(
-          `native export failed for stem "${target.stemName}": ${result.error ?? 'unknown error'}`
+          `native export failed for bus "${busId}": ${result.error ?? 'unknown error'}`
         )
       }
 

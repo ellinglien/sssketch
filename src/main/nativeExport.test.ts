@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AppState } from '../renderer/src/state/store'
@@ -295,52 +295,10 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
 })
 
 describe('renderStemsToDir', () => {
-  it('writes each stem straight to its own WAV file in destDir, never returning bytes', async () => {
-    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
-    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
-    try {
-      const stemPath = join(srcDir, 'a.wav')
-      writeConstantWav(stemPath, 0.3, 4410)
-      const rifff: Rifff = {
-        groupId: 'r1',
-        name: 'my rifff',
-        bpm: 60,
-        barLength: 1,
-        folderPath: '/x',
-        startBar: 0,
-        stems: [
-          {
-            slot: 1,
-            author: 'e',
-            name: 'kick/snare',
-            type: 'fx',
-            path: stemPath,
-            durationSec: 0.1,
-            barLength: 1
-          }
-        ]
-      }
-      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifff } }
-
-      const fileNames = await renderStemsToDir(state, destDir)
-
-      // Path separator in the stem name gets sanitized away, matching
-      // sanitizeFileNamePart's own rules — a real reported concern given
-      // Endlesss preset names are free text.
-      //
-      // No busOf assignment is set on this fixture's state, so this lands
-      // under the 'aux' fallback subfolder (see DEFAULT_STEMS_BUS in
-      // nativeExport.ts) rather than flat in destDir -- bus-grouping is
-      // unconditional, not opt-in.
-      expect(fileNames).toEqual(['my rifff-kick_snare.wav'])
-      expect(existsSync(join(destDir, 'aux', 'my rifff-kick_snare.wav'))).toBe(true)
-    } finally {
-      rmSync(srcDir, { recursive: true, force: true })
-      rmSync(destDir, { recursive: true, force: true })
-    }
-  }, 30000)
-
-  it('disambiguates two stems that would otherwise share a filename', async () => {
+  it('mixes every stem assigned to a bus down into one <busId>.wav, not one file per stem', async () => {
+    // Two DIFFERENT stems, both assigned to the 'drums' bus -- the point of
+    // this export is "the tidied track", so both must land in ONE file, not
+    // two, unlike the old per-stem behavior.
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
     const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
     try {
@@ -359,7 +317,7 @@ describe('renderStemsToDir', () => {
           {
             slot: 1,
             author: 'e',
-            name: 'b',
+            name: 'kick',
             type: 'fx',
             path: stemAPath,
             durationSec: 0.1,
@@ -369,7 +327,7 @@ describe('renderStemsToDir', () => {
       }
       const rifffB: Rifff = {
         groupId: 'r2',
-        name: 'a',
+        name: 'b',
         bpm: 60,
         barLength: 1,
         folderPath: '/x',
@@ -378,7 +336,7 @@ describe('renderStemsToDir', () => {
           {
             slot: 1,
             author: 'e',
-            name: 'b',
+            name: 'snare',
             type: 'fx',
             path: stemBPath,
             durationSec: 0.1,
@@ -386,26 +344,32 @@ describe('renderStemsToDir', () => {
           }
         ]
       }
-      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifffA, r2: rifffB } }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifffA, r2: rifffB },
+        busOf: { 'r1:1': 'drums', 'r2:1': 'drums' }
+      }
 
       const fileNames = await renderStemsToDir(state, destDir)
 
-      // No busOf assignment set here either -- see the same note above.
-      expect(fileNames).toEqual(['a-b.wav', 'a-b-2.wav'])
-      expect(existsSync(join(destDir, 'aux', 'a-b.wav'))).toBe(true)
-      expect(existsSync(join(destDir, 'aux', 'a-b-2.wav'))).toBe(true)
+      expect(fileNames).toEqual(['drums.wav'])
+      expect(existsSync(join(destDir, 'drums.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'bass.wav'))).toBe(false) // no stems on this bus -- no file
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
     }
   }, 30000)
 
-  it('groups output into <destDir>/<busId>/ subfolders, using state.busOf', async () => {
+  it('renders one file per bus that actually has stems, none for buses with nothing assigned', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
     const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
     try {
-      const stemPath = join(srcDir, 'a.wav')
-      writeConstantWav(stemPath, 0.3, 4410)
+      const drumsStemPath = join(srcDir, 'a.wav')
+      const bassStemPath = join(srcDir, 'b.wav')
+      writeConstantWav(drumsStemPath, 0.3, 4410)
+      writeConstantWav(bassStemPath, 0.2, 4410)
       const rifff: Rifff = {
         groupId: 'r1',
         name: 'my rifff',
@@ -419,7 +383,16 @@ describe('renderStemsToDir', () => {
             author: 'e',
             name: 'kick',
             type: 'fx',
-            path: stemPath,
+            path: drumsStemPath,
+            durationSec: 0.1,
+            barLength: 1
+          },
+          {
+            slot: 2,
+            author: 'e',
+            name: 'sub',
+            type: 'fx',
+            path: bassStemPath,
             durationSec: 0.1,
             barLength: 1
           }
@@ -429,21 +402,25 @@ describe('renderStemsToDir', () => {
         ...initialState,
         bpm: 60,
         rifffs: { r1: rifff },
-        busOf: { 'r1:1': 'drums' }
+        busOf: { 'r1:1': 'drums', 'r1:2': 'bass' }
       }
 
       const fileNames = await renderStemsToDir(state, destDir)
 
-      expect(fileNames).toEqual(['my rifff-kick.wav'])
-      expect(existsSync(join(destDir, 'drums', 'my rifff-kick.wav'))).toBe(true)
-      expect(existsSync(join(destDir, 'my rifff-kick.wav'))).toBe(false) // not flat anymore
+      // Bus order (BUS_ORDER in nativeExport.ts), not discovery/placement order.
+      expect(fileNames).toEqual(['drums.wav', 'bass.wav'])
+      expect(existsSync(join(destDir, 'drums.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'bass.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'lead.wav'))).toBe(false)
+      expect(existsSync(join(destDir, 'backing.wav'))).toBe(false)
+      expect(existsSync(join(destDir, 'aux.wav'))).toBe(false)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
     }
   }, 30000)
 
-  it('falls back to the aux bus subfolder for a stem with no busOf assignment', async () => {
+  it('falls back to aux.wav for a stem with no busOf assignment', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
     const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
     try {
@@ -470,9 +447,97 @@ describe('renderStemsToDir', () => {
       }
       const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifff }, busOf: {} }
 
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      expect(fileNames).toEqual(['aux.wav'])
+      expect(existsSync(join(destDir, 'aux.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('actually mixes (sums) two same-bus stems, not just renders one of them', async () => {
+    // Real content-level parity check, mirroring the nativeExport parity
+    // test above: two stems, same bus, fully time-overlapping, both
+    // unmuted/unfaded/unstretched (project bpm === both rifffs' bpm) -- the
+    // rendered drums.wav should be the sample-wise sum of both fixtures,
+    // not silence, not just one of them alone.
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const stemAPath = join(srcDir, 'a.wav')
+      const stemBPath = join(srcDir, 'b.wav')
+      const sampleRate = 44100
+      const numSamples = 4 * sampleRate // exactly 1 bar at 60bpm
+      const volA = 0.3
+      const volB = 0.2
+      writeConstantWav(stemAPath, volA, numSamples, sampleRate)
+      writeConstantWav(stemBPath, volB, numSamples, sampleRate)
+
+      const rifffA: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemAPath,
+            durationSec: 4,
+            barLength: 1
+          }
+        ]
+      }
+      const rifffB: Rifff = {
+        groupId: 'r2',
+        name: 'b',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'b',
+            type: 'fx',
+            path: stemBPath,
+            durationSec: 4,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifffA, r2: rifffB },
+        busOf: { 'r1:1': 'drums', 'r2:1': 'drums' }
+      }
+
       await renderStemsToDir(state, destDir)
 
-      expect(existsSync(join(destDir, 'aux', 'untidied-a.wav'))).toBe(true)
+      const outBuf = readFileSync(join(destDir, 'drums.wav'))
+      const dataStart = findDataChunkOffset(outBuf)
+      const numFrames = (outBuf.length - dataStart) / 4 // stereo, 2 bytes/sample
+      expect(numFrames).toBeGreaterThanOrEqual(numSamples)
+
+      const a16 = Math.round(volA * 32767)
+      const b16 = Math.round(volB * 32767)
+      const segmentDurationSec = numSamples / sampleRate
+      let maxDiff = 0
+      for (let i = 0; i < numSamples; i++) {
+        const gain = microFadeGain(i / sampleRate, segmentDurationSec)
+        const expected16 = Math.max(-32768, Math.min(32767, Math.round(a16 * gain + b16 * gain)))
+        const left = outBuf.readInt16LE(dataStart + i * 4)
+        maxDiff = Math.max(maxDiff, Math.abs(left - expected16))
+      }
+      expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
@@ -533,7 +598,7 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
 
       await exportStemsToLibrary(state, 'my-sketch')
 
-      expect(existsSync(join(sketchStemsDir('my-sketch'), 'bass', 'lib rifff-a.wav'))).toBe(true)
+      expect(existsSync(join(sketchStemsDir('my-sketch'), 'bass.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
     }
@@ -574,7 +639,7 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
 
       await exportStemsNextToSource(state, sourcePath)
 
-      expect(existsSync(join(projectDir, 'Stems', 'lead', 'ext rifff-a.wav'))).toBe(true)
+      expect(existsSync(join(projectDir, 'Stems', 'lead.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(projectDir, { recursive: true, force: true })
@@ -588,8 +653,8 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
     // rmSync-ing this away before discovering there's nothing to render.
     const stemsDir = sketchStemsDir('untidied-sketch')
     try {
-      const markerPath = join(stemsDir, 'aux', 'previous-export.wav')
-      mkdirSync(join(stemsDir, 'aux'), { recursive: true })
+      const markerPath = join(stemsDir, 'aux.wav')
+      mkdirSync(stemsDir, { recursive: true })
       writeFileSync(markerPath, 'not really a wav, just a marker')
 
       const state: AppState = { ...initialState, rifffs: {} }
@@ -607,8 +672,8 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-project-'))
     try {
       const stemsDir = join(projectDir, 'Stems')
-      mkdirSync(join(stemsDir, 'aux'), { recursive: true })
-      const markerPath = join(stemsDir, 'aux', 'previous-export.wav')
+      mkdirSync(stemsDir, { recursive: true })
+      const markerPath = join(stemsDir, 'aux.wav')
       writeFileSync(markerPath, 'not really a wav, just a marker')
 
       const state: AppState = { ...initialState, rifffs: {} }
