@@ -34,7 +34,10 @@ import {
   nativeExport,
   nativeExportStemsToDisk,
   exportStemsToLibrary,
-  exportStemsNextToSource
+  exportStemsNextToSource,
+  nativeExportStemTracksToDisk,
+  exportStemTracksToLibrary,
+  exportStemTracksNextToSource
 } from './nativeExport'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
@@ -454,6 +457,31 @@ app.whenReady().then(async () => {
     async (_event, stateJson: string, sourcePath: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
       return exportStemsNextToSource(state, sourcePath)
+    }
+  )
+
+  ipcMain.handle(
+    'export-stem-tracks-native',
+    async (event, stateJson: string, projectName: string) => {
+      const win = BrowserWindow.fromWebContents(event.sender)!
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return nativeExportStemTracksToDisk(win, state, projectName)
+    }
+  )
+
+  ipcMain.handle(
+    'export-stem-tracks-to-library',
+    async (_event, stateJson: string, libraryName: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportStemTracksToLibrary(state, libraryName)
+    }
+  )
+
+  ipcMain.handle(
+    'export-stem-tracks-next-to-source',
+    async (_event, stateJson: string, sourcePath: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportStemTracksNextToSource(state, sourcePath)
     }
   )
 

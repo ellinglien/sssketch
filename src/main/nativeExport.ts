@@ -1,16 +1,29 @@
 import { readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { stemKey, type BusId } from '@shared/types'
+import { packIntoTracks } from '@shared/packIntoTracks'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 import { sketchStemsDir } from './projectLibrary'
+
+// Anything outside this set is unsafe (or at least unwelcome) in a filename
+// across macOS/Windows/Linux -- matches exportAudioMaterialization.ts's own
+// sanitizeFileNamePart exactly (duplicated rather than imported: it's not
+// exported from that module, and it's a five-line pure function -- not worth
+// coupling these two independent export features over). Needed here only by
+// renderStemTracksToDir, since its filenames embed the free-text project
+// name; the bus-mixdown renderStemsToDir below never did, because BusId
+// values are already safe fixed identifiers.
+function sanitizeFileNamePart(name: string): string {
+  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
+}
 
 // EngineClient.sendAndAwaitType's own default (30000ms) is right for the
 // fast control round-trips it's normally used for (position queries, arm/
@@ -142,21 +155,40 @@ function assertHasPlacedRifffs(state: AppState): void {
 const DEFAULT_STEMS_BUS: BusId = 'aux'
 const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
 
-export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
-  assertHasPlacedRifffs(state)
-  const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+/** One placed (rifff, stem) pair assigned to a bus, with its occupied time
+ * span (in bars) -- the span ignores leftCrop (which only trims audio from
+ * within, never extends beyond the rifff's own placed bounds), so this is a
+ * safe, slightly-conservative approximation of buildAlsXml.ts's own
+ * beat-accurate packIntoTracks input, not a byte-identical replica (same
+ * "wire format twin" spirit as buildRppProject.ts). Good enough for both of
+ * this file's own uses: grouping by bus (span unused) and, in
+ * renderStemTracksToDir, deciding which same-bus stems may safely share one
+ * rendered track. */
+type StemEntry = { key: string; startBar: number; endBar: number }
 
-  const keysByBus = new Map<BusId, string[]>()
-  for (const busId of BUS_ORDER) keysByBus.set(busId, [])
+function stemEntriesByBus(state: AppState): Map<BusId, StemEntry[]> {
+  const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+  const byBus = new Map<BusId, StemEntry[]>()
+  for (const busId of BUS_ORDER) byBus.set(busId, [])
+
   for (const rifff of placed) {
+    const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
+    const startBar = rifff.startBar!
+    const endBar = startBar + playedBars
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
       const busId = state.busOf[key] ?? DEFAULT_STEMS_BUS
-      keysByBus.get(busId)!.push(key)
+      byBus.get(busId)!.push({ key, startBar, endBar })
     }
   }
 
-  const allKeys = [...keysByBus.values()].flat()
+  return byBus
+}
+
+export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
+  assertHasPlacedRifffs(state)
+  const keysByBus = stemEntriesByBus(state)
+  const allKeys = [...keysByBus.values()].flat().map((e) => e.key)
   const durationBars = loopLengthBarsFor(state)
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
@@ -167,8 +199,9 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
     await client.connect(engineHandle.port)
 
     for (const busId of BUS_ORDER) {
-      const busKeys = keysByBus.get(busId)!
-      if (busKeys.length === 0) continue
+      const busEntries = keysByBus.get(busId)!
+      if (busEntries.length === 0) continue
+      const busKeys = busEntries.map((e) => e.key)
 
       const busState = soloState(state, new Set(busKeys), allKeys)
       const project = await buildEngineProject(busState, resolveStretchedForExport, pluginCatalog)
@@ -250,5 +283,135 @@ export async function exportStemsNextToSource(state: AppState, sourcePath: strin
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
   await renderStemsToDir(state, stemsDir)
+  await shell.openPath(stemsDir)
+}
+
+/**
+ * Renders one WAV per physical TRACK within each bus, not one per bus --
+ * "as if you'd exported the tidied Ableton project and rendered each track
+ * individually", for a user who wants to adjust individual layers rather
+ * than accept a frozen bus mixdown. Each bus's stems are partitioned into
+ * the same minimum-track-count grouping buildAlsXml.ts's own Ableton export
+ * already uses (see packIntoTracks): stems that don't overlap in time can
+ * share one physical track/file, stems that DO overlap are forced onto
+ * separate ones. Every stem on a given track is soloed together for that
+ * track's render, same multi-target soloState reuse as renderStemsToDir.
+ * Named `<projectName> - <busId> <n>.wav`, always numbered (even a bus with
+ * only one track) so the number consistently means "track index within this
+ * bus" regardless of how many tracks a given bus actually needed -- flat in
+ * destDir, no subfolders, same as renderStemsToDir, so these still drag
+ * straight into another DAW in one motion.
+ */
+export async function renderStemTracksToDir(
+  state: AppState,
+  destDir: string,
+  projectName: string
+): Promise<string[]> {
+  assertHasPlacedRifffs(state)
+  const entriesByBus = stemEntriesByBus(state)
+  const allKeys = [...entriesByBus.values()].flat().map((e) => e.key)
+  const sanitizedProjectName = sanitizeFileNamePart(projectName)
+  const durationBars = loopLengthBarsFor(state)
+  const engineHandle = await spawnEngine()
+  const client = new EngineClient()
+  const fileNames: string[] = []
+  const pluginCatalog = loadCatalog()
+
+  try {
+    await client.connect(engineHandle.port)
+
+    for (const busId of BUS_ORDER) {
+      const busEntries = entriesByBus.get(busId)!
+      if (busEntries.length === 0) continue
+
+      const packed = packIntoTracks(
+        busEntries,
+        (e) => e.startBar,
+        (e) => e.endBar
+      )
+      for (let i = 0; i < packed.length; i++) {
+        const trackKeys = new Set(packed[i].map((e) => e.key))
+        const trackState = soloState(state, trackKeys, allKeys)
+        const project = await buildEngineProject(
+          trackState,
+          resolveStretchedForExport,
+          pluginCatalog
+        )
+        const fileName = `${sanitizedProjectName} - ${busId} ${i + 1}.wav`
+        const outputPath = join(destDir, fileName)
+
+        client.send('load-project', project)
+        const result = (await client.sendAndAwaitType(
+          'render-export',
+          { outputPath, durationBars },
+          'render-export-result',
+          RENDER_EXPORT_TIMEOUT_MS
+        )) as { success: boolean; error?: string }
+
+        if (!result.success) {
+          throw new Error(
+            `native export failed for bus "${busId}" track ${i + 1}: ${result.error ?? 'unknown error'}`
+          )
+        }
+
+        fileNames.push(fileName)
+      }
+    }
+
+    return fileNames
+  } finally {
+    client.disconnect()
+    engineHandle.stop()
+  }
+}
+
+/** Mirrors nativeExportStemsToDisk above, for the per-track variant. */
+export async function nativeExportStemTracksToDisk(
+  win: BrowserWindow,
+  state: AppState,
+  projectName: string
+): Promise<string | null> {
+  const result = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose a folder for the exported stem tracks'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  const dir = result.filePaths[0]
+  await renderStemTracksToDir(state, dir, projectName)
+  await shell.openPath(dir)
+  return dir
+}
+
+/** Mirrors exportStemsToLibrary above, for the per-track variant -- shares
+ * the same Stems/ folder (each export type fully replaces whatever was
+ * there before, same as re-running exportStemsToLibrary itself does). */
+export async function exportStemTracksToLibrary(
+  state: AppState,
+  libraryName: string
+): Promise<void> {
+  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
+  const stemsDir = sketchStemsDir(libraryName)
+  rmSync(stemsDir, { recursive: true, force: true })
+  mkdirSync(stemsDir, { recursive: true })
+  await renderStemTracksToDir(state, stemsDir, libraryName)
+  await shell.openPath(stemsDir)
+}
+
+/** Mirrors exportStemsNextToSource above, for the per-track variant. The
+ * project name comes from the source file's own basename -- there's no
+ * separate "sketch name" for an externally-located sketch, this is what's
+ * shown for it everywhere else in the app (see App.tsx's
+ * basenameWithoutProjectExt). */
+export async function exportStemTracksNextToSource(
+  state: AppState,
+  sourcePath: string
+): Promise<void> {
+  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
+  const stemsDir = join(dirname(sourcePath), 'Stems')
+  rmSync(stemsDir, { recursive: true, force: true })
+  mkdirSync(stemsDir, { recursive: true })
+  const projectName = basename(sourcePath).replace(/\.sssketchproj$/i, '')
+  await renderStemTracksToDir(state, stemsDir, projectName)
   await shell.openPath(stemsDir)
 }

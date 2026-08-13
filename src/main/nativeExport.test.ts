@@ -44,9 +44,12 @@ import {
   loopLengthBarsFor,
   nativeExport,
   renderStemsToDir,
+  renderStemTracksToDir,
   soloState,
   exportStemsToLibrary,
-  exportStemsNextToSource
+  exportStemsNextToSource,
+  exportStemTracksToLibrary,
+  exportStemTracksNextToSource
 } from './nativeExport'
 
 const rifff: Rifff = {
@@ -557,6 +560,297 @@ describe('renderStemsToDir', () => {
       )
     } finally {
       rmSync(destDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('renderStemTracksToDir', () => {
+  it('packs two non-overlapping same-bus stems onto ONE shared track, still numbered', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-dest-'))
+    try {
+      const stemAPath = join(srcDir, 'a.wav')
+      const stemBPath = join(srcDir, 'b.wav')
+      writeConstantWav(stemAPath, 0.3, 4410)
+      writeConstantWav(stemBPath, 0.2, 4410)
+      // Rifff A occupies bar [0, 1), rifff B occupies bar [1, 2) -- back to
+      // back, no overlap -- so packIntoTracks should place both on the same
+      // physical track.
+      const rifffA: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick',
+            type: 'fx',
+            path: stemAPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const rifffB: Rifff = {
+        groupId: 'r2',
+        name: 'b',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 1,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'snare',
+            type: 'fx',
+            path: stemBPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifffA, r2: rifffB },
+        busOf: { 'r1:1': 'drums', 'r2:1': 'drums' }
+      }
+
+      const fileNames = await renderStemTracksToDir(state, destDir, 'my proj')
+
+      expect(fileNames).toEqual(['my proj - drums 1.wav'])
+      expect(existsSync(join(destDir, 'my proj - drums 1.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('forces two time-overlapping same-bus stems onto separate numbered tracks', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-dest-'))
+    try {
+      const stemAPath = join(srcDir, 'a.wav')
+      const stemBPath = join(srcDir, 'b.wav')
+      writeConstantWav(stemAPath, 0.3, 4410)
+      writeConstantWav(stemBPath, 0.2, 4410)
+      // Both rifffs start at bar 0 -- full overlap -- so packIntoTracks must
+      // open a second track rather than sharing one.
+      const rifffA: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick',
+            type: 'fx',
+            path: stemAPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const rifffB: Rifff = {
+        groupId: 'r2',
+        name: 'b',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'snare',
+            type: 'fx',
+            path: stemBPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifffA, r2: rifffB },
+        busOf: { 'r1:1': 'drums', 'r2:1': 'drums' }
+      }
+
+      const fileNames = await renderStemTracksToDir(state, destDir, 'my proj')
+
+      expect(fileNames).toEqual(['my proj - drums 1.wav', 'my proj - drums 2.wav'])
+      expect(existsSync(join(destDir, 'my proj - drums 1.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'my proj - drums 2.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('sanitizes unsafe characters out of the project name in every filename', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-dest-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'a',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'drums' }
+      }
+
+      const fileNames = await renderStemTracksToDir(state, destDir, 'My:Project/Name')
+
+      expect(fileNames).toEqual(['My_Project_Name - drums 1.wav'])
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('throws instead of silently succeeding with zero files when nothing is placed', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-dest-'))
+    try {
+      const state: AppState = { ...initialState, rifffs: {} }
+
+      await expect(renderStemTracksToDir(state, destDir, 'my proj')).rejects.toThrow(
+        'Nothing to export -- no rifffs are placed on the timeline.'
+      )
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('exportStemTracksToLibrary / exportStemTracksNextToSource', () => {
+  it('exportStemTracksToLibrary uses the library name as the project name', async () => {
+    const { sketchStemsDir } = await import('./projectLibrary')
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'lib rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'bass' }
+      }
+
+      await exportStemTracksToLibrary(state, 'my-sketch')
+
+      expect(existsSync(join(sketchStemsDir('my-sketch'), 'my-sketch - bass 1.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('exportStemTracksNextToSource derives the project name from the source filename', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-project-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'ext rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'lead' }
+      }
+      const sourcePath = join(projectDir, 'my-proj.sssketchproj')
+
+      await exportStemTracksNextToSource(state, sourcePath)
+
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj - lead 1.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('exportStemTracksToLibrary throws and does NOT clear a pre-existing Stems/ folder when nothing is placed', async () => {
+    const { sketchStemsDir } = await import('./projectLibrary')
+    const stemsDir = sketchStemsDir('untidied-tracks-sketch')
+    try {
+      const markerPath = join(stemsDir, 'marker.wav')
+      mkdirSync(stemsDir, { recursive: true })
+      writeFileSync(markerPath, 'not really a wav, just a marker')
+
+      const state: AppState = { ...initialState, rifffs: {} }
+
+      await expect(exportStemTracksToLibrary(state, 'untidied-tracks-sketch')).rejects.toThrow(
+        'Nothing to export -- no rifffs are placed on the timeline.'
+      )
+      expect(existsSync(markerPath)).toBe(true)
+    } finally {
+      rmSync(stemsDir, { recursive: true, force: true })
     }
   })
 })

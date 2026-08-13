@@ -42,6 +42,7 @@ import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
+import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
@@ -414,7 +415,7 @@ function Timeline({
   )
 }
 
-type ExportFormat = 'ableton' | 'reaper' | 'stems'
+type ExportFormat = 'ableton' | 'reaper' | 'stems' | 'stemTracks'
 
 function ProjectMenu({
   currentSketch,
@@ -449,6 +450,7 @@ function ProjectMenu({
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
   const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null)
   const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
+  const [stemsFormatPickerOpen, setStemsFormatPickerOpen] = useState(false)
 
   async function handleNew(): Promise<void> {
     // Only worth interrupting for if there's actually something that would
@@ -549,6 +551,8 @@ function ProjectMenu({
           await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
         } else if (format === 'reaper') {
           await window.rifffApi.exportRppToLibrary(JSON.stringify(state), currentSketch.name)
+        } else if (format === 'stemTracks') {
+          await window.rifffApi.exportStemTracksToLibrary(JSON.stringify(state), currentSketch.name)
         } else {
           await window.rifffApi.exportStemsToLibrary(JSON.stringify(state), currentSketch.name)
         }
@@ -557,20 +561,31 @@ function ProjectMenu({
           await window.rifffApi.exportAlsNextToSource(JSON.stringify(state), currentSketch.path)
         } else if (format === 'reaper') {
           await window.rifffApi.exportRppNextToSource(JSON.stringify(state), currentSketch.path)
+        } else if (format === 'stemTracks') {
+          await window.rifffApi.exportStemTracksNextToSource(
+            JSON.stringify(state),
+            currentSketch.path
+          )
         } else {
           await window.rifffApi.exportStemsNextToSource(JSON.stringify(state), currentSketch.path)
         }
       } else {
         // currentSketch === null: nothing saved yet, no real location to
         // export next to -- Ableton/Reaper fall back to a save dialog
-        // (same as before); stems export already has its own dialog-based
-        // folder picker as its fallback (nativeExportStemsToDisk).
+        // (same as before); both stems variants already have their own
+        // dialog-based folder picker as their fallback.
         if (format === 'ableton') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
           await window.rifffApi.exportAls(JSON.stringify(state), defaultName)
         } else if (format === 'reaper') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
           await window.rifffApi.exportRpp(JSON.stringify(state), defaultName)
+        } else if (format === 'stemTracks') {
+          // exportStemTracksNative's filenames embed the project name
+          // directly, unlike exportAls/exportRpp's optional save-dialog
+          // suggestion -- so it's always generated here, not optional.
+          const defaultName = await window.rifffApi.generateDefaultProjectName()
+          await window.rifffApi.exportStemTracksNative(JSON.stringify(state), defaultName)
         } else {
           await window.rifffApi.exportStemsNative(JSON.stringify(state))
         }
@@ -666,7 +681,7 @@ function ProjectMenu({
           ignoreRef={exportButtonRef}
           items={[
             { label: 'export mix', onClick: handleExportMix },
-            { label: 'export stems', onClick: () => handleExportProject('stems') },
+            { label: 'export stems', onClick: () => setStemsFormatPickerOpen(true) },
             { label: 'export project…', onClick: () => setExportFormatPickerOpen(true) }
           ]}
           onClose={() => setExportMenu(null)}
@@ -686,6 +701,15 @@ function ProjectMenu({
             handleExportProject(format)
           }}
           onCancel={() => setExportFormatPickerOpen(false)}
+        />
+      )}
+      {stemsFormatPickerOpen && (
+        <StemsFormatPicker
+          onChoose={(format) => {
+            setStemsFormatPickerOpen(false)
+            handleExportProject(format)
+          }}
+          onCancel={() => setStemsFormatPickerOpen(false)}
         />
       )}
       {tidyUpNudgeOpen && (

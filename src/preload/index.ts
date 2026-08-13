@@ -120,6 +120,18 @@ const api = {
     ipcRenderer.invoke('export-stems-to-library', stateJson, libraryName),
   exportStemsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
     ipcRenderer.invoke('export-stems-next-to-source', stateJson, sourcePath),
+  // Per-track variant of the exportStemsNative/exportStemsToLibrary/
+  // exportStemsNextToSource trio above -- one WAV per packed track within a
+  // bus rather than one mixed-down WAV per bus (see nativeExport.ts's
+  // renderStemTracksToDir doc comment). projectName is required (unlike
+  // exportAls/exportRpp's optional defaultName) since it's embedded directly
+  // in every rendered filename, not just used as a save-dialog suggestion.
+  exportStemTracksNative: (stateJson: string, projectName: string): Promise<string | null> =>
+    ipcRenderer.invoke('export-stem-tracks-native', stateJson, projectName),
+  exportStemTracksToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
+    ipcRenderer.invoke('export-stem-tracks-to-library', stateJson, libraryName),
+  exportStemTracksNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
+    ipcRenderer.invoke('export-stem-tracks-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
