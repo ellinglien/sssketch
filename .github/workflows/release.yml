@@ -13,7 +13,35 @@ permissions:
   contents: write
 
 jobs:
+  # electron-builder's Github publisher checks "does a release for this tag
+  # exist yet?" and creates one if not -- but each matrix leg's own job runs
+  # TWO of these checks concurrently (one per uploaded asset, e.g. the .dmg
+  # and its .blockmap), and both can see "doesn't exist" before either
+  # finishes creating one. Reproduced on every release so far: sometimes
+  # both concurrent creates crash electron-builder outright (a malformed
+  # response body it can't parse), and sometimes both succeed, silently
+  # splitting the tag's assets across two separate draft releases. Having
+  # every matrix leg depend on this job pre-creating the release means
+  # electron-builder's own "doesn't exist" check always finds one already
+  # there, so it never has anything to race to create.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pre-create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists -- skipping create (idempotent, e.g. a rerun)"
+          else
+            gh release create "$TAG" --draft --title "$VERSION" --notes ""
+          fi
+
   release:
+    needs: create-release
     runs-on: macos-latest
     strategy:
       fail-fast: false
