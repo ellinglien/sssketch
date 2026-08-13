@@ -29,9 +29,25 @@ import type { Rifff } from '../shared/types'
 // exist there, and loadCatalog treats that as "no scan has run yet" (an
 // empty catalog), which is exactly correct for these fixtures, none of
 // which set masterChain.
-vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
+// shell.openPath is mocked as a no-op: exportStemsToLibrary/
+// exportStemsNextToSource (added below) open the destination in Finder on
+// success, same as nativeExportStemsToDisk already does, but there's no real
+// Finder to open against under Vitest -- nothing in this file asserts on it,
+// it just needs to not throw (see the earlier "No shell export is defined on
+// the electron mock" failure this fixes).
+vi.mock('electron', () => ({
+  app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() },
+  shell: { openPath: vi.fn().mockResolvedValue('') }
+}))
 
-import { loopLengthBarsFor, nativeExport, renderStemsToDir, soloState } from './nativeExport'
+import {
+  loopLengthBarsFor,
+  nativeExport,
+  renderStemsToDir,
+  soloState,
+  exportStemsToLibrary,
+  exportStemsNextToSource
+} from './nativeExport'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -311,8 +327,13 @@ describe('renderStemsToDir', () => {
       // Path separator in the stem name gets sanitized away, matching
       // sanitizeFileNamePart's own rules — a real reported concern given
       // Endlesss preset names are free text.
+      //
+      // No busOf assignment is set on this fixture's state, so this lands
+      // under the 'aux' fallback subfolder (see DEFAULT_STEMS_BUS in
+      // nativeExport.ts) rather than flat in destDir -- bus-grouping is
+      // unconditional, not opt-in.
       expect(fileNames).toEqual(['my rifff-kick_snare.wav'])
-      expect(existsSync(join(destDir, 'my rifff-kick_snare.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'aux', 'my rifff-kick_snare.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
@@ -369,12 +390,178 @@ describe('renderStemsToDir', () => {
 
       const fileNames = await renderStemsToDir(state, destDir)
 
+      // No busOf assignment set here either -- see the same note above.
       expect(fileNames).toEqual(['a-b.wav', 'a-b-2.wav'])
-      expect(existsSync(join(destDir, 'a-b.wav'))).toBe(true)
-      expect(existsSync(join(destDir, 'a-b-2.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'aux', 'a-b.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'aux', 'a-b-2.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('groups output into <destDir>/<busId>/ subfolders, using state.busOf', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'my rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'drums' }
+      }
+
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      expect(fileNames).toEqual(['my rifff-kick.wav'])
+      expect(existsSync(join(destDir, 'drums', 'my rifff-kick.wav'))).toBe(true)
+      expect(existsSync(join(destDir, 'my rifff-kick.wav'))).toBe(false) // not flat anymore
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('falls back to the aux bus subfolder for a stem with no busOf assignment', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'untidied',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifff }, busOf: {} }
+
+      await renderStemsToDir(state, destDir)
+
+      expect(existsSync(join(destDir, 'aux', 'untidied-a.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+})
+
+describe('exportStemsToLibrary / exportStemsNextToSource', () => {
+  it('exportStemsToLibrary writes bus-grouped stems into sketchStemsDir(name)', async () => {
+    // Reuses this test file's own electron mock (getPath -> tmpdir()) --
+    // sketchStemsDir resolves under that same tmpdir() via projectLibrary.ts.
+    const { sketchStemsDir } = await import('./projectLibrary')
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'lib rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'bass' }
+      }
+
+      await exportStemsToLibrary(state, 'my-sketch')
+
+      expect(existsSync(join(sketchStemsDir('my-sketch'), 'bass', 'lib rifff-a.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('exportStemsNextToSource writes bus-grouped stems into <sourceDir>/Stems/', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-project-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'ext rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'lead' }
+      }
+      const sourcePath = join(projectDir, 'my-proj.sssketchproj')
+
+      await exportStemsNextToSource(state, sourcePath)
+
+      expect(existsSync(join(projectDir, 'Stems', 'lead', 'ext rifff-a.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(projectDir, { recursive: true, force: true })
     }
   }, 30000)
 })

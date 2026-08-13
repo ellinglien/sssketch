@@ -1,15 +1,16 @@
-import { readFileSync, rmSync } from 'node:fs'
+import { readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
-import { stemKey } from '@shared/types'
+import { stemKey, type BusId } from '@shared/types'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
+import { sketchStemsDir } from './projectLibrary'
 
 // EngineClient.sendAndAwaitType's own default (30000ms) is right for the
 // fast control round-trips it's normally used for (position queries, arm/
@@ -125,15 +126,19 @@ function sanitizeFileNamePart(name: string): string {
  * choking on the combined size of every stem's raw audio in one IPC
  * message. Returns the filenames actually written, in render order.
  */
+const DEFAULT_STEMS_BUS: BusId = 'aux'
+
 export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-  const targets: { key: string; rifffName: string; stemName: string }[] = []
+  const targets: { key: string; rifffName: string; stemName: string; busId: BusId }[] = []
   for (const rifff of placed) {
     for (const stem of rifff.stems) {
+      const key = stemKey(rifff.groupId, stem.slot)
       targets.push({
-        key: stemKey(rifff.groupId, stem.slot),
+        key,
         rifffName: rifff.name,
-        stemName: stem.name
+        stemName: stem.name,
+        busId: state.busOf[key] ?? DEFAULT_STEMS_BUS
       })
     }
   }
@@ -165,7 +170,9 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
         pluginCatalog
       )
       const fileName = uniqueFileName(target.rifffName, target.stemName)
-      const outputPath = join(destDir, fileName)
+      const busDir = join(destDir, target.busId)
+      mkdirSync(busDir, { recursive: true })
+      const outputPath = join(busDir, fileName)
 
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
@@ -213,4 +220,32 @@ export async function nativeExportStemsToDisk(
   await renderStemsToDir(state, dir)
   await shell.openPath(dir)
   return dir
+}
+
+/**
+ * Routine, no-dialog stems export for a library-resident sketch: writes
+ * bus-grouped stems straight into that sketch's own `Stems/` folder,
+ * clearing it first (fully owned by this sketch, safe to clear -- same
+ * reasoning as exportAbletonToLibrary/exportReaperToLibrary's own
+ * Samples/Imported clearing), then opens it in Finder.
+ */
+export async function exportStemsToLibrary(state: AppState, libraryName: string): Promise<void> {
+  const stemsDir = sketchStemsDir(libraryName)
+  rmSync(stemsDir, { recursive: true, force: true })
+  mkdirSync(stemsDir, { recursive: true })
+  await renderStemsToDir(state, stemsDir)
+  await shell.openPath(stemsDir)
+}
+
+/**
+ * Same no-dialog, always-in-a-Stems-subfolder export as
+ * exportStemsToLibrary above, for a sketch with a known external file
+ * location but not in the library.
+ */
+export async function exportStemsNextToSource(state: AppState, sourcePath: string): Promise<void> {
+  const stemsDir = join(dirname(sourcePath), 'Stems')
+  rmSync(stemsDir, { recursive: true, force: true })
+  mkdirSync(stemsDir, { recursive: true })
+  await renderStemsToDir(state, stemsDir)
+  await shell.openPath(stemsDir)
 }
