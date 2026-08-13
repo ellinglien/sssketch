@@ -90,9 +90,10 @@ const REAPER_BUS_COLORS: Record<BusId, string> = {
 // this custom color, not the default", OR'd with a BGR-packed (not RGB)
 // int -- confirmed against REAPER's own SWS extension source
 // (Color/Color.cpp's SWS_ColorToNative, which swaps R/B to produce
-// Windows-COLORREF-style native colors on every platform). Flagged for
-// manual confirmation once a real export can be opened in REAPER -- see
-// the design doc's "Manual verification" section.
+// Windows-COLORREF-style native colors on every platform), AND confirmed
+// against a real export opened in real REAPER (colors, PLAYRATE, and
+// tiling all render correctly) -- see the design doc's "Manual
+// verification" section.
 function colorInt(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
