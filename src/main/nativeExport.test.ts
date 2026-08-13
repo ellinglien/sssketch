@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AppState } from '../renderer/src/state/store'
@@ -478,6 +478,22 @@ describe('renderStemsToDir', () => {
       rmSync(destDir, { recursive: true, force: true })
     }
   }, 30000)
+
+  it('throws instead of silently succeeding with zero files when nothing is placed', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      // No rifffs at all -- the emptiest possible "nothing placed" state.
+      // This also covers nativeExportStemsToDisk (the dialog-based path),
+      // which calls renderStemsToDir directly and has no guard of its own.
+      const state: AppState = { ...initialState, rifffs: {} }
+
+      await expect(renderStemsToDir(state, destDir)).rejects.toThrow(
+        'Nothing to export -- no rifffs are placed on the timeline.'
+      )
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('exportStemsToLibrary / exportStemsNextToSource', () => {
@@ -564,4 +580,46 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
       rmSync(projectDir, { recursive: true, force: true })
     }
   }, 30000)
+
+  it('exportStemsToLibrary throws and does NOT clear a pre-existing Stems/ folder when nothing is placed', async () => {
+    const { sketchStemsDir } = await import('./projectLibrary')
+    // Pre-populate the sketch's Stems/ folder, as if a previous export had
+    // already run -- the bug this guards against is exportStemsToLibrary
+    // rmSync-ing this away before discovering there's nothing to render.
+    const stemsDir = sketchStemsDir('untidied-sketch')
+    try {
+      const markerPath = join(stemsDir, 'aux', 'previous-export.wav')
+      mkdirSync(join(stemsDir, 'aux'), { recursive: true })
+      writeFileSync(markerPath, 'not really a wav, just a marker')
+
+      const state: AppState = { ...initialState, rifffs: {} }
+
+      await expect(exportStemsToLibrary(state, 'untidied-sketch')).rejects.toThrow(
+        'Nothing to export -- no rifffs are placed on the timeline.'
+      )
+      expect(existsSync(markerPath)).toBe(true)
+    } finally {
+      rmSync(stemsDir, { recursive: true, force: true })
+    }
+  })
+
+  it('exportStemsNextToSource throws and does NOT clear a pre-existing Stems/ folder when nothing is placed', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-project-'))
+    try {
+      const stemsDir = join(projectDir, 'Stems')
+      mkdirSync(join(stemsDir, 'aux'), { recursive: true })
+      const markerPath = join(stemsDir, 'aux', 'previous-export.wav')
+      writeFileSync(markerPath, 'not really a wav, just a marker')
+
+      const state: AppState = { ...initialState, rifffs: {} }
+      const sourcePath = join(projectDir, 'my-proj.sssketchproj')
+
+      await expect(exportStemsNextToSource(state, sourcePath)).rejects.toThrow(
+        'Nothing to export -- no rifffs are placed on the timeline.'
+      )
+      expect(existsSync(markerPath)).toBe(true)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
 })

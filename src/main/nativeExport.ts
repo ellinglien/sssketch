@@ -106,6 +106,23 @@ function sanitizeFileNamePart(name: string): string {
   return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
 }
 
+// Mirrors exportAudioMaterialization.ts's materializeStemsForExport's own
+// "nothing placed" guard (same message, so App.tsx's runExportProject shows
+// an identical alert regardless of which export format the user picked) --
+// without this, an empty/untidied-away project silently produced a
+// zero-file "successful" stems export instead of failing loud like the
+// Ableton/Reaper paths do. Called at the START of every entry point that
+// can destructively clear a folder before rendering (exportStemsToLibrary,
+// exportStemsNextToSource), not just inside renderStemsToDir itself --
+// a check placed only inside renderStemsToDir would fire too late for
+// those two, after their own rmSync already ran.
+function assertHasPlacedRifffs(state: AppState): void {
+  const anyPlaced = Object.values(state.rifffs).some((r) => r.startBar !== undefined)
+  if (!anyPlaced) {
+    throw new Error('Nothing to export -- no rifffs are placed on the timeline.')
+  }
+}
+
 /**
  * Renders each stem across the whole arrangement to its own WAV, soloed —
  * i.e. every OTHER stem muted for that render, regardless of its current
@@ -129,6 +146,7 @@ function sanitizeFileNamePart(name: string): string {
 const DEFAULT_STEMS_BUS: BusId = 'aux'
 
 export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
+  assertHasPlacedRifffs(state)
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   const targets: { key: string; rifffName: string; stemName: string; busId: BusId }[] = []
   for (const rifff of placed) {
@@ -230,6 +248,7 @@ export async function nativeExportStemsToDisk(
  * Samples/Imported clearing), then opens it in Finder.
  */
 export async function exportStemsToLibrary(state: AppState, libraryName: string): Promise<void> {
+  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = sketchStemsDir(libraryName)
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
@@ -243,6 +262,7 @@ export async function exportStemsToLibrary(state: AppState, libraryName: string)
  * location but not in the library.
  */
 export async function exportStemsNextToSource(state: AppState, sourcePath: string): Promise<void> {
+  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = join(dirname(sourcePath), 'Stems')
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
