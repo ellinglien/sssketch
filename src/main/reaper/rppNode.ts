@@ -56,7 +56,12 @@ export function serializeRpp(root: RppNode): string {
 
 /** Splits one line into its tag and params, treating a double-quoted span
  * (however it contains spaces) as a single param -- e.g. `NAME "a b c"`
- * splits into `['NAME', '"a b c"']`, not four separate tokens. */
+ * splits into `['NAME', '"a b c"']`, not four separate tokens. Every space
+ * seen outside quotes ends a token -- including one that produces an empty
+ * token (e.g. a trailing space after the tag, from a param that serialized
+ * to `''`) -- so an empty-string param round-trips instead of silently
+ * vanishing. This relies on the caller not having trimmed trailing
+ * whitespace off `line` first (see parseRpp's use of trimStart, not trim). */
 function splitLine(line: string): { tag: string; params: string[] } {
   const tokens: string[] = []
   let current = ''
@@ -68,13 +73,13 @@ function splitLine(line: string): { tag: string; params: string[] } {
       continue
     }
     if (ch === ' ' && !inQuotes) {
-      if (current) tokens.push(current)
+      tokens.push(current)
       current = ''
       continue
     }
     current += ch
   }
-  if (current) tokens.push(current)
+  tokens.push(current)
   const [tag, ...params] = tokens
   return { tag, params }
 }
@@ -82,18 +87,28 @@ function splitLine(line: string): { tag: string; params: string[] } {
 /** Parses serializeRpp's own output back into a tree. Test-only in
  * practice (buildRppProject.ts itself only ever serializes, never
  * re-parses its own output), but exported since it's a genuinely reusable,
- * self-contained capability, not a test-internal helper. */
+ * self-contained capability, not a test-internal helper.
+ *
+ * Uses trimStart (not trim) when reading each line: only the leading
+ * indentation is structural, and a trailing space can itself be meaningful
+ * (see splitLine's empty-token handling) -- trimming it away would silently
+ * drop an empty-string param. */
 export function parseRpp(text: string): RppNode {
   const lines = text.split('\n')
   let i = 0
   function parseNode(): RppNode {
-    const raw = lines[i].trim()
+    const raw = lines[i].trimStart()
     i++
     if (raw.startsWith('<')) {
       const { tag, params } = splitLine(raw.slice(1))
       const children: RppNode[] = []
-      while (lines[i].trim() !== '>') {
+      while (lines[i] !== undefined && lines[i].trimStart() !== '>') {
         children.push(parseNode())
+      }
+      if (lines[i] === undefined) {
+        throw new Error(
+          `parseRpp: block "${tag}" is missing its closing '>' (reached end of input)`
+        )
       }
       i++ // consume the closing '>'
       return { tag, params, children }

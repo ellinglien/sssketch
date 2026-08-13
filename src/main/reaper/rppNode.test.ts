@@ -80,4 +80,15 @@ describe('parseRpp / findChild / findAllChildren round trip', () => {
     expect(findChild(parsed, 'ANYTHING')).toBeUndefined()
     expect(findAllChildren(parsed, 'ANYTHING')).toEqual([])
   })
+
+  it('round-trips an empty-string param instead of silently dropping it', () => {
+    const original = rppField('TAG', '')
+    const parsed = parseRpp(serializeRpp(original))
+    expect(parsed.params).toEqual([''])
+  })
+
+  it('throws a clear error, not a TypeError, when a block is missing its closing bracket', () => {
+    const truncated = '<TRACK\n  NAME "drums"'
+    expect(() => parseRpp(truncated)).toThrow(/TRACK.*closing/)
+  })
 })
