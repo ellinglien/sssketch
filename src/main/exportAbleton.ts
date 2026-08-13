@@ -1,17 +1,8 @@
-import {
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  rmSync,
-  statSync
-} from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { join, basename, dirname } from 'node:path'
 import { dialog, shell, BrowserWindow } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
-import { stemKey } from '@shared/types'
 // electron-vite's own Node-asset mechanism -- resolves to a real filesystem
 // path in both dev and packaged builds, matching this file's own precedent
 // (see index.ts's `import icon from '../../resources/icon.png?asset'`).
@@ -20,82 +11,13 @@ import { stemKey } from '@shared/types'
 // plugin loaded to understand `?asset`, only the real Electron main build does.
 import templatePath from './ableton/template.xml?asset'
 import { buildAlsXml } from './ableton/buildAlsXml'
-import { spawnEngine, type EngineHandle } from './engineProcess'
-import { EngineClient } from './engineClient'
-import {
-  isWavPath,
-  cachedStemPath,
-  cloneOrCopy,
-  samplesCacheDir,
-  sketchAbletonDir,
-  writeSketchMeta
-} from './projectLibrary'
-import { readWavHeaderBytes } from './importRifff'
-import { findWavChunks } from '@shared/wavChunks'
-
-// Anything outside this set is unsafe (or at least unwelcome) in a filename
-// across macOS/Windows/Linux -- matches nativeExport.ts's own
-// sanitizeFileNamePart exactly (duplicated rather than imported: it's not
-// exported from that module, and it's a five-line pure function -- not worth
-// coupling these two independent export features over).
-function sanitizeFileNamePart(name: string): string {
-  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
-}
-
-/** Materializes one stem's audio at `destPath`, via the shared cache (see
- * projectLibrary.ts's cachedStemPath/cloneOrCopy): if this stem's own
- * cache entry already exists (same source path+size+mtime, or same LORE
- * StemCID), it's cloned straight out -- no re-read of the source, no
- * re-decode. Otherwise it's materialized into the cache first (a WAV
- * source is a plain copy; anything else -- a LORE-cached stem, whose
- * actual on-disk bytes are Endlesss's own storage codec, confirmed FLAC --
- * is decoded via the native engine's bake-stem command, which needs
- * `client` to be connected), then cloned out the same way. Returns false
- * (caller should drop this stem from the export) on any failure, including
- * "needed to decode but no engine connection was available". */
-async function materializeStem(
-  path: string,
-  destPath: string,
-  client: EngineClient | null
-): Promise<boolean> {
-  const cachePath = cachedStemPath(path)
-  if (!existsSync(cachePath)) {
-    try {
-      if (isWavPath(path)) {
-        copyFileSync(path, cachePath)
-      } else {
-        if (!client) return false
-        const result = (await client.sendAndAwaitType(
-          'bake-stem',
-          { path, rotationSec: 0, outputPath: cachePath },
-          'bake-stem-result'
-        )) as { success: boolean; error?: string }
-        if (!result.success) {
-          console.error(`materializeStem: native decode failed for ${path}: ${result.error}`)
-          // The native side may have left a partial/empty file at
-          // outputPath despite reporting failure -- don't let that poison
-          // the cache for every future export of this stem (see CLAUDE.md's
-          // "cache by path, evict on rejection" convention).
-          if (existsSync(cachePath)) rmSync(cachePath)
-          return false
-        }
-      }
-    } catch (err) {
-      // Same reasoning as above: a copy/decode that threw partway through
-      // may still have left a partial file behind. Evict before rethrowing
-      // so this failure doesn't silently poison the cache forever.
-      if (existsSync(cachePath)) rmSync(cachePath)
-      throw err
-    }
-  }
-  cloneOrCopy(cachePath, destPath)
-  return true
-}
+import { sketchAbletonDir, writeSketchMeta } from './projectLibrary'
+import { materializeStemsForExport } from './exportAudioMaterialization'
 
 /**
  * Materializes every placed stem's source audio into
- * `<outputDir>/Samples/Imported/` (via the shared cache -- see
- * materializeStem), builds the .als XML, gzips it, and writes
+ * `<outputDir>/Samples/Imported/` (via materializeStemsForExport -- see
+ * exportAudioMaterialization.ts), builds the .als XML, gzips it, and writes
  * `<outputDir>/<projectName>.als`. A stem whose source file can't be
  * copied/decoded is logged and skipped (its clip is simply absent from the
  * export) rather than failing the whole export -- matching this
@@ -117,93 +39,7 @@ export async function buildAndWriteAlsProject(
   outputDir: string,
   projectName: string
 ): Promise<void> {
-  const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-  if (placed.length === 0) {
-    throw new Error('Nothing to export -- no rifffs are placed on the timeline.')
-  }
-
-  const samplesDir = join(outputDir, 'Samples', 'Imported')
-  mkdirSync(samplesDir, { recursive: true })
-  mkdirSync(samplesCacheDir(), { recursive: true })
-
-  const stemFileNames = new Map<string, string>()
-  const usedNames = new Map<string, number>()
-  function uniqueFileName(rifffName: string, stemName: string): string {
-    const base = `${sanitizeFileNamePart(rifffName)}-${sanitizeFileNamePart(stemName)}`
-    const count = (usedNames.get(base) ?? 0) + 1
-    usedNames.set(base, count)
-    return count === 1 ? `${base}.wav` : `${base}-${count}.wav`
-  }
-
-  const stemEntries: { key: string; path: string; destPath: string }[] = []
-  for (const rifff of placed) {
-    for (const stem of rifff.stems) {
-      const fileName = uniqueFileName(rifff.name, stem.name)
-      const entry = {
-        key: stemKey(rifff.groupId, stem.slot),
-        path: stem.path,
-        destPath: join(samplesDir, fileName)
-      }
-      stemEntries.push(entry)
-      stemFileNames.set(entry.key, fileName)
-    }
-  }
-
-  // Only spawn the native engine at all if at least one stem actually needs
-  // decoding -- if every stem is already cached from a prior export, this
-  // export needs no engine process whatsoever.
-  const needsEngine = stemEntries.some(
-    ({ path }) => !isWavPath(path) && !existsSync(cachedStemPath(path))
-  )
-  let client: EngineClient | null = null
-  let engineHandle: EngineHandle | null = null
-  if (needsEngine) {
-    engineHandle = await spawnEngine()
-    client = new EngineClient()
-    try {
-      await client.connect(engineHandle.port)
-    } catch (err) {
-      // spawnEngine() already resolved, meaning the process is up and
-      // running -- if connect() then throws, stop it here so it isn't
-      // orphaned (the try/finally below is never reached in that case,
-      // since this whole block runs before it).
-      engineHandle.stop()
-      throw err
-    }
-  }
-  try {
-    for (const { key, path, destPath } of stemEntries) {
-      try {
-        const ok = await materializeStem(path, destPath, client)
-        if (!ok) stemFileNames.delete(key)
-      } catch (err) {
-        stemFileNames.delete(key)
-        console.error(`buildAndWriteAlsProject: failed to materialize stem from ${path}:`, err)
-      }
-    }
-  } finally {
-    client?.disconnect()
-    engineHandle?.stop()
-  }
-
-  // Read each successfully-materialized stem's real sample rate from its
-  // ACTUAL destination file (not the original source) -- needed to convert
-  // fadeInBars/fadeOutBars into buildAlsXml's fade-length unit (see that
-  // function's own fadeSecToSampleCount/applyFade doc comments for the
-  // unverified hypothesis this depends on). Iterating stemFileNames here
-  // (not stemEntries) naturally skips any stem whose materialize failed
-  // above (deleted from the map already) -- no separate failure tracking
-  // needed.
-  const stemSampleRates = new Map<string, number>()
-  for (const [key, fileName] of stemFileNames) {
-    try {
-      const destPath = join(samplesDir, fileName)
-      const { sampleRate } = findWavChunks(readWavHeaderBytes(destPath))
-      if (sampleRate > 0) stemSampleRates.set(key, sampleRate)
-    } catch (err) {
-      console.error(`buildAndWriteAlsProject: failed to read sample rate for ${fileName}:`, err)
-    }
-  }
+  const { stemFileNames, stemSampleRates } = await materializeStemsForExport(state, outputDir)
 
   const templateXml = readFileSync(templatePath, 'utf-8')
   const alsXml = buildAlsXml(templateXml, state, outputDir, stemFileNames, stemSampleRates)
