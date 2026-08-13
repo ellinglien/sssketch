@@ -110,6 +110,16 @@ const api = {
     ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
   exportAlsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
     ipcRenderer.invoke('export-als-next-to-source', stateJson, sourcePath),
+  exportRpp: (stateJson: string, defaultName?: string): Promise<string | null> =>
+    ipcRenderer.invoke('export-rpp', stateJson, defaultName),
+  exportRppToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
+    ipcRenderer.invoke('export-rpp-to-library', stateJson, libraryName),
+  exportRppNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
+    ipcRenderer.invoke('export-rpp-next-to-source', stateJson, sourcePath),
+  exportStemsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
+    ipcRenderer.invoke('export-stems-to-library', stateJson, libraryName),
+  exportStemsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
+    ipcRenderer.invoke('export-stems-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),

@@ -29,7 +29,13 @@ import {
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
 import { exportAbleton, exportAbletonToLibrary, exportAbletonNextToSource } from './exportAbleton'
-import { nativeExport, nativeExportStemsToDisk } from './nativeExport'
+import { exportReaper, exportReaperToLibrary, exportReaperNextToSource } from './exportReaper'
+import {
+  nativeExport,
+  nativeExportStemsToDisk,
+  exportStemsToLibrary,
+  exportStemsNextToSource
+} from './nativeExport'
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
@@ -410,6 +416,44 @@ app.whenReady().then(async () => {
     async (_event, stateJson: string, sourcePath: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
       return exportAbletonNextToSource(state, sourcePath)
+    }
+  )
+
+  ipcMain.handle('export-rpp', async (event, stateJson: string, defaultName?: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+    return exportReaper(win, state, defaultName)
+  })
+
+  ipcMain.handle(
+    'export-rpp-to-library',
+    async (_event, stateJson: string, libraryName: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportReaperToLibrary(state, libraryName)
+    }
+  )
+
+  ipcMain.handle(
+    'export-rpp-next-to-source',
+    async (_event, stateJson: string, sourcePath: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportReaperNextToSource(state, sourcePath)
+    }
+  )
+
+  ipcMain.handle(
+    'export-stems-to-library',
+    async (_event, stateJson: string, libraryName: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportStemsToLibrary(state, libraryName)
+    }
+  )
+
+  ipcMain.handle(
+    'export-stems-next-to-source',
+    async (_event, stateJson: string, sourcePath: string) => {
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportStemsNextToSource(state, sourcePath)
     }
   )
 
