@@ -1,13 +1,15 @@
 /** Small format-choice modal for the "export project…" menu item -- shown
  * before dispatching to whichever format's own dialog/library/
  * next-to-source entry-point logic (see App.tsx's ProjectMenu component).
- * Styled to match TidyUpNudgeModal.tsx's own dimmed-backdrop-plus-panel
- * convention. */
+ * Stems export lives as its own top-level "export stems" menu item instead
+ * (right next to "export mix"), not here -- only the two real DAW-project
+ * formats need a "which one" choice. Styled to match TidyUpNudgeModal.tsx's
+ * own dimmed-backdrop-plus-panel convention. */
 export function ExportFormatPicker({
   onChoose,
   onCancel
 }: {
-  onChoose: (format: 'ableton' | 'reaper' | 'stems') => void
+  onChoose: (format: 'ableton' | 'reaper') => void
   onCancel: () => void
 }): React.JSX.Element {
   const buttonStyle = {
@@ -53,11 +55,8 @@ export function ExportFormatPicker({
           <button style={buttonStyle} onClick={() => onChoose('ableton')}>
             ableton project
           </button>
-          <button style={buttonStyle} onClick={() => onChoose('reaper')}>
+          <button style={{ ...buttonStyle, marginBottom: 0 }} onClick={() => onChoose('reaper')}>
             reaper project
-          </button>
-          <button style={{ ...buttonStyle, marginBottom: 0 }} onClick={() => onChoose('stems')}>
-            stems (grouped by bus)
           </button>
         </div>
       </div>

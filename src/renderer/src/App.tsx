@@ -666,6 +666,7 @@ function ProjectMenu({
           ignoreRef={exportButtonRef}
           items={[
             { label: 'export mix', onClick: handleExportMix },
+            { label: 'export stems', onClick: () => handleExportProject('stems') },
             { label: 'export project…', onClick: () => setExportFormatPickerOpen(true) }
           ]}
           onClose={() => setExportMenu(null)}
