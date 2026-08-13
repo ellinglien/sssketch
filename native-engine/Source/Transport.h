@@ -107,6 +107,26 @@ namespace sssketch
          * error, same convention as setRecordingInputDevice(). */
         juce::String setOutputDevice(const juce::String& deviceName);
 
+        /** Switches the currently-open device's buffer size, leaving the
+         * input/output device selection and sample rate untouched --
+         * unlike setRecordingInputDevice/setOutputDevice, this never
+         * changes WHICH device is open, just how it's configured, so
+         * there's nothing to auto-choose: the requested size is applied
+         * directly. JUCE's own chooseBestBufferSize() picks the nearest
+         * size the driver actually supports if the exact value isn't
+         * offered, same "ask for what you want, let JUCE round to what's
+         * real" reasoning openDefaultDevice()'s own kPreferredBufferSize
+         * already relies on. Short-circuits on an exact match against the
+         * live device's current block size (refreshed every
+         * audioDeviceAboutToStart callback) rather than a separate
+         * lastConfigured cache -- there's no first-call false-positive
+         * hazard here the way device-name matching has (see
+         * setRecordingInputDevice's own doc comment for that), since a
+         * numeric size actually matching IS actually already configured.
+         * Returns an empty string on success, or a human-readable error,
+         * same convention as setRecordingInputDevice()/setOutputDevice(). */
+        juce::String setBufferSize(int bufferSizeSamples);
+
         /** Round-trip audio I/O latency (input + output) in samples, as
          * reported by the currently-open device -- captured audio is
          * delayed by roughly this much relative to when the performer

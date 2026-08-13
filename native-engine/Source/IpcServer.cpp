@@ -421,6 +421,35 @@ namespace sssketch
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }
+        else if (type == "get-buffer-size")
+        {
+            // Request/response, fetched on-demand -- same convention as
+            // get-link-status above, used to populate the settings menu's
+            // buffer-size dropdown with the engine's actual current value
+            // on open rather than a hardcoded guess.
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("bufferSize", transport.currentBlockSize());
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "buffer-size");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
+        else if (type == "set-buffer-size")
+        {
+            // Direct, standalone switch, same immediate-apply convention
+            // as set-output-device above -- there's no "arm" concept for
+            // buffer size either.
+            const int bufferSize =
+                payload.isObject() ? (int) payload.getProperty("bufferSize", 0) : 0;
+            const auto error = transport.setBufferSize(bufferSize);
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("success", error.isEmpty());
+            if (error.isNotEmpty()) payloadObj->setProperty("error", error);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "set-buffer-size-result");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "set-link-enabled")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);

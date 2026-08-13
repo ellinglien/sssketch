@@ -151,6 +151,9 @@ const api = {
     deviceName: string
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-output-device', deviceName),
+  engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
+  engineSetBufferSize: (bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('engine-set-buffer-size', bufferSize),
   engineArmRecording: (
     channelId: string,
     deviceName: string,

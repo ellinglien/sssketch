@@ -581,6 +581,40 @@ app.whenReady().then(async () => {
     }
   )
 
+  ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
+    if (!playbackEngine) return null
+    try {
+      const result = (await playbackEngine.client.sendAndAwaitType(
+        'get-buffer-size',
+        undefined,
+        'buffer-size'
+      )) as { bufferSize: number }
+      return result.bufferSize
+    } catch (err) {
+      console.error('engine-get-buffer-size: failed:', err)
+      return null
+    }
+  })
+
+  ipcMain.handle(
+    'engine-set-buffer-size',
+    async (_event, bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> => {
+      if (!playbackEngine) return { ok: false, error: 'engine not running' }
+      try {
+        const result = (await playbackEngine.client.sendAndAwaitType(
+          'set-buffer-size',
+          { bufferSize },
+          'set-buffer-size-result'
+        )) as { success: boolean; error?: string }
+        return result.success ? { ok: true } : { ok: false, error: result.error ?? 'unknown error' }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error('engine-set-buffer-size: failed:', err)
+        return { ok: false, error: message }
+      }
+    }
+  )
+
   ipcMain.handle(
     'engine-arm-recording',
     async (

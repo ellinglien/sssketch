@@ -207,6 +207,19 @@ export function TransportBar({
   const [selectedOutputDevice, setSelectedOutputDevice] = useState<string | null>(null)
   const fetchingOutputDevicesRef = useRef(false)
 
+  // Buffer size: same component-local, never-auto-applied-on-mount posture
+  // as selectedOutputDevice above, for the same reason -- a numeric size
+  // doesn't carry output device's "silently wrong direction" risk, but
+  // there's still no value in persisting it across launches when the
+  // modal's own fetch-on-open already shows the engine's real current
+  // value every time. Null only until that first fetch resolves.
+  const [bufferSize, setBufferSize] = useState<number | null>(null)
+  function fetchBufferSize(): void {
+    void window.rifffApi.engineGetBufferSize().then((size) => {
+      if (size !== null) setBufferSize(size)
+    })
+  }
+
   // Unlike a name merely being *listed*, there's no way to confirm a device
   // is actually the one physically in use right now (headphones unplugged
   // but still enumerated, a stale Bluetooth pairing, etc.) -- auto-applying
@@ -795,6 +808,7 @@ export function TransportBar({
                 // fetch).
                 fetchAndRestoreInputDevices()
                 fetchOutputDevices()
+                fetchBufferSize()
                 setAudioModalOpen(true)
               }
             },
@@ -829,6 +843,16 @@ export function TransportBar({
                 setSelectedOutputDevice(device)
               } else {
                 console.error('TransportBar: failed to set output device:', result.error)
+              }
+            })
+          }}
+          bufferSize={bufferSize}
+          onChangeBufferSize={(size) => {
+            void window.rifffApi.engineSetBufferSize(size).then((result) => {
+              if (result.ok) {
+                setBufferSize(size)
+              } else {
+                console.error('TransportBar: failed to set buffer size:', result.error)
               }
             })
           }}

@@ -239,6 +239,27 @@ namespace sssketch
         return error;
     }
 
+    juce::String Transport::setBufferSize(int bufferSizeSamples)
+    {
+        // Short-circuit: same teardown/reopen cost reasoning as
+        // setRecordingInputDevice's own short-circuit (see its doc
+        // comment) -- comparing directly against the live,
+        // callback-refreshed deviceBlockSize rather than a separate
+        // lastConfigured member, since a numeric match here can't have
+        // that function's "matches by coincidence before ever being
+        // configured" hazard.
+        if (deviceManager.getCurrentAudioDevice() != nullptr && deviceBlockSize == bufferSizeSamples)
+            return {};
+
+        auto setup = deviceManager.getAudioDeviceSetup();
+        setup.bufferSize = bufferSizeSamples;
+        // inputDeviceName/outputDeviceName/sampleRate deliberately left
+        // exactly as they are -- unlike setRecordingInputDevice/
+        // setOutputDevice, this never switches to a different device, so
+        // there's no reason to force JUCE to re-choose a sample rate.
+        return deviceManager.setAudioDeviceSetup(setup, true);
+    }
+
     void Transport::closeDevice()
     {
         deviceManager.removeAudioCallback(this);

@@ -5,6 +5,12 @@
  * TransportBar.tsx (unchanged) — this component is just the two dropdowns'
  * presentation, lifted into a modal shell matching this app's other small
  * modals (OnboardingModal.tsx's own fixed-overlay + centered-card shape). */
+/** Common power-of-2 sizes — matches every real DAW's own buffer-size
+ * picker convention, and JUCE's chooseBestBufferSize() will round to the
+ * nearest driver-supported size regardless of which of these is picked, so
+ * there's no need to enumerate a device's own exact supported list. */
+const BUFFER_SIZE_OPTIONS = [128, 256, 512, 1024, 2048, 4096]
+
 export function AudioDeviceModal({
   onClose,
   availableInputDevices,
@@ -13,7 +19,9 @@ export function AudioDeviceModal({
   isAnyChannelArmed,
   availableOutputDevices,
   selectedOutputDevice,
-  onChangeOutput
+  onChangeOutput,
+  bufferSize,
+  onChangeBufferSize
 }: {
   onClose: () => void
   availableInputDevices: string[]
@@ -27,6 +35,10 @@ export function AudioDeviceModal({
   availableOutputDevices: string[]
   selectedOutputDevice: string | null
   onChangeOutput: (device: string | null) => void
+  /** Null only while the initial engine-get-buffer-size fetch is still in
+   * flight — see TransportBar.tsx's own fetch effect. */
+  bufferSize: number | null
+  onChangeBufferSize: (size: number) => void
 }): React.JSX.Element {
   const selectStyle: React.CSSProperties = {
     fontFamily: 'inherit',
@@ -107,6 +119,29 @@ export function AudioDeviceModal({
             {availableOutputDevices.map((name) => (
               <option key={name} value={name}>
                 {name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>buffer size</span>
+          <select
+            value={bufferSize ?? ''}
+            disabled={bufferSize === null}
+            onChange={(e) => onChangeBufferSize(Number(e.target.value))}
+            style={{ ...selectStyle, cursor: bufferSize === null ? 'not-allowed' : 'pointer' }}
+          >
+            {bufferSize !== null && !BUFFER_SIZE_OPTIONS.includes(bufferSize) && (
+              // The engine's actual current size can be a driver-rounded
+              // value not in the common preset list (e.g. a device that
+              // doesn't support an exact power of 2) -- show it rather
+              // than silently snapping the dropdown to the wrong option.
+              <option value={bufferSize}>{bufferSize} samples (current)</option>
+            )}
+            {BUFFER_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size} samples
               </option>
             ))}
           </select>
