@@ -275,4 +275,33 @@ describe('buildRppProject', () => {
     expect(tracks).toHaveLength(2)
     tracks.forEach((t) => expect(findChild(t, 'NAME')?.params[0]).toMatch(/drums/i))
   })
+
+  it('merges two non-overlapping-in-time same-bus stems onto one shared track', () => {
+    // drumsRifff() has barLength 4 and no playedBars override, so each
+    // rifff's own clip spans exactly 4 bars (playedBars falls back to
+    // rifff.barLength) -- at the default state.bpm=120 that's 8 seconds
+    // (secPerBarProject=2). rifffA occupies bars [0, 4) / seconds [0, 8);
+    // rifffB starts at bar 4, exactly where A's own bar span ends, so its
+    // seconds span is [8, 16) -- adjacent, not overlapping (packIntoTracks'
+    // half-open [start, end) convention treats "starts exactly when the
+    // other ends" as NOT an overlap), so both stems should land on the
+    // same physical track.
+    const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
+    const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 4 }
+    const state = emptyAppState({
+      rifffs: { a: rifffA, b: rifffB },
+      busOf: { 'a:0': 'drums', 'b:0': 'drums' }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map([
+        ['a:0', 'a.wav'],
+        ['b:0', 'b.wav']
+      ])
+    )
+    const { tracks } = tracksOf(rppText)
+
+    expect(tracks).toHaveLength(1) // merged onto ONE track, not two
+    expect(findAllChildren(tracks[0], 'ITEM')).toHaveLength(2) // both stems' items present
+  })
 })
