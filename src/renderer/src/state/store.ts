@@ -282,11 +282,10 @@ export interface AppState {
 
 export const initialState: AppState = {
   bpm: 80,
-  // Index 4 = SNAP_DIVS[4] = 16 (1/16, the finest option) -- SNAP_DIVS grew
-  // two coarser entries at the FRONT of the array (see its own doc
-  // comment), so this index moved from 2 to 4 to keep the actual default
-  // grid unchanged.
-  snapIdx: 4,
+  // Index 0 = SNAP_DIVS[0] = 1 (1/1, the coarsest option) -- default grid
+  // per explicit user request, so re-one starts at whole-bar precision
+  // rather than the previous 1/16 default.
+  snapIdx: 0,
   vol: {},
   mute: {},
   off: {},

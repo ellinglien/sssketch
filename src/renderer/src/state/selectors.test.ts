@@ -220,6 +220,7 @@ describe('clipGeometry', () => {
   it('shifts left by the grid-step offset', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'SET_SNAP_IDX', snapIdx: 4 }) // 1/16, independent of the default
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 4 }) // +4/16 steps
     const geo = clipGeometry(state, 'r1', 24)
     // offsetPx = steps * ppb / snapDiv = 4 * 24 / 16 = 6

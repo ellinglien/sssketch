@@ -235,9 +235,7 @@ describe('reducer', () => {
   it('cycles snap index through 0..4 and wraps', () => {
     // SNAP_DIVS is [1, 2, 4, 8, 16] -- 1/16 on the fine end (1/32 removed,
     // was finer than anyone needed), 1/1 and 1/2 added on the coarse end.
-    let state = initialState // snapIdx starts at 4 (1/16, the old default)
-    state = reducer(state, { type: 'CYCLE_SNAP' })
-    expect(state.snapIdx).toBe(0) // wraps past the end of the array
+    let state = initialState // snapIdx starts at 0 (1/1, the default)
     state = reducer(state, { type: 'CYCLE_SNAP' })
     expect(state.snapIdx).toBe(1)
     state = reducer(state, { type: 'CYCLE_SNAP' })
@@ -245,7 +243,9 @@ describe('reducer', () => {
     state = reducer(state, { type: 'CYCLE_SNAP' })
     expect(state.snapIdx).toBe(3)
     state = reducer(state, { type: 'CYCLE_SNAP' })
-    expect(state.snapIdx).toBe(4) // back to start, full cycle confirmed
+    expect(state.snapIdx).toBe(4)
+    state = reducer(state, { type: 'CYCLE_SNAP' })
+    expect(state.snapIdx).toBe(0) // wraps past the end of the array, back to start
   })
 
   it('clamps nudged offset to -8..8', () => {
