@@ -88,6 +88,10 @@ function ChannelRowImpl({
   const rifffsMap = useAppSelector((s) => s.rifffs)
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
+  // Brief "click here to arm" pointer -- see App.tsx's own "/" key handler
+  // for when this gets set (pressing "/" while this channel already
+  // exists, empty and unarmed, rather than creating yet another one).
+  const showArmReminder = useAppSelector((s) => s.recordingArmReminderChannelId === channelId)
   const selectedInputDevice = useAppSelector((s) => s.selectedInputDevice)
   const bpm = useAppSelector((s) => s.bpm)
   const loopRegion = useAppSelector((s) => s.loopRegion)
@@ -466,26 +470,49 @@ function ChannelRowImpl({
             fx
           </button>
           {isRecordingChannel && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                void handleToggleArm()
-              }}
-              disabled={!canArm}
-              aria-label={
-                isArmed ? `disarm channel ${channelId}` : `arm channel ${channelId} for recording`
-              }
-              title={
-                selectedInputDevice
-                  ? isArmed
-                    ? 'disarm recording'
-                    : 'arm for recording'
-                  : 'select an input device first'
-              }
-              style={recordButtonStyle}
-            >
-              r
-            </button>
+            <span style={{ position: 'relative', display: 'inline-block' }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handleToggleArm()
+                }}
+                disabled={!canArm}
+                aria-label={
+                  isArmed ? `disarm channel ${channelId}` : `arm channel ${channelId} for recording`
+                }
+                title={
+                  selectedInputDevice
+                    ? isArmed
+                      ? 'disarm recording'
+                      : 'arm for recording'
+                    : 'select an input device first'
+                }
+                style={recordButtonStyle}
+              >
+                r
+              </button>
+              {showArmReminder && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    marginBottom: 4,
+                    padding: '2px 6px',
+                    background: 'var(--ra-mute-on)',
+                    color: 'var(--ra-mute-on-ink)',
+                    border: '1px solid var(--ra-mute-on)',
+                    fontSize: 10,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                    zIndex: 10
+                  }}
+                >
+                  click to arm
+                </div>
+              )}
+            </span>
           )}
           {isRecordingChannel && (
             <button

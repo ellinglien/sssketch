@@ -217,6 +217,16 @@ export interface AppState {
    * a save/reload, matching volumeDragMode's own "how I'm currently
    * working" convention. */
   armedChannelId: string | null
+  /** Which recording channel, if any, should currently show a brief "arm
+   * me" nudge -- set when the user presses "/" (App.tsx's keydown handler)
+   * while an existing empty, unarmed recording channel is already sitting
+   * there rather than creating ANOTHER one, per direct feedback that having
+   * to separately create a channel THEN arm it felt like an extra manual
+   * step. Cleared by the same handler's own timeout a couple seconds later
+   * -- purely a transient visual pointer at ChannelRow.tsx's own rec-dot,
+   * not a persisted or otherwise meaningful piece of state. Not persisted,
+   * same "how I'm currently working" convention as armedChannelId above. */
+  recordingArmReminderChannelId: string | null
   /** Populated once from a list-input-devices IPC round-trip when the
    * input device dropdown first opens -- not fetched proactively on every
    * app launch. Not persisted -- devices can change between sessions. */
@@ -303,6 +313,7 @@ export const initialState: AppState = {
   sel: null,
   channelOrder: [],
   channelOf: {},
+  recordingArmReminderChannelId: null,
   busOf: {},
   exp: {},
   loopRegion: null,
@@ -425,6 +436,7 @@ export type Action =
   | { type: 'REMOVE_RECORDING_CHANNEL'; channelId: string }
   | { type: 'ARM_RECORDING_CHANNEL'; channelId: string }
   | { type: 'DISARM_RECORDING_CHANNEL' }
+  | { type: 'SET_RECORDING_ARM_REMINDER'; channelId: string | null }
   | { type: 'SET_GATED_RECORDING_ENABLED'; enabled: boolean }
   | { type: 'SET_GATED_RECORDING_CHANNEL'; channelId: string | null }
   | { type: 'SET_GATED_RECORDING_TARGET'; groupId: string | null }
@@ -1286,6 +1298,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'DISARM_RECORDING_CHANNEL':
       return { ...state, armedChannelId: null }
+
+    case 'SET_RECORDING_ARM_REMINDER':
+      return { ...state, recordingArmReminderChannelId: action.channelId }
 
     case 'SET_GATED_RECORDING_ENABLED':
       return { ...state, gatedRecordingEnabled: action.enabled }

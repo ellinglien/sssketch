@@ -15,6 +15,7 @@ export type PersistedProject = Omit<
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
   | 'armedChannelId'
+  | 'recordingArmReminderChannelId'
   | 'availableInputDevices'
   | 'selectedInputDevice'
   | 'regionSelection'
@@ -47,6 +48,7 @@ export function serializeProject(state: AppState): string {
     inspectorCollapsed,
     metronomeEnabled,
     armedChannelId,
+    recordingArmReminderChannelId,
     availableInputDevices,
     selectedInputDevice,
     regionSelection,

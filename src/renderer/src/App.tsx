@@ -1535,17 +1535,46 @@ function Frame(): React.JSX.Element {
   // recording. Mirrors the "\" effect above exactly (ignore while typing
   // in an input/textarea, preventDefault so "/" itself never lands in a
   // focused field first).
+  //
+  // If an empty, unarmed recording channel ALREADY exists, pressing "/"
+  // again is read as "I'm trying to record and it's not doing anything" --
+  // per direct feedback, having to separately create a channel and then go
+  // arm it felt like an extra manual step easy to forget. Rather than
+  // creating ANOTHER unused channel, this points a brief reminder at the
+  // existing one's rec-dot instead (ChannelRow.tsx's own
+  // recordingArmReminderChannelId-driven tooltip) and leaves the actual
+  // arming to an explicit click, so the placement-affecting
+  // armedLoopRegion snapshot still only ever gets set through
+  // handleToggleArm's own normal path.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== '/') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
+      const placedChannelIds = new Set(Object.values(state.channelOf))
+      const existingUnarmedChannel = state.channelOrder.find(
+        (id) =>
+          state.recordingChannelIds[id] && !placedChannelIds.has(id) && id !== state.armedChannelId
+      )
+      if (existingUnarmedChannel) {
+        dispatch({ type: 'SET_RECORDING_ARM_REMINDER', channelId: existingUnarmedChannel })
+        window.setTimeout(() => {
+          dispatch({ type: 'SET_RECORDING_ARM_REMINDER', channelId: null })
+        }, 2500)
+        return
+      }
       dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [dispatch])
+  }, [
+    dispatch,
+    state.channelOf,
+    state.channelOrder,
+    state.recordingChannelIds,
+    state.armedChannelId
+  ])
 
   // Hold Cmd to pan the arranger view by dragging anywhere in it, rather
   // than having to grab the scrollbar directly.
