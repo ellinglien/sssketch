@@ -1579,6 +1579,26 @@ function Frame(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSave is a fresh closure every render (reads state/currentSketch directly), same reasoning as the Tab/gated-recording (\) handlers above: re-registering on every render would be wasteful without behavioral difference, since it always reads the CURRENT closure's state anyway.
   }, [state, currentSketch])
 
+  // Keeps main's own rendererHasUnsavedChanges (index.ts) in sync so the
+  // quit-time dialog (before-quit) knows whether to ask before discarding
+  // real unsaved work. `dirty` only changes value on a real transition (see
+  // its own declaration above), so this effect only fires then, not on
+  // every keystroke.
+  useEffect(() => {
+    void window.rifffApi.setDirtyState(dirty)
+  }, [dirty])
+
+  // Main pushes 'request-save-before-quit' when the user picks "Save" on
+  // the native quit-time dialog (index.ts's before-quit handler) -- run the
+  // same handleSave() the Save button/Cmd+S use, then reply so main's own
+  // requestSaveBeforeQuit() (racing against a timeout) can stop waiting.
+  useEffect(() => {
+    return window.rifffApi.onRequestSaveBeforeQuit(() => {
+      void handleSave().finally(() => window.rifffApi.notifySaveBeforeQuitComplete())
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSave is a fresh closure every render (reads state/currentSketch directly), same reasoning as the Cmd+S effect just above: re-subscribing on every render would be wasteful without behavioral difference, since the listener always reads the CURRENT closure's state anyway.
+  }, [state, currentSketch])
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       // e.repeat guards against the OS's own key-repeat re-firing keydown
