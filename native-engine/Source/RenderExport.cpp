@@ -31,9 +31,10 @@ namespace sssketch
         masterChain.setBpm(project.bpm);
         for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
         {
-            const auto& path = project.masterChain[(size_t) slot].path;
+            const auto& masterSlot = project.masterChain[(size_t) slot];
             juce::String slotError;
-            if (!masterChain.loadPluginSync(slot, path, sampleRate, blockSize, slotError))
+            if (!masterChain.loadPluginSync(
+                    slot, masterSlot.path, sampleRate, blockSize, slotError, masterSlot.stateBase64))
             {
                 errorOut = "master chain slot " + juce::String(slot) + " failed to load: " + slotError;
                 return false;
@@ -51,9 +52,10 @@ namespace sssketch
             chain->setBpm(project.bpm);
             for (int slot = 0; slot < kNumChannelChainSlots; ++slot)
             {
-                const auto& path = chainEntry.slots[(size_t) slot].path;
+                const auto& channelSlot = chainEntry.slots[(size_t) slot];
                 juce::String slotError;
-                if (!chain->loadPluginSync(slot, path, sampleRate, blockSize, slotError))
+                if (!chain->loadPluginSync(
+                        slot, channelSlot.path, sampleRate, blockSize, slotError, channelSlot.stateBase64))
                 {
                     errorOut = "channel \"" + chainEntry.channelId + "\" slot " + juce::String(slot)
                         + " failed to load: " + slotError;
