@@ -64,7 +64,7 @@ import {
   syncJam as syncJamToWarehouse,
   abortSync as abortWarehouseSync,
   removeJamSync as removeWarehouseJamSync
-} from './loreWarehouseSync'
+} from './riffLibrarySync'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import {
   getWarehouseSyncStatus,

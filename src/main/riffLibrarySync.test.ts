@@ -105,7 +105,7 @@ function sharedFeedPage(riffCIDs: string[], hasMore: boolean): Record<string, un
 
 describe('syncSharedFeed', () => {
   it('walks every page, skeleton-inserts and resolves every riff, and marks the jam complete', async () => {
-    const { syncSharedFeed } = await import('./loreWarehouseSync')
+    const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()
     // listSharedFeed's own hasMore is computed as `summaries.length ===
     // count` (see endlesssApi.ts) -- there's no separate "more available"
@@ -153,7 +153,7 @@ describe('syncSharedFeed', () => {
   })
 
   it('a repeat sync with nothing new stops after the first page instead of walking to the end', async () => {
-    const { syncSharedFeed } = await import('./loreWarehouseSync')
+    const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()
     let pageCalls = 0
     const fetchImpl = vi.fn(async (url: string) => {
@@ -217,7 +217,7 @@ describe('syncJam', () => {
     // -- loginWithCredentials persists it into the same in-memory module
     // state syncJam's own endlesssApi.ts import will read.
     const { loginWithCredentials } = await import('./endlesssApi')
-    const { syncJam } = await import('./loreWarehouseSync')
+    const { syncJam } = await import('./riffLibrarySync')
     const db = freshDb()
 
     const loginFetch = vi.fn(
