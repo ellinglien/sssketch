@@ -64,6 +64,22 @@ const api = {
   saveLastOpenedSketch: (json: string): Promise<void> =>
     ipcRenderer.invoke('save-last-opened-sketch', json),
   loadLastOpenedSketch: (): Promise<string | null> => ipcRenderer.invoke('load-last-opened-sketch'),
+  // One-way: main just stores the boolean, no reply expected. Fired from
+  // App.tsx's Frame whenever hasUnsavedChanges's own value transitions, not
+  // on every keystroke -- see index.ts's rendererHasUnsavedChanges.
+  setDirtyState: (dirty: boolean): Promise<void> => ipcRenderer.invoke('set-dirty-state', dirty),
+  // Main pushes this when the quit dialog's "Save" choice is picked (see
+  // index.ts's requestSaveBeforeQuit) -- the renderer's own listener (Frame)
+  // runs handleSave() and calls notifySaveBeforeQuitComplete() once it
+  // resolves, which main is waiting on via a matching ipcMain.once().
+  onRequestSaveBeforeQuit: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('request-save-before-quit', listener)
+    return () => ipcRenderer.removeListener('request-save-before-quit', listener)
+  },
+  notifySaveBeforeQuitComplete: (): void => {
+    ipcRenderer.send('save-before-quit-complete')
+  },
   exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
