@@ -69,4 +69,26 @@ describe('migrateRiffLibraryLocation', () => {
     migrateRiffLibraryLocation()
     expect(existsSync(join(userDataDir, 'lore-warehouse'))).toBe(true) // untouched
   })
+
+  it('does nothing when only a LEGACY (pre-rename) prefs override is stored -- carried forward first, then honored', async () => {
+    // Real first-launch-after-upgrade scenario: a user who already pointed
+    // sssketch at a real external LORE archive under the pre-rename prefs
+    // filename, with real directory content still sitting at the old
+    // default too. hasStoredRiffLibraryRootOverride() (called by this
+    // migration) triggers riffLibraryStore.ts's own
+    // carryForwardLegacyRiffLibraryPrefs() as a side effect, which must
+    // create riffLibraryPrefs.json BEFORE this migration's own override
+    // check runs -- so the directory move is correctly skipped in the same
+    // call, not just on some later run.
+    writeOldRiffLibrary()
+    writeFileSync(
+      join(userDataDir, 'loreWarehousePrefs.json'),
+      JSON.stringify({ root: '/Volumes/External/MyLoreArchive' })
+    )
+    const { migrateRiffLibraryLocation } = await import('./riffLibraryMigration')
+    migrateRiffLibraryLocation()
+    expect(existsSync(join(userDataDir, 'lore-warehouse'))).toBe(true) // untouched
+    expect(existsSync(join(userDataDir, 'riffLibraryPrefs.json'))).toBe(true) // carried forward
+    expect(existsSync(join(userDataDir, 'loreWarehousePrefs.json'))).toBe(false) // legacy cleaned up
+  })
 })
