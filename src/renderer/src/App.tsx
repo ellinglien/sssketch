@@ -844,14 +844,13 @@ function Frame(): React.JSX.Element {
   // whenever anything that could actually change the answer changes: the
   // live content (persistedJson, itself derived from state.rifffs),
   // currentSketch (every lastSavedJsonRef.current writer except handleSave
-  // and the debounced-autosave library write below is paired with a
-  // setCurrentSketch of its own -- see this effect's dependency array), or
-  // saveVersion (handleSave's own signal, since it changes neither state
-  // nor currentSketch). The debounced-autosave write is the one remaining
-  // gap -- it can move lastSavedJsonRef.current without tripping any of
-  // these deps, so the indicator can lag briefly after an autosave-write
-  // cycle until something else re-renders; Task 5 removes that write
-  // entirely, which closes the gap rather than needing it patched here.
+  // is paired with a setCurrentSketch of its own -- see this effect's
+  // dependency array), or saveVersion (handleSave's own signal, since it
+  // changes neither state nor currentSketch). The debounced-autosave effect
+  // below used to ALSO write straight to the library folder on a timer,
+  // which could move lastSavedJsonRef.current without tripping any of these
+  // deps and let the indicator lag briefly until something else re-rendered;
+  // Task 5 removed that write entirely, closing the gap.
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
     setDirty(hasUnsavedChanges(state.rifffs, persistedJson, lastSavedJsonRef.current))
@@ -1049,9 +1048,9 @@ function Frame(): React.JSX.Element {
       // Fresh start (nothing to recover, no last-opened sketch, or it's
       // gone) -- give the sketch a real library name immediately rather
       // than leaving it null/"untitled sketch" until an explicit Save, so
-      // importing something right away already has somewhere real to land
-      // (see the debounced autosave effect below, which writes straight to
-      // this library entry once there's real content).
+      // there's already a real library entry name for handleSave to write
+      // to (or for a duplicate/rename to target) once the user actually
+      // saves, instead of handleSave having to invent one on the spot.
       lastSavedJsonRef.current = serializeProject(initialState)
       setCurrentSketch({
         kind: 'library',
