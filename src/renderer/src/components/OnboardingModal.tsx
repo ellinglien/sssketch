@@ -1,16 +1,4 @@
 import { useState } from 'react'
-import { LoadingLoader } from './LoadingLoader'
-
-// All four LoadingLoader bars in plain white/near-white -- monochrome per
-// direct feedback ("black background, white text, no in-between greys"),
-// replacing the previous four-color rainbow mark. LoadingLoader's own
-// bounce/position motion is unaffected; only the color is flattened here.
-const MARK_COLORS: [string, string, string, string] = [
-  'var(--ra-text)',
-  'var(--ra-text)',
-  'var(--ra-text)',
-  'var(--ra-text)'
-]
 
 const WORDMARK = 'SSSKETCH'.split('')
 
@@ -166,7 +154,6 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <LoadingLoader size={150} colors={MARK_COLORS} />
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
             <span

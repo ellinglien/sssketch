@@ -823,7 +823,7 @@ export function TransportBar({
             { label: 'take the tour', onClick: onStartTour },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
             {
-              label: 'change lore archive location…',
+              label: 'change riff archive location…',
               onClick: () => void handleChangeLoreLocation()
             },
             {
