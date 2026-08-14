@@ -94,6 +94,38 @@ import {
 // closure and can't otherwise reach it.
 let playbackEngine: PlaybackEngineHandle | undefined
 
+/**
+ * Best-effort fetch of current plugin state from the PERSISTENT live engine
+ * (not any fresh, export-only engine a caller might separately spawn) --
+ * shared by every export path (mixdown, bus stems, per-track stems) so an
+ * export taken right after tweaking a plugin, without an intervening
+ * explicit Save, still reflects that tweak. Returns null (never throws) if
+ * the engine isn't running or the round trip fails -- unlike handleSave's
+ * own "fail loud, don't write the file" choice, every export path degrades
+ * to exporting at default plugin state rather than failing the whole
+ * export; Save is the one place this codebase treats plugin state as
+ * something the user is relying on being durably correct, while an export
+ * is regenerable at any time by exporting again once the round trip works.
+ * `logLabel` is only for the console.error prefix, so a failure is
+ * traceable back to which export path hit it.
+ */
+async function fetchLivePluginStates(logLabel: string): Promise<RawPluginStatesCapture | null> {
+  if (!playbackEngine) return null
+  try {
+    return (await playbackEngine.client.sendAndAwaitType(
+      'get-plugin-states',
+      undefined,
+      'plugin-states'
+    )) as RawPluginStatesCapture
+  } catch (err) {
+    console.error(
+      `${logLabel}: failed to fetch live plugin states, exporting at default state:`,
+      err
+    )
+    return null
+  }
+}
+
 // Tracks whichever BrowserWindow is currently live, reassigned every time
 // createWindow() runs (both the initial whenReady() call and any later
 // 'activate' call after the user closed all windows and reopened via the
@@ -402,38 +434,15 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('export-mix-native', async (_event, stateJson: string) => {
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    // Best-effort: export at whatever plugin state is currently live in the
-    // PERSISTENT engine (not the fresh, export-only one this function is
-    // about to spawn) -- an export taken right after tweaking a plugin,
-    // without an intervening explicit Save, should still reflect that
-    // tweak. Unlike handleSave's own "fail loud, don't write the file"
-    // choice, a failed fetch here degrades to exporting at default plugin
-    // state rather than failing the whole export -- Save is the one place
-    // this codebase treats plugin state as something the user is relying
-    // on being durably correct; a mixdown is regenerable at any time by
-    // exporting again once the engine round trip works.
-    let rawPluginStates: RawPluginStatesCapture | null = null
-    if (playbackEngine) {
-      try {
-        rawPluginStates = (await playbackEngine.client.sendAndAwaitType(
-          'get-plugin-states',
-          undefined,
-          'plugin-states'
-        )) as RawPluginStatesCapture
-      } catch (err) {
-        console.error(
-          'export-mix-native: failed to fetch live plugin states, exporting at default state:',
-          err
-        )
-      }
-    }
+    const rawPluginStates = await fetchLivePluginStates('export-mix-native')
     return nativeExport(state, rawPluginStates)
   })
 
   ipcMain.handle('export-stems-native', async (event, stateJson: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return nativeExportStemsToDisk(win, state)
+    const rawPluginStates = await fetchLivePluginStates('export-stems-native')
+    return nativeExportStemsToDisk(win, state, rawPluginStates)
   })
 
   ipcMain.handle('export-als', async (event, stateJson: string, defaultName?: string) => {
@@ -532,7 +541,8 @@ app.whenReady().then(async () => {
     'export-stems-to-library',
     async (_event, stateJson: string, libraryName: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportStemsToLibrary(state, libraryName)
+      const rawPluginStates = await fetchLivePluginStates('export-stems-to-library')
+      return exportStemsToLibrary(state, libraryName, rawPluginStates)
     }
   )
 
@@ -540,7 +550,8 @@ app.whenReady().then(async () => {
     'export-stems-next-to-source',
     async (_event, stateJson: string, sourcePath: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportStemsNextToSource(state, sourcePath)
+      const rawPluginStates = await fetchLivePluginStates('export-stems-next-to-source')
+      return exportStemsNextToSource(state, sourcePath, rawPluginStates)
     }
   )
 
@@ -549,7 +560,8 @@ app.whenReady().then(async () => {
     async (event, stateJson: string, projectName: string) => {
       const win = BrowserWindow.fromWebContents(event.sender)!
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return nativeExportStemTracksToDisk(win, state, projectName)
+      const rawPluginStates = await fetchLivePluginStates('export-stem-tracks-native')
+      return nativeExportStemTracksToDisk(win, state, projectName, rawPluginStates)
     }
   )
 
@@ -557,7 +569,8 @@ app.whenReady().then(async () => {
     'export-stem-tracks-to-library',
     async (_event, stateJson: string, libraryName: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportStemTracksToLibrary(state, libraryName)
+      const rawPluginStates = await fetchLivePluginStates('export-stem-tracks-to-library')
+      return exportStemTracksToLibrary(state, libraryName, rawPluginStates)
     }
   )
 
@@ -565,7 +578,8 @@ app.whenReady().then(async () => {
     'export-stem-tracks-next-to-source',
     async (_event, stateJson: string, sourcePath: string) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportStemTracksNextToSource(state, sourcePath)
+      const rawPluginStates = await fetchLivePluginStates('export-stem-tracks-next-to-source')
+      return exportStemTracksNextToSource(state, sourcePath, rawPluginStates)
     }
   )
 
@@ -686,20 +700,9 @@ app.whenReady().then(async () => {
     }
   })
 
-  ipcMain.handle('engine-get-plugin-states', async (): Promise<RawPluginStatesCapture | null> => {
-    if (!playbackEngine) return null
-    try {
-      const result = (await playbackEngine.client.sendAndAwaitType(
-        'get-plugin-states',
-        undefined,
-        'plugin-states'
-      )) as RawPluginStatesCapture
-      return result
-    } catch (err) {
-      console.error('engine-get-plugin-states: failed:', err)
-      return null
-    }
-  })
+  ipcMain.handle('engine-get-plugin-states', (): Promise<RawPluginStatesCapture | null> =>
+    fetchLivePluginStates('engine-get-plugin-states')
+  )
 
   ipcMain.handle(
     'engine-set-buffer-size',

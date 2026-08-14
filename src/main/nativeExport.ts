@@ -198,7 +198,11 @@ function stemEntriesByBus(state: AppState): Map<BusId, StemEntry[]> {
   return byBus
 }
 
-export async function renderStemsToDir(state: AppState, destDir: string): Promise<string[]> {
+export async function renderStemsToDir(
+  state: AppState,
+  destDir: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
+): Promise<string[]> {
   assertHasPlacedRifffs(state)
   const keysByBus = stemEntriesByBus(state)
   const allKeys = [...keysByBus.values()].flat().map((e) => e.key)
@@ -207,6 +211,15 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
   const client = new EngineClient()
   const fileNames: string[] = []
   const pluginCatalog = loadCatalog()
+  // soloState below always zeroes masterChain (a solo render never goes
+  // through the master chain, see soloState's own doc comment), so only
+  // channelPlugins entries in pluginStates can ever actually apply here --
+  // still built from the full, un-soloed `state` so channel insert plugin
+  // identity/state lookups aren't affected by which bus is being isolated.
+  const pluginStates =
+    rawPluginStates !== null
+      ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
+      : {}
 
   try {
     await client.connect(engineHandle.port)
@@ -217,7 +230,12 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
       const busKeys = busEntries.map((e) => e.key)
 
       const busState = soloState(state, new Set(busKeys), allKeys)
-      const project = await buildEngineProject(busState, resolveStretchedForExport, pluginCatalog)
+      const project = await buildEngineProject(
+        busState,
+        resolveStretchedForExport,
+        pluginCatalog,
+        pluginStates
+      )
       const fileName = `${busId}.wav`
       const outputPath = join(destDir, fileName)
 
@@ -255,7 +273,8 @@ export async function renderStemsToDir(state: AppState, destDir: string): Promis
  */
 export async function nativeExportStemsToDisk(
   win: BrowserWindow,
-  state: AppState
+  state: AppState,
+  rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<string | null> {
   const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
@@ -264,7 +283,7 @@ export async function nativeExportStemsToDisk(
   if (result.canceled || result.filePaths.length === 0) return null
 
   const dir = result.filePaths[0]
-  await renderStemsToDir(state, dir)
+  await renderStemsToDir(state, dir, rawPluginStates)
   await shell.openPath(dir)
   return dir
 }
@@ -276,12 +295,16 @@ export async function nativeExportStemsToDisk(
  * reasoning as exportAbletonToLibrary/exportReaperToLibrary's own
  * Samples/Imported clearing), then opens it in Finder.
  */
-export async function exportStemsToLibrary(state: AppState, libraryName: string): Promise<void> {
+export async function exportStemsToLibrary(
+  state: AppState,
+  libraryName: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
+): Promise<void> {
   assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = sketchStemsDir(libraryName)
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
-  await renderStemsToDir(state, stemsDir)
+  await renderStemsToDir(state, stemsDir, rawPluginStates)
   await shell.openPath(stemsDir)
 }
 
@@ -290,12 +313,16 @@ export async function exportStemsToLibrary(state: AppState, libraryName: string)
  * exportStemsToLibrary above, for a sketch with a known external file
  * location but not in the library.
  */
-export async function exportStemsNextToSource(state: AppState, sourcePath: string): Promise<void> {
+export async function exportStemsNextToSource(
+  state: AppState,
+  sourcePath: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
+): Promise<void> {
   assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = join(dirname(sourcePath), 'Stems')
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
-  await renderStemsToDir(state, stemsDir)
+  await renderStemsToDir(state, stemsDir, rawPluginStates)
   await shell.openPath(stemsDir)
 }
 
@@ -318,7 +345,8 @@ export async function exportStemsNextToSource(state: AppState, sourcePath: strin
 export async function renderStemTracksToDir(
   state: AppState,
   destDir: string,
-  projectName: string
+  projectName: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<string[]> {
   assertHasPlacedRifffs(state)
   const entriesByBus = stemEntriesByBus(state)
@@ -329,6 +357,12 @@ export async function renderStemTracksToDir(
   const client = new EngineClient()
   const fileNames: string[] = []
   const pluginCatalog = loadCatalog()
+  // Same soloState-zeroes-masterChain reasoning as renderStemsToDir above --
+  // only channelPlugins entries in pluginStates can ever actually apply.
+  const pluginStates =
+    rawPluginStates !== null
+      ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
+      : {}
 
   try {
     await client.connect(engineHandle.port)
@@ -348,7 +382,8 @@ export async function renderStemTracksToDir(
         const project = await buildEngineProject(
           trackState,
           resolveStretchedForExport,
-          pluginCatalog
+          pluginCatalog,
+          pluginStates
         )
         const fileName = `${sanitizedProjectName} - ${busId} ${i + 1}.wav`
         const outputPath = join(destDir, fileName)
@@ -382,7 +417,8 @@ export async function renderStemTracksToDir(
 export async function nativeExportStemTracksToDisk(
   win: BrowserWindow,
   state: AppState,
-  projectName: string
+  projectName: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<string | null> {
   const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
@@ -391,7 +427,7 @@ export async function nativeExportStemTracksToDisk(
   if (result.canceled || result.filePaths.length === 0) return null
 
   const dir = result.filePaths[0]
-  await renderStemTracksToDir(state, dir, projectName)
+  await renderStemTracksToDir(state, dir, projectName, rawPluginStates)
   await shell.openPath(dir)
   return dir
 }
@@ -401,13 +437,14 @@ export async function nativeExportStemTracksToDisk(
  * there before, same as re-running exportStemsToLibrary itself does). */
 export async function exportStemTracksToLibrary(
   state: AppState,
-  libraryName: string
+  libraryName: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<void> {
   assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = sketchStemsDir(libraryName)
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
-  await renderStemTracksToDir(state, stemsDir, libraryName)
+  await renderStemTracksToDir(state, stemsDir, libraryName, rawPluginStates)
   await shell.openPath(stemsDir)
 }
 
@@ -418,13 +455,14 @@ export async function exportStemTracksToLibrary(
  * basenameWithoutProjectExt). */
 export async function exportStemTracksNextToSource(
   state: AppState,
-  sourcePath: string
+  sourcePath: string,
+  rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<void> {
   assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
   const stemsDir = join(dirname(sourcePath), 'Stems')
   rmSync(stemsDir, { recursive: true, force: true })
   mkdirSync(stemsDir, { recursive: true })
   const projectName = basename(sourcePath).replace(/\.sssketchproj$/i, '')
-  await renderStemTracksToDir(state, stemsDir, projectName)
+  await renderStemTracksToDir(state, stemsDir, projectName, rawPluginStates)
   await shell.openPath(stemsDir)
 }
