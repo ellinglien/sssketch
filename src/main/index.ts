@@ -85,7 +85,8 @@ import {
   deleteSketch,
   toggleSketchFavourite,
   listSketchBackups,
-  restoreSketchBackup
+  restoreSketchBackup,
+  readSketchBackup
 } from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -436,6 +437,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('restore-sketch-backup', (_event, name: string, backupPath: string) =>
     restoreSketchBackup(name, backupPath)
+  )
+
+  ipcMain.handle('read-sketch-backup', (_event, name: string, backupPath: string) =>
+    readSketchBackup(name, backupPath)
   )
 
   ipcMain.handle(

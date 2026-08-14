@@ -114,6 +114,8 @@ const api = {
     backupPath: string
   ): Promise<{ ok: true } | { ok: false; reason: string }> =>
     ipcRenderer.invoke('restore-sketch-backup', name, backupPath),
+  readSketchBackup: (name: string, backupPath: string): Promise<string | null> =>
+    ipcRenderer.invoke('read-sketch-backup', name, backupPath),
   exportAlsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
     ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
   exportAlsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>

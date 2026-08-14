@@ -1,5 +1,14 @@
 // src/renderer/src/components/ProjectLibraryBrowser.tsx
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { stemKey } from '@shared/types'
+import { deserializeProject } from '../state/serialize'
+import { getAudioContext } from '../audio/peakCache'
+import {
+  startPreviewLoop,
+  stopPreviewSources,
+  registerActivePreview,
+  unregisterActivePreview
+} from '../audio/previewLoop'
 
 interface LibrarySketchSummary {
   name: string
@@ -73,6 +82,90 @@ export function ProjectLibraryBrowser({
   // backup path (not sketch name) since several backups can be listed at
   // once under one expanded row.
   const [restoreArmedPath, setRestoreArmedPath] = useState<string | null>(null)
+  // Audio-only preview of a backup, keyed by its path -- see
+  // startPreviewLoop's own doc comment (audio/previewLoop.ts): a plain Web
+  // Audio decode-and-loop mechanism, the SAME one the rifff library preview
+  // uses, deliberately NOT the native engine. A backup's project JSON is
+  // parsed straight from disk and never dispatched into the live reducer,
+  // so previewing one can't disturb whatever's actually open in the
+  // arranger -- the native engine's own "current project" is never touched.
+  const [previewingPath, setPreviewingPath] = useState<string | null>(null)
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const previewTokenRef = useRef(0)
+  // Bumped on every stop/new-attempt -- lets an in-flight decode (the
+  // rifffApi.readSketchBackup + decodeAudioData round trip inside
+  // startPreviewLoop both take real time) notice it's been superseded by a
+  // later click and bail out instead of clobbering whatever's now playing.
+  const previewGenerationRef = useRef(0)
+
+  const stopBackupPreview = useCallback(() => {
+    previewGenerationRef.current++
+    stopPreviewSources(previewSourcesRef.current)
+    previewSourcesRef.current = []
+    unregisterActivePreview(previewTokenRef.current)
+    setPreviewingPath(null)
+  }, [])
+
+  // Unmount cleanup only (empty deps) -- getAudioContext() returns a
+  // module-level singleton that outlives this component, so a source
+  // that's still playing when this modal closes would otherwise keep
+  // looping in the background forever with no way to reach it again.
+  useEffect(() => stopBackupPreview, [stopBackupPreview])
+
+  async function handlePreviewClick(name: string, backupPath: string): Promise<void> {
+    if (previewingPath === backupPath) {
+      stopBackupPreview()
+      return
+    }
+    stopBackupPreview()
+    const generation = previewGenerationRef.current
+    const json = await window.rifffApi.readSketchBackup(name, backupPath)
+    if (previewGenerationRef.current !== generation) return
+    if (!json) {
+      window.alert("Couldn't preview that version.")
+      return
+    }
+    let state: ReturnType<typeof deserializeProject>
+    try {
+      state = deserializeProject(JSON.parse(json))
+    } catch (err) {
+      console.error('ProjectLibraryBrowser: failed to parse backup for preview:', err)
+      window.alert("Couldn't preview that version.")
+      return
+    }
+    // Only placed (arranged) stems -- an unplaced shelf-only rifff was
+    // never actually part of "what this version sounded like."
+    const stems = Object.values(state.rifffs)
+      .filter((rifff) => rifff.startBar !== undefined)
+      .flatMap((rifff) =>
+        rifff.stems.map((stem) => ({
+          path: stem.path,
+          gain: state.vol[stemKey(rifff.groupId, stem.slot)] ?? 1,
+          durationSec: stem.durationSec
+        }))
+      )
+    if (stems.length === 0) {
+      window.alert('Nothing to preview -- no stems were placed on the timeline in that version.')
+      return
+    }
+    if (previewGenerationRef.current !== generation) return
+    setPreviewingPath(backupPath)
+    const sources = await startPreviewLoop(
+      getAudioContext(),
+      stems,
+      () => previewGenerationRef.current !== generation
+    )
+    if (previewGenerationRef.current !== generation) {
+      stopPreviewSources(sources)
+      return
+    }
+    if (sources.length === 0) {
+      setPreviewingPath(null)
+      return
+    }
+    previewSourcesRef.current = sources
+    previewTokenRef.current = registerActivePreview(stopBackupPreview)
+  }
 
   async function handleToggleFavourite(name: string): Promise<void> {
     await window.rifffApi.toggleSketchFavourite(name)
@@ -99,6 +192,7 @@ export function ProjectLibraryBrowser({
   }
 
   async function handleToggleHistory(name: string): Promise<void> {
+    stopBackupPreview()
     if (historyOpenName === name) {
       setHistoryOpenName(null)
       return
@@ -118,6 +212,7 @@ export function ProjectLibraryBrowser({
       return
     }
     setRestoreArmedPath(null)
+    stopBackupPreview()
     const result = await window.rifffApi.restoreSketchBackup(name, backupPath)
     if (!result.ok) {
       console.error('ProjectLibraryBrowser: restoreSketchBackup failed:', result.reason)
@@ -325,6 +420,27 @@ export function ProjectLibraryBrowser({
                       <span style={{ flex: 1, color: 'var(--ra-text-2)', fontSize: 9 }}>
                         {formatMtime(backup.mtimeMs)}
                       </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handlePreviewClick(sketch.name, backup.path)
+                        }}
+                        title={
+                          previewingPath === backup.path ? 'stop preview' : 'preview (audio only)'
+                        }
+                        aria-label={
+                          previewingPath === backup.path
+                            ? `stop preview of ${sketch.name} at ${formatMtime(backup.mtimeMs)}`
+                            : `preview ${sketch.name} at ${formatMtime(backup.mtimeMs)}`
+                        }
+                        style={{
+                          ...buttonStyle(),
+                          color:
+                            previewingPath === backup.path ? 'var(--ra-text)' : 'var(--ra-text-2)'
+                        }}
+                      >
+                        {previewingPath === backup.path ? 'stop' : 'preview'}
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation()

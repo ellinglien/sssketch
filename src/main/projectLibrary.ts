@@ -361,21 +361,29 @@ export function listSketchBackups(name: string): SketchBackupSummary[] {
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
 }
 
+// Shared by restoreSketchBackup and readSketchBackup below -- backupPath is
+// renderer-supplied (via IPC) in both, so it's resolved and checked to
+// actually live inside THIS sketch's own backups folder before anything
+// touches disk, rather than trusting it. Returns the resolved path, or null
+// if it's outside the backups folder (a mismatched sketch name, or a
+// traversal attempt).
+function resolveBackupPathOrNull(name: string, backupPath: string): string | null {
+  const backupsDir = resolve(sketchBackupsDir(name))
+  const resolvedBackup = resolve(backupPath)
+  return resolvedBackup.startsWith(backupsDir + sep) ? resolvedBackup : null
+}
+
 /** Restores a previously-rotated backup as the sketch's current live
  * project file. Itself non-destructive: the CURRENT live file is rotated
  * into backups FIRST (same rotateBackupBeforeOverwrite path a normal save
  * uses), so restoring an old version is always itself undoable, not a
- * one-way trip. backupPath is renderer-supplied (via IPC), so it's
- * resolved and checked to actually live inside THIS sketch's own backups
- * folder before anything touches disk -- rejects a mismatched or
- * traversal-attempting path rather than trusting it. */
+ * one-way trip. */
 export function restoreSketchBackup(
   name: string,
   backupPath: string
 ): { ok: true } | { ok: false; reason: string } {
-  const backupsDir = resolve(sketchBackupsDir(name))
-  const resolvedBackup = resolve(backupPath)
-  if (!resolvedBackup.startsWith(backupsDir + sep)) {
+  const resolvedBackup = resolveBackupPathOrNull(name, backupPath)
+  if (!resolvedBackup) {
     return { ok: false, reason: "backup path is not inside this sketch's own backups folder" }
   }
   if (!existsSync(resolvedBackup)) {
@@ -384,4 +392,22 @@ export function restoreSketchBackup(
   rotateBackupBeforeOverwrite(name)
   cloneOrCopy(resolvedBackup, sketchProjectPath(name))
   return { ok: true }
+}
+
+/** Reads a specific backup's raw project JSON, for previewing (audio-only,
+ * see ProjectLibraryBrowser.tsx) before deciding whether to actually
+ * restore it. Returns null on any failure (invalid path, missing file,
+ * unreadable) rather than throwing, matching openLibrarySketch's own
+ * "null on failure" convention -- a failed preview attempt shouldn't crash
+ * anything, just fail to show a preview. */
+export function readSketchBackup(name: string, backupPath: string): string | null {
+  const resolvedBackup = resolveBackupPathOrNull(name, backupPath)
+  if (!resolvedBackup || !existsSync(resolvedBackup)) return null
+  try {
+    return readFileSync(resolvedBackup, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`readSketchBackup: failed to read ${resolvedBackup}: ${message}`)
+    return null
+  }
 }
