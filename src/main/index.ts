@@ -1029,7 +1029,12 @@ app.on('before-quit', (event) => {
       })
       return
     }
-    // Don't Save.
+    // Don't Save -- the user just explicitly discarded unsaved work, so
+    // clear the crash-recovery snapshot too (see the renderer-side discard
+    // paths in App.tsx for the matching New/open/restore cases). Without
+    // this, the debounced autosave effect's last snapshot survives and the
+    // next launch offers to "recover" exactly the content just discarded.
+    clearAutosave()
     rendererHasUnsavedChanges = false
     app.quit()
     return

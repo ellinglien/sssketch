@@ -946,6 +946,13 @@ function Frame(): React.JSX.Element {
       // still safely in the editor and unsaved, so bail out here rather
       // than opening the new-project modal, which would discard it.
       if (!saved) return
+    } else {
+      // 'discard' -- the user just explicitly threw away unsaved work.
+      // The debounced autosave effect may still have a stale crash-recovery
+      // snapshot of exactly that content on disk; clear it so a later
+      // launch doesn't turn around and offer to "recover" what was just
+      // discarded.
+      void window.rifffApi.clearAutosave()
     }
     setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
   }
@@ -1984,6 +1991,9 @@ function Frame(): React.JSX.Element {
                 // open/restore rather than replacing the still-unsaved
                 // live project.
                 if (!saved) return 'cancel'
+              } else {
+                // 'discard' -- see handleNew's matching comment above.
+                void window.rifffApi.clearAutosave()
               }
               return 'proceed'
             }}
@@ -2016,6 +2026,9 @@ function Frame(): React.JSX.Element {
                   // rather than proceeding to the disk-open flow, which
                   // would replace the still-unsaved live project.
                   if (!saved) return
+                } else {
+                  // 'discard' -- see handleNew's matching comment above.
+                  void window.rifffApi.clearAutosave()
                 }
                 setLibraryBrowserOpen(false)
                 setBusy('opening project…')
