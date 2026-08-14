@@ -70,7 +70,7 @@ import {
   getWarehouseSyncStatus,
   listWarehouseFavourites,
   toggleWarehouseFavourite
-} from './loreWarehouseWriter'
+} from './riffLibraryWriter'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import {

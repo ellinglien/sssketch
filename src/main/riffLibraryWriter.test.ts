@@ -15,7 +15,7 @@ import {
   toggleWarehouseFavourite,
   listWarehouseFavourites,
   deleteJamRows
-} from './loreWarehouseWriter'
+} from './riffLibraryWriter'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
 // (rather than importing openOwnWarehouseDb, which requires mocking

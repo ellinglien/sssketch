@@ -18,7 +18,7 @@ import {
   areAllResolved,
   filterUnresolved,
   deleteJamRows
-} from './loreWarehouseWriter'
+} from './riffLibraryWriter'
 
 /** Runs `worker` over every item in `items`, with at most `limit` calls in
  * flight at once. Copied here from endlesssSync.ts's own identical helper --
