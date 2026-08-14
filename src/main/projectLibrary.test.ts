@@ -355,21 +355,21 @@ describe('projectLibrary', () => {
       expect(readFileSync(backups[0].path, 'utf-8')).toBe('{"rifffs":{"first":true}}')
     })
 
-    it('keeps only the most recent MAX_BACKUPS (3), newest first', async () => {
+    it('keeps only the most recent MAX_BACKUPS (15), newest first', async () => {
       const { saveProjectToLibrary } = await import('./projectFile')
       const { listSketchBackups } = await import('./projectLibrary')
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 17; i++) {
         saveProjectToLibrary('many-saves', `{"rifffs":{"n":${i}}}`)
         await tick()
       }
       const backups = listSketchBackups('many-saves')
-      expect(backups).toHaveLength(3)
-      // Saves 0..4 each back up the PREVIOUS content just before
-      // overwriting -- so the 5 saves produce backups of versions 0,1,2,3
-      // (save 4's own content is still live, never backed up). Newest
-      // three kept: versions 3, 2, 1.
+      expect(backups).toHaveLength(15)
+      // Saves 0..16 each back up the PREVIOUS content just before
+      // overwriting -- so the 17 saves produce backups of versions 0..15
+      // (save 16's own content is still live, never backed up). Newest 15
+      // kept: versions 15 down to 1 (version 0 pruned).
       const contents = backups.map((b) => JSON.parse(readFileSync(b.path, 'utf-8')).rifffs.n)
-      expect(contents).toEqual([3, 2, 1])
+      expect(contents).toEqual(Array.from({ length: 15 }, (_, idx) => 15 - idx))
     })
 
     it('returns an empty list for a sketch that was only ever saved once', async () => {

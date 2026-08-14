@@ -307,9 +307,12 @@ export function sketchBackupsDir(name: string): string {
 }
 
 // Only the most recent few -- this is a safety net against an unwanted
-// autosave overwrite, not real version control; unbounded growth would
-// just be silent disk usage nobody asked for.
-const MAX_BACKUPS = 3
+// overwrite (an explicit Save, or the quit-time save prompt), not real
+// version control; unbounded growth would just be silent disk usage nobody
+// asked for. Raised from 3 to 15 once a save point became a deliberate
+// action (the explicit-save model) rather than firing every few seconds --
+// see docs/superpowers/specs/2026-08-14-explicit-save-model-design.md, §6.
+const MAX_BACKUPS = 15
 
 /** Copies a sketch's CURRENT live project file into its own backups folder
  * -- called from saveProjectToLibrary right before every overwrite
