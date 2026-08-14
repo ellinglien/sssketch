@@ -21,7 +21,7 @@ for that.
 - [Arranging clips](#arranging-clips)
 - [Mute, solo, volume, fades](#mute-solo-volume-fades)
 - [Plugins (VST3/AU)](#plugins-vst3au)
-- [The LORE library browser](#the-lore-library-browser)
+- [The riff library browser](#the-riff-library-browser)
 - [One-shot samples](#one-shot-samples)
 - [Project files, autosave, export](#project-files-autosave-export)
 - [Key commands reference](#key-commands-reference)
@@ -52,8 +52,7 @@ Top to bottom:
 ## Basic workflow
 
 1. **Import** a rifff — drag an Endlesss export folder (or loose stem files)
-   onto the Shelf, or pull one in from the [LORE library browser](#the-lore-library-browser)
-   if you have a synced local archive.
+   onto the Shelf, or pull one in from the [riff library browser](#the-riff-library-browser).
 2. **Fix the downbeat** — the [downbeat picker](#the-downbeat-picker) opens
    automatically right after import so you can mark where the loop actually
    starts.
@@ -91,7 +90,7 @@ correction is baked into a rotated copy of the audio.
 You can reopen this later from the Inspector's **re-pick beat** button if the
 original guess was wrong.
 
-When importing several rifffs at once (e.g. a batch from the LORE browser),
+When importing several rifffs at once (e.g. a batch from the riff library browser),
 use <kbd>←</kbd>/<kbd>→</kbd> to move between them — the app pre-selects
 whichever one it thinks most needs a correction.
 
@@ -185,17 +184,23 @@ the catalog) work the same way — sssketch runs them in a background helper
 process automatically. Slot order is fixed (0→1→2→3 for the master chain,
 0→1 for channel inserts) — there's no reordering UI.
 
-## The LORE library browser
+## The riff library browser
 
-If you have a local OUROVEON/LORE-synced Endlesss archive, this is a
-searchable alternative to drag-and-drop: pick a jam, browse its riffs as a
-grid of small circles (brightness shows your own contribution level to that
-riff; black means it isn't fully downloaded locally yet), click a circle to
-preview it, and import with one click.
+sssketch keeps its own local, searchable library of your Endlesss riffs —
+log in once and it syncs directly from Endlesss in the background, no
+external tool required. Pick a jam, browse its riffs as a grid of small
+circles (brightness shows your own contribution level to that riff; black
+means it isn't fully downloaded locally yet), click a circle to preview it,
+and import with one click.
 
 - Paste a riff ID directly to jump straight to it.
 - **Download missing stems** fetches anything not yet cached locally.
 - <kbd>Esc</kbd> closes the panel.
+
+If you already have a local archive synced by the separate, real LORE app
+(OUROVEON), you can point sssketch at it instead from the settings menu's
+**change riff archive location…** — an optional override, not required for
+the browser to work.
 
 ## One-shot samples
 
@@ -257,7 +262,7 @@ disabled while a text field is focused.
 | Right-click a clip's name bar | Context menu: copy / duplicate / ungroup / re-bake downbeat / delete |
 | Right-click empty timeline | Paste menu (if something's copied) |
 | <kbd>Cmd</kbd>-drag a placed clip | Duplicate instead of move |
-| Shift-click a tile (Shelf / sketch / LORE) | Range-select |
+| Shift-click a tile (Shelf / sketch / riff library) | Range-select |
 | <kbd>Cmd</kbd>-click a tile | Toggle individual selection |
 
 ### One-shot samples
@@ -275,7 +280,7 @@ disabled while a text field is focused.
 | <kbd>Space</kbd> | Start/stop preview loop, or mark the downbeat if already playing |
 | <kbd>←</kbd> / <kbd>→</kbd> | Previous/next rifff in a batch import |
 
-### LORE browser
+### riff library browser
 
 | Key | Action |
 |---|---|
