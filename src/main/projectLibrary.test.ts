@@ -30,9 +30,9 @@ describe('projectLibrary', () => {
   })
 
   describe('libraryRootPath / setLibraryRootPath', () => {
-    it('defaults to <music>/sssketch when no preference has been set', async () => {
+    it('defaults to <music>/sssketch/projects when no preference has been set', async () => {
       const { libraryRootPath } = await import('./projectLibrary')
-      expect(libraryRootPath()).toBe(join(musicDir, 'sssketch'))
+      expect(libraryRootPath()).toBe(join(musicDir, 'sssketch', 'projects'))
     })
 
     it('returns a previously-set custom root', async () => {
@@ -54,7 +54,7 @@ describe('projectLibrary', () => {
         sketchStemsDir,
         samplesCacheDir
       } = await import('./projectLibrary')
-      const root = join(musicDir, 'sssketch')
+      const root = join(musicDir, 'sssketch', 'projects')
       expect(sketchDir('my-sketch')).toBe(join(root, 'my-sketch'))
       expect(sketchProjectPath('my-sketch')).toBe(join(root, 'my-sketch', 'my-sketch.sssketchproj'))
       expect(sketchMetaPath('my-sketch')).toBe(join(root, 'my-sketch', '.sssketch-meta.json'))

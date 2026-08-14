@@ -73,6 +73,7 @@ import {
 } from './riffLibraryWriter'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
+import { migrateProjectLibraryLocation } from './projectLibraryMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
@@ -206,6 +207,15 @@ if (is.dev) {
 app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
+
+  // One-time, idempotent relocation of the project library from its old
+  // default (~/Music/sssketch/ directly) onto its new one
+  // (~/Music/sssketch/projects/) -- see projectLibraryMigration.ts's own
+  // doc comment. No ordering constraint relative to the other migrations
+  // below (touches an entirely separate directory tree), but run first for
+  // readability alongside its riff-library counterpart (added in the next
+  // task).
+  migrateProjectLibraryLocation()
 
   // One-time (idempotent) migration off the old source-partitioned Endlesss
   // stem cache -- see stemCacheMigration.ts's own doc comment. Cheap once

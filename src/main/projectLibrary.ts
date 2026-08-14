@@ -22,13 +22,20 @@ function libraryPrefsPath(): string {
 }
 
 function defaultLibraryRoot(): string {
-  return join(app.getPath('music'), 'sssketch')
+  // A visible sibling of the riff library's own relocated default
+  // (~/Music/sssketch/library/, see riffLibrarySchema.ts's
+  // ownRiffLibraryRoot) under the same shared ~/Music/sssketch/ parent --
+  // was directly `<Music>/sssketch` with no subfolder. Existing users with
+  // real sketches still sitting at the old default are handled by
+  // projectLibraryMigration.ts, wired into app startup.
+  return join(app.getPath('music'), 'sssketch', 'projects')
 }
 
 /** Where every sketch's own subfolder lives -- user-relocatable (see
- * setLibraryRootPath), defaulting to `<Music>/sssketch`. Read fresh every
- * call rather than cached, matching pluginCatalog.ts's own loadCatalog
- * convention -- this is a rarely-called, cheap file read, not a hot path. */
+ * setLibraryRootPath), defaulting to `<Music>/sssketch/projects`. Read
+ * fresh every call rather than cached, matching pluginCatalog.ts's own
+ * loadCatalog convention -- this is a rarely-called, cheap file read, not a
+ * hot path. */
 export function libraryRootPath(): string {
   const path = libraryPrefsPath()
   if (!existsSync(path)) return defaultLibraryRoot()
@@ -49,6 +56,14 @@ export function setLibraryRootPath(newRoot: string): void {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`setLibraryRootPath: failed to write ${libraryPrefsPath()}: ${message}`)
   }
+}
+
+/** True once the user has explicitly repointed the project library away
+ * from its own default -- see setLibraryRootPath. Used by
+ * projectLibraryMigration.ts to make sure the one-time default-location
+ * migration never runs for someone who already made their own choice. */
+export function hasStoredLibraryRootOverride(): boolean {
+  return existsSync(libraryPrefsPath())
 }
 
 export function sketchDir(name: string): string {
