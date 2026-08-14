@@ -146,6 +146,7 @@ export function TransportBar({
   onStop,
   onShowWelcome,
   onOpenEndlesss,
+  onStartTour,
   mode,
   sketchEligible,
   onCycleMode
@@ -173,6 +174,12 @@ export function TransportBar({
    * -- opens the same library browser the onboarding modal's own "log into
    * endlesss" button does, rather than duplicating a login form here. */
   onOpenEndlesss: () => void
+  /** Settings menu's "take the tour" entry -- a deliberate replay, always
+   * present regardless of whether the tour has already been seen (unlike
+   * OnboardingModal's own tour link, which disappears once tourSeen is
+   * true -- see App.tsx's replayTour for the confirm-if-existing-content
+   * guard this shares with the welcome modal's own onStartTour). */
+  onStartTour: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -813,6 +820,7 @@ export function TransportBar({
           ignoreRef={settingsButtonRef}
           items={[
             { label: 'show welcome screen', onClick: onShowWelcome },
+            { label: 'take the tour', onClick: onStartTour },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
             {
               label: 'change lore archive location…',

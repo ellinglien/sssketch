@@ -692,6 +692,15 @@ const ONBOARDING_SEEN_STORAGE_KEY = 'sssketch:onboardingSeen'
 // decision (where do sketches live), not a recurring reminder, so it
 // never shows again once dismissed, unlike the welcome modal.
 const LIBRARY_LOCATION_SEEN_STORAGE_KEY = 'sssketch:libraryLocationSeen'
+// Tracks whether the guided tour has ever been started -- once true,
+// OnboardingModal stops offering "take the tour" on welcome (it's still
+// reachable as a deliberate replay from the gear/settings menu, which
+// isn't gated on this at all). Same localStorage-flag pattern as
+// ONBOARDING_SEEN_STORAGE_KEY above; marked seen the moment the tour
+// actually starts (see Frame's own startTour), not on some stricter
+// "reached the end" signal -- TourOverlay.tsx has no such signal cheaply
+// available, and "started" is an acceptable proxy for "seen" here.
+const TOUR_SEEN_STORAGE_KEY = 'sssketch:tourSeen'
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -965,22 +974,32 @@ function Frame(): React.JSX.Element {
   }
   // Guards the startup effect below against StrictMode's dev-only
   // double-invoke: without this, both invocations independently call
-  // loadAutosave() before either gets to clearAutosave(), so a real
-  // crash-recovery snapshot triggers TWO "recover unsaved work?" prompts in
-  // a row for the same content -- confirmed live (clicking OK on the first
-  // immediately shows a second, identical one).
+  // loadAutosave() before either gets to clearAutosave()/setRecoverableAutosave(),
+  // double-counting the same on-disk snapshot -- confirmed live pre-redesign
+  // (see git history: this used to manifest as two "recover unsaved work?"
+  // prompts in a row for the same content).
   const startupResolvedRef = useRef(false)
 
-  // Once, on mount: offer to restore a crash-recovery snapshot from a
-  // previous session that never got explicitly saved (see projectFile.ts's
-  // writeAutosave/loadAutosave/clearAutosave — a dedicated file, decoupled
-  // from the user's own named .sssketchproj saves). Cleared either way once
-  // answered, so a later launch doesn't keep asking about the same stale
-  // snapshot. Also restores currentSketch from the sketch-info sidecar (see
-  // writeAutosaveSketchInfo/loadAutosaveSketchInfo) -- without this, the
-  // next routine Save after a recovered library sketch would silently fork
-  // a brand-new library entry instead of writing back to the sketch the
-  // recovered content actually came from.
+  // Non-null only when there's a genuine, unresolved crash-recovery
+  // snapshot from a previous session -- one that was never explicitly
+  // saved OR discarded (every explicit discard path -- New, library open/
+  // restore, open-from-disk, quit's "Don't Save" -- now calls
+  // clearAutosave() itself, so surviving to the next launch means a real
+  // crash/force-quit/power-loss, not a normal exit). OnboardingModal reads
+  // this (via hasRecovery) to show its recovery sub-view instead of the
+  // normal new/open welcome -- see its own doc comment for why the view is
+  // derived from this prop rather than mirrored into local state there.
+  const [recoverableAutosave, setRecoverableAutosave] = useState<{ json: string } | null>(null)
+
+  // Once, on mount: check for a crash-recovery snapshot and, if real,
+  // surface it via recoverableAutosave for OnboardingModal to offer --
+  // never auto-loads it, and never shows a native window.confirm (folded
+  // into the welcome modal itself, see its own recovery sub-view). If
+  // there's nothing to recover, this deliberately does nothing else --
+  // no auto-reopening the last project, no auto-naming a fresh sketch.
+  // OnboardingModal's default (non-recovery) sub-view already renders in
+  // that case via the existing showOnboarding state, and its own "new
+  // project" / "open project" buttons are what start a real session now.
   useEffect(() => {
     if (startupResolvedRef.current) return
     startupResolvedRef.current = true
@@ -996,101 +1015,83 @@ function Frame(): React.JSX.Element {
       // on their very next launch for content that was never really
       // there. Matches the same Object.keys(...).length > 0 definition
       // of "real" already used by the New-project dirty check above.
-      const hasRealContent = json !== null && Object.keys(JSON.parse(json).rifffs ?? {}).length > 0
-      if (hasRealContent && window.confirm('Recover unsaved work from a previous session?')) {
-        const loaded = deserializeProject(JSON.parse(json))
-        // Same pre-warm-before-LOAD_STATE reasoning as the library
-        // browser's onSelect/onOpenFromDisk handlers below -- avoids the
-        // timeline/sketch strip rendering with blank waveforms that pop
-        // in one at a time as each mounted component's own decode finishes.
-        setBusy('loading…')
-        await warmStemCaches(loaded)
-        dispatch({ type: 'LOAD_STATE', state: loaded })
-        lastSavedJsonRef.current = serializeProject(loaded)
-        setBusy(null)
-        const sketchJson = await window.rifffApi.loadAutosaveSketch()
-        // The sketch-info sidecar can be missing/corrupted even when the
-        // content autosave above recovered fine (they're written/read
-        // independently -- see writeAutosaveSketchInfo/loadAutosaveSketchInfo).
-        // Falling back to null here would leave real recovered content
-        // showing as "untitled sketch" AND excluded from the debounced
-        // autosave effect's own library-write gating below (it requires
-        // currentSketch.kind === 'library'). Give it a real name instead,
-        // same as the fresh-start branch further down.
-        setCurrentSketch(
-          sketchJson
-            ? (JSON.parse(sketchJson) as CurrentSketch)
-            : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
-        )
-        void window.rifffApi.clearAutosave()
+      if (json !== null && Object.keys(JSON.parse(json).rifffs ?? {}).length > 0) {
+        setRecoverableAutosave({ json })
         return
       }
+      // Autosave file exists but has no real content (see above) -- clear
+      // it so it doesn't linger and get offered on some later launch once
+      // it might coincidentally look more "real."
       if (json) void window.rifffApi.clearAutosave()
-
-      // Nothing to recover (or recovery declined) -- offer to reopen
-      // whatever was last opened (see writeLastOpenedSketch, kept updated
-      // by the effect below), same pattern as the library browser's own
-      // onSelect/onOpenFromDisk handlers, rather than always starting a
-      // brand-new sketch. Asks first (declining falls straight through to
-      // the fresh-start block below) rather than silently reopening it --
-      // per direct feedback, launching straight into a possibly-large old
-      // project isn't always what's wanted. Same window.confirm() pattern
-      // as the crash-recovery prompt just above, for the same "startup
-      // decision, not worth a custom modal" reasoning.
-      const lastOpenedJson = await window.rifffApi.loadLastOpenedSketch()
-      const lastOpened = lastOpenedJson ? (JSON.parse(lastOpenedJson) as CurrentSketch) : null
-      const lastOpenedLabel =
-        lastOpened?.kind === 'library'
-          ? lastOpened.name
-          : lastOpened
-            ? basenameWithoutProjectExt(lastOpened.path)
-            : null
-      if (lastOpened && window.confirm(`Open the last project, "${lastOpenedLabel}"?`)) {
-        const result =
-          lastOpened.kind === 'library'
-            ? await window.rifffApi.openLibrarySketch(lastOpened.name)
-            : await window.rifffApi.openProjectFromPath(lastOpened.path)
-        if (result) {
-          const loaded = deserializeProject(JSON.parse(result.json))
-          setBusy('loading…')
-          await warmStemCaches(loaded)
-          dispatch({ type: 'LOAD_STATE', state: loaded })
-          lastSavedJsonRef.current = serializeProject(loaded)
-          setBusy(null)
-          setCurrentSketch(lastOpened)
-          return
-        }
-        // The pointed-at sketch is gone (deleted/moved/renamed since it was
-        // last opened) -- fall through to the fresh-sketch path below
-        // rather than getting stuck unable to start at all.
-      }
-
-      // Fresh start (nothing to recover, no last-opened sketch, or it's
-      // gone) -- give the sketch a real library name immediately rather
-      // than leaving it null/"untitled sketch" until an explicit Save, so
-      // there's already a real library entry name for handleSave to write
-      // to (or for a duplicate/rename to target) once the user actually
-      // saves, instead of handleSave having to invent one on the spot.
-      lastSavedJsonRef.current = serializeProject(initialState)
-      setCurrentSketch({
-        kind: 'library',
-        name: await window.rifffApi.generateDefaultProjectName()
-      })
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run-once-on-mount; dispatch/setBusy/setCurrentSketch are stable
   }, [])
 
-  // Keeps the last-opened-sketch pointer (see writeLastOpenedSketch) in
-  // sync with currentSketch, so the NEXT launch's mount effect above can
-  // open straight back into wherever this session left off. Skipped while
-  // currentSketch is null (a brand-new, never-yet-located sketch, e.g.
-  // right after "new" -- see Frame's own handleNew) so quitting before
-  // that sketch is ever saved/named doesn't overwrite the pointer to the
-  // last REAL sketch with nothing addressable to reopen.
-  useEffect(() => {
-    if (currentSketch !== null)
-      void window.rifffApi.saveLastOpenedSketch(JSON.stringify(currentSketch))
-  }, [currentSketch])
+  /** OnboardingModal's "recover" button -- loads the just-found snapshot
+   * into the live project, restores currentSketch from its sidecar (see
+   * writeAutosaveSketchInfo/loadAutosaveSketchInfo -- without this, the
+   * next routine Save after a recovered library sketch would silently
+   * fork a brand-new library entry instead of writing back to the sketch
+   * the recovered content actually came from), clears the snapshot, and
+   * dismisses the welcome modal. */
+  async function handleRecoverAutosave(dontShowAgain: boolean): Promise<void> {
+    if (!recoverableAutosave) return
+    const loaded = deserializeProject(JSON.parse(recoverableAutosave.json))
+    // Same pre-warm-before-LOAD_STATE reasoning as the library browser's
+    // onSelect/onOpenFromDisk handlers below -- avoids the timeline/sketch
+    // strip rendering with blank waveforms that pop in one at a time as
+    // each mounted component's own decode finishes.
+    setBusy('loading…')
+    await warmStemCaches(loaded)
+    dispatch({ type: 'LOAD_STATE', state: loaded })
+    lastSavedJsonRef.current = serializeProject(loaded)
+    setBusy(null)
+    const sketchJson = await window.rifffApi.loadAutosaveSketch()
+    // The sketch-info sidecar can be missing/corrupted even when the
+    // content autosave above recovered fine (they're written/read
+    // independently). Falling back to null here would leave real
+    // recovered content showing as "untitled sketch." Give it a real name
+    // instead, same as the fresh-start path below.
+    setCurrentSketch(
+      sketchJson
+        ? (JSON.parse(sketchJson) as CurrentSketch)
+        : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
+    )
+    void window.rifffApi.clearAutosave()
+    setRecoverableAutosave(null)
+    dismissOnboarding(dontShowAgain)
+  }
+
+  /** OnboardingModal's "discard" button (recovery sub-view) -- clears the
+   * snapshot and falls through to the normal new/open sub-view, rather
+   * than dismissing the whole modal (the user still needs to pick what to
+   * do next). Setting recoverableAutosave to null is what flips
+   * OnboardingModal's own hasRecovery-derived view on the next render. */
+  function handleDiscardRecovery(): void {
+    void window.rifffApi.clearAutosave()
+    setRecoverableAutosave(null)
+    // Force the modal to stay open on its normal new/open sub-view, even
+    // if "don't show this again" was checked in some earlier session --
+    // showing the recovery sub-view at all already overrode that opt-out
+    // once this launch (see this modal's own render-site comment); falling
+    // back to the persisted "hidden" preference right here would silently
+    // strand the user with nothing telling them how to start a project.
+    setShowOnboarding(true)
+  }
+
+  /** OnboardingModal's "new project" button -- the same "give the sketch a
+   * real library name immediately" fresh-start behavior this app used to
+   * do automatically at launch (so there's already a real library entry
+   * name for handleSave to write to, or for a duplicate/rename to target,
+   * once the user actually saves), now an explicit welcome-screen action
+   * instead of a silent default. */
+  async function handleNewProjectFromWelcome(dontShowAgain: boolean): Promise<void> {
+    lastSavedJsonRef.current = serializeProject(initialState)
+    setCurrentSketch({
+      kind: 'library',
+      name: await window.rifffApi.generateDefaultProjectName()
+    })
+    dismissOnboarding(dontShowAgain)
+  }
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
   // last real edit. Depends on the SERIALIZED content (a string), not state
@@ -1202,6 +1203,18 @@ function Frame(): React.JSX.Element {
   // tour) rather than assuming it's the only thing on the timeline.
   const tourDemoGroupIdRef = useRef<string | null>(null)
 
+  // Read lazily in useState's initializer, same "can't flash open-then-
+  // closed" reasoning as showOnboarding below -- OnboardingModal's
+  // tourSeen prop needs the real persisted value on its very first render,
+  // not a default that flips a moment later.
+  const [tourSeen, setTourSeen] = useState(() => {
+    try {
+      return localStorage.getItem(TOUR_SEEN_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
   async function startTour(): Promise<void> {
     dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
     const rifff = await window.rifffApi.importDemoRifff()
@@ -1210,6 +1223,13 @@ function Frame(): React.JSX.Element {
     dispatch({ type: 'ADD_TO_SHELF', rifff })
     dispatch({ type: 'PLACE_ON_TIMELINE', groupId: rifff.groupId, startBar: 0 })
     setTourStepIndex(0)
+    setTourSeen(true)
+    try {
+      localStorage.setItem(TOUR_SEEN_STORAGE_KEY, '1')
+    } catch {
+      // localStorage unavailable -- welcome will just keep offering the
+      // tour link every launch, not worth surfacing as an error.
+    }
   }
 
   function endTour(): void {
@@ -1218,6 +1238,22 @@ function Frame(): React.JSX.Element {
       tourDemoGroupIdRef.current = null
     }
     setTourStepIndex(null)
+  }
+
+  /** Gear-menu "take the tour" entry (TransportBar.tsx) -- a deliberate
+   * replay, always offered regardless of tourSeen. Confirms first when
+   * there's real content to protect, same guard as the welcome modal's own
+   * onStartTour handler below (which can't just call this directly --
+   * that one also needs to dismiss the modal first). */
+  function replayTour(): void {
+    const hasExistingContent = Object.keys(state.rifffs).length > 0
+    if (
+      hasExistingContent &&
+      !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+    ) {
+      return
+    }
+    void startTour()
   }
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
@@ -1865,6 +1901,7 @@ function Frame(): React.JSX.Element {
           onStop={() => void handleStop()}
           onShowWelcome={showWelcomeAgain}
           onOpenEndlesss={() => setRiffLibraryOpen(true)}
+          onStartTour={replayTour}
           mode={state.mode}
           sketchEligible={isSketchEligible(state)}
           onCycleMode={handleCycleArrangerMode}
@@ -2083,9 +2120,23 @@ function Frame(): React.JSX.Element {
             onContinue={dismissLibraryLocationSetup}
           />
         )}
-        {!showLibraryLocationSetup && showOnboarding && (
+        {/* Shown whenever the normal welcome opt-out says so, OR
+          (unconditionally, overriding that opt-out) whenever there's a
+          genuine crash-recovery snapshot to offer -- see
+          recoverableAutosave's own doc comment. Surfacing an unresolved
+          crash-recovery snapshot always wins over "don't show this again,"
+          since that opt-out was about the welcome pitch, not about
+          silently dropping recoverable work. */}
+        {!showLibraryLocationSetup && (showOnboarding || recoverableAutosave !== null) && (
           <OnboardingModal
-            onDismiss={dismissOnboarding}
+            hasRecovery={recoverableAutosave !== null}
+            onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
+            onDiscardRecovery={handleDiscardRecovery}
+            onNewProject={(dontShowAgain) => void handleNewProjectFromWelcome(dontShowAgain)}
+            onOpenProject={(dontShowAgain) => {
+              dismissOnboarding(dontShowAgain)
+              setLibraryBrowserOpen(true)
+            }}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
               setRiffLibraryOpen(true)
@@ -2101,6 +2152,7 @@ function Frame(): React.JSX.Element {
               dismissOnboarding(dontShowAgain)
               void startTour()
             }}
+            tourSeen={tourSeen}
           />
         )}
         {tourStepIndex !== null && (

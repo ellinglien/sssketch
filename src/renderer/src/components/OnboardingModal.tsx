@@ -1,38 +1,5 @@
 import { useState } from 'react'
-import { LoadingLoader } from './LoadingLoader'
-
-/** The "1a — marquee" welcome-modal variant, imported via claude_design MCP
- * from the "Sssketch Welcome.dc.html" design project (claude.ai/design,
- * 2026-08-10) and implemented as coded there: a big four-color loader mark
- * over an eight-letter SSSKETCH wordmark that chases the same eight colors
- * across itself, one hard color-step per letter rather than a gradient
- * blend (see ssrainbow below). Originally an 8-hex rainbow sequence as
- * imported from the design; switched to greyscale per direct feedback --
- * this app's own design system spends color only on things that carry
- * audio information (see CLAUDE.md's Design system section), and a color
- * mark is the first thing anyone sees on launch. Kept as 8 distinct steps
- * (not reused from tokens.css's 4-step --ra-text-N scale) so the chase
- * animation still reads as motion rather than collapsing to 2-3 repeats. */
-const PALETTE = [
-  '#f2f2f2',
-  '#d9d9d9',
-  '#c2c2c2',
-  '#a8a8a8',
-  '#8f8f8f',
-  '#757575',
-  '#5c5c5c',
-  '#444444'
-] as const
-// The mark's 4 bars, per the design's own "colour the SWAPPING PAIRS" note
-// on ra-loader-bounce -- these are PALETTE[0], PALETTE[3], PALETTE[6],
-// PALETTE[1] as coded in 1a, not an arbitrary pick.
-const MARK_COLORS: [string, string, string, string] = [
-  PALETTE[0],
-  PALETTE[3],
-  PALETTE[6],
-  PALETTE[1]
-]
-const WORDMARK = 'SSSKETCH'.split('')
+import icon from '../assets/icon.png'
 
 const buttonStyle: React.CSSProperties = {
   height: 36,
@@ -51,18 +18,23 @@ const primaryButtonStyle: React.CSSProperties = {
   color: 'var(--ra-play-on-ink)'
 }
 
+// Against the new pure-black panel background (see this component's own
+// panel style below), the old var(--ra-bg-row)/var(--ra-text-2) pairing
+// read as a visible mid-grey box -- exactly what direct feedback called out
+// ("black background, white text, no in-between greys"). Transparent fill +
+// a bright var(--ra-text) outline instead, so it reads as "outlined button
+// on black" rather than "grey button."
 const secondaryButtonStyle: React.CSSProperties = {
   ...buttonStyle,
-  border: '1px solid var(--ra-border)',
-  background: 'var(--ra-bg-row)',
-  color: 'var(--ra-text-2)'
+  border: '1px solid var(--ra-text)',
+  background: 'transparent',
+  color: 'var(--ra-text)'
 }
 
-// A plain text-link affordance, not a bordered button -- the tour trigger
-// isn't part of the 1a design's own two-button hero row (marquee only
-// ships "start sketching" + "log into endlesss"), so it stays visually
-// quieter than either CTA while remaining always-visible per direct
-// feedback (see this component's own onStartTour doc comment).
+// A plain text-link affordance, not a bordered button -- stays visually
+// quieter than either CTA above. var(--ra-type-fx) is one of this app's real
+// sound-type accent colors (teal), not a grey -- kept as the one deliberate
+// spot of color here, same as before this component's restyle.
 const linkButtonStyle: React.CSSProperties = {
   height: 36,
   border: 'none',
@@ -76,29 +48,61 @@ const linkButtonStyle: React.CSSProperties = {
 
 /** Shown on every launch by default (see App.tsx's Frame -- persisted via
  * localStorage, same convention as LoreLibraryBrowser.tsx's own
- * loreUsername setting) until "don't show this again" is checked. Just
- * the one-line pitch, not a feature explainer -- per direct feedback,
- * anything longer wears thin fast as the first thing you see every time
- * you open the app. */
+ * loreUsername setting) until "don't show this again" is checked, OR
+ * unconditionally (regardless of that opt-out) whenever there's a genuine
+ * crash-recovery snapshot to offer -- see hasRecovery below.
+ *
+ * Two sub-views, chosen by hasRecovery rather than any state local to this
+ * component: recovery (offer to restore unsaved work from a previous
+ * session that never got explicitly saved or discarded -- see
+ * projectFile.ts's writeAutosave/loadAutosave/clearAutosave) and the normal
+ * new/open welcome. Deriving the view straight from the prop (not mirroring
+ * it into local state) means App.tsx's Frame clearing its own
+ * recoverableAutosave state after a discard is all it takes to flip this
+ * back to the normal view on the next render -- no separate transition to
+ * manage here. */
 export function OnboardingModal({
-  onDismiss,
+  hasRecovery,
+  onRecover,
+  onDiscardRecovery,
+  onNewProject,
+  onOpenProject,
   onOpenEndlesss,
-  onStartTour
+  onStartTour,
+  tourSeen
 }: {
-  /** dontShowAgain reflects the checkbox at the moment of dismissal --
-   * App.tsx only persists the opt-out when true, so leaving it unchecked
-   * means this shows again next launch. */
-  onDismiss: (dontShowAgain: boolean) => void
+  /** True when Frame's startup effect found a real, never-explicitly-saved-
+   * or-discarded autosave snapshot -- see App.tsx's own hasRealContent
+   * check. Selects the recovery sub-view below. */
+  hasRecovery: boolean
+  /** Loads the recovered snapshot into the live project and dismisses the
+   * whole modal -- dontShowAgain reflects the checkbox at the moment of
+   * the click, same semantics as every other callback here. */
+  onRecover: (dontShowAgain: boolean) => void
+  /** Clears the crash-recovery snapshot and falls through to the normal
+   * new/open sub-view -- does NOT dismiss the modal, since the user still
+   * needs to pick what to do next. No dontShowAgain: discarding recovered
+   * content isn't the same decision as opting out of the welcome screen,
+   * and the normal sub-view's own buttons carry the checkbox from here. */
+  onDiscardRecovery: () => void
+  /** Generates a fresh library name and starts a brand-new sketch, then
+   * dismisses -- the same "fresh start" behavior this app used to do
+   * automatically at launch, now an explicit welcome-screen action. */
+  onNewProject: (dontShowAgain: boolean) => void
+  /** Dismisses and opens the project library browser. */
+  onOpenProject: (dontShowAgain: boolean) => void
   /** Dismisses AND opens the Endlesss login/import browser directly --
    * the shortest path from "just opened this" to "have real audio in the
    * timeline" for anyone with an Endlesss account already. */
   onOpenEndlesss: (dontShowAgain: boolean) => void
-  /** Dismisses AND starts the guided tour (see TourOverlay.tsx) -- always
-   * shown, even for a returning user with existing content (previously
-   * hidden then, since the tour imports a demo rifff onto the timeline).
-   * App.tsx's own handler confirms first when there's real content to
-   * protect, so this component doesn't need to know about that itself. */
+  /** Dismisses AND starts the guided tour (see TourOverlay.tsx). App.tsx's
+   * own handler confirms first when there's real content to protect, so
+   * this component doesn't need to know about that itself. */
   onStartTour: (dontShowAgain: boolean) => void
+  /** Once the tour has been started at least once, its welcome-screen
+   * link goes away -- it's still reachable as a deliberate replay from the
+   * gear/settings menu (see TransportBar.tsx), which isn't gated on this. */
+  tourSeen: boolean
 }): React.JSX.Element {
   const [dontShowAgain, setDontShowAgain] = useState(false)
 
@@ -117,7 +121,12 @@ export function OnboardingModal({
       <div
         style={{
           width: 'min(420px, 90vw)',
-          background: 'var(--ra-bg-bar)',
+          // A real, literal black -- distinct from the shell's own near-
+          // black (--ra-bg-bar, #0a0a0a) per direct feedback ("black
+          // background for intro/welcome, white text"). Deliberately a
+          // one-off here rather than a new shared token -- this modal's
+          // color choices are its own, not a second parallel palette.
+          background: '#000000',
           border: '1px solid var(--ra-border-strong)',
           borderRadius: 0,
           boxShadow: 'var(--ra-shadow-popover)',
@@ -129,41 +138,49 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <LoadingLoader size={110} colors={MARK_COLORS} speedMs={6000} />
+        <img src={icon} alt="sssketch" width={64} height={64} style={{ display: 'block' }} />
 
-        <div style={{ display: 'flex', gap: 1 }}>
-          {WORDMARK.map((ch, i) => (
-            <span
-              key={i}
-              style={{
-                fontSize: 28,
-                fontWeight: 700,
-                lineHeight: 1,
-                animation: 'ss-onboarding-rainbow 12.8s steps(1,end) infinite',
-                animationDelay: `${(-i * 1.6).toFixed(1)}s`
-              }}
+        {hasRecovery ? (
+          <>
+            <div
+              style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
             >
-              {ch}
-            </span>
-          ))}
-        </div>
-
-        <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}>
-          a track sketching tool
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-          <button onClick={() => onDismiss(dontShowAgain)} style={primaryButtonStyle}>
-            start sketching
-          </button>
-          <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
-            log into endlesss
-          </button>
-        </div>
-
-        <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
-          take the tour
-        </button>
+              unsaved work from a previous session was found
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+              <button onClick={() => onRecover(dontShowAgain)} style={primaryButtonStyle}>
+                recover
+              </button>
+              <button onClick={onDiscardRecovery} style={secondaryButtonStyle}>
+                discard
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
+            >
+              a track sketching tool
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+              <button onClick={() => onNewProject(dontShowAgain)} style={primaryButtonStyle}>
+                new project
+              </button>
+              <button onClick={() => onOpenProject(dontShowAgain)} style={secondaryButtonStyle}>
+                open project
+              </button>
+              <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
+                log into endlesss
+              </button>
+            </div>
+            {!tourSeen && (
+              <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
+                take the tour
+              </button>
+            )}
+          </>
+        )}
 
         <label
           style={{
@@ -171,7 +188,7 @@ export function OnboardingModal({
             alignItems: 'center',
             gap: 6,
             fontSize: 10,
-            color: 'var(--ra-text-3)'
+            color: 'var(--ra-text)'
           }}
         >
           <input
@@ -181,25 +198,6 @@ export function OnboardingModal({
           />
           don&apos;t show this again
         </label>
-
-        {/* Discrete color steps (not a blended gradient) per letter, each
-            span 1.6s out of phase with the last -- the same 8-hex sequence
-            as the mark's own STEMS subset, chasing left to right. Scoped
-            locally, same "component owns its own keyframe" pattern as
-            LoadingLoader's own ra-loader-bounce. */}
-        <style>{`
-          @keyframes ss-onboarding-rainbow {
-            0%   { color: ${PALETTE[0]} }
-            12%  { color: ${PALETTE[1]} }
-            25%  { color: ${PALETTE[2]} }
-            37%  { color: ${PALETTE[3]} }
-            50%  { color: ${PALETTE[4]} }
-            62%  { color: ${PALETTE[5]} }
-            75%  { color: ${PALETTE[6]} }
-            87%  { color: ${PALETTE[7]} }
-            100% { color: ${PALETTE[0]} }
-          }
-        `}</style>
       </div>
     </div>
   )
