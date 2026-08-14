@@ -799,7 +799,7 @@ function Frame(): React.JSX.Element {
   // The last content actually known to be durably saved (library folder,
   // external file, or -- immediately after a crash-recovery restore -- the
   // just-recovered snapshot itself). Compared against the live, freshly
-  // serialized state in ProjectMenu's handleNew to decide whether there's
+  // serialized state in Frame's own handleNew to decide whether there's
   // anything real to lose -- see its own doc comment. Kept as a ref (not
   // state) since nothing needs to re-render off it; it's read once, at
   // click time.
@@ -998,7 +998,7 @@ function Frame(): React.JSX.Element {
   // sync with currentSketch, so the NEXT launch's mount effect above can
   // open straight back into wherever this session left off. Skipped while
   // currentSketch is null (a brand-new, never-yet-located sketch, e.g.
-  // right after "new" -- see ProjectMenu's handleNew) so quitting before
+  // right after "new" -- see Frame's own handleNew) so quitting before
   // that sketch is ever saved/named doesn't overwrite the pointer to the
   // last REAL sketch with nothing addressable to reopen.
   useEffect(() => {
