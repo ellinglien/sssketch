@@ -60,10 +60,12 @@ Native engine subprocess (native-engine/, JUCE/C++, built separately)
 
 - **`src/main/`** — Electron main process. File I/O, project save/load (`projectFile.ts`),
   audio import (`importRifff.ts`), plugin scanning (`pluginScan.ts`, `runFullScan.ts`,
-  `pluginCatalog.ts`), the LORE warehouse integration (`loreWarehouse.ts`), and the engine
-  subprocess lifecycle (`engineProcess.ts` spawns it, `engineClient.ts` talks to it,
-  `playbackEngineLifecycle.ts` wires it into app startup). Every `ipcMain.handle(...)` call
-  in `index.ts` is the full IPC surface — grep there first when tracing a feature end to end.
+  `pluginCatalog.ts`), the riff library integration (`riffLibraryStore.ts`, `riffLibrarySchema.ts`,
+  `riffLibrarySync.ts`, `riffLibraryWriter.ts` — sssketch's own self-built, always-on riff-sync
+  database, plus an optional connection to a real external LORE-synced archive if the user already
+  has one), and the engine subprocess lifecycle (`engineProcess.ts` spawns it, `engineClient.ts`
+  talks to it, `playbackEngineLifecycle.ts` wires it into app startup). Every `ipcMain.handle(...)`
+  call in `index.ts` is the full IPC surface — grep there first when tracing a feature end to end.
 - **`src/preload/`** — thin bridge exposing `window.rifffApi` to the renderer. Any new
   IPC channel needs a matching entry here.
 - **`src/renderer/src/`** — the React UI. `state/store.ts` is a single reducer (see its
