@@ -74,6 +74,7 @@ import {
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
+import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
@@ -213,9 +214,15 @@ app.whenReady().then(async () => {
   // (~/Music/sssketch/projects/) -- see projectLibraryMigration.ts's own
   // doc comment. No ordering constraint relative to the other migrations
   // below (touches an entirely separate directory tree), but run first for
-  // readability alongside its riff-library counterpart (added in the next
-  // task).
+  // readability alongside its riff-library counterpart.
   migrateProjectLibraryLocation()
+
+  // Same for the riff library -- see riffLibraryMigration.ts's own doc
+  // comment. MUST run before migrateLegacyFavourites' own
+  // openOwnRiffLibraryDb() call a few lines below, which is this process's
+  // first time opening that connection -- moving the directory out from
+  // under an already-open one would corrupt it.
+  migrateRiffLibraryLocation()
 
   // One-time (idempotent) migration off the old source-partitioned Endlesss
   // stem cache -- see stemCacheMigration.ts's own doc comment. Cheap once

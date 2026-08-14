@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -9,6 +9,7 @@ import {
   setRiffLibraryRoot,
   resolveStemPath,
   setRiffLibraryRootForTests,
+  hasStoredRiffLibraryRootOverride,
   listJams,
   listRiffs,
   resolveRiff,
@@ -158,6 +159,74 @@ function createSeededFixtureWarehouse(root: string): void {
   `)
   db.close()
 }
+
+describe('legacy loreWarehousePrefs.json carry-forward', () => {
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-carryforward-test-'))
+  })
+
+  afterEach(() => {
+    setRiffLibraryRootForTests(null)
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('carries forward a legacy loreWarehousePrefs.json to the new filename, honoring its root', () => {
+    writeFileSync(
+      join(userDataDir, 'loreWarehousePrefs.json'),
+      JSON.stringify({ root: '/Volumes/Elling-Lien/ENDLESSS' })
+    )
+    setRiffLibraryRootForTests(null) // force a real read through prefs, not the test override
+
+    expect(riffLibraryRootPath()).toBe('/Volumes/Elling-Lien/ENDLESSS')
+
+    const newPrefs = JSON.parse(
+      readFileSync(join(userDataDir, 'riffLibraryPrefs.json'), 'utf-8')
+    ) as { root: string }
+    expect(newPrefs).toEqual({ root: '/Volumes/Elling-Lien/ENDLESSS' })
+
+    expect(existsSync(join(userDataDir, 'loreWarehousePrefs.json'))).toBe(false)
+  })
+
+  it('carries forward for hasStoredRiffLibraryRootOverride too, and reports true once carried', () => {
+    writeFileSync(
+      join(userDataDir, 'loreWarehousePrefs.json'),
+      JSON.stringify({ root: '/Volumes/Elling-Lien/ENDLESSS' })
+    )
+    setRiffLibraryRootForTests(null)
+
+    expect(hasStoredRiffLibraryRootOverride()).toBe(true)
+    expect(existsSync(join(userDataDir, 'riffLibraryPrefs.json'))).toBe(true)
+    expect(existsSync(join(userDataDir, 'loreWarehousePrefs.json'))).toBe(false)
+  })
+
+  it('when both the legacy and new prefs files exist, the new one wins and the legacy one is left untouched', () => {
+    writeFileSync(
+      join(userDataDir, 'loreWarehousePrefs.json'),
+      JSON.stringify({ root: '/Volumes/Elling-Lien/OldArchive' })
+    )
+    writeFileSync(
+      join(userDataDir, 'riffLibraryPrefs.json'),
+      JSON.stringify({ root: '/Volumes/Elling-Lien/NewArchive' })
+    )
+    setRiffLibraryRootForTests(null)
+
+    expect(riffLibraryRootPath()).toBe('/Volumes/Elling-Lien/NewArchive')
+
+    // Legacy file is left completely alone -- new-key-first semantics,
+    // never overwritten or deleted once the new file already exists.
+    const legacyPrefs = JSON.parse(
+      readFileSync(join(userDataDir, 'loreWarehousePrefs.json'), 'utf-8')
+    ) as { root: string }
+    expect(legacyPrefs).toEqual({ root: '/Volumes/Elling-Lien/OldArchive' })
+  })
+
+  it('does nothing when neither prefs file exists', () => {
+    setRiffLibraryRootForTests(null)
+    expect(existsSync(join(userDataDir, 'riffLibraryPrefs.json'))).toBe(false)
+    expect(hasStoredRiffLibraryRootOverride()).toBe(false)
+    expect(existsSync(join(userDataDir, 'riffLibraryPrefs.json'))).toBe(false)
+  })
+})
 
 describe('listJams', () => {
   let root: string

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
@@ -17,6 +17,42 @@ const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
 function riffLibraryPrefsPath(): string {
   return join(app.getPath('userData'), RIFF_LIBRARY_PREFS_FILENAME)
+}
+
+// Pre-rename filename -- see docs/superpowers/specs/
+// 2026-08-14-riff-library-rename-design.md §3. Only ever read once, by
+// carryForwardLegacyRiffLibraryPrefs' own one-time carry-forward below;
+// never written again after this app version ships.
+const LEGACY_RIFF_LIBRARY_PREFS_FILENAME = 'loreWarehousePrefs.json'
+
+function legacyRiffLibraryPrefsPath(): string {
+  return join(app.getPath('userData'), LEGACY_RIFF_LIBRARY_PREFS_FILENAME)
+}
+
+/** One-time carry-forward of a stored riff-library-root override from the
+ * pre-rename prefs filename to the new one, so nobody's already-chosen
+ * external LORE archive location silently reverts to the default just
+ * because the prefs file itself was renamed -- mirrors
+ * LibraryBrowser.tsx's own loadStoredRiffLibraryUsername() localStorage
+ * carry-forward. Called at the top of both riffLibraryRootPath() and
+ * hasStoredRiffLibraryRootOverride(), so it runs on whichever of those two
+ * this process happens to call first -- self-terminating, since it's a
+ * no-op the moment the new file exists. */
+function carryForwardLegacyRiffLibraryPrefs(): void {
+  const newPath = riffLibraryPrefsPath()
+  if (existsSync(newPath)) return
+  const legacyPath = legacyRiffLibraryPrefsPath()
+  if (!existsSync(legacyPath)) return
+  try {
+    const contents = readFileSync(legacyPath, 'utf-8')
+    writeFileSync(newPath, contents, 'utf-8')
+    rmSync(legacyPath)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(
+      `carryForwardLegacyRiffLibraryPrefs: failed to carry forward ${legacyPath}: ${message}`
+    )
+  }
 }
 
 /** Test-only seam: points the module at a fixture warehouse instead of the
@@ -43,6 +79,7 @@ export function setRiffLibraryRootForTests(root: string | null): void {
  * libraryRootPath convention. */
 export function riffLibraryRootPath(): string {
   if (riffLibraryRootOverride !== null) return riffLibraryRootOverride
+  carryForwardLegacyRiffLibraryPrefs()
   const path = riffLibraryPrefsPath()
   if (!existsSync(path)) return ownRiffLibraryRoot()
   try {
@@ -73,6 +110,7 @@ export function setRiffLibraryRoot(newRoot: string): void {
  * riffLibraryMigration.ts to make sure the one-time default-location
  * migration never runs for someone who already made their own choice. */
 export function hasStoredRiffLibraryRootOverride(): boolean {
+  carryForwardLegacyRiffLibraryPrefs()
   return existsSync(riffLibraryPrefsPath())
 }
 
