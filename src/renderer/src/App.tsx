@@ -1078,21 +1078,6 @@ function Frame(): React.JSX.Element {
     setShowOnboarding(true)
   }
 
-  /** OnboardingModal's "new project" button -- the same "give the sketch a
-   * real library name immediately" fresh-start behavior this app used to
-   * do automatically at launch (so there's already a real library entry
-   * name for handleSave to write to, or for a duplicate/rename to target,
-   * once the user actually saves), now an explicit welcome-screen action
-   * instead of a silent default. */
-  async function handleNewProjectFromWelcome(dontShowAgain: boolean): Promise<void> {
-    lastSavedJsonRef.current = serializeProject(initialState)
-    setCurrentSketch({
-      kind: 'library',
-      name: await window.rifffApi.generateDefaultProjectName()
-    })
-    dismissOnboarding(dontShowAgain)
-  }
-
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
   // last real edit. Depends on the SERIALIZED content (a string), not state
   // itself, so a purely transient UI change (mode, volumeDragMode — both
@@ -1111,13 +1096,26 @@ function Frame(): React.JSX.Element {
   // crash-recovery snapshot, always a separate, decoupled mechanism (see
   // projectFile.ts's writeAutosave/loadAutosave/clearAutosave) that needed
   // no change here.
+  //
+  // Skipped entirely while recoverableAutosave is non-null -- that means a
+  // genuine crash-recovery snapshot is on disk and OnboardingModal is
+  // showing its recovery sub-view, still waiting on the user's Recover/
+  // Discard decision. Before this guard, leaving that prompt open for
+  // AUTOSAVE_DEBOUNCE_MS or longer let this effect fire and overwrite the
+  // real snapshot with persistedJson -- at that point still just
+  // serializeProject(initialState), since the live state hasn't been
+  // touched yet -- destroying the exact safety net crash recovery exists
+  // to provide. Resumes normally as soon as recoverableAutosave flips back
+  // to null (Recover or Discard, both in handleRecoverAutosave/
+  // handleDiscardRecovery above).
   useEffect(() => {
+    if (recoverableAutosave !== null) return
     const id = window.setTimeout(() => {
       void window.rifffApi.autosaveProject(persistedJson)
       void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [persistedJson, currentSketch])
+  }, [persistedJson, currentSketch, recoverableAutosave])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
@@ -2132,7 +2130,16 @@ function Frame(): React.JSX.Element {
             hasRecovery={recoverableAutosave !== null}
             onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
             onDiscardRecovery={handleDiscardRecovery}
-            onNewProject={(dontShowAgain) => void handleNewProjectFromWelcome(dontShowAgain)}
+            onNewProject={(dontShowAgain) => {
+              // Dismiss first so the welcome modal doesn't visually stack
+              // behind/conflict with whatever handleNew() shows next (the
+              // discard-guard dialog and/or NewProjectModal) -- see
+              // handleNew()'s own doc comment for why this routes through
+              // the exact same path as the toolbar's "new" button rather
+              // than a separate welcome-only shortcut.
+              dismissOnboarding(dontShowAgain)
+              void handleNew()
+            }}
             onOpenProject={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
               setLibraryBrowserOpen(true)

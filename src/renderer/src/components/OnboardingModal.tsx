@@ -85,9 +85,15 @@ export function OnboardingModal({
    * content isn't the same decision as opting out of the welcome screen,
    * and the normal sub-view's own buttons carry the checkbox from here. */
   onDiscardRecovery: () => void
-  /** Generates a fresh library name and starts a brand-new sketch, then
-   * dismisses -- the same "fresh start" behavior this app used to do
-   * automatically at launch, now an explicit welcome-screen action. */
+  /** Dismisses the welcome modal, then routes through the exact same "new"
+   * flow as the toolbar's New button: a discard-guard if there's real
+   * unsaved content on the timeline (possible here too, since the welcome
+   * modal is also reachable any time via the gear menu's "show welcome
+   * screen" entry, not just at a genuinely fresh launch), followed by the
+   * naming modal to actually create the new sketch. No longer a silent
+   * auto-named shortcut -- that used to skip both the discard-guard and
+   * the actual reducer state reset, corrupting the live project when
+   * reopened over real unsaved content. */
   onNewProject: (dontShowAgain: boolean) => void
   /** Dismisses and opens the project library browser. */
   onOpenProject: (dontShowAgain: boolean) => void
