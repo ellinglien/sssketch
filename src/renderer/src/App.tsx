@@ -1213,6 +1213,26 @@ function Frame(): React.JSX.Element {
     }
   })
 
+  // OnboardingModal's "log into endlesss" button should disappear once the
+  // user is already authenticated -- unlike tourSeen above (a synchronous
+  // localStorage read), this is a real IPC round trip, so it can't be known
+  // at first render. Defaults false (button shown) and flips once the fetch
+  // resolves; same TransportBar.tsx endlesssAuthStatus() bridge call and
+  // error handling as its own settings-menu fetch (see handleOpenSettingsMenu
+  // there), just fired once on mount here instead of on-demand. A brief
+  // flash of the button before it disappears on a slow fetch is an
+  // acceptable, undramatic tradeoff -- not worth blocking the modal's first
+  // render on.
+  const [endlesssLoggedIn, setEndlesssLoggedIn] = useState(false)
+  useEffect(() => {
+    void window.rifffApi
+      .endlesssAuthStatus()
+      .then((status) => setEndlesssLoggedIn(status.loggedIn))
+      .catch((err) => {
+        console.error('Frame: endlesssAuthStatus() failed:', err)
+      })
+  }, [])
+
   async function startTour(): Promise<void> {
     dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
     const rifff = await window.rifffApi.importDemoRifff()
@@ -2160,6 +2180,7 @@ function Frame(): React.JSX.Element {
               void startTour()
             }}
             tourSeen={tourSeen}
+            endlesssLoggedIn={endlesssLoggedIn}
           />
         )}
         {tourStepIndex !== null && (

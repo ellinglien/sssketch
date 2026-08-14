@@ -1,5 +1,18 @@
 import { useState } from 'react'
-import icon from '../assets/icon.png'
+import { LoadingLoader } from './LoadingLoader'
+
+// All four LoadingLoader bars in plain white/near-white -- monochrome per
+// direct feedback ("black background, white text, no in-between greys"),
+// replacing the previous four-color rainbow mark. LoadingLoader's own
+// bounce/position motion is unaffected; only the color is flattened here.
+const MARK_COLORS: [string, string, string, string] = [
+  'var(--ra-text)',
+  'var(--ra-text)',
+  'var(--ra-text)',
+  'var(--ra-text)'
+]
+
+const WORDMARK = 'SSSKETCH'.split('')
 
 const buttonStyle: React.CSSProperties = {
   height: 36,
@@ -69,7 +82,8 @@ export function OnboardingModal({
   onOpenProject,
   onOpenEndlesss,
   onStartTour,
-  tourSeen
+  tourSeen,
+  endlesssLoggedIn
 }: {
   /** True when Frame's startup effect found a real, never-explicitly-saved-
    * or-discarded autosave snapshot -- see App.tsx's own hasRealContent
@@ -109,6 +123,14 @@ export function OnboardingModal({
    * link goes away -- it's still reachable as a deliberate replay from the
    * gear/settings menu (see TransportBar.tsx), which isn't gated on this. */
   tourSeen: boolean
+  /** True once Frame's mount-time endlesssAuthStatus() fetch resolves
+   * "logged in" -- hides the "log into endlesss" button below, same
+   * gating pattern as tourSeen above. Defaults false (button shown) until
+   * that real async round trip resolves, so a slow fetch just means the
+   * button pops away a moment after the modal appears rather than the
+   * modal waiting on it -- an acceptable, undramatic flash, not worth
+   * special-casing. */
+  endlesssLoggedIn: boolean
 }): React.JSX.Element {
   const [dontShowAgain, setDontShowAgain] = useState(false)
 
@@ -144,7 +166,17 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <img src={icon} alt="sssketch" width={64} height={64} style={{ display: 'block' }} />
+        <LoadingLoader size={150} colors={MARK_COLORS} />
+        <div style={{ display: 'flex', gap: 1 }}>
+          {WORDMARK.map((ch, i) => (
+            <span
+              key={i}
+              style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, color: 'var(--ra-text)' }}
+            >
+              {ch}
+            </span>
+          ))}
+        </div>
 
         {hasRecovery ? (
           <>
@@ -176,9 +208,11 @@ export function OnboardingModal({
               <button onClick={() => onOpenProject(dontShowAgain)} style={secondaryButtonStyle}>
                 open project
               </button>
-              <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
-                log into endlesss
-              </button>
+              {!endlesssLoggedIn && (
+                <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
+                  log into endlesss
+                </button>
+              )}
             </div>
             {!tourSeen && (
               <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
