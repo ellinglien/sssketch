@@ -199,11 +199,14 @@ namespace sssketch
     }
 
     bool PluginChain::loadPluginSync(
-        int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)
+        int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut,
+        const juce::String& stateBase64)
     {
         auto instance = instantiator(path, sampleRate, blockSize, errorOut);
         if (!errorOut.isEmpty())
             return false;
+        if (instance != nullptr)
+            applyStateBase64(*instance, stateBase64);
         auto& slot = slots[(size_t) slotIndex];
         slot.active = std::move(instance); // nullptr (empty pluginId) is a valid "no plugin" state
         if (slot.active != nullptr)
@@ -212,6 +215,25 @@ namespace sssketch
             ? std::max({ 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() })
             : 2;
         return true;
+    }
+
+    juce::String PluginChain::captureStateBase64(int slotIndex) const
+    {
+        const auto& slot = slots[(size_t) slotIndex];
+        if (slot.active == nullptr)
+            return {};
+        juce::MemoryBlock block;
+        slot.active->getStateInformation(block);
+        return block.toBase64Encoding();
+    }
+
+    void PluginChain::applyStateBase64(juce::AudioProcessor& instance, const juce::String& stateBase64)
+    {
+        if (stateBase64.isEmpty())
+            return;
+        juce::MemoryBlock block;
+        if (block.fromBase64Encoding(stateBase64))
+            instance.setStateInformation(block.getData(), (int) block.getSize());
     }
 
     bool PluginChain::openEditorWindow(int slotIndex)
@@ -279,10 +301,15 @@ namespace sssketch
         const juce::String& path,
         double sampleRate,
         int blockSize,
-        std::function<void(bool, const juce::String&)> onLoaded)
+        std::function<void(bool, const juce::String&)> onLoaded,
+        const juce::String& stateBase64)
     {
         if (bridgeClient != nullptr && !path.isEmpty() && detectPluginArchitecture(path) == "x86_64")
         {
+            // Bridge-hosted plugin state capture/restore is out of scope
+            // for this feature (see the design doc's own non-goals) --
+            // stateBase64 is silently ignored on this branch, same as an
+            // empty one would be.
             static std::atomic<int> bridgeSlotCounter { 0 };
             const auto newBridgeSlotId = "bridge-slot-" + juce::String(bridgeSlotCounter.fetch_add(1));
             bridgeClient->loadPlugin(newBridgeSlotId, path, sampleRate, blockSize,
@@ -319,7 +346,7 @@ namespace sssketch
         // later message-loop iteration) -- it's off the audio thread, which
         // is the property that actually matters for real-time safety here,
         // just no longer off the message thread too.
-        juce::MessageManager::callAsync([this, slotIndex, path, sampleRate, blockSize, onLoaded]()
+        juce::MessageManager::callAsync([this, slotIndex, path, sampleRate, blockSize, onLoaded, stateBase64]()
         {
             auto& slot = slots[(size_t) slotIndex];
             juce::String error;
@@ -328,6 +355,15 @@ namespace sssketch
 
             if (success)
             {
+                // Applied here, strictly before the instance is published
+                // via slot.pending/pendingReady below -- the audio thread's
+                // own applyPendingSwaps() is the ONLY place slot.active
+                // (and therefore audio-thread visibility) ever gets set, so
+                // an instance that hasn't reached that exchange yet is
+                // provably not being concurrently processed. See this
+                // method's own .h doc comment.
+                if (instance != nullptr)
+                    applyStateBase64(*instance, stateBase64);
                 auto* newPending = new PendingLoad { instance.release(), {} };
                 delete slot.pending.exchange(newPending);
                 slot.pendingReady.store(true);

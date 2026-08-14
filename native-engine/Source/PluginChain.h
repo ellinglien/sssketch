@@ -65,13 +65,47 @@ namespace sssketch
             const juce::String& path,
             double sampleRate,
             int blockSize,
-            std::function<void(bool success, const juce::String& error)> onLoaded);
+            std::function<void(bool success, const juce::String& error)> onLoaded,
+            const juce::String& stateBase64 = {});
 
         /** Synchronous, blocking load — offline export only, where nothing
          * concurrently reads this slot from an audio thread. Returns false
          * (errorOut set) on failure, leaving the slot unchanged. */
         bool loadPluginSync(
-            int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
+            int slotIndex, const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut,
+            const juce::String& stateBase64 = {});
+
+        /** Message-thread API: captures slotIndex's currently active
+         * plugin's own parameter state via getStateInformation(),
+         * base64-encoded. Empty string if the slot has no plugin loaded
+         * (including a bridged slot -- bridge-hosted plugin state capture
+         * is out of scope for this feature, see the design doc's non-goals).
+         *
+         * Reads `active` without additional synchronization -- the SAME
+         * accepted-risk pattern openEditorWindow already uses just below
+         * (a plain pointer read racing the audio thread's own
+         * applyPendingSwaps() write is not new risk this method
+         * introduces; worst case is observing a briefly-stale but still
+         * valid pointer, never a torn read, on every real target
+         * platform). getStateInformation() itself is safe to call from the
+         * message thread while this SAME instance concurrently processes
+         * audio on another thread -- this is JUCE/VST3/AU's own
+         * established host-plugin threading contract (real DAWs capture
+         * plugin state for autosave during playback routinely); unlike
+         * requestLoad's own macOS-UI-toolkit-during-INSTANTIATION hazard
+         * (see requestLoad's own doc comment in the .cpp), this is not a
+         * case this codebase has found to be unsafe in practice. */
+        juce::String captureStateBase64(int slotIndex) const;
+
+        /** Any-thread API, but ONLY ever safe to call at a point where
+         * `instance` is not yet visible to the audio thread -- i.e. from
+         * loadPluginSync's own synchronous, single-threaded export context
+         * before it assigns slot.active, or from requestLoad's
+         * message-thread callAsync lambda before the loaded instance is
+         * published via slot.pending/pendingReady. Never call this on an
+         * already-live slot.active. No-op if stateBase64 is empty or fails
+         * to decode. */
+        static void applyStateBase64(juce::AudioProcessor& instance, const juce::String& stateBase64);
 
         /** Any thread: updates the project tempo every plugin in this chain
          * sees via its own AudioPlayHead::getPosition() query — e.g. a

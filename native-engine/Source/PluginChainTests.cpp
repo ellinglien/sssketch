@@ -118,6 +118,54 @@ namespace sssketch
             };
         }
 
+        /** Records whatever bytes setStateInformation was last called with,
+         * and returns a fixed, known blob from getStateInformation -- lets
+         * tests verify the full capture/apply round trip without needing a
+         * real plugin binary. */
+        class StateCapturingTestPlugin : public juce::AudioProcessor
+        {
+        public:
+            const juce::String getName() const override { return "StateCapturingTestPlugin"; }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+            bool hasEditor() const override { return false; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock& block) override
+            {
+                block.append(fixedState, sizeof(fixedState));
+            }
+            void setStateInformation(const void* data, int size) override
+            {
+                lastAppliedState.assign((const char*) data, (const char*) data + size);
+            }
+
+            static constexpr char fixedState[4] = { 1, 2, 3, 4 };
+            std::vector<char> lastAppliedState;
+        };
+
+        PluginChain::Instantiator stateCaptureInstantiator(StateCapturingTestPlugin*& outPlugin)
+        {
+            return [&outPlugin](
+                       const juce::String& pluginId, double, int, juce::String& errorOut) -> std::unique_ptr<juce::AudioProcessor>
+            {
+                errorOut = {};
+                if (pluginId.isEmpty())
+                    return nullptr;
+                auto plugin = std::make_unique<StateCapturingTestPlugin>();
+                outPlugin = plugin.get();
+                return plugin;
+            };
+        }
+
         PluginChain::Instantiator fakeInstantiator(std::map<int, float> gainsBySlot)
         {
             // Captured by value into the returned std::function; slotIndex isn't
@@ -209,6 +257,34 @@ namespace sssketch
                     chain.setBpm(90.0);
                     chain.process(1, l, r);
                     expectWithinAbsoluteError(raw->lastSeenBpm, 90.0, 0.0001);
+                }
+
+                beginTest("captureStateBase64 round-trips through applyStateBase64 via loadPluginSync");
+                {
+                    StateCapturingTestPlugin* raw = nullptr;
+                    PluginChain chain(4, stateCaptureInstantiator(raw));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "any-id", 44100.0, 512, err));
+                    expect(raw != nullptr);
+
+                    const auto captured = chain.captureStateBase64(0);
+                    expect(captured.isNotEmpty());
+
+                    // A second slot, loaded WITH the captured state passed straight through.
+                    StateCapturingTestPlugin* raw2 = nullptr;
+                    PluginChain chain2(4, stateCaptureInstantiator(raw2));
+                    juce::String err2;
+                    expect(chain2.loadPluginSync(0, "any-id", 44100.0, 512, err2, captured));
+                    expect(raw2 != nullptr);
+                    expect(raw2->lastAppliedState.size() == 4);
+                    expectEquals((int) raw2->lastAppliedState[0], 1);
+                    expectEquals((int) raw2->lastAppliedState[3], 4);
+                }
+
+                beginTest("captureStateBase64 returns empty for an empty slot");
+                {
+                    PluginChain chain(4, fakeInstantiator({}));
+                    expect(chain.captureStateBase64(0).isEmpty());
                 }
             }
         };
