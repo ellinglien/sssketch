@@ -1929,6 +1929,12 @@ function Frame(): React.JSX.Element {
             currentLibraryName={
               currentSketch !== null && currentSketch.kind === 'library' ? currentSketch.name : null
             }
+            onBeforeReplaceProject={async () => {
+              const choice = await confirmDiscardIfDirty()
+              if (choice === 'cancel') return 'cancel'
+              if (choice === 'save') await handleSave()
+              return 'proceed'
+            }}
             onSelect={(name) => {
               void (async () => {
                 setBusy('opening project…')
@@ -1949,8 +1955,11 @@ function Frame(): React.JSX.Element {
               })()
             }}
             onOpenFromDisk={() => {
-              setLibraryBrowserOpen(false)
               void (async () => {
+                const choice = await confirmDiscardIfDirty()
+                if (choice === 'cancel') return
+                if (choice === 'save') await handleSave()
+                setLibraryBrowserOpen(false)
                 setBusy('opening project…')
                 try {
                   const result = await window.rifffApi.openProject()

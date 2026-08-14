@@ -43,7 +43,8 @@ export function ProjectLibraryBrowser({
   onSelect,
   onOpenFromDisk,
   onClose,
-  currentLibraryName
+  currentLibraryName,
+  onBeforeReplaceProject
 }: {
   onSelect: (name: string) => void
   /** The "open" toolbar button now opens straight to this browser (the
@@ -60,6 +61,14 @@ export function ProjectLibraryBrowser({
    * sketch you're actively working in out from under yourself would leave
    * the app referencing files that no longer exist. */
   currentLibraryName: string | null
+  /** App.tsx's Frame's shared discard-guard, adapted to this component's
+   * needs -- called before replacing the live project (a row click, or a
+   * backup restore) to give the user a chance to save/discard/cancel first.
+   * Resolves 'proceed' immediately when there's nothing unsaved to lose.
+   * Frame's own implementation performs the actual save internally when
+   * the user picks "save" (this component has no access to handleSave),
+   * so the only thing this needs to branch on is whether to continue. */
+  onBeforeReplaceProject: () => Promise<'proceed' | 'cancel'>
 }): React.JSX.Element {
   const [sketches, setSketches] = useState<LibrarySketchSummary[] | null>(null)
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
@@ -211,6 +220,15 @@ export function ProjectLibraryBrowser({
       setRestoreArmedPath(backupPath)
       return
     }
+    // Runs BEFORE restoreSketchBackup, not just before the subsequent
+    // onSelect -- restoring already changes the file on disk (safely, via
+    // its own pre-restore backup), so checking only after the fact would
+    // leave the live editor out of sync with a disk change the user just
+    // tried to cancel.
+    if ((await onBeforeReplaceProject()) === 'cancel') {
+      setRestoreArmedPath(null)
+      return
+    }
     setRestoreArmedPath(null)
     stopBackupPreview()
     const result = await window.rifffApi.restoreSketchBackup(name, backupPath)
@@ -347,8 +365,11 @@ export function ProjectLibraryBrowser({
                 </button>
                 <span
                   onClick={() => {
-                    onSelect(sketch.name)
-                    onClose()
+                    void (async () => {
+                      if ((await onBeforeReplaceProject()) === 'cancel') return
+                      onSelect(sketch.name)
+                      onClose()
+                    })()
                   }}
                   role="button"
                   aria-label={`open ${sketch.name}`}
