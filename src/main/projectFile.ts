@@ -254,12 +254,12 @@ export function saveProjectToLibrary(name: string, json: string): { path: string
   mkdirSync(sketchDir(name), { recursive: true })
   const path = sketchProjectPath(name)
   // Backs up whatever's CURRENTLY on disk before it's overwritten --
-  // covers both this function's own callers: explicit Save and the
-  // debounced autosave (App.tsx). Without this, an autosave firing on
-  // changes the user didn't actually want kept overwrites the last real
-  // save with no way back -- see rotateBackupBeforeOverwrite's own doc
-  // comment for the recovery story (list/restore via the Project Library
-  // browser).
+  // covers this function's own callers: explicit Save (the Save button,
+  // Cmd+S, and the quit-time save prompt, all via handleSave), naming a
+  // brand-new sketch for the first time, and duplicating as a new version.
+  // Without this, an unwanted overwrite has no way back -- see
+  // rotateBackupBeforeOverwrite's own doc comment for the recovery story
+  // (list/restore via the Project Library browser).
   rotateBackupBeforeOverwrite(name)
   saveProjectInPlace(path, json)
   return { path }
