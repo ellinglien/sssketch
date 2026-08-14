@@ -40,6 +40,19 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn().mockResolvedValue('') }
 }))
 
+// Wraps the real buildEngineProject in a spy (still calling straight through
+// to the real implementation) so the pluginStates-threading tests below can
+// assert on what argument each renderStemsToDir/renderStemTracksToDir call
+// actually passed, without needing a real plugin binary to observe an
+// audible effect -- per this codebase's own convention, real plugin-hosting
+// behavior itself is verified by manual walkthrough, not faked here.
+vi.mock('@shared/buildEngineProject', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/buildEngineProject')>()
+  return { ...actual, buildEngineProject: vi.fn(actual.buildEngineProject) }
+})
+
+import { buildEngineProject } from '@shared/buildEngineProject'
+import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loopLengthBarsFor,
   nativeExport,
@@ -562,6 +575,98 @@ describe('renderStemsToDir', () => {
       rmSync(destDir, { recursive: true, force: true })
     }
   })
+})
+
+describe('renderStemsToDir / renderStemTracksToDir — pluginStates threading', () => {
+  // soloState() (used internally by both functions) always zeroes
+  // masterChain for a solo render, but leaves channelPlugins untouched --
+  // so a captured channel-insert plugin's state must still reach
+  // buildEngineProject even though the bus/track being isolated changes on
+  // every iteration. buildEngineProject is a real function here (only
+  // wrapped, not replaced, by the vi.mock above), so this also exercises
+  // the real buildPluginStatesMap/stateForSlot lookup -- it just can't
+  // observe an AUDIBLE effect without a real plugin binary, which is this
+  // codebase's own established boundary for what's unit- vs manually-
+  // walkthrough-tested.
+  it('renderStemsToDir threads a channel plugin state into buildEngineProject for the isolated bus render', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      vi.mocked(buildEngineProject).mockClear()
+      const state: AppState = {
+        ...initialState,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'drums', 'r1:2': 'drums' },
+        channelPlugins: { r1: ['comp-plugin', null] }
+      }
+      const rawPluginStates: RawPluginStatesCapture = {
+        masterChain: ['', '', '', ''],
+        channelChains: [{ channelId: 'r1', slots: ['Q0FUUw==', ''] }]
+      }
+
+      await renderStemsToDir(state, destDir, rawPluginStates)
+
+      expect(buildEngineProject).toHaveBeenCalled()
+      for (const call of vi.mocked(buildEngineProject).mock.calls) {
+        const pluginStates = call[3]
+        expect(pluginStates).toEqual({
+          'channel:r1:0': { pluginId: 'comp-plugin', stateBase64: 'Q0FUUw==' }
+        })
+      }
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('renderStemTracksToDir threads a channel plugin state into buildEngineProject for the isolated track render', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-dest-'))
+    try {
+      vi.mocked(buildEngineProject).mockClear()
+      const state: AppState = {
+        ...initialState,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'drums', 'r1:2': 'drums' },
+        channelPlugins: { r1: ['comp-plugin', null] }
+      }
+      const rawPluginStates: RawPluginStatesCapture = {
+        masterChain: ['', '', '', ''],
+        channelChains: [{ channelId: 'r1', slots: ['Q0FUUw==', ''] }]
+      }
+
+      await renderStemTracksToDir(state, destDir, 'my proj', rawPluginStates)
+
+      expect(buildEngineProject).toHaveBeenCalled()
+      for (const call of vi.mocked(buildEngineProject).mock.calls) {
+        const pluginStates = call[3]
+        expect(pluginStates).toEqual({
+          'channel:r1:0': { pluginId: 'comp-plugin', stateBase64: 'Q0FUUw==' }
+        })
+      }
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('omits stateBase64 (empty map) when rawPluginStates is not passed, matching pre-fix behavior', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      vi.mocked(buildEngineProject).mockClear()
+      const state: AppState = {
+        ...initialState,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'drums', 'r1:2': 'drums' },
+        channelPlugins: { r1: ['comp-plugin', null] }
+      }
+
+      await renderStemsToDir(state, destDir)
+
+      expect(buildEngineProject).toHaveBeenCalled()
+      for (const call of vi.mocked(buildEngineProject).mock.calls) {
+        expect(call[3]).toEqual({})
+      }
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
 })
 
 describe('renderStemTracksToDir', () => {
