@@ -1562,6 +1562,23 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [dispatch])
 
+  // Cmd+S/Ctrl+S saves the current project -- the same handleSave() already
+  // wired to the Save button, just a keyboard trigger for it. Skipped while
+  // focus is in a text input, matching every other global shortcut here.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      const key = e.key.toLowerCase()
+      if (!(e.metaKey || e.ctrlKey) || key !== 's') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      void handleSave()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSave is a fresh closure every render (reads state/currentSketch directly), same reasoning as the Tab/gated-recording (\) handlers above: re-registering on every render would be wasteful without behavioral difference, since it always reads the CURRENT closure's state anyway.
+  }, [state, currentSketch])
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       // e.repeat guards against the OS's own key-repeat re-firing keydown
