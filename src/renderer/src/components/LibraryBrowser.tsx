@@ -149,9 +149,10 @@ const SCROLL_LOAD_MORE_THRESHOLD_PX = 200
 // real risk, not enough that it's obviously huge either way.
 const LARGE_JAM_RIFF_THRESHOLD = 300
 
-// The lore-sync-progress IPC channel keys shared-feed events by the bare
-// username (see lore-sync-start-shared-feed's handler in src/main/index.ts),
-// not the synthetic `shared:<username>` jamCID this component's own jam
+// The riff-library-sync-progress IPC channel keys shared-feed events by the
+// bare username (see riff-library-sync-start-shared-feed's handler in
+// src/main/index.ts), not the synthetic `shared:<username>` jamCID this
+// component's own jam
 // list/selection uses -- strip the prefix so a jamCID can always be turned
 // into the same key the progress events themselves use, for both syncing
 // state (syncingKeys) and progress display (syncProgressByKey).

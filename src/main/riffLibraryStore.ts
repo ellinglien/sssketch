@@ -135,7 +135,7 @@ function getRiffLibraryDb(): Database.Database | null {
     })
     return cachedDb
   } catch (err) {
-    console.error('loreWarehouse: failed to open warehouse.db3:', err)
+    console.error('getRiffLibraryDb: failed to open warehouse.db3:', err)
     return null
   }
 }
@@ -367,7 +367,7 @@ export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
     try {
       gains = JSON.parse(riffRow.GainsJSON) as Record<string, number>
     } catch (err) {
-      console.error(`loreWarehouse: malformed GainsJSON for riff ${riffCID}:`, err)
+      console.error(`resolveRiff: malformed GainsJSON for riff ${riffCID}:`, err)
     }
   }
 
@@ -505,7 +505,7 @@ async function downloadOneStem(
   try {
     const res = await fetch(downloadUrl)
     if (!res.ok) {
-      console.error(`loreWarehouse: download failed for stem ${stemCID}: HTTP ${res.status}`)
+      console.error(`downloadOneStem: download failed for stem ${stemCID}: HTTP ${res.status}`)
       return false
     }
     const bytes = Buffer.from(await res.arrayBuffer())
@@ -516,7 +516,7 @@ async function downloadOneStem(
     renameSync(tmpPath, finalPath)
     return true
   } catch (err) {
-    console.error(`loreWarehouse: failed to download stem ${stemCID}:`, err)
+    console.error(`downloadOneStem: failed to download stem ${stemCID}:`, err)
     return false
   }
 }

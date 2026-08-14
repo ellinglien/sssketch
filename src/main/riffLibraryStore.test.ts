@@ -48,7 +48,7 @@ function createFixtureWarehouse(root: string): void {
   db.close()
 }
 
-describe('loreWarehouse', () => {
+describe('riffLibraryStore', () => {
   let root: string
 
   beforeEach(() => {

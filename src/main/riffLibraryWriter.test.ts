@@ -75,7 +75,7 @@ function resolvedRiffFixture(
   }
 }
 
-describe('loreWarehouseWriter', () => {
+describe('riffLibraryWriter', () => {
   let db: Database.Database
 
   beforeEach(() => {
