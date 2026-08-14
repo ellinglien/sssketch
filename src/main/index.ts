@@ -109,6 +109,12 @@ let mainWindow: BrowserWindow | undefined
 // re-entering itself when it calls app.quit() a second time.
 let isQuitting = false
 
+// Kept in sync with the renderer's own hasUnsavedChanges value via the
+// 'set-dirty-state' IPC call below, fired on each of its transitions (not
+// every keystroke) -- read from the before-quit handler to decide whether
+// Cmd+Q needs to ask before discarding real unsaved work.
+let rendererHasUnsavedChanges = false
+
 function createWindow(): BrowserWindow {
   // Create the browser window.
   const win = new BrowserWindow({
@@ -372,6 +378,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('save-last-opened-sketch', (_event, json: string) => writeLastOpenedSketch(json))
 
   ipcMain.handle('load-last-opened-sketch', () => loadLastOpenedSketch())
+
+  ipcMain.handle('set-dirty-state', (_event, dirty: boolean) => {
+    rendererHasUnsavedChanges = dirty
+  })
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
@@ -965,17 +975,74 @@ app.on('window-all-closed', () => {
   }
 })
 
+// Asks the renderer to save now (the quit dialog's own "Save" choice,
+// below), awaiting its reply over a dedicated round-trip pair --
+// 'request-save-before-quit' pushed to the renderer, 'save-before-quit-
+// complete' sent back once handleSave() resolves (see preload/index.ts's
+// onRequestSaveBeforeQuit/notifySaveBeforeQuitComplete and App.tsx's Frame,
+// which wires the two together). Raced against a fixed timeout, the same
+// Promise.race shape as the engine shutdownTimeout below, so a hung or
+// already-torn-down renderer can't make the app un-quittable.
+function requestSaveBeforeQuit(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve()
+  const win = mainWindow
+  const replyPromise = new Promise<void>((resolve) => {
+    ipcMain.once('save-before-quit-complete', () => resolve())
+  })
+  const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 5000))
+  win.webContents.send('request-save-before-quit')
+  return Promise.race([replyPromise, timeoutPromise])
+}
+
 app.on('before-quit', (event) => {
+  // isQuitting guards against infinite recursion from the app.quit() calls
+  // below (both this handler's own dirty-prompt branch and the
+  // engine-shutdown branch further down) re-triggering this same handler --
+  // each of those is a deliberate re-issue of quit once there's nothing
+  // left to interrupt it for, not a bug.
+  if (isQuitting) return
+
+  // Ask before discarding real unsaved work -- see rendererHasUnsavedChanges's
+  // own doc comment above (kept current via the 'set-dirty-state' IPC call).
+  // A NATIVE dialog here, not the custom in-app UnsavedChangesDialog: at
+  // shutdown the window may already be tearing down, and a native
+  // quit-prompt matches what every Mac user already expects from Cmd+Q. See
+  // docs/superpowers/specs/2026-08-14-explicit-save-model-design.md, §5.
+  if (rendererHasUnsavedChanges) {
+    event.preventDefault()
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      buttons: ['Save', "Don't Save", 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      message: 'This project has unsaved changes.',
+      detail: 'Do you want to save before quitting?'
+    })
+    if (choice === 2) return // Cancel -- stay open, nothing else to do.
+    if (choice === 0) {
+      // Save -- ask the renderer to save and wait for its reply (bounded by
+      // a timeout, see requestSaveBeforeQuit), then re-issue quit now that
+      // there's nothing left to lose.
+      void requestSaveBeforeQuit().finally(() => {
+        rendererHasUnsavedChanges = false
+        app.quit()
+      })
+      return
+    }
+    // Don't Save.
+    rendererHasUnsavedChanges = false
+    app.quit()
+    return
+  }
+
   // shutdown() is async — normally it resolves fast enough that this race
   // never matters, but if a crash-triggered respawn happens to be in flight
   // exactly when the user quits, shutdown() has to await that respawn
   // unwinding before it kills the engine process, which can run past the
   // point Electron's default quit sequence is blocked on. Deferring the
   // actual quit until shutdown() has genuinely finished avoids leaving an
-  // orphaned native engine subprocess behind. isQuitting guards against
-  // infinite recursion from the app.quit() call below re-triggering this
-  // same handler.
-  if (isQuitting || !playbackEngine) return
+  // orphaned native engine subprocess behind.
+  if (!playbackEngine) return
   isQuitting = true
   event.preventDefault()
   // shutdown() has no internal timeout of its own — if a respawn's
