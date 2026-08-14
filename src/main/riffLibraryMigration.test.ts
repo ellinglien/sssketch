@@ -53,6 +53,29 @@ describe('migrateRiffLibraryLocation', () => {
     expect(existsSync(join(userDataDir, 'lore-warehouse'))).toBe(true) // untouched this run
   })
 
+  it('still migrates when a sketch named "library" occupies the new root, since only a real db3 counts as already-migrated', async () => {
+    // Real cross-migration collision: projectLibraryMigration.ts
+    // deliberately excludes any sketch folder literally named "library" or
+    // "projects" from its own move (so it doesn't fight over those sibling
+    // folder names), which means a real sketch called "library" can end up
+    // sitting at exactly this migration's own new root
+    // (~/Music/sssketch/library/). A bare "does anything exist there at
+    // all" check would have mistaken that sketch's files for an
+    // already-migrated riff library and permanently skipped the real move.
+    writeOldRiffLibrary()
+    const collidingSketchDir = join(musicDir, 'sssketch', 'library', 'library')
+    mkdirSync(collidingSketchDir, { recursive: true })
+    writeFileSync(join(collidingSketchDir, 'library.sssketchproj'), '{}')
+    const { migrateRiffLibraryLocation } = await import('./riffLibraryMigration')
+    migrateRiffLibraryLocation()
+    const newDbPath = join(musicDir, 'sssketch', 'library', 'cache', 'common', 'warehouse.db3')
+    expect(existsSync(newDbPath)).toBe(true)
+    expect(existsSync(join(userDataDir, 'lore-warehouse'))).toBe(false)
+    // The colliding sketch's own files are untouched by this migration --
+    // it only moves the old riff-sync directory's contents in.
+    expect(existsSync(join(collidingSketchDir, 'library.sssketchproj'))).toBe(true)
+  })
+
   it('does nothing when there is nothing at the old default', async () => {
     const { migrateRiffLibraryLocation } = await import('./riffLibraryMigration')
     expect(() => migrateRiffLibraryLocation()).not.toThrow()

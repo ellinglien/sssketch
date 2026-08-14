@@ -1,6 +1,6 @@
-// A LORE riff's own riffCID is a great unique key but a lousy thing to scan
-// a list by -- every entry starts to look like "LORE riff <hex>". This
-// derives a human-readable "adjective noun" pair FROM the riffCID itself
+// A riff's own riffCID is a great unique key but a lousy thing to scan a
+// list by -- every entry starts to look like "riff <hex>". This derives a
+// human-readable "adjective noun" pair FROM the riffCID itself
 // (not randomly) so the same riff always gets the same friendly name across
 // sessions/reopens, while the CID suffix stays in the display name as the
 // exact, greppable identifier.
