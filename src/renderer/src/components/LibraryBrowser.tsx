@@ -1024,7 +1024,7 @@ export function LibraryBrowser({
         // BeatPicker's own preview: pause the main arrangement first so the
         // two don't play over each other.
         if (playing) dispatch({ type: 'PAUSE' })
-        const cachedStems = resolved.stems.filter((s) => s.path !== null)
+
         // previewLoop.ts itself no longer applies sqrtGain's stem-count
         // headroom normalization — Shelf.tsx's tile preview passes
         // state.vol, which already has that baked in from import time. This
@@ -1032,28 +1032,43 @@ export function LibraryBrowser({
         // entry for it — its raw LORE GainsJSON gain never had sqrtGain
         // applied at all, so it has to be computed fresh here, same as this
         // preview always did.
-        const gain = sqrtGain(cachedStems.length)
-        const sources = await startPreviewLoop(
-          getAudioContext(),
-          cachedStems.map((s) => ({
-            path: s.path!,
-            gain: gain * s.gain,
-            durationSec: s.durationSec
-          })),
-          () => cancelled
-        )
-        previewSourcesRef.current.push(...sources)
-        if (sources.length > 0) {
+        async function tryStartPreview(riff: LoreResolvedRiff): Promise<boolean> {
+          const cachedStems = riff.stems.filter((s) => s.path !== null)
+          if (cachedStems.length === 0) return false
+          const gain = sqrtGain(cachedStems.length)
+          const sources = await startPreviewLoop(
+            getAudioContext(),
+            cachedStems.map((s) => ({
+              path: s.path!,
+              gain: gain * s.gain,
+              durationSec: s.durationSec
+            })),
+            () => cancelled
+          )
+          if (sources.length === 0) return false
+          previewSourcesRef.current.push(...sources)
           previewTokenRef.current = registerActivePreview(stopPreview)
           setPlayingRiffCID(selectedRiffCID)
+          return true
         }
+
+        const startedOnFirstTry = await tryStartPreview(resolved)
 
         // Selecting a riff also starts syncing it (if anything's missing),
         // then keeps going outward to nearby riffs in the background — see
         // runBackgroundSync's own doc comment.
         if (cancelled) return
-        await ensureStemsDownloaded(selectedRiffCID, resolved)
+        const refreshed = await ensureStemsDownloaded(selectedRiffCID, resolved)
         if (cancelled || syncQueueToken !== syncQueueTokenRef.current) return
+        if (!startedOnFirstTry) {
+          // Nothing was cached locally yet on the first attempt (a riff
+          // that's never been synced), so tryStartPreview above was a
+          // guaranteed no-op -- retry now that ensureStemsDownloaded has
+          // brought real stem paths in, so a never-synced riff plays on its
+          // first click instead of requiring the user to click away and
+          // back once the download quietly finishes in the background.
+          await tryStartPreview(refreshed)
+        }
         void runBackgroundSync(syncQueueToken, selectedRiffCID)
       })
       .catch((err) => {
