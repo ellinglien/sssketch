@@ -11,11 +11,12 @@ import { dialog, shell, BrowserWindow } from 'electron'
  */
 export async function exportMixToWav(
   win: BrowserWindow,
-  bytes: Uint8Array
+  bytes: Uint8Array,
+  defaultName?: string
 ): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
-    defaultPath: 'mixdown.wav'
+    defaultPath: `${defaultName ?? 'mixdown'}.wav`
   })
   if (result.canceled || !result.filePath) return null
 

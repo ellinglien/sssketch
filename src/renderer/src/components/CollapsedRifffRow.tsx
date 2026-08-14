@@ -854,72 +854,70 @@ export function CollapsedRifffRow({
               way via translate(-50%,-50%), so it only grows the invisible
               margin around the dot, never shifting its visual position.
 
-              pointerEvents flips to 'none' outside envelope mode
-              (volumeDragMode) -- see StemWaveformRow's own identical fix for
-              why (this used to stay grabbable at all times, which meant its
-              hit box competed with the resize handles' for the same
-              top-of-clip space even when fade wasn't what was being
-              adjusted, making resize noticeably less reliable near the top
-              of the clip). The visual dot is unaffected, only its own
-              interactivity is gated. */}
-          <div
-            onMouseDown={handleFadeInStart}
-            onContextMenu={(e) => e.stopPropagation()}
-            title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
-            style={{
-              position: 'absolute',
-              left: fiEnd,
-              top: plateauY,
-              transform: 'translate(-50%, -50%)',
-              width: 14,
-              height: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 4,
-              pointerEvents: volumeDragMode ? 'auto' : 'none'
-            }}
-          >
-            <div
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: 'var(--ra-text)',
-                pointerEvents: 'none'
-              }}
-            />
-          </div>
-          <div
-            onMouseDown={handleFadeOutStart}
-            onContextMenu={(e) => e.stopPropagation()}
-            title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
-            style={{
-              position: 'absolute',
-              left: foStart,
-              top: plateauY,
-              transform: 'translate(-50%, -50%)',
-              width: 14,
-              height: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 4,
-              pointerEvents: volumeDragMode ? 'auto' : 'none'
-            }}
-          >
-            <div
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: 'var(--ra-text)',
-                pointerEvents: 'none'
-              }}
-            />
-          </div>
+              Not rendered at all outside envelope mode (volumeDragMode) --
+              see StemWaveformRow's own identical fix for why (they aren't
+              clickable there, so showing them was just visual noise with no
+              affordance behind it). */}
+          {volumeDragMode && (
+            <>
+              <div
+                onMouseDown={handleFadeInStart}
+                onContextMenu={(e) => e.stopPropagation()}
+                title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
+                style={{
+                  position: 'absolute',
+                  left: fiEnd,
+                  top: plateauY,
+                  transform: 'translate(-50%, -50%)',
+                  width: 14,
+                  height: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  zIndex: 4
+                }}
+              >
+                <div
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'var(--ra-text)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+              <div
+                onMouseDown={handleFadeOutStart}
+                onContextMenu={(e) => e.stopPropagation()}
+                title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
+                style={{
+                  position: 'absolute',
+                  left: foStart,
+                  top: plateauY,
+                  transform: 'translate(-50%, -50%)',
+                  width: 14,
+                  height: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  zIndex: 4
+                }}
+              >
+                <div
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'var(--ra-text)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+            </>
+          )}
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on, repurposing the same open area that

@@ -620,75 +620,71 @@ export function StemWaveformRow({
               only grows the invisible margin around the dot, never shifting
               the dot's own visual position.
 
-              pointerEvents flips to 'none' outside envelope mode (volumeDragMode)
-              -- the dot used to stay grabbable at all times, which meant its own
-              hit box (bigger than the visible dot, right above) competed with the
-              resize handles' for the same top-of-clip real estate even when fade
-              wasn't the thing being adjusted, making resize noticeably less
-              reliable specifically near the top of the clip. Outside envelope
-              mode there's nothing here to drag anyway (fadeIn/fadeOut are only
-              meant to be adjusted in that mode), so letting clicks pass straight
-              through to the resize handle/scrub surface underneath is strictly
-              better than shadowing them. The visual dot itself is unaffected --
-              still drawn at all times, only its own interactivity is gated. */}
-          <div
-            onMouseDown={handleFadeInStart}
-            onContextMenu={(e) => e.stopPropagation()}
-            title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
-            style={{
-              position: 'absolute',
-              left: fiEnd,
-              top: plateauY,
-              transform: 'translate(-50%, -50%)',
-              width: 14,
-              height: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 4,
-              pointerEvents: volumeDragMode ? 'auto' : 'none'
-            }}
-          >
-            <div
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: 'var(--ra-text)',
-                pointerEvents: 'none'
-              }}
-            />
-          </div>
-          <div
-            onMouseDown={handleFadeOutStart}
-            onContextMenu={(e) => e.stopPropagation()}
-            title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
-            style={{
-              position: 'absolute',
-              left: foStart,
-              top: plateauY,
-              transform: 'translate(-50%, -50%)',
-              width: 14,
-              height: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 4,
-              pointerEvents: volumeDragMode ? 'auto' : 'none'
-            }}
-          >
-            <div
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: 'var(--ra-text)',
-                pointerEvents: 'none'
-              }}
-            />
-          </div>
+              Not rendered at all outside envelope mode (volumeDragMode) --
+              they aren't clickable there (fadeIn/fadeOut are only meant to
+              be adjusted in that mode), so showing them was just visual
+              noise with no affordance behind it (reported as confusing --
+              looked draggable everywhere, wasn't). */}
+          {volumeDragMode && (
+            <>
+              <div
+                onMouseDown={handleFadeInStart}
+                onContextMenu={(e) => e.stopPropagation()}
+                title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
+                style={{
+                  position: 'absolute',
+                  left: fiEnd,
+                  top: plateauY,
+                  transform: 'translate(-50%, -50%)',
+                  width: 14,
+                  height: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  zIndex: 4
+                }}
+              >
+                <div
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'var(--ra-text)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+              <div
+                onMouseDown={handleFadeOutStart}
+                onContextMenu={(e) => e.stopPropagation()}
+                title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
+                style={{
+                  position: 'absolute',
+                  left: foStart,
+                  top: plateauY,
+                  transform: 'translate(-50%, -50%)',
+                  width: 14,
+                  height: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  zIndex: 4
+                }}
+              >
+                <div
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'var(--ra-text)',
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+            </>
+          )}
 
           {/* Volume drag surface: spans the whole waveform body while
               volumeDragMode is on (see the V-key toggle in App.tsx/TransportBar),

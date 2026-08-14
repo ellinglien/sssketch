@@ -189,9 +189,9 @@ export function Inspector({
             </div>
             <div style={{ marginTop: 6, fontSize: 10, color: 'var(--ra-text-2)' }}>
               {ratio === 1
-                ? 'native tempo — nothing to stretch.'
+                ? 'native tempo.'
                 : stretchOn
-                  ? `stretched ${(ratio * 100).toFixed(1)}% to fit the project grid. pitch preserved.`
+                  ? `stretched ${(ratio * 100).toFixed(1)}%`
                   : 'playing at source tempo — will drift against the grid.'}
             </div>
           </>
@@ -393,8 +393,7 @@ export function Inspector({
           </div>
           <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
             source: {rifff.stems[0]?.author}
-            {new Set(rifff.stems.map((s) => s.author)).size > 1 ? ' and others' : ''}, copied into
-            your rifff library.
+            {new Set(rifff.stems.map((s) => s.author)).size > 1 ? ' and others' : ''}
           </div>
         </>
       )}
