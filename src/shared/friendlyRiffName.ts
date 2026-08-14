@@ -87,13 +87,22 @@ function fnv1a(str: string): number {
 }
 
 /** Deterministic "adjective noun <cid> <suffix>" display name for a riff
- * imported from an external source (LORE or the new direct-Endlesss path),
- * e.g. "green leopard 2f29c140 lore" -- same riffCID always produces the
+ * imported from an external source (sssketch's own riff library, a
+ * genuinely-connected external LORE archive, or the direct-Endlesss path),
+ * e.g. "green leopard 2f29c140 library" -- same riffCID always produces the
  * same adjective/noun pair. The adjective and noun are hashed with
  * different salts so they don't covary (a riffCID that picks "green"
  * shouldn't be more or less likely to also pick "leopard"). `suffix`
- * defaults to 'lore' to keep every existing call site's output identical. */
-export function friendlyRiffName(riffCID: string, suffix: 'lore' | 'endlesss' = 'lore'): string {
+ * defaults to 'library' -- the common case, since sssketch's own riff
+ * library is always present and where the overwhelming majority of riffs
+ * are actually resolved from; 'lore' is passed explicitly only when a riff
+ * genuinely came from a real, externally-connected LORE archive (see
+ * LibraryBrowser.tsx's own isOwnRiffLibrary signal, sourced from the
+ * riff-library-is-own IPC channel). */
+export function friendlyRiffName(
+  riffCID: string,
+  suffix: 'library' | 'lore' | 'endlesss' = 'library'
+): string {
   const adjective = ADJECTIVES[fnv1a(riffCID + '|adjective') % ADJECTIVES.length]
   const noun = NOUNS[fnv1a(riffCID + '|noun') % NOUNS.length]
   return `${adjective} ${noun} ${riffCID.slice(0, 8)} ${suffix}`

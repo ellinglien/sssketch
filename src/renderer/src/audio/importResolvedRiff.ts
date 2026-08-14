@@ -25,12 +25,12 @@ import type { Rifff } from '@shared/types'
  * nothing new (already fully up to date, in which case `existing` itself is
  * returned as `rifff` so callers can still report success). `sourceLabel`
  * feeds friendlyRiffName's suffix and Rifff.folderPath's display text
- * (e.g. 'lore' / 'endlesss'). */
+ * (e.g. 'library' / 'lore' / 'endlesss'). */
 export function buildImportedRifff(
   riffCID: string,
   resolved: RiffLibraryResolvedRiff,
   existing: Rifff | undefined,
-  sourceLabel: 'lore' | 'endlesss',
+  sourceLabel: 'library' | 'lore' | 'endlesss',
   folderPathLabel: string
 ): { groupId: string; rifff: Rifff; newStemSlots: number[] } | null {
   const cachedStems = resolved.stems.filter((s) => s.path !== null)

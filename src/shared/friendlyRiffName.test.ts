@@ -7,14 +7,19 @@ describe('friendlyRiffName', () => {
     expect(friendlyRiffName(cid)).toBe(friendlyRiffName(cid))
   })
 
-  it('ends with the first 8 characters of the riffCID, followed by "lore"', () => {
+  it('ends with the first 8 characters of the riffCID, followed by "library" by default', () => {
     const cid = '2f29c1401234567890abcdef'
-    expect(friendlyRiffName(cid)).toMatch(/2f29c140 lore$/)
+    expect(friendlyRiffName(cid)).toMatch(/2f29c140 library$/)
   })
 
   it('starts with an "adjective noun" pair', () => {
     const cid = '2f29c1401234567890abcdef'
-    expect(friendlyRiffName(cid)).toMatch(/^[a-z]+ [a-z]+ 2f29c140 lore$/)
+    expect(friendlyRiffName(cid)).toMatch(/^[a-z]+ [a-z]+ 2f29c140 library$/)
+  })
+
+  it('uses the "lore" suffix when explicitly passed, for a riff resolved through a real external LORE archive', () => {
+    const cid = '2f29c1401234567890abcdef'
+    expect(friendlyRiffName(cid, 'lore')).toMatch(/2f29c140 lore$/)
   })
 
   it('produces different names for different riffCIDs (not a constant)', () => {
