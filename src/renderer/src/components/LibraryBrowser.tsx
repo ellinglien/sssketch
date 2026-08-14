@@ -42,13 +42,30 @@ import { ContextMenu } from './ContextMenu'
 
 // Persisted locally (not in project files or app state) since it's a
 // per-person identity setting, not something that travels with a project —
-// each tester on their own machine sets their own LORE username once here
-// and it sticks across sessions, rather than being baked into the app.
-const LORE_USERNAME_STORAGE_KEY = 'sssketch:loreUsername'
+// each tester on their own machine sets their own username once here and
+// it sticks across sessions, rather than being baked into the app.
+const RIFF_LIBRARY_USERNAME_STORAGE_KEY = 'sssketch:riffLibraryUsername'
+// Pre-rename key -- see docs/superpowers/specs/
+// 2026-08-14-riff-library-rename-design.md §3. Only ever read once, by
+// loadStoredRiffLibraryUsername's own one-time carry-forward below; never
+// written again after this app version ships.
+const LEGACY_LORE_USERNAME_STORAGE_KEY = 'sssketch:loreUsername'
 
-function loadStoredLoreUsername(): string {
+function loadStoredRiffLibraryUsername(): string {
   try {
-    return localStorage.getItem(LORE_USERNAME_STORAGE_KEY) ?? RIFF_LIBRARY_USERNAME
+    const current = localStorage.getItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY)
+    if (current !== null) return current
+    // One-time carry-forward from the pre-rename key, so nobody's already-
+    // set username setting silently resets just because the storage key
+    // itself was renamed. Never runs again once the new key exists (the
+    // branch above already returns first on every subsequent call).
+    const legacy = localStorage.getItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+    if (legacy !== null) {
+      localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, legacy)
+      localStorage.removeItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+      return legacy
+    }
+    return RIFF_LIBRARY_USERNAME
   } catch {
     return RIFF_LIBRARY_USERNAME
   }
@@ -159,6 +176,15 @@ export function LibraryBrowser({
   // Warehouse availability + external folder config (unchanged from LoreLibraryBrowser.tsx)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [warehouseRoot, setWarehouseRootState] = useState<string | null>(null)
+  // True iff the currently active riff library root is sssketch's own
+  // self-built one, rather than a user-pointed real external LORE archive
+  // -- see importResolvedRiff's own use of this for friendlyRiffName's
+  // suffix (item 5 of docs/superpowers/specs/
+  // 2026-08-14-riff-library-rename-design.md). Defaults to true (the
+  // overwhelmingly common case) until the real fetch above resolves, so a
+  // riff resolved in the brief window before that first fetch completes
+  // still gets labeled correctly for the common case.
+  const [isOwnRiffLibrary, setIsOwnRiffLibrary] = useState(true)
 
   // Jam sidebar
   const [jamFilter, setJamFilter] = useState('')
@@ -274,11 +300,11 @@ export function LibraryBrowser({
   const [scaleFilter, setScaleFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
-  // Which LORE username "you" are, for ownerFraction (drives the ownership
+  // Which username "you" are, for ownerFraction (drives the ownership
   // brightness coloring) and the "only mine" filter — editable and
-  // persisted per-machine (see loadStoredLoreUsername), not hardcoded, since
-  // other people testing this app aren't Elling.
-  const [loreUsername, setLoreUsername] = useState(loadStoredLoreUsername)
+  // persisted per-machine (see loadStoredRiffLibraryUsername), not
+  // hardcoded, since other people testing this app aren't Elling.
+  const [riffLibraryUsername, setRiffLibraryUsername] = useState(loadStoredRiffLibraryUsername)
   const [onlyContainsMe, setOnlyContainsMe] = useState(false)
   // <input type="date"> values (YYYY-MM-DD strings, or '' for unset) —
   // converted to unix-seconds boundaries (start/end of day) when building
@@ -362,6 +388,12 @@ export function LibraryBrowser({
       .then(setWarehouseRootState)
       .catch((err) => {
         console.error('LibraryBrowser: riffLibraryRoot() failed:', err)
+      })
+    window.rifffApi
+      .riffLibraryIsOwn()
+      .then(setIsOwnRiffLibrary)
+      .catch((err) => {
+        console.error('LibraryBrowser: riffLibraryIsOwn() failed:', err)
       })
   }, [available])
 
@@ -779,7 +811,7 @@ export function LibraryBrowser({
     // Always sent (not just while the "only mine" filter is checked) — this
     // also drives ownerFraction's brightness coloring on every riff shown,
     // not just the filtered subset.
-    if (loreUsername.trim() !== '') filters.targetUser = loreUsername.trim()
+    if (riffLibraryUsername.trim() !== '') filters.targetUser = riffLibraryUsername.trim()
     if (onlyContainsMe) filters.onlyContainsUser = true
     if (offset > 0) filters.offset = offset
     if (limit !== undefined) filters.limit = limit
@@ -839,7 +871,7 @@ export function LibraryBrowser({
     scaleFilter,
     userNameFilter,
     onlyFullyCached,
-    loreUsername,
+    riffLibraryUsername,
     onlyContainsMe,
     // Bumped by the sync-progress effect once a sync completes for the
     // currently-selected jam -- re-runs this same fetch (from offset 0) so
@@ -875,7 +907,7 @@ export function LibraryBrowser({
           setRiffIdNotFound(true)
           return
         }
-        // Clears every filter (not loreUsername -- that's a persistent
+        // Clears every filter (not riffLibraryUsername -- that's a persistent
         // identity setting, not a filter scope) so nothing hides the
         // centered window this jump is about to fetch.
         setDateFromFilter('')
@@ -1132,17 +1164,28 @@ export function LibraryBrowser({
    * (audio/importResolvedRiff.ts), shared with every riff source this app
    * has ever had — this is a thin wrapper that owns this component's own
    * side effects (ADD_TO_SHELF, gain restoration, importedRiffGroupIds
-   * tracking, classifyStems). Always imports with sourceLabel 'lore' since
-   * this component always reads through loreWarehouse.ts's lore-* channels,
-   * regardless of which underlying warehouse (self-built or external) is
-   * actually active. */
+   * tracking, classifyStems). Imports with sourceLabel 'library' when the
+   * currently active riff library root is sssketch's own self-built one, or
+   * 'lore' when the user has pointed sssketch at a real, externally-
+   * connected LORE archive instead (see isOwnRiffLibrary, sourced from the
+   * riff-library-is-own IPC channel) — see friendlyRiffName's own doc
+   * comment for why this distinction matters. This component always reads
+   * through riffLibraryStore.ts's riff-library-* channels either way; only
+   * which underlying root is currently active changes what the resulting
+   * riff should be labeled as having come from. */
   function importResolvedRiff(
     riffCID: string,
     resolved: RiffLibraryResolvedRiff
   ): { groupId: string; rifff: Rifff } | null {
     const existingGroupId = importedRiffGroupIds.get(riffCID)
     const existing = existingGroupId ? appState.rifffs[existingGroupId] : undefined
-    const result = buildImportedRifff(riffCID, resolved, existing, 'lore', 'lore library')
+    const result = buildImportedRifff(
+      riffCID,
+      resolved,
+      existing,
+      isOwnRiffLibrary ? 'library' : 'lore',
+      isOwnRiffLibrary ? 'riff library' : 'lore library'
+    )
     if (!result) return null
     const { groupId, rifff, newStemSlots } = result
     if (newStemSlots.length === 0 && existing) return { groupId, rifff }
@@ -1305,7 +1348,7 @@ export function LibraryBrowser({
         {available === false ? (
           <div style={{ padding: 24 }}>
             <p>
-              lore archive not found at {warehouseRoot ?? '...'} — change its location from the gear
+              riff archive not found at {warehouseRoot ?? '...'} — change its location from the gear
               menu
             </p>
           </div>
@@ -1696,10 +1739,10 @@ export function LibraryBrowser({
                     />
                     <input
                       type="text"
-                      value={loreUsername}
-                      onChange={(e) => setLoreUsername(e.target.value)}
+                      value={riffLibraryUsername}
+                      onChange={(e) => setRiffLibraryUsername(e.target.value)}
                       placeholder="your username"
-                      title="your LORE username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
+                      title="your username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
                       style={{
                         width: 100,
                         height: 22,
