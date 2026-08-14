@@ -40,6 +40,7 @@ import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
+import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
@@ -48,6 +49,7 @@ import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
+import { hasUnsavedChanges } from './state/unsavedChanges'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
@@ -806,6 +808,55 @@ function Frame(): React.JSX.Element {
   const lastSavedJsonRef = useRef<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
 
+  // Moved up from where it used to sit (right before the debounced-autosave
+  // effect further down) so both confirmDiscardIfDirty and the dirty
+  // indicator below can reuse it instead of paying for a second serialize
+  // of potentially-large project state on every render.
+  const persistedJson = useMemo(() => serializeProject(state), [state])
+
+  // Bumped after every explicit save (handleSave) so the dirty-tracking
+  // effect below re-evaluates immediately. lastSavedJsonRef stays a plain
+  // ref (not state) since most of its writers (initial load, crash-recovery
+  // restore, opening a different sketch) already force a re-render of their
+  // own (dispatch(LOAD_STATE) and/or setCurrentSketch), which is what the
+  // effect below actually keys off. handleSave is the one writer that
+  // changes nothing else React-visible, so without this bump the indicator
+  // would stay stuck showing "dirty" immediately after a real save.
+  const [saveVersion, setSaveVersion] = useState(0)
+
+  // See UnsavedChangesDialog.tsx's own doc comment for why this doesn't
+  // need LockInConfirmDialog's reducer-level visibility state -- only Frame
+  // (and callbacks it hands down, like ProjectLibraryBrowser's
+  // onBeforeReplaceProject below) ever calls confirmDiscardIfDirty.
+  const [unsavedChangesPromptOpen, setUnsavedChangesPromptOpen] = useState(false)
+  const unsavedChangesResolveRef = useRef<((choice: 'save' | 'discard' | 'cancel') => void) | null>(
+    null
+  )
+
+  // The single shared "is there real content that would be lost" value --
+  // see state/unsavedChanges.ts's own doc comment. Tracked as real React
+  // state rather than computed inline from lastSavedJsonRef.current during
+  // render: this project's react-hooks/refs lint rule forbids reading a
+  // ref's .current synchronously in the render body (see stateRef's own
+  // doc comment further down for the same convention already established
+  // for the mirrored-state-in-an-effect pattern) -- ref reads are only
+  // safe from an effect or an event handler. Recomputed in the effect below
+  // whenever anything that could actually change the answer changes: the
+  // live content (persistedJson, itself derived from state.rifffs),
+  // currentSketch (every lastSavedJsonRef.current writer except handleSave
+  // and the debounced-autosave library write below is paired with a
+  // setCurrentSketch of its own -- see this effect's dependency array), or
+  // saveVersion (handleSave's own signal, since it changes neither state
+  // nor currentSketch). The debounced-autosave write is the one remaining
+  // gap -- it can move lastSavedJsonRef.current without tripping any of
+  // these deps, so the indicator can lag briefly after an autosave-write
+  // cycle until something else re-renders; Task 5 removes that write
+  // entirely, which closes the gap rather than needing it patched here.
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    setDirty(hasUnsavedChanges(state.rifffs, persistedJson, lastSavedJsonRef.current))
+  }, [state.rifffs, persistedJson, currentSketch, saveVersion])
+
   async function handleRename(newName: string): Promise<void> {
     setRenameError(null)
     if (currentSketch === null) {
@@ -850,24 +901,40 @@ function Frame(): React.JSX.Element {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
       lastSavedJsonRef.current = json
+      setSaveVersion((v) => v + 1)
     } catch (err) {
       console.error('Frame: failed to save project:', err)
       window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
+  /** Shared discard-guard -- called from every place about to replace the
+   * live in-memory project (New, opening/restoring a different library
+   * sketch, opening from disk). Resolves 'discard' immediately when there's
+   * nothing real to lose; otherwise shows UnsavedChangesDialog and resolves
+   * once the user picks a button. See
+   * docs/superpowers/specs/2026-08-14-explicit-save-model-design.md,
+   * section 4. */
+  function confirmDiscardIfDirty(): Promise<'save' | 'discard' | 'cancel'> {
+    if (!dirty) return Promise.resolve('discard')
+    return new Promise((resolve) => {
+      unsavedChangesResolveRef.current = resolve
+      setUnsavedChangesPromptOpen(true)
+    })
+  }
+
+  function resolveUnsavedChangesPrompt(choice: 'save' | 'discard' | 'cancel'): void {
+    setUnsavedChangesPromptOpen(false)
+    unsavedChangesResolveRef.current?.(choice)
+    unsavedChangesResolveRef.current = null
+  }
+
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
 
   async function handleNew(): Promise<void> {
-    // Only worth interrupting for if there's actually something that would
-    // be lost: an empty project has nothing to discard, and a project whose
-    // current content already matches the last known-saved snapshot isn't
-    // going anywhere -- it's already sitting safely in the library/file.
-    const hasUnsaved =
-      Object.keys(state.rifffs).length > 0 && serializeProject(state) !== lastSavedJsonRef.current
-    if (hasUnsaved && !window.confirm('Discard the current project and start a new one?')) {
-      return
-    }
+    const choice = await confirmDiscardIfDirty()
+    if (choice === 'cancel') return
+    if (choice === 'save') await handleSave()
     setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
   }
 
@@ -1014,7 +1081,6 @@ function Frame(): React.JSX.Element {
   // writes currentSketch to its own sidecar file in lockstep (see
   // writeAutosaveSketchInfo), so a crash-recovery restore knows which
   // sketch the recovered snapshot actually belongs to.
-  const persistedJson = useMemo(() => serializeProject(state), [state])
   useEffect(() => {
     const id = window.setTimeout(() => {
       void window.rifffApi.autosaveProject(persistedJson)
@@ -1713,6 +1779,7 @@ function Frame(): React.JSX.Element {
               stemCount={Object.values(state.rifffs).reduce((n, r) => n + r.stems.length, 0)}
               onRename={(newName) => void handleRename(newName)}
               renameError={renameError}
+              dirty={dirty}
             />
           </div>
           <div style={{ paddingRight: 14 }}>
@@ -1900,6 +1967,13 @@ function Frame(): React.JSX.Element {
             defaultName={newProjectModal.defaultName}
             onCreate={commitNewProject}
             onCancel={() => setNewProjectModal(null)}
+          />
+        )}
+        {unsavedChangesPromptOpen && (
+          <UnsavedChangesDialog
+            onSave={() => resolveUnsavedChangesPrompt('save')}
+            onDiscard={() => resolveUnsavedChangesPrompt('discard')}
+            onCancel={() => resolveUnsavedChangesPrompt('cancel')}
           />
         )}
         <LockInConfirmDialog />

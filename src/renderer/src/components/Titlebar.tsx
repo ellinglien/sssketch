@@ -10,7 +10,8 @@ export function Titlebar({
   rifffCount,
   stemCount,
   onRename,
-  renameError
+  renameError,
+  dirty
 }: {
   /** The real current project name, already resolved by the caller (see
    * App.tsx's Frame) -- was previously a hardcoded "untitled sketch 04"
@@ -28,6 +29,11 @@ export function Titlebar({
   /** Non-null right after a rename attempt was rejected (e.g. name already
    * taken) -- shown inline next to the name. */
   renameError?: string | null
+  /** True when the live project differs from what's last known to be
+   * durably saved -- see state/unsavedChanges.ts's hasUnsavedChanges.
+   * Shown as a small dot next to the project name; App.tsx's Frame is the
+   * only place that knows both sides of that comparison. */
+  dirty?: boolean
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(sketchName)
@@ -89,6 +95,15 @@ export function Titlebar({
             style={{ color: 'var(--ra-text-2)', cursor: 'pointer' }}
           >
             {sketchName}
+          </span>
+        )}
+        {dirty && (
+          <span
+            title="unsaved changes"
+            aria-label="unsaved changes"
+            style={{ color: 'var(--ra-text-3)', fontSize: 14, lineHeight: 1 }}
+          >
+            •
           </span>
         )}
         {renameError && (
