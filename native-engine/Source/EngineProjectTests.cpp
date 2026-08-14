@@ -250,6 +250,30 @@ namespace sssketch
                 expect(project.channelChains.empty());
             }
 
+            beginTest("masterChain slot parses stateBase64, defaulting to empty when absent");
+            {
+                EngineProject project;
+                juce::String error;
+                const bool ok = parseEngineProject(
+                    R"({"masterChain":[{"pluginId":"reverb","path":"/plugins/reverb.vst3","stateBase64":"AQIDBA=="},{"pluginId":"","path":""},{"pluginId":"","path":""},{"pluginId":"","path":""}]})",
+                    project, error);
+                expect(ok);
+                expectEquals(project.masterChain[0].stateBase64, juce::String("AQIDBA=="));
+                expectEquals(project.masterChain[1].stateBase64, juce::String());
+            }
+
+            beginTest("channelChains slot parses stateBase64 the same way");
+            {
+                EngineProject project;
+                juce::String error;
+                const bool ok = parseEngineProject(
+                    R"({"channelChains":[{"channelId":"kick","slots":[{"pluginId":"comp","path":"/plugins/comp.vst3","stateBase64":"Q0FUUw=="},{"pluginId":"","path":""}]}]})",
+                    project, error);
+                expect(ok);
+                expect(project.channelChains.size() == 1);
+                expectEquals(project.channelChains[0].slots[0].stateBase64, juce::String("Q0FUUw=="));
+            }
+
             beginTest("parses leftCropBars from the wire format, defaulting to 0.0 when omitted");
             {
                 const juce::String json = R"({

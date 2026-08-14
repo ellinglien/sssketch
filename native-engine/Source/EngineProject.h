@@ -79,6 +79,17 @@ namespace sssketch
         {
             juce::String pluginId;
             juce::String path;
+            // "" (default) = nothing to restore for this slot -- either no
+            // captured state exists, or (for a fresh load with no matching
+            // captured pluginId) restoration deliberately doesn't apply.
+            // Only ever read by RenderExport.cpp's offline plugin-load loop
+            // -- the live engine's own load-master-plugin/load-channel-plugin
+            // IPC handlers (IpcServer.cpp) restore state via a completely
+            // separate path (their own payload's own stateBase64 field, not
+            // this one), since live plugin loading never goes through
+            // EngineProject/setProject() at all. See docs/superpowers/specs/
+            // 2026-08-14-plugin-state-persistence-design.md.
+            juce::String stateBase64;
         };
         std::array<MasterChainSlot, kNumMasterChainSlots> masterChain {};
 

@@ -51,6 +51,7 @@ namespace sssketch
                 const auto& slotVar = (*masterChainArray)[i];
                 project.masterChain[(size_t) i].pluginId = slotVar.getProperty("pluginId", "").toString();
                 project.masterChain[(size_t) i].path = slotVar.getProperty("path", "").toString();
+                project.masterChain[(size_t) i].stateBase64 = slotVar.getProperty("stateBase64", "").toString();
             }
         }
         // else: leave the default-constructed all-empty masterChain as-is
@@ -73,6 +74,7 @@ namespace sssketch
                         const auto& slotVar = (*slotsArray)[i];
                         chain.slots[(size_t) i].pluginId = slotVar.getProperty("pluginId", "").toString();
                         chain.slots[(size_t) i].path = slotVar.getProperty("path", "").toString();
+                        chain.slots[(size_t) i].stateBase64 = slotVar.getProperty("stateBase64", "").toString();
                     }
                 }
                 project.channelChains.push_back(std::move(chain));
