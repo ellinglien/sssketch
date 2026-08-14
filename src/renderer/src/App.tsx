@@ -1284,6 +1284,22 @@ function Frame(): React.JSX.Element {
     void startTour()
   }
   const [libraryBrowserOpen, setLibraryBrowserOpen] = useState(false)
+  // Opening one of these two full-screen library modals must close the
+  // other -- both render as position:fixed;inset:0 overlays at the same
+  // z-index (LibraryBrowser.tsx's own LORE modal, ProjectLibraryBrowser.tsx's
+  // sssketch modal), so nothing previously stopped both being mounted at
+  // once. With both open, whichever renders on top fully occludes the
+  // other -- a real reported bug where "switching" to the other library
+  // looked like it showed the wrong/broken content, when actually the
+  // first modal was just still open underneath.
+  function openLibraryBrowser(): void {
+    setRiffLibraryOpen(false)
+    setLibraryBrowserOpen(true)
+  }
+  function openRiffLibrary(): void {
+    setLibraryBrowserOpen(false)
+    setRiffLibraryOpen(true)
+  }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside
@@ -1916,19 +1932,19 @@ function Frame(): React.JSX.Element {
               setCurrentSketch={setCurrentSketch}
               handleNew={handleNew}
               handleSave={handleSave}
-              onOpenLibrary={() => setLibraryBrowserOpen(true)}
+              onOpenLibrary={openLibraryBrowser}
               onOpenClusterStems={() => setClusterStemsOpen(true)}
             />
           </div>
         </div>
-        <Shelf onImported={handleImported} onOpenLibrary={() => setRiffLibraryOpen(true)} />
+        <Shelf onImported={handleImported} onOpenLibrary={openRiffLibrary} />
         <TransportBar
           onOpenClusterStems={() => setClusterStemsOpen(true)}
           onEnableGatedRecording={() => void enableGatedRecording()}
           onDisableGatedRecording={() => void disableGatedRecording()}
           onStop={() => void handleStop()}
           onShowWelcome={showWelcomeAgain}
-          onOpenEndlesss={() => setRiffLibraryOpen(true)}
+          onOpenEndlesss={openRiffLibrary}
           onStartTour={replayTour}
           mode={state.mode}
           sketchEligible={isSketchEligible(state)}
@@ -2172,11 +2188,11 @@ function Frame(): React.JSX.Element {
             }}
             onOpenProject={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
-              setLibraryBrowserOpen(true)
+              openLibraryBrowser()
             }}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
-              setRiffLibraryOpen(true)
+              openRiffLibrary()
             }}
             onStartTour={(dontShowAgain) => {
               const hasExistingContent = Object.keys(state.rifffs).length > 0
