@@ -347,10 +347,10 @@ export function LibraryBrowser({
 
   useEffect(() => {
     window.rifffApi
-      .loreWarehouseAvailable()
+      .riffLibraryAvailable()
       .then(setAvailable)
       .catch((err) => {
-        console.error('LibraryBrowser: loreWarehouseAvailable() failed:', err)
+        console.error('LibraryBrowser: riffLibraryAvailable() failed:', err)
         setAvailable(false)
       })
   }, [])
@@ -358,20 +358,20 @@ export function LibraryBrowser({
   useEffect(() => {
     if (available === null) return
     window.rifffApi
-      .loreWarehouseRoot()
+      .riffLibraryRoot()
       .then(setWarehouseRootState)
       .catch((err) => {
-        console.error('LibraryBrowser: loreWarehouseRoot() failed:', err)
+        console.error('LibraryBrowser: riffLibraryRoot() failed:', err)
       })
   }, [available])
 
   useEffect(() => {
     if (!available) return
     window.rifffApi
-      .loreListJams(jamFilter)
+      .riffLibraryListJams(jamFilter)
       .then(setSyncedJams)
       .catch((err) => {
-        console.error('LibraryBrowser: loreListJams() failed:', err)
+        console.error('LibraryBrowser: riffLibraryListJams() failed:', err)
       })
   }, [jamFilter, available])
 
@@ -473,12 +473,12 @@ export function LibraryBrowser({
       }
     }
     window.rifffApi
-      .loreSyncStatus(selectedJamCID)
+      .riffLibrarySyncStatus(selectedJamCID)
       .then((status) => {
         if (!cancelled) setSyncStatus(status)
       })
       .catch((err) => {
-        console.error('LibraryBrowser: loreSyncStatus() failed:', err)
+        console.error('LibraryBrowser: riffLibrarySyncStatus() failed:', err)
       })
     return () => {
       cancelled = true
@@ -526,7 +526,7 @@ export function LibraryBrowser({
   // which is unambiguous: the async function returned, so the sync (or its
   // abort) is genuinely done.
   useEffect(() => {
-    return window.rifffApi.onLoreSyncProgress((progress) => {
+    return window.rifffApi.onRiffLibrarySyncProgress((progress) => {
       setSyncProgressByKey((prev) => ({ ...prev, [progress.key]: progress }))
     })
   }, [])
@@ -553,18 +553,18 @@ export function LibraryBrowser({
       // selected -- without this, only the jam you happened to be looking
       // at when it finished ever lost its "(not synced)" suffix.
       window.rifffApi
-        .loreListJams(jamFilter)
+        .riffLibraryListJams(jamFilter)
         .then(setSyncedJams)
         .catch((err) => {
-          console.error('LibraryBrowser: loreListJams() refresh failed:', err)
+          console.error('LibraryBrowser: riffLibraryListJams() refresh failed:', err)
         })
       if (syncKeyFor(viewingJamCID) !== key) return
       setRiffRefreshToken((t) => t + 1)
       window.rifffApi
-        .loreSyncStatus(viewingJamCID)
+        .riffLibrarySyncStatus(viewingJamCID)
         .then(setSyncStatus)
         .catch((err) => {
-          console.error('LibraryBrowser: loreSyncStatus() failed:', err)
+          console.error('LibraryBrowser: riffLibrarySyncStatus() failed:', err)
         })
     },
     [jamFilter]
@@ -589,8 +589,8 @@ export function LibraryBrowser({
         return next
       })
       const promise = jamCID.startsWith('shared:')
-        ? window.rifffApi.loreSyncStartSharedFeed(jamCID.slice('shared:'.length))
-        : window.rifffApi.loreSyncStartJam(jamCID, jamName)
+        ? window.rifffApi.riffLibrarySyncStartSharedFeed(jamCID.slice('shared:'.length))
+        : window.rifffApi.riffLibrarySyncStartJam(jamCID, jamName)
       promise
         .catch((err) => {
           console.error('LibraryBrowser: sync failed:', err)
@@ -681,17 +681,17 @@ export function LibraryBrowser({
   const handleAbortSync = useCallback(() => {
     if (!selectedJamCID) return
     // Passes selectedJamCID as-is, NOT syncKeyFor(selectedJamCID) --
-    // loreSyncAbort's `key` param must match syncsInFlight's own internal
-    // key convention in loreWarehouseSync.ts (`shared:<username>` for a
-    // shared-feed sync, matching Jams/Riffs' OwnerJamCID storage
+    // riffLibrarySyncAbort's `key` param must match syncsInFlight's own
+    // internal key convention in riffLibrarySync.ts (`shared:<username>`
+    // for a shared-feed sync, matching Jams/Riffs' OwnerJamCID storage
     // convention exactly), which is a DIFFERENT convention from the
     // syncKeyFor()-stripped bare-username keys this component's own
     // syncingKeys/syncProgressByKey maps use for display purposes. Passing
     // the stripped form here was a real bug: it silently made "cancel"
     // a no-op for the shared feed specifically (abortSync's own
     // syncsInFlight.get(key) lookup always missed).
-    window.rifffApi.loreSyncAbort(selectedJamCID).catch((err) => {
-      console.error('LibraryBrowser: loreSyncAbort() failed:', err)
+    window.rifffApi.riffLibrarySyncAbort(selectedJamCID).catch((err) => {
+      console.error('LibraryBrowser: riffLibrarySyncAbort() failed:', err)
     })
   }, [selectedJamCID])
 
@@ -720,13 +720,13 @@ export function LibraryBrowser({
         return
       }
       window.rifffApi
-        .loreRemoveJamSync(jamCID, deleteFiles)
+        .riffLibraryRemoveJamSync(jamCID, deleteFiles)
         .then(() => {
           window.rifffApi
-            .loreListJams(jamFilter)
+            .riffLibraryListJams(jamFilter)
             .then(setSyncedJams)
             .catch((err) => {
-              console.error('LibraryBrowser: loreListJams() refresh failed:', err)
+              console.error('LibraryBrowser: riffLibraryListJams() refresh failed:', err)
             })
           // Refreshes the detail pane back to "not synced" only if it's
           // currently showing the jam that was just removed -- otherwise
@@ -734,14 +734,14 @@ export function LibraryBrowser({
           if (jamCID !== selectedJamCID) return
           setRiffRefreshToken((t) => t + 1)
           window.rifffApi
-            .loreSyncStatus(jamCID)
+            .riffLibrarySyncStatus(jamCID)
             .then(setSyncStatus)
             .catch((err) => {
-              console.error('LibraryBrowser: loreSyncStatus() failed:', err)
+              console.error('LibraryBrowser: riffLibrarySyncStatus() failed:', err)
             })
         })
         .catch((err) => {
-          console.error('LibraryBrowser: loreRemoveJamSync() failed:', err)
+          console.error('LibraryBrowser: riffLibraryRemoveJamSync() failed:', err)
           alert(`Couldn't remove "${jamName}" from sync — see the console for details.`)
         })
     },
@@ -801,7 +801,7 @@ export function LibraryBrowser({
     // offset-0/full-page behavior automatically.
     const jump = pendingJump
     window.rifffApi
-      .loreListRiffs(
+      .riffLibraryListRiffs(
         selectedJamCID,
         buildRiffFilters(jump?.offset ?? 0, jump ? RIFF_ID_JUMP_WINDOW_SIZE : undefined)
       )
@@ -823,7 +823,7 @@ export function LibraryBrowser({
         }
       })
       .catch((err) => {
-        console.error('LibraryBrowser: loreListRiffs() failed:', err)
+        console.error('LibraryBrowser: riffLibraryListRiffs() failed:', err)
       })
     return () => {
       cancelled = true
@@ -852,14 +852,14 @@ export function LibraryBrowser({
     if (!selectedJamCID || loadingMoreRiffs) return
     setLoadingMoreRiffs(true)
     window.rifffApi
-      .loreListRiffs(selectedJamCID, buildRiffFilters(nextOffsetRef.current))
+      .riffLibraryListRiffs(selectedJamCID, buildRiffFilters(nextOffsetRef.current))
       .then((result) => {
         setRiffs((prev) => [...prev, ...result.riffs])
         setHasMoreRiffs(result.hasMore)
         nextOffsetRef.current = result.nextOffset
       })
       .catch((err) => {
-        console.error('LibraryBrowser: loreListRiffs() (load more) failed:', err)
+        console.error('LibraryBrowser: riffLibraryListRiffs() (load more) failed:', err)
       })
       .finally(() => setLoadingMoreRiffs(false))
   }
@@ -869,7 +869,7 @@ export function LibraryBrowser({
     if (id === '') return
     setRiffIdNotFound(false)
     window.rifffApi
-      .loreResolveRiffWithContext(id)
+      .riffLibraryResolveRiffWithContext(id)
       .then((result) => {
         if (!result) {
           setRiffIdNotFound(true)
@@ -891,7 +891,7 @@ export function LibraryBrowser({
         setSelectedJamCID(result.jamCID)
       })
       .catch((err) => {
-        console.error('LibraryBrowser: loreResolveRiffWithContext() failed:', err)
+        console.error('LibraryBrowser: riffLibraryResolveRiffWithContext() failed:', err)
         setRiffIdNotFound(true)
       })
   }
@@ -902,7 +902,7 @@ export function LibraryBrowser({
 
   /** Patches just this one riff's cachedStemCount in the already-loaded
    * `riffs` list (the grid's own data) after a download — cheaper and more
-   * immediate than re-running loreListRiffs, and the only field
+   * immediate than re-running riffLibraryListRiffs, and the only field
    * riffCircleColor's "fully cached" check actually reads. */
   function patchRiffCacheCount(riffCID: string, resolved: RiffLibraryResolvedRiff): void {
     const cachedStemCount = resolved.stems.filter((s) => s.path !== null).length
@@ -924,13 +924,13 @@ export function LibraryBrowser({
     if (!resolved.stems.some((s) => s.path === null)) return resolved
     setDownloadingRiffCID(riffCID)
     try {
-      const refreshed = await window.rifffApi.loreDownloadMissingStems(riffCID)
+      const refreshed = await window.rifffApi.riffLibraryDownloadMissingStems(riffCID)
       if (!refreshed) return resolved
       if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
       patchRiffCacheCount(riffCID, refreshed)
       return refreshed
     } catch (err) {
-      console.error(`LibraryBrowser: loreDownloadMissingStems(${riffCID}) failed:`, err)
+      console.error(`LibraryBrowser: riffLibraryDownloadMissingStems(${riffCID}) failed:`, err)
       return resolved
     } finally {
       setDownloadingRiffCID(null)
@@ -946,7 +946,7 @@ export function LibraryBrowser({
    * walk from continuing to the next. */
   async function backgroundDownload(riffCID: string): Promise<void> {
     try {
-      const refreshed = await window.rifffApi.loreDownloadMissingStems(riffCID)
+      const refreshed = await window.rifffApi.riffLibraryDownloadMissingStems(riffCID)
       if (!refreshed) return
       patchRiffCacheCount(riffCID, refreshed)
       if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
@@ -997,7 +997,7 @@ export function LibraryBrowser({
     // syncQueueTokenRef.current already IS this run's own token.
     const syncQueueToken = syncQueueTokenRef.current
     window.rifffApi
-      .loreResolveRiff(selectedRiffCID)
+      .riffLibraryResolveRiff(selectedRiffCID)
       .then(async (resolved) => {
         if (cancelled || !resolved) return
         setResolvedRiff(resolved)
@@ -1054,7 +1054,7 @@ export function LibraryBrowser({
         void runBackgroundSync(syncQueueToken, selectedRiffCID)
       })
       .catch((err) => {
-        console.error('LibraryBrowser: loreResolveRiff() failed:', err)
+        console.error('LibraryBrowser: riffLibraryResolveRiff() failed:', err)
       })
     return () => {
       cancelled = true
@@ -1199,7 +1199,7 @@ export function LibraryBrowser({
           const resolved =
             riffCID === selectedRiffCID && resolvedRiff
               ? resolvedRiff
-              : await window.rifffApi.loreResolveRiff(riffCID)
+              : await window.rifffApi.riffLibraryResolveRiff(riffCID)
           if (resolved) {
             const toImport = await ensureStemsDownloaded(riffCID, resolved)
             const result = importResolvedRiff(riffCID, toImport)

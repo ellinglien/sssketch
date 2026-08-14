@@ -319,13 +319,21 @@ const api = {
     ipcRenderer.on('engine-link-tempo-changed', listener)
     return () => ipcRenderer.removeListener('engine-link-tempo-changed', listener)
   },
-  loreWarehouseAvailable: (): Promise<boolean> => ipcRenderer.invoke('lore-warehouse-available'),
-  loreWarehouseRoot: (): Promise<string> => ipcRenderer.invoke('lore-warehouse-root'),
-  loreSetWarehouseRoot: (newRoot: string): Promise<void> =>
-    ipcRenderer.invoke('lore-set-warehouse-root', newRoot),
-  loreListJams: (filterText: string): Promise<RiffLibraryJam[]> =>
-    ipcRenderer.invoke('lore-list-jams', filterText),
-  loreListRiffs: (
+  riffLibraryAvailable: (): Promise<boolean> => ipcRenderer.invoke('riff-library-available'),
+  riffLibraryRoot: (): Promise<string> => ipcRenderer.invoke('riff-library-root'),
+  // True iff the currently active riff library root is sssketch's own
+  // self-built one (rather than a user-pointed real external LORE archive)
+  // -- see riff-library-is-own's own handler in index.ts. Threaded into
+  // friendlyRiffName's suffix by LibraryBrowser.tsx so an imported riff's
+  // generated name reflects where it actually came from, instead of always
+  // saying "lore" -- see docs/superpowers/specs/
+  // 2026-08-14-riff-library-rename-design.md §4.
+  riffLibraryIsOwn: (): Promise<boolean> => ipcRenderer.invoke('riff-library-is-own'),
+  setRiffLibraryRoot: (newRoot: string): Promise<void> =>
+    ipcRenderer.invoke('riff-library-set-root', newRoot),
+  riffLibraryListJams: (filterText: string): Promise<RiffLibraryJam[]> =>
+    ipcRenderer.invoke('riff-library-list-jams', filterText),
+  riffLibraryListRiffs: (
     jamCID: string,
     filters: {
       dateFrom?: number
@@ -339,15 +347,15 @@ const api = {
       limit?: number
     }
   ): Promise<{ riffs: RiffLibraryRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
-    ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
-  loreResolveRiff: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
-    ipcRenderer.invoke('lore-resolve-riff', riffCID),
-  loreResolveRiffWithContext: (
+    ipcRenderer.invoke('riff-library-list-riffs', jamCID, filters),
+  riffLibraryResolveRiff: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
+    ipcRenderer.invoke('riff-library-resolve-riff', riffCID),
+  riffLibraryResolveRiffWithContext: (
     riffCID: string
   ): Promise<{ jamCID: string; offset: number; matchedRiffCID: string } | null> =>
-    ipcRenderer.invoke('lore-resolve-riff-with-context', riffCID),
-  loreDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
-    ipcRenderer.invoke('lore-download-missing-stems', riffCID),
+    ipcRenderer.invoke('riff-library-resolve-riff-with-context', riffCID),
+  riffLibraryDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
+    ipcRenderer.invoke('riff-library-download-missing-stems', riffCID),
   endlesssLogin: (
     username: string,
     password: string
@@ -362,33 +370,36 @@ const api = {
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
     ipcRenderer.invoke('endlesss-jam-riff-count', jamId),
-  loreSyncStartSharedFeed: (userName: string): Promise<void> =>
-    ipcRenderer.invoke('lore-sync-start-shared-feed', userName),
-  loreSyncStartJam: (jamId: string, jamName: string): Promise<void> =>
-    ipcRenderer.invoke('lore-sync-start-jam', jamId, jamName),
-  loreSyncStatus: (jamCID: string): Promise<{ riffCount: number; complete: boolean } | null> =>
-    ipcRenderer.invoke('lore-sync-status', jamCID),
+  riffLibrarySyncStartSharedFeed: (userName: string): Promise<void> =>
+    ipcRenderer.invoke('riff-library-sync-start-shared-feed', userName),
+  riffLibrarySyncStartJam: (jamId: string, jamName: string): Promise<void> =>
+    ipcRenderer.invoke('riff-library-sync-start-jam', jamId, jamName),
+  riffLibrarySyncStatus: (
+    jamCID: string
+  ): Promise<{ riffCount: number; complete: boolean } | null> =>
+    ipcRenderer.invoke('riff-library-sync-status', jamCID),
   // `key` must match syncsInFlight's own internal key convention in
-  // loreWarehouseSync.ts -- `shared:<username>` for a shared-feed sync
-  // (same form as Jams/Riffs' OwnerJamCID storage), or the bare jamId for
-  // a private jam. NOT the same as onLoreSyncProgress's own event `key`
-  // field, which uses bare username for shared feed -- a separate,
+  // riffLibrarySync.ts -- `shared:<username>` for a shared-feed sync (same
+  // form as Jams/Riffs' OwnerJamCID storage), or the bare jamId for a
+  // private jam. NOT the same as onRiffLibrarySyncProgress's own event
+  // `key` field, which uses bare username for shared feed -- a separate,
   // decoupled convention chosen for the renderer's own per-jam display
   // state (syncingKeys/syncProgressByKey), see LibraryBrowser.tsx's
   // syncKeyFor. Resolves to false, not a rejection, if nothing was running
   // for that key.
-  loreSyncAbort: (key: string): Promise<boolean> => ipcRenderer.invoke('lore-sync-abort', key),
-  // jamCID here uses the SAME convention as loreSyncAbort's own `key`
-  // param just above (shared:<username> for shared feed, not the bare
-  // form) -- matches Jams/Riffs.OwnerJamCID storage directly. Rejects if a
-  // sync is currently running for it; the renderer's right-click menu
+  riffLibrarySyncAbort: (key: string): Promise<boolean> =>
+    ipcRenderer.invoke('riff-library-sync-abort', key),
+  // jamCID here uses the SAME convention as riffLibrarySyncAbort's own
+  // `key` param just above (shared:<username> for shared feed, not the
+  // bare form) -- matches Jams/Riffs.OwnerJamCID storage directly. Rejects
+  // if a sync is currently running for it; the renderer's right-click menu
   // should offer abort first in that case.
-  loreRemoveJamSync: (
+  riffLibraryRemoveJamSync: (
     jamCID: string,
     deleteFiles: boolean
   ): Promise<{ riffsRemoved: number; filesDeleted: number }> =>
-    ipcRenderer.invoke('lore-remove-jam-sync', jamCID, deleteFiles),
-  onLoreSyncProgress: (
+    ipcRenderer.invoke('riff-library-remove-jam-sync', jamCID, deleteFiles),
+  onRiffLibrarySyncProgress: (
     callback: (progress: {
       source: 'shared' | 'jam'
       key: string
@@ -407,8 +418,8 @@ const api = {
         bytesDone: number
       }
     ): void => callback(progress)
-    ipcRenderer.on('lore-sync-progress', listener)
-    return () => ipcRenderer.removeListener('lore-sync-progress', listener)
+    ipcRenderer.on('riff-library-sync-progress', listener)
+    return () => ipcRenderer.removeListener('riff-library-sync-progress', listener)
   }
 }
 

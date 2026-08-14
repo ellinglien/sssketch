@@ -340,7 +340,7 @@ export function TransportBar({
     try {
       const newRoot = await window.rifffApi.pickFolder()
       if (!newRoot) return
-      await window.rifffApi.loreSetWarehouseRoot(newRoot)
+      await window.rifffApi.setRiffLibraryRoot(newRoot)
     } catch (err) {
       console.error('TransportBar: handleChangeLoreLocation() failed:', err)
     }

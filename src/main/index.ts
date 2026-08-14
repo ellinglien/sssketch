@@ -65,7 +65,7 @@ import {
   abortSync as abortWarehouseSync,
   removeJamSync as removeWarehouseJamSync
 } from './riffLibrarySync'
-import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import {
   getWarehouseSyncStatus,
   listWarehouseFavourites,
@@ -260,27 +260,27 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('lore-warehouse-available', () => riffLibraryAvailable())
+  ipcMain.handle('riff-library-available', () => riffLibraryAvailable())
 
-  ipcMain.handle('lore-warehouse-root', () => riffLibraryRootPath())
+  ipcMain.handle('riff-library-root', () => riffLibraryRootPath())
 
-  ipcMain.handle('lore-set-warehouse-root', (_event, newRoot: string) =>
-    setRiffLibraryRoot(newRoot)
-  )
+  ipcMain.handle('riff-library-is-own', () => riffLibraryRootPath() === ownRiffLibraryRoot())
 
-  ipcMain.handle('lore-list-jams', (_event, filterText: string) => listJams(filterText))
+  ipcMain.handle('riff-library-set-root', (_event, newRoot: string) => setRiffLibraryRoot(newRoot))
 
-  ipcMain.handle('lore-list-riffs', (_event, jamCID: string, filters: RiffFilters) =>
+  ipcMain.handle('riff-library-list-jams', (_event, filterText: string) => listJams(filterText))
+
+  ipcMain.handle('riff-library-list-riffs', (_event, jamCID: string, filters: RiffFilters) =>
     listRiffs(jamCID, filters)
   )
 
-  ipcMain.handle('lore-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
+  ipcMain.handle('riff-library-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
 
-  ipcMain.handle('lore-resolve-riff-with-context', (_event, riffCID: string) =>
+  ipcMain.handle('riff-library-resolve-riff-with-context', (_event, riffCID: string) =>
     resolveRiffWithContext(riffCID)
   )
 
-  ipcMain.handle('lore-download-missing-stems', (_event, riffCID: string) =>
+  ipcMain.handle('riff-library-download-missing-stems', (_event, riffCID: string) =>
     downloadMissingStems(riffCID)
   )
 
@@ -291,38 +291,39 @@ app.whenReady().then(async () => {
   ipcMain.handle('endlesss-auth-status', () => getEndlesssAuthStatus())
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
   ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))
-  ipcMain.handle('lore-sync-start-shared-feed', (event, userName: string) =>
+  ipcMain.handle('riff-library-sync-start-shared-feed', (event, userName: string) =>
     syncSharedFeedToWarehouse(userName, (progress) => {
-      event.sender.send('lore-sync-progress', {
+      event.sender.send('riff-library-sync-progress', {
         source: 'shared' as const,
         key: userName,
         ...progress
       })
     })
   )
-  ipcMain.handle('lore-sync-start-jam', (event, jamId: string, jamName: string) =>
+  ipcMain.handle('riff-library-sync-start-jam', (event, jamId: string, jamName: string) =>
     syncJamToWarehouse(jamId, jamName, (progress) => {
-      event.sender.send('lore-sync-progress', {
+      event.sender.send('riff-library-sync-progress', {
         source: 'jam' as const,
         key: jamId,
         ...progress
       })
     })
   )
-  ipcMain.handle('lore-sync-status', (_event, jamCID: string) =>
+  ipcMain.handle('riff-library-sync-status', (_event, jamCID: string) =>
     getWarehouseSyncStatus(openOwnRiffLibraryDb(), jamCID)
   )
-  // `key` matches lore-sync-progress's own key convention (bare username for
-  // a shared-feed sync, jamId for a private jam) -- see abortSync's own doc
-  // comment in loreWarehouseSync.ts. Returns false, not an error, if nothing
-  // was running for that key (e.g. it already finished on its own).
-  ipcMain.handle('lore-sync-abort', (_event, key: string) => abortWarehouseSync(key))
+  // `key` matches riff-library-sync-progress's own key convention (bare
+  // username for a shared-feed sync, jamId for a private jam) -- see
+  // abortSync's own doc comment in riffLibrarySync.ts. Returns false, not
+  // an error, if nothing was running for that key (e.g. it already
+  // finished on its own).
+  ipcMain.handle('riff-library-sync-abort', (_event, key: string) => abortWarehouseSync(key))
   // Renderer already confirms with the user before calling this (see
   // LibraryBrowser.tsx's right-click "remove from sync" menu) -- this
   // handler just does the deletion. Rejects (rather than silently no-op)
   // if a sync is currently running for this jamCID, matching
-  // removeJamSync's own doc comment in loreWarehouseSync.ts.
-  ipcMain.handle('lore-remove-jam-sync', (_event, jamCID: string, deleteFiles: boolean) =>
+  // removeJamSync's own doc comment in riffLibrarySync.ts.
+  ipcMain.handle('riff-library-remove-jam-sync', (_event, jamCID: string, deleteFiles: boolean) =>
     removeWarehouseJamSync(jamCID, deleteFiles)
   )
 
