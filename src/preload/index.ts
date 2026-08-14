@@ -8,6 +8,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { BusCentroidStore } from '@shared/busCentroids'
+import type { RawPluginStatesCapture } from '@shared/pluginStates'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -74,7 +75,8 @@ const api = {
   notifySaveBeforeQuitComplete: (): void => {
     ipcRenderer.send('save-before-quit-complete')
   },
-  exportMix: (bytes: Uint8Array): Promise<string | null> => ipcRenderer.invoke('export-mix', bytes),
+  exportMix: (bytes: Uint8Array, defaultName?: string): Promise<string | null> =>
+    ipcRenderer.invoke('export-mix', bytes, defaultName),
   exportMixNative: (stateJson: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('export-mix-native', stateJson),
   // Renders every stem straight to disk in the main process and returns
@@ -175,6 +177,8 @@ const api = {
   saveBusCentroids: (store: BusCentroidStore): Promise<void> =>
     ipcRenderer.invoke('save-bus-centroids', store),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
+  engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
+    ipcRenderer.invoke('engine-get-plugin-states'),
   engineSetBufferSize: (bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-buffer-size', bufferSize),
   engineArmRecording: (

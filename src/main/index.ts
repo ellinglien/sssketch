@@ -52,6 +52,7 @@ import {
   resolveRiffWithContext,
   downloadMissingStems
 } from './riffLibraryStore'
+import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
   logout as endlesssLogout,
@@ -394,9 +395,9 @@ app.whenReady().then(async () => {
     rendererHasUnsavedChanges = dirty
   })
 
-  ipcMain.handle('export-mix', (event, bytes: Uint8Array) => {
+  ipcMain.handle('export-mix', (event, bytes: Uint8Array, defaultName?: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
-    return exportMixToWav(win, bytes)
+    return exportMixToWav(win, bytes, defaultName)
   })
 
   ipcMain.handle('export-mix-native', async (_event, stateJson: string) => {
@@ -656,6 +657,21 @@ app.whenReady().then(async () => {
       return result.bufferSize
     } catch (err) {
       console.error('engine-get-buffer-size: failed:', err)
+      return null
+    }
+  })
+
+  ipcMain.handle('engine-get-plugin-states', async (): Promise<RawPluginStatesCapture | null> => {
+    if (!playbackEngine) return null
+    try {
+      const result = (await playbackEngine.client.sendAndAwaitType(
+        'get-plugin-states',
+        undefined,
+        'plugin-states'
+      )) as RawPluginStatesCapture
+      return result
+    } catch (err) {
+      console.error('engine-get-plugin-states: failed:', err)
       return null
     }
   })
