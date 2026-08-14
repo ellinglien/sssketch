@@ -316,10 +316,12 @@ const MAX_BACKUPS = 15
 
 /** Copies a sketch's CURRENT live project file into its own backups folder
  * -- called from saveProjectToLibrary right before every overwrite
- * (explicit Save and the debounced autosave both funnel through it), so an
- * autosave the user didn't want is always recoverable, not just the newest
- * state. A no-op if there's no existing project file yet (first save has
- * nothing to back up). Prunes down to MAX_BACKUPS afterward, oldest first. */
+ * (explicit Save -- the Save button, Cmd+S, and the quit-time save prompt
+ * all route through handleSave -- plus naming a brand-new sketch for the
+ * first time and duplicating as a new version), so an unwanted overwrite
+ * is always recoverable, not just the newest state. A no-op if there's no
+ * existing project file yet (first save has nothing to back up). Prunes
+ * down to MAX_BACKUPS afterward, oldest first. */
 export function rotateBackupBeforeOverwrite(name: string): void {
   const projectPath = sketchProjectPath(name)
   if (!existsSync(projectPath)) return
