@@ -149,6 +149,28 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Cmd+- (zoom out) fallback -- no custom app menu exists here, so View >
+  // Zoom Out/In/Actual Size come from Electron's own default macOS menu,
+  // which wires them to the 'zoomIn'/'zoomOut'/'resetZoom' roles. Zoom In
+  // works fine (Cmd+= or Cmd+Plus), but Zoom Out's accelerator (Cmd+-)
+  // reportedly doesn't fire on some keyboards -- clicking the menu item
+  // itself still works, only the shortcut doesn't, which points at
+  // Electron's accelerator parser not matching whatever the OS reports for
+  // that physical key on the affected layout (a known class of issue, not
+  // something specific to this app's own code). Rather than replacing the
+  // entire native menu just to attach a second accelerator to one item,
+  // this listens directly for the key and replicates the role's own effect
+  // (zoomLevel -= 0.5, matching Electron's built-in zoomIn/zoomOut/
+  // resetZoom increment) as a supplemental path -- checks both the
+  // produced character (key) and the physical key code (code) so it isn't
+  // tied to one specific layout.
+  win.webContents.on('before-input-event', (_event, input) => {
+    if (input.type !== 'keyDown' || !input.meta || input.shift) return
+    if (input.key === '-' || input.code === 'Minus') {
+      win.webContents.zoomLevel -= 0.5
+    }
+  })
+
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
