@@ -18,6 +18,7 @@ import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlaybac
 import { loopLengthBars } from './selectors'
 import { isWithinManualSeekGrace } from './manualSeek'
 import type { PluginCatalog } from '../../../main/pluginCatalog'
+import { stateForSlot, type PluginStatesMap } from '@shared/pluginStates'
 
 // Playback position/state now live entirely outside the undo-tracked main
 // reducer — see StoreProvider's dispatch below. Previously they were fields
@@ -74,6 +75,9 @@ export function __setStateForTest(state: AppState): void {
 
 const StateCtx = createContext<AppState>(initialState)
 const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
+const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStatesMap) => void>(
+  () => {}
+)
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 // Effective pixels-per-bar (base PPB * the current zoom multiplier) --
@@ -296,6 +300,22 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         rawDispatch(action)
     }
   }, [])
+
+  // Owns pluginStates BETWEEN "a project was just parsed off disk" and "the
+  // masterChain/channelPluginsRef diffing effects below fire their
+  // engineLoadMasterPlugin/engineLoadChannelPlugin calls for it" -- see
+  // pluginStates.ts's own doc comment for why this deliberately lives
+  // OUTSIDE the reducer/AppState. A plain ref, not React state: nothing
+  // ever needs to re-render off this value changing, only read it exactly
+  // once per LOAD_STATE inside the two diffing effects below.
+  const pluginStatesRef = useRef<PluginStatesMap>({})
+  const restoreState = useCallback(
+    (state: AppState, pluginStates: PluginStatesMap): void => {
+      pluginStatesRef.current = pluginStates
+      dispatch({ type: 'LOAD_STATE', state })
+    },
+    [dispatch]
+  )
 
   const undo = useCallback(() => rawDispatch({ type: 'UNDO' }), [])
   const redo = useCallback(() => rawDispatch({ type: 'REDO' }), [])
@@ -566,7 +586,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           pluginId === null
             ? null
             : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path)
+        const stateBase64 =
+          stateForSlot(pluginStatesRef.current, `master:${slot}`, pluginId) ?? null
+        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path, stateBase64)
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value), never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
@@ -595,7 +617,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             pluginId === null
               ? null
               : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-          void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path)
+          const stateBase64 =
+            stateForSlot(pluginStatesRef.current, `channel:${channelId}:${slot}`, pluginId) ?? null
+          void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path, stateBase64)
         }
       })
     }
@@ -737,33 +761,37 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   return (
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={dispatch}>
-        <PosCtx.Provider value={pos}>
-          <PlayingCtx.Provider value={playing}>
-            <ZoomCtx.Provider value={24 * zoomMultiplier}>
-              <HistoryCtx.Provider value={historyControls}>
-                <MasterChainStatusCtx.Provider value={masterChainStatus}>
-                  <MasterChainErrorCtx.Provider value={masterChainError}>
-                    <ChannelChainStatusCtx.Provider value={channelChainStatus}>
-                      <ChannelChainErrorCtx.Provider value={channelChainError}>
-                        <PluginCatalogCtx.Provider value={pluginCatalog}>
-                          <PluginScanStateCtx.Provider value={{ scanning, progress: scanProgress }}>
-                            <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                              <RiffFavouritesCtx.Provider value={riffFavourites}>
-                                <RiffFavouritesActionsCtx.Provider value={riffFavouritesActions}>
-                                  {children}
-                                </RiffFavouritesActionsCtx.Provider>
-                              </RiffFavouritesCtx.Provider>
-                            </PluginCatalogActionsCtx.Provider>
-                          </PluginScanStateCtx.Provider>
-                        </PluginCatalogCtx.Provider>
-                      </ChannelChainErrorCtx.Provider>
-                    </ChannelChainStatusCtx.Provider>
-                  </MasterChainErrorCtx.Provider>
-                </MasterChainStatusCtx.Provider>
-              </HistoryCtx.Provider>
-            </ZoomCtx.Provider>
-          </PlayingCtx.Provider>
-        </PosCtx.Provider>
+        <RestoreStateCtx.Provider value={restoreState}>
+          <PosCtx.Provider value={pos}>
+            <PlayingCtx.Provider value={playing}>
+              <ZoomCtx.Provider value={24 * zoomMultiplier}>
+                <HistoryCtx.Provider value={historyControls}>
+                  <MasterChainStatusCtx.Provider value={masterChainStatus}>
+                    <MasterChainErrorCtx.Provider value={masterChainError}>
+                      <ChannelChainStatusCtx.Provider value={channelChainStatus}>
+                        <ChannelChainErrorCtx.Provider value={channelChainError}>
+                          <PluginCatalogCtx.Provider value={pluginCatalog}>
+                            <PluginScanStateCtx.Provider
+                              value={{ scanning, progress: scanProgress }}
+                            >
+                              <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                                <RiffFavouritesCtx.Provider value={riffFavourites}>
+                                  <RiffFavouritesActionsCtx.Provider value={riffFavouritesActions}>
+                                    {children}
+                                  </RiffFavouritesActionsCtx.Provider>
+                                </RiffFavouritesCtx.Provider>
+                              </PluginCatalogActionsCtx.Provider>
+                            </PluginScanStateCtx.Provider>
+                          </PluginCatalogCtx.Provider>
+                        </ChannelChainErrorCtx.Provider>
+                      </ChannelChainStatusCtx.Provider>
+                    </MasterChainErrorCtx.Provider>
+                  </MasterChainStatusCtx.Provider>
+                </HistoryCtx.Provider>
+              </ZoomCtx.Provider>
+            </PlayingCtx.Provider>
+          </PosCtx.Provider>
+        </RestoreStateCtx.Provider>
       </DispatchCtx.Provider>
     </StateCtx.Provider>
   )
@@ -800,6 +828,11 @@ export function useAppSelector<T>(
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useDispatch(): Dispatch<DispatchableAction> {
   return useContext(DispatchCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useRestoreState(): (state: AppState, pluginStates: PluginStatesMap) => void {
+  return useContext(RestoreStateCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component

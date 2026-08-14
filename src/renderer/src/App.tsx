@@ -17,6 +17,7 @@ import {
   useHistory,
   usePlaying,
   usePos,
+  useRestoreState,
   useZoom
 } from './state/StoreContext'
 import { Titlebar } from './components/Titlebar'
@@ -784,6 +785,7 @@ function SketchModeAutoFollow(): null {
 function Frame(): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const restoreState = useRestoreState()
   const setBusy = useBusy()
 
   // A project should always have somewhere to record onto -- fires on
@@ -1061,15 +1063,15 @@ function Frame(): React.JSX.Element {
    * dismisses the welcome modal. */
   async function handleRecoverAutosave(dontShowAgain: boolean): Promise<void> {
     if (!recoverableAutosave) return
-    const loaded = deserializeProject(JSON.parse(recoverableAutosave.json))
+    const { state: loaded, pluginStates } = deserializeProject(JSON.parse(recoverableAutosave.json))
     // Same pre-warm-before-LOAD_STATE reasoning as the library browser's
     // onSelect/onOpenFromDisk handlers below -- avoids the timeline/sketch
     // strip rendering with blank waveforms that pop in one at a time as
     // each mounted component's own decode finishes.
     setBusy('loading…')
     await warmStemCaches(loaded)
-    dispatch({ type: 'LOAD_STATE', state: loaded })
-    lastSavedJsonRef.current = serializeProject(loaded)
+    restoreState(loaded, pluginStates)
+    lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
     setBusy(null)
     const sketchJson = await window.rifffApi.loadAutosaveSketch()
     // The sketch-info sidecar can be missing/corrupted even when the
@@ -2100,11 +2102,13 @@ function Frame(): React.JSX.Element {
                 try {
                   const result = await window.rifffApi.openLibrarySketch(name)
                   if (!result) return
-                  const loaded = deserializeProject(JSON.parse(result.json))
+                  const { state: loaded, pluginStates } = deserializeProject(
+                    JSON.parse(result.json)
+                  )
                   setBusy('loading…')
                   await warmStemCaches(loaded)
-                  dispatch({ type: 'LOAD_STATE', state: loaded })
-                  lastSavedJsonRef.current = serializeProject(loaded)
+                  restoreState(loaded, pluginStates)
+                  lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
@@ -2132,13 +2136,15 @@ function Frame(): React.JSX.Element {
                 try {
                   const result = await window.rifffApi.openProject()
                   if (!result) return
-                  const loaded = deserializeProject(JSON.parse(result.json))
+                  const { state: loaded, pluginStates } = deserializeProject(
+                    JSON.parse(result.json)
+                  )
                   // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
                   // handler right above -- see its own comment history.
                   setBusy('loading…')
                   await warmStemCaches(loaded)
-                  dispatch({ type: 'LOAD_STATE', state: loaded })
-                  lastSavedJsonRef.current = serializeProject(loaded)
+                  restoreState(loaded, pluginStates)
+                  lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)

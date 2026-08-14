@@ -22,7 +22,7 @@ describe('project serialization', () => {
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 2 })
 
     const json = serializeProject(state)
-    const restored = deserializeProject(JSON.parse(json))
+    const { state: restored } = deserializeProject(JSON.parse(json))
 
     expect(restored.bpm).toBe(96)
     expect(restored.off.r1).toBe(2)
@@ -40,7 +40,7 @@ describe('project serialization', () => {
     const json = serializeProject(state)
     expect(JSON.parse(json).volumeDragMode).toBeUndefined()
 
-    const restored = deserializeProject(JSON.parse(json))
+    const { state: restored } = deserializeProject(JSON.parse(json))
     expect(restored.volumeDragMode).toBe(false)
   })
 
@@ -52,7 +52,7 @@ describe('project serialization', () => {
     const json = serializeProject(state)
     expect(JSON.parse(json).inspectorCollapsed).toBeUndefined()
 
-    const restored = deserializeProject(JSON.parse(json))
+    const { state: restored } = deserializeProject(JSON.parse(json))
     expect(restored.inspectorCollapsed).toBe(false)
   })
 
@@ -64,7 +64,7 @@ describe('project serialization', () => {
     const json = serializeProject(state)
     expect(JSON.parse(json).gatedRecordingTargetGroupId).toBeUndefined()
 
-    const restored = deserializeProject(JSON.parse(json))
+    const { state: restored } = deserializeProject(JSON.parse(json))
     expect(restored.gatedRecordingTargetGroupId).toBeNull()
   })
 
@@ -76,7 +76,7 @@ describe('project serialization', () => {
     const json = serializeProject(state)
     expect(JSON.parse(json).pendingLockInConfirm).toBeUndefined()
 
-    const restored = deserializeProject(JSON.parse(json))
+    const { state: restored } = deserializeProject(JSON.parse(json))
     expect(restored.pendingLockInConfirm).toBe(false)
   })
 
@@ -95,7 +95,7 @@ describe('project serialization', () => {
     expect(parsed.gatedRecordingEnabled).toBeUndefined()
     expect(parsed.gatedRecordingChannelId).toBeUndefined()
 
-    const restored = deserializeProject(parsed)
+    const { state: restored } = deserializeProject(parsed)
     expect(restored.tidiedView).toBe(initialState.tidiedView)
     expect(restored.gatedRecordingEnabled).toBe(initialState.gatedRecordingEnabled)
     expect(restored.gatedRecordingChannelId).toBe(initialState.gatedRecordingChannelId)
@@ -105,7 +105,7 @@ describe('project serialization', () => {
 describe('deserializeProject mode fallback', () => {
   it('defaults to sketch mode for a plain (sketch-eligible) loaded arrangement', () => {
     const persisted = JSON.parse(serializeProject(initialState))
-    expect(deserializeProject(persisted).mode).toBe('sketch')
+    expect(deserializeProject(persisted).state.mode).toBe('sketch')
   })
 
   it('falls back to normal mode when the loaded arrangement is not sketch-eligible', () => {
@@ -116,7 +116,7 @@ describe('deserializeProject mode fallback', () => {
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
     const persisted = JSON.parse(serializeProject(state))
-    expect(deserializeProject(persisted).mode).toBe('normal')
+    expect(deserializeProject(persisted).state.mode).toBe('normal')
   })
 })
 
@@ -131,7 +131,7 @@ describe('deserializeProject snapIdx clamp', () => {
       snapIdx: 7
     } as unknown as import('./serialize').PersistedProject
 
-    const restored = deserializeProject(persisted)
+    const { state: restored } = deserializeProject(persisted)
     expect(restored.snapIdx).toBe(4)
   })
 })
@@ -153,7 +153,7 @@ describe('deserializeProject barLength noise migration', () => {
       rifffs: { r1: { ...rifff, barLength: noisyBarLength } }
     } as unknown as import('./serialize').PersistedProject
 
-    const restored = deserializeProject(persisted)
+    const { state: restored } = deserializeProject(persisted)
     expect(restored.rifffs.r1.barLength).toBe(16)
   })
 
@@ -168,7 +168,7 @@ describe('deserializeProject barLength noise migration', () => {
       }
     } as unknown as import('./serialize').PersistedProject
 
-    const restored = deserializeProject(persisted)
+    const { state: restored } = deserializeProject(persisted)
     expect(restored.rifffs.r1.stems[0].barLength).toBe(16)
   })
 
@@ -184,7 +184,7 @@ describe('deserializeProject barLength noise migration', () => {
       }
     } as unknown as import('./serialize').PersistedProject
 
-    const restored = deserializeProject(persisted)
+    const { state: restored } = deserializeProject(persisted)
     expect(restored.rifffs.r1.barLength).toBe(7.75)
     expect(restored.rifffs.r1.stems[0].barLength).toBe(7.75)
   })
@@ -199,7 +199,7 @@ describe('deserializeProject migration from trackOrder', () => {
       },
       trackOrder: ['r1', 'r2']
     } as unknown as LegacyPersistedProject
-    const restored = deserializeProject(legacy)
+    const { state: restored } = deserializeProject(legacy)
     expect(restored.channelOrder).toEqual(['r1', 'r2'])
     expect(restored.channelOf).toEqual({ r1: 'r1', r2: 'r2' })
     expect(restored.rifffs.r1.startBar).toBe(0)
@@ -210,7 +210,7 @@ describe('deserializeProject migration from trackOrder', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     const persisted = JSON.parse(serializeProject(state))
-    const restored = deserializeProject(persisted)
+    const { state: restored } = deserializeProject(persisted)
     expect(restored.channelOrder).toEqual(['r1'])
     expect(restored.channelOf).toEqual({ r1: 'r1' })
   })

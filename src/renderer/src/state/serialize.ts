@@ -124,9 +124,12 @@ function snapBarLengthNoise(rifffs: AppState['rifffs']): AppState['rifffs'] {
   return rifffsChanged ? nextRifffs : rifffs
 }
 
-export function deserializeProject(data: PersistedProject | LegacyPersistedProject): AppState {
-  const migrated = 'channelOrder' in data ? {} : migrateTrackOrder(data.trackOrder)
-  const state = { ...initialState, ...data, ...migrated }
+export function deserializeProject(
+  data: (PersistedProject | LegacyPersistedProject) & { pluginStates?: PluginStatesMap }
+): { state: AppState; pluginStates: PluginStatesMap } {
+  const { pluginStates, ...projectData } = data
+  const migrated = 'channelOrder' in projectData ? {} : migrateTrackOrder(projectData.trackOrder)
+  const state = { ...initialState, ...projectData, ...migrated }
   // SNAP_DIVS has grown/shrunk twice now: [4,8,16,32] -> [4,8,16] (dropped
   // the finest option), then -> [1,2,4,8,16] (two new, COARSER options
   // added at the front -- see its own doc comment). There's no persisted
@@ -143,5 +146,8 @@ export function deserializeProject(data: PersistedProject | LegacyPersistedProje
   // it's re-picked, not anything already committed to audio.
   if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
-  return isSketchEligible(state) ? state : { ...state, mode: 'normal' }
+  return {
+    state: isSketchEligible(state) ? state : { ...state, mode: 'normal' },
+    pluginStates: pluginStates ?? {}
+  }
 }

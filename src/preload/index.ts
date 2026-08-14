@@ -216,8 +216,10 @@ const api = {
   engineLoadMasterPlugin: (
     slot: number,
     pluginId: string | null,
-    path: string | null
-  ): Promise<void> => ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId, path),
+    path: string | null,
+    stateBase64: string | null
+  ): Promise<void> =>
+    ipcRenderer.invoke('engine-load-master-plugin', slot, pluginId, path, stateBase64),
   engineOpenMasterPluginEditor: (slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-open-master-plugin-editor', slot),
   engineCloseMasterPluginEditor: (slot: number): Promise<void> =>
@@ -226,9 +228,10 @@ const api = {
     channelId: string,
     slot: number,
     pluginId: string | null,
-    path: string | null
+    path: string | null,
+    stateBase64: string | null
   ): Promise<void> =>
-    ipcRenderer.invoke('engine-load-channel-plugin', channelId, slot, pluginId, path),
+    ipcRenderer.invoke('engine-load-channel-plugin', channelId, slot, pluginId, path, stateBase64),
   engineOpenChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>
     ipcRenderer.invoke('engine-open-channel-plugin-editor', channelId, slot),
   engineCloseChannelPluginEditor: (channelId: string, slot: number): Promise<void> =>

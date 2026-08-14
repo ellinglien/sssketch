@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { stemKey } from '@shared/types'
 import { deserializeProject } from '../state/serialize'
+import type { AppState } from '../state/store'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
@@ -135,9 +136,9 @@ export function ProjectLibraryBrowser({
       window.alert("Couldn't preview that version.")
       return
     }
-    let state: ReturnType<typeof deserializeProject>
+    let state: AppState
     try {
-      state = deserializeProject(JSON.parse(json))
+      ;({ state } = deserializeProject(JSON.parse(json)))
     } catch (err) {
       console.error('ProjectLibraryBrowser: failed to parse backup for preview:', err)
       window.alert("Couldn't preview that version.")

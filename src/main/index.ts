@@ -847,8 +847,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'engine-load-master-plugin',
-    (_event, slot: number, pluginId: string | null, path: string | null) => {
-      playbackEngine?.client.send('load-master-plugin', { slot, pluginId, path })
+    (
+      _event,
+      slot: number,
+      pluginId: string | null,
+      path: string | null,
+      stateBase64: string | null
+    ) => {
+      playbackEngine?.client.send('load-master-plugin', { slot, pluginId, path, stateBase64 })
     }
   )
 
@@ -862,8 +868,21 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'engine-load-channel-plugin',
-    (_event, channelId: string, slot: number, pluginId: string | null, path: string | null) => {
-      playbackEngine?.client.send('load-channel-plugin', { channelId, slot, pluginId, path })
+    (
+      _event,
+      channelId: string,
+      slot: number,
+      pluginId: string | null,
+      path: string | null,
+      stateBase64: string | null
+    ) => {
+      playbackEngine?.client.send('load-channel-plugin', {
+        channelId,
+        slot,
+        pluginId,
+        path,
+        stateBase64
+      })
     }
   )
 
