@@ -110,39 +110,6 @@ describe('library-aware project functions', () => {
     })
   })
 
-  describe('openProjectFromPath', () => {
-    it('reads back a project file at a known path, no dialog', async () => {
-      const { openProjectFromPath } = await import('./projectFile')
-      const path = join(userDataDir, 'external.sssketchproj')
-      writeFileSync(path, '{"bpm":95}')
-      const result = openProjectFromPath(path)
-      expect(result).not.toBeNull()
-      expect(result!.path).toBe(path)
-      expect(result!.json).toBe('{"bpm":95}')
-    })
-
-    it('returns null for a path that does not exist', async () => {
-      const { openProjectFromPath } = await import('./projectFile')
-      expect(openProjectFromPath(join(userDataDir, 'nope.sssketchproj'))).toBeNull()
-    })
-  })
-
-  describe('last-opened sketch pointer', () => {
-    it('round-trips through writeLastOpenedSketch/loadLastOpenedSketch', async () => {
-      const { writeLastOpenedSketch, loadLastOpenedSketch } = await import('./projectFile')
-      expect(loadLastOpenedSketch()).toBeNull()
-      writeLastOpenedSketch('{"kind":"library","name":"my-sketch"}')
-      expect(loadLastOpenedSketch()).toBe('{"kind":"library","name":"my-sketch"}')
-    })
-
-    it('a later write overwrites the earlier pointer, not appends', async () => {
-      const { writeLastOpenedSketch, loadLastOpenedSketch } = await import('./projectFile')
-      writeLastOpenedSketch('{"kind":"library","name":"first"}')
-      writeLastOpenedSketch('{"kind":"library","name":"second"}')
-      expect(loadLastOpenedSketch()).toBe('{"kind":"library","name":"second"}')
-    })
-  })
-
   describe('duplicateSketchAsNewVersion', () => {
     it('copies the current sketch json into a new -2 named sketch', async () => {
       const { saveProjectToLibrary, duplicateSketchAsNewVersion, openLibrarySketch } =

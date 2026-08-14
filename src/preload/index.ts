@@ -48,22 +48,12 @@ const api = {
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
-  openProjectFromPath: (path: string): Promise<{ path: string; json: string } | null> =>
-    ipcRenderer.invoke('open-project-from-path', path),
   autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
   loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
   clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
   autosaveProjectSketch: (json: string): Promise<void> =>
     ipcRenderer.invoke('autosave-project-sketch', json),
   loadAutosaveSketch: (): Promise<string | null> => ipcRenderer.invoke('load-autosave-sketch'),
-  // Distinct from autosave{Project,ProjectSketch}Sketch above -- those are
-  // crash-recovery only (cleared once offered at startup). This pair is
-  // never cleared, always reflecting the most recently opened/created
-  // sketch, so the NEXT launch can open straight back into it -- see
-  // App.tsx's mount effect.
-  saveLastOpenedSketch: (json: string): Promise<void> =>
-    ipcRenderer.invoke('save-last-opened-sketch', json),
-  loadLastOpenedSketch: (): Promise<string | null> => ipcRenderer.invoke('load-last-opened-sketch'),
   // One-way: main just stores the boolean, no reply expected. Fired from
   // App.tsx's Frame whenever hasUnsavedChanges's own value transitions, not
   // on every keystroke -- see index.ts's rendererHasUnsavedChanges.

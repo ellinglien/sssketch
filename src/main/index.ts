@@ -11,14 +11,11 @@ import { renderStretched } from './rubberband'
 import {
   saveProjectAs,
   openProject,
-  openProjectFromPath,
   writeAutosave,
   loadAutosave,
   clearAutosave,
   writeAutosaveSketchInfo,
   loadAutosaveSketchInfo,
-  writeLastOpenedSketch,
-  loadLastOpenedSketch,
   saveProjectToLibrary,
   saveProjectInPlace,
   openLibrarySketch,
@@ -363,8 +360,6 @@ app.whenReady().then(async () => {
     return openProject(win)
   })
 
-  ipcMain.handle('open-project-from-path', (_event, path: string) => openProjectFromPath(path))
-
   ipcMain.handle('autosave-project', (_event, json: string) => writeAutosave(json))
 
   ipcMain.handle('load-autosave', () => loadAutosave())
@@ -374,10 +369,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('autosave-project-sketch', (_event, json: string) => writeAutosaveSketchInfo(json))
 
   ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
-
-  ipcMain.handle('save-last-opened-sketch', (_event, json: string) => writeLastOpenedSketch(json))
-
-  ipcMain.handle('load-last-opened-sketch', () => loadLastOpenedSketch())
 
   ipcMain.handle('set-dirty-state', (_event, dirty: boolean) => {
     rendererHasUnsavedChanges = dirty
