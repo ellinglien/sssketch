@@ -252,7 +252,7 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
         rifffs: { r1: rifffA, r2: rifffB }
       }
 
-      const nativeBytes = await nativeExport(state)
+      const nativeBytes = await nativeExport(state, null)
 
       // Reference: both stems are unstretched (project bpm === rifff bpm),
       // unmuted, unfaded (state.fadeIn/fadeOut have no entries -> default 0),

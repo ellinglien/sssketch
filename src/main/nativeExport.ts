@@ -12,6 +12,7 @@ import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 import { sketchStemsDir } from './projectLibrary'
+import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 
 // Anything outside this set is unsafe (or at least unwelcome) in a filename
 // across macOS/Windows/Linux -- matches exportAudioMaterialization.ts's own
@@ -81,8 +82,20 @@ export function soloState(state: AppState, targetKeys: Set<string>, allKeys: str
  * engine process spawned at app startup (see src/main/playbackEngineLifecycle.ts)
  * — this function only handles the export path.
  */
-export async function nativeExport(state: AppState): Promise<Uint8Array> {
-  const project = await buildEngineProject(state, resolveStretchedForExport, loadCatalog())
+export async function nativeExport(
+  state: AppState,
+  rawPluginStates: RawPluginStatesCapture | null
+): Promise<Uint8Array> {
+  const pluginStates =
+    rawPluginStates !== null
+      ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
+      : {}
+  const project = await buildEngineProject(
+    state,
+    resolveStretchedForExport,
+    loadCatalog(),
+    pluginStates
+  )
   const durationBars = loopLengthBarsFor(state)
 
   const engineHandle = await spawnEngine()

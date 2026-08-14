@@ -402,7 +402,32 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('export-mix-native', async (_event, stateJson: string) => {
     const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return nativeExport(state)
+    // Best-effort: export at whatever plugin state is currently live in the
+    // PERSISTENT engine (not the fresh, export-only one this function is
+    // about to spawn) -- an export taken right after tweaking a plugin,
+    // without an intervening explicit Save, should still reflect that
+    // tweak. Unlike handleSave's own "fail loud, don't write the file"
+    // choice, a failed fetch here degrades to exporting at default plugin
+    // state rather than failing the whole export -- Save is the one place
+    // this codebase treats plugin state as something the user is relying
+    // on being durably correct; a mixdown is regenerable at any time by
+    // exporting again once the engine round trip works.
+    let rawPluginStates: RawPluginStatesCapture | null = null
+    if (playbackEngine) {
+      try {
+        rawPluginStates = (await playbackEngine.client.sendAndAwaitType(
+          'get-plugin-states',
+          undefined,
+          'plugin-states'
+        )) as RawPluginStatesCapture
+      } catch (err) {
+        console.error(
+          'export-mix-native: failed to fetch live plugin states, exporting at default state:',
+          err
+        )
+      }
+    }
+    return nativeExport(state, rawPluginStates)
   })
 
   ipcMain.handle('export-stems-native', async (event, stateJson: string) => {
