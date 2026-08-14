@@ -260,17 +260,21 @@ describe('buildEngineProject', () => {
     const state = stateWith({ bpm: 150, masterChain: [null, 'pro-q-3', null, 'soothe2'] })
     const project = await buildEngineProject(state, vi.fn(), catalog)
     expect(project.masterChain).toEqual([
-      { pluginId: '', path: '' },
-      { pluginId: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' },
-      { pluginId: '', path: '' },
-      { pluginId: 'soothe2', path: '/Library/Audio/Plug-Ins/VST3/soothe2.vst3' }
+      { pluginId: '', path: '', stateBase64: '' },
+      {
+        pluginId: 'pro-q-3',
+        path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3',
+        stateBase64: ''
+      },
+      { pluginId: '', path: '', stateBase64: '' },
+      { pluginId: 'soothe2', path: '/Library/Audio/Plug-Ins/VST3/soothe2.vst3', stateBase64: '' }
     ])
   })
 
   it('resolves to an empty path when the catalog id is not found (e.g. plugin no longer scanned)', async () => {
     const state = stateWith({ bpm: 150, masterChain: ['unknown-id', null, null, null] })
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
-    expect(project.masterChain[0]).toEqual({ pluginId: 'unknown-id', path: '' })
+    expect(project.masterChain[0]).toEqual({ pluginId: 'unknown-id', path: '', stateBase64: '' })
   })
 
   it("resolves each rifff's channelId from channelOf", async () => {
@@ -299,8 +303,12 @@ describe('buildEngineProject', () => {
       {
         channelId: 'ch-1',
         slots: [
-          { pluginId: 'pro-q-3', path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3' },
-          { pluginId: '', path: '' }
+          {
+            pluginId: 'pro-q-3',
+            path: '/Library/Audio/Plug-Ins/VST3/FabFilter Pro-Q 3.vst3',
+            stateBase64: ''
+          },
+          { pluginId: '', path: '', stateBase64: '' }
         ]
       }
     ])
@@ -310,5 +318,64 @@ describe('buildEngineProject', () => {
     const state = stateWith({ bpm: 150, channelOf: { r1: 'ch-1' }, channelPlugins: {} })
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)
     expect(project.channelChains).toEqual([])
+  })
+
+  it('threads pluginStates into masterChain/channelChains, matched by slot address and pluginId', async () => {
+    const state = stateWith({
+      bpm: 150,
+      masterChain: ['reverb-plugin', null, null, null],
+      channelPlugins: { kick: ['comp-plugin', null] }
+    })
+    const pluginCatalog = {
+      plugins: [
+        { id: 'reverb-plugin', path: '/plugins/reverb.vst3' },
+        { id: 'comp-plugin', path: '/plugins/comp.vst3' }
+      ]
+    }
+    const pluginStates = {
+      'master:0': { pluginId: 'reverb-plugin', stateBase64: 'AQIDBA==' },
+      'channel:kick:0': { pluginId: 'comp-plugin', stateBase64: 'Q0FUUw==' }
+    }
+
+    const project = await buildEngineProject(
+      state,
+      async (path) => ({ path, durationSec: 1 }),
+      pluginCatalog,
+      pluginStates
+    )
+
+    expect(project.masterChain[0].stateBase64).toBe('AQIDBA==')
+    const kickChain = project.channelChains.find((c) => c.channelId === 'kick')
+    expect(kickChain?.slots[0].stateBase64).toBe('Q0FUUw==')
+  })
+
+  it('leaves stateBase64 empty when pluginStates is omitted (existing callers unaffected)', async () => {
+    const state = stateWith({ bpm: 150, masterChain: ['reverb-plugin', null, null, null] })
+    const pluginCatalog = { plugins: [{ id: 'reverb-plugin', path: '/plugins/reverb.vst3' }] }
+
+    const project = await buildEngineProject(
+      state,
+      async (path) => ({ path, durationSec: 1 }),
+      pluginCatalog
+    )
+
+    expect(project.masterChain[0].stateBase64).toBe('')
+  })
+
+  it('leaves stateBase64 empty when a captured entry exists but its pluginId no longer matches the slot', async () => {
+    const state = stateWith({ bpm: 150, masterChain: ['a-different-plugin', null, null, null] })
+    const pluginCatalog = { plugins: [{ id: 'a-different-plugin', path: '/plugins/other.vst3' }] }
+    const pluginStates = {
+      'master:0': { pluginId: 'reverb-plugin', stateBase64: 'AQIDBA==' } // stale -- a different plugin now occupies slot 0
+    }
+
+    const project = await buildEngineProject(
+      state,
+      async (path) => ({ path, durationSec: 1 }),
+      pluginCatalog,
+      pluginStates
+    )
+
+    expect(project.masterChain[0].stateBase64).toBe('')
   })
 })

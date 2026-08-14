@@ -2,6 +2,8 @@ import type { AppState } from '../renderer/src/state/store'
 import { SNAP_DIVS } from '../renderer/src/state/store'
 import { loopLengthBars, resolvePlayedBars } from '../renderer/src/state/selectors'
 import { stemKey } from './types'
+import type { PluginStatesMap } from './pluginStates'
+import { stateForSlot } from './pluginStates'
 
 export interface EngineStem {
   stemKey: string
@@ -69,6 +71,7 @@ export interface EngineProject {
 export interface EngineMasterChainSlot {
   pluginId: string
   path: string
+  stateBase64: string
 }
 
 export interface EngineChannelChain {
@@ -113,7 +116,8 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
 export async function buildEngineProject(
   state: AppState,
   resolveStretched: StretchResolver,
-  pluginCatalog: PluginCatalogForEngineProject
+  pluginCatalog: PluginCatalogForEngineProject,
+  pluginStates: PluginStatesMap = {}
 ): Promise<EngineProject> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   const rifffs: EngineRifff[] = []
@@ -221,20 +225,28 @@ export async function buildEngineProject(
     })
   }
 
-  const masterChain = state.masterChain.map((id) => {
-    if (id === null) return { pluginId: '', path: '' }
+  const masterChain = state.masterChain.map((id, slot) => {
+    if (id === null) return { pluginId: '', path: '', stateBase64: '' }
     const entry = pluginCatalog.plugins.find((p) => p.id === id)
-    return { pluginId: id, path: entry?.path ?? '' } // empty path = engine treats as empty/unresolvable
+    return {
+      pluginId: id,
+      path: entry?.path ?? '', // empty path = engine treats as empty/unresolvable
+      stateBase64: stateForSlot(pluginStates, `master:${slot}`, id) ?? ''
+    }
   }) as EngineProject['masterChain']
 
   const channelChains: EngineChannelChain[] = Object.entries(state.channelPlugins)
     .filter(([, slots]) => slots.some((id) => id !== null))
     .map(([channelId, slots]) => ({
       channelId,
-      slots: slots.map((id) => {
-        if (id === null) return { pluginId: '', path: '' }
+      slots: slots.map((id, slot) => {
+        if (id === null) return { pluginId: '', path: '', stateBase64: '' }
         const entry = pluginCatalog.plugins.find((p) => p.id === id)
-        return { pluginId: id, path: entry?.path ?? '' }
+        return {
+          pluginId: id,
+          path: entry?.path ?? '',
+          stateBase64: stateForSlot(pluginStates, `channel:${channelId}:${slot}`, id) ?? ''
+        }
       }) as [EngineMasterChainSlot, EngineMasterChainSlot]
     }))
 
