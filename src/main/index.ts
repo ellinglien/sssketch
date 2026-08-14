@@ -83,7 +83,9 @@ import {
   shouldWarnBeforeOverwrite,
   renameSketch,
   deleteSketch,
-  toggleSketchFavourite
+  toggleSketchFavourite,
+  listSketchBackups,
+  restoreSketchBackup
 } from './projectLibrary'
 
 // Assigned inside app.whenReady().then(...) once the engine has started;
@@ -428,6 +430,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('should-warn-before-ableton-overwrite', (_event, libraryName: string) =>
     shouldWarnBeforeOverwrite(libraryName)
+  )
+
+  ipcMain.handle('list-sketch-backups', (_event, name: string) => listSketchBackups(name))
+
+  ipcMain.handle('restore-sketch-backup', (_event, name: string, backupPath: string) =>
+    restoreSketchBackup(name, backupPath)
   )
 
   ipcMain.handle(

@@ -107,6 +107,13 @@ const api = {
     ipcRenderer.invoke('set-library-root', newRoot),
   shouldWarnBeforeAbletonOverwrite: (libraryName: string): Promise<boolean> =>
     ipcRenderer.invoke('should-warn-before-ableton-overwrite', libraryName),
+  listSketchBackups: (name: string): Promise<{ path: string; mtimeMs: number }[]> =>
+    ipcRenderer.invoke('list-sketch-backups', name),
+  restoreSketchBackup: (
+    name: string,
+    backupPath: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('restore-sketch-backup', name, backupPath),
   exportAlsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
     ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
   exportAlsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>

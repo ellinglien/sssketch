@@ -61,6 +61,18 @@ export function ProjectLibraryBrowser({
   // it -- see the panel's own onClick below -- so an armed button can't
   // linger and get triggered by an unrelated later click.
   const [deleteArmedName, setDeleteArmedName] = useState<string | null>(null)
+  // Which row's backup history is currently expanded (at most one) --
+  // fetched lazily on open rather than for every row up front, since most
+  // sketches will never be opened this way. See rotateBackupBeforeOverwrite
+  // (projectLibrary.ts) for what populates this: every save (explicit or
+  // the debounced autosave) backs up whatever was on disk just before
+  // overwriting it, so an unwanted autosave is always recoverable here.
+  const [historyOpenName, setHistoryOpenName] = useState<string | null>(null)
+  const [backups, setBackups] = useState<{ path: string; mtimeMs: number }[]>([])
+  // Same two-step arm/confirm pattern as deleteArmedName above, keyed by
+  // backup path (not sketch name) since several backups can be listed at
+  // once under one expanded row.
+  const [restoreArmedPath, setRestoreArmedPath] = useState<string | null>(null)
 
   async function handleToggleFavourite(name: string): Promise<void> {
     await window.rifffApi.toggleSketchFavourite(name)
@@ -84,6 +96,37 @@ export function ProjectLibraryBrowser({
       return
     }
     setSketches(await window.rifffApi.listLibrarySketches())
+  }
+
+  async function handleToggleHistory(name: string): Promise<void> {
+    if (historyOpenName === name) {
+      setHistoryOpenName(null)
+      return
+    }
+    setRestoreArmedPath(null)
+    setHistoryOpenName(name)
+    setBackups(await window.rifffApi.listSketchBackups(name))
+  }
+
+  // Restoring loads the now-restored content the same way clicking the
+  // sketch's own row does (onSelect + onClose) -- "restore this version"
+  // means "open it," matching that existing mental model rather than
+  // introducing a second, silent way for a sketch's live content to change.
+  async function handleRestoreClick(name: string, backupPath: string): Promise<void> {
+    if (restoreArmedPath !== backupPath) {
+      setRestoreArmedPath(backupPath)
+      return
+    }
+    setRestoreArmedPath(null)
+    const result = await window.rifffApi.restoreSketchBackup(name, backupPath)
+    if (!result.ok) {
+      console.error('ProjectLibraryBrowser: restoreSketchBackup failed:', result.reason)
+      window.alert(`Couldn't restore that version: ${result.reason}`)
+      return
+    }
+    setHistoryOpenName(null)
+    onSelect(name)
+    onClose()
   }
 
   useEffect(() => {
@@ -140,6 +183,7 @@ export function ProjectLibraryBrowser({
         onClick={(e) => {
           e.stopPropagation()
           setDeleteArmedName(null)
+          setRestoreArmedPath(null)
         }}
         style={{
           background: 'var(--ra-bg-row-active)',
@@ -182,66 +226,128 @@ export function ProjectLibraryBrowser({
             </div>
           )}
           {sketches?.map((sketch) => (
-            <div
-              key={sketch.name}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 0'
-              }}
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void handleToggleFavourite(sketch.name)
-                }}
-                aria-label={`${sketch.favourite ? 'unfavourite' : 'favourite'} ${sketch.name}`}
-                title={sketch.favourite ? 'unfavourite' : 'favourite'}
+            <div key={sketch.name}>
+              <div
                 style={{
-                  ...buttonStyle(),
-                  padding: '2px 6px',
-                  color: sketch.favourite ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 0'
                 }}
               >
-                {sketch.favourite ? '★' : '☆'}
-              </button>
-              <span
-                onClick={() => {
-                  onSelect(sketch.name)
-                  onClose()
-                }}
-                role="button"
-                aria-label={`open ${sketch.name}`}
-                style={{ flex: 1, color: 'var(--ra-text)', cursor: 'pointer' }}
-              >
-                {sketch.name}
-              </span>
-              <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>
-                {formatMtime(sketch.mtimeMs)}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void handleDeleteClick(sketch.name)
-                }}
-                disabled={sketch.name === currentLibraryName}
-                title={
-                  sketch.name === currentLibraryName
-                    ? "can't delete the sketch you're currently working in"
-                    : deleteArmedName === sketch.name
-                      ? 'click again to delete (moves to trash)'
-                      : 'delete (moves to trash)'
-                }
-                aria-label={
-                  deleteArmedName === sketch.name
-                    ? `confirm delete ${sketch.name}`
-                    : `delete ${sketch.name}`
-                }
-                style={buttonStyle(sketch.name === currentLibraryName)}
-              >
-                {deleteArmedName === sketch.name ? 'delete?' : '×'}
-              </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleToggleFavourite(sketch.name)
+                  }}
+                  aria-label={`${sketch.favourite ? 'unfavourite' : 'favourite'} ${sketch.name}`}
+                  title={sketch.favourite ? 'unfavourite' : 'favourite'}
+                  style={{
+                    ...buttonStyle(),
+                    padding: '2px 6px',
+                    color: sketch.favourite ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+                  }}
+                >
+                  {sketch.favourite ? '★' : '☆'}
+                </button>
+                <span
+                  onClick={() => {
+                    onSelect(sketch.name)
+                    onClose()
+                  }}
+                  role="button"
+                  aria-label={`open ${sketch.name}`}
+                  style={{ flex: 1, color: 'var(--ra-text)', cursor: 'pointer' }}
+                >
+                  {sketch.name}
+                </span>
+                <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>
+                  {formatMtime(sketch.mtimeMs)}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleToggleHistory(sketch.name)
+                  }}
+                  title="earlier autosaved versions"
+                  aria-label={`earlier versions of ${sketch.name}`}
+                  style={{
+                    ...buttonStyle(),
+                    color: historyOpenName === sketch.name ? 'var(--ra-text)' : 'var(--ra-text-2)'
+                  }}
+                >
+                  history
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleDeleteClick(sketch.name)
+                  }}
+                  disabled={sketch.name === currentLibraryName}
+                  title={
+                    sketch.name === currentLibraryName
+                      ? "can't delete the sketch you're currently working in"
+                      : deleteArmedName === sketch.name
+                        ? 'click again to delete (moves to trash)'
+                        : 'delete (moves to trash)'
+                  }
+                  aria-label={
+                    deleteArmedName === sketch.name
+                      ? `confirm delete ${sketch.name}`
+                      : `delete ${sketch.name}`
+                  }
+                  style={buttonStyle(sketch.name === currentLibraryName)}
+                >
+                  {deleteArmedName === sketch.name ? 'delete?' : '×'}
+                </button>
+              </div>
+              {historyOpenName === sketch.name && (
+                <div
+                  style={{
+                    margin: '0 0 4px 22px',
+                    paddingLeft: 8,
+                    borderLeft: '1px solid var(--ra-border-soft)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4
+                  }}
+                >
+                  {backups.length === 0 && (
+                    <span style={{ color: 'var(--ra-text-4)', fontSize: 9, padding: '2px 0' }}>
+                      no earlier versions yet
+                    </span>
+                  )}
+                  {backups.map((backup) => (
+                    <div
+                      key={backup.path}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <span style={{ flex: 1, color: 'var(--ra-text-2)', fontSize: 9 }}>
+                        {formatMtime(backup.mtimeMs)}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleRestoreClick(sketch.name, backup.path)
+                        }}
+                        title={
+                          restoreArmedPath === backup.path
+                            ? 'click again to restore this version'
+                            : 'restore this version'
+                        }
+                        aria-label={
+                          restoreArmedPath === backup.path
+                            ? `confirm restore ${sketch.name} to ${formatMtime(backup.mtimeMs)}`
+                            : `restore ${sketch.name} to ${formatMtime(backup.mtimeMs)}`
+                        }
+                        style={buttonStyle()}
+                      >
+                        {restoreArmedPath === backup.path ? 'restore?' : 'restore'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>

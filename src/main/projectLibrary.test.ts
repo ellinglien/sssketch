@@ -329,4 +329,105 @@ describe('projectLibrary', () => {
       expect(result).toEqual({ ok: false, reason: 'permission denied' })
     })
   })
+
+  // Small real delay between saves -- guarantees each rotated backup gets a
+  // distinct mtime to sort by, same as two real autosaves would naturally
+  // have seconds apart. Synchronous back-to-back saves could otherwise land
+  // in the same filesystem-mtime tick, making "newest first" ordering
+  // untestable (not a real-world concern: the debounced autosave this
+  // guards is 4s apart, an explicit Save is human-paced).
+  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5))
+
+  describe('rotateBackupBeforeOverwrite / listSketchBackups', () => {
+    it('does nothing when the sketch has no project file yet', async () => {
+      const { rotateBackupBeforeOverwrite, listSketchBackups } = await import('./projectLibrary')
+      rotateBackupBeforeOverwrite('brand-new')
+      expect(listSketchBackups('brand-new')).toEqual([])
+    })
+
+    it('backs up the current file before a save overwrites it', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { listSketchBackups } = await import('./projectLibrary')
+      saveProjectToLibrary('my-sketch', '{"rifffs":{"first":true}}')
+      saveProjectToLibrary('my-sketch', '{"rifffs":{"second":true}}')
+      const backups = listSketchBackups('my-sketch')
+      expect(backups).toHaveLength(1)
+      expect(readFileSync(backups[0].path, 'utf-8')).toBe('{"rifffs":{"first":true}}')
+    })
+
+    it('keeps only the most recent MAX_BACKUPS (3), newest first', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { listSketchBackups } = await import('./projectLibrary')
+      for (let i = 0; i < 5; i++) {
+        saveProjectToLibrary('many-saves', `{"rifffs":{"n":${i}}}`)
+        await tick()
+      }
+      const backups = listSketchBackups('many-saves')
+      expect(backups).toHaveLength(3)
+      // Saves 0..4 each back up the PREVIOUS content just before
+      // overwriting -- so the 5 saves produce backups of versions 0,1,2,3
+      // (save 4's own content is still live, never backed up). Newest
+      // three kept: versions 3, 2, 1.
+      const contents = backups.map((b) => JSON.parse(readFileSync(b.path, 'utf-8')).rifffs.n)
+      expect(contents).toEqual([3, 2, 1])
+    })
+
+    it('returns an empty list for a sketch that was only ever saved once', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { listSketchBackups } = await import('./projectLibrary')
+      saveProjectToLibrary('once-only', '{"rifffs":{}}')
+      expect(listSketchBackups('once-only')).toEqual([])
+    })
+  })
+
+  describe('restoreSketchBackup', () => {
+    it('restores an older version as the live project file', async () => {
+      const { saveProjectToLibrary, openLibrarySketch } = await import('./projectFile')
+      const { listSketchBackups, restoreSketchBackup } = await import('./projectLibrary')
+      saveProjectToLibrary('restore-me', '{"rifffs":{"n":0}}')
+      await tick()
+      saveProjectToLibrary('restore-me', '{"rifffs":{"n":1}}')
+      const [backup] = listSketchBackups('restore-me')
+      const result = restoreSketchBackup('restore-me', backup.path)
+      expect(result).toEqual({ ok: true })
+      expect(openLibrarySketch('restore-me')?.json).toBe('{"rifffs":{"n":0}}')
+    })
+
+    it('backs up the version it replaces, so restoring is itself undoable', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { listSketchBackups, restoreSketchBackup } = await import('./projectLibrary')
+      saveProjectToLibrary('undo-restore', '{"rifffs":{"n":0}}')
+      await tick()
+      saveProjectToLibrary('undo-restore', '{"rifffs":{"n":1}}')
+      const [backupOfN0] = listSketchBackups('undo-restore')
+      restoreSketchBackup('undo-restore', backupOfN0.path)
+      const backupsAfterRestore = listSketchBackups('undo-restore')
+      const contents = backupsAfterRestore.map(
+        (b) => JSON.parse(readFileSync(b.path, 'utf-8')).rifffs.n
+      )
+      expect(contents).toContain(1)
+    })
+
+    it("rejects a backup path outside this sketch's own backups folder", async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { restoreSketchBackup, sketchProjectPath } = await import('./projectLibrary')
+      saveProjectToLibrary('sketch-a', '{"rifffs":{"n":0}}')
+      await tick()
+      saveProjectToLibrary('sketch-a', '{"rifffs":{"n":1}}')
+      saveProjectToLibrary('sketch-b', '{"rifffs":{"other":true}}')
+      const result = restoreSketchBackup('sketch-b', sketchProjectPath('sketch-a'))
+      expect(result.ok).toBe(false)
+    })
+
+    it('returns ok:false when the backup no longer exists', async () => {
+      const { saveProjectToLibrary } = await import('./projectFile')
+      const { restoreSketchBackup, sketchBackupsDir } = await import('./projectLibrary')
+      saveProjectToLibrary('gone', '{"rifffs":{}}')
+      const result = restoreSketchBackup(
+        'gone',
+        join(sketchBackupsDir('gone'), 'nope.sssketchproj')
+      )
+      expect(result).toEqual({ ok: false, reason: 'that backup no longer exists' })
+    })
+  })
 })

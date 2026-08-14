@@ -8,10 +8,11 @@ import {
   copyFileSync,
   mkdirSync,
   renameSync,
+  unlinkSync,
   constants
 } from 'node:fs'
-import { join, basename } from 'node:path'
-import { createHash } from 'node:crypto'
+import { join, basename, resolve, sep } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 import { app, shell } from 'electron'
 
 const LIBRARY_PREFS_FILENAME = 'libraryPrefs.json'
@@ -292,4 +293,95 @@ export async function deleteSketch(
     const message = err instanceof Error ? err.message : String(err)
     return { ok: false, reason: message }
   }
+}
+
+// A hidden subfolder inside sketchDir(name), alongside Ableton/Reaper/Stems
+// -- invisible to listLibrarySketches (which only checks the library ROOT's
+// immediate children for a matching .sssketchproj, never recurses into a
+// sketch's own directory), and carried along for free by both renameSketch
+// (whole-directory rename) and deleteSketch (whole-directory trash), so a
+// sketch's own backup history moves and is cleaned up with it rather than
+// getting orphaned.
+export function sketchBackupsDir(name: string): string {
+  return join(sketchDir(name), '.backups')
+}
+
+// Only the most recent few -- this is a safety net against an unwanted
+// autosave overwrite, not real version control; unbounded growth would
+// just be silent disk usage nobody asked for.
+const MAX_BACKUPS = 3
+
+/** Copies a sketch's CURRENT live project file into its own backups folder
+ * -- called from saveProjectToLibrary right before every overwrite
+ * (explicit Save and the debounced autosave both funnel through it), so an
+ * autosave the user didn't want is always recoverable, not just the newest
+ * state. A no-op if there's no existing project file yet (first save has
+ * nothing to back up). Prunes down to MAX_BACKUPS afterward, oldest first. */
+export function rotateBackupBeforeOverwrite(name: string): void {
+  const projectPath = sketchProjectPath(name)
+  if (!existsSync(projectPath)) return
+  const backupsDir = sketchBackupsDir(name)
+  mkdirSync(backupsDir, { recursive: true })
+  // Colon/dot-free so the filename is valid across filesystems -- same
+  // "sanitize a timestamp for a path" need as elsewhere in this codebase,
+  // just inlined here since it's a one-line replace, not worth its own
+  // shared helper. The random suffix guards against two rotations landing
+  // in the same millisecond (e.g. rapid saves, or synchronous test calls)
+  // silently colliding onto the same filename -- toISOString()'s own
+  // resolution isn't fine enough to guarantee that on its own.
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const suffix = randomBytes(3).toString('hex')
+  cloneOrCopy(projectPath, join(backupsDir, `${name}-${timestamp}-${suffix}.sssketchproj`))
+  pruneOldBackups(name)
+}
+
+function pruneOldBackups(name: string): void {
+  const backups = listSketchBackups(name)
+  for (const stale of backups.slice(MAX_BACKUPS)) {
+    unlinkSync(stale.path)
+  }
+}
+
+export interface SketchBackupSummary {
+  path: string
+  mtimeMs: number
+}
+
+/** Every backup currently kept for a sketch, newest first. Empty if the
+ * sketch has never been overwritten (or doesn't exist) -- not an error. */
+export function listSketchBackups(name: string): SketchBackupSummary[] {
+  const backupsDir = sketchBackupsDir(name)
+  if (!existsSync(backupsDir)) return []
+  return readdirSync(backupsDir)
+    .filter((f) => f.endsWith('.sssketchproj'))
+    .map((f) => {
+      const path = join(backupsDir, f)
+      return { path, mtimeMs: statSync(path).mtimeMs }
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+/** Restores a previously-rotated backup as the sketch's current live
+ * project file. Itself non-destructive: the CURRENT live file is rotated
+ * into backups FIRST (same rotateBackupBeforeOverwrite path a normal save
+ * uses), so restoring an old version is always itself undoable, not a
+ * one-way trip. backupPath is renderer-supplied (via IPC), so it's
+ * resolved and checked to actually live inside THIS sketch's own backups
+ * folder before anything touches disk -- rejects a mismatched or
+ * traversal-attempting path rather than trusting it. */
+export function restoreSketchBackup(
+  name: string,
+  backupPath: string
+): { ok: true } | { ok: false; reason: string } {
+  const backupsDir = resolve(sketchBackupsDir(name))
+  const resolvedBackup = resolve(backupPath)
+  if (!resolvedBackup.startsWith(backupsDir + sep)) {
+    return { ok: false, reason: "backup path is not inside this sketch's own backups folder" }
+  }
+  if (!existsSync(resolvedBackup)) {
+    return { ok: false, reason: 'that backup no longer exists' }
+  }
+  rotateBackupBeforeOverwrite(name)
+  cloneOrCopy(resolvedBackup, sketchProjectPath(name))
+  return { ok: true }
 }

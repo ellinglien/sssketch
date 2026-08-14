@@ -5,7 +5,8 @@ import {
   sketchDir,
   sketchProjectPath,
   listLibrarySketches,
-  nextVersionName
+  nextVersionName,
+  rotateBackupBeforeOverwrite
 } from './projectLibrary'
 
 // Fun, short words for the auto-generated default project name -- kept
@@ -252,6 +253,14 @@ export function renameExternalSketchFile(
 export function saveProjectToLibrary(name: string, json: string): { path: string } {
   mkdirSync(sketchDir(name), { recursive: true })
   const path = sketchProjectPath(name)
+  // Backs up whatever's CURRENTLY on disk before it's overwritten --
+  // covers both this function's own callers: explicit Save and the
+  // debounced autosave (App.tsx). Without this, an autosave firing on
+  // changes the user didn't actually want kept overwrites the last real
+  // save with no way back -- see rotateBackupBeforeOverwrite's own doc
+  // comment for the recovery story (list/restore via the Project Library
+  // browser).
+  rotateBackupBeforeOverwrite(name)
   saveProjectInPlace(path, json)
   return { path }
 }
