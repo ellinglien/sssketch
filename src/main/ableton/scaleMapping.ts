@@ -5,7 +5,20 @@
 // IS the semitone offset from C -- confirmed against the reference template
 // (E -> index 4 -> Ableton's own Root Value="4" for a Set the user set to
 // E Minor).
-const RIFF_LIBRARY_ROOT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'] as const
+const RIFF_LIBRARY_ROOT_NAMES = [
+  'C',
+  'Db',
+  'D',
+  'Eb',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'Ab',
+  'A',
+  'Bb',
+  'B'
+] as const
 
 // Only entries confirmed against a real Ableton-generated reference file
 // (see docs/superpowers/specs/2026-08-04-ableton-export-design.md) --
