@@ -278,6 +278,8 @@ namespace sssketch
                     expect(raw2 != nullptr);
                     expect(raw2->lastAppliedState.size() == 4);
                     expectEquals((int) raw2->lastAppliedState[0], 1);
+                    expectEquals((int) raw2->lastAppliedState[1], 2);
+                    expectEquals((int) raw2->lastAppliedState[2], 3);
                     expectEquals((int) raw2->lastAppliedState[3], 4);
                 }
 
