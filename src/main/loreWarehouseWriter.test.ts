@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import type { LoreResolvedRiff } from '@shared/loreLibrary'
+import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
 import {
   upsertJam,
   markJamSyncComplete,
@@ -45,7 +45,9 @@ function freshDb(): Database.Database {
   return db
 }
 
-function resolvedRiffFixture(overrides: Partial<LoreResolvedRiff> = {}): LoreResolvedRiff {
+function resolvedRiffFixture(
+  overrides: Partial<RiffLibraryResolvedRiff> = {}
+): RiffLibraryResolvedRiff {
   return {
     riffCID: 'riff_1',
     bpm: 120,

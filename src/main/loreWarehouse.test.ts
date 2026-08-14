@@ -15,7 +15,7 @@ import {
   resolveRiffWithContext,
   downloadMissingStems
 } from './loreWarehouse'
-import { stemDownloadUrl } from '@shared/loreLibrary'
+import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 
 let userDataDir: string
 
@@ -341,7 +341,7 @@ describe('listRiffs', () => {
     expect(riffs).toHaveLength(0)
   })
 
-  it('scores ownerFraction against targetUser instead of the LORE_USERNAME default when given', () => {
+  it('scores ownerFraction against targetUser instead of the RIFF_LIBRARY_USERNAME default when given', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
@@ -361,7 +361,7 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setWarehouseRootForTests(root)
 
-    // Defaults to LORE_USERNAME ('elling') when targetUser is unset — both
+    // Defaults to RIFF_LIBRARY_USERNAME ('elling') when targetUser is unset — both
     // riff-1 and riff-2 have an elling stem.
     expect(listRiffs('jam-techno', { onlyContainsUser: true }).riffs.map((r) => r.riffCID)).toEqual(
       ['riff-2', 'riff-1']

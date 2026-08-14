@@ -4,8 +4,8 @@ import {
   computeOwnerFraction,
   stemDownloadUrl,
   resolveKeyName,
-  LORE_USERNAME
-} from './loreLibrary'
+  RIFF_LIBRARY_USERNAME
+} from './riffLibraryTypes'
 
 describe('instrumentMaskToSoundType', () => {
   it('maps the drum bit (2) to drums', () => {
@@ -58,8 +58,8 @@ describe('computeOwnerFraction', () => {
     expect(computeOwnerFraction([], 'elling')).toBe(0)
   })
 
-  it('matches LORE_USERNAME by default when no target is passed', () => {
-    expect(computeOwnerFraction([LORE_USERNAME], undefined)).toBe(1)
+  it('matches RIFF_LIBRARY_USERNAME by default when no target is passed', () => {
+    expect(computeOwnerFraction([RIFF_LIBRARY_USERNAME], undefined)).toBe(1)
   })
 })
 

@@ -2,14 +2,14 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
-  LoreJam,
-  LoreResolvedRiff,
-  LoreResolvedStem,
-  LoreRiffSummary,
+  RiffLibraryJam,
+  RiffLibraryResolvedRiff,
+  RiffLibraryResolvedStem,
+  RiffLibraryRiffSummary,
   RiffFilters,
   RiffPage
-} from '@shared/loreLibrary'
-import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/loreLibrary'
+} from '@shared/riffLibraryTypes'
+import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/riffLibraryTypes'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -357,7 +357,7 @@ function stemFlagsToMask(stem: RawStemDoc): number {
 // builds the request URL from these three components. Falls back to the
 // embedded url only if `key` is missing (shouldn't happen in practice, but
 // cheaper than risking a null download for a defensively-optional field).
-function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): LoreResolvedStem {
+function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): RiffLibraryResolvedStem {
   const bpm = bpsToRoundedBpm(stem.bps)
   const barLength = stem.length16ths / 16
   const ogg = stem.cdn_attachments.oggAudio
@@ -390,8 +390,8 @@ function buildResolvedRiff(
   riffCID: string,
   riffDoc: RawRiffDoc,
   stemDocs: (RawStemDoc | null)[]
-): LoreResolvedRiff {
-  const stems: LoreResolvedStem[] = []
+): RiffLibraryResolvedRiff {
+  const stems: RiffLibraryResolvedStem[] = []
   riffDoc.state.playback.forEach((slotWrapper, index) => {
     const current = slotWrapper.slot?.current
     if (!current || !current.on || !current.currentLoop) return
@@ -414,9 +414,9 @@ function summarizeResolvedRiff(
   riffCID: string,
   userName: string,
   creationTime: number,
-  resolved: LoreResolvedRiff,
+  resolved: RiffLibraryResolvedRiff,
   ownerFraction: number
-): LoreRiffSummary {
+): RiffLibraryRiffSummary {
   return {
     riffCID,
     creationTime,
@@ -547,7 +547,7 @@ async function downloadOneEndlesssStem(
 }
 
 /** Downloads every not-yet-cached stem in `resolved` (path === null but a
- * downloadUrl exists), returning a new LoreResolvedRiff with paths filled
+ * downloadUrl exists), returning a new RiffLibraryResolvedRiff with paths filled
  * in for whichever succeeded. Shared by both the shared-feed and
  * private-jam resolve paths. Exported for loreWarehouseSync.ts's own use --
  * see peekSharedFeedCache's doc comment for why syncSharedFeed needs to
@@ -563,11 +563,11 @@ async function downloadOneEndlesssStem(
  * locally" (which already-cached stems would inflate without actually
  * costing any time or bandwidth this run). */
 export async function downloadMissingStemsFor(
-  resolved: LoreResolvedRiff,
+  resolved: RiffLibraryResolvedRiff,
   fetchImpl: FetchLike,
   signal?: AbortSignal,
   onStemDownloaded?: (bytes: number) => void
-): Promise<LoreResolvedRiff> {
+): Promise<RiffLibraryResolvedRiff> {
   const stems = await Promise.all(
     resolved.stems.map(async (stem) => {
       if (stem.path !== null || !stem.downloadUrl) return stem
@@ -608,14 +608,14 @@ export async function downloadMissingStemsFor(
 // that was nowhere close. peekSharedFeedCache lets syncSharedFeed snapshot
 // each page's entries into ITS OWN accumulator immediately after listing
 // that page, before the next page's listSharedFeed call evicts them here.
-let sharedFeedCache = new Map<string, LoreResolvedRiff>()
+let sharedFeedCache = new Map<string, RiffLibraryResolvedRiff>()
 
 /** Snapshots whichever of `riffCIDs` are currently present in the
  * shared-feed listing cache -- see sharedFeedCache's own doc comment for
  * why this exists. Read-only; does not affect the cache or trigger any
  * network activity. */
-export function peekSharedFeedCache(riffCIDs: string[]): Map<string, LoreResolvedRiff> {
-  const result = new Map<string, LoreResolvedRiff>()
+export function peekSharedFeedCache(riffCIDs: string[]): Map<string, RiffLibraryResolvedRiff> {
+  const result = new Map<string, RiffLibraryResolvedRiff>()
   for (const riffCID of riffCIDs) {
     const cached = sharedFeedCache.get(riffCID)
     if (cached) result.set(riffCID, cached)
@@ -660,8 +660,8 @@ export async function listSharedFeed(
     return { riffs: [], hasMore: false, nextOffset: offset }
   }
 
-  const newCache = new Map<string, LoreResolvedRiff>()
-  const summaries: LoreRiffSummary[] = []
+  const newCache = new Map<string, RiffLibraryResolvedRiff>()
+  const summaries: RiffLibraryRiffSummary[] = []
   for (const entry of body.data ?? []) {
     // entry.loops can contain literal nulls for unused slots -- a documented
     // Endlesss backend quirk (see the design spec's grounding section), not
@@ -745,7 +745,7 @@ async function fetchJamDisplayName(
  * (unlike LORE's own listJams, which derives it from synced riff data this
  * module doesn't have) -- the UI can sort jams alphabetically or by join
  * order instead. */
-export async function listJams(fetchImpl: FetchLike = fetch): Promise<LoreJam[]> {
+export async function listJams(fetchImpl: FetchLike = fetch): Promise<RiffLibraryJam[]> {
   const session = activeSession()
   if (!session) return []
 
@@ -803,7 +803,7 @@ const DEFAULT_RIFF_PAGE_SIZE = 200
  * live testing against an actual jam showed every riff rendering as
  * 12/31/1969 (epoch), meaning that assumption was wrong; the real unit is
  * unix MILLISECONDS (JS's own standard `Date.now()` convention), so this
- * divides by 1000 to match LoreRiffSummary's unix-SECONDS convention, not
+ * divides by 1000 to match RiffLibraryRiffSummary's unix-SECONDS convention, not
  * 1e9. Client-side filters
  * (date/bpm/userName) from RiffFilters are NOT applied here -- the raw view
  * doesn't expose that metadata without a per-riff resolve, unlike LORE's own
@@ -849,7 +849,7 @@ export async function listRiffsInJam(
   }
 
   const rows = body.rows ?? []
-  const riffs: LoreRiffSummary[] = rows.map((row) => ({
+  const riffs: RiffLibraryRiffSummary[] = rows.map((row) => ({
     riffCID: row.id,
     creationTime: Math.floor(row.key / 1000),
     bpm: 0,
@@ -953,7 +953,7 @@ export async function resolveJamRiff(
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
   onStemDownloaded?: (bytes: number) => void
-): Promise<LoreResolvedRiff | null> {
+): Promise<RiffLibraryResolvedRiff | null> {
   const session = activeSession()
   if (!session) return null
 

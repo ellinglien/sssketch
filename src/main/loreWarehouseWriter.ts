@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { LoreResolvedRiff } from '@shared/loreLibrary'
+import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -62,7 +62,7 @@ export function writeRiffDetail(
   db: Database.Database,
   jamCID: string,
   meta: RiffDetailMeta,
-  resolved: LoreResolvedRiff
+  resolved: RiffLibraryResolvedRiff
 ): void {
   const upsertRiffRow = db.prepare(
     `INSERT INTO Riffs (
@@ -94,7 +94,7 @@ export function writeRiffDetail(
      WHERE StemCID = @stemCID`
   )
 
-  const txn = db.transaction((riff: LoreResolvedRiff) => {
+  const txn = db.transaction((riff: RiffLibraryResolvedRiff) => {
     const slots: (string | null)[] = Array.from({ length: 8 }, (_, i) => {
       const stem = riff.stems.find((s) => s.slot === i + 1)
       return stem?.stemCID ?? null

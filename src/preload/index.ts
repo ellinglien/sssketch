@@ -1,7 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff, Stem } from '@shared/types'
 import type { StretchedStem } from '@shared/buildEngineProject'
-import type { LoreJam, LoreRiffSummary, LoreResolvedRiff } from '@shared/loreLibrary'
+import type {
+  RiffLibraryJam,
+  RiffLibraryRiffSummary,
+  RiffLibraryResolvedRiff
+} from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { BusCentroidStore } from '@shared/busCentroids'
 
@@ -319,7 +323,7 @@ const api = {
   loreWarehouseRoot: (): Promise<string> => ipcRenderer.invoke('lore-warehouse-root'),
   loreSetWarehouseRoot: (newRoot: string): Promise<void> =>
     ipcRenderer.invoke('lore-set-warehouse-root', newRoot),
-  loreListJams: (filterText: string): Promise<LoreJam[]> =>
+  loreListJams: (filterText: string): Promise<RiffLibraryJam[]> =>
     ipcRenderer.invoke('lore-list-jams', filterText),
   loreListRiffs: (
     jamCID: string,
@@ -334,15 +338,15 @@ const api = {
       offset?: number
       limit?: number
     }
-  ): Promise<{ riffs: LoreRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
+  ): Promise<{ riffs: RiffLibraryRiffSummary[]; hasMore: boolean; nextOffset: number }> =>
     ipcRenderer.invoke('lore-list-riffs', jamCID, filters),
-  loreResolveRiff: (riffCID: string): Promise<LoreResolvedRiff | null> =>
+  loreResolveRiff: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('lore-resolve-riff', riffCID),
   loreResolveRiffWithContext: (
     riffCID: string
   ): Promise<{ jamCID: string; offset: number; matchedRiffCID: string } | null> =>
     ipcRenderer.invoke('lore-resolve-riff-with-context', riffCID),
-  loreDownloadMissingStems: (riffCID: string): Promise<LoreResolvedRiff | null> =>
+  loreDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('lore-download-missing-stems', riffCID),
   endlesssLogin: (
     username: string,
@@ -355,7 +359,7 @@ const api = {
   endlesssAuthStatus: (): Promise<
     { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
-  endlesssListJams: (): Promise<LoreJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
+  endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
     ipcRenderer.invoke('endlesss-jam-riff-count', jamId),
   loreSyncStartSharedFeed: (userName: string): Promise<void> =>

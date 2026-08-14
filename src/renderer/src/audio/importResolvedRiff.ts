@@ -1,5 +1,5 @@
-import type { LoreResolvedRiff } from '@shared/loreLibrary'
-import { instrumentMaskToSoundType } from '@shared/loreLibrary'
+import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
+import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
 import type { Rifff } from '@shared/types'
@@ -28,7 +28,7 @@ import type { Rifff } from '@shared/types'
  * (e.g. 'lore' / 'endlesss'). */
 export function buildImportedRifff(
   riffCID: string,
-  resolved: LoreResolvedRiff,
+  resolved: RiffLibraryResolvedRiff,
   existing: Rifff | undefined,
   sourceLabel: 'lore' | 'endlesss',
   folderPathLabel: string

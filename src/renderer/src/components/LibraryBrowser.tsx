@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { LoreJam, LoreResolvedRiff, LoreRiffSummary, RiffFilters } from '@shared/loreLibrary'
+import type {
+  RiffLibraryJam,
+  RiffLibraryResolvedRiff,
+  RiffLibraryRiffSummary,
+  RiffFilters
+} from '@shared/riffLibraryTypes'
 import {
   instrumentMaskToSoundType,
-  LORE_USERNAME,
-  LORE_ROOT_NAMES,
-  LORE_SCALE_NAMES
-} from '@shared/loreLibrary'
+  RIFF_LIBRARY_USERNAME,
+  RIFF_LIBRARY_ROOT_NAMES,
+  RIFF_LIBRARY_SCALE_NAMES
+} from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -43,9 +48,9 @@ const LORE_USERNAME_STORAGE_KEY = 'sssketch:loreUsername'
 
 function loadStoredLoreUsername(): string {
   try {
-    return localStorage.getItem(LORE_USERNAME_STORAGE_KEY) ?? LORE_USERNAME
+    return localStorage.getItem(LORE_USERNAME_STORAGE_KEY) ?? RIFF_LIBRARY_USERNAME
   } catch {
-    return LORE_USERNAME
+    return RIFF_LIBRARY_USERNAME
   }
 }
 
@@ -54,7 +59,7 @@ type AuthStatus =
 
 interface RiffTempoGroup {
   bpm: number // rounded to the nearest whole BPM — the grouping key for "similar tempos"
-  riffs: LoreRiffSummary[]
+  riffs: RiffLibraryRiffSummary[]
 }
 
 interface RiffDateGroup {
@@ -74,7 +79,7 @@ interface RiffDateGroup {
  * are really "the same tempo" rarely match exactly. Each date's tempo
  * groups are then sorted numerically ascending, for easy scanning rather
  * than whatever order they happened to occur in that day. */
-function groupRiffsByDateAndTempo(riffs: LoreRiffSummary[]): RiffDateGroup[] {
+function groupRiffsByDateAndTempo(riffs: RiffLibraryRiffSummary[]): RiffDateGroup[] {
   const dateGroups: RiffDateGroup[] = []
   for (const riff of riffs) {
     const label = new Date(riff.creationTime * 1000).toLocaleDateString(undefined, {
@@ -157,8 +162,8 @@ export function LibraryBrowser({
 
   // Jam sidebar
   const [jamFilter, setJamFilter] = useState('')
-  const [syncedJams, setSyncedJams] = useState<LoreJam[]>([])
-  const [membershipJams, setMembershipJams] = useState<LoreJam[] | null>(null)
+  const [syncedJams, setSyncedJams] = useState<RiffLibraryJam[]>([])
+  const [membershipJams, setMembershipJams] = useState<RiffLibraryJam[] | null>(null)
   // The account's own personal jam -- by Endlesss convention, every account
   // has exactly one private jam named identically to its own username,
   // distinct from any group jams it has joined. Tracked separately from
@@ -168,7 +173,7 @@ export function LibraryBrowser({
   // depending on visibleJams -- which is itself filtered by jamFilter, so a
   // `.find()` against it could miss the own jam entirely while the user has
   // something typed into the jam search box.
-  const [ownJam, setOwnJam] = useState<LoreJam | null>(null)
+  const [ownJam, setOwnJam] = useState<RiffLibraryJam | null>(null)
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   // Right-click "remove from sync" menu on a sidebar jam row -- jamCID/
   // jamName are captured at open time rather than read back from
@@ -228,7 +233,7 @@ export function LibraryBrowser({
   const [riffRefreshToken, setRiffRefreshToken] = useState(0)
 
   // Riff list + pagination (single flat list -- no more per-tab duplication)
-  const [riffs, setRiffs] = useState<LoreRiffSummary[]>([])
+  const [riffs, setRiffs] = useState<RiffLibraryRiffSummary[]>([])
   const riffGroups = useMemo(() => groupRiffsByDateAndTempo(riffs), [riffs])
   // Whether the warehouse has more riffs beyond the currently-loaded page(s)
   // for the current jam/filters — some of Elling's real jams have 20,000+
@@ -300,7 +305,7 @@ export function LibraryBrowser({
     setSelectedRiffCIDs(new Set())
   }
 
-  const [resolvedRiff, setResolvedRiff] = useState<LoreResolvedRiff | null>(null)
+  const [resolvedRiff, setResolvedRiff] = useState<RiffLibraryResolvedRiff | null>(null)
   const [playingRiffCID, setPlayingRiffCID] = useState<string | null>(null)
   // riffCID -> the groupId it was imported as, so re-clicking Import after
   // more of a riff's stems finish downloading in the background (see
@@ -392,7 +397,7 @@ export function LibraryBrowser({
       .endlesssListJams()
       .then((liveJams) => {
         if (cancelled) return
-        const sharedFeedEntry: LoreJam = {
+        const sharedFeedEntry: RiffLibraryJam = {
           jamCID: `shared:${authStatus.username}`,
           name: 'Shared Feed',
           lastRiffTime: 0
@@ -421,7 +426,7 @@ export function LibraryBrowser({
   // on conflict (they carry a real lastRiffTime from the warehouse;
   // membershipJams entries never do, per endlesssListJams' own contract).
   const visibleJams = useMemo(() => {
-    const byId = new Map<string, LoreJam>()
+    const byId = new Map<string, RiffLibraryJam>()
     for (const jam of membershipJams ?? []) byId.set(jam.jamCID, jam)
     for (const jam of syncedJams) byId.set(jam.jamCID, jam)
     const merged = [...byId.values()]
@@ -439,9 +444,9 @@ export function LibraryBrowser({
   // visibleJams itself (used elsewhere for name lookups) stays sorted by
   // lastRiffTime, unaffected. Stable within each group.
   const sidebarJams = useMemo(() => {
-    const syncing: LoreJam[] = []
-    const pinned: LoreJam[] = []
-    const rest: LoreJam[] = []
+    const syncing: RiffLibraryJam[] = []
+    const pinned: RiffLibraryJam[] = []
+    const rest: RiffLibraryJam[] = []
     for (const jam of visibleJams) {
       if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
       else if (jam.jamCID.startsWith('shared:') || jam.jamCID === ownJam?.jamCID) pinned.push(jam)
@@ -899,7 +904,7 @@ export function LibraryBrowser({
    * `riffs` list (the grid's own data) after a download — cheaper and more
    * immediate than re-running loreListRiffs, and the only field
    * riffCircleColor's "fully cached" check actually reads. */
-  function patchRiffCacheCount(riffCID: string, resolved: LoreResolvedRiff): void {
+  function patchRiffCacheCount(riffCID: string, resolved: RiffLibraryResolvedRiff): void {
     const cachedStemCount = resolved.stems.filter((s) => s.path !== null).length
     setRiffs((prev) => prev.map((r) => (r.riffCID === riffCID ? { ...r, cachedStemCount } : r)))
   }
@@ -914,8 +919,8 @@ export function LibraryBrowser({
    * has something to import. */
   async function ensureStemsDownloaded(
     riffCID: string,
-    resolved: LoreResolvedRiff
-  ): Promise<LoreResolvedRiff> {
+    resolved: RiffLibraryResolvedRiff
+  ): Promise<RiffLibraryResolvedRiff> {
     if (!resolved.stems.some((s) => s.path === null)) return resolved
     setDownloadingRiffCID(riffCID)
     try {
@@ -1009,7 +1014,7 @@ export function LibraryBrowser({
         // entry for it — its raw LORE GainsJSON gain never had sqrtGain
         // applied at all, so it has to be computed fresh here, same as this
         // preview always did.
-        async function tryStartPreview(riff: LoreResolvedRiff): Promise<boolean> {
+        async function tryStartPreview(riff: RiffLibraryResolvedRiff): Promise<boolean> {
           const cachedStems = riff.stems.filter((s) => s.path !== null)
           if (cachedStems.length === 0) return false
           const gain = sqrtGain(cachedStems.length)
@@ -1133,7 +1138,7 @@ export function LibraryBrowser({
    * actually active. */
   function importResolvedRiff(
     riffCID: string,
-    resolved: LoreResolvedRiff
+    resolved: RiffLibraryResolvedRiff
   ): { groupId: string; rifff: Rifff } | null {
     const existingGroupId = importedRiffGroupIds.get(riffCID)
     const existing = existingGroupId ? appState.rifffs[existingGroupId] : undefined
@@ -1623,7 +1628,7 @@ export function LibraryBrowser({
                       }}
                     >
                       <option value="">key: any</option>
-                      {LORE_ROOT_NAMES.map((name, i) => (
+                      {RIFF_LIBRARY_ROOT_NAMES.map((name, i) => (
                         <option key={name} value={i}>
                           {name}
                         </option>
@@ -1644,7 +1649,7 @@ export function LibraryBrowser({
                       }}
                     >
                       <option value="">scale: any</option>
-                      {LORE_SCALE_NAMES.map((name, i) => (
+                      {RIFF_LIBRARY_SCALE_NAMES.map((name, i) => (
                         <option key={name} value={i}>
                           {name}
                         </option>

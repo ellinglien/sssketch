@@ -1,19 +1,19 @@
 import type { SoundType } from './types'
 
-/** Default LORE username, used only as the initial value of the
- * user-editable "your username" setting in LoreLibraryBrowser (persisted to
+/** Default riff-library username, used only as the initial value of the
+ * user-editable "your username" setting in LibraryBrowser (persisted to
  * localStorage from there) and as computeOwnerFraction's own fallback
  * default below. Not a hardcoded identity any more — other people testing
- * this app set their own in the LORE library browser's filter bar. */
-export const LORE_USERNAME = 'elling'
+ * this app set their own in the riff library browser's filter bar. */
+export const RIFF_LIBRARY_USERNAME = 'elling'
 
-export interface LoreJam {
+export interface RiffLibraryJam {
   jamCID: string
   name: string
   lastRiffTime: number // unix seconds
 }
 
-export interface LoreRiffSummary {
+export interface RiffLibraryRiffSummary {
   riffCID: string
   creationTime: number
   bpm: number
@@ -21,10 +21,10 @@ export interface LoreRiffSummary {
   userName: string
   stemCount: number // populated slots, 1-8
   cachedStemCount: number // of those, how many are on disk right now
-  ownerFraction: number // 0-1, fraction of populated slots created by LORE_USERNAME
+  ownerFraction: number // 0-1, fraction of populated slots created by RIFF_LIBRARY_USERNAME
 }
 
-export interface LoreResolvedStem {
+export interface RiffLibraryResolvedStem {
   stemCID: string
   slot: number // 1-8
   path: string | null // local file path, or null if not cached
@@ -94,7 +94,7 @@ export interface RiffFilters {
    * regardless of who owns it. */
   targetUser?: string
   /** Only riffs with at least one stem authored by targetUser (falls back to
-   * LORE_USERNAME if targetUser is unset). */
+   * RIFF_LIBRARY_USERNAME if targetUser is unset). */
   onlyContainsUser?: boolean
   /** How many riffs (most-recent-first) to skip before this page — 0/undefined
    * for the first page. */
@@ -104,7 +104,7 @@ export interface RiffFilters {
 }
 
 export interface RiffPage {
-  riffs: LoreRiffSummary[]
+  riffs: RiffLibraryRiffSummary[]
   /** True if there's likely at least one more riff beyond this page. */
   hasMore: boolean
   /** The `offset` to pass for the next page. */
@@ -118,7 +118,7 @@ export interface RiffPage {
   totalCount?: number
 }
 
-export interface LoreResolvedRiff {
+export interface RiffLibraryResolvedRiff {
   riffCID: string
   bpm: number
   barLength: number
@@ -133,7 +133,7 @@ export interface LoreResolvedRiff {
    * (loreWarehouse.ts's own resolveRiff only derives `key`, not these). */
   root?: number
   scale?: number
-  stems: LoreResolvedStem[]
+  stems: RiffLibraryResolvedStem[]
 }
 
 /** Traced directly from OUROVEON's own source (toolkit.warehouse.cpp), not
@@ -164,10 +164,10 @@ export function stemDownloadUrl(fileEndpoint: string, fileBucket: string, fileKe
 }
 
 /** Fraction of `creatorUserNames` equal to `targetUser` (defaults to
- * LORE_USERNAME). Returns 0 for an empty list rather than dividing by zero. */
+ * RIFF_LIBRARY_USERNAME). Returns 0 for an empty list rather than dividing by zero. */
 export function computeOwnerFraction(
   creatorUserNames: string[],
-  targetUser: string = LORE_USERNAME
+  targetUser: string = RIFF_LIBRARY_USERNAME
 ): number {
   if (creatorUserNames.length === 0) return 0
   const matching = creatorUserNames.filter((u) => u === targetUser).length
@@ -181,7 +181,7 @@ export function computeOwnerFraction(
 // black keys (Db, Eb, F#, Ab, Bb -- not a typo, that's genuinely the
 // reference client's own spelling choice, kept verbatim rather than "fixed"
 // to an enharmonic sharps-only convention).
-export const LORE_ROOT_NAMES = [
+export const RIFF_LIBRARY_ROOT_NAMES = [
   'C',
   'Db',
   'D',
@@ -201,7 +201,7 @@ export const LORE_ROOT_NAMES = [
 // pentatonic/blues/whole-tone/chromatic scales Endlesss also supports.
 // "Major (Ionian)"/"Minor (Aeolian)" get their common pop name alongside the
 // mode name; every other entry is OUROVEON's own exact string, used verbatim.
-export const LORE_SCALE_NAMES = [
+export const RIFF_LIBRARY_SCALE_NAMES = [
   'Major (Ionian)',
   'Dorian',
   'Phrygian',
@@ -228,8 +228,8 @@ export const LORE_SCALE_NAMES = [
  * showing a raw number. */
 export function resolveKeyName(root: number | null, scale: number | null): string | undefined {
   if (root === null || scale === null) return undefined
-  const rootName = LORE_ROOT_NAMES[root]
-  const scaleName = LORE_SCALE_NAMES[scale]
+  const rootName = RIFF_LIBRARY_ROOT_NAMES[root]
+  const scaleName = RIFF_LIBRARY_SCALE_NAMES[scale]
   if (!rootName || !scaleName) return undefined
   return `${rootName} ${scaleName}`
 }

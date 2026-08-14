@@ -3,14 +3,14 @@ import { join, dirname } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
 import type {
-  LoreJam,
-  LoreRiffSummary,
-  LoreResolvedRiff,
-  LoreResolvedStem,
+  RiffLibraryJam,
+  RiffLibraryRiffSummary,
+  RiffLibraryResolvedRiff,
+  RiffLibraryResolvedStem,
   RiffFilters,
   RiffPage
-} from '@shared/loreLibrary'
-import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/loreLibrary'
+} from '@shared/riffLibraryTypes'
+import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { ownWarehouseRoot } from './loreWarehouseSchema'
 
 const WAREHOUSE_PREFS_FILENAME = 'loreWarehousePrefs.json'
@@ -126,7 +126,7 @@ export function resolveStemPath(jamCID: string, stemCID: string): string {
   return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)
 }
 
-export function listJams(filterText: string): LoreJam[] {
+export function listJams(filterText: string): RiffLibraryJam[] {
   const db = getWarehouseDb()
   if (!db) return []
   const rows = db
@@ -138,7 +138,7 @@ export function listJams(filterText: string): LoreJam[] {
        GROUP BY j.JamCID
        ORDER BY lastRiffTime DESC`
     )
-    .all(`%${filterText}%`) as LoreJam[]
+    .all(`%${filterText}%`) as RiffLibraryJam[]
   return rows
 }
 
@@ -241,7 +241,7 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
     for (const s of stemRows) stemCreators.set(s.StemCID, s.CreatorUserName)
   }
 
-  const summaries: LoreRiffSummary[] = rows.map((row) => {
+  const summaries: RiffLibraryRiffSummary[] = rows.map((row) => {
     const stemCIDs: string[] = []
     for (let slot = 1; slot <= 8; slot++) {
       const cid = row[`StemCID_${slot}` as keyof RiffRow] as string | null
@@ -299,7 +299,7 @@ interface FullStemRow {
   FileKey: string | null
 }
 
-export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
+export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
   const db = getWarehouseDb()
   if (!db) return null
 
@@ -330,7 +330,7 @@ export function resolveRiff(riffCID: string): LoreResolvedRiff | null {
     if (cid) slots.push({ slot, stemCID: cid })
   }
 
-  const stems: LoreResolvedStem[] = slots.map(({ slot, stemCID }) => {
+  const stems: RiffLibraryResolvedStem[] = slots.map(({ slot, stemCID }) => {
     const stemRow = db
       .prepare(
         `SELECT StemCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s,
@@ -481,7 +481,9 @@ async function downloadOneStem(
  * has at most 8 stems) rather than sequentially. Returns null if the riff
  * itself can't be resolved (unavailable warehouse, unknown riffCID) — same
  * "never throws" convention as every other warehouse function. */
-export async function downloadMissingStems(riffCID: string): Promise<LoreResolvedRiff | null> {
+export async function downloadMissingStems(
+  riffCID: string
+): Promise<RiffLibraryResolvedRiff | null> {
   const db = getWarehouseDb()
   if (!db) return null
   const riffRow = db.prepare('SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?').get(riffCID) as

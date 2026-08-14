@@ -41,7 +41,7 @@ import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
 import { loadBusCentroidStore, saveBusCentroidStore } from './busCentroidStore'
 import type { BusCentroidStore } from '@shared/busCentroids'
-import type { RiffFilters } from '@shared/loreLibrary'
+import type { RiffFilters } from '@shared/riffLibraryTypes'
 import {
   warehouseAvailable,
   warehouseRootPath,
