@@ -330,19 +330,19 @@ export function TransportBar({
     }
   }
 
-  // Same pickFolder + loreSetWarehouseRoot pair LibraryBrowser.tsx's LORE
-  // tab used to offer inline (as a "choose folder" recovery button on its
-  // warehouse-unavailable fallback) -- moved here so it's reachable without
-  // having to hit that unavailable state first. Points LORE at a different
-  // OUROVEON sync target than sssketch's own self-built warehouse; see
-  // loreWarehouse.ts for what "warehouse root" means.
-  async function handleChangeLoreLocation(): Promise<void> {
+  // Same pickFolder + setRiffLibraryRoot pair LibraryBrowser.tsx's own
+  // warehouse-unavailable fallback used to offer inline -- moved here so
+  // it's reachable without having to hit that unavailable state first.
+  // Points the riff library at a different OUROVEON/LORE sync target than
+  // sssketch's own self-built one; see riffLibraryStore.ts for what "riff
+  // library root" means.
+  async function handleChangeRiffLibraryLocation(): Promise<void> {
     try {
       const newRoot = await window.rifffApi.pickFolder()
       if (!newRoot) return
       await window.rifffApi.setRiffLibraryRoot(newRoot)
     } catch (err) {
-      console.error('TransportBar: handleChangeLoreLocation() failed:', err)
+      console.error('TransportBar: handleChangeRiffLibraryLocation() failed:', err)
     }
   }
 
@@ -824,7 +824,7 @@ export function TransportBar({
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
             {
               label: 'change riff archive location…',
-              onClick: () => void handleChangeLoreLocation()
+              onClick: () => void handleChangeRiffLibraryLocation()
             },
             {
               label: 'audio…',
