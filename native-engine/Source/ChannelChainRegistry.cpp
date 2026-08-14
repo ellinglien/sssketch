@@ -71,7 +71,8 @@ namespace sssketch
         const juce::String& path,
         double sampleRate,
         int blockSize,
-        std::function<void(bool, const juce::String&)> onLoaded)
+        std::function<void(bool, const juce::String&)> onLoaded,
+        const juce::String& stateBase64)
     {
         auto* chain = chainFor(channelId);
         if (chain == nullptr)
@@ -80,7 +81,7 @@ namespace sssketch
                 onLoaded(false, "unknown channel: " + channelId);
             return;
         }
-        chain->requestLoad(slotIndex, path, sampleRate, blockSize, std::move(onLoaded));
+        chain->requestLoad(slotIndex, path, sampleRate, blockSize, std::move(onLoaded), stateBase64);
     }
 
     bool ChannelChainRegistry::openEditorWindow(const juce::String& channelId, int slotIndex)
@@ -108,6 +109,16 @@ namespace sssketch
         const auto* map = published.load();
         auto it = map->find(channelId);
         return it == map->end() ? nullptr : it->second.get();
+    }
+
+    std::vector<juce::String> ChannelChainRegistry::knownChannelIds() const
+    {
+        std::vector<juce::String> ids;
+        const auto* map = published.load();
+        ids.reserve(map->size());
+        for (const auto& [channelId, chain] : *map)
+            ids.push_back(channelId);
+        return ids;
     }
 
     void ChannelChainRegistry::installForExport(ChannelChainMap chains)

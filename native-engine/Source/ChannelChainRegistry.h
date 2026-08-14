@@ -62,7 +62,8 @@ namespace sssketch
             const juce::String& path,
             double sampleRate,
             int blockSize,
-            std::function<void(bool success, const juce::String& error)> onLoaded);
+            std::function<void(bool success, const juce::String& error)> onLoaded,
+            const juce::String& stateBase64 = {});
 
         /** Message-thread API: no-op (returns false) if channelId isn't
          * currently known. */
@@ -79,6 +80,13 @@ namespace sssketch
          * blocks, never allocates -- one atomic pointer load plus an
          * unordered_map lookup into an already-fully-built map. */
         PluginChain* chainFor(const juce::String& channelId);
+
+        /** Message-thread API: every channel ID currently known (i.e.
+         * present in the last-published map from updateChannelSet), in no
+         * particular order. Used by the get-plugin-states IPC handler to
+         * enumerate what to capture -- nothing else in this class exposes
+         * enumeration today, only single-channel lookup via chainFor. */
+        std::vector<juce::String> knownChannelIds() const;
 
         using ChannelChainMap = std::unordered_map<juce::String, std::shared_ptr<PluginChain>>;
 

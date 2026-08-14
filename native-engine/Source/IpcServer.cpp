@@ -742,6 +742,7 @@ namespace sssketch
             const int slot = (int) payload.getProperty("slot", -1);
             const auto pluginId = payload.getProperty("pluginId", "").toString();
             const auto path = payload.getProperty("path", "").toString();
+            const auto stateBase64 = payload.getProperty("stateBase64", "").toString();
             if (slot < 0 || slot >= kNumMasterChainSlots)
                 return;
 
@@ -776,7 +777,8 @@ namespace sssketch
                     obj->setProperty("type", "master-plugin-loaded");
                     obj->setProperty("payload", juce::var(payloadObj.get()));
                     sendJson(juce::var(obj.get()));
-                });
+                },
+                stateBase64);
         }
         else if (type == "open-master-plugin-editor")
         {
@@ -800,6 +802,7 @@ namespace sssketch
             const int slot = (int) payload.getProperty("slot", -1);
             const auto pluginId = payload.getProperty("pluginId", "").toString();
             const auto path = payload.getProperty("path", "").toString();
+            const auto stateBase64 = payload.getProperty("stateBase64", "").toString();
             if (slot < 0 || slot >= kNumChannelChainSlots)
                 return;
 
@@ -817,7 +820,8 @@ namespace sssketch
                     obj->setProperty("type", "channel-plugin-loaded");
                     obj->setProperty("payload", juce::var(payloadObj.get()));
                     sendJson(juce::var(obj.get()));
-                });
+                },
+                stateBase64);
         }
         else if (type == "open-channel-plugin-editor")
         {
@@ -834,6 +838,36 @@ namespace sssketch
             const auto channelId = payload.getProperty("channelId", "").toString();
             const int slot = (int) payload.getProperty("slot", -1);
             channelChains.closeEditorWindow(channelId, slot);
+        }
+        else if (type == "get-plugin-states")
+        {
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+
+            juce::Array<juce::var> masterStatesVar;
+            for (int slot = 0; slot < kNumMasterChainSlots; ++slot)
+                masterStatesVar.add(masterChain.captureStateBase64(slot));
+            payloadObj->setProperty("masterChain", masterStatesVar);
+
+            juce::Array<juce::var> channelChainsVar;
+            for (const auto& channelId : channelChains.knownChannelIds())
+            {
+                auto* chain = channelChains.chainFor(channelId);
+                if (chain == nullptr)
+                    continue; // raced with a concurrent updateChannelSet -- skip, matches this feature's own "best-effort capture" scope
+                juce::DynamicObject::Ptr entryObj = new juce::DynamicObject();
+                entryObj->setProperty("channelId", channelId);
+                juce::Array<juce::var> slotsVar;
+                for (int slot = 0; slot < kNumChannelChainSlots; ++slot)
+                    slotsVar.add(chain->captureStateBase64(slot));
+                entryObj->setProperty("slots", slotsVar);
+                channelChainsVar.add(juce::var(entryObj.get()));
+            }
+            payloadObj->setProperty("channelChains", channelChainsVar);
+
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "plugin-states");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
         }
         else if (type == "render-export")
         {
