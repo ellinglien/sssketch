@@ -73,9 +73,9 @@ describe('loreWarehouse', () => {
   })
 
   it('warehouseRootPath defaults to the self-built warehouse root when no prefs file exists', async () => {
-    const { ownWarehouseRoot } = await import('./loreWarehouseSchema')
+    const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
     setWarehouseRootForTests(null) // clear the test override this file's other tests rely on
-    expect(warehouseRootPath()).toBe(ownWarehouseRoot())
+    expect(warehouseRootPath()).toBe(ownRiffLibraryRoot())
   })
 
   it('setWarehouseRoot() persists a new root that warehouseRootPath() then returns', () => {
@@ -112,8 +112,8 @@ describe('loreWarehouse', () => {
   })
 
   it('resolveStemPath uses the content-addressed endlesss-cache layout for the self-built warehouse', async () => {
-    const { ownWarehouseRoot } = await import('./loreWarehouseSchema')
-    setWarehouseRootForTests(ownWarehouseRoot())
+    const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
+    setWarehouseRootForTests(ownRiffLibraryRoot())
     expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
       join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem_abc123')
     )

@@ -11,7 +11,7 @@ import type {
   RiffPage
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
-import { ownWarehouseRoot } from './loreWarehouseSchema'
+import { ownRiffLibraryRoot } from './riffLibrarySchema'
 
 const WAREHOUSE_PREFS_FILENAME = 'loreWarehousePrefs.json'
 
@@ -32,7 +32,7 @@ export function setWarehouseRootForTests(root: string | null): void {
 
 /** Where the user's LORE-style warehouse lives -- user-relocatable (see
  * setWarehouseRoot). Defaults to sssketch's own self-built warehouse
- * (ownWarehouseRoot(), populated by loreWarehouseSync.ts's background sync)
+ * (ownRiffLibraryRoot(), populated by loreWarehouseSync.ts's background sync)
  * until a user explicitly points this at a real, externally-managed
  * OUROVEON-synced folder via the folder picker -- see the design spec's
  * Favourites + external-warehouse compatibility section
@@ -44,14 +44,14 @@ export function setWarehouseRootForTests(root: string | null): void {
 export function warehouseRootPath(): string {
   if (warehouseRootOverride !== null) return warehouseRootOverride
   const path = warehousePrefsPath()
-  if (!existsSync(path)) return ownWarehouseRoot()
+  if (!existsSync(path)) return ownRiffLibraryRoot()
   try {
     const prefs = JSON.parse(readFileSync(path, 'utf-8')) as { root?: string }
-    return prefs.root ?? ownWarehouseRoot()
+    return prefs.root ?? ownRiffLibraryRoot()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`warehouseRootPath: failed to read ${path}: ${message}`)
-    return ownWarehouseRoot()
+    return ownRiffLibraryRoot()
   }
 }
 
@@ -120,7 +120,7 @@ export function warehouseAvailable(): boolean {
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
   const root = warehouseRootPath()
-  if (root === ownWarehouseRoot()) {
+  if (root === ownRiffLibraryRoot()) {
     return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
   }
   return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)

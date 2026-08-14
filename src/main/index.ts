@@ -65,7 +65,7 @@ import {
   abortSync as abortWarehouseSync,
   removeJamSync as removeWarehouseJamSync
 } from './loreWarehouseSync'
-import { openOwnWarehouseDb } from './loreWarehouseSchema'
+import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import {
   getWarehouseSyncStatus,
   listWarehouseFavourites,
@@ -217,7 +217,7 @@ app.whenReady().then(async () => {
   // flat-JSON file onto the new warehouse's Tags table -- see
   // riffFavouritesMigration.ts's own doc comment for why this is safe to
   // run unconditionally on every startup.
-  migrateLegacyFavourites(openOwnWarehouseDb())
+  migrateLegacyFavourites(openOwnRiffLibraryDb())
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
@@ -308,7 +308,7 @@ app.whenReady().then(async () => {
     })
   )
   ipcMain.handle('lore-sync-status', (_event, jamCID: string) =>
-    getWarehouseSyncStatus(openOwnWarehouseDb(), jamCID)
+    getWarehouseSyncStatus(openOwnRiffLibraryDb(), jamCID)
   )
   // `key` matches lore-sync-progress's own key convention (bare username for
   // a shared-feed sync, jamId for a private jam) -- see abortSync's own doc
@@ -831,10 +831,10 @@ app.whenReady().then(async () => {
     return loadCatalog()
   })
 
-  ipcMain.handle('list-riff-favourites', () => listWarehouseFavourites(openOwnWarehouseDb()))
+  ipcMain.handle('list-riff-favourites', () => listWarehouseFavourites(openOwnRiffLibraryDb()))
 
   ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) =>
-    toggleWarehouseFavourite(openOwnWarehouseDb(), riffCID)
+    toggleWarehouseFavourite(openOwnRiffLibraryDb(), riffCID)
   )
 
   createWindow()

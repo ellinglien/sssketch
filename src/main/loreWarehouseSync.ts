@@ -8,7 +8,7 @@ import {
   deleteStemFiles,
   type FetchLike
 } from './endlesssApi'
-import { openOwnWarehouseDb } from './loreWarehouseSchema'
+import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import {
   upsertJam,
   markJamSyncComplete,
@@ -106,7 +106,7 @@ export interface RemoveJamSyncResult {
 export function removeJamSync(
   jamCID: string,
   deleteFiles: boolean,
-  db: Database.Database = openOwnWarehouseDb()
+  db: Database.Database = openOwnRiffLibraryDb()
 ): RemoveJamSyncResult {
   if (syncsInFlight.has(jamCID)) {
     throw new Error(`cannot remove ${jamCID}: a sync is currently running for it`)
@@ -135,7 +135,7 @@ export async function syncSharedFeed(
   userName: string,
   onProgress: (progress: SyncProgress) => void,
   fetchImpl: FetchLike = fetch,
-  db: Database.Database = openOwnWarehouseDb()
+  db: Database.Database = openOwnRiffLibraryDb()
 ): Promise<void> {
   const key = `shared:${userName}`
   if (syncsInFlight.has(key)) return
@@ -231,7 +231,7 @@ export async function syncJam(
   jamName: string,
   onProgress: (progress: SyncProgress) => void,
   fetchImpl: FetchLike = fetch,
-  db: Database.Database = openOwnWarehouseDb()
+  db: Database.Database = openOwnRiffLibraryDb()
 ): Promise<void> {
   if (syncsInFlight.has(jamId)) return
   const controller = new AbortController()
