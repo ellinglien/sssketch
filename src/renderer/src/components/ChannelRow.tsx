@@ -15,17 +15,57 @@ import {
   useZoom
 } from '../state/StoreContext'
 
-// A recording channel with zero clips yet renders no RifffBlockRow at all,
-// so nothing establishes this row's flow height -- it would otherwise
-// collapse to 0px (RifffBlockRow.tsx's own NAME_BAR_HEIGHT spacer is what
-// normally does that job). Beyond just looking wrong, this silently broke
-// the live capture-level overlay below: its fill collapses to a real 0px
-// box inside a 0px-tall parent, so the bars were rendering (capturePeaks
-// really was updating) but were invisible the entire time a channel was
-// armed -- a real bug found during manual testing. Matches a single-stem
-// clip's own footprint so an empty recording channel doesn't look
-// jarringly different in size once a take lands on it.
-const EMPTY_CHANNEL_MIN_HEIGHT = NAME_BAR_HEIGHT + ROW_HEIGHT
+// The right-edge m/s/fx/r/x button stack (rendered further down, an
+// absolutely-positioned flex column with gap: 2, anchored at top: 4 from
+// this row's own top edge) can hold up to 5 buttons -- m, s, fx, r, x, the
+// last two only for isRecordingChannel rows -- or as few as 3 (m, s, fx)
+// for a non-recording one. Every button in it shares baseButtonStyle's
+// fontSize: 9 and padding: '1px 4px' (1px top + 1px bottom), plus, per its
+// own variant style just below (muteButtonStyle/soloButtonStyle/
+// fxButtonStyle/recordButtonStyle/the inline "x" button style), a 1px
+// solid border on all sides. With no explicit height set anywhere, a
+// button's own rendered height is roughly its font-size plus the browser's
+// own line-height slack above/below a 9px line (~2px), plus that 2px of
+// padding and 2px of border:
+//   9 (font) + 2 (line-height slack) + 2 (padding) + 2 (border) = ~15px
+// A full 5-button stack then needs:
+//   5 buttons x ~15px                            = 75
+//   + 4 gaps x 2px (the stack's own gap: 2)       = 8
+//   + top: 4 (the stack's own offset from the row's top edge) = 4
+//   + ~4px bottom breathing room                  = 4
+//   = ~91px
+//
+// This was previously enforced ONLY on empty channels (rifffs.length ===
+// 0), via a smaller EMPTY_CHANNEL_MIN_HEIGHT (NAME_BAR_HEIGHT + ROW_HEIGHT
+// = 18 + 44 = 62px) -- that number was meant only to match a single placed
+// clip's own visual footprint (so an empty recording channel doesn't look
+// jarringly different in size once a take lands on it) and has nothing to
+// do with the button stack; at 62px it's actually SMALLER than the 91px a
+// 5-button recording channel needs, so even an empty recording channel
+// could already have collided before this fix. Non-empty rows had no
+// minHeight at all, driven purely by their RifffBlockRow children's own
+// flow height -- exactly what let the buttons visibly overlap a short row
+// in the reported screenshot.
+//
+// Applied uniformly below to every channel row's container -- empty or
+// not, recording or not. 91px comfortably covers both the old footprint-
+// matching goal (62px) and the button-collision fix in one constant, so
+// this fully replaces EMPTY_CHANNEL_MIN_HEIGHT rather than coexisting with
+// it. A non-recording row only ever needs 3 buttons' worth of height, but
+// one uniform minimum across every row is simpler and more consistent
+// than maintaining two different minimums for the sake of a few
+// slightly-shorter rows.
+const CHANNEL_ROW_MIN_HEIGHT = 91
+
+// Temporary, deliberate hide per direct feedback ("let's temporarily
+// remove the FX button from the tracks .. i don't want to have fx on the
+// tracks currently, just the main") -- NOT a bug, and not a removal: the
+// button's onClick, chainPanelOpen state, and the ChannelChainPanel it
+// toggles are all left fully intact below so this is trivially reversible
+// by flipping this one flag back to true. This is only about the
+// per-CHANNEL plugin-chain button; the separate, already-existing "fx on
+// main" control elsewhere in the app is untouched.
+const CHANNEL_FX_BUTTON_ENABLED = false
 
 // Must match IpcServer.cpp's own armedRecorder->peaksFixedWindow(0.05) call
 // exactly -- the live capture overlay below derives its pixel width from
@@ -203,13 +243,23 @@ function ChannelRowImpl({
   // the region elsewhere before disarming.
   const [armedLoopRegion, setArmedLoopRegion] = useState<LoopRegion>(null)
 
-  // Same "filled red = active/attention-grabbing state" treatment the mute
-  // button already uses, reusing this app's own audio-in accent color.
+  // ARMED keeps the same "filled red = active/attention-grabbing state"
+  // treatment the mute button already uses, reusing this app's own
+  // audio-in accent color -- that's an established, clear signal and
+  // unchanged here. UNARMED now uses --ra-recording-live (#8f7dd4), this
+  // app's own established "recording system" purple -- already used
+  // elsewhere in THIS FILE (the live capture-level overlay above) and in
+  // SketchStrip.tsx/RifffBlockRow.tsx's pulsing in-progress-recording dot
+  // -- so the R button reads as visually linked to the recording system
+  // at a glance even before it's armed, not just indistinguishable neutral
+  // chrome like m/s/fx/x until the moment it turns red. Background stays
+  // the same subtle --ra-bg-row-active fill the other buttons use (not a
+  // solid purple block) so only the border/text carry the accent.
   const recordButtonStyle: React.CSSProperties = {
     ...baseButtonStyle,
     background: isArmed ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-    border: `1px solid ${isArmed ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
-    color: isArmed ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
+    border: `1px solid ${isArmed ? 'var(--ra-mute-on)' : 'var(--ra-recording-live)'}`,
+    color: isArmed ? 'var(--ra-mute-on-ink)' : 'var(--ra-recording-live)',
     opacity: canArm ? 1 : 0.3,
     cursor: canArm ? 'pointer' : 'not-allowed'
   }
@@ -421,7 +471,7 @@ function ChannelRowImpl({
       onDrop={(e) => onDropOnChannel(e, channelId)}
       style={{
         position: 'relative',
-        minHeight: rifffs.length === 0 ? EMPTY_CHANNEL_MIN_HEIGHT : undefined,
+        minHeight: CHANNEL_ROW_MIN_HEIGHT,
         borderLeft: bus ? `3px solid ${busColorHex(bus)}` : undefined
       }}
     >
@@ -458,17 +508,19 @@ function ChannelRowImpl({
           >
             s
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setChainPanelOpen((open) => !open)
-            }}
-            aria-label={`channel ${channelId} plugin chain`}
-            title="channel plugin chain"
-            style={fxButtonStyle}
-          >
-            fx
-          </button>
+          {CHANNEL_FX_BUTTON_ENABLED && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setChainPanelOpen((open) => !open)
+              }}
+              aria-label={`channel ${channelId} plugin chain`}
+              title="channel plugin chain"
+              style={fxButtonStyle}
+            >
+              fx
+            </button>
+          )}
           {isRecordingChannel && (
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <button
