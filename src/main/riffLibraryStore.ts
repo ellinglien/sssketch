@@ -13,62 +13,71 @@ import type {
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { ownRiffLibraryRoot } from './riffLibrarySchema'
 
-const WAREHOUSE_PREFS_FILENAME = 'loreWarehousePrefs.json'
+const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
-function warehousePrefsPath(): string {
-  return join(app.getPath('userData'), WAREHOUSE_PREFS_FILENAME)
+function riffLibraryPrefsPath(): string {
+  return join(app.getPath('userData'), RIFF_LIBRARY_PREFS_FILENAME)
 }
 
 /** Test-only seam: points the module at a fixture warehouse instead of the
  * real one, bypassing prefs entirely. Pass null to clear the override and
- * fall back to reading prefs again (for tests exercising warehouseRootPath
+ * fall back to reading prefs again (for tests exercising riffLibraryRootPath
  * itself). Also resets the cached connection, since a previously-opened DB
  * handle would otherwise keep pointing at the old root. */
-let warehouseRootOverride: string | null = null
-export function setWarehouseRootForTests(root: string | null): void {
-  warehouseRootOverride = root
-  closeWarehouseDb()
+let riffLibraryRootOverride: string | null = null
+export function setRiffLibraryRootForTests(root: string | null): void {
+  riffLibraryRootOverride = root
+  closeRiffLibraryDb()
 }
 
-/** Where the user's LORE-style warehouse lives -- user-relocatable (see
- * setWarehouseRoot). Defaults to sssketch's own self-built warehouse
- * (ownRiffLibraryRoot(), populated by loreWarehouseSync.ts's background sync)
+/** Where the user's riff library lives -- user-relocatable (see
+ * setRiffLibraryRoot). Defaults to sssketch's own self-built riff library
+ * (ownRiffLibraryRoot(), populated by riffLibrarySync.ts's background sync)
  * until a user explicitly points this at a real, externally-managed
- * OUROVEON-synced folder via the folder picker -- see the design spec's
- * Favourites + external-warehouse compatibility section
- * (docs/superpowers/specs/2026-08-09-lore-warehouse-sync-design.md).
- * Once a prefs file exists, whatever root is saved there always wins; this
+ * OUROVEON/LORE-synced folder via the folder picker -- see the design
+ * spec's Favourites + external-archive compatibility section
+ * (docs/superpowers/specs/2026-08-09-lore-warehouse-sync-design.md). Once a
+ * prefs file exists, whatever root is saved there always wins; this
  * default is only consulted on a genuinely first-ever launch. Read fresh
  * every call rather than cached, matching projectLibrary.ts's own
  * libraryRootPath convention. */
-export function warehouseRootPath(): string {
-  if (warehouseRootOverride !== null) return warehouseRootOverride
-  const path = warehousePrefsPath()
+export function riffLibraryRootPath(): string {
+  if (riffLibraryRootOverride !== null) return riffLibraryRootOverride
+  const path = riffLibraryPrefsPath()
   if (!existsSync(path)) return ownRiffLibraryRoot()
   try {
     const prefs = JSON.parse(readFileSync(path, 'utf-8')) as { root?: string }
     return prefs.root ?? ownRiffLibraryRoot()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`warehouseRootPath: failed to read ${path}: ${message}`)
+    console.error(`riffLibraryRootPath: failed to read ${path}: ${message}`)
     return ownRiffLibraryRoot()
   }
 }
 
-/** Persists a new warehouse root and closes the cached DB connection, since
- * it would otherwise keep pointing at the old root's file. */
-export function setWarehouseRoot(newRoot: string): void {
+/** Persists a new riff library root and closes the cached DB connection,
+ * since it would otherwise keep pointing at the old root's file. */
+export function setRiffLibraryRoot(newRoot: string): void {
   try {
-    writeFileSync(warehousePrefsPath(), JSON.stringify({ root: newRoot }, null, 2), 'utf-8')
+    writeFileSync(riffLibraryPrefsPath(), JSON.stringify({ root: newRoot }, null, 2), 'utf-8')
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`setWarehouseRoot: failed to write ${warehousePrefsPath()}: ${message}`)
+    console.error(`setRiffLibraryRoot: failed to write ${riffLibraryPrefsPath()}: ${message}`)
   }
-  closeWarehouseDb()
+  closeRiffLibraryDb()
 }
 
-function warehouseDbPath(): string {
-  return join(warehouseRootPath(), 'cache', 'common', 'warehouse.db3')
+/** True once the user has explicitly repointed the riff library away from
+ * its own default (whether at sssketch's own self-built store or a real
+ * external LORE archive) -- see setRiffLibraryRoot. Used by
+ * riffLibraryMigration.ts to make sure the one-time default-location
+ * migration never runs for someone who already made their own choice. */
+export function hasStoredRiffLibraryRootOverride(): boolean {
+  return existsSync(riffLibraryPrefsPath())
+}
+
+function riffLibraryDbPath(): string {
+  return join(riffLibraryRootPath(), 'cache', 'common', 'warehouse.db3')
 }
 
 let cachedDb: Database.Database | null = null
@@ -77,11 +86,11 @@ let cachedDb: Database.Database | null = null
  * of LORE writing concurrently degrades gracefully instead of hanging.
  * Returns null (never throws) if the file doesn't exist or can't be opened —
  * callers treat that as "library unavailable", not a crash. */
-function getWarehouseDb(): Database.Database | null {
+function getRiffLibraryDb(): Database.Database | null {
   if (cachedDb) return cachedDb
-  if (!existsSync(warehouseDbPath())) return null
+  if (!existsSync(riffLibraryDbPath())) return null
   try {
-    cachedDb = new Database(warehouseDbPath(), {
+    cachedDb = new Database(riffLibraryDbPath(), {
       readonly: true,
       fileMustExist: true,
       timeout: 2000
@@ -93,13 +102,13 @@ function getWarehouseDb(): Database.Database | null {
   }
 }
 
-function closeWarehouseDb(): void {
+function closeRiffLibraryDb(): void {
   cachedDb?.close()
   cachedDb = null
 }
 
-export function warehouseAvailable(): boolean {
-  return getWarehouseDb() !== null
+export function riffLibraryAvailable(): boolean {
+  return getRiffLibraryDb() !== null
 }
 
 /** Stem audio lives in one of two places depending on which warehouse is
@@ -119,7 +128,7 @@ export function warehouseAvailable(): boolean {
  */
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
-  const root = warehouseRootPath()
+  const root = riffLibraryRootPath()
   if (root === ownRiffLibraryRoot()) {
     return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
   }
@@ -127,7 +136,7 @@ export function resolveStemPath(jamCID: string, stemCID: string): string {
 }
 
 export function listJams(filterText: string): RiffLibraryJam[] {
-  const db = getWarehouseDb()
+  const db = getRiffLibraryDb()
   if (!db) return []
   const rows = db
     .prepare(
@@ -174,7 +183,7 @@ interface StemLookupRow {
 const RIFF_PAGE_SIZE = 1000
 
 export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
-  const db = getWarehouseDb()
+  const db = getRiffLibraryDb()
   const offset = filters.offset ?? 0
   const limit = filters.limit ?? RIFF_PAGE_SIZE
   if (!db) return { riffs: [], hasMore: false, nextOffset: offset }
@@ -300,7 +309,7 @@ interface FullStemRow {
 }
 
 export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
-  const db = getWarehouseDb()
+  const db = getRiffLibraryDb()
   if (!db) return null
 
   const riffRow = db
@@ -408,7 +417,7 @@ const RIFF_CONTEXT_WINDOW_BEFORE = 10
  * and case-insensitive, before giving up. Returns null (never throws) if
  * neither matches, or if the warehouse itself is unavailable. */
 export function resolveRiffWithContext(riffCID: string): RiffContextResult | null {
-  const db = getWarehouseDb()
+  const db = getRiffLibraryDb()
   if (!db) return null
 
   const trimmed = riffCID.trim()
@@ -484,7 +493,7 @@ async function downloadOneStem(
 export async function downloadMissingStems(
   riffCID: string
 ): Promise<RiffLibraryResolvedRiff | null> {
-  const db = getWarehouseDb()
+  const db = getRiffLibraryDb()
   if (!db) return null
   const riffRow = db.prepare('SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?').get(riffCID) as
     { OwnerJamCID: string } | undefined
@@ -499,4 +508,4 @@ export async function downloadMissingStems(
   return resolveRiff(riffCID)
 }
 
-export { getWarehouseDb }
+export { getRiffLibraryDb }

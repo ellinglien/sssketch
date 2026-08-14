@@ -43,15 +43,15 @@ import { loadBusCentroidStore, saveBusCentroidStore } from './busCentroidStore'
 import type { BusCentroidStore } from '@shared/busCentroids'
 import type { RiffFilters } from '@shared/riffLibraryTypes'
 import {
-  warehouseAvailable,
-  warehouseRootPath,
-  setWarehouseRoot,
+  riffLibraryAvailable,
+  riffLibraryRootPath,
+  setRiffLibraryRoot,
   listJams,
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
   downloadMissingStems
-} from './loreWarehouse'
+} from './riffLibraryStore'
 import {
   loginWithCredentials,
   logout as endlesssLogout,
@@ -260,11 +260,13 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('lore-warehouse-available', () => warehouseAvailable())
+  ipcMain.handle('lore-warehouse-available', () => riffLibraryAvailable())
 
-  ipcMain.handle('lore-warehouse-root', () => warehouseRootPath())
+  ipcMain.handle('lore-warehouse-root', () => riffLibraryRootPath())
 
-  ipcMain.handle('lore-set-warehouse-root', (_event, newRoot: string) => setWarehouseRoot(newRoot))
+  ipcMain.handle('lore-set-warehouse-root', (_event, newRoot: string) =>
+    setRiffLibraryRoot(newRoot)
+  )
 
   ipcMain.handle('lore-list-jams', (_event, filterText: string) => listJams(filterText))
 

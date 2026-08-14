@@ -4,17 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import {
-  warehouseAvailable,
-  warehouseRootPath,
-  setWarehouseRoot,
+  riffLibraryAvailable,
+  riffLibraryRootPath,
+  setRiffLibraryRoot,
   resolveStemPath,
-  setWarehouseRootForTests,
+  setRiffLibraryRootForTests,
   listJams,
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
   downloadMissingStems
-} from './loreWarehouse'
+} from './riffLibraryStore'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 
 let userDataDir: string
@@ -57,54 +57,54 @@ describe('loreWarehouse', () => {
   afterEach(() => {
     if (root) rmSync(root, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
-    setWarehouseRootForTests(null)
+    setRiffLibraryRootForTests(null)
   })
 
-  it('warehouseAvailable() is false when the root directory does not exist', () => {
-    setWarehouseRootForTests('/no/such/path/at/all')
-    expect(warehouseAvailable()).toBe(false)
+  it('riffLibraryAvailable() is false when the root directory does not exist', () => {
+    setRiffLibraryRootForTests('/no/such/path/at/all')
+    expect(riffLibraryAvailable()).toBe(false)
   })
 
-  it('warehouseAvailable() is true when a real warehouse.db3 exists at the expected path', () => {
+  it('riffLibraryAvailable() is true when a real warehouse.db3 exists at the expected path', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
-    expect(warehouseAvailable()).toBe(true)
+    setRiffLibraryRootForTests(root)
+    expect(riffLibraryAvailable()).toBe(true)
   })
 
-  it('warehouseRootPath defaults to the self-built warehouse root when no prefs file exists', async () => {
+  it('riffLibraryRootPath defaults to the self-built warehouse root when no prefs file exists', async () => {
     const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
-    setWarehouseRootForTests(null) // clear the test override this file's other tests rely on
-    expect(warehouseRootPath()).toBe(ownRiffLibraryRoot())
+    setRiffLibraryRootForTests(null) // clear the test override this file's other tests rely on
+    expect(riffLibraryRootPath()).toBe(ownRiffLibraryRoot())
   })
 
-  it('setWarehouseRoot() persists a new root that warehouseRootPath() then returns', () => {
-    setWarehouseRootForTests(null)
-    setWarehouseRoot('/Users/someone/Music/EndlesssSync')
-    expect(warehouseRootPath()).toBe('/Users/someone/Music/EndlesssSync')
-    const prefs = JSON.parse(
-      readFileSync(join(userDataDir, 'loreWarehousePrefs.json'), 'utf-8')
-    ) as { root: string }
+  it('setRiffLibraryRoot() persists a new root that riffLibraryRootPath() then returns', () => {
+    setRiffLibraryRootForTests(null)
+    setRiffLibraryRoot('/Users/someone/Music/EndlesssSync')
+    expect(riffLibraryRootPath()).toBe('/Users/someone/Music/EndlesssSync')
+    const prefs = JSON.parse(readFileSync(join(userDataDir, 'riffLibraryPrefs.json'), 'utf-8')) as {
+      root: string
+    }
     expect(prefs).toEqual({ root: '/Users/someone/Music/EndlesssSync' })
   })
 
-  it('setWarehouseRoot() picks up a real warehouse at the new root immediately', () => {
+  it('setRiffLibraryRoot() picks up a real warehouse at the new root immediately', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
     // Point somewhere real first so the cached DB handle is non-null --
-    // this is what actually exercises setWarehouseRoot's closeWarehouseDb()
+    // this is what actually exercises setRiffLibraryRoot's closeRiffLibraryDb()
     // call; starting from a null override risks a false pass on Elling's
     // own dev machine, where the legacy default happens to be real and
     // mounted too.
-    setWarehouseRootForTests('/no/such/path/at/all')
-    expect(warehouseAvailable()).toBe(false)
-    setWarehouseRootForTests(null)
-    setWarehouseRoot(root)
-    expect(warehouseAvailable()).toBe(true)
+    setRiffLibraryRootForTests('/no/such/path/at/all')
+    expect(riffLibraryAvailable()).toBe(false)
+    setRiffLibraryRootForTests(null)
+    setRiffLibraryRoot(root)
+    expect(riffLibraryAvailable()).toBe(true)
   })
 
   it('resolveStemPath shards by the first hex character of the StemCID', () => {
-    setWarehouseRootForTests('/Volumes/Elling-Lien/ENDLESSS')
+    setRiffLibraryRootForTests('/Volumes/Elling-Lien/ENDLESSS')
     const path = resolveStemPath('bandABC123', 'dc857530d08e11ecb5304f35d712ecc6')
     expect(path).toBe(
       '/Volumes/Elling-Lien/ENDLESSS/cache/common/stem_v2/bandABC123/d/dc857530d08e11ecb5304f35d712ecc6'
@@ -113,14 +113,14 @@ describe('loreWarehouse', () => {
 
   it('resolveStemPath uses the content-addressed endlesss-cache layout for the self-built warehouse', async () => {
     const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
-    setWarehouseRootForTests(ownRiffLibraryRoot())
+    setRiffLibraryRootForTests(ownRiffLibraryRoot())
     expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
       join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem_abc123')
     )
   })
 
   it('resolveStemPath still uses the jam-sharded stem_v2 layout for an external warehouse', () => {
-    setWarehouseRootForTests('/some/external/lore-folder')
+    setRiffLibraryRootForTests('/some/external/lore-folder')
     expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
       join('/some/external/lore-folder', 'cache', 'common', 'stem_v2', 'jam_1', 's', 'stem_abc123')
     )
@@ -168,7 +168,7 @@ describe('listJams', () => {
   it('lists jams sorted by most recent riff activity, most recent first', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     const jams = listJams('')
     expect(jams.map((j) => j.jamCID)).toEqual(['jam-techno', 'jam-ambient', 'jam-empty'])
     expect(jams[0].lastRiffTime).toBe(2000)
@@ -177,7 +177,7 @@ describe('listJams', () => {
   it('filters by name, case-insensitively', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     const jams = listJams('techno')
     expect(jams.map((j) => j.jamCID)).toEqual(['jam-techno'])
   })
@@ -185,7 +185,7 @@ describe('listJams', () => {
   it('a jam with no riffs yet still appears, sorted last (lastRiffTime 0)', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     const jams = listJams('')
     expect(jams[jams.length - 1]).toEqual({
       jamCID: 'jam-empty',
@@ -195,7 +195,7 @@ describe('listJams', () => {
   })
 
   it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
-    setWarehouseRootForTests('/no/such/path')
+    setRiffLibraryRootForTests('/no/such/path')
     expect(listJams('')).toEqual([])
   })
 })
@@ -254,7 +254,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const { riffs } = listRiffs('jam-techno', {})
     const riff1 = riffs.find((r) => r.riffCID === 'riff-1')!
@@ -272,7 +272,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const { riffs } = listRiffs('jam-ambient', {})
     expect(riffs.map((r) => r.riffCID)).toEqual(['riff-3'])
@@ -282,7 +282,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // Both riff-1 and riff-2 (jam-techno) are BPMrnd 130.
     expect(listRiffs('jam-techno', { bpmMin: 130, bpmMax: 130 }).riffs).toHaveLength(2)
@@ -298,7 +298,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // Scoped to this test only (not the shared fixture) -- other tests in
     // this file rely on riff-1 having no Root/Scale set at all.
@@ -323,7 +323,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     expect(listRiffs('jam-techno', { userName: 'elling' }).riffs).toHaveLength(2)
     expect(listRiffs('jam-techno', { userName: 'nobody' }).riffs).toHaveLength(0)
@@ -333,7 +333,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // riff-1 has 1 of 2 stems cached (not fully); riff-2 has 0 of 1 (not
     // fully either) — neither should pass a strict "fully cached" filter.
@@ -345,7 +345,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // Symmetric to the 'reports ... ownerFraction' test above, but scored
     // against 'mvdg' (stem-b's creator) instead of the default 'elling' —
@@ -359,7 +359,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // Defaults to RIFF_LIBRARY_USERNAME ('elling') when targetUser is unset — both
     // riff-1 and riff-2 have an elling stem.
@@ -389,7 +389,7 @@ describe('listRiffs', () => {
       insert.run(`riff-big-${i}`, 'jam-big', i, 130, 8, 'elling')
     }
     db.close()
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const page1 = listRiffs('jam-big', {})
     expect(page1.riffs).toHaveLength(1000)
@@ -408,7 +408,7 @@ describe('listRiffs', () => {
   })
 
   it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
-    setWarehouseRootForTests('/no/such/path')
+    setRiffLibraryRootForTests('/no/such/path')
     expect(listRiffs('jam-techno', {}).riffs).toEqual([])
   })
 
@@ -416,7 +416,7 @@ describe('listRiffs', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // jam-techno has 2 riffs (riff-1, riff-2) -- a limit of 1 constrains the
     // fetch to exactly 1 row, and correctly reports hasMore against THAT
@@ -445,7 +445,7 @@ describe('resolveRiff', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const resolved = resolveRiff('riff-1')
     expect(resolved).not.toBeNull()
@@ -494,7 +494,7 @@ describe('resolveRiff', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const resolved = resolveRiff('riff-2') // riff-2 has no GainsJSON at all
     expect(resolved!.stems[0].gain).toBe(1.0)
@@ -503,7 +503,7 @@ describe('resolveRiff', () => {
   it('returns null for a nonexistent RiffCID', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     expect(resolveRiff('no-such-riff')).toBeNull()
   })
 
@@ -519,7 +519,7 @@ describe('resolveRiff', () => {
        VALUES ('riff-keyed', 'jam-techno', 2000, 89.9, 4, 'elling', 4, 5)`
       ).run()
       db.close()
-      setWarehouseRootForTests(root)
+      setRiffLibraryRootForTests(root)
 
       const resolved = resolveRiff('riff-keyed')
       expect(resolved!.key).toBe('E Minor (Aeolian)')
@@ -530,7 +530,7 @@ describe('resolveRiff', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // riff-1 (from createFixtureWarehouse's own seed data) never set Root/
     // Scale -- both are NULL, the normal case for riffs predating this
@@ -540,7 +540,7 @@ describe('resolveRiff', () => {
   })
 
   it('returns null when the warehouse is unavailable, rather than throwing', () => {
-    setWarehouseRootForTests('/no/such/path')
+    setRiffLibraryRootForTests('/no/such/path')
     expect(resolveRiff('riff-1')).toBeNull()
   })
 })
@@ -565,7 +565,7 @@ describe('resolveRiffWithContext', () => {
       insert.run(`riff-${i}`, 'jam-big', i, 130, 8, 'elling')
     }
     db.close()
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const result = resolveRiffWithContext('riff-20')
     expect(result).not.toBeNull()
@@ -577,7 +577,7 @@ describe('resolveRiffWithContext', () => {
   it('clamps the offset to 0 for a riff at (or near) the very start of a jam', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     // riff-2 (CreationTime 2000) is the NEWEST riff in jam-techno -- rank 0,
     // offset would be 0-10 = -10, clamped to 0.
@@ -590,7 +590,7 @@ describe('resolveRiffWithContext', () => {
   it('matches case-insensitively and trims whitespace, as a typo-tolerant fallback', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const result = resolveRiffWithContext('  RIFF-1  ')
     expect(result).not.toBeNull()
@@ -603,12 +603,12 @@ describe('resolveRiffWithContext', () => {
   it('returns null for a riffCID with no match at all, exact or fallback', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     expect(resolveRiffWithContext('no-such-riff')).toBeNull()
   })
 
   it('returns null when the warehouse is unavailable, rather than throwing', () => {
-    setWarehouseRootForTests('/no/such/path')
+    setRiffLibraryRootForTests('/no/such/path')
     expect(resolveRiffWithContext('riff-1')).toBeNull()
   })
 })
@@ -624,7 +624,7 @@ describe('downloadMissingStems', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toBe(
@@ -660,7 +660,7 @@ describe('downloadMissingStems', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
 
     vi.stubGlobal(
       'fetch',
@@ -674,12 +674,12 @@ describe('downloadMissingStems', () => {
   it('returns null for a nonexistent RiffCID', async () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
-    setWarehouseRootForTests(root)
+    setRiffLibraryRootForTests(root)
     expect(await downloadMissingStems('no-such-riff')).toBeNull()
   })
 
   it('returns null when the warehouse is unavailable, rather than throwing', async () => {
-    setWarehouseRootForTests('/no/such/path')
+    setRiffLibraryRootForTests('/no/such/path')
     expect(await downloadMissingStems('riff-1')).toBeNull()
   })
 })
