@@ -82,9 +82,10 @@ export function ProjectLibraryBrowser({
   // Which row's backup history is currently expanded (at most one) --
   // fetched lazily on open rather than for every row up front, since most
   // sketches will never be opened this way. See rotateBackupBeforeOverwrite
-  // (projectLibrary.ts) for what populates this: every save (explicit or
-  // the debounced autosave) backs up whatever was on disk just before
-  // overwriting it, so an unwanted autosave is always recoverable here.
+  // (projectLibrary.ts) for what populates this: every explicit save (the
+  // Save button, Cmd+S, or the quit-time save prompt) backs up whatever was
+  // on disk just before overwriting it, so an unwanted overwrite is always
+  // recoverable here.
   const [historyOpenName, setHistoryOpenName] = useState<string | null>(null)
   const [backups, setBackups] = useState<{ path: string; mtimeMs: number }[]>([])
   // Same two-step arm/confirm pattern as deleteArmedName above, keyed by
