@@ -1081,28 +1081,23 @@ function Frame(): React.JSX.Element {
   // writes currentSketch to its own sidecar file in lockstep (see
   // writeAutosaveSketchInfo), so a crash-recovery restore knows which
   // sketch the recovered snapshot actually belongs to.
+  //
+  // Used to ALSO write straight to the library folder (saveProjectToLibrary)
+  // once a real named sketch had real content -- removed as of the explicit
+  // save model (see docs/superpowers/specs/2026-08-14-explicit-save-model-
+  // design.md, section 1): the real project file on disk should only change
+  // on an explicit save (the Save button, Cmd+S, or the quit-time prompt),
+  // never on a timer. This effect's only remaining job is the
+  // crash-recovery snapshot, always a separate, decoupled mechanism (see
+  // projectFile.ts's writeAutosave/loadAutosave/clearAutosave) that needed
+  // no change here.
   useEffect(() => {
     const id = window.setTimeout(() => {
       void window.rifffApi.autosaveProject(persistedJson)
       void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
-      // Also writes straight to the library folder once there's a real
-      // named sketch AND real content -- the whole point of auto-naming a
-      // fresh sketch immediately (see the mount effect above) is that
-      // imported content ends up somewhere real and discoverable without
-      // an explicit Save. Gated on non-empty rifffs so a session where
-      // nothing was ever imported doesn't litter the library with an
-      // empty, auto-named folder on every launch.
-      if (
-        currentSketch !== null &&
-        currentSketch.kind === 'library' &&
-        Object.keys(state.rifffs).length > 0
-      ) {
-        void window.rifffApi.saveProjectToLibrary(currentSketch.name, persistedJson)
-        lastSavedJsonRef.current = persistedJson
-      }
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [persistedJson, currentSketch, state.rifffs])
+  }, [persistedJson, currentSketch])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
