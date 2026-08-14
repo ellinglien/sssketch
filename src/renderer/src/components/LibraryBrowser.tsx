@@ -61,8 +61,16 @@ function loadStoredRiffLibraryUsername(): string {
     // branch above already returns first on every subsequent call).
     const legacy = localStorage.getItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
     if (legacy !== null) {
-      localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, legacy)
-      localStorage.removeItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+      // Persisting the carry-forward is best-effort -- if the write/delete
+      // below throws (e.g. quota exceeded), still return the legacy value
+      // we already have in hand rather than silently falling back to the
+      // default, even though the migration itself didn't stick this time.
+      try {
+        localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, legacy)
+        localStorage.removeItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+      } catch (err) {
+        console.error('LibraryBrowser: failed to persist riff library username carry-forward:', err)
+      }
       return legacy
     }
     return RIFF_LIBRARY_USERNAME
