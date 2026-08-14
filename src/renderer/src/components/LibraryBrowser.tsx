@@ -154,7 +154,6 @@ export function LibraryBrowser({
   // Warehouse availability + external folder config (unchanged from LoreLibraryBrowser.tsx)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [warehouseRoot, setWarehouseRootState] = useState<string | null>(null)
-  const [changingWarehouseRoot, setChangingWarehouseRoot] = useState(false)
 
   // Jam sidebar
   const [jamFilter, setJamFilter] = useState('')
@@ -744,28 +743,6 @@ export function LibraryBrowser({
     [syncingKeys, jamFilter, selectedJamCID]
   )
 
-  /** Opens the OS folder picker and points LORE at the chosen folder --
-   * needed since the warehouse root defaults to sssketch's own self-built
-   * warehouse (see loreWarehouse.ts) and picking a different folder is how
-   * someone points this at their own external OUROVEON sync target instead.
-   * Re-checks availability against the new root immediately so picking a
-   * folder that isn't actually a LORE sync target still shows an honest
-   * result rather than a stale "connected". */
-  async function handleChooseWarehouseFolder(): Promise<void> {
-    setChangingWarehouseRoot(true)
-    try {
-      const picked = await window.rifffApi.pickFolder()
-      if (!picked) return
-      await window.rifffApi.loreSetWarehouseRoot(picked)
-      setWarehouseRootState(picked)
-      setAvailable(await window.rifffApi.loreWarehouseAvailable())
-    } catch (err) {
-      console.error('LibraryBrowser: handleChooseWarehouseFolder() failed:', err)
-    } finally {
-      setChangingWarehouseRoot(false)
-    }
-  }
-
   // ---------------------------------------------------------------------
   // Riff list fetch (filters + pagination + riff-ID jump)
   // ---------------------------------------------------------------------
@@ -1318,27 +1295,14 @@ export function LibraryBrowser({
             or unmounted EXTERNAL folder -- the self-built warehouse is
             created during app startup, before this component can ever
             mount, so that path is guaranteed to exist by the time we get
-            here. If that startup guarantee ever changes, this copy (and the
-            choose-folder-only recovery path below) would need to account
-            for the self-built case too. */}
+            here. If that startup guarantee ever changes, this copy would
+            need to account for the self-built case too. */}
         {available === false ? (
           <div style={{ padding: 24 }}>
-            <p>library not available at {warehouseRoot ?? '...'}</p>
-            <button
-              disabled={changingWarehouseRoot}
-              onClick={handleChooseWarehouseFolder}
-              style={{
-                height: 22,
-                borderRadius: 0,
-                padding: '0 10px',
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
-              }}
-            >
-              choose folder
-            </button>
+            <p>
+              lore archive not found at {warehouseRoot ?? '...'} — change its location from the gear
+              menu
+            </p>
           </div>
         ) : (
           <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
