@@ -435,7 +435,7 @@ function ProjectMenu({
    * the shared discard-guard (Frame also owns confirmDiscardIfDirty).
    * ProjectMenu itself is purely presentational for these two. */
   handleNew: () => Promise<void>
-  handleSave: () => Promise<void>
+  handleSave: () => Promise<boolean>
   onOpenLibrary: () => void
   /** Opens the "tidy up" browser -- the same callback TransportBar.tsx's
    * own tidy-up button already uses (wired to setClusterStemsOpen(true) in
@@ -887,7 +887,12 @@ function Frame(): React.JSX.Element {
     setCurrentSketch({ kind: 'external', path: result.path })
   }
 
-  async function handleSave(): Promise<void> {
+  /** Returns whether the save actually succeeded, so every discard-guard
+   * call site (New, opening/restoring a library sketch, opening from disk,
+   * quit-time save) can tell a real failure (disk full, permission denied,
+   * etc.) apart from a resolved promise and avoid proceeding to discard/
+   * replace the live project on top of a save that never landed. */
+  async function handleSave(): Promise<boolean> {
     try {
       const json = serializeProject(state)
       if (currentSketch === null) {
@@ -901,9 +906,11 @@ function Frame(): React.JSX.Element {
       }
       lastSavedJsonRef.current = json
       setSaveVersion((v) => v + 1)
+      return true
     } catch (err) {
       console.error('Frame: failed to save project:', err)
       window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      return false
     }
   }
 
@@ -933,7 +940,13 @@ function Frame(): React.JSX.Element {
   async function handleNew(): Promise<void> {
     const choice = await confirmDiscardIfDirty()
     if (choice === 'cancel') return
-    if (choice === 'save') await handleSave()
+    if (choice === 'save') {
+      const saved = await handleSave()
+      // Save failed (handleSave already alerted) -- the live project is
+      // still safely in the editor and unsaved, so bail out here rather
+      // than opening the new-project modal, which would discard it.
+      if (!saved) return
+    }
     setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
   }
 
@@ -1592,6 +1605,19 @@ function Frame(): React.JSX.Element {
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
   // same handleSave() the Save button/Cmd+S use, then reply so main's own
   // requestSaveBeforeQuit() (racing against a timeout) can stop waiting.
+  //
+  // We reply unconditionally here (ignoring handleSave()'s success/failure)
+  // rather than only replying on success: main already dismissed its own
+  // dialog and is just waiting on this round trip (or a 5s timeout) before
+  // calling app.quit() -- there's no "cancel the quit" signal this bridge
+  // can send back, so withholding the reply on failure would only burn the
+  // full timeout, not actually protect anything. handleSave() already shows
+  // a blocking window.alert() on failure, which delays this .finally() (and
+  // therefore the quit) until the user dismisses it, so they do see the
+  // failure before the app exits -- just can't stop the quit outright from
+  // here. A real fix (e.g. main aborting the pending quit on an explicit
+  // failure signal) would need a new IPC contract in main; flagged rather
+  // than guessed at.
   useEffect(() => {
     return window.rifffApi.onRequestSaveBeforeQuit(() => {
       void handleSave().finally(() => window.rifffApi.notifySaveBeforeQuitComplete())
@@ -1952,7 +1978,13 @@ function Frame(): React.JSX.Element {
             onBeforeReplaceProject={async () => {
               const choice = await confirmDiscardIfDirty()
               if (choice === 'cancel') return 'cancel'
-              if (choice === 'save') await handleSave()
+              if (choice === 'save') {
+                const saved = await handleSave()
+                // Save failed (handleSave already alerted) -- abort the
+                // open/restore rather than replacing the still-unsaved
+                // live project.
+                if (!saved) return 'cancel'
+              }
               return 'proceed'
             }}
             onSelect={(name) => {
@@ -1978,7 +2010,13 @@ function Frame(): React.JSX.Element {
               void (async () => {
                 const choice = await confirmDiscardIfDirty()
                 if (choice === 'cancel') return
-                if (choice === 'save') await handleSave()
+                if (choice === 'save') {
+                  const saved = await handleSave()
+                  // Save failed (handleSave already alerted) -- bail out
+                  // rather than proceeding to the disk-open flow, which
+                  // would replace the still-unsaved live project.
+                  if (!saved) return
+                }
                 setLibraryBrowserOpen(false)
                 setBusy('opening project…')
                 try {
