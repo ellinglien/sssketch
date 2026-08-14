@@ -574,13 +574,20 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // slot that actually changed gets reloaded -- an unrelated arrangement
   // edit elsewhere must never accidentally trigger a plugin reload/swap
   // glitch on a slot nobody touched (see the design spec's "separate,
-  // explicit load-master-plugin message" rationale).
+  // explicit load-master-plugin message" rationale). Also reloads a slot
+  // whose identity DIDN'T change if pluginStatesRef still holds an
+  // unconsumed captured entry for it -- otherwise opening a project that
+  // reuses the same plugin (in the same slot) as whatever was already
+  // live would silently skip restoring that project's own saved
+  // parameters, since identity alone wouldn't have changed.
   const masterChainRef = useRef(state.masterChain)
   useEffect(() => {
     const prev = masterChainRef.current
     masterChainRef.current = state.masterChain
     state.masterChain.forEach((pluginId, slot) => {
-      if (pluginId !== prev[slot]) {
+      const slotKey = `master:${slot}`
+      const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
+      if (pluginId !== prev[slot] || stateBase64 !== null) {
         setMasterChainStatus((s) => {
           const next = [...s] as typeof s
           next[slot] = pluginId === null ? 'idle' : 'loading'
@@ -590,18 +597,18 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           pluginId === null
             ? null
             : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-        const slotKey = `master:${slot}`
-        const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
         if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
         void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path, stateBase64)
       }
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value), never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value) or a pending restore, never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
   }, [state.masterChain])
 
   // Per-channel equivalent of the masterChainRef diffing effect above --
   // same reasoning, generalized from a fixed 4-tuple to a Record<channelId,
-  // [SlotStatus, SlotStatus]> keyed by channel id.
+  // [SlotStatus, SlotStatus]> keyed by channel id -- including the same
+  // "also reload on an unconsumed captured entry, not just an identity
+  // change" fix.
   const channelPluginsRef = useRef(state.channelPlugins)
   useEffect(() => {
     const prev = channelPluginsRef.current
@@ -610,7 +617,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       const slots = state.channelPlugins[channelId]
       const prevSlots = prev[channelId]
       slots.forEach((pluginId, slot) => {
-        if (pluginId !== (prevSlots?.[slot] ?? null)) {
+        const slotKey = `channel:${channelId}:${slot}`
+        const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
+        if (pluginId !== (prevSlots?.[slot] ?? null) || stateBase64 !== null) {
           setChannelChainStatus((s) => {
             const existing =
               s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
@@ -622,8 +631,6 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             pluginId === null
               ? null
               : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-          const slotKey = `channel:${channelId}:${slot}`
-          const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
           if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
           void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path, stateBase64)
         }
