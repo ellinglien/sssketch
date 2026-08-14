@@ -420,18 +420,20 @@ type ExportFormat = 'ableton' | 'reaper' | 'stems' | 'stemTracks'
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
-  lastSavedJsonRef,
+  handleNew,
+  handleSave,
   onOpenLibrary,
   onOpenClusterStems
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
-  /** Baseline to diff the live project against -- see App's own doc comment
-   * on this ref. A plain mutable ref (not state) passed down from App,
-   * which is the only place that knows every "this content is now durably
-   * saved" moment (initial load/recovery, the debounced library autosave,
-   * explicit Open) -- handleNew reads it, handleSave writes it. */
-  lastSavedJsonRef: React.RefObject<string | null>
+  /** Owned by App.tsx's Frame -- the only place that knows every "this
+   * content is now durably saved" moment (initial load/recovery, explicit
+   * Save/Cmd+S, the quit-time save prompt) and the only place that can run
+   * the shared discard-guard (Frame also owns confirmDiscardIfDirty).
+   * ProjectMenu itself is purely presentational for these two. */
+  handleNew: () => Promise<void>
+  handleSave: () => Promise<void>
   onOpenLibrary: () => void
   /** Opens the "tidy up" browser -- the same callback TransportBar.tsx's
    * own tidy-up button already uses (wired to setClusterStemsOpen(true) in
@@ -440,61 +442,15 @@ function ProjectMenu({
   onOpenClusterStems: () => void
 }): React.JSX.Element {
   const state = useAppState()
-  const dispatch = useDispatch()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const exportButtonRef = useRef<HTMLButtonElement>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
   const saveButtonRef = useRef<HTMLButtonElement>(null)
-  const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
   const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null)
   const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
   const [stemsFormatPickerOpen, setStemsFormatPickerOpen] = useState(false)
-
-  async function handleNew(): Promise<void> {
-    // Only worth interrupting for if there's actually something that would
-    // be lost: an empty project has nothing to discard, and a project whose
-    // current content already matches the last known-saved snapshot (an
-    // explicit Save, the debounced library autosave having already caught
-    // up, or simply never having been touched since it was opened) isn't
-    // going anywhere -- it's already sitting safely in the library/file.
-    // Previously this only checked "is there any content at all," which
-    // fired the confirm dialog constantly for projects that were, in fact,
-    // already fully saved.
-    const hasUnsavedChanges =
-      Object.keys(state.rifffs).length > 0 && serializeProject(state) !== lastSavedJsonRef.current
-    if (hasUnsavedChanges && !window.confirm('Discard the current project and start a new one?')) {
-      return
-    }
-    setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
-  }
-
-  function commitNewProject(name: string): void {
-    dispatch({ type: 'LOAD_STATE', state: initialState })
-    lastSavedJsonRef.current = serializeProject(initialState)
-    setCurrentSketch({ kind: 'library', name })
-    setNewProjectModal(null)
-  }
-
-  async function handleSave(): Promise<void> {
-    try {
-      const json = serializeProject(state)
-      if (currentSketch === null) {
-        const name = await window.rifffApi.generateDefaultProjectName()
-        await window.rifffApi.saveProjectToLibrary(name, json)
-        setCurrentSketch({ kind: 'library', name })
-      } else if (currentSketch.kind === 'library') {
-        await window.rifffApi.saveProjectToLibrary(currentSketch.name, json)
-      } else {
-        await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
-      }
-      lastSavedJsonRef.current = json
-    } catch (err) {
-      console.error('ProjectMenu: failed to save project:', err)
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
 
   async function handleSaveCopyElsewhere(): Promise<void> {
     try {
@@ -685,13 +641,6 @@ function ProjectMenu({
             { label: 'export project…', onClick: () => setExportFormatPickerOpen(true) }
           ]}
           onClose={() => setExportMenu(null)}
-        />
-      )}
-      {newProjectModal && (
-        <NewProjectModal
-          defaultName={newProjectModal.defaultName}
-          onCreate={commitNewProject}
-          onCancel={() => setNewProjectModal(null)}
         />
       )}
       {exportFormatPickerOpen && (
@@ -886,6 +835,47 @@ function Frame(): React.JSX.Element {
       return
     }
     setCurrentSketch({ kind: 'external', path: result.path })
+  }
+
+  async function handleSave(): Promise<void> {
+    try {
+      const json = serializeProject(state)
+      if (currentSketch === null) {
+        const name = await window.rifffApi.generateDefaultProjectName()
+        await window.rifffApi.saveProjectToLibrary(name, json)
+        setCurrentSketch({ kind: 'library', name })
+      } else if (currentSketch.kind === 'library') {
+        await window.rifffApi.saveProjectToLibrary(currentSketch.name, json)
+      } else {
+        await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
+      }
+      lastSavedJsonRef.current = json
+    } catch (err) {
+      console.error('Frame: failed to save project:', err)
+      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
+
+  async function handleNew(): Promise<void> {
+    // Only worth interrupting for if there's actually something that would
+    // be lost: an empty project has nothing to discard, and a project whose
+    // current content already matches the last known-saved snapshot isn't
+    // going anywhere -- it's already sitting safely in the library/file.
+    const hasUnsaved =
+      Object.keys(state.rifffs).length > 0 && serializeProject(state) !== lastSavedJsonRef.current
+    if (hasUnsaved && !window.confirm('Discard the current project and start a new one?')) {
+      return
+    }
+    setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
+  }
+
+  function commitNewProject(name: string): void {
+    dispatch({ type: 'LOAD_STATE', state: initialState })
+    lastSavedJsonRef.current = serializeProject(initialState)
+    setCurrentSketch({ kind: 'library', name })
+    setNewProjectModal(null)
   }
   // Guards the startup effect below against StrictMode's dev-only
   // double-invoke: without this, both invocations independently call
@@ -1729,7 +1719,8 @@ function Frame(): React.JSX.Element {
             <ProjectMenu
               currentSketch={currentSketch}
               setCurrentSketch={setCurrentSketch}
-              lastSavedJsonRef={lastSavedJsonRef}
+              handleNew={handleNew}
+              handleSave={handleSave}
               onOpenLibrary={() => setLibraryBrowserOpen(true)}
               onOpenClusterStems={() => setClusterStemsOpen(true)}
             />
@@ -1904,6 +1895,13 @@ function Frame(): React.JSX.Element {
           />
         )}
         {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
+        {newProjectModal && (
+          <NewProjectModal
+            defaultName={newProjectModal.defaultName}
+            onCreate={commitNewProject}
+            onCancel={() => setNewProjectModal(null)}
+          />
+        )}
         <LockInConfirmDialog />
         {contextMenu && (
           <ContextMenu
