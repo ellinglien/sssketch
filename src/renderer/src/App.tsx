@@ -50,6 +50,7 @@ import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
+import { buildPluginStatesMap } from '@shared/pluginStates'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
@@ -480,7 +481,13 @@ function ProjectMenu({
     setExporting(true)
     try {
       const wav = await window.rifffApi.exportMixNative(JSON.stringify(state))
-      await window.rifffApi.exportMix(wav)
+      const defaultName =
+        currentSketch !== null && currentSketch.kind === 'library'
+          ? currentSketch.name
+          : currentSketch !== null && currentSketch.kind === 'external'
+            ? basenameWithoutProjectExt(currentSketch.path)
+            : await window.rifffApi.generateDefaultProjectName()
+      await window.rifffApi.exportMix(wav, defaultName)
     } catch (err) {
       console.error('ProjectMenu: failed to export mix:', err)
       // Export now has exactly one code path (the native engine, with no Web
@@ -913,7 +920,16 @@ function Frame(): React.JSX.Element {
    * replace the live project on top of a save that never landed. */
   async function handleSave(): Promise<boolean> {
     try {
-      const json = serializeProject(state)
+      const rawPluginStates = await window.rifffApi.engineGetPluginStates()
+      if (rawPluginStates === null) {
+        throw new Error('failed to read current plugin state from the engine')
+      }
+      const pluginStates = buildPluginStatesMap(
+        rawPluginStates,
+        state.masterChain,
+        state.channelPlugins
+      )
+      const json = serializeProject(state, pluginStates)
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
         await window.rifffApi.saveProjectToLibrary(name, json)

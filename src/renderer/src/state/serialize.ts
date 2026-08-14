@@ -1,6 +1,7 @@
 import { initialState, type AppState } from './store'
 import { isSketchEligible } from './selectors'
 import { snapToWholeBarIfNearlyExact } from '@shared/barLengthSnap'
+import type { PluginStatesMap } from '@shared/pluginStates'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -37,7 +38,7 @@ export interface LegacyPersistedProject extends Omit<
   trackOrder: string[]
 }
 
-export function serializeProject(state: AppState): string {
+export function serializeProject(state: AppState, pluginStates: PluginStatesMap = {}): string {
   // Rest destructure is how we drop the transient UI-mode fields;
   // ignoreRestSiblings isn't enabled project-wide, so the extracted-but-unused
   // bindings need an explicit disable.
@@ -60,7 +61,13 @@ export function serializeProject(state: AppState): string {
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */
-  return JSON.stringify(rest, null, 2)
+  // pluginStates lives outside AppState entirely (see pluginStates.ts's own
+  // doc comment) -- merged in here, at the very last moment before
+  // stringifying, rather than ever being carried on `state` itself.
+  // Omitted from the output entirely when empty, so an old project with no
+  // plugins ever loaded doesn't grow a permanent `"pluginStates": {}` line.
+  const withPluginStates = Object.keys(pluginStates).length > 0 ? { ...rest, pluginStates } : rest
+  return JSON.stringify(withPluginStates, null, 2)
 }
 
 // Reuses each old trackOrder entry's own groupId as its channel id, matching
