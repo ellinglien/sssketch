@@ -306,8 +306,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // engineLoadMasterPlugin/engineLoadChannelPlugin calls for it" -- see
   // pluginStates.ts's own doc comment for why this deliberately lives
   // OUTSIDE the reducer/AppState. A plain ref, not React state: nothing
-  // ever needs to re-render off this value changing, only read it exactly
-  // once per LOAD_STATE inside the two diffing effects below.
+  // ever needs to re-render off this value changing, only read it. Each
+  // entry is deleted the moment a diffing effect below actually applies it
+  // (see their own `delete pluginStatesRef.current[slotKey]` calls) --
+  // without that, a later remove-then-reselect-the-same-plugin later in the
+  // SAME session would silently reapply a stale captured blob instead of
+  // loading the plugin at its current default state.
   const pluginStatesRef = useRef<PluginStatesMap>({})
   const restoreState = useCallback(
     (state: AppState, pluginStates: PluginStatesMap): void => {
@@ -586,8 +590,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           pluginId === null
             ? null
             : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-        const stateBase64 =
-          stateForSlot(pluginStatesRef.current, `master:${slot}`, pluginId) ?? null
+        const slotKey = `master:${slot}`
+        const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
+        if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
         void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path, stateBase64)
       }
     })
@@ -617,8 +622,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             pluginId === null
               ? null
               : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-          const stateBase64 =
-            stateForSlot(pluginStatesRef.current, `channel:${channelId}:${slot}`, pluginId) ?? null
+          const slotKey = `channel:${channelId}:${slot}`
+          const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
+          if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
           void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path, stateBase64)
         }
       })
