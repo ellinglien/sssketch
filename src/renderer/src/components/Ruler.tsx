@@ -120,6 +120,7 @@ export function Ruler({
 
   return (
     <div
+      data-tour-id="tour-zoom"
       onMouseDown={(e) => {
         // Cmd+drag scrubs (matching this app's existing "Cmd = the
         // special navigation/setup modifier" convention -- see App.tsx's

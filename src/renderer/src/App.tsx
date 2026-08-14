@@ -714,14 +714,24 @@ const TOUR_STEPS: TourStep[] = [
     body: 'drag a clip to move it, drag its edges to crop.'
   },
   {
+    selector: '[data-tour-id="tour-mute"]',
+    title: 'muting clips',
+    body: 'right-click a clip to mute it, right-click again to unmute.'
+  },
+  {
+    selector: '[data-tour-id="tour-zoom"]',
+    title: 'zooming in',
+    body: 'hold cmd and scroll to zoom the timeline in and out.'
+  },
+  {
     selector: '[data-tour-id="tour-tidy"]',
     title: 'tidy up',
-    body: 'groups similar-sounding stems onto shared tracks automatically.'
+    body: 'a tool to help you group similar sounding stems when exporting.'
   },
   {
     selector: '[data-tour-id="tour-mode"]',
     title: 'sketch / arrange',
-    body: 'sketch is a quick rough layout; arrange is the basic timeline.'
+    body: 'sketch is a quick rough layout; arrange is a timeline view.'
   }
 ]
 

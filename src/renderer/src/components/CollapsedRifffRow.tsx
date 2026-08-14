@@ -674,6 +674,7 @@ export function CollapsedRifffRow({
       <div style={{ flex: 1, position: 'relative' }}>
         <div
           data-rifff-clip
+          data-tour-id="tour-mute"
           onContextMenu={handleBlockContextMenu}
           title="right-click to mute group · ctrl+right-click to solo"
           style={{
