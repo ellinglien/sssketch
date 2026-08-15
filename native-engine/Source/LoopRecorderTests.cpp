@@ -56,7 +56,7 @@ namespace sssketch
                 std::vector<float> left2(100, 0.05f);
                 std::vector<float> right2(100, 0.1f);
                 const float* secondChannels[] = { left2.data(), right2.data() };
-                recorder.writeBlock(secondChannels, 2, 100, 100);
+                recorder.writeBlock(secondChannels, 2, 0, 100);
                 expectWithinAbsoluteError(recorder.currentPeakL(), 0.05f, 0.01f);
                 expectWithinAbsoluteError(recorder.currentPeakR(), 0.1f, 0.01f);
             }

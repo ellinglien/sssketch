@@ -283,7 +283,7 @@ namespace sssketch
                 std::vector<float> loudL(100, 0.7f);
                 std::vector<float> loudR(100, 0.9f);
                 const float* loudChannels[] = { loudL.data(), loudR.data() };
-                recorder.writeBlock(loudChannels, 2, 100, 100, 0.001);
+                recorder.writeBlock(loudChannels, 2, 0, 100, 0.001);
                 expectWithinAbsoluteError(recorder.currentPeakL(), 0.7f, 0.05f);
                 expectWithinAbsoluteError(recorder.currentPeakR(), 0.9f, 0.05f);
             }
