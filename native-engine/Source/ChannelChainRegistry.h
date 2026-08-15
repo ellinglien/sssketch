@@ -52,6 +52,16 @@ namespace sssketch
          * the next explicit setBpm call. */
         void setBpm(double bpm);
 
+        /** Audio-thread API (unlike setBpm just above) -- called once per
+         * block from PlaybackEngine::renderBlock (see PluginChain::
+         * setPosition's own doc comment for why this is safe there).
+         * Forwards the current transport position to every currently
+         * published channel's chain, and remembers it so a channel created
+         * later by updateChannelSet starts already synced to the current
+         * position, instead of defaulting to bar 0 until the next block.
+         * Same lock-free load-then-iterate pattern as setBpm. */
+        void setPosition(double positionBars);
+
         /** Message-thread API: forwards to channelId's own chain. A no-op
          * (onLoaded called with success=false) if channelId isn't currently
          * known -- updateChannelSet should normally have already been
@@ -101,5 +111,6 @@ namespace sssketch
         PluginChain::Instantiator instantiator;
         BridgeClient* bridgeClient;
         std::atomic<double> currentBpm { 120.0 };
+        std::atomic<double> currentPositionBars { 0.0 };
     };
 }

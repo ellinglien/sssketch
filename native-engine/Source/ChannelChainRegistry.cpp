@@ -39,6 +39,7 @@ namespace sssketch
                     ? std::make_shared<PluginChain>(kNumChannelChainSlots, instantiator, bridgeClient)
                     : std::make_shared<PluginChain>(kNumChannelChainSlots, &PluginChain::defaultInstantiate, bridgeClient);
                 (*next)[channelId]->setBpm(currentBpm.load());
+                (*next)[channelId]->setPosition(currentPositionBars.load());
             }
         }
 
@@ -63,6 +64,14 @@ namespace sssketch
         const auto* map = published.load();
         for (auto& [channelId, chain] : *map)
             chain->setBpm(bpm);
+    }
+
+    void ChannelChainRegistry::setPosition(double positionBars)
+    {
+        currentPositionBars.store(positionBars);
+        const auto* map = published.load();
+        for (auto& [channelId, chain] : *map)
+            chain->setPosition(positionBars);
     }
 
     void ChannelChainRegistry::requestLoad(
