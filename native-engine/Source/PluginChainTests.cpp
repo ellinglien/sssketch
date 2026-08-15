@@ -85,6 +85,8 @@ namespace sssketch
                 auto position = ph->getPosition();
                 if (position.hasValue() && position->getBpm().hasValue())
                     lastSeenBpm = *position->getBpm();
+                if (position.hasValue() && position->getPpqPosition().hasValue())
+                    lastSeenPpq = *position->getPpqPosition();
             }
             double getTailLengthSeconds() const override { return 0.0; }
             bool acceptsMidi() const override { return false; }
@@ -100,6 +102,7 @@ namespace sssketch
             void setStateInformation(const void*, int) override {}
 
             double lastSeenBpm = 0.0;
+            double lastSeenPpq = 0.0;
         };
 
         // outPlugin is set to the constructed instance's raw pointer, so the
@@ -257,6 +260,26 @@ namespace sssketch
                     chain.setBpm(90.0);
                     chain.process(1, l, r);
                     expectWithinAbsoluteError(raw->lastSeenBpm, 90.0, 0.0001);
+                }
+
+                beginTest("setPosition reaches a loaded plugin's own playhead as PPQ "
+                          "(positionBars * 4.0), live on every block");
+                {
+                    BpmCapturingTestPlugin* raw = nullptr;
+                    PluginChain chain(4, bpmCaptureInstantiator(raw));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "any-id", 44100.0, 512, err));
+                    expect(raw != nullptr);
+
+                    chain.setPosition(2.5); // 2.5 bars -> 10.0 PPQ (4 beats/bar, this app's fixed assumption)
+                    float l[1] = { 0.0f };
+                    float r[1] = { 0.0f };
+                    chain.process(1, l, r);
+                    expectWithinAbsoluteError(raw->lastSeenPpq, 10.0, 0.0001);
+
+                    chain.setPosition(1.0);
+                    chain.process(1, l, r);
+                    expectWithinAbsoluteError(raw->lastSeenPpq, 4.0, 0.0001);
                 }
 
                 beginTest("captureStateBase64 round-trips through applyStateBase64 via loadPluginSync");

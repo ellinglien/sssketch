@@ -23,6 +23,7 @@ namespace sssketch
     }
 
     void PluginChain::setBpm(double bpm) { playHead.setBpm(bpm); }
+    void PluginChain::setPosition(double positionBars) { playHead.setPosition(positionBars); }
 
     void PluginChain::applyPendingSwaps()
     {

@@ -117,6 +117,22 @@ namespace sssketch
          * addendum for why that scope was chosen over full playhead sync. */
         void setBpm(double bpm);
 
+        /** Any thread: updates the transport position every plugin in this
+         * chain sees via its own AudioPlayHead::getPosition() query, so a
+         * tempo-synced delay/arpeggiator/gated effect/synced LFO can lock
+         * onto the beat, not just match tempo (see setBpm just above -- this
+         * is the position half of that same playhead). Time-signature-
+         * agnostic: always reports PPQ as positionBars * 4.0 (a fixed
+         * 4-beats-per-bar assumption) -- this app doesn't track a real time
+         * signature today, and most plugins default sensibly to 4/4 without
+         * one; per the design spec's own explicit decision to skip time
+         * signature for this feature. Same real-time-safety story as
+         * setBpm: a plain lock-free atomic store, safe to call from the
+         * audio thread (and in practice always IS called from there, once
+         * per renderBlock -- see PlaybackEngine::renderBlock and
+         * Transport.cpp's own call sites). */
+        void setPosition(double positionBars);
+
         /** Audio-thread API: promotes any slot with a ready pending swap to
          * active; the instance it replaces is handed to a background
          * cleanup thread rather than deleted here (a plugin's destructor
@@ -168,17 +184,20 @@ namespace sssketch
         {
         public:
             void setBpm(double newBpm) { bpm.store(newBpm); }
+            void setPosition(double newPositionBars) { positionBars.store(newPositionBars); }
 
             juce::Optional<PositionInfo> getPosition() const override
             {
                 PositionInfo info;
                 info.setBpm(bpm.load());
                 info.setIsPlaying(true);
+                info.setPpqPosition(positionBars.load() * 4.0);
                 return info;
             }
 
         private:
             std::atomic<double> bpm { 120.0 };
+            std::atomic<double> positionBars { 0.0 };
         };
 
         // Bundles what a completed background load hands off to the audio
