@@ -96,40 +96,19 @@ namespace sssketch
          * LoopRecorder::writeToWavFile/RenderExport.cpp. */
         bool writeToWavFile(const juce::String& outputPath) const;
 
-        /** Peak amplitude across the WHOLE fixed buffer, split into
-         * numBuckets evenly-sized buckets -- unlike LoopRecorder's own
-         * peaksSoFar/peaksFixedWindow (both designed around a
-         * monotonically-growing, append-only buffer), this buffer is a
-         * fixed length for its entire lifetime (see this class's own doc
-         * comment), so there's no "how much has been written so far" to
-         * track. Called on the same 30Hz poll as writeToWavFile's own use
-         * case (see IpcServer.cpp's timerCallback), for a live "building
-         * up" waveform preview while gated recording is enabled -- see
-         * ChannelRow.tsx's own overlay for the LoopRecorder equivalent
-         * this mirrors.
-         *
-         * Incrementally cached, NOT a full rescan every call -- an earlier
-         * version rescanned the entire buffer (up to several million
-         * stereo samples for a long loop region) from scratch on every one
-         * of these 30Hz polls, which meant holding bufferLock -- the SAME
-         * lock writeBlock needs on every real-time audio callback -- for a
-         * genuinely long stretch, repeatedly, for the whole time gated
-         * recording was armed. Confirmed as the likely cause of real
-         * reported glitching/stuttering while recording: a slow poll
-         * blocking the audio thread's own lock acquisition is a textbook
-         * dropout. Now only the kPeaksBucketCount buckets actually
-         * touched by writeBlock since the LAST peaks() call get
-         * recomputed (see markBucketsDirty/dirtyBuckets below); everything
-         * else returns the still-valid cached value from last time -- the
-         * lock is still taken, but only ever held for a handful of small,
-         * bounded bucket scans instead of the whole buffer.
-         *
-         * numBuckets is expected to always be kPeaksBucketCount in
-         * practice (IpcServer.cpp's only caller always asks for exactly
-         * that) -- passing anything else still works, just falls back to
-         * an uncached full recompute at that resolution rather than trying
-         * to reconcile two different bucket granularities in one cache. */
-        std::vector<float> peaks(int numBuckets) const;
+        /** Peak amplitude of whatever this recorder's own left/right
+         * output channel most recently SAW as input, in the MOST RECENT
+         * writeBlock() call only -- computed regardless of gate state (so
+         * the meter reflects true input level even below threshold, for
+         * calibrating a mic before it's loud enough to actually start
+         * capturing), and entirely independent of buffer/bufferLock/the
+         * fixed loop-position buffer this class writes into -- a plain
+         * lock-free atomic pair, same pattern as LoopRecorder's own
+         * currentPeakL()/currentPeakR(). writeBlock() (audio thread) is
+         * the sole writer, these two accessors (message thread) the sole
+         * readers. */
+        float currentPeakL() const { return currentPeakL_.load(std::memory_order_relaxed); }
+        float currentPeakR() const { return currentPeakR_.load(std::memory_order_relaxed); }
 
     private:
         double sampleRate;
@@ -145,40 +124,7 @@ namespace sssketch
         // needed for this.
         int hangoverRemainingSamples = 0;
 
-        // The fixed bucket resolution peaks()'s incremental cache is kept
-        // at -- see peaks()'s own doc comment on why this needs to be a
-        // fixed, known-in-advance constant rather than derived from
-        // whatever numBuckets a given peaks() call happens to pass: writeBlock
-        // (audio thread) needs to know which bucket index a just-written
-        // sample range falls into WITHOUT waiting for a peaks() call to
-        // tell it. Matches IpcServer.cpp's own peaks(128) call.
-        static constexpr int kPeaksBucketCount = 128;
-
-        // cachedPeaks/dirtyBuckets are guarded by bufferLock, same as
-        // buffer itself -- writeBlock (audio thread) marks buckets dirty
-        // while already holding the lock for the sample write; peaks()
-        // (message thread) reads/recomputes/clears them while holding the
-        // lock for its own bounded per-bucket work. Both empty until the
-        // first peaks(kPeaksBucketCount) call establishes them (at
-        // kPeaksBucketCount size, every bucket initially dirty -- a
-        // correct, if unavoidable, one-time full compute) -- see peaks()'s
-        // own implementation.
-        mutable std::vector<float> cachedPeaks;
-        mutable std::vector<bool> dirtyBuckets;
-
-        // Peak amplitude of ONE bucket (bucketIndex of numBuckets total),
-        // scanning across every channel -- the actual per-bucket scan work
-        // both peaks()'s cached path and its uncached-fallback path share.
-        float computeBucketPeak(int bucketIndex, int numBuckets) const;
-
-        // Marks whichever of kPeaksBucketCount buckets the sample range
-        // [startPos, startPos + numSamples) (mod bufferLengthSamples)
-        // falls into as dirty, so the next peaks() call knows to recompute
-        // them instead of trusting a now-stale cached value. Called from
-        // writeBlock, already holding bufferLock. A no-op before
-        // dirtyBuckets exists yet (peaks() hasn't been called for the
-        // first time) -- nothing to keep in sync with until there's a
-        // cache to keep in sync.
-        void markBucketsDirty(int startPos, int numSamples);
+        std::atomic<float> currentPeakL_ { 0.0f };
+        std::atomic<float> currentPeakR_ { 0.0f };
     };
 }

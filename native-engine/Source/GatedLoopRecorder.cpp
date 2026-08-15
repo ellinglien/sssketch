@@ -96,6 +96,26 @@ namespace sssketch
     {
         if (numSamples <= 0) return;
 
+        // Live per-channel input level for the VU meter -- computed
+        // UNCONDITIONALLY, before the gate/threshold decision below, so
+        // the meter reflects true input signal even while below
+        // threshold. Entirely independent of bufferLock/buffer -- reads
+        // straight from inputChannelData, so this can never reintroduce
+        // the whole-buffer-rescan-under-lock bug this class's own former
+        // peaks() method used to have.
+        if (numInputChannels > 0 && inputChannelData != nullptr)
+        {
+            for (int destCh = 0; destCh < kOutputChannels; ++destCh)
+            {
+                const int srcCh = std::min(destCh, numInputChannels - 1);
+                const auto* src = inputChannelData[srcCh];
+                float peak = 0.0f;
+                for (int i = 0; i < numSamples; ++i)
+                    peak = std::max(peak, std::abs(src[startSample + i]));
+                (destCh == 0 ? currentPeakL_ : currentPeakR_).store(peak, std::memory_order_relaxed);
+            }
+        }
+
         // RMS over this block's mono downmix decides whether ANY of it
         // gets written -- computed outside the lock, cheap and read-only.
         // Still a downmix here even though the CAPTURED audio is now
@@ -151,7 +171,6 @@ namespace sssketch
                 dest[destIndex] = src[startSample + i];
             }
         }
-        markBucketsDirty(startPos, numSamples);
     }
 
     bool GatedLoopRecorder::writeToWavFile(const juce::String& outputPath) const
@@ -183,84 +202,4 @@ namespace sssketch
         return true;
     }
 
-    float GatedLoopRecorder::computeBucketPeak(int bucketIndex, int numBuckets) const
-    {
-        const int bucketStart = (int) ((double) bucketIndex / numBuckets * bufferLengthSamples);
-        const int bucketEnd = (int) ((double) (bucketIndex + 1) / numBuckets * bufferLengthSamples);
-        float peak = 0.0f;
-        // Peak across both channels -- this is just a coarse live overview
-        // bar, not a true stereo waveform, matching LoopRecorder's own
-        // peaksSoFar/peaksFixedWindow reasoning.
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        {
-            const auto* data = buffer.getReadPointer(ch);
-            for (int i = bucketStart; i < bucketEnd; ++i)
-                peak = std::max(peak, std::abs(data[i]));
-        }
-        return peak;
-    }
-
-    void GatedLoopRecorder::markBucketsDirty(int startPos, int numSamples)
-    {
-        if (dirtyBuckets.empty()) return; // no cache established yet -- nothing to keep in sync with
-        if (numSamples <= 0) return;
-
-        const int bucketSize = std::max(1, bufferLengthSamples / kPeaksBucketCount);
-        // Walks in bucket-sized strides (not per-sample) -- a real write is
-        // typically well under one bucket's own width, so this loop body
-        // usually runs exactly once; it only iterates further for an
-        // unusually large numSamples relative to the loop length.
-        for (int offset = 0; offset < numSamples; offset += bucketSize)
-        {
-            const int pos = (startPos + offset) % bufferLengthSamples;
-            const int bucket = std::min(kPeaksBucketCount - 1, pos / bucketSize);
-            dirtyBuckets[(size_t) bucket] = true;
-        }
-        // The stride above can overstep the LAST sample actually written
-        // (numSamples isn't necessarily an exact multiple of bucketSize) --
-        // explicitly mark its own bucket too so the tail end of a write is
-        // never silently left stale.
-        const int lastPos = (startPos + numSamples - 1) % bufferLengthSamples;
-        dirtyBuckets[(size_t) std::min(kPeaksBucketCount - 1, lastPos / bucketSize)] = true;
-    }
-
-    std::vector<float> GatedLoopRecorder::peaks(int numBuckets) const
-    {
-        if (numBuckets <= 0) return {};
-
-        const juce::ScopedLock sl(bufferLock);
-
-        // Only kPeaksBucketCount is incrementally cached/dirty-tracked (see
-        // markBucketsDirty and this method's own doc comment on why) -- a
-        // request for any other resolution falls back to a plain, uncached
-        // full scan at THAT resolution instead, matching this method's
-        // original (pre-caching) behavior exactly. Doesn't happen in
-        // practice (IpcServer.cpp always asks for kPeaksBucketCount).
-        if (numBuckets != kPeaksBucketCount)
-        {
-            std::vector<float> result((size_t) numBuckets, 0.0f);
-            for (int b = 0; b < numBuckets; ++b)
-                result[(size_t) b] = computeBucketPeak(b, numBuckets);
-            return result;
-        }
-
-        if ((int) cachedPeaks.size() != kPeaksBucketCount)
-        {
-            // First call (or a resolution change) -- nothing cached yet, so
-            // every bucket needs a real scan this one time. Later calls
-            // only redo whichever buckets markBucketsDirty actually flagged
-            // since the last poll.
-            cachedPeaks.assign((size_t) kPeaksBucketCount, 0.0f);
-            dirtyBuckets.assign((size_t) kPeaksBucketCount, true);
-        }
-
-        for (int b = 0; b < kPeaksBucketCount; ++b)
-        {
-            if (!dirtyBuckets[(size_t) b]) continue;
-            cachedPeaks[(size_t) b] = computeBucketPeak(b, kPeaksBucketCount);
-            dirtyBuckets[(size_t) b] = false;
-        }
-
-        return cachedPeaks;
-    }
 }

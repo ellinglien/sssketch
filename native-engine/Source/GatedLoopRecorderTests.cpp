@@ -260,74 +260,32 @@ namespace sssketch
                 expect(recorder.writeToWavFile(path)); // callable again, still fine
             }
 
-            beginTest("peaks() reflects captured audio at the right bucket, silence "
-                      "elsewhere -- unlike LoopRecorder's own peaksSoFar/peaksFixedWindow, "
-                      "this always spans the WHOLE fixed buffer, not 'how much so far'");
-            {
-                GatedLoopRecorder recorder(kSampleRate, 4.0, 2.0); // 8s loop
-                const auto silentPeaks = recorder.peaks(8);
-                for (float p : silentPeaks) expectWithinAbsoluteError(p, 0.0f, 0.001f);
-
-                auto loud = loudTone(4800);
-                const float* channels[] = { loud.data() };
-                // loopRelativeStartBar=0.0 -> writes into the very first bucket.
-                recorder.writeBlock(channels, 1, 0, 4800, 0.0);
-                const auto peaksAfterWrite = recorder.peaks(8);
-                expectWithinAbsoluteError(peaksAfterWrite[0], 0.8f, 0.05f);
-                for (size_t i = 1; i < peaksAfterWrite.size(); ++i)
-                    expectWithinAbsoluteError(peaksAfterWrite[i], 0.0f, 0.001f);
-            }
-
-            beginTest("peaks(128) incrementally re-scans only buckets actually touched since "
-                      "the last call, not the whole buffer every time -- the real fix for "
-                      "reported glitching/stuttering while recording (see peaks()'s own doc "
-                      "comment): a bucket nothing has written to since the previous call keeps "
-                      "returning its cached value rather than getting needlessly rescanned");
-            {
-                GatedLoopRecorder recorder(kSampleRate, 4.0, 2.0); // 8s loop = 384000 samples
-                // 128 (kPeaksBucketCount) is the ONLY resolution this cache
-                // actually applies to -- see peaks()'s own doc comment on
-                // why any other numBuckets falls back to an uncached scan.
-                auto peaks1 = recorder.peaks(128);
-                expectEquals((int) peaks1.size(), 128);
-                for (float p : peaks1) expectWithinAbsoluteError(p, 0.0f, 0.001f);
-
-                // 384000 samples / 128 buckets = 3000 samples/bucket. Write
-                // loud audio into exactly bucket 0.
-                auto loud = loudTone(3000);
-                const float* loudChannels[] = { loud.data() };
-                recorder.writeBlock(loudChannels, 1, 0, 3000, 0.0);
-
-                auto peaks2 = recorder.peaks(128);
-                expectWithinAbsoluteError(peaks2[0], 0.8f, 0.05f);
-                for (size_t i = 1; i < peaks2.size(); ++i)
-                    expectWithinAbsoluteError(peaks2[i], 0.0f, 0.001f);
-
-                // Now write loud audio into a FAR LATER bucket (50) only.
-                auto loud2 = loudTone(3000);
-                const float* loud2Channels[] = { loud2.data() };
-                const double bar50 = (50.0 * 3000.0 / 384000.0) * 4.0; // sample 150000 as a bar position
-                recorder.writeBlock(loud2Channels, 1, 0, 3000, bar50);
-
-                auto peaks3 = recorder.peaks(128);
-                // Bucket 0 STILL reads back as loud -- proves the cache from
-                // the earlier call wasn't discarded/reset by this second,
-                // unrelated write; only bucket 50 needed a real rescan.
-                expectWithinAbsoluteError(peaks3[0], 0.8f, 0.05f);
-                expectWithinAbsoluteError(peaks3[50], 0.8f, 0.05f);
-                for (size_t i = 1; i < peaks3.size(); ++i)
-                {
-                    if (i == 50) continue;
-                    expectWithinAbsoluteError(peaks3[i], 0.0f, 0.001f);
-                }
-            }
-
-            beginTest("peaks() returns an empty vector for numBuckets <= 0, rather than "
-                      "crashing or dividing by zero");
+            beginTest("currentPeakL/currentPeakR are 0 for a freshly-constructed recorder");
             {
                 GatedLoopRecorder recorder(kSampleRate, 4.0, 2.0);
-                expect(recorder.peaks(0).empty());
-                expect(recorder.peaks(-1).empty());
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.0f, 0.0001f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.0f, 0.0001f);
+            }
+
+            beginTest("currentPeakL/currentPeakR reflect the true input level EVEN BELOW the "
+                      "gate threshold, independently per channel, and only the MOST RECENT "
+                      "writeBlock call");
+            {
+                GatedLoopRecorder recorder(kSampleRate, 4.0, 2.0);
+                std::vector<float> quietL(100, 0.005f);
+                std::vector<float> quietR(100, 0.008f);
+                const float* quietChannels[] = { quietL.data(), quietR.data() };
+                recorder.writeBlock(quietChannels, 2, 0, 100, 0.0);
+                expect(!recorder.isGateOpen());
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.005f, 0.001f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.008f, 0.001f);
+
+                std::vector<float> loudL(100, 0.7f);
+                std::vector<float> loudR(100, 0.9f);
+                const float* loudChannels[] = { loudL.data(), loudR.data() };
+                recorder.writeBlock(loudChannels, 2, 100, 100, 0.001);
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.7f, 0.05f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.9f, 0.05f);
             }
 
             beginTest("writeToWavFile blends the buffer's own loop seam -- the exported tail "
