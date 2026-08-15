@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { BusId, Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
-import { linearWaveBars, linearWaveBarsRunningMax } from '@shared/visuals'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { busColorHex } from '../theme/typeColor'
+import { linearToMeterFraction, nextMeterValue } from '../audio/meterBallistics'
 import {
   getStateSnapshot,
   useAppSelector,
@@ -66,12 +66,6 @@ const CHANNEL_ROW_MIN_HEIGHT = 91
 // per-CHANNEL plugin-chain button; the separate, already-existing "fx on
 // main" control elsewhere in the app is untouched.
 const CHANNEL_FX_BUTTON_ENABLED = false
-
-// Must match IpcServer.cpp's own armedRecorder->peaksFixedWindow(0.05) call
-// exactly -- the live capture overlay below derives its pixel width from
-// capturePeaks.length * this value, not from a separately-pushed elapsed
-// time, so the two need to agree on what one bucket represents.
-const LIVE_CAPTURE_BUCKET_SECONDS = 0.05
 
 /** One arranger row, hosting every clip currently assigned to this channel
  * (see channelOf in store.ts) — could be exactly one clip (today's default,
@@ -419,49 +413,71 @@ function ChannelRowImpl({
     dispatch({ type: 'REMOVE_RECORDING_CHANNEL', channelId })
   }
 
-  // Live "building up" waveform feedback while this channel is armed -- see
+  // Live VU-meter feedback while this channel is armed -- see
   // docs/superpowers/specs/2026-08-03-loop-recording-design.md's "Live
   // capture feedback" section. Subscribes only while armed (unsubscribes and
-  // clears immediately on disarm, rather than leaving a stale bar graph
+  // clears immediately on disarm, rather than leaving a stale meter reading
   // sitting there) since the engine only pushes capture-level-update while
   // some channel is actually armed (see IpcServer.cpp's timerCallback).
-  const [capturePeaks, setCapturePeaks] = useState<number[]>([])
+  // displayL/displayR/lastUpdateMs live in this effect's own closure (not
+  // state) since they're intermediate ballistics bookkeeping updated on
+  // every poll -- only the final, already-eased value needs to be state so
+  // React actually re-renders on it.
+  const [capturePeakL, setCapturePeakL] = useState(0)
+  const [capturePeakR, setCapturePeakR] = useState(0)
   useEffect(() => {
     if (!isArmed) return
-    const unsubscribe = window.rifffApi.onCaptureLevelUpdate((updateChannelId, peaks) => {
-      if (updateChannelId === channelId) {
-        setCapturePeaks(peaks)
-      }
+    let lastUpdateMs = performance.now()
+    let displayL = 0
+    let displayR = 0
+    const unsubscribe = window.rifffApi.onCaptureLevelUpdate((updateChannelId, peakL, peakR) => {
+      if (updateChannelId !== channelId) return
+      const now = performance.now()
+      const elapsedMs = now - lastUpdateMs
+      lastUpdateMs = now
+      displayL = nextMeterValue(displayL, linearToMeterFraction(peakL), elapsedMs)
+      displayR = nextMeterValue(displayR, linearToMeterFraction(peakR), elapsedMs)
+      setCapturePeakL(displayL)
+      setCapturePeakR(displayR)
     })
     // Reset lives in the cleanup, not the setup body -- calling setState
     // synchronously in an effect's setup trips react-hooks/set-state-in-effect
     // (see BeatPicker.tsx's identical reasoning on its own preview-stop
     // effect). Cleanup fires both when isArmed flips back to false and on
-    // unmount, so the bar graph never lingers stale after a disarm.
+    // unmount, so the meter never lingers stale after a disarm.
     return () => {
       unsubscribe()
-      setCapturePeaks([])
+      setCapturePeakL(0)
+      setCapturePeakR(0)
     }
   }, [isArmed, channelId])
 
-  // Same live-overlay pattern as capturePeaks above, adapted for
+  // Same live-overlay pattern as capturePeakL/R above, adapted for
   // GatedLoopRecorder's fixed-size buffer (see its own doc comment):
   // unlike the arm-to-disarm LoopRecorder, this buffer never grows -- it
   // always spans the WHOLE selected loop region from the moment gated
   // recording is enabled, so the overlay's width is fixed too (derived
-  // from loopRegion, not from gatedPeaks.length) and uses linearWaveBars
-  // (plain whole-array normalization), not linearWaveBarsRunningMax --
-  // there's no "growing array retroactively rescaling" problem to guard
-  // against when the array's own length never changes.
-  const [gatedPeaks, setGatedPeaks] = useState<number[]>([])
+  // from loopRegion, not from anything peak-related).
+  const [gatedPeakL, setGatedPeakL] = useState(0)
+  const [gatedPeakR, setGatedPeakR] = useState(0)
   useEffect(() => {
     if (!gatedRecordingEnabled || !isGatedRecordingChannel) return
-    const unsubscribe = window.rifffApi.onGatedRecordingUpdate((peaks) => {
-      setGatedPeaks(peaks)
+    let lastUpdateMs = performance.now()
+    let displayL = 0
+    let displayR = 0
+    const unsubscribe = window.rifffApi.onGatedRecordingUpdate((peakL, peakR) => {
+      const now = performance.now()
+      const elapsedMs = now - lastUpdateMs
+      lastUpdateMs = now
+      displayL = nextMeterValue(displayL, linearToMeterFraction(peakL), elapsedMs)
+      displayR = nextMeterValue(displayR, linearToMeterFraction(peakR), elapsedMs)
+      setGatedPeakL(displayL)
+      setGatedPeakR(displayR)
     })
     return () => {
       unsubscribe()
-      setGatedPeaks([])
+      setGatedPeakL(0)
+      setGatedPeakR(0)
     }
   }, [gatedRecordingEnabled, isGatedRecordingChannel])
 
@@ -617,30 +633,19 @@ function ChannelRowImpl({
         // sitting on top here still can't block clicking the clip
         // underneath.
         //
-        // Positioned at armedLoopRegion's startBar (where capture
-        // ACTUALLY started, matching MOVE_TO_CHANNEL's own placement at
-        // disarm -- see that state's own doc comment), not the live
-        // loopRegion selector -- capture length is no longer tied to the
-        // loop region at all, so this needs to track "where and how much
-        // has actually been recorded," not "the loop's own box." Width is
-        // derived from capturePeaks.length (each entry is exactly
-        // LIVE_CAPTURE_BUCKET_SECONDS of real captured audio -- see
-        // peaksFixedWindow's own doc comment on the native side), NOT from
-        // a separately-pushed elapsedSeconds -- growing in lockstep with
-        // the bars themselves means the container only ever widens in the
-        // same discrete steps new bars appear in, instead of stretching
-        // smoothly between bucket arrivals (which visibly "breathed" the
-        // most recently drawn bar wider each frame until the next bucket
-        // landed). Math.max(2, ...) keeps it from collapsing to 0px in the
-        // first instant after arming, before the first bucket exists yet.
+        // Positioned at armedLoopRegion's startBar/endBar -- a fixed
+        // snapshot taken at arm time (see its own doc comment above) --
+        // not the live loopRegion selector, and NOT derived from any
+        // growing peaks array: a live level meter shows "right now," not
+        // "how far the take has built up," so the region is sized to its
+        // full final bounds the instant the channel arms, matching where
+        // the committed take will actually land (MOVE_TO_CHANNEL's own
+        // placement at disarm).
         <div
           style={{
             position: 'absolute',
             left: armedLoopRegion.startBar * ppb,
-            width: Math.max(
-              2,
-              ((capturePeaks.length * LIVE_CAPTURE_BUCKET_SECONDS) / ((60 / bpm) * 4)) * ppb
-            ),
+            width: (armedLoopRegion.endBar - armedLoopRegion.startBar) * ppb,
             // NAME_BAR_HEIGHT/ROW_HEIGHT, not top:0/bottom:0 spanning this
             // whole channel row -- the row's own container includes the
             // 18px name-bar strip above where a committed clip's Waveform
@@ -653,55 +658,42 @@ function ChannelRowImpl({
             pointerEvents: 'none'
           }}
         >
-          {/* Same linearWaveBars geometry Waveform.tsx uses for every other
-              clip's waveform (centered bars in a 128x100 viewBox, edge to
-              edge, crisp edges) -- not a from-scratch bar-graph look, per
-              feedback asking this to read more like "the waveforms
-              elsewhere." No brightness modulation (that's the zero-
-              crossing-rate "spectrographic" layer Waveform.tsx also draws --
-              explicitly not wanted here) and no pitch line -- still no glow
-              (an earlier, separate, explicit design decision). Full
-              opacity, not Waveform.tsx's usual 0.75. Uses the dedicated
-              --ra-recording-live purple, which is the SAME purple
-              --ra-type-audio-in now uses for a committed clip too -- live
-              and final read as one continuous color language rather than
-              switching partway through.
-
-              linearWaveBarsRunningMax, not linearWaveBars -- the latter
-              normalizes every bar's height against Math.max(peaks) across
-              the WHOLE array, which for a live, growing array meant a
-              louder bucket arriving later in the take retroactively shrank
-              every bar already on screen (the "waveform looks animated"
-              bug). linearWaveBarsRunningMax normalizes each bar only
-              against peaks up to and including its own index -- values
-              that never change once present -- so a bar's height, once
-              drawn, is provably stable on every later poll, while still
-              tracking toward the same auto-normalized look
-              Waveform.tsx's own linearWaveBars gives the finished clip. */}
-          <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
-            {linearWaveBarsRunningMax(capturePeaks).map((bar, i) => (
-              <rect
-                key={i}
-                x={bar.x}
-                y={bar.y}
-                width={bar.width}
-                height={bar.height}
-                fill="var(--ra-recording-live)"
-                shapeRendering="crispEdges"
-              />
-            ))}
-          </svg>
+          {/* Two thin, flush-stacked L/R VU-meter fill bars (5px each, no
+              gap) near the bottom of the lane, instead of a growing
+              waveform -- see meterBallistics.ts for the dB conversion +
+              peak-hold-and-decay ballistics behind capturePeakL/R. Color
+              stays the dedicated --ra-recording-live purple at ALL levels
+              (no clip/near-max warning color) -- an explicit, established
+              design choice for this overlay, matching the SAME purple
+              --ra-type-audio-in uses for a committed clip too. */}
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 6, height: 5 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${capturePeakL * 100}%`,
+                background: 'var(--ra-recording-live)'
+              }}
+            />
+          </div>
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 1, height: 5 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${capturePeakR * 100}%`,
+                background: 'var(--ra-recording-live)'
+              }}
+            />
+          </div>
         </div>
       )}
       {gatedRecordingEnabled && isGatedRecordingChannel && loopRegion && (
         // Fixed position/width spanning the WHOLE loop region for the
-        // entire time gated recording is enabled -- unlike the armed
-        // overlay above (which grows from a start point as capture
-        // proceeds), GatedLoopRecorder's own buffer is bounded to exactly
-        // one loop pass from the start, so there's no "how far has it
-        // gotten" position to track, just "redraw the whole fixed span on
-        // every poll." Same NAME_BAR_HEIGHT/ROW_HEIGHT lane and
-        // --ra-recording-live color as the armed overlay, for one
+        // entire time gated recording is enabled -- GatedLoopRecorder's
+        // own buffer is bounded to exactly one loop pass from the start,
+        // so there's no "how far has it gotten" position to track, just
+        // "redraw the whole fixed span on every poll." Same
+        // NAME_BAR_HEIGHT/ROW_HEIGHT lane, VU-meter bars, and
+        // --ra-recording-live color as the armed overlay above, for one
         // continuous "this is live capture" color language across both
         // recording paths.
         <div
@@ -714,19 +706,24 @@ function ChannelRowImpl({
             pointerEvents: 'none'
           }}
         >
-          <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
-            {linearWaveBars(gatedPeaks).map((bar, i) => (
-              <rect
-                key={i}
-                x={bar.x}
-                y={bar.y}
-                width={bar.width}
-                height={bar.height}
-                fill="var(--ra-recording-live)"
-                shapeRendering="crispEdges"
-              />
-            ))}
-          </svg>
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 6, height: 5 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${gatedPeakL * 100}%`,
+                background: 'var(--ra-recording-live)'
+              }}
+            />
+          </div>
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 1, height: 5 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${gatedPeakR * 100}%`,
+                background: 'var(--ra-recording-live)'
+              }}
+            />
+          </div>
         </div>
       )}
       {chainPanelOpen && (
