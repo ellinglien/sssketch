@@ -55,10 +55,28 @@ include(${ableton_link_SOURCE_DIR}/AbletonLinkConfig.cmake)
 # window. BUNDLE_ID is set explicitly since the default (derived from
 # COMPANY_NAME, which this project never sets) would otherwise fall back to
 # something generic.
+#
+# MICROPHONE_PERMISSION_ENABLED/_TEXT inject NSMicrophoneUsageDescription
+# into THIS bundle's own Info.plist -- this .app is a separately signed
+# bundle with its own CFBundleIdentifier (com.ellinglien.sssketch-engine,
+# distinct from the main Electron app's), and it's this process, not the
+# Electron one, that actually opens the CoreAudio input device (Transport.cpp).
+# electron-builder.yml's own NSMicrophoneUsageDescription (extendInfo) only
+# ever reaches the MAIN app's Info.plist -- macOS TCC treats this bundle as
+# its own separate responsible process for hardware access, so without this
+# key here too, the packaged/signed engine can never be authorized: found via
+# real recording-produces-silence testing on a signed, notarized build (never
+# reproduced in unsigned `npm run dev`, where this distinction doesn't
+# apply) -- CoreAudio's HAL-level input API doesn't hard-fail when TCC denies
+# it like AVFoundation capture does, it just silently hands back zeroed
+# samples, which is exactly what a real recording test showed: arm/disarm
+# succeeded with no error, but the captured file was silent throughout.
 juce_add_gui_app(sssketch_engine
   PRODUCT_NAME "sssketch-engine"
   BUNDLE_ID "com.ellinglien.sssketch-engine"
   PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
+  MICROPHONE_PERMISSION_ENABLED TRUE
+  MICROPHONE_PERMISSION_TEXT "sssketch needs microphone access to record audio into your project."
 )
 
 # PRIVATE so this only applies to our own Source/*.cpp -- not JUCE's own
