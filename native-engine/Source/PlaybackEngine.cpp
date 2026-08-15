@@ -106,6 +106,17 @@ namespace sssketch
         if (snap == nullptr)
             return;
 
+        // Pushed once per renderBlock call, covering every channel chain at
+        // once -- both live playback (Transport.cpp's several
+        // engine.renderBlock() call sites inside renderLoopAware, e.g. a
+        // loop-wrap split render) and offline export (RenderExport.cpp's
+        // own call) already funnel through this one function, so this is
+        // the single place a hosted channel-chain plugin's playhead
+        // position needs to be kept in sync -- see
+        // ChannelChainRegistry::setPosition's own doc comment for why it's
+        // safe to call this from a real-time thread every block.
+        channelChains.setPosition(positionBars);
+
         // Single, genuinely lock-free check -- see hasAnyOverride()'s own
         // doc comment -- letting the two call sites below skip
         // liveParamOverrides.fadeInFor()/fadeOutFor()/volumeFor() (each of
