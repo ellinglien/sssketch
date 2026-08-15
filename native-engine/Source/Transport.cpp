@@ -578,6 +578,7 @@ namespace sssketch
         {
             const double pos = positionBars.load();
             const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+            masterChain.setPosition(pos);
             masterChain.process(numSamples, outL, outR);
             for (int i = 0; i < numSamples; ++i)
             {
@@ -610,6 +611,7 @@ namespace sssketch
 
         const double pos = positionBars.load();
         const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+        masterChain.setPosition(pos);
         masterChain.process(numSamples, outL, outR);
 
         if (fadingOut)
