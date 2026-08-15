@@ -74,16 +74,16 @@ namespace sssketch
          * requirement). */
         bool hasAnyAudio() const { return writePos.load(std::memory_order_acquire) > 0; }
 
-        /** How much real time has been captured so far, in seconds --
-         * lets the renderer size the live overlay to match how long the
-         * take has actually grown to (see IpcServer.cpp's
-         * capture-level-update push), rather than the recording loop
-         * region's own fixed bounds, which no longer constrain capture
-         * length at all (see this class's own doc comment). */
-        double elapsedSeconds() const
-        {
-            return (double) writePos.load(std::memory_order_acquire) / sampleRate;
-        }
+        /** Peak amplitude of whatever this recorder's own left/right
+         * output channel most recently captured, in the MOST RECENT
+         * writeBlock() call only -- not a growing history like
+         * peaksSoFar above, a live INSTANT level for a VU-meter-style
+         * display: "right now," nothing else. Lock-free -- writeBlock()
+         * (audio thread) is the sole writer, these two accessors
+         * (message thread, IpcConnection::timerCallback) the sole
+         * readers, same std::atomic pattern as writePos above. */
+        float currentPeakL() const { return currentPeakL_.load(std::memory_order_relaxed); }
+        float currentPeakR() const { return currentPeakR_.load(std::memory_order_relaxed); }
 
         /** Per-bucket peak amplitude across whatever's been captured so
          * far this session (0 buckets/empty result if nothing's been
@@ -99,25 +99,6 @@ namespace sssketch
          * since this is live, partially-filled data being sampled every
          * 33ms, not a one-shot full-file decode. */
         std::vector<float> peaksSoFar(int numBuckets) const;
-
-        /** Fixed-width bucketing, unlike peaksSoFar's fixed-COUNT rescaling
-         * above -- one bucket per full bucketDurationSec of audio actually
-         * captured so far, growing in LENGTH as more gets captured but
-         * never recomputing a bucket already returned by an earlier call (a
-         * bucket's own sample range, once it exists, never changes). Built
-         * for the renderer's live capture overlay (see ChannelRow.tsx):
-         * peaksSoFar's rescaling made that overlay visibly reshape its
-         * already-drawn portion on every poll, since EVERY bucket's
-         * boundaries (including bucket 0's) widened each time more got
-         * captured -- not the "write once and leave it" look that's
-         * actually wanted for something meant to be watched growing in
-         * real time. Trade-off: the most recent partial bucket (up to
-         * almost bucketDurationSec of audio) is never included -- a
-         * bucket's value is only ever computed once, over its complete
-         * range, so an incomplete one can't be returned without later
-         * being recomputed differently once it does complete, recreating
-         * the exact problem this method exists to avoid. */
-        std::vector<float> peaksFixedWindow(double bucketDurationSec) const;
 
         /** Writes whatever's been captured so far (writePos samples, not
          * the full pre-allocated buffer) to a 16-bit stereo WAV file at the
@@ -135,5 +116,7 @@ namespace sssketch
         double sampleRate;
         juce::AudioBuffer<float> buffer;
         std::atomic<int> writePos { 0 };
+        std::atomic<float> currentPeakL_ { 0.0f };
+        std::atomic<float> currentPeakR_ { 0.0f };
     };
 }

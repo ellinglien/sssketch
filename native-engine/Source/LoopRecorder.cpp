@@ -46,12 +46,15 @@ namespace sssketch
             const int srcCh = std::min(destCh, numInputChannels - 1);
             auto* dest = buffer.getWritePointer(destCh);
             const auto* src = inputChannelData[srcCh];
+            float peak = 0.0f;
             for (int i = 0; i < numSamples; ++i)
             {
                 const int destIndex = startPos + i;
                 if (destIndex >= bufferSamples) break; // hit the generous ceiling -- stop capturing rather than overflow; not expected in normal use
                 dest[destIndex] = src[startSample + i];
+                peak = std::max(peak, std::abs(src[startSample + i]));
             }
+            (destCh == 0 ? currentPeakL_ : currentPeakR_).store(peak, std::memory_order_relaxed);
         }
         // Release store: publishes both the samples just written above AND
         // this new index in one handoff, so peaksSoFar's acquire load on
@@ -81,34 +84,6 @@ namespace sssketch
                     peak = std::max(peak, std::abs(data[i]));
             }
             result[b] = peak;
-        }
-        return result;
-    }
-
-    std::vector<float> LoopRecorder::peaksFixedWindow(double bucketDurationSec) const
-    {
-        std::vector<float> result;
-        // Acquire load, paired with writeBlock's release store, same as
-        // peaksSoFar above.
-        const int currentWritePos = writePos.load(std::memory_order_acquire);
-        if (currentWritePos <= 0 || bucketDurationSec <= 0.0) return result;
-
-        const int samplesPerBucket = std::max(1, (int) std::lround(bucketDurationSec * sampleRate));
-        const int numBuckets = currentWritePos / samplesPerBucket; // whole buckets only -- see this method's own doc comment on excluding the trailing partial one
-        result.reserve((size_t) numBuckets);
-        for (int b = 0; b < numBuckets; ++b)
-        {
-            const int start = b * samplesPerBucket;
-            const int end = start + samplesPerBucket;
-            float peak = 0.0f;
-            // Peak across both channels -- same reasoning as peaksSoFar above.
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            {
-                const auto* data = buffer.getReadPointer(ch);
-                for (int i = start; i < end; ++i)
-                    peak = std::max(peak, std::abs(data[i]));
-            }
-            result.push_back(peak);
         }
         return result;
     }

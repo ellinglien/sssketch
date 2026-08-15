@@ -35,21 +35,30 @@ namespace sssketch
                 expect(recorder.hasAnyAudio());
             }
 
-            beginTest("elapsedSeconds() is 0 for a freshly-constructed recorder and reflects "
-                      "however much has actually been captured -- lets the renderer size the "
-                      "live overlay to match the take's own real, growing length rather than "
-                      "the recording loop region's fixed bounds");
+            beginTest("currentPeakL/currentPeakR are 0 for a freshly-constructed recorder");
             {
                 LoopRecorder recorder(48000.0);
-                expectWithinAbsoluteError(recorder.elapsedSeconds(), 0.0, 0.0001);
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.0f, 0.0001f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.0f, 0.0001f);
+            }
 
-                std::vector<float> inputData(24000, 0.5f); // 0.5s at 48kHz
-                const float* channels[] = { inputData.data() };
-                recorder.writeBlock(channels, 1, 0, 24000);
-                expectWithinAbsoluteError(recorder.elapsedSeconds(), 0.5, 0.0001);
+            beginTest("currentPeakL/currentPeakR reflect only the MOST RECENT writeBlock call, "
+                      "independently per channel, not a running max across the whole take");
+            {
+                LoopRecorder recorder(48000.0);
+                std::vector<float> left1(100, 0.2f);
+                std::vector<float> right1(100, 0.9f);
+                const float* firstChannels[] = { left1.data(), right1.data() };
+                recorder.writeBlock(firstChannels, 2, 0, 100);
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.2f, 0.01f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.9f, 0.01f);
 
-                recorder.writeBlock(channels, 1, 0, 24000); // another 0.5s, appended
-                expectWithinAbsoluteError(recorder.elapsedSeconds(), 1.0, 0.0001);
+                std::vector<float> left2(100, 0.05f);
+                std::vector<float> right2(100, 0.1f);
+                const float* secondChannels[] = { left2.data(), right2.data() };
+                recorder.writeBlock(secondChannels, 2, 100, 100);
+                expectWithinAbsoluteError(recorder.currentPeakL(), 0.05f, 0.01f);
+                expectWithinAbsoluteError(recorder.currentPeakR(), 0.1f, 0.01f);
             }
 
             beginTest("writeBlock across multiple calls appends rather than overwrites, "
@@ -176,25 +185,6 @@ namespace sssketch
                 expect(anyNonZero);
             }
 
-            beginTest("peaksFixedWindow on a freshly-constructed recorder (never written to) is "
-                      "empty");
-            {
-                LoopRecorder recorder(48000.0);
-                expect(recorder.peaksFixedWindow(0.01).empty());
-            }
-
-            beginTest("peaksFixedWindow excludes a trailing partial bucket -- a bucket's value "
-                      "is only ever computed once, over its complete range, so it can't be "
-                      "returned before that range is fully captured");
-            {
-                LoopRecorder recorder(48000.0); // 0.01s bucket == 480 samples at 48kHz
-                std::vector<float> inputData(300, 0.6f); // fewer than 480 samples written
-                const float* channels[] = { inputData.data() };
-                recorder.writeBlock(channels, 1, 0, 300);
-
-                expect(recorder.peaksFixedWindow(0.01).empty());
-            }
-
             beginTest("writeBlock duplicates a mono (single-channel) input onto BOTH output "
                       "channels, rather than leaving channel 1 silent -- per direct feedback "
                       "(\"is it recording in stereo? it seems like mono\"), this recorder's "
@@ -243,32 +233,6 @@ namespace sssketch
                 tmp.deleteFile();
             }
 
-            beginTest("peaksFixedWindow is append-only -- a bucket already returned by an "
-                      "earlier call keeps the exact same value on a later call, even once more "
-                      "audio has since been captured (the live capture overlay draws each bar "
-                      "once and must not see it reshape later)");
-            {
-                LoopRecorder recorder(48000.0); // 0.01s bucket == 480 samples at 48kHz
-                std::vector<float> quiet(480, 0.1f);
-                const float* quietChannels[] = { quiet.data() };
-                recorder.writeBlock(quietChannels, 1, 0, 480);
-
-                const auto firstPoll = recorder.peaksFixedWindow(0.01);
-                expectEquals((int) firstPoll.size(), 1);
-                expectWithinAbsoluteError(firstPoll[0], 0.1f, 0.01f);
-
-                std::vector<float> loud(480, 0.9f);
-                const float* loudChannels[] = { loud.data() };
-                recorder.writeBlock(loudChannels, 1, 0, 480);
-
-                const auto secondPoll = recorder.peaksFixedWindow(0.01);
-                expectEquals((int) secondPoll.size(), 2);
-                // Bucket 0's value is identical to what firstPoll already
-                // returned -- the whole point of this method over
-                // peaksSoFar's rescaling.
-                expectWithinAbsoluteError(secondPoll[0], 0.1f, 0.01f);
-                expectWithinAbsoluteError(secondPoll[1], 0.9f, 0.01f);
-            }
         }
     };
 
