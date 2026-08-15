@@ -85,6 +85,7 @@ namespace sssketch
             auto* l = output.getWritePointer(0, startSample);
             auto* r = output.getWritePointer(1, startSample);
             engine.renderBlock(positionBars, sampleRate, numSamples, l, r, channelChainRegistry);
+            masterChain.setPosition(positionBars);
             masterChain.process(numSamples, l, r);
         }
 
