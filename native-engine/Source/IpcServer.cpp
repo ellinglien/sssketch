@@ -181,54 +181,26 @@ namespace sssketch
         // message type at all.
         if (armedRecorder)
         {
+            // Live per-channel level, not a growing bucket history -- see
+            // LoopRecorder::currentPeakL/currentPeakR's own doc comment.
             juce::DynamicObject::Ptr capPayload = new juce::DynamicObject();
             capPayload->setProperty("channelId", armedChannelId);
-            juce::Array<juce::var> peaksVar;
-            // Fixed-width buckets (see peaksFixedWindow's own doc comment)
-            // rather than peaksSoFar's rescale-to-N-buckets -- a bucket's
-            // value never changes once returned, so the renderer's overlay
-            // can draw each one once and leave it alone instead of visibly
-            // reshaping already-drawn portions on every poll. 0.05s (50ms)
-            // per bucket: fine enough to feel responsive at the ~33ms poll
-            // rate below, coarse enough not to flood the IPC payload during
-            // a multi-minute take. ChannelRow.tsx's LIVE_CAPTURE_BUCKET_SECONDS
-            // must match this exactly -- it derives the overlay's pixel
-            // width from bucket count, not from elapsedSeconds below.
-            for (float peak : armedRecorder->peaksFixedWindow(0.05))
-                peaksVar.add(peak);
-            capPayload->setProperty("peaksSoFar", peaksVar);
-            // Lets the renderer size the live overlay to match how long
-            // the take has actually grown to, rather than the recording
-            // loop region's own fixed bounds -- capture length is no
-            // longer tied to the loop region at all (see LoopRecorder's
-            // own doc comment), so a fixed-width overlay would otherwise
-            // have to squish an ever-growing recording into the same
-            // fixed pixel span, visually "shrinking" everything already
-            // drawn every time more gets captured.
-            capPayload->setProperty("elapsedSeconds", armedRecorder->elapsedSeconds());
+            capPayload->setProperty("peakL", armedRecorder->currentPeakL());
+            capPayload->setProperty("peakR", armedRecorder->currentPeakR());
             juce::DynamicObject::Ptr capObj = new juce::DynamicObject();
             capObj->setProperty("type", "capture-level-update");
             capObj->setProperty("payload", juce::var(capPayload.get()));
             sendJson(juce::var(capObj.get()));
         }
 
-        // Same piggyback-on-the-existing-30Hz-timer reasoning as the
-        // armedRecorder push above, for the gated (threshold-triggered)
-        // recording feature -- see GatedLoopRecorder::peaks' own doc
-        // comment for why this always spans the WHOLE fixed buffer rather
-        // than "how much captured so far." 128 buckets matches this app's
-        // own standard waveform resolution elsewhere (see
-        // @shared/visuals.ts's peaksFromChannel default and the 0-128
-        // viewBox every Waveform-style SVG already uses), so the
-        // renderer's live overlay can reuse the exact same rendering path
-        // as a finished clip's own waveform.
         if (gatedRecorder)
         {
+            // Same live-level-not-history shape as capture-level-update
+            // above -- see GatedLoopRecorder::currentPeakL/currentPeakR's
+            // own doc comment.
             juce::DynamicObject::Ptr gatedPayload = new juce::DynamicObject();
-            juce::Array<juce::var> peaksVar;
-            for (float peak : gatedRecorder->peaks(128))
-                peaksVar.add(peak);
-            gatedPayload->setProperty("peaks", peaksVar);
+            gatedPayload->setProperty("peakL", gatedRecorder->currentPeakL());
+            gatedPayload->setProperty("peakR", gatedRecorder->currentPeakR());
             juce::DynamicObject::Ptr gatedObj = new juce::DynamicObject();
             gatedObj->setProperty("type", "gated-recording-update");
             gatedObj->setProperty("payload", juce::var(gatedPayload.get()));
