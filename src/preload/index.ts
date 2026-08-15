@@ -294,18 +294,18 @@ const api = {
   // stay consistent with every other engine-originated push already bridged
   // here.
   onCaptureLevelUpdate: (
-    callback: (channelId: string, peaksSoFar: number[], elapsedSeconds: number) => void
+    callback: (channelId: string, peakL: number, peakR: number) => void
   ): (() => void) => {
     const listener = (
       _event: unknown,
-      payload: { channelId: string; peaksSoFar: number[]; elapsedSeconds: number }
-    ): void => callback(payload.channelId, payload.peaksSoFar, payload.elapsedSeconds)
+      payload: { channelId: string; peakL: number; peakR: number }
+    ): void => callback(payload.channelId, payload.peakL, payload.peakR)
     ipcRenderer.on('engine-capture-level-update', listener)
     return () => ipcRenderer.removeListener('engine-capture-level-update', listener)
   },
-  onGatedRecordingUpdate: (callback: (peaks: number[]) => void): (() => void) => {
-    const listener = (_event: unknown, payload: { peaks: number[] }): void =>
-      callback(payload.peaks)
+  onGatedRecordingUpdate: (callback: (peakL: number, peakR: number) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { peakL: number; peakR: number }): void =>
+      callback(payload.peakL, payload.peakR)
     ipcRenderer.on('engine-gated-recording-update', listener)
     return () => ipcRenderer.removeListener('engine-gated-recording-update', listener)
   },
