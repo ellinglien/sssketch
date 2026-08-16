@@ -42,6 +42,7 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
+import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
@@ -2171,6 +2172,7 @@ function Frame(): React.JSX.Element {
           />
         )}
         <LockInConfirmDialog />
+        <UpdateAvailableDialog />
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
