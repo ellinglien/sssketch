@@ -9,6 +9,7 @@ import type {
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { BusCentroidStore } from '@shared/busCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
+import type { UpdateState } from '@shared/updateState'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -303,6 +304,16 @@ const api = {
     ipcRenderer.on('engine-capture-level-update', listener)
     return () => ipcRenderer.removeListener('engine-capture-level-update', listener)
   },
+  // main/index.ts's update-state-changed push (see @shared/updateState's
+  // own doc comment for the full UpdateState shape) -- one consolidated
+  // payload per change, not one event per field.
+  onUpdateStateChanged: (callback: (state: UpdateState) => void): (() => void) => {
+    const listener = (_event: unknown, state: UpdateState): void => callback(state)
+    ipcRenderer.on('update-state-changed', listener)
+    return () => ipcRenderer.removeListener('update-state-changed', listener)
+  },
+  confirmUpdateInstall: (): Promise<void> => ipcRenderer.invoke('update-confirm-install'),
+  dismissUpdate: (): Promise<void> => ipcRenderer.invoke('update-dismiss'),
   onGatedRecordingUpdate: (callback: (peakL: number, peakR: number) => void): (() => void) => {
     const listener = (_event: unknown, payload: { peakL: number; peakR: number }): void =>
       callback(payload.peakL, payload.peakR)
