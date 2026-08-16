@@ -56,6 +56,7 @@ mac:
   # ['zip','dmg'] default).
   target:
     - dmg
+    - zip
   # arm64 is the historical/default target -- pinning this keeps the arm64
   # DMG's filename unsuffixed (sssketch-X.Y.Z.dmg, unchanged from every
   # prior release, no broken download links) while the x64 leg
