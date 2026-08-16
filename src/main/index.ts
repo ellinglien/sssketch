@@ -41,6 +41,7 @@ import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
 import { loadBusCentroidStore, saveBusCentroidStore } from './busCentroidStore'
 import type { BusCentroidStore } from '@shared/busCentroids'
+import { nextUpdateState, type UpdateState } from '@shared/updateState'
 import type { RiffFilters } from '@shared/riffLibraryTypes'
 import {
   riffLibraryAvailable,
@@ -136,6 +137,11 @@ async function fetchLivePluginStates(logLabel: string): Promise<RawPluginStatesC
 // synchronously inside EngineClient's socket 'data' handler and can crash
 // the whole main process.
 let mainWindow: BrowserWindow | undefined
+// Single source of truth for the auto-update flow -- see @shared/updateState's
+// own doc comment. Only ever mutated by pushUpdateState, defined inside the
+// `if (app.isPackaged)` block below (stays 'idle' forever in dev, where that
+// whole block never runs).
+let currentUpdateState: UpdateState = { state: 'idle' }
 
 // Guards before-quit's shutdown-then-requit sequence (see below) against
 // re-entering itself when it calls app.quit() a second time.
@@ -925,14 +931,79 @@ app.whenReady().then(async () => {
   // Only in a packaged (production) build -- never in dev, where there's no
   // meaningful "newer published release" to check against, and running it
   // unconditionally would just spam electron-updater's own network calls +
-  // logging on every dev-server restart for no benefit. Failure here (no
-  // network, no releases published yet, etc.) must never be fatal to the
-  // rest of the app -- it's a background convenience check, not a
-  // load-bearing startup step.
+  // logging on every dev-server restart for no benefit. Failure at any
+  // stage below must never be fatal to the rest of the app -- it's a
+  // background convenience feature, not a load-bearing startup step.
   if (app.isPackaged) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err: unknown) => {
+    // electron-updater defaults autoDownload to true -- explicitly turned
+    // off here since nothing may download or install without the user
+    // confirming first via the update-confirm-install handler below (see
+    // this feature's own design doc).
+    autoUpdater.autoDownload = false
+
+    function pushUpdateState(next: UpdateState): void {
+      currentUpdateState = next
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-state-changed', currentUpdateState)
+      }
+    }
+
+    autoUpdater.on('update-available', (info) => {
+      pushUpdateState(
+        nextUpdateState(currentUpdateState, { type: 'update-available', version: info.version })
+      )
+    })
+    autoUpdater.on('update-not-available', () => {
+      pushUpdateState(nextUpdateState(currentUpdateState, { type: 'dismiss' }))
+    })
+    autoUpdater.on('download-progress', (progress) => {
+      pushUpdateState(
+        nextUpdateState(currentUpdateState, {
+          type: 'download-progress',
+          percent: progress.percent
+        })
+      )
+    })
+    autoUpdater.on('update-downloaded', () => {
+      pushUpdateState(nextUpdateState(currentUpdateState, { type: 'update-downloaded' }))
+      // Immediate, per this feature's own design doc -- the app quits and
+      // relaunches itself on the new version right away rather than
+      // waiting for the user to quit on their own.
+      autoUpdater.quitAndInstall()
+    })
+    autoUpdater.on('error', (err) => {
+      pushUpdateState(nextUpdateState(currentUpdateState, { type: 'error', error: err.message }))
+    })
+
+    ipcMain.handle('update-confirm-install', () => {
+      pushUpdateState(nextUpdateState(currentUpdateState, { type: 'confirm-install' }))
+      autoUpdater.downloadUpdate().catch((err: unknown) => {
+        console.error('index: auto-update download failed', err)
+      })
+    })
+
+    ipcMain.handle('update-dismiss', () => {
+      pushUpdateState(nextUpdateState(currentUpdateState, { type: 'dismiss' }))
+    })
+
+    autoUpdater.checkForUpdates().catch((err: unknown) => {
       console.error('index: auto-update check failed', err)
     })
+    // Every 4 hours for as long as the app stays open. Skips its own check
+    // whenever a check/download/install is already in flight (state isn't
+    // idle) -- otherwise a tick landing while the user has an unanswered
+    // "available" dialog open, or mid-download, would kick off a redundant
+    // overlapping check (see this feature's own design doc).
+    setInterval(
+      () => {
+        if (currentUpdateState.state === 'idle') {
+          autoUpdater.checkForUpdates().catch((err: unknown) => {
+            console.error('index: periodic auto-update check failed', err)
+          })
+        }
+      },
+      4 * 60 * 60 * 1000
+    )
   }
 
   // playbackEngine.client is a getter (see playbackEngineLifecycle.ts's doc
