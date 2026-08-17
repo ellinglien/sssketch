@@ -1,11 +1,28 @@
 import { useState } from 'react'
+import { LoadingLoader } from './LoadingLoader'
+
+// All four LoadingLoader bars in plain white -- monochrome per this app's
+// own "black background, white text, no in-between greys" rule, not the
+// original multi-color rainbow mark. LoadingLoader's own bounce/position
+// motion is unaffected; only the color is flattened here.
+const MARK_COLORS: [string, string, string, string] = [
+  'var(--ra-text)',
+  'var(--ra-text)',
+  'var(--ra-text)',
+  'var(--ra-text)'
+]
 
 const WORDMARK = 'SSSKETCH'.split('')
 
 const buttonStyle: React.CSSProperties = {
   height: 36,
+  // Fixed rather than padding-driven -- "log into endlesss" is the longest
+  // label of the three normal-view buttons, and a shared width means every
+  // button (including "recover"/"discard" in the recovery sub-view) reads
+  // as one consistent row instead of each one hugging its own text.
+  width: 140,
   borderRadius: 0,
-  padding: '0 18px',
+  padding: '0 8px',
   fontSize: 11,
   fontWeight: 700,
   whiteSpace: 'nowrap',
@@ -154,6 +171,7 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
+        <LoadingLoader size={150} colors={MARK_COLORS} speedMs={6000} />
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
             <span
@@ -186,7 +204,7 @@ export function OnboardingModal({
             <div
               style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
             >
-              a track sketching tool
+              a little arranger thing that works with endlesss
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
               <button onClick={() => onNewProject(dontShowAgain)} style={primaryButtonStyle}>

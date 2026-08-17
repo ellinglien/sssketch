@@ -10,6 +10,8 @@ audio engine running underneath for playback and plugin hosting.
 
 **Status:** early beta. Expect rough edges — see [Known issues](#known-issues) below.
 
+This app is not affiliated with or endorsed by Endlesss or Hablab London. Use at your own risk.
+
 ## Getting your audio in
 
 Two ways to bring stems into a project:
