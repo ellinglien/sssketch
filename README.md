@@ -101,6 +101,22 @@ possible at all, and sssketch's own Endlesss integration leaned on its work more
 along the way. sssketch can still open an existing OUROVEON/LORE-synced `warehouse.db3`
 directly, if you already have one.
 
+**Shared Features**
+
+- **Audio Engine**
+  - Real-time playback, device I/O, and VST3/AU plugin hosting via [JUCE](https://juce.com/)
+  - Tempo sync with other apps/devices via [Ableton Link](https://github.com/Ableton/link)
+  - Stem time-stretching via [Rubberband](https://breakfastquay.com/rubberband/)
+
+- **App Shell**
+  - Desktop app shell via [Electron](https://www.electronjs.org/)
+  - UI built with [React](https://react.dev/)
+  - Local riff library database via [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
+  - Ableton Live project export via [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser)
+  - Build, packaging, and auto-update tooling via [electron-vite](https://electron-vite.org/),
+    [electron-builder](https://www.electron.build/), and
+    [electron-updater](https://www.electron.build/auto-update)
+
 ## License
 
 [GPL-3.0-or-later](LICENSE).
