@@ -9,6 +9,8 @@ audio engine (JUCE) running underneath for playback and (basic) plugin hosting.
 
 This app isn't affiliated with or endorsed by Endlesss or Hablab London. Use at your own risk.
 
+AI disclosure: this codebase is AI-assisted. See [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
+
 ## Getting your audio in
 
 Two ways to bring stems into a project:
@@ -83,11 +85,11 @@ npm test              # vitest (TypeScript/shared logic)
 
 ## Acknowledgments
 
-I love [Endlesss](https://endlesss.fm/)! When I first downloaded it to my phone in 2020 it changed my relationship with music for the better, instantly connected me with a world of amazing people, and finally made me think of myself as a musician. Thank you to Tim Exile and the Endlesss team
-for building it, and thank you to Imogen Heap and Hablab London for resuscitating it after the bankruptcy and closure.
+[Endlesss](https://endlesss.fm/) rules. When I first downloaded it to my phone in 2020 it changed my relationship with music for the better, instantly connected me with a world of amazing people, and finally made me think of myself as a musician. Thank you to Tim Exile and the Endlesss team
+for building it, and thank you to Imogen Heap and Hablab London for resuscitating it after the closure.
 
 sssketch would not exist without [OUROVEON](https://github.com/OUROcorp/OUROVEON), an
-open-source toolkit for the Endlesss ecosystem developed by ishani. There is no published API for Endlesss and ishani and the OUROVEON team reverse-engineered the backend. sssketch's Endlesss integration leaned on it completely. sssketch can even open an existing OUROVEON/LORE-synced `warehouse.db3`
+open-source toolkit for the Endlesss ecosystem created by @ishani. There is no published API for Endlesss and ishani and the OUROVEON team reverse-engineered the backend. sssketch's Endlesss integration leaned on it completely. sssketch can even open an existing OUROVEON/LORE-synced `warehouse.db3`
 directly if you have one.
 
 **Shared Features**
