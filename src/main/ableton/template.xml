@@ -432,7 +432,7 @@
 											<FileRef>
 												<RelativePathType Value="1" />
 												<RelativePath Value="../8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04.wav" />
-												<Path Value="/Users/nickel/Downloads/8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04.wav" />
+												<Path Value="/Users/user/Downloads/8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04.wav" />
 												<Type Value="2" />
 												<LivePackName Value="" />
 												<LivePackId Value="" />
@@ -2143,7 +2143,7 @@
 											<FileRef>
 												<RelativePathType Value="1" />
 												<RelativePath Value="../../../nsh/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
-												<Path Value="/Users/nsh/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
+												<Path Value="/Users/user/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
 												<Type Value="2" />
 												<LivePackName Value="" />
 												<LivePackId Value="" />
@@ -2182,7 +2182,7 @@
 													<FileRef>
 														<RelativePathType Value="1" />
 														<RelativePath Value="../../../nsh/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
-														<Path Value="/Users/nsh/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
+														<Path Value="/Users/user/Library/Application Support/Ableton/Live 11 Core Library/Devices/Audio Effects/Simple Delay/Dotted Eighth Note.adv" />
 														<Type Value="2" />
 														<LivePackName Value="" />
 														<LivePackId Value="" />
