@@ -204,7 +204,7 @@ describe('buildRppProject', () => {
     const item = firstItemOf(tracksOf(rppText).tracks[0])
 
     expect(findChild(item, 'MUTE')?.params).toEqual(['1'])
-    expect(findChild(item, 'VOLPAN')?.params[2]).toBe('0.8')
+    expect(findChild(item, 'VOLPAN')?.params[0]).toBe('0.8')
   })
 
   it('splits a stem into multiple ITEMs around a partial mute region, with fade only on first/last', () => {

@@ -223,7 +223,7 @@ function buildStemItems(
         rppField('MUTE', muted ? 1 : 0),
         rppField('IGUID', newGuid()),
         rppField('NAME', quote(trackLabel)),
-        rppField('VOLPAN', 1, 0, volume, -1),
+        rppField('VOLPAN', volume, 0, 1, -1),
         rppField('SOFFS', segSoffsSec),
         rppField('PLAYRATE', playrate, 1, 0, -1, 0, -1),
         rppField('GUID', newGuid()),

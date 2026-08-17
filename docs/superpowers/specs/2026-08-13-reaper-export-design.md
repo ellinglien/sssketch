@@ -106,8 +106,13 @@ New files, mirroring `buildAlsXml.ts`/`exportAbleton.ts`'s shape:
     item-mute flag. Cleaner than the Ableton export's `SampleVolume 0` workaround (see
     `docs/superpowers/plans/2026-08-11-ableton-volume-fade-export.md`): a single click
     un-mutes in REAPER, vs. a fader move in Ableton.
-  - `VOLPAN`: take-volume field (field 3) set to `state.vol[key] ?? 1`; other three fields
-    (`1 0 · -1`) left at the real example's observed defaults, untouched.
+  - `VOLPAN`: take-volume field (field 1) set to `state.vol[key] ?? 1`; other three fields
+    (`0 1 -1`) left at the real example's observed defaults, untouched. **Correction
+    (2026-08-17):** originally implemented with volume in field 3 instead — plausible from
+    the primary-source example alone (a default-volume item shows `1` in both position 1 and
+    3, so a diff-based guess could land on either), but wrong: real-world testing in REAPER
+    confirmed volume changes only take effect via field 1. Fixed in `buildRppProject.ts` and
+    `buildRppProject.test.ts`.
   - `FADEIN`/`FADEOUT`: `<shape> <length_sec> 0 1 0 0` — shape and trailing fields copied
     verbatim from the real example (not independently derived — flagged in a code comment);
     `length_sec` is `fadeInBars`/`fadeOutBars` (same `state.dragFadeIn[groupId] ??
