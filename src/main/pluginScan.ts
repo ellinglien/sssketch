@@ -86,6 +86,19 @@ export function getMtimeMs(path: string): number | null {
 }
 
 function defaultBinaryPath(): string {
+  // Mirrors engineProcess.ts's own defaultBinaryPath() dev-vs-packaged
+  // branch exactly. Packaged mode: the engine bundle ships as an
+  // extraResources copy (see electron-builder.yml) under the app's own
+  // Resources directory. This function previously always used the dev-mode
+  // path below, even when packaged -- meaning every scan candidate spawned
+  // against a nonexistent binary in a packaged build, and a full plugin scan
+  // silently found nothing.
+  if (app.isPackaged) {
+    return join(
+      process.resourcesPath,
+      'native-engine/sssketch-engine.app/Contents/MacOS/sssketch-engine'
+    )
+  }
   return join(
     app.getAppPath(),
     'native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
