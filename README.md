@@ -89,8 +89,16 @@ npm test              # vitest (TypeScript/shared logic)
 for building it, and thank you to Imogen Heap and Hablab London for resuscitating it after the closure.
 
 sssketch would not exist without [OUROVEON](https://github.com/OUROcorp/OUROVEON), an
-open-source toolkit for the Endlesss ecosystem created by @ishani. There is no published API for Endlesss and ishani and the OUROVEON team reverse-engineered the backend. sssketch's Endlesss integration leaned on it completely. sssketch can even open an existing OUROVEON/LORE-synced `warehouse.db3`
-directly if you have one.
+open-source toolkit for the Endlesss ecosystem created by @ishani. There is no published API for Endlesss — ishani and the OUROVEON team reverse-engineered the backend from scratch, and released that work openly. sssketch's Endlesss integration doesn't just take general inspiration from that; specific, named parts of it were read directly from OUROVEON's own source and reproduced or ported:
+
+- **Login and session handling** — the login endpoint, request/response shape, and how the returned token/password pair authenticates two different ways (Basic auth for CouchDB calls, Bearer for REST calls) are traced from OUROVEON's `ouro.cpp`, `config.h`, and `api.cpp`.
+- **Shared feed, jam, and riff listing** — the CouchDB endpoints and views sssketch calls, including a quirk where the feed response can contain literal `null` entries that need filtering out, come straight from OUROVEON's own client.
+- **Stem downloading** — URL reconstruction (never trusting the embedded `url` field), retry/backoff timing, and CDN fetch headers all match OUROVEON's `Stem::fetch()`/`attemptRemoteFetch` behavior.
+- **BPM rounding, root/scale names, and instrument-type detection** — sssketch uses OUROVEON's own formulas and constants directly (from `core.constants.h` and `toolkit.warehouse.cpp`), so the values it shows agree with the official client.
+- **The loop-seam declick fade** in sssketch's native audio engine is a direct port of OUROVEON's `Stem::applyLoopSewingBlend`, including its exact tuning.
+- **The riff library database** sssketch builds and syncs for itself is schema-compatible with OUROVEON's own LORE warehouse, and its sync design is modeled on OUROVEON's task-queue approach (not a literal code port). sssketch can also open an existing OUROVEON/LORE-synced `warehouse.db3` directly, read-only, if you already have one.
+
+None of this would have been possible without OUROVEON having done that reverse-engineering work first and shared it.
 
 **Shared Features**
 
