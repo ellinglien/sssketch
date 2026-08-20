@@ -48,6 +48,17 @@ export function nextUpdateState(current: UpdateState, event: UpdateEvent): Updat
       if (current.state !== 'downloading') return current
       return { state: 'installing', version: current.version }
     case 'error':
+      // A background/periodic check (fired while idle -- see main/index.ts's
+      // startup checkForUpdates() and its own 4-hourly timer, which only
+      // ever fires when idle) failing must never surface a dialog: nobody
+      // asked for it, and electron-updater's own error messages can be a
+      // raw HTTP response dump (headers, cookies, the works), not something
+      // fit to show a user unprompted. The underlying failure is still
+      // logged server-side via that same call site's own .catch(). Once the
+      // user has actually engaged (state is 'available'/'downloading'/
+      // 'installing'), an error IS surfaced -- they're actively waiting on
+      // something and silently going nowhere would be worse.
+      if (current.state === 'idle') return current
       return { state: 'error', error: event.error }
     case 'dismiss':
       return { state: 'idle' }

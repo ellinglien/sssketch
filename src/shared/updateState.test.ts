@@ -42,10 +42,15 @@ describe('nextUpdateState', () => {
     expect(next).toEqual(idle)
   })
 
-  it('error moves any state to error, carrying the message', () => {
+  it('error moves a non-idle state to error, carrying the message', () => {
     const downloading: UpdateState = { state: 'downloading', version: '1.2.0', percent: 42 }
     const next = nextUpdateState(downloading, { type: 'error', error: 'network unreachable' })
     expect(next).toEqual({ state: 'error', error: 'network unreachable' })
+  })
+
+  it('error is a no-op from idle -- a background/periodic check failing must not surface a dialog nobody asked for', () => {
+    const next = nextUpdateState(idle, { type: 'error', error: 'network unreachable' })
+    expect(next).toEqual(idle)
   })
 
   it('dismiss resets any state to idle', () => {
