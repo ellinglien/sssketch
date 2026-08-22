@@ -338,17 +338,43 @@ function stemFlagsToMask(stem: RawStemDoc): number {
   return mask
 }
 
-// Deliberately OGG-only for v1: sssketch's existing decode pipeline (shared
-// with the LORE path, whose synced stems are always ogg-content files) has
-// no FLAC support today, and OUROVEON itself documents flacAudio as "very
-// rare" for a stem to lack ogg entirely. A stem with only flacAudio (no
-// oggAudio) is treated as undownloadable (downloadUrl: null) rather than
-// attempting a decode path that doesn't exist yet elsewhere in this app.
-// (OUROVEON's own client actually prefers flacAudio over oggAudio whenever
-// present -- see ResultStemDocument::CDNAttachments::getAudioFormat() -- but
-// that's irrelevant here since this app can only decode ogg regardless of
-// which format the real client would pick.)
-//
+interface ChosenAudio {
+  endpoint: string
+  bucket: string
+  key: string | undefined
+  url: string
+  length: number
+}
+
+// Prefers flacAudio over oggAudio whenever both are present, matching
+// OUROVEON's own client (ResultStemDocument::CDNAttachments::
+// getAudioFormat()). Previously hardcoded to ogg only, on the assumption
+// the decode pipeline couldn't handle FLAC -- turned out to be wrong: the
+// native engine's JUCE AudioFormatManager already registers FLAC via
+// registerBasicFormats() with no restricting build flags, and was already
+// decoding real FLAC-content LORE stems in production (the Ableton-export
+// bake-stem path). The renderer's Web Audio decodeAudioData has no format
+// gate either. Normalizes flacAudio's shape (no `bucket` field at all) and
+// oggAudio's shape (optional `bucket`) into one common shape so the caller
+// doesn't need to know which format won.
+function chosenAudio(cdn: RawStemDoc['cdn_attachments']): ChosenAudio | null {
+  if (cdn.flacAudio) {
+    const f = cdn.flacAudio
+    return { endpoint: f.endpoint, bucket: '', key: f.key, url: f.url, length: f.length }
+  }
+  if (cdn.oggAudio) {
+    const o = cdn.oggAudio
+    return {
+      endpoint: o.endpoint,
+      bucket: o.bucket ?? '',
+      key: o.key,
+      url: o.url,
+      length: o.length
+    }
+  }
+  return null
+}
+
 // downloadUrl is RECONSTRUCTED from endpoint/bucket/key via the same
 // stemDownloadUrl() the LORE path already uses -- not read from the raw
 // `url` field embedded in the doc. Traced directly from OUROVEON's own
@@ -360,13 +386,13 @@ function stemFlagsToMask(stem: RawStemDoc): number {
 function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): RiffLibraryResolvedStem {
   const bpm = bpsToRoundedBpm(stem.bps)
   const barLength = stem.length16ths / 16
-  const ogg = stem.cdn_attachments.oggAudio
+  const audio = chosenAudio(stem.cdn_attachments)
   const downloadUrl =
-    ogg == null
+    audio == null
       ? null
-      : ogg.key
-        ? stemDownloadUrl(ogg.endpoint, ogg.bucket ?? '', ogg.key)
-        : (ogg.url ?? null)
+      : audio.key
+        ? stemDownloadUrl(audio.endpoint, audio.bucket, audio.key)
+        : (audio.url ?? null)
   return {
     stemCID: stem._id,
     slot,
@@ -379,10 +405,10 @@ function buildResolvedStem(stem: RawStemDoc, slot: number, gain: number): RiffLi
     barLength,
     bpm,
     downloadUrl,
-    fileEndpoint: ogg?.endpoint,
-    fileBucket: ogg?.bucket,
-    fileKey: ogg?.key,
-    sizeBytes: ogg?.length
+    fileEndpoint: audio?.endpoint,
+    fileBucket: audio?.bucket,
+    fileKey: audio?.key,
+    sizeBytes: audio?.length
   }
 }
 

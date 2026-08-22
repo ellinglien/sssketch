@@ -544,6 +544,74 @@ describe('endlesssApi jam riff resolution', () => {
     expect(JSON.parse(calls[0].body!)).toEqual({ keys: ['riff_1'] })
     expect(JSON.parse(calls[1].body!)).toEqual({ keys: ['stem_1'] })
   })
+
+  it('prefers flacAudio over oggAudio when a stem has both', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const stemWithBoth = rawStemDoc({
+      cdn_attachments: {
+        oggAudio: {
+          endpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+          key: 'attachments/oggAudio/1/abc',
+          url: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc',
+          length: 12345
+        },
+        flacAudio: {
+          endpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+          key: 'attachments/flacAudio/1/xyz',
+          url: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/flacAudio/1/xyz',
+          length: 54321
+        }
+      }
+    })
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+          { status: 200 }
+        )
+      }
+      return new Response(
+        JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: stemWithBoth }] }),
+        { status: 200 }
+      )
+    })
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+    expect(resolved!.stems[0].downloadUrl).toBe(
+      'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/flacAudio/1/xyz'
+    )
+  })
+
+  it('downloads a FLAC-only stem (no oggAudio attachment at all)', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const flacOnlyStem = rawStemDoc({
+      cdn_attachments: {
+        flacAudio: {
+          endpoint: 'ndls-att0.fra1.digitaloceanspaces.com',
+          key: 'attachments/flacAudio/1/xyz',
+          url: 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/flacAudio/1/xyz',
+          length: 54321
+        }
+      }
+    })
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('_all_docs') && JSON.parse(init!.body as string).keys[0] === 'riff_1') {
+        return new Response(
+          JSON.stringify({ total_rows: 1, rows: [{ id: 'riff_1', doc: rawRiffDoc('stem_1') }] }),
+          { status: 200 }
+        )
+      }
+      return new Response(
+        JSON.stringify({ total_rows: 1, rows: [{ id: 'stem_1', doc: flacOnlyStem }] }),
+        { status: 200 }
+      )
+    })
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', fakeFetch as typeof fetch)
+    expect(resolved!.stems[0].downloadUrl).toBe(
+      'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/flacAudio/1/xyz'
+    )
+  })
 })
 
 describe('endlesssApi stem downloading', () => {

@@ -115,6 +115,13 @@ support — this is a real, permanent scope limit, not a bug to fix. Comment at
 `core.types.h:160-166` describes ogg-missing-entirely as *"very rare,"* and FLAC as *"a recent
 addition"* to the platform — consistent with sssketch's own existing doc comment.
 
+**Correction (2026-08-22):** the "no FLAC support" premise above was wrong — both actual decode
+surfaces (the native engine's JUCE `AudioFormatManager`, and the renderer's Web Audio
+`decodeAudioData`) are format-agnostic and were already decoding real FLAC-content stems in
+production (the Ableton-export bake-stem path). The OGG-only restriction was never a decode
+limitation, just an unverified assumption in `buildResolvedStem` (`src/main/endlesssApi.ts`).
+Fixed: sssketch now prefers `flacAudio` over `oggAudio` too, matching OUROVEON's own client.
+
 **No eager/hover/visible-content prefetch exists anywhere in OUROVEON.** Two distinct mechanisms
 cover all bulk-download behavior, and neither is automatic-on-browse:
 
@@ -155,9 +162,12 @@ calls) — sssketch's existing implementation already matches this.
 
 - Syncing anything outside the two already-approved scopes (own shared feed, own private
   jam(s)) — no public discovery feed, no other people's jams, no "every jam I've ever joined."
-- 100% download success. Stems that are genuinely FLAC-only (no `oggAudio` attachment at all)
+- 100% download success. ~~Stems that are genuinely FLAC-only (no `oggAudio` attachment at all)
   remain undownloadable given sssketch's OGG-only decode pipeline — a real content limit, not a
-  bug, and already has its own accurate UI message.
+  bug, and already has its own accurate UI message.~~ **Correction (2026-08-22):** no longer
+  true — sssketch now downloads `flacAudio` directly (preferring it over `oggAudio`, matching
+  OUROVEON), so a FLAC-only stem is no longer undownloadable. See the Format-preference
+  correction above.
 - An automatic, silent, unbounded background sync the moment someone logs in. See Part B's
   trigger discussion — OUROVEON's own precedent (explicit opt-in bulk download) argues against
   this, and it's the same class of thing ("uncapped background fetching") that already caused a
