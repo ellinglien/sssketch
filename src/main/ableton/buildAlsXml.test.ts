@@ -1179,10 +1179,11 @@ describe('buildAlsXml', () => {
     })
 
     it('colors the group, its track, and its clip all the same, per the assigned bus', () => {
-      // Colors are Ableton's own fixed palette indices -- bass=65 here is
-      // extracted directly from a real project the user hand-recolored in
-      // Ableton itself (see ABLETON_BUS_COLORS's own doc comment), not an
-      // arbitrary test value.
+      // Colors are Ableton's own fixed palette indices -- bass=0 here is
+      // ABLETON_BUS_COLORS's post-swap value (drums/bass deliberately
+      // swapped 2026-08-21, see that table's own doc comment); still not
+      // an arbitrary test value, just no longer the original real-sampled
+      // one (that's now on drums instead).
       const state = emptyAppState({
         rifffs: { 'rifff-1': drumsRifff() },
         channelOrder: ['rifff-1'],
@@ -1195,14 +1196,14 @@ describe('buildAlsXml', () => {
       const { tracks } = tracksOf(xml)
 
       const groupTrack = findChild(tracks, 'GroupTrack')!
-      expect(attrs(findChild(childArray(groupTrack, 'GroupTrack'), 'Color')!)['@_Value']).toBe('65')
+      expect(attrs(findChild(childArray(groupTrack, 'GroupTrack'), 'Color')!)['@_Value']).toBe('0')
 
       const audioTrack = findChild(tracks, 'AudioTrack')!
       const audioTrackBody = childArray(audioTrack, 'AudioTrack')
-      expect(attrs(findChild(audioTrackBody, 'Color')!)['@_Value']).toBe('65')
+      expect(attrs(findChild(audioTrackBody, 'Color')!)['@_Value']).toBe('0')
 
       const clip = findAudioClip(audioTrack)
-      expect(attrs(findChild(childArray(clip, 'AudioClip'), 'Color')!)['@_Value']).toBe('65')
+      expect(attrs(findChild(childArray(clip, 'AudioClip'), 'Color')!)['@_Value']).toBe('0')
     })
 
     it('colors different buses differently', () => {
@@ -1226,7 +1227,7 @@ describe('buildAlsXml', () => {
       const groupColors = findAllChildren(tracks, 'GroupTrack').map(
         (g) => attrs(findChild(childArray(g, 'GroupTrack'), 'Color')!)['@_Value']
       )
-      expect(new Set(groupColors)).toEqual(new Set(['0', '53'])) // drums, lead
+      expect(new Set(groupColors)).toEqual(new Set(['65', '53'])) // drums, lead
     })
 
     it('sets UserName, not just EffectiveName, on both the group and its track', () => {

@@ -28,20 +28,40 @@ export function stemColorVar(stem: Stem | undefined): string {
 }
 
 /**
- * Swatch per bus, for tidied-view's row coloring -- meant to evoke the SAME
- * bus identity buildAlsXml.ts's own ABLETON_BUS_COLORS table colors the
- * Ableton export with. drums/bass/lead here are sampled directly off a real
- * exported .als reopened in actual Ableton (a screenshot Elling shared
- * 2026-08-10) -- not a guess, and not a generic swatch: this IS what those
- * bus indices render as. backing/aux don't appear in that particular
- * project (nothing was assigned to them), so there's still no real sample
- * for those two -- rather than another arbitrary guess, these fall back to
- * the closest-hued existing app token (--ra-type-ext-fx's green for
- * backing, a neutral cool grey in the app's own border/ink family for aux)
- * so an unavoidable guess at least stays inside this app's own palette
- * instead of introducing a new hue from nowhere. Literal hex, not a
- * tokens.css var -- unlike typeColorVar's stem-type palette, this is a
- * narrow, single-purpose mapping with no other consumer to keep in sync.
+ * A stem's tidy-up bus color -- same recordedInApp override as
+ * stemColorVar above (a recorded take stays its own distinct category
+ * regardless of bus), otherwise busColorHex(bus). The caller resolves
+ * `bus` itself (selectors.ts's busForStem/busForStemFromBusOf) since that
+ * needs state.busOf, which this file has no access to and shouldn't --
+ * this function only owns the color mapping, not the state lookup. Use
+ * this instead of stemColorVar wherever a clip's color should reflect
+ * real tidy-up categorization (drums/bass/lead/...) rather than the
+ * one-time import-time SoundType guess, which stays 'audioIn' for most
+ * raw Endlesss stems forever.
+ */
+export function stemBusColorVar(stem: Stem | undefined, bus: BusId): string {
+  if (stem?.recordedInApp) return 'var(--ra-recording-live)'
+  return busColorHex(bus)
+}
+
+/**
+ * Swatch per bus, for tidied-view's row coloring. lead here is sampled
+ * directly off a real exported .als reopened in actual Ableton (a
+ * screenshot Elling shared 2026-08-10) -- not a guess, and not a generic
+ * swatch: this IS what that bus index renders as. drums/bass are
+ * deliberately swapped from that same sample (Elling's own preference,
+ * 2026-08-21) -- so unlike lead, they no longer match what Ableton itself
+ * shows for those two bus indices; the in-app preview and a real Ableton
+ * export will disagree on drums/bass specifically. backing/aux don't
+ * appear in that sampled project (nothing was assigned to them), so
+ * there's still no real sample for those two -- rather than another
+ * arbitrary guess, these fall back to the closest-hued existing app token
+ * (--ra-type-ext-fx's green for backing, a neutral cool grey in the app's
+ * own border/ink family for aux) so an unavoidable guess at least stays
+ * inside this app's own palette instead of introducing a new hue from
+ * nowhere. Literal hex, not a tokens.css var -- unlike typeColorVar's
+ * stem-type palette, this is a narrow, single-purpose mapping with no
+ * other consumer to keep in sync.
  */
 const BUS_COLOR_HEX: Record<BusId, string> = {
   drums: '#e8929b',

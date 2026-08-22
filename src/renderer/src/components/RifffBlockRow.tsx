@@ -1,10 +1,10 @@
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
-import type { Rifff } from '@shared/types'
-import { stemColorVar } from '../theme/typeColor'
+import type { BusId, Rifff } from '@shared/types'
+import { stemBusColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
-import { clipGeometryFromFields } from '../state/selectors'
+import { busForStemFromBusOf, clipGeometryFromFields } from '../state/selectors'
 import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
@@ -12,8 +12,13 @@ import { useGatedRecordingControls } from '../state/useGatedRecordingControls'
 
 export const NAME_BAR_HEIGHT = 18
 
-function identityColor(rifff: Rifff): string {
-  return stemColorVar(rifff.stems[0])
+// Same "first stem's identity" convention CollapsedRifffRow.tsx's own
+// color uses -- the name bar and (expanded) selection outline show ONE
+// color for the whole rifff, so they pick the same representative stem
+// the collapsed block does, rather than introducing a third convention.
+function identityColor(rifff: Rifff, busOf: Record<string, BusId>): string {
+  const firstStem = rifff.stems[0]
+  return stemBusColorVar(firstStem, busForStemFromBusOf(busOf, rifff.groupId, firstStem.slot))
 }
 
 export function RifffBlockRow({
@@ -49,7 +54,8 @@ export function RifffBlockRow({
   // one-shot.
   const isOneShot = rifff.stems.length === 1 && !!rifff.stems[0].oneShot
   const expanded = expandedFlag && !isOneShot
-  const color = identityColor(rifff)
+  const busOf = useAppSelector((s) => s.busOf)
+  const color = identityColor(rifff, busOf)
   const ppb = useZoom()
   const geo = clipGeometryFromFields({
     startBar: rifff.startBar ?? 0,

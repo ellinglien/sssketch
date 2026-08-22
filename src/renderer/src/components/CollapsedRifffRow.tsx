@@ -4,11 +4,12 @@ import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import {
+  busForStemFromBusOf,
   clipGeometryFromFields,
   resolvedPlayedBarsFromFields,
   tileOffsetsPx
 } from '../state/selectors'
-import { stemColorVar } from '../theme/typeColor'
+import { stemBusColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import {
@@ -117,6 +118,7 @@ export function CollapsedRifffRow({
   const bpm = useAppSelector((s) => s.bpm)
   const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const mute = useAppSelector((s) => s.mute)
+  const busOf = useAppSelector((s) => s.busOf)
   const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
   const regionSelection = useAppSelector((s) => s.regionSelection)
   // The collapsed view shows the UNION of every stem's own muted spans --
@@ -138,7 +140,7 @@ export function CollapsedRifffRow({
     return out
   }, [rifff.stems, groupId, muteRegionsByStem])
   const firstStem = rifff.stems[0]
-  const color = stemColorVar(firstStem)
+  const color = stemBusColorVar(firstStem, busForStemFromBusOf(busOf, groupId, firstStem.slot))
   const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
   const oneShotStem = isOneShot ? firstStem : null
   const secPerBar = (60 / bpm) * 4
@@ -692,10 +694,17 @@ export function CollapsedRifffRow({
             cursor: 'grab'
           }}
         >
-          {/* One tiled layer per stem, overlaid — same color-per-sound-type
-              and opacity convention as PolarGlyph's own rings (fill =
-              stemColorVar(stem), opacity 0.55, no blend mode), so the
-              collapsed block's waveform reads as a mix of all its stems
+          {/* One tiled layer per stem, overlaid — colored by each stem's
+              OWN tidy-up bus (stemBusColorVar + busForStemFromBusOf), not
+              a single color for the whole rifff, so a clip mixing stems
+              from different buses still reads each one at a glance rather
+              than averaging into one representative color. Same no-blend-
+              mode convention as PolarGlyph's own rings. Opacity raised to
+              0.85 (was 0.55, matching PolarGlyph's rings) since the
+              collapsed view is what most
+              stems are seen through by default (expanding is a click away),
+              and 0.55 read as too dark there. So the collapsed block's
+              waveform reads as a mix of all its stems
               rather than just one representative one. Each stem's own mute
               state (independent of the single group-mute button, which just
               sets all of them at once) still suppresses that one stem's own
@@ -727,8 +736,11 @@ export function CollapsedRifffRow({
                   >
                     <Waveform
                       path={oneShotStem.path}
-                      color={stemColorVar(oneShotStem)}
-                      opacity={0.55}
+                      color={stemBusColorVar(
+                        oneShotStem,
+                        busForStemFromBusOf(busOf, groupId, oneShotStem.slot)
+                      )}
+                      opacity={0.85}
                     />
                   </div>
                 )
@@ -738,8 +750,8 @@ export function CollapsedRifffRow({
                     <CollapsedTiles
                       key={stem.slot}
                       path={stem.path}
-                      color={stemColorVar(stem)}
-                      opacity={0.55}
+                      color={stemBusColorVar(stem, busForStemFromBusOf(busOf, groupId, stem.slot))}
+                      opacity={0.85}
                       widthPx={widthPx}
                       stemBarLength={stem.barLength}
                       playedBars={displayedPlayedBars}

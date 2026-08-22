@@ -1,5 +1,6 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
+import { nextBusClipName } from '@shared/busNaming'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
 // than anyone actually needed in practice (per direct user feedback: "it
@@ -446,6 +447,98 @@ export type Action =
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
   | { type: 'LOAD_STATE'; state: AppState }
 
+// Hand-synced copy of selectors.ts's own TIDIED_BUS_ORDER -- store.ts can't
+// import from selectors.ts (selectors.ts already imports Action/AppState
+// FROM this file, so the reverse import would be circular). Only used for
+// the same majority-bus tie-break selectors.ts's busForRifff does, below.
+const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+
+/** After a bus assignment, renames every newly-affected rifff to "{bus}
+ * {n}" -- e.g. "drums 1" -- so a tidied project reads at a glance. Per
+ * Elling's own explicit call (2026-08-22): unconditional, not just for
+ * clips still at a generic default -- most pre-tidy names (raw stem
+ * names like "Highpass", "Delay") were "meaningless almost" anyway, so
+ * this always overwrites, including a name the user already typed by
+ * hand. `busOf` must already reflect the assignment this call is
+ * reacting to (the reducer cases below build it first, then pass it in
+ * here) so the majority-bus tie-break sees the new assignment, not the
+ * stale one. Mirrors busForRifff's own tie-break exactly, duplicated
+ * rather than imported (see BUS_ORDER above) -- a rifff with stems split
+ * across buses gets named for whichever bus most of its stems are
+ * actually on, same as tidied view's own row-grouping logic. */
+function renameRifffsForBusAssignment(
+  rifffs: Record<string, Rifff>,
+  busOf: Record<string, BusId>,
+  affectedStemKeys: Iterable<string>
+): Record<string, Rifff> {
+  const affected = new Set(affectedStemKeys)
+  const affectedGroupIds = new Set<string>()
+  for (const rifff of Object.values(rifffs)) {
+    if (rifff.stems.some((stem) => affected.has(stemKey(rifff.groupId, stem.slot)))) {
+      affectedGroupIds.add(rifff.groupId)
+    }
+  }
+  if (affectedGroupIds.size === 0) return rifffs
+
+  const result = { ...rifffs }
+  for (const groupId of affectedGroupIds) {
+    const rifff = result[groupId]
+    const counts: Partial<Record<BusId, number>> = {}
+    for (const stem of rifff.stems) {
+      const bus = busOf[stemKey(groupId, stem.slot)] ?? 'aux'
+      counts[bus] = (counts[bus] ?? 0) + 1
+    }
+    let bestBus: BusId = 'aux'
+    let bestCount = -1
+    for (const bus of BUS_ORDER) {
+      const count = counts[bus] ?? 0
+      if (count > bestCount) {
+        bestCount = count
+        bestBus = bus
+      }
+    }
+    // Reads Object.values(result) (not the original `rifffs`) so multiple
+    // renames within this same batch get sequential numbers instead of
+    // all colliding on the same "{bus} 1".
+    const newName = nextBusClipName(
+      Object.values(result).map((r) => r.name),
+      bestBus
+    )
+    result[groupId] = { ...rifff, name: newName }
+  }
+  return result
+}
+
+/** The mute map SOLO_STEMS produces: every stem of every PLACED rifff
+ * muted except exactly `targetStemKeys` -- extracted as its own pure
+ * function (not just inlined in the reducer case) so a caller that needs
+ * to know the resulting mute state SYNCHRONOUSLY, before it's actually
+ * been dispatched/rendered, can compute it directly. Concretely:
+ * ClusterStemsBrowser.tsx's startPreview dispatches SOLO_STEMS then
+ * immediately wants to flush the corrected mute state to the engine
+ * before playing -- but reading it back via a dispatch+rerender+ref
+ * round trip isn't synchronous (React batches the dispatch; the ref
+ * mirroring `state` only updates after the next render's effects run),
+ * so it computes the SAME mute map here instead and passes it straight
+ * to useFlushEngineSyncNow's override, guaranteeing the engine sees it
+ * immediately rather than racing a later coalesced sync. */
+export function soloStemsMute(
+  rifffs: Record<string, Rifff>,
+  currentMute: Record<string, boolean>,
+  targetStemKeys: string[]
+): Record<string, boolean> {
+  const targetKeys = new Set(targetStemKeys)
+  const rifffList = Object.values(rifffs).filter((r) => r.startBar !== undefined)
+  const mute = { ...currentMute }
+  for (const rifff of rifffList) {
+    for (const stem of rifff.stems) {
+      const key = stemKey(rifff.groupId, stem.slot)
+      mute[key] = !targetKeys.has(key)
+    }
+  }
+  return mute
+}
+
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'ADD_TO_SHELF': {
@@ -521,8 +614,11 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...placed, channelOf, channelOrder, channelPlugins }
     }
 
-    case 'ASSIGN_TO_BUS':
-      return { ...state, busOf: { ...state.busOf, [action.stemKey]: action.busId } }
+    case 'ASSIGN_TO_BUS': {
+      const busOf = { ...state.busOf, [action.stemKey]: action.busId }
+      const rifffs = renameRifffsForBusAssignment(state.rifffs, busOf, [action.stemKey])
+      return { ...state, busOf, rifffs }
+    }
 
     // Batched counterpart to ASSIGN_TO_BUS, for the "cluster stems"
     // labelling UI's own per-cluster bus assignment -- a cluster can have
@@ -532,7 +628,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'ASSIGN_STEMS_TO_BUS': {
       const busOf = { ...state.busOf }
       for (const key of action.stemKeys) busOf[key] = action.busId
-      return { ...state, busOf }
+      const rifffs = renameRifffsForBusAssignment(state.rifffs, busOf, action.stemKeys)
+      return { ...state, busOf, rifffs }
     }
 
     // Repacks every rifff in groupIds into contiguous bar positions, in that
@@ -1017,18 +1114,8 @@ export function reducer(state: AppState, action: Action): AppState {
     // hear everything come back." Always solos EXACTLY `action.stemKeys`,
     // every time, no matter what was soloed before. Scoped to placed
     // rifffs only, for the same reason documented on SOLO_GROUP above.
-    case 'SOLO_STEMS': {
-      const targetKeys = new Set(action.stemKeys)
-      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-      const mute = { ...state.mute }
-      for (const rifff of rifffList) {
-        for (const stem of rifff.stems) {
-          const key = stemKey(rifff.groupId, stem.slot)
-          mute[key] = !targetKeys.has(key)
-        }
-      }
-      return { ...state, mute }
-    }
+    case 'SOLO_STEMS':
+      return { ...state, mute: soloStemsMute(state.rifffs, state.mute, action.stemKeys) }
 
     // Restores a full mute snapshot verbatim -- used by ClusterStemsBrowser
     // to undo whatever temporary SOLO_STEMS preview-auditioning it did while

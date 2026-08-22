@@ -38,3 +38,20 @@ export function busGroupName(busId: BusId, entries: { soundType: SoundType }[]):
   const name = summary === busId ? busId : `${busId} — ${summary}`
   return name.toUpperCase()
 }
+
+/** The next free "{bus} N" name for a newly bus-assigned clip -- lowercase,
+ * matching this app's own UI-copy convention (unlike busGroupName above,
+ * which is deliberately uppercase export-side flavor). Scans every
+ * existing rifff name for this exact bus's own "{bus} N" pattern and picks
+ * one past the highest N found, rather than just counting current
+ * members, so a clip that got renamed away or deleted doesn't free up its
+ * old number for reuse. */
+export function nextBusClipName(existingNames: Iterable<string>, busId: BusId): string {
+  const pattern = new RegExp(`^${busId} (\\d+)$`, 'i')
+  let max = 0
+  for (const name of existingNames) {
+    const match = pattern.exec(name.trim())
+    if (match) max = Math.max(max, parseInt(match[1], 10))
+  }
+  return `${busId} ${max + 1}`
+}

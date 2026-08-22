@@ -98,6 +98,13 @@ export function channelsInOrder(state: AppState): Channel[] {
       seen.add(channelId)
     }
   }
+  // No per-channel bus here: unlike tidiedChannelsInOrder's synthetic rows
+  // (which are bus-homogeneous by construction, one bus per row), a normal
+  // channel is just whatever the user dropped onto it and can freely mix
+  // clips from different buses -- a single row-level color wouldn't mean
+  // anything. Per-clip bus coloring (CollapsedRifffRow.tsx/
+  // StemWaveformRow.tsx, via busForStem below) is the right granularity
+  // for that, not this selector.
   return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId) ?? [] }))
 }
 
@@ -125,6 +132,31 @@ function busForRifff(state: AppState, rifff: Rifff): BusId {
     }
   }
   return best
+}
+
+/** The busOf-lookup part of busForStem on its own, so a caller that already
+ * has state.busOf via its own fine-grained useAppSelector (see
+ * resolvedPlayedBarsFromFields above for the same pattern) doesn't need a
+ * full AppState just to call it. */
+export function busForStemFromBusOf(
+  busOf: Record<string, BusId>,
+  groupId: string,
+  slot: number
+): BusId {
+  return busOf[stemKey(groupId, slot)] ?? 'aux'
+}
+
+/** One stem's own bus, straight from state.busOf -- unlike busForRifff
+ * (which picks one representative bus for a whole multi-stem rifff, for
+ * row-grouping purposes), this is the real per-stem granularity: two
+ * stems in the same rifff can genuinely be on different buses. 'aux' is
+ * the fallback for a stem that hasn't been through tidy-up yet, same
+ * convention as busForRifff and buildAlsXml.ts. Used for per-clip
+ * coloring in the arranger (CollapsedRifffRow.tsx, StemWaveformRow.tsx)
+ * so each stem reads its own category at a glance, not just whichever bus
+ * happens to dominate its rifff. */
+export function busForStem(state: AppState, groupId: string, slot: number): BusId {
+  return busForStemFromBusOf(state.busOf, groupId, slot)
 }
 
 /** channelsInOrder's tidied-view layout: every placed rifff bucketed by its

@@ -1909,6 +1909,75 @@ describe('reducer', () => {
       expect(state.busOf['r1:1']).toBe('backing')
     })
 
+    it('ASSIGN_TO_BUS renames a newly bus-assigned rifff to "{bus} 1"', () => {
+      const rifff = makeRifff({ name: 'Audio In', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1: rifff } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
+      )
+      expect(state.rifffs.r1.name).toBe('drums 1')
+    })
+
+    it('ASSIGN_TO_BUS overwrites a rifff that already has a real, hand-typed name', () => {
+      const rifff = makeRifff({ name: 'my jam 150', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1: rifff } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
+      )
+      expect(state.rifffs.r1.name).toBe('drums 1')
+    })
+
+    it('ASSIGN_TO_BUS numbers sequentially past existing same-bus names', () => {
+      const r1 = makeRifff({ groupId: 'r1', name: 'drums 1', stems: [makeRifff().stems[0]] })
+      const r2 = makeRifff({ groupId: 'r2', name: 'Audio In', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1, r2 } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r2', 1), busId: 'drums' }
+      )
+      expect(state.rifffs.r2.name).toBe('drums 2')
+    })
+
+    it('ASSIGN_STEMS_TO_BUS renames every newly-affected rifff, numbered sequentially', () => {
+      const r1 = makeRifff({ groupId: 'r1', name: 'Audio In', stems: [makeRifff().stems[0]] })
+      const r2 = makeRifff({ groupId: 'r2', name: 'Audio In', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1, r2 } },
+        {
+          type: 'ASSIGN_STEMS_TO_BUS',
+          stemKeys: [stemKey('r1', 1), stemKey('r2', 1)],
+          busId: 'bass'
+        }
+      )
+      expect([state.rifffs.r1.name, state.rifffs.r2.name].sort()).toEqual(['bass 1', 'bass 2'])
+    })
+
+    it('names a multi-stem rifff for whichever bus most of its own stems are on', () => {
+      const rifff = makeRifff({ name: 'Audio In' }) // stems at slot 1 and slot 6
+      const state = reducer(
+        {
+          ...initialState,
+          rifffs: { r1: rifff },
+          busOf: { [stemKey('r1', 6)]: 'lead' } // slot 6 already on lead
+        },
+        // Only slot 1 is being assigned now, to drums -- but lead still
+        // has the other stem, so this is a genuine 1-vs-1 tie broken by
+        // BUS_ORDER (drums first).
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
+      )
+      expect(state.rifffs.r1.name).toBe('drums 1')
+    })
+
+    it('leaves a rifff untouched by this assignment alone, real name or not', () => {
+      const r1 = makeRifff({ groupId: 'r1', name: 'Audio In', stems: [makeRifff().stems[0]] })
+      const r2 = makeRifff({ groupId: 'r2', name: 'my jam 150', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1, r2 } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
+      )
+      expect(state.rifffs.r1.name).toBe('drums 1')
+      expect(state.rifffs.r2.name).toBe('my jam 150')
+    })
+
     it('DELETE_RIFFFS strips busOf for every deleted stem', () => {
       const rifff = {
         groupId: 'r1',

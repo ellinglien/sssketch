@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { humanizeSoundType, summarizeSoundTypes, busGroupName } from './busNaming'
+import { humanizeSoundType, summarizeSoundTypes, busGroupName, nextBusClipName } from './busNaming'
 
 describe('humanizeSoundType', () => {
   it('inserts a space before each internal capital and lowercases the whole string', () => {
@@ -36,5 +36,27 @@ describe('busGroupName', () => {
 
   it('upper-cases the result', () => {
     expect(busGroupName('bass', [{ soundType: 'bass' }])).toBe('BASS')
+  })
+})
+
+describe('nextBusClipName', () => {
+  it('starts at 1 when no existing clip matches this bus', () => {
+    expect(nextBusClipName(['Audio In', 'my jam 150'], 'drums')).toBe('drums 1')
+  })
+
+  it('picks one past the highest existing number for this bus', () => {
+    expect(nextBusClipName(['drums 1', 'drums 3', 'drums 2'], 'drums')).toBe('drums 4')
+  })
+
+  it('is case-insensitive and ignores whitespace when matching existing names', () => {
+    expect(nextBusClipName(['DRUMS 1', '  drums 2  '], 'drums')).toBe('drums 3')
+  })
+
+  it('ignores clips belonging to a different bus', () => {
+    expect(nextBusClipName(['bass 1', 'bass 2'], 'drums')).toBe('drums 1')
+  })
+
+  it('does not match a name that only shares the bus as a prefix', () => {
+    expect(nextBusClipName(['drums extra 1'], 'drums')).toBe('drums 1')
   })
 })

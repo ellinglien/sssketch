@@ -249,8 +249,8 @@ describe('buildRppProject', () => {
     const rppText = buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]))
     const track = tracksOf(rppText).tracks[0]
 
-    // drums bus hex is #e8929b -- r=0xe8, g=0x92, b=0x9b.
-    const expectedColor = 0x01000000 | (0x9b << 16) | (0x92 << 8) | 0xe8
+    // drums bus hex is #4a56ad (post drums/bass swap, 2026-08-21) -- r=0x4a, g=0x56, b=0xad.
+    const expectedColor = 0x01000000 | (0xad << 16) | (0x56 << 8) | 0x4a
     expect(findChild(track, 'PEAKCOL')?.params).toEqual([String(expectedColor)])
     expect(findChild(track, 'NAME')?.params[0]).toBe('"DRUMS"')
   })

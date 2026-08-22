@@ -86,20 +86,25 @@ function applyFade(
 // code the groups and clips"). bass/lead/backing are NOT guesses: extracted
 // directly from a real project the user hand-recolored in Ableton itself as
 // a reference (2026-08-05-plush-nectar3234 project) -- bass's group, track,
-// and every clip all used 65; backing's used 67 uniformly the same way;
-// lead's group+track used 53 (its own clips separately used 38, but this
-// export keeps ONE color per bus end to end, matching the bass/backing
-// majority pattern, rather than introducing a second "clip vs track" tier
-// only lead had). drums/aux have no reference in that project (it didn't
-// use either bus) -- picked as reasonably-distinct, unverified guesses
-// (0=a warm reddish tone, common "drums" convention in most DAWs; 16=a
-// cooler neutral tone for the catch-all aux bus), same "best-effort,
-// adjust by hand afterward" caveat this file's own WARP_MODE_BEATS/
-// WARP_MODE_COMPLEX_PRO constants already carry for a similarly
-// unverifiable Ableton enum.
+// and every clip all used 65 originally; backing's used 67 uniformly the
+// same way; lead's group+track used 53 (its own clips separately used 38,
+// but this export keeps ONE color per bus end to end, matching the
+// bass/backing majority pattern, rather than introducing a second "clip vs
+// track" tier only lead had). drums/aux have no reference in that project
+// (it didn't use either bus) -- drums was picked as a reasonably-distinct,
+// unverified guess (0, a warm reddish tone, common "drums" convention in
+// most DAWs); aux similarly (16, a cooler neutral tone for the catch-all
+// bus), same "best-effort, adjust by hand afterward" caveat this file's own
+// WARP_MODE_BEATS/WARP_MODE_COMPLEX_PRO constants already carry for a
+// similarly unverifiable Ableton enum. drums/bass swapped 2026-08-21 (same
+// swap made in the renderer's busColorHex, theme/typeColor.ts, so the
+// in-app tidied-view preview and this export still agree with each other)
+// -- meaning drums now exports as 65 (bass's real sampled color) and bass
+// as 0 (drums's unverified guess); neither index is what that bus showed
+// in the reference project anymore.
 const ABLETON_BUS_COLORS: Record<BusId, number> = {
-  drums: 0,
-  bass: 65,
+  drums: 65,
+  bass: 0,
   lead: 53,
   backing: 67,
   aux: 16

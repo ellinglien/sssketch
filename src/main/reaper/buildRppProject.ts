@@ -71,16 +71,17 @@ function newGuid(): string {
 // Sampled from the same real, hand-recolored-in-Ableton reference project
 // buildAlsXml.ts's own ABLETON_BUS_COLORS is built from (see that file's
 // doc comment) -- these exact hex values are src/renderer/src/theme/
-// typeColor.ts's own BUS_COLORS, the actual source palette both exports
-// draw from. Kept as its own copy, not imported from typeColor.ts -- this
-// is REAPER-native RGB hex, a genuinely different encoding from Ableton's
-// palette-index enum, and main-process code importing a renderer theme
-// file would cross this codebase's own process boundary for no real
-// benefit (see CLAUDE.md's "wire format twins are hand-synced, not
-// code-shared" convention).
+// typeColor.ts's own BUS_COLOR_HEX, the actual source palette both exports
+// draw from, including that same file's drums/bass swap (2026-08-21) --
+// keep this in sync by hand if that table ever changes again. Kept as its
+// own copy, not imported from typeColor.ts -- this is REAPER-native RGB
+// hex, a genuinely different encoding from Ableton's palette-index enum,
+// and main-process code importing a renderer theme file would cross this
+// codebase's own process boundary for no real benefit (see CLAUDE.md's
+// "wire format twins are hand-synced, not code-shared" convention).
 const REAPER_BUS_COLORS: Record<BusId, string> = {
-  drums: '#e8929b',
-  bass: '#4a56ad',
+  drums: '#4a56ad',
+  bass: '#e8929b',
   lead: '#c7a4d2',
   backing: '#7fc98a',
   aux: '#8a97a3'
