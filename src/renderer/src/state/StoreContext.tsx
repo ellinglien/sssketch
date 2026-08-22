@@ -78,6 +78,10 @@ const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStatesMap) => void>(
   () => {}
 )
+// See useFlushEngineSyncNow's own doc comment below for what this is for.
+const FlushEngineSyncNowCtx = createContext<(overrides?: Partial<AppState>) => Promise<void>>(() =>
+  Promise.resolve()
+)
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 // Effective pixels-per-bar (base PPB * the current zoom multiplier) --
@@ -378,6 +382,44 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // in-flight) is a no-op, and the eventual flush reads stateRef.current --
   // the LATEST committed state at the moment it actually runs, not
   // whatever was captured when it was scheduled.
+  // Forces an immediate build+send of the current project to the engine,
+  // bypassing the rAF coalescing below entirely -- for a caller that needs
+  // the engine to actually be running the LATEST mute/solo state before
+  // issuing a play/seek command right after, rather than whenever the
+  // coalesced sync below happens to catch up. Concretely:
+  // ClusterStemsBrowser.tsx's startPreview dispatches SOLO_STEMS then
+  // immediately plays/seeks -- without awaiting this first, the play/seek
+  // IPC call reaches the native engine well before the rAF-deferred sync
+  // below would have sent the corrected mute state (that sync waits a
+  // full animation frame, then buildEngineProject's own async rubberband
+  // IPC round-trip, then the load-project send itself), so the engine
+  // would still be running whatever mute state (e.g. a channel muted
+  // earlier in the arranger) was current before SOLO_STEMS ran -- the
+  // preview would seem to play nothing, or the wrong thing, even though
+  // the reducer's own state was already correct. Harmless to call whether
+  // or not the coalesced effect ALSO fires shortly after for the same
+  // change (see this whole effect's own "sending load-project to a
+  // paused/playing engine is harmless" comment below) -- redundant, not
+  // incorrect.
+  // `overrides` lets a caller supply fields it already knows the NEXT
+  // value of, synchronously -- e.g. a mute map computed via
+  // store.ts's soloStemsMute -- rather than relying on stateRef.current,
+  // which only reflects a just-dispatched action once React has actually
+  // re-rendered and this component's own `stateRef.current = state`
+  // effect has run (not guaranteed by the time a caller in the same
+  // synchronous event handler wants to flush).
+  const flushEngineSyncNow = useCallback(
+    async (overrides?: Partial<AppState>): Promise<void> => {
+      const project = await buildEngineProject(
+        { ...stateRef.current, ...overrides },
+        resolveStretchedForPlayback,
+        pluginCatalog
+      )
+      await window.rifffApi.engineLoadProject(project)
+    },
+    [pluginCatalog]
+  )
+
   const pendingEngineSyncRef = useRef(false)
   // Set whenever a dependency changes while a flush is already pending/
   // in-flight (see scheduleEngineSync below) -- catches the case a plain
@@ -775,35 +817,39 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={dispatch}>
         <RestoreStateCtx.Provider value={restoreState}>
-          <PosCtx.Provider value={pos}>
-            <PlayingCtx.Provider value={playing}>
-              <ZoomCtx.Provider value={24 * zoomMultiplier}>
-                <HistoryCtx.Provider value={historyControls}>
-                  <MasterChainStatusCtx.Provider value={masterChainStatus}>
-                    <MasterChainErrorCtx.Provider value={masterChainError}>
-                      <ChannelChainStatusCtx.Provider value={channelChainStatus}>
-                        <ChannelChainErrorCtx.Provider value={channelChainError}>
-                          <PluginCatalogCtx.Provider value={pluginCatalog}>
-                            <PluginScanStateCtx.Provider
-                              value={{ scanning, progress: scanProgress }}
-                            >
-                              <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                                <RiffFavouritesCtx.Provider value={riffFavourites}>
-                                  <RiffFavouritesActionsCtx.Provider value={riffFavouritesActions}>
-                                    {children}
-                                  </RiffFavouritesActionsCtx.Provider>
-                                </RiffFavouritesCtx.Provider>
-                              </PluginCatalogActionsCtx.Provider>
-                            </PluginScanStateCtx.Provider>
-                          </PluginCatalogCtx.Provider>
-                        </ChannelChainErrorCtx.Provider>
-                      </ChannelChainStatusCtx.Provider>
-                    </MasterChainErrorCtx.Provider>
-                  </MasterChainStatusCtx.Provider>
-                </HistoryCtx.Provider>
-              </ZoomCtx.Provider>
-            </PlayingCtx.Provider>
-          </PosCtx.Provider>
+          <FlushEngineSyncNowCtx.Provider value={flushEngineSyncNow}>
+            <PosCtx.Provider value={pos}>
+              <PlayingCtx.Provider value={playing}>
+                <ZoomCtx.Provider value={24 * zoomMultiplier}>
+                  <HistoryCtx.Provider value={historyControls}>
+                    <MasterChainStatusCtx.Provider value={masterChainStatus}>
+                      <MasterChainErrorCtx.Provider value={masterChainError}>
+                        <ChannelChainStatusCtx.Provider value={channelChainStatus}>
+                          <ChannelChainErrorCtx.Provider value={channelChainError}>
+                            <PluginCatalogCtx.Provider value={pluginCatalog}>
+                              <PluginScanStateCtx.Provider
+                                value={{ scanning, progress: scanProgress }}
+                              >
+                                <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                                  <RiffFavouritesCtx.Provider value={riffFavourites}>
+                                    <RiffFavouritesActionsCtx.Provider
+                                      value={riffFavouritesActions}
+                                    >
+                                      {children}
+                                    </RiffFavouritesActionsCtx.Provider>
+                                  </RiffFavouritesCtx.Provider>
+                                </PluginCatalogActionsCtx.Provider>
+                              </PluginScanStateCtx.Provider>
+                            </PluginCatalogCtx.Provider>
+                          </ChannelChainErrorCtx.Provider>
+                        </ChannelChainStatusCtx.Provider>
+                      </MasterChainErrorCtx.Provider>
+                    </MasterChainStatusCtx.Provider>
+                  </HistoryCtx.Provider>
+                </ZoomCtx.Provider>
+              </PlayingCtx.Provider>
+            </PosCtx.Provider>
+          </FlushEngineSyncNowCtx.Provider>
         </RestoreStateCtx.Provider>
       </DispatchCtx.Provider>
     </StateCtx.Provider>
@@ -846,6 +892,15 @@ export function useDispatch(): Dispatch<DispatchableAction> {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useRestoreState(): (state: AppState, pluginStates: PluginStatesMap) => void {
   return useContext(RestoreStateCtx)
+}
+
+/** See flushEngineSyncNow's own doc comment (in StoreProvider, above) for
+ * what this is for and why it exists -- await this before issuing a
+ * play/seek command right after a mute/solo-changing dispatch, so the
+ * engine is guaranteed to have the corrected state first. */
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useFlushEngineSyncNow(): (overrides?: Partial<AppState>) => Promise<void> {
+  return useContext(FlushEngineSyncNowCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component

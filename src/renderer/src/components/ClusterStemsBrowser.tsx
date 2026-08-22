@@ -1,6 +1,13 @@
 // src/renderer/src/components/ClusterStemsBrowser.tsx
 import { useEffect, useMemo, useState } from 'react'
-import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
+import { soloStemsMute } from '../state/store'
+import {
+  useAppSelector,
+  useDispatch,
+  useFlushEngineSyncNow,
+  usePlaying,
+  usePos
+} from '../state/StoreContext'
 import { stemKey, type BusId } from '@shared/types'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { toFeatureArray, standardizeFeatures } from '@shared/stemFeatures'
@@ -117,6 +124,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   const stateBpm = useAppSelector((s) => s.bpm)
   const playing = usePlaying()
   const pos = usePos()
+  const flushEngineSyncNow = useFlushEngineSyncNow()
 
   // Snapshot of the REAL mute state as it was the moment this modal opened.
   // `mute` itself is read fresh every render (it changes as SOLO_STEMS runs
@@ -402,15 +410,29 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // resuming from wherever the transport already happened to be -- is what
   // makes "what's playing" deterministic: press a button, hear THAT thing,
   // from its own start, every time.
-  function startPreview(
+  //
+  // Awaits flushEngineSyncNow BEFORE seeking/playing, passing the solo's
+  // own mute map as an override rather than dispatching SOLO_STEMS and
+  // hoping stateRef catches up in time -- without this, a clip left muted
+  // in the arranger (a whole channel muted, or just that one clip) stayed
+  // muted here too: the play/seek IPC call was reaching the engine before
+  // the coalesced rAF sync elsewhere had a chance to send the corrected
+  // mute state, so the engine was still running the arranger's own mute
+  // state at the moment playback started. Reported 2026-08-22 as "I
+  // cannot hear the audio [[[in Tidy Up]]]... I think that channel is
+  // muted on the arrangement" -- mute set anywhere in the arranger must
+  // never bleed into a preview started from here.
+  async function startPreview(
     keys: Set<string>,
     groupIdToSelect: string | undefined,
     targetBar: number
-  ): void {
+  ): Promise<void> {
     setPreviewingKeys(keys)
+    const soloedMute = soloStemsMute(rifffs, mute, [...keys])
     dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
+    await flushEngineSyncNow({ mute: soloedMute })
     if (playing) {
       markManualSeek()
       void window.rifffApi.engineSetPosition(targetBar)
@@ -442,14 +464,14 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     }
     setFocusedRow(rowIndex)
     const targetBar = Math.min(...members.map((m) => m.startBar))
-    startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
+    void startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
   }
 
   // A single thumbnail click/scrub -- targetBar is computed in ClusterRow
   // from the actual click position within the thumbnail, not just the
   // clip's start (see ClusterRow's handlePointerDown below).
   function previewStem(stem: ClusterableStem, targetBar: number): void {
-    startPreview(new Set([stem.key]), stem.groupId, targetBar)
+    void startPreview(new Set([stem.key]), stem.groupId, targetBar)
   }
 
   // Folds every member's own raw feature vector into the centroid store
@@ -510,7 +532,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
       return
     }
     const targetBar = Math.min(...members.map((m) => m.startBar))
-    startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
+    void startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
   }
 
   function assignSuggestedGroup(
