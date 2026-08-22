@@ -99,43 +99,32 @@ export function StemWaveformRow({
   const displayedFadeOut = dragFadeOut ?? fadeOut
   const displayedVolume = dragVolume ?? volume
 
-  const stemGeo = clipGeometryFromFields({
-    startBar: rifff.startBar ?? 0,
+  const baseStartBar = rifff.startBar ?? 0
+  const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
+  // Live preview during EITHER edge's drag uses the EXACT SAME formula real
+  // (committed) rendering uses -- one clipGeometryFromFields call handling
+  // both dragPlayedBars (right edge) and dragLeftCropBars (left edge) via
+  // their own overrides, rather than the right edge previously shortcutting
+  // to a bare `dragPlayedBars * ppb` that skipped the `- leftCropBars` and
+  // stretch/bpm-scaling terms the real formula applies -- that shortcut
+  // made the live-drag width visibly wrong (too wide, or wrong-scaled)
+  // whenever the clip already had a nonzero leftCropBars or stretch was
+  // off, snapping back to the correct width only once the drag committed.
+  // Reported 2026-08-22: "waveform stretches" during a right-edge trim.
+  const previewGeo = clipGeometryFromFields({
+    startBar: baseStartBar,
     offsetSteps,
     snapDiv: SNAP_DIVS[snapIdx],
-    playedBarsOverride,
-    leftCropBars,
+    playedBarsOverride: dragPlayedBars ?? playedBarsOverride,
+    leftCropBars: dragLeftCropBars ?? leftCropBars,
     rifffBarLength: rifff.barLength,
     stretchOn,
     rifffBpm: rifff.bpm,
     stateBpm: bpm,
     ppb
   })
-  const baseStartBar = rifff.startBar ?? 0
-  const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
-  // Live preview during a left-edge drag uses the EXACT SAME formula real
-  // (committed) rendering uses -- unlike the old startBar-based preview this
-  // replaces, there's no separate reconciliation needed, since neither
-  // startBar nor offsetSteps ever moves for this drag anymore.
-  const previewGeo =
-    dragLeftCropBars !== null
-      ? clipGeometryFromFields({
-          startBar: baseStartBar,
-          offsetSteps,
-          snapDiv: SNAP_DIVS[snapIdx],
-          playedBarsOverride,
-          leftCropBars: dragLeftCropBars,
-          rifffBarLength: rifff.barLength,
-          stretchOn,
-          rifffBpm: rifff.bpm,
-          stateBpm: bpm,
-          ppb
-        })
-      : stemGeo
   const leftPx = previewGeo.leftPx
-  // While actively dragging, use the in-progress width instead of the
-  // committed-state one, so the row visibly resizes in real time.
-  const widthPx = dragPlayedBars !== null ? dragPlayedBars * ppb : previewGeo.widthPx
+  const widthPx = previewGeo.widthPx
 
   // The native engine always loops a stem from its own beginning every
   // stem.barLength bars -- playedBars beyond that adds more repeats (or

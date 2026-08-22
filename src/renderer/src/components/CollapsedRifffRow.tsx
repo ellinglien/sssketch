@@ -225,25 +225,29 @@ export function CollapsedRifffRow({
     ppb: PPB
   })
   const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
-  // Live preview during a left-edge drag (non-one-shot case) uses the EXACT
-  // SAME formula real (committed) rendering uses -- see StemWaveformRow's
-  // identical fix for why the old nudgeOffsetPx/displayedStartBar
-  // reconciliation trick is gone.
-  const previewGeo =
-    dragLeftCropBars !== null
-      ? clipGeometryFromFields({
-          startBar: baseStartBar,
-          offsetSteps,
-          snapDiv: SNAP_DIVS[snapIdx],
-          playedBarsOverride,
-          leftCropBars: dragLeftCropBars,
-          rifffBarLength: rifff.barLength,
-          stretchOn,
-          rifffBpm: rifff.bpm,
-          stateBpm: bpm,
-          ppb: PPB
-        })
-      : geo
+  // Live preview during a drag (non-one-shot case) on EITHER edge uses the
+  // EXACT SAME formula real (committed) rendering uses -- one
+  // clipGeometryFromFields call handling both dragPlayedBars (right edge)
+  // and dragLeftCropBars (left edge) via their own overrides. See
+  // StemWaveformRow's identical fix: the right edge used to shortcut to a
+  // bare `dragPlayedBars * PPB` below (skipping the `- leftCropBars` and
+  // stretch/bpm-scaling terms this formula applies), making the live-drag
+  // width visibly wrong whenever leftCropBars was already nonzero or
+  // stretch was off, snapping back to correct only once the drag
+  // committed. Reported 2026-08-22: "waveform stretches" during a
+  // right-edge trim.
+  const previewGeo = clipGeometryFromFields({
+    startBar: baseStartBar,
+    offsetSteps,
+    snapDiv: SNAP_DIVS[snapIdx],
+    playedBarsOverride: dragPlayedBars ?? playedBarsOverride,
+    leftCropBars: dragLeftCropBars ?? leftCropBars,
+    rifffBarLength: rifff.barLength,
+    stretchOn,
+    rifffBpm: rifff.bpm,
+    stateBpm: bpm,
+    ppb: PPB
+  })
   const oneShotCommittedDurationSec =
     oneShotStem != null
       ? (oneShotStem.trimEndSec ?? oneShotStem.durationSec) - (oneShotStem.trimStartSec ?? 0)
@@ -256,9 +260,7 @@ export function CollapsedRifffRow({
     : previewGeo.leftPx
   const widthPx = isOneShot
     ? oneShotWidthBars(oneShotDragPreview?.durationSec ?? oneShotCommittedDurationSec, bpm) * PPB
-    : dragPlayedBars !== null
-      ? dragPlayedBars * PPB
-      : previewGeo.widthPx
+    : previewGeo.widthPx
 
   // One-shot waveform geometry: trimming must CROP a fixed-scale waveform
   // (the audio's own duration/speed hasn't changed, only how much of it
