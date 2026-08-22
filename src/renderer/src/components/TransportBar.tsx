@@ -61,10 +61,9 @@ function MetronomeIcon(): React.JSX.Element {
 
 // Simplified 6-tooth cog silhouette, same hand-drawn-glyph/no-icon-library
 // convention as MetronomeIcon above -- outer ring + hole drawn as strokes,
-// teeth as small rects rotated around the same center. Distinct from the
-// "tidy" button next to it (internally still named gearMenu below, a
-// pre-existing misnomer -- that one is scoped to tidy-up options only, not
-// a general settings surface).
+// teeth as small rects rotated around the same center. (The "tidy" button
+// this used to sit next to moved up to App.tsx's own ProjectMenu, in the
+// top row -- see that component's tidy button for tidy-up/tidy-view.)
 function SettingsGearIcon(): React.JSX.Element {
   return (
     <svg
@@ -140,7 +139,6 @@ function modeLabel(mode: 'normal' | 'sketch'): string {
 }
 
 export function TransportBar({
-  onOpenClusterStems,
   onEnableGatedRecording,
   onDisableGatedRecording,
   onStop,
@@ -151,7 +149,6 @@ export function TransportBar({
   sketchEligible,
   onCycleMode
 }: {
-  onOpenClusterStems: () => void
   onEnableGatedRecording: () => void
   onDisableGatedRecording: () => void
   // Separate from a plain STOP dispatch -- App.tsx's handleStop also checks
@@ -186,12 +183,6 @@ export function TransportBar({
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
-  const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
-  // Passed to ContextMenu as ignoreRef -- see that prop's own doc comment
-  // for why the trigger button needs to be exempted from the menu's
-  // capture-phase outside-click dismissal, not just guarded in this
-  // button's own onClick.
-  const gearButtonRef = useRef<HTMLButtonElement>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   // The settings menu's "audio…" entry -- replaces the two dropdowns that
@@ -746,52 +737,6 @@ export function TransportBar({
       >
         + rec channel
       </button>
-
-      <button
-        ref={gearButtonRef}
-        onClick={(e) => {
-          // Toggles closed if already open, rather than always re-opening/
-          // repositioning. See ContextMenu's own ignoreRef doc comment for
-          // why the trigger also needs to be passed there -- this guard
-          // alone isn't enough to stop the menu reopening the instant it's
-          // dismissed by ContextMenu's own outside-click handling.
-          if (gearMenu) {
-            setGearMenu(null)
-            return
-          }
-          const rect = e.currentTarget.getBoundingClientRect()
-          setGearMenu({ x: rect.left, y: rect.bottom + 4 })
-        }}
-        aria-label="More arranger options"
-        title="tidy up / tidy view"
-        data-tour-id="tour-tidy"
-        style={{
-          height: 22,
-          borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          background: state.tidiedView ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
-        }}
-      >
-        tidy
-      </button>
-      {gearMenu && (
-        <ContextMenu
-          x={gearMenu.x}
-          y={gearMenu.y}
-          ignoreRef={gearButtonRef}
-          items={[
-            { label: 'tidy up', onClick: onOpenClusterStems },
-            {
-              label: state.tidiedView ? 'tidy view: on' : 'tidy view: off',
-              onClick: () => dispatch({ type: 'TOGGLE_TIDIED_VIEW' })
-            }
-          ]}
-          onClose={() => setGearMenu(null)}
-        />
-      )}
 
       <button
         ref={settingsButtonRef}

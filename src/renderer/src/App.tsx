@@ -447,11 +447,19 @@ function ProjectMenu({
   onOpenClusterStems: () => void
 }): React.JSX.Element {
   const state = useAppState()
+  const dispatch = useDispatch()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const exportButtonRef = useRef<HTMLButtonElement>(null)
   const [saveMenu, setSaveMenu] = useState<{ x: number; y: number } | null>(null)
   const saveButtonRef = useRef<HTMLButtonElement>(null)
+  // Moved here from TransportBar.tsx (per direct request: a top-row button
+  // to the left of export, rather than buried in the transport bar) --
+  // internally still called gearMenu, a pre-existing misnomer carried over
+  // from TransportBar.tsx (scoped to tidy-up options only, not a general
+  // settings surface).
+  const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
+  const gearButtonRef = useRef<HTMLButtonElement>(null)
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
   const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null)
   const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
@@ -589,12 +597,15 @@ function ProjectMenu({
       <button onClick={handleNew} style={buttonStyle}>
         new
       </button>
+      <button onClick={onOpenLibrary} style={buttonStyle}>
+        open
+      </button>
       <button
         ref={saveButtonRef}
         onClick={(e) => {
           // Toggles closed if already open -- see ContextMenu's own
-          // ignoreRef doc comment (and TransportBar.tsx's gear-menu button)
-          // for why the trigger also needs to be passed there.
+          // ignoreRef doc comment (and the tidy button below) for why the
+          // trigger also needs to be passed there.
           if (saveMenu) {
             setSaveMenu(null)
             return
@@ -621,9 +632,48 @@ function ProjectMenu({
           onClose={() => setSaveMenu(null)}
         />
       )}
-      <button onClick={onOpenLibrary} style={buttonStyle}>
-        open
+      <button
+        ref={gearButtonRef}
+        onClick={(e) => {
+          // Toggles closed if already open, rather than always re-opening/
+          // repositioning. See ContextMenu's own ignoreRef doc comment for
+          // why the trigger also needs to be passed there -- this guard
+          // alone isn't enough to stop the menu reopening the instant it's
+          // dismissed by ContextMenu's own outside-click handling.
+          if (gearMenu) {
+            setGearMenu(null)
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setGearMenu({ x: rect.left, y: rect.bottom + 4 })
+        }}
+        aria-label="More arranger options"
+        title="tidy up / tidy view"
+        data-tour-id="tour-tidy"
+        style={{
+          ...buttonStyle,
+          background: state.tidiedView ? 'var(--ra-stretch-on-bg)' : buttonStyle.background,
+          border: `1px solid ${state.tidiedView ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: state.tidiedView ? 'var(--ra-stretch-on)' : buttonStyle.color
+        }}
+      >
+        tidy
       </button>
+      {gearMenu && (
+        <ContextMenu
+          x={gearMenu.x}
+          y={gearMenu.y}
+          ignoreRef={gearButtonRef}
+          items={[
+            { label: 'tidy up', onClick: onOpenClusterStems },
+            {
+              label: state.tidiedView ? 'tidy view: on' : 'tidy view: off',
+              onClick: () => dispatch({ type: 'TOGGLE_TIDIED_VIEW' })
+            }
+          ]}
+          onClose={() => setGearMenu(null)}
+        />
+      )}
       <button
         ref={exportButtonRef}
         onClick={(e) => {
@@ -1958,7 +2008,6 @@ function Frame(): React.JSX.Element {
         </div>
         <Shelf onImported={handleImported} onOpenLibrary={openRiffLibrary} />
         <TransportBar
-          onOpenClusterStems={() => setClusterStemsOpen(true)}
           onEnableGatedRecording={() => void enableGatedRecording()}
           onDisableGatedRecording={() => void disableGatedRecording()}
           onStop={() => void handleStop()}
