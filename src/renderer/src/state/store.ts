@@ -1,6 +1,6 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
-import { nextBusClipName } from '@shared/busNaming'
+import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
 // than anyone actually needed in practice (per direct user feedback: "it
@@ -499,10 +499,14 @@ function renameRifffsForBusAssignment(
     }
     // Reads Object.values(result) (not the original `rifffs`) so multiple
     // renames within this same batch get sequential numbers instead of
-    // all colliding on the same "{bus} 1".
+    // all colliding on the same "{bus} 1 — ...". originalNameFromBusName
+    // strips any PRIOR "{bus} {n} — " prefix first, so re-tidying an
+    // already-renamed clip into a different bus renames cleanly instead
+    // of nesting ("bass 2 — drums 1 — Highpass").
     const newName = nextBusClipName(
       Object.values(result).map((r) => r.name),
-      bestBus
+      bestBus,
+      originalNameFromBusName(rifff.name)
     )
     result[groupId] = { ...rifff, name: newName }
   }
@@ -1172,6 +1176,7 @@ export function reducer(state: AppState, action: Action): AppState {
       delete rifffs[action.groupId]
       const vol = { ...state.vol }
       const mute = { ...state.mute }
+      const busOf = { ...state.busOf }
       const off = { ...state.off }
       const playedBars = { ...state.playedBars }
       const fadeIn = { ...state.fadeIn }
@@ -1191,9 +1196,36 @@ export function reducer(state: AppState, action: Action): AppState {
       for (const stem of rifff.stems) {
         const newGroupId = crypto.randomUUID()
         newGroupIds.push(newGroupId)
+        // A tidy-up bus assignment is keyed by groupId:slot -- without
+        // carrying it over to the new groupId below, a previously-tidied
+        // stem would silently lose its bus (falling back to the neutral
+        // aux/grey color, and its name reverting to the bare stem name)
+        // the instant it got ungrouped, even though nothing about its
+        // actual categorization changed. Reported 2026-08-22: "when i
+        // tidy... and then ungroup, they appear grey... still have the
+        // original stem names."
+        const oldBusKey = stemKey(action.groupId, stem.slot)
+        const newBusKey = stemKey(newGroupId, stem.slot)
+        const bus = state.busOf[oldBusKey]
+        if (bus !== undefined) busOf[newBusKey] = bus
+        delete busOf[oldBusKey]
+        // Only rename if this stem actually has a real bus assignment --
+        // never fabricate a "aux 1 — " prefix on something that was
+        // simply never tidied. originalNameFromBusName guards against
+        // nesting if the PARENT rifff's own name already carried a prior
+        // bus prefix (e.g. it was tidied, then had more stems added,
+        // then got ungrouped again).
+        const name =
+          bus === undefined
+            ? stem.name
+            : nextBusClipName(
+                Object.values(rifffs).map((r) => r.name),
+                bus,
+                originalNameFromBusName(stem.name)
+              )
         rifffs[newGroupId] = {
           groupId: newGroupId,
-          name: stem.name,
+          name,
           bpm: rifff.bpm,
           // The group's own CURRENT resolved length (reflecting any active
           // resize), not stem.barLength — matches pasteStemAction's own
@@ -1221,6 +1253,7 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs,
         vol,
         mute,
+        busOf,
         off,
         playedBars,
         fadeIn,

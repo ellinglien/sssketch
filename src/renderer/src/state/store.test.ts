@@ -855,6 +855,31 @@ describe('reducer', () => {
       expect(state.mute['r1:6']).toBeUndefined()
     })
 
+    it('carries over each stem’s own tidy-up bus assignment, keyed to its new groupId', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:1', busId: 'drums' })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+
+      const slot1Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 1)!
+      const slot6Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 6)!
+      expect(state.busOf[`${slot1Rifff.groupId}:1`]).toBe('drums')
+      expect(state.busOf[`${slot6Rifff.groupId}:6`]).toBeUndefined() // never tidied
+      expect(state.busOf['r1:1']).toBeUndefined() // old key scrubbed
+    })
+
+    it('renames a split-out stem to its bus name only if it actually has a bus assigned', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+      state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:1', busId: 'drums' })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+
+      const slot1Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 1)!
+      const slot6Rifff = Object.values(state.rifffs).find((r) => r.stems[0].slot === 6)!
+      expect(slot1Rifff.name).toBe('drums 1 — Highpass') // tidied -- gets the bus name
+      expect(slot6Rifff.name).toBe('Freezer') // never tidied -- keeps its plain stem name
+    })
+
     it('copies group-level fade/stretch identically to every new clip', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
@@ -1909,32 +1934,41 @@ describe('reducer', () => {
       expect(state.busOf['r1:1']).toBe('backing')
     })
 
-    it('ASSIGN_TO_BUS renames a newly bus-assigned rifff to "{bus} 1"', () => {
+    it('ASSIGN_TO_BUS renames a newly bus-assigned rifff to "{bus} 1 — {original name}"', () => {
       const rifff = makeRifff({ name: 'Audio In', stems: [makeRifff().stems[0]] })
       const state = reducer(
         { ...initialState, rifffs: { r1: rifff } },
         { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
       )
-      expect(state.rifffs.r1.name).toBe('drums 1')
+      expect(state.rifffs.r1.name).toBe('drums 1 — Audio In')
     })
 
-    it('ASSIGN_TO_BUS overwrites a rifff that already has a real, hand-typed name', () => {
+    it('ASSIGN_TO_BUS overwrites a rifff that already has a real, hand-typed name -- keeping it, not discarding it', () => {
       const rifff = makeRifff({ name: 'my jam 150', stems: [makeRifff().stems[0]] })
       const state = reducer(
         { ...initialState, rifffs: { r1: rifff } },
         { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
       )
-      expect(state.rifffs.r1.name).toBe('drums 1')
+      expect(state.rifffs.r1.name).toBe('drums 1 — my jam 150')
     })
 
     it('ASSIGN_TO_BUS numbers sequentially past existing same-bus names', () => {
-      const r1 = makeRifff({ groupId: 'r1', name: 'drums 1', stems: [makeRifff().stems[0]] })
+      const r1 = makeRifff({ groupId: 'r1', name: 'drums 1 — Kick', stems: [makeRifff().stems[0]] })
       const r2 = makeRifff({ groupId: 'r2', name: 'Audio In', stems: [makeRifff().stems[0]] })
       const state = reducer(
         { ...initialState, rifffs: { r1, r2 } },
         { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r2', 1), busId: 'drums' }
       )
-      expect(state.rifffs.r2.name).toBe('drums 2')
+      expect(state.rifffs.r2.name).toBe('drums 2 — Audio In')
+    })
+
+    it('ASSIGN_TO_BUS re-tidying an already bus-named rifff into a different bus does not nest prefixes', () => {
+      const rifff = makeRifff({ name: 'drums 1 — Highpass', stems: [makeRifff().stems[0]] })
+      const state = reducer(
+        { ...initialState, rifffs: { r1: rifff } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'bass' }
+      )
+      expect(state.rifffs.r1.name).toBe('bass 1 — Highpass')
     })
 
     it('ASSIGN_STEMS_TO_BUS renames every newly-affected rifff, numbered sequentially', () => {
@@ -1948,7 +1982,10 @@ describe('reducer', () => {
           busId: 'bass'
         }
       )
-      expect([state.rifffs.r1.name, state.rifffs.r2.name].sort()).toEqual(['bass 1', 'bass 2'])
+      expect([state.rifffs.r1.name, state.rifffs.r2.name].sort()).toEqual([
+        'bass 1 — Audio In',
+        'bass 2 — Audio In'
+      ])
     })
 
     it('names a multi-stem rifff for whichever bus most of its own stems are on', () => {
@@ -1964,7 +2001,7 @@ describe('reducer', () => {
         // BUS_ORDER (drums first).
         { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
       )
-      expect(state.rifffs.r1.name).toBe('drums 1')
+      expect(state.rifffs.r1.name).toBe('drums 1 — Audio In')
     })
 
     it('leaves a rifff untouched by this assignment alone, real name or not', () => {
@@ -1974,7 +2011,7 @@ describe('reducer', () => {
         { ...initialState, rifffs: { r1, r2 } },
         { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'drums' }
       )
-      expect(state.rifffs.r1.name).toBe('drums 1')
+      expect(state.rifffs.r1.name).toBe('drums 1 — Audio In')
       expect(state.rifffs.r2.name).toBe('my jam 150')
     })
 

@@ -39,19 +39,40 @@ export function busGroupName(busId: BusId, entries: { soundType: SoundType }[]):
   return name.toUpperCase()
 }
 
-/** The next free "{bus} N" name for a newly bus-assigned clip -- lowercase,
- * matching this app's own UI-copy convention (unlike busGroupName above,
- * which is deliberately uppercase export-side flavor). Scans every
- * existing rifff name for this exact bus's own "{bus} N" pattern and picks
- * one past the highest N found, rather than just counting current
- * members, so a clip that got renamed away or deleted doesn't free up its
- * old number for reuse. */
-export function nextBusClipName(existingNames: Iterable<string>, busId: BusId): string {
-  const pattern = new RegExp(`^${busId} (\\d+)$`, 'i')
+const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+
+/** If `name` already carries a "{bus} {n} — " prefix this same naming
+ * convention would have added, strips it and returns just the original
+ * portion -- otherwise returns `name` unchanged. Used before re-deriving a
+ * bus name so re-tidying a clip into a different bus (or splitting it via
+ * UNGROUP) doesn't nest prefixes ("bass 2 — drums 1 — Highpass"); the
+ * genuinely original name is always what ends up after the last " — ". */
+export function originalNameFromBusName(name: string): string {
+  const pattern = new RegExp(`^(?:${BUS_IDS.join('|')}) \\d+ — (.+)$`)
+  const match = pattern.exec(name.trim())
+  return match ? match[1] : name
+}
+
+/** The next free "{bus} N — {originalName}" name for a newly bus-assigned
+ * clip -- lowercase, matching this app's own UI-copy convention (unlike
+ * busGroupName above, which is deliberately uppercase export-side
+ * flavor). Keeps the clip's own original name rather than discarding it,
+ * per explicit request: overwriting names entirely lost information that
+ * was sometimes still useful to see. Scans every existing rifff name for
+ * this exact bus's own "{bus} N — " pattern and picks one past the
+ * highest N found, rather than just counting current members, so a clip
+ * that got renamed away or deleted doesn't free up its old number for
+ * reuse. */
+export function nextBusClipName(
+  existingNames: Iterable<string>,
+  busId: BusId,
+  originalName: string
+): string {
+  const pattern = new RegExp(`^${busId} (\\d+) — `, 'i')
   let max = 0
   for (const name of existingNames) {
     const match = pattern.exec(name.trim())
     if (match) max = Math.max(max, parseInt(match[1], 10))
   }
-  return `${busId} ${max + 1}`
+  return `${busId} ${max + 1} — ${originalNameFromBusName(originalName)}`
 }
