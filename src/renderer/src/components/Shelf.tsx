@@ -18,6 +18,10 @@ import { formatBpm } from '@shared/format'
 
 const TILE_SIZE = 42
 
+// A stable empty-Set reference for the "batch selection is stale" case
+// below, rather than allocating a fresh one every render.
+const EMPTY_SELECTION: Set<string> = new Set()
+
 export function Shelf({
   onImported,
   onOpenLibrary
@@ -48,7 +52,21 @@ export function Shelf({
   // preview/detail-line/Inspector exactly as before. A plain click always
   // collapses this back down to just that one tile. Same convention as the
   // LORE library browser's own multi-select.
-  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  const [rawMultiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  // A shift/cmd-click batch always includes its own anchor tile (state.sel)
+  // as a member -- shift-click's range always spans from state.sel to the
+  // clicked tile inclusive; cmd/ctrl-click's toggle can in principle remove
+  // the anchor itself, an accepted edge case here. So once state.sel moves
+  // to something OUTSIDE this batch -- a click in the arranger, sketch
+  // mode, or a Tidy Up preview -- the batch is stale and treated as empty,
+  // without needing an effect or a ref to detect "state.sel changed" (this
+  // project's linter forbids setState-in-effect and ref reads/writes
+  // during render; see ClusterStemsBrowser.tsx's own "derive instead of
+  // reset" comment for the same convention elsewhere in this codebase).
+  // Reported 2026-09-01: shelf selection should clear on arranger/sketch
+  // interaction, and vice versa.
+  const multiSelected =
+    state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   // Bumped on every click so a preview whose decode is still in flight when
   // a different tile gets clicked knows it's been superseded and shouldn't

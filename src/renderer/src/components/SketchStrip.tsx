@@ -10,6 +10,10 @@ import type { Rifff } from '@shared/types'
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
 
+// A stable empty-Set reference for the "batch selection is stale" case
+// below, rather than allocating a fresh one every render.
+const EMPTY_SELECTION: Set<string> = new Set()
+
 // Vertical pixels of right-click-drag movement per step through a tile's
 // bar-length option list (see handleBarsMouseDown) — small enough that the
 // whole short preset list is reachable within a comfortable drag distance.
@@ -42,7 +46,17 @@ export function SketchStrip(): React.JSX.Element {
   // Batch selection (shift-click range, cmd/ctrl-click toggle) — same
   // convention as Shelf's own multi-select. Separate from state.sel, which
   // stays the single "anchor" tile a plain click always collapses back to.
-  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  const [rawMultiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  // A shift/cmd-click batch always includes its own anchor tile (state.sel)
+  // as a member, so once state.sel moves to something OUTSIDE this batch --
+  // a click in the Shelf, or a Tidy Up preview -- the batch is stale and
+  // treated as empty. Mirrors Shelf.tsx's identical derivation and its own
+  // comment on why this is derived rather than reset via an effect or a
+  // ref (this project's linter forbids both during/around render).
+  // Reported 2026-09-01: shelf selection should clear on arranger/sketch
+  // interaction, and vice versa.
+  const multiSelected =
+    state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
   // Set (only) when a real drag of the scrub dot just ended — see
   // handleTileClick's own doc comment for why the tile's click handler
   // needs to check this.
