@@ -1128,7 +1128,7 @@ function Frame(): React.JSX.Element {
     // The sketch-info sidecar can be missing/corrupted even when the
     // content autosave above recovered fine (they're written/read
     // independently). Falling back to null here would leave real
-    // recovered content showing as "untitled sketch." Give it a real name
+    // recovered content showing as "untitled." Give it a real name
     // instead, same as the fresh-start path below.
     setCurrentSketch(
       sketchJson
@@ -1994,7 +1994,7 @@ function Frame(): React.JSX.Element {
             <Titlebar
               sketchName={
                 currentSketch === null
-                  ? 'untitled sketch'
+                  ? 'untitled'
                   : currentSketch.kind === 'library'
                     ? currentSketch.name
                     : basenameWithoutProjectExt(currentSketch.path)
@@ -2004,6 +2004,9 @@ function Frame(): React.JSX.Element {
               onRename={(newName) => void handleRename(newName)}
               renameError={renameError}
               dirty={dirty}
+              mode={state.mode}
+              sketchEligible={isSketchEligible(state)}
+              onCycleMode={handleCycleArrangerMode}
             />
           </div>
           <div style={{ paddingRight: 14 }}>
@@ -2025,9 +2028,6 @@ function Frame(): React.JSX.Element {
           onShowWelcome={showWelcomeAgain}
           onOpenEndlesss={openRiffLibrary}
           onStartTour={replayTour}
-          mode={state.mode}
-          sketchEligible={isSketchEligible(state)}
-          onCycleMode={handleCycleArrangerMode}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/

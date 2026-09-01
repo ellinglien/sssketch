@@ -130,24 +130,13 @@ function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX
   )
 }
 
-// 'normal' is still the real internal ArrangerMode value (store.ts) -- this
-// is purely a display label, used both for the mode-toggle button's own
-// visible text and its tooltip. Moved here from Titlebar.tsx along with the
-// button itself -- see the button's own render site below for why.
-function modeLabel(mode: 'normal' | 'sketch'): string {
-  return mode === 'normal' ? 'arrange' : mode
-}
-
 export function TransportBar({
   onEnableGatedRecording,
   onDisableGatedRecording,
   onStop,
   onShowWelcome,
   onOpenEndlesss,
-  onStartTour,
-  mode,
-  sketchEligible,
-  onCycleMode
+  onStartTour
 }: {
   onEnableGatedRecording: () => void
   onDisableGatedRecording: () => void
@@ -156,13 +145,6 @@ export function TransportBar({
   // comment), which needs state this component doesn't have direct access
   // to construct itself.
   onStop: () => void
-  /** Arranger/sketch mode toggle -- moved here from Titlebar.tsx (per
-   * direct feedback: more prominent, next to the Link button rather than
-   * buried beside the project name). See the button's own render site
-   * below for the rest of this feature's reasoning. */
-  mode: 'normal' | 'sketch'
-  sketchEligible: boolean
-  onCycleMode: () => void
   /** Settings menu's "show welcome screen" entry -- see App.tsx's
    * showWelcomeAgain for what "re-enable" actually does (clears the
    * persisted opt-out AND reopens it now). */
@@ -628,42 +610,6 @@ export function TransportBar({
           +
         </button>
       </div>
-
-      <button
-        onClick={onCycleMode}
-        aria-label="Cycle arranger mode"
-        data-tour-id="tour-mode"
-        title={
-          mode === 'normal' && !sketchEligible
-            ? 'mode: arrange (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
-            : `mode: ${modeLabel(mode)} (Tab)`
-        }
-        style={{
-          height: 22,
-          // Fixed, not content-width -- "arrange" and "sketch" are
-          // different lengths, and per direct feedback the button itself
-          // shouldn't visibly resize when the mode flips. Sized to fit
-          // "arrange" (the longer label) comfortably.
-          width: 64,
-          borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          // Moved here from Titlebar.tsx (more prominent, next to Link) --
-          // per direct feedback, both states now share the same red text
-          // and white outline (previously grey/teal text with a subtle
-          // border, plus a small moving "switch" mark that's been dropped
-          // entirely) rather than differing per state; only the background
-          // still signals which mode is active.
-          background: mode !== 'normal' ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-text)',
-          color: 'var(--ra-mute-on)'
-        }}
-      >
-        {modeLabel(mode)}
-      </button>
 
       <button
         onClick={() => {

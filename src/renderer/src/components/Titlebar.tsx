@@ -1,4 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
+import { modeLabel } from '../state/selectors'
+
+// Matches ProjectMenu's own buttonStyle (App.tsx) exactly -- the mode
+// toggle button below moved up here from TransportBar.tsx per direct
+// feedback ("same style as the other grey buttons," no special
+// highlight), so it needs to actually look like NEW/OPEN/SAVE/TIDY/EXPORT
+// rather than the red-text/white-outline treatment it had down there.
+// Duplicated rather than shared/exported -- both are small, one-off
+// per-component style objects in this codebase's existing convention
+// (TransportBar's own buttons are all hand-rolled inline too), not worth
+// a new shared module for one flat object.
+const buttonStyle: React.CSSProperties = {
+  height: 22,
+  borderRadius: 0,
+  padding: '0 10px',
+  fontSize: 10,
+  border: '1px solid var(--ra-border)',
+  background: 'var(--ra-bg-row-active)',
+  color: 'var(--ra-text-2)'
+}
 
 // No self-owned bottom border — App.tsx's Frame wraps this together with ProjectMenu
 // in one row and owns the border there instead, so it spans the full row width under
@@ -11,7 +31,10 @@ export function Titlebar({
   stemCount,
   onRename,
   renameError,
-  dirty
+  dirty,
+  mode,
+  sketchEligible,
+  onCycleMode
 }: {
   /** The real current project name, already resolved by the caller (see
    * App.tsx's Frame) -- was previously a hardcoded "untitled sketch 04"
@@ -34,6 +57,17 @@ export function Titlebar({
    * Shown as a small dot next to the project name; App.tsx's Frame is the
    * only place that knows both sides of that comparison. */
   dirty?: boolean
+  /** Arranger/sketch mode toggle -- moved here from TransportBar.tsx per
+   * direct feedback: sits up in the empty gap of this row (between the
+   * project name and the rifff/stem count) instead of down in the
+   * transport row, and drops the white-outline stroke it had there for
+   * the plain grey buttonStyle stroke above -- same look whichever mode is
+   * active, no background/border highlight. The label text itself stays
+   * red (var(--ra-mute-on), see the button's own style below), the one
+   * thing per direct feedback that should still stand out. */
+  mode: 'normal' | 'sketch'
+  sketchEligible: boolean
+  onCycleMode: () => void
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(sketchName)
@@ -44,7 +78,7 @@ export function Titlebar({
   }, [editing])
 
   function startEditing(): void {
-    setDraft(sketchName === 'untitled sketch' ? '' : sketchName)
+    setDraft(sketchName === 'untitled' ? '' : sketchName)
     setEditing(true)
   }
 
@@ -110,8 +144,38 @@ export function Titlebar({
           <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>{renameError}</span>
         )}
       </div>
-      <div style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-        {rifffCount} rifffs · {stemCount} stems imported
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={onCycleMode}
+          aria-label="Cycle arranger mode"
+          data-tour-id="tour-mode"
+          title={
+            mode === 'normal' && !sketchEligible
+              ? 'mode: arrange (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
+              : `mode: ${modeLabel(mode)} (Tab)`
+          }
+          style={{
+            ...buttonStyle,
+            // Fixed, not content-width -- "arrange" and "sketch" are
+            // different lengths, and per direct feedback the button itself
+            // shouldn't visibly resize when the mode flips. Sized to fit
+            // "arrange" (the longer label) comfortably.
+            width: 64,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            // Text stays red (unlike every other plain grey button here) --
+            // per direct feedback this one label should still stand out as
+            // the mode indicator, while the stroke stays the same neutral
+            // grey as the rest of buttonStyle (no white outline).
+            color: 'var(--ra-mute-on)'
+          }}
+        >
+          {modeLabel(mode)}
+        </button>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+          {rifffCount} rifffs · {stemCount} stems imported
+        </div>
       </div>
     </div>
   )

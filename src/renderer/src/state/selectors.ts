@@ -242,6 +242,14 @@ export function isSketchEligible(state: AppState): boolean {
   return true
 }
 
+/** Display label for the arranger mode toggle -- shared by Titlebar.tsx
+ * (where the button itself now lives) and anywhere else that needs to show
+ * the current mode as text. 'normal' reads as "arrange" everywhere in the
+ * UI; there's no user-facing "normal." */
+export function modeLabel(mode: ArrangerMode): string {
+  return mode === 'normal' ? 'arrange' : mode
+}
+
 /** What Tab / the TransportBar's mode button should switch to next —
  * normal <-> sketch, staying on 'normal' when isSketchEligible(state) is
  * false, so the toggle never lands on a mode it can't actually show. */
