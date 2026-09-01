@@ -93,21 +93,28 @@ function applyFade(
 // track" tier only lead had). drums/aux have no reference in that project
 // (it didn't use either bus) -- drums was picked as a reasonably-distinct,
 // unverified guess (0, a warm reddish tone, common "drums" convention in
-// most DAWs); aux similarly (16, a cooler neutral tone for the catch-all
-// bus), same "best-effort, adjust by hand afterward" caveat this file's own
-// WARP_MODE_BEATS/WARP_MODE_COMPLEX_PRO constants already carry for a
-// similarly unverifiable Ableton enum. drums/bass swapped 2026-08-21 (same
-// swap made in the renderer's busColorHex, theme/typeColor.ts, so the
+// most DAWs), same "best-effort, adjust by hand afterward" caveat this
+// file's own WARP_MODE_BEATS/WARP_MODE_COMPLEX_PRO constants already carry
+// for a similarly unverifiable Ableton enum. drums/bass swapped 2026-08-21
+// (same swap made in the renderer's busColorHex, theme/typeColor.ts, so the
 // in-app tidied-view preview and this export still agree with each other)
 // -- meaning drums now exports as 65 (bass's real sampled color) and bass
 // as 0 (drums's unverified guess); neither index is what that bus showed
 // in the reference project anymore.
+//
+// aux was originally 16 (a cool neutral grey) -- changed 2026-09-01 to 22
+// (an unverified guess at a warm tan/khaki swatch), matching the same
+// grey-reads-as-muted-clip fix made to busColorHex in theme/typeColor.ts
+// (see that file's own longer comment for the full reasoning). Same
+// "adjust by hand in Ableton if this index isn't actually the tan it's
+// assumed to be" caveat as drums above -- unlike drums/bass/lead/backing,
+// this one was never checked against a real opened project.
 const ABLETON_BUS_COLORS: Record<BusId, number> = {
   drums: 65,
   bass: 0,
   lead: 53,
   backing: 67,
-  aux: 16
+  aux: 22
 }
 
 // Mirrors src/renderer/src/state/selectors.ts's resolvePlayedBars

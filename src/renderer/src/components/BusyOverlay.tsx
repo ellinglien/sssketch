@@ -26,7 +26,7 @@ export function BusyOverlay(): React.JSX.Element | null {
         pointerEvents: 'auto'
       }}
     >
-      <LoadingLoader size={40} />
+      <LoadingLoader size={64} />
       <div style={{ fontSize: 11, color: 'var(--ra-text-2)' }}>{message}</div>
     </div>
   )

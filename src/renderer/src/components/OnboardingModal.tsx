@@ -1,16 +1,4 @@
 import { useState } from 'react'
-import { LoadingLoader } from './LoadingLoader'
-
-// All four LoadingLoader bars in plain white -- monochrome per this app's
-// own "black background, white text, no in-between greys" rule, not the
-// original multi-color rainbow mark. LoadingLoader's own bounce/position
-// motion is unaffected; only the color is flattened here.
-const MARK_COLORS: [string, string, string, string] = [
-  'var(--ra-text)',
-  'var(--ra-text)',
-  'var(--ra-text)',
-  'var(--ra-text)'
-]
 
 const WORDMARK = 'SSSKETCH'.split('')
 
@@ -18,7 +6,7 @@ const buttonStyle: React.CSSProperties = {
   height: 36,
   // Fixed rather than padding-driven -- "log into endlesss" is the longest
   // label of the three normal-view buttons, and a shared width means every
-  // button (including "recover"/"discard" in the recovery sub-view) reads
+  // button (including "recover"/"discard" in the recovery notice) reads
   // as one consistent row instead of each one hugging its own text.
   width: 140,
   borderRadius: 0,
@@ -50,17 +38,22 @@ const secondaryButtonStyle: React.CSSProperties = {
 }
 
 // A plain text-link affordance, not a bordered button -- stays visually
-// quieter than either CTA above. var(--ra-type-fx) is one of this app's real
-// sound-type accent colors (teal), not a grey -- kept as the one deliberate
-// spot of color here, same as before this component's restyle.
+// quieter than either CTA above. Same color as the rest of this modal's
+// body text (var(--ra-text)) per direct feedback -- previously a
+// deliberate accent color (var(--ra-type-fx), teal), which read as an odd
+// one-off spot of color against this modal's otherwise plain black/white
+// treatment. Sits inline with the "don't show this again" checkbox in one
+// shared bottom row (see that row's own comment below) -- same fontSize
+// as the checkbox label so the two read as one consistent utility row,
+// bold to stay legible/clickable at that small size.
 const linkButtonStyle: React.CSSProperties = {
-  height: 36,
+  height: 20,
   border: 'none',
   background: 'transparent',
-  padding: '0 4px',
-  fontSize: 11,
+  padding: 0,
+  fontSize: 10,
   fontWeight: 700,
-  color: 'var(--ra-type-fx)',
+  color: 'var(--ra-text)',
   cursor: 'pointer'
 }
 
@@ -70,15 +63,17 @@ const linkButtonStyle: React.CSSProperties = {
  * unconditionally (regardless of that opt-out) whenever there's a genuine
  * crash-recovery snapshot to offer -- see hasRecovery below.
  *
- * Two sub-views, chosen by hasRecovery rather than any state local to this
- * component: recovery (offer to restore unsaved work from a previous
- * session that never got explicitly saved or discarded -- see
- * projectFile.ts's writeAutosave/loadAutosave/clearAutosave) and the normal
- * new/open welcome. Deriving the view straight from the prop (not mirroring
- * it into local state) means App.tsx's Frame clearing its own
- * recoverableAutosave state after a discard is all it takes to flip this
- * back to the normal view on the next render -- no separate transition to
- * manage here. */
+ * hasRecovery adds a recovery notice (offer to restore unsaved work from a
+ * previous session that never got explicitly saved or discarded -- see
+ * projectFile.ts's writeAutosave/loadAutosave/clearAutosave) ON TOP OF the
+ * normal new/open welcome, rather than replacing it with a separate full
+ * sub-view -- previously this was two sequential screens (recovery, then,
+ * on discard, welcome) that per direct feedback read as "two modals that
+ * look very similar" back to back. One screen now: the recovery notice
+ * sits above the same new/open/login buttons, which stay visible and
+ * usable the whole time, so there's nothing to "fall through" to once
+ * discard/recover resolves it -- clearing recoverableAutosave in App.tsx
+ * just makes the notice disappear from this same modal. */
 export function OnboardingModal({
   hasRecovery,
   onRecover,
@@ -92,17 +87,19 @@ export function OnboardingModal({
 }: {
   /** True when Frame's startup effect found a real, never-explicitly-saved-
    * or-discarded autosave snapshot -- see App.tsx's own hasRealContent
-   * check. Selects the recovery sub-view below. */
+   * check. Shows the recovery notice above the normal new/open buttons
+   * (see this component's own doc comment above). */
   hasRecovery: boolean
   /** Loads the recovered snapshot into the live project and dismisses the
    * whole modal -- dontShowAgain reflects the checkbox at the moment of
    * the click, same semantics as every other callback here. */
   onRecover: (dontShowAgain: boolean) => void
-  /** Clears the crash-recovery snapshot and falls through to the normal
-   * new/open sub-view -- does NOT dismiss the modal, since the user still
-   * needs to pick what to do next. No dontShowAgain: discarding recovered
-   * content isn't the same decision as opting out of the welcome screen,
-   * and the normal sub-view's own buttons carry the checkbox from here. */
+  /** Clears the crash-recovery snapshot, which makes the recovery notice
+   * disappear on the next render -- does NOT dismiss the whole modal, since
+   * the normal new/open buttons underneath stay exactly as they were. No
+   * dontShowAgain: discarding recovered content isn't the same decision as
+   * opting out of the welcome screen, and those buttons carry the checkbox
+   * themselves if the user goes on to use one of them. */
   onDiscardRecovery: () => void
   /** Dismisses the welcome modal, then routes through the exact same "new"
    * flow as the toolbar's New button: a discard-guard if there's real
@@ -171,7 +168,6 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
-        <LoadingLoader size={150} colors={MARK_COLORS} speedMs={6000} />
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
             <span
@@ -183,8 +179,22 @@ export function OnboardingModal({
           ))}
         </div>
 
-        {hasRecovery ? (
-          <>
+        {hasRecovery && (
+          // A bordered box, not a color accent -- this design system spends
+          // color only on audio information (see root CLAUDE.md's Design
+          // system section), so "this is a notice" is carried by the border
+          // + divider below rather than a warning hue.
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              alignItems: 'center',
+              alignSelf: 'stretch',
+              padding: '14px 12px',
+              border: '1px solid var(--ra-border-strong)'
+            }}
+          >
             <div
               style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
             >
@@ -198,51 +208,65 @@ export function OnboardingModal({
                 discard
               </button>
             </div>
-          </>
-        ) : (
-          <>
-            <div
-              style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
-            >
-              a little arranger thing that works with endlesss
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-              <button onClick={() => onNewProject(dontShowAgain)} style={primaryButtonStyle}>
-                new project
-              </button>
-              <button onClick={() => onOpenProject(dontShowAgain)} style={secondaryButtonStyle}>
-                open project
-              </button>
-              {!endlesssLoggedIn && (
-                <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
-                  log into endlesss
-                </button>
-              )}
-            </div>
-            {!tourSeen && (
-              <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
-                take the tour
-              </button>
-            )}
-          </>
+          </div>
         )}
 
-        <label
+        <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}>
+          arrangement tool for endlesss
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          <button onClick={() => onNewProject(dontShowAgain)} style={primaryButtonStyle}>
+            new project
+          </button>
+          <button onClick={() => onOpenProject(dontShowAgain)} style={secondaryButtonStyle}>
+            open project
+          </button>
+          {!endlesssLoggedIn && (
+            <button onClick={() => onOpenEndlesss(dontShowAgain)} style={secondaryButtonStyle}>
+              log into endlesss
+            </button>
+          )}
+        </div>
+
+        {/* One shared utility row rather than "take the tour" standing on
+            its own line above the checkbox -- the checkbox stays put on
+            the left (justify-content:space-between's natural resting spot
+            for a lone child too, so this row looks identical whether or
+            not the tour link is showing), "take the tour" sits at the
+            right. alignSelf:'stretch' overrides the panel's own
+            alignItems:'center' so this row actually spans the panel's
+            full content width -- without it, a shrink-wrapped row can't
+            visually separate its two ends. */}
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
-            fontSize: 10,
-            color: 'var(--ra-text)'
+            justifyContent: 'space-between',
+            alignSelf: 'stretch'
           }}
         >
-          <input
-            type="checkbox"
-            checked={dontShowAgain}
-            onChange={(e) => setDontShowAgain(e.target.checked)}
-          />
-          don&apos;t show this again
-        </label>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              color: 'var(--ra-text)'
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={dontShowAgain}
+              onChange={(e) => setDontShowAgain(e.target.checked)}
+            />
+            don&apos;t show this again
+          </label>
+          {!tourSeen && (
+            <button onClick={() => onStartTour(dontShowAgain)} style={linkButtonStyle}>
+              take the tour
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

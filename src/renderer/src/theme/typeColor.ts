@@ -28,20 +28,30 @@ export function stemColorVar(stem: Stem | undefined): string {
 }
 
 /**
- * A stem's tidy-up bus color -- same recordedInApp override as
- * stemColorVar above (a recorded take stays its own distinct category
- * regardless of bus), otherwise busColorHex(bus). The caller resolves
- * `bus` itself (selectors.ts's busForStem/busForStemFromBusOf) since that
- * needs state.busOf, which this file has no access to and shouldn't --
- * this function only owns the color mapping, not the state lookup. Use
- * this instead of stemColorVar wherever a clip's color should reflect
- * real tidy-up categorization (drums/bass/lead/...) rather than the
- * one-time import-time SoundType guess, which stays 'audioIn' for most
- * raw Endlesss stems forever.
+ * A clip's per-stem display color, given the stem's OWN bus assignment or
+ * undefined if it's never been through Tidy Up (the caller resolves that
+ * via selectors.ts's busIfAssignedFromBusOf, since that needs state.busOf,
+ * which this file has no access to and shouldn't -- this function only
+ * owns the color mapping, not the state lookup). Same recordedInApp
+ * override as stemColorVar above (a recorded take stays its own distinct
+ * category regardless of bus/type). Falls back to stemColorVar (the raw
+ * Endlesss-derived SoundType color) when `bus` is undefined, rather than
+ * always resolving to the aux bus color -- per direct feedback
+ * (2026-09-01): most people are looking at freshly-imported, never-tidied
+ * content most of the time, and that content already carries real
+ * category information (drum/note/bass/mic flags) from Endlesss itself,
+ * which a flat neutral color was throwing away for no benefit. Once a
+ * stem genuinely goes through Tidy Up -- including landing in aux on
+ * purpose -- it switches over to the bus palette, which is the whole
+ * visual payoff of having tidied it. Use this instead of stemColorVar at
+ * every call site that decides a CLIP'S OWN rendered color
+ * (CollapsedRifffRow.tsx, StemWaveformRow.tsx, RifffBlockRow.tsx) -- NOT
+ * at selectors.ts's busForRifff, which needs a bus that's always resolved
+ * (defaulting unassigned stems to aux) for its own row-grouping tie-break.
  */
-export function stemBusColorVar(stem: Stem | undefined, bus: BusId): string {
+export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefined): string {
   if (stem?.recordedInApp) return 'var(--ra-recording-live)'
-  return busColorHex(bus)
+  return bus !== undefined ? busColorHex(bus) : typeColorVar(stem?.type ?? 'fx')
 }
 
 /**
@@ -52,23 +62,35 @@ export function stemBusColorVar(stem: Stem | undefined, bus: BusId): string {
  * deliberately swapped from that same sample (Elling's own preference,
  * 2026-08-21) -- so unlike lead, they no longer match what Ableton itself
  * shows for those two bus indices; the in-app preview and a real Ableton
- * export will disagree on drums/bass specifically. backing/aux don't
- * appear in that sampled project (nothing was assigned to them), so
- * there's still no real sample for those two -- rather than another
- * arbitrary guess, these fall back to the closest-hued existing app token
- * (--ra-type-ext-fx's green for backing, a neutral cool grey in the app's
- * own border/ink family for aux) so an unavoidable guess at least stays
- * inside this app's own palette instead of introducing a new hue from
- * nowhere. Literal hex, not a tokens.css var -- unlike typeColorVar's
- * stem-type palette, this is a narrow, single-purpose mapping with no
- * other consumer to keep in sync.
+ * export will disagree on drums/bass specifically. backing doesn't appear
+ * in that sampled project (nothing was assigned to it), so there's still
+ * no real sample for it -- rather than another arbitrary guess, it falls
+ * back to the closest-hued existing app token (--ra-type-ext-fx's green)
+ * so an unavoidable guess at least stays inside this app's own palette
+ * instead of introducing a new hue from nowhere.
+ *
+ * aux was ORIGINALLY a neutral cool grey (#8a97a3, "the app's own
+ * border/ink family") -- per direct feedback this read as visually
+ * indistinguishable from a fully-muted clip's own grey (StemWaveformRow's
+ * always-visible `--ra-text-3` layer, revealed once the full-color layer
+ * on top is suppressed by mute), making it genuinely hard to tell "is
+ * this just an untidied/aux stem, or is it muted?" at a glance. Replaced
+ * (2026-09-01) with a warm taupe/sand instead -- still reads as "neutral,
+ * no strong category" (unlike the other four bus colors, which are all
+ * clearly saturated hues), but its warm cast keeps it visually distinct
+ * from every grey already in use (both --ra-text-3's muted-state grey and
+ * the app's own cool near-black chrome).
+ *
+ * Literal hex, not a tokens.css var -- unlike typeColorVar's stem-type
+ * palette, this is a narrow, single-purpose mapping with no other
+ * consumer to keep in sync.
  */
 const BUS_COLOR_HEX: Record<BusId, string> = {
   drums: '#e8929b',
   bass: '#4a56ad',
   lead: '#c7a4d2',
   backing: '#7fc98a',
-  aux: '#8a97a3'
+  aux: '#a3937a'
 }
 
 export function busColorHex(bus: BusId): string {

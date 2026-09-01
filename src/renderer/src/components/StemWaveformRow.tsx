@@ -4,12 +4,12 @@ import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import {
-  busForStemFromBusOf,
+  busIfAssignedFromBusOf,
   clipGeometryFromFields,
   resolvedPlayedBarsFromFields,
   tileOffsetsPx
 } from '../state/selectors'
-import { stemBusColorVar } from '../theme/typeColor'
+import { stemDisplayColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { startPointerDrag } from './dragUtils'
 import { scheduleLiveParamSync } from './liveParamSync'
@@ -62,7 +62,7 @@ export function StemWaveformRow({
   const regionSelection = useAppSelector((s) => s.regionSelection)
   const busOf = useAppSelector((s) => s.busOf)
   const stem = rifff.stems.find((s) => s.slot === slot)!
-  const color = stemBusColorVar(stem, busForStemFromBusOf(busOf, groupId, slot))
+  const color = stemDisplayColorVar(stem, busIfAssignedFromBusOf(busOf, groupId, slot))
   const playedBarsKey = groupId
 
   // Shared, store-backed live preview -- NOT local useState -- so every

@@ -1,10 +1,10 @@
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import type { BusId, Rifff } from '@shared/types'
-import { stemBusColorVar } from '../theme/typeColor'
+import { stemDisplayColorVar } from '../theme/typeColor'
 import { StemWaveformRow } from './StemWaveformRow'
 import { CollapsedRifffRow } from './CollapsedRifffRow'
 import { computeGrabOffsetBars, setGrabOffsetBars, mouseBarFromDragEvent } from './dragGrabOffset'
-import { busForStemFromBusOf, clipGeometryFromFields } from '../state/selectors'
+import { busIfAssignedFromBusOf, clipGeometryFromFields } from '../state/selectors'
 import { SNAP_DIVS } from '../state/store'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { suppressNextSyntheticClick } from './dragUtils'
@@ -18,7 +18,10 @@ export const NAME_BAR_HEIGHT = 18
 // the collapsed block does, rather than introducing a third convention.
 function identityColor(rifff: Rifff, busOf: Record<string, BusId>): string {
   const firstStem = rifff.stems[0]
-  return stemBusColorVar(firstStem, busForStemFromBusOf(busOf, rifff.groupId, firstStem.slot))
+  return stemDisplayColorVar(
+    firstStem,
+    busIfAssignedFromBusOf(busOf, rifff.groupId, firstStem.slot)
+  )
 }
 
 export function RifffBlockRow({

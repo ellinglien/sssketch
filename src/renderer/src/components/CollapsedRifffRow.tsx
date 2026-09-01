@@ -4,12 +4,12 @@ import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
 import { dbLabel } from '@shared/visuals'
 import {
-  busForStemFromBusOf,
+  busIfAssignedFromBusOf,
   clipGeometryFromFields,
   resolvedPlayedBarsFromFields,
   tileOffsetsPx
 } from '../state/selectors'
-import { stemBusColorVar } from '../theme/typeColor'
+import { stemDisplayColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import {
@@ -140,7 +140,10 @@ export function CollapsedRifffRow({
     return out
   }, [rifff.stems, groupId, muteRegionsByStem])
   const firstStem = rifff.stems[0]
-  const color = stemBusColorVar(firstStem, busForStemFromBusOf(busOf, groupId, firstStem.slot))
+  const color = stemDisplayColorVar(
+    firstStem,
+    busIfAssignedFromBusOf(busOf, groupId, firstStem.slot)
+  )
   const isOneShot = rifff.stems.length === 1 && !!firstStem.oneShot
   const oneShotStem = isOneShot ? firstStem : null
   const secPerBar = (60 / bpm) * 4
@@ -697,10 +700,11 @@ export function CollapsedRifffRow({
           }}
         >
           {/* One tiled layer per stem, overlaid — colored by each stem's
-              OWN tidy-up bus (stemBusColorVar + busForStemFromBusOf), not
+              OWN tidy-up bus once it has one, else its raw Endlesss-derived
+              SoundType (stemDisplayColorVar + busIfAssignedFromBusOf), not
               a single color for the whole rifff, so a clip mixing stems
-              from different buses still reads each one at a glance rather
-              than averaging into one representative color. Same no-blend-
+              from different buses/types still reads each one at a glance
+              rather than averaging into one representative color. Same no-blend-
               mode convention as PolarGlyph's own rings. Opacity raised to
               0.85 (was 0.55, matching PolarGlyph's rings) since the
               collapsed view is what most
@@ -738,9 +742,9 @@ export function CollapsedRifffRow({
                   >
                     <Waveform
                       path={oneShotStem.path}
-                      color={stemBusColorVar(
+                      color={stemDisplayColorVar(
                         oneShotStem,
-                        busForStemFromBusOf(busOf, groupId, oneShotStem.slot)
+                        busIfAssignedFromBusOf(busOf, groupId, oneShotStem.slot)
                       )}
                       opacity={0.85}
                     />
@@ -752,7 +756,10 @@ export function CollapsedRifffRow({
                     <CollapsedTiles
                       key={stem.slot}
                       path={stem.path}
-                      color={stemBusColorVar(stem, busForStemFromBusOf(busOf, groupId, stem.slot))}
+                      color={stemDisplayColorVar(
+                        stem,
+                        busIfAssignedFromBusOf(busOf, groupId, stem.slot)
+                      )}
                       opacity={0.85}
                       widthPx={widthPx}
                       stemBarLength={stem.barLength}

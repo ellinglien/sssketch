@@ -1140,21 +1140,19 @@ function Frame(): React.JSX.Element {
     dismissOnboarding(dontShowAgain)
   }
 
-  /** OnboardingModal's "discard" button (recovery sub-view) -- clears the
-   * snapshot and falls through to the normal new/open sub-view, rather
-   * than dismissing the whole modal (the user still needs to pick what to
-   * do next). Setting recoverableAutosave to null is what flips
-   * OnboardingModal's own hasRecovery-derived view on the next render. */
+  /** OnboardingModal's "discard" button -- clears the snapshot, which is
+   * all it takes to make the recovery notice disappear from the modal on
+   * the next render (see OnboardingModal's own doc comment: the notice sits
+   * ON TOP OF the normal new/open welcome now, not as a separate sub-view,
+   * so there's nothing left to "fall through" to here). No need to force
+   * showOnboarding open the way this used to -- the new/open buttons were
+   * already visible underneath the notice the whole time, so discarding
+   * just respects whatever showOnboarding already was (including a past
+   * "don't show this again," now that there's no longer a risk of
+   * stranding the user on a bare recovery screen with no other buttons). */
   function handleDiscardRecovery(): void {
     void window.rifffApi.clearAutosave()
     setRecoverableAutosave(null)
-    // Force the modal to stay open on its normal new/open sub-view, even
-    // if "don't show this again" was checked in some earlier session --
-    // showing the recovery sub-view at all already overrode that opt-out
-    // once this launch (see this modal's own render-site comment); falling
-    // back to the persisted "hidden" preference right here would silently
-    // strand the user with nothing telling them how to start a project.
-    setShowOnboarding(true)
   }
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
@@ -1251,6 +1249,19 @@ function Frame(): React.JSX.Element {
   })
   function dismissOnboarding(dontShowAgain: boolean): void {
     setShowOnboarding(false)
+    // Choosing any of this modal's normal actions (new/open/login/tour)
+    // while a recovery notice is still showing (see OnboardingModal's own
+    // doc comment -- the notice now sits ON TOP OF those buttons rather
+    // than replacing them) is an implicit "not recovering this" -- without
+    // clearing it here too, recoverableAutosave staying non-null would
+    // immediately reopen this same modal on the next render (its render
+    // condition ORs on recoverableAutosave !== null). handleRecoverAutosave
+    // already nulls it out itself before calling this, so this is a no-op
+    // on that path.
+    if (recoverableAutosave !== null) {
+      void window.rifffApi.clearAutosave()
+      setRecoverableAutosave(null)
+    }
     if (!dontShowAgain) return
     try {
       localStorage.setItem(ONBOARDING_SEEN_STORAGE_KEY, '1')

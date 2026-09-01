@@ -26,7 +26,16 @@
  * signalling a busy state at all. That call site passes 6000, slower than
  * the loading-spinner default but faster than the design file's own
  * explicit `ra-loader-bounce 8s` (per direct feedback, 8s read as too
- * slow once seen live). */
+ * slow once seen live).
+ *
+ * The bounce keyframe itself is this component's ORIGINAL one (0%/70%/100%
+ * rest, swap at 23.33%/46.67%, settle at 69.99%) -- a later revision
+ * (2026-08-10) replaced it with a more elaborate 7-stop version to fix a
+ * perceived "abrupt teleport-home at the 70% mark," but per direct
+ * feedback the original reads as the correct one; reverted 2026-09-01.
+ * backgroundSize stays at the corrected 25% (not that revision's 26%),
+ * since that part was a genuine bug fix (bars overlapping at rest),
+ * unrelated to the keyframe timing. */
 export function LoadingLoader({
   size = 64,
   colors,
@@ -60,13 +69,10 @@ export function LoadingLoader({
     >
       <style>{`
         @keyframes ra-loader-bounce {
-          0%, 3%      { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
-          11.67%      { background-position: calc(0*100%/3) 0, calc(1*100%/3) 100%, calc(2*100%/3) 0, calc(3*100%/3) 100%; }
-          23.33%      { background-position: calc(1*100%/3) 0, calc(0*100%/3) 100%, calc(3*100%/3) 0, calc(2*100%/3) 100%; }
-          35%, 53%    { background-position: calc(1*100%/3) 50%, calc(0*100%/3) 50%, calc(3*100%/3) 50%, calc(2*100%/3) 50%; }
-          61.67%      { background-position: calc(1*100%/3) 100%, calc(0*100%/3) 0, calc(3*100%/3) 100%, calc(2*100%/3) 0; }
-          73.33%      { background-position: calc(0*100%/3) 100%, calc(1*100%/3) 0, calc(2*100%/3) 100%, calc(3*100%/3) 0; }
-          85%, 100%   { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
+          0%, 70%, 100% { background-position: calc(0*100%/3) 50%, calc(1*100%/3) 50%, calc(2*100%/3) 50%, calc(3*100%/3) 50%; }
+          23.33% { background-position: calc(0*100%/3) 0, calc(1*100%/3) 100%, calc(2*100%/3) 0, calc(3*100%/3) 100%; }
+          46.67% { background-position: calc(1*100%/3) 0, calc(0*100%/3) 100%, calc(3*100%/3) 0, calc(2*100%/3) 100%; }
+          69.99% { background-position: calc(1*100%/3) 50%, calc(0*100%/3) 50%, calc(3*100%/3) 50%, calc(2*100%/3) 50%; }
         }
       `}</style>
     </div>
