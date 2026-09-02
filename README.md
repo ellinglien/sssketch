@@ -11,6 +11,8 @@ This app isn't affiliated with or endorsed by Endlesss or Hablab London. Use at 
 
 AI disclosure: this codebase is AI-assisted. See [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
 
+![sssketch arranger view](docs/screenshots/app.png)
+
 ## Getting your audio in
 
 Two ways to bring stems into a project:
@@ -42,39 +44,6 @@ notarized, so Gatekeeper should open it normally after you approve opening an ap
 **Uninstalling:** drag `sssketch.app` to the Trash. Your saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and
 aren't touched; delete that folder too if you want them gone. App preferences and caches live
 in `~/Library/Application Support/sssketch`.
-
-## Running from source
-
-Requires [Node.js](https://nodejs.org/) and [CMake](https://cmake.org/) (`brew install cmake`).
-
-```bash
-npm install
-npm run dev
-```
-
-The audio engine is a separate native build (JUCE/C++) and isn't part of `npm run dev`:
-
-```bash
-cd native-engine
-cmake -B build
-cmake --build build
-```
-
-sssketch needs the engine built at least once before it can play any audio. After that,
-`npm run dev` alone is enough for day-to-day work on the Electron/React side. The engine
-doesn't hot-reload — after changing anything under `native-engine/`, rebuild it, then fully
-quit and relaunch the app; a renderer reload alone won't pick up the new engine binary.
-
-Tempo stretching needs the `rubberband` CLI (`brew install rubberband`) in dev mode. Packaged
-release builds have it bundled.
-
-### Other useful commands
-
-```bash
-npm run typecheck    # tsc, node + web configs
-npm run lint          # eslint
-npm test              # vitest (TypeScript/shared logic)
-```
 
 ## Known issues
 
@@ -119,7 +88,3 @@ None of this would have been possible without OUROVEON having done that reverse-
 ## License
 
 [GPL-3.0-or-later](LICENSE).
-
-## Recommended IDE setup
-
-- [VS Code](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
