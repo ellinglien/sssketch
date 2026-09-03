@@ -40,26 +40,53 @@ export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): Re
   // return value actually wires up (see ClusterStemsBrowser.tsx's own
   // load-on-mount effects for the same pattern in this codebase).
   useEffect(() => {
+    if (!rifff) return
+    const stems = rifff.stems
     let cancelled = false
     async function load(): Promise<void> {
-      const resolved: StemRoleInfo[] = []
-      const densityByKey: Record<string, number> = {}
-      for (const stem of rifff.stems) {
+      // Role resolution itself is synchronous and can't fail -- resolve it
+      // up front for every stem regardless of how feature extraction goes.
+      const resolved: StemRoleInfo[] = stems.map((stem) => {
         const key = buildStemKey(groupId, stem.slot)
-        resolved.push(resolveStemRole(stem, key, busOf[key] ?? null))
-        const features = await getStemFeatures(stem.path)
-        densityByKey[key] = computeDensityScore(features)
-      }
-      if (!cancelled) {
-        setRoles(resolved)
-        setDensities(densityByKey)
-      }
+        return resolveStemRole(stem, key, busOf[key] ?? null)
+      })
+      // Promise.allSettled, not Promise.all/a plain await loop -- mirrors
+      // ClusterStemsBrowser.tsx's own handling of getStemFeatures, which is
+      // documented (stemFeaturesCache.ts) as able to reject on a corrupt/
+      // unreadable stem file. Unlike that browser (which excludes a failed
+      // stem from clustering entirely), a failed stem here still needs a row
+      // in the roles list, so it falls back to density score 0 ('sparse') --
+      // the least presumptuous default -- rather than being dropped.
+      const results = await Promise.allSettled(
+        stems.map((stem) => getStemFeatures(stem.path).then(computeDensityScore))
+      )
+      if (cancelled) return
+      const densityByKey: Record<string, number> = {}
+      results.forEach((result, i) => {
+        const key = buildStemKey(groupId, stems[i].slot)
+        if (result.status === 'fulfilled') {
+          densityByKey[key] = result.value
+        } else {
+          console.error(
+            'AutoArrangeRoleStep: feature extraction failed for stem',
+            stems[i].path,
+            result.reason
+          )
+          densityByKey[key] = 0
+        }
+      })
+      setRoles(resolved)
+      setDensities(densityByKey)
     }
     void load()
     return () => {
       cancelled = true
     }
   }, [groupId, rifff, busOf])
+
+  if (!rifff) {
+    return <div style={{ padding: 20, color: 'var(--ra-text-2)' }}>no rifff found</div>
+  }
 
   if (!roles) {
     return <div style={{ padding: 20, color: 'var(--ra-text-2)' }}>analyzing stems...</div>
