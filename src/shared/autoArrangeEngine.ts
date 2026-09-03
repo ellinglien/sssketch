@@ -27,11 +27,30 @@ export interface ArrangeCandidate {
 // switches from building (enter/fill only) to releasing (exit/fill only).
 const PEAK_ACTIVE_FRACTION = 0.75
 
+// Enter-candidate weighting: how much a stem's own sparsity vs. its role's
+// under-representation among active stems should drive the pick. A first
+// pass, expected to be retuned after a real manual walkthrough -- keep these
+// (and PEAK_ACTIVE_FRACTION above) as the one place to look when tuning.
+const ENTER_SPARSITY_WEIGHT = 0.6
+const ENTER_DIVERSITY_WEIGHT = 0.4
+// Above this diversity bonus, a stem's role is treated as "not yet
+// represented" for the candidate's explanatory reason text -- kept in sync
+// with ENTER_DIVERSITY_WEIGHT's meaning, not an independent tuning knob.
+const DIVERSITY_NOTABLE_THRESHOLD = 0.5
+
 function includedStems(stems: ArrangeStemInput[]): ArrangeStemInput[] {
   return stems.filter((s) => s.included)
 }
 
-function roleDiversityBonus(role: string, activeStemKeys: string[], stems: ArrangeStemInput[]): number {
+function enterWeight(densityScore: number, diversity: number): number {
+  return (1 - densityScore) * ENTER_SPARSITY_WEIGHT + diversity * ENTER_DIVERSITY_WEIGHT
+}
+
+function roleDiversityBonus(
+  role: string,
+  activeStemKeys: string[],
+  stems: ArrangeStemInput[]
+): number {
   if (activeStemKeys.length === 0) return 1
   const activeWithSameRole = activeStemKeys.filter((key) => {
     const s = stems.find((stem) => stem.stemKey === key)
@@ -69,9 +88,9 @@ export function computeCandidates(
       candidates.push({
         stemKey: stem.stemKey,
         moveType: 'enter',
-        weight: (1 - stem.densityScore) * 0.6 + diversity * 0.4,
+        weight: enterWeight(stem.densityScore, diversity),
         reason:
-          diversity > 0.5
+          diversity > DIVERSITY_NOTABLE_THRESHOLD
             ? 'sparse and a role not yet represented'
             : 'sparse -- good early/building material'
       })
