@@ -1,24 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppSelector } from '../state/StoreContext'
+import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
-import { stemKey as buildStemKey, type SoundType, type Stem } from '@shared/types'
+import type { SoundType } from '@shared/types'
 
 interface Props {
   onConfirm: (roles: StemRoleInfo[]) => void
   onCancel: () => void
-}
-
-/** One stem flattened out of its owning placed rifff, carrying enough of that
- * rifff's identity (groupId) to rebuild its real per-stem stemKey -- see
- * AutoArrangeWizard.tsx, which mirrors this exact flatten so both components
- * agree on one "all placed rifffs' stems" data source rather than each
- * inventing its own. */
-interface FlatStem {
-  stem: Stem
-  groupId: string
-  stemKey: string
 }
 
 const SOUND_TYPE_OPTIONS: SoundType[] = [
@@ -45,24 +35,8 @@ const SOUND_TYPE_OPTIONS: SoundType[] = [
  * rifff -- there's no "currently selected rifff" convention in this app for
  * a single-target design to hang off of. */
 export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
-  const rifffs = useAppSelector((s) => s.rifffs)
   const busOf = useAppSelector((s) => s.busOf)
-
-  const placedRifffs = useMemo(
-    () => Object.values(rifffs).filter((r) => r.startBar !== undefined),
-    [rifffs]
-  )
-  const flatStems = useMemo<FlatStem[]>(
-    () =>
-      placedRifffs.flatMap((rifff) =>
-        rifff.stems.map((stem) => ({
-          stem,
-          groupId: rifff.groupId,
-          stemKey: buildStemKey(rifff.groupId, stem.slot)
-        }))
-      ),
-    [placedRifffs]
-  )
+  const { placedRifffs, flatStems } = usePlacedFlatStems()
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
   const [densities, setDensities] = useState<Record<string, number>>({})
