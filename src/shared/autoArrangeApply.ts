@@ -3,6 +3,16 @@ import type { ArrangeMoveType } from './autoArrangeEngine'
 export const ARRANGE_STEP_BARS = 8
 export const ARRANGE_FILL_BARS = 2
 
+// activeRangesForStem's fill branch computes fillStart as
+// stepStartBar + ARRANGE_STEP_BARS - ARRANGE_FILL_BARS, which is only a
+// well-formed (non-negative, before fillEnd) range while this holds. Retuning
+// either constant without preserving it would silently produce a malformed
+// ADD_MUTE_REGION (startBar >= endBar) dispatched straight into real app
+// state -- the reducer does no validation of its own.
+if (ARRANGE_FILL_BARS >= ARRANGE_STEP_BARS) {
+  throw new Error('ARRANGE_FILL_BARS must be smaller than ARRANGE_STEP_BARS')
+}
+
 export interface ArrangeMoveRecord {
   stepIndex: number
   stemKey: string
