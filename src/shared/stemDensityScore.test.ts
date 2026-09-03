@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { computeDensityScore, computeFillScore, densityLabel } from './stemDensityScore'
+import {
+  buildDensityMap,
+  computeDensityScore,
+  computeFillScore,
+  densityLabel
+} from './stemDensityScore'
 import type { StemFeatures } from './stemFeatures'
+import type { Stem } from './types'
 
 function features(overrides: Partial<StemFeatures>): StemFeatures {
   return {
@@ -11,6 +17,19 @@ function features(overrides: Partial<StemFeatures>): StemFeatures {
     voicedFraction: 0,
     pitchVarianceCents: 0,
     mfcc: new Array(13).fill(0),
+    ...overrides
+  }
+}
+
+function stem(overrides: Partial<Stem>): Stem {
+  return {
+    slot: 0,
+    author: 'someone',
+    name: 'a stem',
+    type: 'fx',
+    path: '/tmp/a.wav',
+    durationSec: 1,
+    barLength: 1,
     ...overrides
   }
 }
@@ -70,5 +89,45 @@ describe('computeFillScore', () => {
     const score = computeFillScore(features({ zcrBrightness: 1, transientDensity: 100 }))
     expect(score).toBeLessThanOrEqual(1)
     expect(score).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('buildDensityMap', () => {
+  it('maps every fulfilled result to its stem key by score', () => {
+    const stems = [stem({ slot: 0 }), stem({ slot: 1 })]
+    const results: PromiseSettledResult<number>[] = [
+      { status: 'fulfilled', value: 0.8 },
+      { status: 'fulfilled', value: 0.2 }
+    ]
+    expect(buildDensityMap(stems, 'g1', results)).toEqual({
+      'g1:0': 0.8,
+      'g1:1': 0.2
+    })
+  })
+
+  it('falls back to 0 for every rejected result -- the least presumptuous default', () => {
+    const stems = [stem({ slot: 0 }), stem({ slot: 1 })]
+    const results: PromiseSettledResult<number>[] = [
+      { status: 'rejected', reason: new Error('decode failed') },
+      { status: 'rejected', reason: new Error('decode failed') }
+    ]
+    expect(buildDensityMap(stems, 'g1', results)).toEqual({
+      'g1:0': 0,
+      'g1:1': 0
+    })
+  })
+
+  it('mixes fulfilled and rejected results independently, keyed by stem slot', () => {
+    const stems = [stem({ slot: 0 }), stem({ slot: 1 }), stem({ slot: 2 })]
+    const results: PromiseSettledResult<number>[] = [
+      { status: 'fulfilled', value: 0.5 },
+      { status: 'rejected', reason: new Error('decode failed') },
+      { status: 'fulfilled', value: 0.9 }
+    ]
+    expect(buildDensityMap(stems, 'g1', results)).toEqual({
+      'g1:0': 0.5,
+      'g1:1': 0,
+      'g1:2': 0.9
+    })
   })
 })

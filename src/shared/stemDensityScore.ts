@@ -1,4 +1,5 @@
 import type { StemFeatures } from './stemFeatures'
+import { stemKey, type Stem } from './types'
 
 export type DensityLabel = 'sparse' | 'steady' | 'dense'
 
@@ -29,4 +30,25 @@ export function densityLabel(score: number): DensityLabel {
 export function computeFillScore(features: StemFeatures): number {
   const transient = normalizeTransientDensity(features.transientDensity)
   return features.zcrBrightness * 0.5 + transient * 0.5
+}
+
+/** Turns a Promise.allSettled result set (one settled density score per
+ * `stems[i]`, in the same order) into a stemKey-keyed map -- the shape
+ * AutoArrangeRoleStep.tsx's UI actually consumes. A rejected result (e.g. a
+ * corrupt/unreadable stem file -- see stemFeaturesCache.ts's own doc comment
+ * on getStemFeatures rejecting) falls back to 0 (`densityLabel(0)` ===
+ * 'sparse'), the least presumptuous default, rather than excluding the stem
+ * -- unlike ClusterStemsBrowser.tsx's own Promise.allSettled use, a stem
+ * here still needs a row in the UI even when its density can't be scored. */
+export function buildDensityMap(
+  stems: Stem[],
+  groupId: string,
+  results: readonly PromiseSettledResult<number>[]
+): Record<string, number> {
+  const map: Record<string, number> = {}
+  stems.forEach((stem, i) => {
+    const result = results[i]
+    map[stemKey(groupId, stem.slot)] = result.status === 'fulfilled' ? result.value : 0
+  })
+  return map
 }

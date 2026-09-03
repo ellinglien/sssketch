@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAppSelector } from '../state/StoreContext'
-import { computeDensityScore, densityLabel } from '@shared/stemDensityScore'
+import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { stemKey as buildStemKey, type SoundType } from '@shared/types'
@@ -61,24 +61,31 @@ export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): Re
         stems.map((stem) => getStemFeatures(stem.path).then(computeDensityScore))
       )
       if (cancelled) return
-      const densityByKey: Record<string, number> = {}
       results.forEach((result, i) => {
-        const key = buildStemKey(groupId, stems[i].slot)
-        if (result.status === 'fulfilled') {
-          densityByKey[key] = result.value
-        } else {
+        if (result.status === 'rejected') {
           console.error(
             'AutoArrangeRoleStep: feature extraction failed for stem',
             stems[i].path,
             result.reason
           )
-          densityByKey[key] = 0
         }
       })
       setRoles(resolved)
-      setDensities(densityByKey)
+      setDensities(buildDensityMap(stems, groupId, results))
     }
-    void load()
+    // Promise.allSettled above only guards a getStemFeatures rejection --
+    // this outer .catch() is a second, wider net (mirrors
+    // ClusterStemsBrowser.tsx:283-288) so anything else unexpected thrown
+    // inside load() still lands on a safe fallback state instead of leaving
+    // the modal wedged on "analyzing stems..." forever with an unhandled
+    // rejection.
+    load().catch((err: unknown) => {
+      if (!cancelled) {
+        console.error('AutoArrangeRoleStep: role/feature load failed', err)
+        setRoles([])
+        setDensities({})
+      }
+    })
     return () => {
       cancelled = true
     }
