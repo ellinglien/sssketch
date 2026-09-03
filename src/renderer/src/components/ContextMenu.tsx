@@ -4,6 +4,14 @@ export interface ContextMenuItem {
   label: string
   onClick: () => void
   danger?: boolean
+  /** Renders the item non-interactive (native `disabled`, so onClick can't
+   * fire) -- for an action that's visible but currently unavailable rather
+   * than hidden outright, e.g. auto-arrange's 32-bar length guard in
+   * App.tsx. Pair with `title` to explain why. */
+  disabled?: boolean
+  /** Tooltip shown on hover -- the established way this app explains a
+   * disabled control (see AudioDeviceModal.tsx, ChannelRow.tsx). */
+  title?: string
 }
 
 export function ContextMenu({
@@ -106,6 +114,8 @@ export function ContextMenu({
       {items.map((item, i) => (
         <button
           key={i}
+          disabled={item.disabled}
+          title={item.title}
           onClick={() => {
             item.onClick()
             onClose()
@@ -119,8 +129,12 @@ export function ContextMenu({
             border: 'none',
             background: 'transparent',
             color: item.danger ? 'var(--ra-mute-on)' : 'var(--ra-text)',
-            cursor: 'pointer',
-            borderRadius: 0
+            cursor: item.disabled ? 'not-allowed' : 'pointer',
+            borderRadius: 0,
+            // tokens.css / docs/design.md's disabled convention: 30% opacity,
+            // not-allowed cursor -- same rule this app's disabled buttons
+            // already follow elsewhere (see AudioDeviceModal.tsx et al.).
+            opacity: item.disabled ? 0.3 : 1
           }}
         >
           {item.label}

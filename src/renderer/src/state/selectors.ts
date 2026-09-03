@@ -398,16 +398,39 @@ export function tileOffsetsPx(
 
 const DEFAULT_LOOP_BARS = 32
 
-/** Loop length auto-fits to whichever placed clip ends latest, falling back to a
- * sensible default when the timeline is empty rather than collapsing to 0. */
-export function loopLengthBars(state: AppState): number {
+/** End bar (startBar + played length) of every rifff actually placed on the
+ * timeline, unplaced shelf rifffs excluded. Shared by loopLengthBars and
+ * placedTimelineSpanBars below, which differ only in what an empty timeline
+ * (no ends at all) should report. */
+function placedRifffEndBars(state: AppState): number[] {
   const ends: number[] = []
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
     const playedBars = resolvePlayedBars(state, rifff.groupId)
     ends.push(rifff.startBar + playedBars)
   }
+  return ends
+}
+
+/** Loop length auto-fits to whichever placed clip ends latest, falling back to a
+ * sensible default when the timeline is empty rather than collapsing to 0. */
+export function loopLengthBars(state: AppState): number {
+  const ends = placedRifffEndBars(state)
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
+}
+
+/** The real span (in bars) of everything currently placed on the timeline --
+ * from bar 0 to the furthest point any placed rifff reaches. Unlike
+ * loopLengthBars, does NOT fall back to DEFAULT_LOOP_BARS when nothing is
+ * placed: it returns 0, so a caller that specifically cares whether there's
+ * any real content (Task 8's auto-arrange length guard, which needs to tell
+ * "nothing placed" apart from "something placed that happens to reach the
+ * default loop length") doesn't misread the loop-render fallback as content.
+ * Deliberately the SPAN, not a sum of each rifff's own length -- rifffs on
+ * different channels can overlap in time, so summing would overcount. */
+export function placedTimelineSpanBars(state: AppState): number {
+  const ends = placedRifffEndBars(state)
+  return ends.length === 0 ? 0 : Math.max(...ends)
 }
 
 /**

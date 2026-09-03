@@ -37,6 +37,7 @@ import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LibraryBrowser } from './components/LibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
+import { AutoArrangeWizard } from './components/AutoArrangeWizard'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
@@ -58,6 +59,7 @@ import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
   loopLengthBars,
+  placedTimelineSpanBars,
   pasteRifffAction,
   channelsInOrder,
   nextArrangerMode,
@@ -428,7 +430,8 @@ function ProjectMenu({
   handleNew,
   handleSave,
   onOpenLibrary,
-  onOpenClusterStems
+  onOpenClusterStems,
+  onOpenAutoArrange
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
@@ -445,6 +448,9 @@ function ProjectMenu({
    * App.tsx's Frame). Reused here for the export-time nudge's "tidy up
    * first" button. */
   onOpenClusterStems: () => void
+  /** Opens AutoArrangeWizard -- project-wide, same "no groupId" shape as
+   * onOpenClusterStems above, wired to setAutoArrangeOpen(true) in Frame. */
+  onOpenAutoArrange: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -582,6 +588,26 @@ function ProjectMenu({
     void runExportProject(format)
   }
 
+  // Auto-arrange pools every stem from every rifff placed on the timeline
+  // (usePlacedFlatStems.ts) -- per Elling, only offered for "relatively
+  // short arrangements", guarded here at 32 bars of real timeline span
+  // rather than left to open a wizard that's unusable/misleading on a large
+  // project. placedTimelineSpanBars (not loopLengthBars) specifically
+  // because loopLengthBars falls back to a 32-bar *default* when nothing is
+  // placed at all -- using that here would silently treat an empty timeline
+  // as "right at the limit" for the wrong reason. Nothing placed (span 0) is
+  // also disabled: there's nothing to arrange, and disabling here beats
+  // opening a wizard just to show its own "no rifffs on the timeline yet"
+  // empty state.
+  const AUTO_ARRANGE_MAX_BARS = 32
+  const autoArrangeSpanBars = placedTimelineSpanBars(state)
+  const autoArrangeDisabledReason =
+    autoArrangeSpanBars === 0
+      ? 'auto-arrange needs at least one rifff placed on the timeline'
+      : autoArrangeSpanBars >= AUTO_ARRANGE_MAX_BARS
+        ? `auto-arrange is only available for short arrangements (currently ${autoArrangeSpanBars} bars, limit ${AUTO_ARRANGE_MAX_BARS})`
+        : undefined
+
   const buttonStyle = {
     height: 22,
     borderRadius: 0,
@@ -666,6 +692,12 @@ function ProjectMenu({
           ignoreRef={gearButtonRef}
           items={[
             { label: 'tidy up', onClick: onOpenClusterStems },
+            {
+              label: 'auto-arrange',
+              onClick: onOpenAutoArrange,
+              disabled: autoArrangeDisabledReason !== undefined,
+              title: autoArrangeDisabledReason
+            },
             {
               label: state.tidiedView ? 'tidy view: on' : 'tidy view: off',
               onClick: () => dispatch({ type: 'TOGGLE_TIDIED_VIEW' })
@@ -1381,6 +1413,7 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(true)
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
+  const [autoArrangeOpen, setAutoArrangeOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside
   // pickerGroupId so BeatPicker opens on just the first one. Drives two
@@ -2017,6 +2050,7 @@ function Frame(): React.JSX.Element {
               handleSave={handleSave}
               onOpenLibrary={openLibraryBrowser}
               onOpenClusterStems={() => setClusterStemsOpen(true)}
+              onOpenAutoArrange={() => setAutoArrangeOpen(true)}
             />
           </div>
         </div>
@@ -2217,6 +2251,7 @@ function Frame(): React.JSX.Element {
           />
         )}
         {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
+        {autoArrangeOpen && <AutoArrangeWizard onClose={() => setAutoArrangeOpen(false)} />}
         {newProjectModal && (
           <NewProjectModal
             defaultName={newProjectModal.defaultName}
