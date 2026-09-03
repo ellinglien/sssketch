@@ -283,6 +283,23 @@ describe('placedTimelineSpanBars', () => {
     expect(placedTimelineSpanBars(state)).toBe(24)
   })
 
+  it('uses the furthest endpoint, not a sum, when placed clips genuinely overlap in time', () => {
+    // r1: bars 0-8. r2: bars 4-12 (on a different channel, so it's allowed
+    // to overlap r1 rather than being packed onto a new track/channel by
+    // this alone -- span computation doesn't care about channels, only
+    // start/end). Both are simultaneously active bars 4-8. The guard needs
+    // max(endpoints) = 12 here, not startBar+barLength summed (8 + 8 = 16),
+    // which would overcount exactly the overlapping case this selector
+    // exists to get right.
+    const first: Rifff = { ...rifff, groupId: 'r1', barLength: 8, startBar: undefined }
+    const second: Rifff = { ...rifff, groupId: 'r2', barLength: 8, startBar: undefined }
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: first })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: second })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 }) // ends at 8
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 }) // ends at 12
+    expect(placedTimelineSpanBars(state)).toBe(12)
+  })
+
   it('ignores rifffs still sitting in the shelf, unplaced', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     const shelfOnly: Rifff = { ...rifff, groupId: 'r2', barLength: 200, startBar: undefined }
