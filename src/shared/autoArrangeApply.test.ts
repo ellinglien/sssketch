@@ -7,22 +7,12 @@ import {
 } from './autoArrangeApply'
 
 describe('buildArrangeActions', () => {
-  it('places the rifff at the current playhead when not already placed', () => {
-    const actions = buildArrangeActions('g1', [], 1, false, 10)
-    expect(actions).toContainEqual({ type: 'PLACE_ON_TIMELINE', groupId: 'g1', startBar: 10 })
-  })
-
-  it('does not place the rifff when already placed', () => {
-    const actions = buildArrangeActions('g1', [], 1, true, 10)
-    expect(actions.find((a) => a.type === 'PLACE_ON_TIMELINE')).toBeUndefined()
-  })
-
   it('sets playedBars to totalSteps * ARRANGE_STEP_BARS keyed by groupId (once per arrangement)', () => {
     const moves: ArrangeMoveRecord[] = [
       { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
       { stepIndex: 1, stemKey: 'g1:1', moveType: 'enter' }
     ]
-    const actions = buildArrangeActions('g1', moves, 3, true, 0)
+    const actions = buildArrangeActions(moves, 3)
     expect(actions).toContainEqual({
       type: 'SET_PLAYED_BARS',
       key: 'g1',
@@ -32,9 +22,29 @@ describe('buildArrangeActions', () => {
     expect(actions.filter((a) => a.type === 'SET_PLAYED_BARS')).toHaveLength(1)
   })
 
+  it('dispatches one SET_PLAYED_BARS per distinct groupId when moves span multiple rifffs', () => {
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
+      { stepIndex: 0, stemKey: 'g2:0', moveType: 'enter' }
+    ]
+    const actions = buildArrangeActions(moves, 3)
+    const playedBarsActions = actions.filter((a) => a.type === 'SET_PLAYED_BARS')
+    expect(playedBarsActions).toHaveLength(2)
+    expect(playedBarsActions).toContainEqual({
+      type: 'SET_PLAYED_BARS',
+      key: 'g1',
+      bars: 3 * ARRANGE_STEP_BARS
+    })
+    expect(playedBarsActions).toContainEqual({
+      type: 'SET_PLAYED_BARS',
+      key: 'g2',
+      bars: 3 * ARRANGE_STEP_BARS
+    })
+  })
+
   it('a stem that only ever exits (never enters) is muted for the whole arrangement', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'exit' }]
-    const actions = buildArrangeActions('g1', moves, 2, true, 0)
+    const actions = buildArrangeActions(moves, 2)
     const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
     expect(muteRegions).toContainEqual({
       type: 'ADD_MUTE_REGION',
@@ -46,7 +56,7 @@ describe('buildArrangeActions', () => {
 
   it('a stem entering at step 1 is muted before that and active after', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 1, stemKey: 'g1:0', moveType: 'enter' }]
-    const actions = buildArrangeActions('g1', moves, 3, true, 0)
+    const actions = buildArrangeActions(moves, 3)
     const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
     expect(muteRegions).toContainEqual({
       type: 'ADD_MUTE_REGION',
@@ -70,7 +80,7 @@ describe('buildArrangeActions', () => {
       { stepIndex: 1, stemKey: 'g1:0', moveType: 'enter' },
       { stepIndex: 2, stemKey: 'g1:0', moveType: 'exit' }
     ]
-    const actions = buildArrangeActions('g1', moves, 4, true, 0)
+    const actions = buildArrangeActions(moves, 4)
     const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
     expect(muteRegions).toContainEqual({
       type: 'ADD_MUTE_REGION',
@@ -88,7 +98,7 @@ describe('buildArrangeActions', () => {
 
   it('a fill at step 0 is active only for the last ARRANGE_FILL_BARS bars of that step', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'fill' }]
-    const actions = buildArrangeActions('g1', moves, 2, true, 0)
+    const actions = buildArrangeActions(moves, 2)
     const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
     const fillActiveStart = ARRANGE_STEP_BARS - ARRANGE_FILL_BARS
     expect(muteRegions).toContainEqual({
@@ -107,10 +117,16 @@ describe('buildArrangeActions', () => {
 
   it('a stem with no moves at all is left alone entirely (no playedBars/mute actions for it)', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' }]
-    const actions = buildArrangeActions('g1', moves, 2, true, 0)
+    const actions = buildArrangeActions(moves, 2)
     expect(actions.some((a) => a.type === 'SET_PLAYED_BARS' && a.key === 'g1:1')).toBe(false)
     expect(actions.some((a) => a.type === 'ADD_MUTE_REGION' && a.stemKeys.includes('g1:1'))).toBe(
       false
     )
+  })
+
+  it('never emits a PLACE_ON_TIMELINE action', () => {
+    const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' }]
+    const actions = buildArrangeActions(moves, 2)
+    expect(actions.every((a) => (a as { type: string }).type !== 'PLACE_ON_TIMELINE')).toBe(true)
   })
 })

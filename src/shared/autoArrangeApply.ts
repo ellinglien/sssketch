@@ -20,9 +20,19 @@ export interface ArrangeMoveRecord {
 }
 
 export type ArrangeAction =
-  | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
   | { type: 'ADD_MUTE_REGION'; stemKeys: string[]; startBar: number; endBar: number }
+
+// stemKey() (types.ts) joins with ':' and groupId is always a crypto.randomUUID()
+// (no colons of its own -- see buildRifff.ts/selectors.ts/importResolvedRiff.ts),
+// so splitting on the LAST ':' recovers the owning groupId. No shared parse
+// helper exists elsewhere in the codebase (every other call site only ever
+// builds a stemKey forward from a known groupId, e.g. selectors.ts/
+// buildEngineProject.ts) -- this is deliberately kept local rather than
+// promoted to types.ts until a second caller needs it.
+function groupIdFromStemKey(key: string): string {
+  return key.slice(0, key.lastIndexOf(':'))
+}
 
 interface BarRange {
   startBar: number
@@ -91,22 +101,19 @@ function inactiveRangesFrom(activeRanges: BarRange[], totalBars: number): BarRan
 }
 
 export function buildArrangeActions(
-  groupId: string,
   moves: ArrangeMoveRecord[],
-  totalSteps: number,
-  alreadyPlaced: boolean,
-  playheadBar: number
+  totalSteps: number
 ): ArrangeAction[] {
   const actions: ArrangeAction[] = []
   const totalBars = totalSteps * ARRANGE_STEP_BARS
 
-  if (!alreadyPlaced) {
-    actions.push({ type: 'PLACE_ON_TIMELINE', groupId, startBar: playheadBar })
-  }
-
-  // SET_PLAYED_BARS is keyed by groupId, not per-stem; all stems in one arrangement
-  // share the same totalBars extent, so dispatch once.
-  if (moves.length > 0) {
+  // SET_PLAYED_BARS is keyed by groupId, not per-stem. Auto-arrange now pools
+  // stems from every rifff placed on the timeline, so moves can span several
+  // groupIds -- all of them share the same totalBars extent (the whole
+  // arrangement plays out over one common span), so dispatch once per
+  // distinct groupId rather than once overall.
+  const groupIds = [...new Set(moves.map((m) => groupIdFromStemKey(m.stemKey)))]
+  for (const groupId of groupIds) {
     actions.push({ type: 'SET_PLAYED_BARS', key: groupId, bars: totalBars })
   }
 

@@ -1,14 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppSelector } from '../state/StoreContext'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
-import { stemKey as buildStemKey, type SoundType } from '@shared/types'
+import { stemKey as buildStemKey, type SoundType, type Stem } from '@shared/types'
 
 interface Props {
-  groupId: string
   onConfirm: (roles: StemRoleInfo[]) => void
   onCancel: () => void
+}
+
+/** One stem flattened out of its owning placed rifff, carrying enough of that
+ * rifff's identity (groupId) to rebuild its real per-stem stemKey -- see
+ * AutoArrangeWizard.tsx, which mirrors this exact flatten so both components
+ * agree on one "all placed rifffs' stems" data source rather than each
+ * inventing its own. */
+interface FlatStem {
+  stem: Stem
+  groupId: string
+  stemKey: string
 }
 
 const SOUND_TYPE_OPTIONS: SoundType[] = [
@@ -27,10 +37,32 @@ const SOUND_TYPE_OPTIONS: SoundType[] = [
  * autoArrangeEngine.ts sees them. `uncertain` (from resolveStemRole) flags
  * stems this can't classify with any real signal -- never tidied AND still
  * on the unresolved 'fx' default -- so the user knows which rows are guesses.
- * Styled after TidyUpNudgeModal.tsx's conventions: see docs/design.md. */
-export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): React.JSX.Element {
-  const rifff = useAppSelector((s) => s.rifffs[groupId])
+ * Styled after TidyUpNudgeModal.tsx's conventions: see docs/design.md.
+ *
+ * Scope: like Tidy Up, this pools stems from EVERY rifff currently placed on
+ * the timeline (rifff.startBar !== undefined -- the same sentinel selectors.ts
+ * uses throughout, e.g. groupIdAtPosition/loopLengthBars), not one target
+ * rifff -- there's no "currently selected rifff" convention in this app for
+ * a single-target design to hang off of. */
+export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
+  const rifffs = useAppSelector((s) => s.rifffs)
   const busOf = useAppSelector((s) => s.busOf)
+
+  const placedRifffs = useMemo(
+    () => Object.values(rifffs).filter((r) => r.startBar !== undefined),
+    [rifffs]
+  )
+  const flatStems = useMemo<FlatStem[]>(
+    () =>
+      placedRifffs.flatMap((rifff) =>
+        rifff.stems.map((stem) => ({
+          stem,
+          groupId: rifff.groupId,
+          stemKey: buildStemKey(rifff.groupId, stem.slot)
+        }))
+      ),
+    [placedRifffs]
+  )
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
   const [densities, setDensities] = useState<Record<string, number>>({})
@@ -40,16 +72,14 @@ export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): Re
   // return value actually wires up (see ClusterStemsBrowser.tsx's own
   // load-on-mount effects for the same pattern in this codebase).
   useEffect(() => {
-    if (!rifff) return
-    const stems = rifff.stems
+    if (flatStems.length === 0) return
     let cancelled = false
     async function load(): Promise<void> {
       // Role resolution itself is synchronous and can't fail -- resolve it
       // up front for every stem regardless of how feature extraction goes.
-      const resolved: StemRoleInfo[] = stems.map((stem) => {
-        const key = buildStemKey(groupId, stem.slot)
-        return resolveStemRole(stem, key, busOf[key] ?? null)
-      })
+      const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) =>
+        resolveStemRole(stem, key, busOf[key] ?? null)
+      )
       // Promise.allSettled, not Promise.all/a plain await loop -- mirrors
       // ClusterStemsBrowser.tsx's own handling of getStemFeatures, which is
       // documented (stemFeaturesCache.ts) as able to reject on a corrupt/
@@ -58,20 +88,32 @@ export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): Re
       // in the roles list, so it falls back to density score 0 ('sparse') --
       // the least presumptuous default -- rather than being dropped.
       const results = await Promise.allSettled(
-        stems.map((stem) => getStemFeatures(stem.path).then(computeDensityScore))
+        flatStems.map(({ stem }) => getStemFeatures(stem.path).then(computeDensityScore))
       )
       if (cancelled) return
       results.forEach((result, i) => {
         if (result.status === 'rejected') {
           console.error(
             'AutoArrangeRoleStep: feature extraction failed for stem',
-            stems[i].path,
+            flatStems[i].stem.path,
             result.reason
           )
         }
       })
       setRoles(resolved)
-      setDensities(buildDensityMap(stems, groupId, results))
+      // buildDensityMap is keyed to one groupId per call -- build it per
+      // owning rifff over the matching slice of `results` (flatStems is built
+      // by flatMap over placedRifffs in the same order, so slices line up),
+      // then merge. Keeps the shared helper's single-rifff shape intact
+      // rather than reshaping it for a multi-rifff caller.
+      let cursor = 0
+      const densityMap: Record<string, number> = {}
+      for (const rifff of placedRifffs) {
+        const sliceResults = results.slice(cursor, cursor + rifff.stems.length)
+        Object.assign(densityMap, buildDensityMap(rifff.stems, rifff.groupId, sliceResults))
+        cursor += rifff.stems.length
+      }
+      setDensities(densityMap)
     }
     // Promise.allSettled above only guards a getStemFeatures rejection --
     // this outer .catch() is a second, wider net (mirrors
@@ -89,10 +131,12 @@ export function AutoArrangeRoleStep({ groupId, onConfirm, onCancel }: Props): Re
     return () => {
       cancelled = true
     }
-  }, [groupId, rifff, busOf])
+  }, [flatStems, placedRifffs, busOf])
 
-  if (!rifff) {
-    return <div style={{ padding: 20, color: 'var(--ra-text-2)' }}>no rifff found</div>
+  if (placedRifffs.length === 0) {
+    return (
+      <div style={{ padding: 20, color: 'var(--ra-text-2)' }}>no rifffs on the timeline yet</div>
+    )
   }
 
   if (!roles) {

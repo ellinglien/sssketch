@@ -1,19 +1,28 @@
 // src/renderer/src/components/AutoArrangeWizard.tsx
-import { useState } from 'react'
-import { useAppSelector, useDispatch, usePos } from '../state/StoreContext'
+import { useMemo, useState } from 'react'
+import { useAppSelector, useDispatch } from '../state/StoreContext'
 import { computeDensityScore, computeFillScore } from '@shared/stemDensityScore'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import type { StemRoleInfo } from '@shared/stemRole'
 import type { ArrangeStemInput } from '@shared/autoArrangeEngine'
 import type { ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import { buildArrangeActions } from '@shared/autoArrangeApply'
-import { stemKey as buildStemKey } from '@shared/types'
+import { stemKey as buildStemKey, type Stem } from '@shared/types'
 import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
 import { AutoArrangeBuildStep } from './AutoArrangeBuildStep'
 
 interface Props {
-  groupId: string
   onClose: () => void
+}
+
+/** Mirrors AutoArrangeRoleStep.tsx's own flatten exactly (same shape, same
+ * "startBar !== undefined" placed-rifff filter) so both components agree on
+ * one "all placed rifffs' stems" data source rather than each inventing its
+ * own way to resolve a stemKey back to its owning rifff/stem. */
+interface FlatStem {
+  stem: Stem
+  groupId: string
+  stemKey: string
 }
 
 type WizardStep =
@@ -29,7 +38,13 @@ type WizardStep =
 /** Orchestrates AutoArrangeRoleStep.tsx -> AutoArrangeBuildStep.tsx -> real
  * dispatch. Sits between the two click-through steps and buildArrangeActions
  * (autoArrangeApply.ts), which turns the finished move list into real
- * PLACE_ON_TIMELINE/SET_PLAYED_BARS/ADD_MUTE_REGION actions.
+ * SET_PLAYED_BARS/ADD_MUTE_REGION actions.
+ *
+ * Scope: pools stems from EVERY rifff currently placed on the timeline
+ * (mirrors AutoArrangeRoleStep.tsx's own "startBar !== undefined" filter),
+ * not one target rifff passed in as a prop -- there's no PLACE_ON_TIMELINE
+ * step here anymore either, since every rifff in scope is, by that same
+ * selection criterion, already placed.
  *
  * Re-run guard: buildArrangeActions always emits a fresh, complete set of
  * mute regions for every targeted stem (it has no notion of "existing" state
@@ -41,12 +56,27 @@ type WizardStep =
  * explicit confirm step instead of applying straight away -- never silently
  * clears, never silently layers on top.
  */
-export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Element {
+export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
   const dispatch = useDispatch()
-  const rifff = useAppSelector((s) => s.rifffs[groupId])
+  const rifffs = useAppSelector((s) => s.rifffs)
   const muteRegions = useAppSelector((s) => s.muteRegions)
   const playedBarsOverrides = useAppSelector((s) => s.playedBars)
-  const pos = usePos()
+
+  const placedRifffs = useMemo(
+    () => Object.values(rifffs).filter((r) => r.startBar !== undefined),
+    [rifffs]
+  )
+  const flatStems = useMemo<FlatStem[]>(
+    () =>
+      placedRifffs.flatMap((rifff) =>
+        rifff.stems.map((stem) => ({
+          stem,
+          groupId: rifff.groupId,
+          stemKey: buildStemKey(rifff.groupId, stem.slot)
+        }))
+      ),
+    [placedRifffs]
+  )
 
   const [step, setStep] = useState<WizardStep>({ phase: 'role' })
 
@@ -60,7 +90,7 @@ export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Elemen
     // whole wizard over one bad file.
     const results = await Promise.allSettled(
       included.map(async (role) => {
-        const stem = rifff?.stems.find((s) => buildStemKey(groupId, s.slot) === role.stemKey)
+        const stem = flatStems.find((s) => s.stemKey === role.stemKey)?.stem
         if (!stem) throw new Error(`AutoArrangeWizard: no stem found for role ${role.stemKey}`)
         return getStemFeatures(stem.path)
       })
@@ -93,7 +123,19 @@ export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Elemen
       (count, key) => count + (muteRegions[key]?.length ?? 0),
       0
     )
-    const hasExtendedPlayedBars = playedBarsOverrides[groupId] !== undefined
+    // Multi-rifff aware: a re-run warning fires if ANY rifff whose stems this
+    // run touches already carries a playedBars override -- not just one
+    // groupId, since moves can now span several placed rifffs at once.
+    const touchedGroupIds = [
+      ...new Set(
+        stemKeys
+          .map((key) => flatStems.find((s) => s.stemKey === key)?.groupId)
+          .filter((g): g is string => g !== undefined)
+      )
+    ]
+    const hasExtendedPlayedBars = touchedGroupIds.some(
+      (groupId) => playedBarsOverrides[groupId] !== undefined
+    )
     if (existingRegionCount > 0 || hasExtendedPlayedBars) {
       setStep({ phase: 'confirm-rerun', pendingMoves: moves, totalSteps, existingRegionCount })
       return
@@ -102,13 +144,7 @@ export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Elemen
   }
 
   function apply(moves: ArrangeMoveRecord[], totalSteps: number): void {
-    const actions = buildArrangeActions(
-      groupId,
-      moves,
-      totalSteps,
-      rifff?.startBar !== undefined,
-      pos
-    )
+    const actions = buildArrangeActions(moves, totalSteps)
     for (const action of actions) {
       dispatch(action)
     }
@@ -116,9 +152,7 @@ export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Elemen
   }
 
   if (step.phase === 'role') {
-    return (
-      <AutoArrangeRoleStep groupId={groupId} onConfirm={handleRoleConfirm} onCancel={onClose} />
-    )
+    return <AutoArrangeRoleStep onConfirm={handleRoleConfirm} onCancel={onClose} />
   }
 
   if (step.phase === 'build') {
