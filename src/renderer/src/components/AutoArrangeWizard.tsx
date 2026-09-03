@@ -93,7 +93,7 @@ export function AutoArrangeWizard({ groupId, onClose }: Props): React.JSX.Elemen
       (count, key) => count + (muteRegions[key]?.length ?? 0),
       0
     )
-    const hasExtendedPlayedBars = stemKeys.some((key) => playedBarsOverrides[key] !== undefined)
+    const hasExtendedPlayedBars = playedBarsOverrides[groupId] !== undefined
     if (existingRegionCount > 0 || hasExtendedPlayedBars) {
       setStep({ phase: 'confirm-rerun', pendingMoves: moves, totalSteps, existingRegionCount })
       return
