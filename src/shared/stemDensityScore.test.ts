@@ -28,7 +28,9 @@ describe('computeDensityScore', () => {
   })
 
   it('weights transient density more than bass energy ratio', () => {
-    const transientHeavy = computeDensityScore(features({ transientDensity: 8, bassEnergyRatio: 0 }))
+    const transientHeavy = computeDensityScore(
+      features({ transientDensity: 8, bassEnergyRatio: 0 })
+    )
     const bassHeavy = computeDensityScore(features({ transientDensity: 0, bassEnergyRatio: 1 }))
     expect(transientHeavy).toBeGreaterThan(bassHeavy)
   })
