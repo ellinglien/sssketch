@@ -104,10 +104,14 @@ export function buildArrangeActions(
     actions.push({ type: 'PLACE_ON_TIMELINE', groupId, startBar: playheadBar })
   }
 
+  // SET_PLAYED_BARS is keyed by groupId, not per-stem; all stems in one arrangement
+  // share the same totalBars extent, so dispatch once.
+  if (moves.length > 0) {
+    actions.push({ type: 'SET_PLAYED_BARS', key: groupId, bars: totalBars })
+  }
+
   const stemKeys = [...new Set(moves.map((m) => m.stemKey))]
   for (const stemKey of stemKeys) {
-    actions.push({ type: 'SET_PLAYED_BARS', key: stemKey, bars: totalBars })
-
     const stemMoves = moves.filter((m) => m.stemKey === stemKey)
     const activeRanges = activeRangesForStem(stemMoves, totalBars)
     const inactiveRanges = inactiveRangesFrom(activeRanges, totalBars)

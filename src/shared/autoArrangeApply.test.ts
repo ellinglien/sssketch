@@ -17,14 +17,19 @@ describe('buildArrangeActions', () => {
     expect(actions.find((a) => a.type === 'PLACE_ON_TIMELINE')).toBeUndefined()
   })
 
-  it('sets playedBars to totalSteps * ARRANGE_STEP_BARS for every stem with at least one move', () => {
-    const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' }]
+  it('sets playedBars to totalSteps * ARRANGE_STEP_BARS keyed by groupId (once per arrangement)', () => {
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'g1:1', moveType: 'enter' }
+    ]
     const actions = buildArrangeActions('g1', moves, 3, true, 0)
     expect(actions).toContainEqual({
       type: 'SET_PLAYED_BARS',
-      key: 'g1:0',
+      key: 'g1',
       bars: 3 * ARRANGE_STEP_BARS
     })
+    // Exactly one SET_PLAYED_BARS per arrangement, not per stem
+    expect(actions.filter((a) => a.type === 'SET_PLAYED_BARS')).toHaveLength(1)
   })
 
   it('a stem that only ever exits (never enters) is muted for the whole arrangement', () => {
