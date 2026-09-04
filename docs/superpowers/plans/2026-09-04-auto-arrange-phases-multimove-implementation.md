@@ -675,7 +675,7 @@ export function computeCandidates(
 
 export function advanceBuildState(
   buildState: ArrangeBuildState,
-  stems: ArrangeStemInput[],
+  _stems: ArrangeStemInput[],
   chosen: ArrangeCandidate,
   stepIndex: number
 ): ArrangeBuildState {
