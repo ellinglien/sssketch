@@ -18,8 +18,10 @@ import {
   isSketchEligible,
   nextArrangerMode,
   groupIdAtPosition,
-  tileOffsetsPx
+  tileOffsetsPx,
+  buildArrangeReplaceActions
 } from './selectors'
+import { ARRANGE_STEP_BARS, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import type { Rifff, Stem } from '@shared/types'
 
 const rifff: Rifff = {
@@ -976,5 +978,215 @@ describe('pasteStemAction', () => {
     expect(state.rifffs[newGroupId].startBar).toBe(20)
     // Original untouched — still has both its stems.
     expect(state.rifffs.r1.stems).toHaveLength(2)
+  })
+})
+
+describe('buildArrangeReplaceActions', () => {
+  const r1: Rifff = {
+    groupId: 'r1',
+    name: 'test',
+    bpm: 150,
+    barLength: 8,
+    folderPath: '/x',
+    startBar: 4,
+    stems: [
+      {
+        slot: 1,
+        author: 'e',
+        name: 'kick',
+        type: 'drums',
+        path: '/k.wav',
+        durationSec: 1,
+        barLength: 8
+      },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'bass',
+        type: 'bass',
+        path: '/b.wav',
+        durationSec: 1,
+        barLength: 8
+      }
+    ]
+  }
+
+  const r2: Rifff = {
+    groupId: 'r2',
+    name: 'untouched-rifff',
+    bpm: 150,
+    barLength: 8,
+    folderPath: '/x',
+    startBar: 20,
+    stems: [
+      {
+        slot: 1,
+        author: 'e',
+        name: 'lead',
+        type: 'fx',
+        path: '/c.wav',
+        durationSec: 1,
+        barLength: 8
+      }
+    ]
+  }
+
+  function setup(): ReturnType<typeof reducer> {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: r1 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: r2 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 20 })
+    return state
+  }
+
+  it('a moved stem gets one PASTE_RIFFF per active range, with correct bar ranges', () => {
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 4)
+    const pastes = actions.filter(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 1
+    )
+    expect(pastes).toHaveLength(2)
+    expect(
+      pastes.map((a) => ({ startBar: a.rifff.startBar, barLength: a.rifff.barLength }))
+    ).toEqual([
+      { startBar: 0, barLength: ARRANGE_STEP_BARS },
+      { startBar: 2 * ARRANGE_STEP_BARS, barLength: ARRANGE_STEP_BARS }
+    ])
+  })
+
+  it('carries over vol/mute/off/stretch onto a window copy the same way pasteStemAction does', () => {
+    let state = setup()
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.3 })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: 2 })
+    state = reducer(state, { type: 'TOGGLE_STRETCH', groupId: 'r1' }) // true -> false
+
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2)
+    const paste = actions.find(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 1
+    )
+    if (!paste) throw new Error('expected a PASTE_RIFFF for the moved stem')
+    const newGroupId = paste.rifff.groupId
+    expect(paste.vol[`${newGroupId}:1`]).toBe(0.3)
+    expect(paste.mute[`${newGroupId}:1`]).toBe(true)
+    expect(paste.off[newGroupId]).toBe(2)
+    expect(paste.stretch).toBe(false)
+  })
+
+  it('an untouched sibling stem gets exactly one identity-preserving copy at its current position/length', () => {
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2)
+    const siblingPastes = actions.filter(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 2
+    )
+    expect(siblingPastes).toHaveLength(1)
+    expect(siblingPastes[0].rifff.startBar).toBe(4) // r1's current startBar, unchanged
+    expect(siblingPastes[0].rifff.barLength).toBe(8) // r1's resolved played bars, unchanged
+  })
+
+  it('emits exactly one DELETE_RIFFFS covering the touched groupId, not the untouched one', () => {
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2)
+    const deletes = actions.filter((a) => a.type === 'DELETE_RIFFFS')
+    expect(deletes).toHaveLength(1)
+    if (deletes[0].type !== 'DELETE_RIFFFS') throw new Error('expected DELETE_RIFFFS')
+    expect(deletes[0].groupIds).toEqual(['r1'])
+  })
+
+  it('a rifff with zero moved stems is completely absent from the output', () => {
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2)
+    for (const action of actions) {
+      if (action.type === 'PASTE_RIFFF') expect(action.rifff.folderPath).not.toBe(undefined)
+      if (action.type === 'DELETE_RIFFFS') expect(action.groupIds).not.toContain('r2')
+    }
+    // No paste sourced from r2's own stem path.
+    expect(
+      actions.some((a) => a.type === 'PASTE_RIFFF' && a.rifff.stems[0].path === '/c.wav')
+    ).toBe(false)
+  })
+
+  it('a stem with 3 active windows gets 3 PASTE_RIFFF actions and exactly 2 MOVE_TO_CHANNEL actions moving copies 2 and 3 onto copy 1s channel', () => {
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 4, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 5, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 6)
+    const pastes = actions.filter(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 1
+    )
+    expect(pastes).toHaveLength(3)
+
+    const moveToChannel = actions.filter(
+      (a): a is Extract<typeof a, { type: 'MOVE_TO_CHANNEL' }> => a.type === 'MOVE_TO_CHANNEL'
+    )
+    expect(moveToChannel).toHaveLength(2)
+
+    const firstCopyGroupId = pastes[0].rifff.groupId
+    expect(moveToChannel.map((m) => m.groupId)).toEqual([
+      pastes[1].rifff.groupId,
+      pastes[2].rifff.groupId
+    ])
+    expect(moveToChannel.every((m) => m.channelId === firstCopyGroupId)).toBe(true)
+
+    // The untouched sibling's single identity-preserving copy never gets a
+    // MOVE_TO_CHANNEL of its own.
+    const siblingPaste = actions.find(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 2
+    )
+    if (!siblingPaste) throw new Error('expected a PASTE_RIFFF for the sibling stem')
+    expect(moveToChannel.some((m) => m.groupId === siblingPaste.rifff.groupId)).toBe(false)
+  })
+
+  it('applying the full action list leaves independent placed clips with nothing in the gaps and the original rifff gone', () => {
+    let state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 4)
+    for (const action of actions) {
+      state = reducer(state, action)
+    }
+    expect(state.rifffs.r1).toBeUndefined()
+    expect(state.rifffs.r2).toBeDefined() // untouched rifff survives untouched
+    const remaining = Object.values(state.rifffs)
+    // Two window-copies for the moved stem, one identity copy for the sibling.
+    expect(remaining.filter((r) => r.stems[0]?.path === '/k.wav')).toHaveLength(2)
+    expect(remaining.filter((r) => r.stems[0]?.path === '/b.wav')).toHaveLength(1)
   })
 })

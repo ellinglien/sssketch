@@ -1,5 +1,11 @@
 import { stemKey, type BusId, type Rifff, type Stem } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
+import {
+  ARRANGE_STEP_BARS,
+  activeRangesForStem,
+  groupIdFromStemKey,
+  type ArrangeMoveRecord
+} from '@shared/autoArrangeApply'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
 /** The played-bars override/fallback logic on its own, so a caller that
@@ -607,4 +613,181 @@ export function pasteStemAction(
     off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
     stretch: state.stretch[sourceGroupId] ?? true
   }
+}
+
+/**
+ * Builds a PASTE_RIFFF action for ONE of a moved stem's active windows
+ * (auto-arrange's replace-and-delete apply, buildArrangeReplaceActions
+ * below) -- a close variant of pasteStemAction above, differing only in
+ * that barLength is the window's own duration (`endBar - startBar`), not
+ * pasteStemAction's resolvePlayedBars(state, sourceGroupId). Kept as its
+ * own function rather than folded into pasteStemAction (e.g. via an
+ * optional barLength override) because pasteStemAction's existing null
+ * check on a missing source has to run before resolvePlayedBars is safe to
+ * call -- threading an override through would only complicate that
+ * ordering for one caller.
+ */
+function pasteStemWindowAction(
+  state: AppState,
+  sourceGroupId: string,
+  slot: number,
+  startBar: number,
+  barLength: number
+): Action | null {
+  const source = state.rifffs[sourceGroupId]
+  if (!source) return null
+  const stem = source.stems.find((s) => s.slot === slot)
+  if (!stem) return null
+
+  const newGroupId = crypto.randomUUID()
+  const rifff: Rifff = {
+    groupId: newGroupId,
+    name: stem.name,
+    bpm: source.bpm,
+    barLength,
+    folderPath: source.folderPath,
+    startBar,
+    stems: [{ ...stem }]
+  }
+
+  const oldKey = stemKey(sourceGroupId, slot)
+  const newKey = stemKey(newGroupId, slot)
+  const vol: Record<string, number> = {}
+  const mute: Record<string, boolean> = {}
+  if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
+  if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+
+  return {
+    type: 'PASTE_RIFFF',
+    rifff,
+    vol,
+    mute,
+    off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
+    stretch: state.stretch[sourceGroupId] ?? true
+  }
+}
+
+/**
+ * Turns a finished auto-arrange build (its ArrangeMoveRecord[] move list --
+ * see autoArrangeEngine.ts/autoArrangeApply.ts) into real actions by
+ * replacing each touched rifff outright, rather than the old
+ * buildArrangeActions' approach of extending one clip's own playedBars and
+ * carving ADD_MUTE_REGION gaps into it (autoArrangeApply.ts, removed once
+ * this shipped). Per Elling's real-app feedback, a stem's active windows
+ * now become separate, independently-trimmed clip instances -- like
+ * "ungroup" produces -- with nothing at all placed in the gaps, instead of
+ * one long clip with muted-looking dead space inside it.
+ *
+ * For every rifff with at least one moved stem (`touchedGroupIds`):
+ *  - each MOVED stem gets one PASTE_RIFFF per active range from
+ *    activeRangesForStem (a window-copy, via pasteStemWindowAction). Since
+ *    PASTE_RIFFF alone always hands every copy a brand new channel of its
+ *    own (channelOf[newGroupId] = newGroupId -- no "reuse if no overlap"
+ *    logic), and re-entry (the frequency feature) can easily give one stem
+ *    several windows, every copy AFTER the first is explicitly reassigned
+ *    via MOVE_TO_CHANNEL onto the first copy's own channel (same startBar,
+ *    right after its own PASTE_RIFFF) -- so one original stem always ends
+ *    up occupying exactly one channel row, its window-copies sitting in it
+ *    as separate clips, not spread across many rows.
+ *  - every OTHER stem in that same rifff -- excluded from auto-arrange, or
+ *    included but never picked during the build -- still needs its own
+ *    independent copy before its parent gets deleted below, so it gets
+ *    exactly one PASTE_RIFFF preserving its current position/length
+ *    unchanged (pasteStemAction, used as-is). Never more than one copy, so
+ *    never a MOVE_TO_CHANNEL for these.
+ * Then ONE DELETE_RIFFFS removes every touched groupId.
+ *
+ * A rifff with zero moved stems never enters touchedGroupIds, so it's left
+ * completely untouched -- no pastes, no delete.
+ *
+ * Paste actions are returned before the DELETE_RIFFFS despite each paste
+ * already having copied its source's data at build time (pasteStemAction/
+ * pasteStemWindowAction both read from `state`, not from whatever's live at
+ * dispatch time) -- ordering pastes first is just the more defensive,
+ * intuitive sequencing for a caller that dispatches this list in order.
+ */
+export function buildArrangeReplaceActions(
+  state: AppState,
+  moves: ArrangeMoveRecord[],
+  totalSteps: number
+): Action[] {
+  const totalBars = totalSteps * ARRANGE_STEP_BARS
+
+  const movesByStemKey = new Map<string, ArrangeMoveRecord[]>()
+  for (const move of moves) {
+    const list = movesByStemKey.get(move.stemKey)
+    if (list) list.push(move)
+    else movesByStemKey.set(move.stemKey, [move])
+  }
+
+  const touchedGroupIds = [
+    ...new Set([...movesByStemKey.keys()].map((key) => groupIdFromStemKey(key)))
+  ]
+
+  const actions: Action[] = []
+
+  for (const groupId of touchedGroupIds) {
+    const source = state.rifffs[groupId]
+    if (!source) continue // source already gone -- nothing left to replace
+
+    for (const stem of source.stems) {
+      const key = stemKey(groupId, stem.slot)
+      const stemMoves = movesByStemKey.get(key)
+
+      if (stemMoves && stemMoves.length > 0) {
+        const ranges = activeRangesForStem(stemMoves, totalBars)
+        // All of this ONE original stem's window-copies share a single
+        // channel row -- PASTE_RIFFF alone gives every copy its own brand
+        // new channel (channelOf[newGroupId] = newGroupId, no reuse logic),
+        // and with re-entry (the frequency feature) one stem can easily
+        // produce several windows, so left alone this would spray one stem
+        // across many channel rows. The first copy just keeps the channel
+        // PASTE_RIFFF already gave it; every later copy of the SAME stem
+        // gets explicitly moved onto that first copy's channel (its own
+        // groupId) via MOVE_TO_CHANNEL, same startBar, right after its own
+        // PASTE_RIFFF.
+        let firstCopyChannelId: string | null = null
+        for (const range of ranges) {
+          const action = pasteStemWindowAction(
+            state,
+            groupId,
+            stem.slot,
+            range.startBar,
+            range.endBar - range.startBar
+          )
+          if (!action || action.type !== 'PASTE_RIFFF') continue
+          actions.push(action)
+          const newGroupId = action.rifff.groupId
+          if (firstCopyChannelId === null) {
+            firstCopyChannelId = newGroupId
+          } else {
+            actions.push({
+              type: 'MOVE_TO_CHANNEL',
+              groupId: newGroupId,
+              // Same startBar pasteStemWindowAction placed this copy at --
+              // this only changes which channel row it lives on.
+              startBar: range.startBar,
+              channelId: firstCopyChannelId
+            })
+          }
+        }
+      } else {
+        // Untouched sibling -- give it independence at its current
+        // position/length, unchanged, rather than relocating it. Every
+        // stem reachable here belongs to a rifff that has at least one
+        // moved stem, so it's necessarily already placed (startBar set) --
+        // auto-arrange only ever pools placed stems' moves in the first
+        // place (usePlacedFlatStems.ts).
+        const currentStartBar = source.startBar ?? 0
+        const action = pasteStemAction(state, groupId, stem.slot, currentStartBar)
+        if (action) actions.push(action)
+      }
+    }
+  }
+
+  if (touchedGroupIds.length > 0) {
+    actions.push({ type: 'DELETE_RIFFFS', groupIds: touchedGroupIds })
+  }
+
+  return actions
 }
