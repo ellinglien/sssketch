@@ -668,6 +668,43 @@ function pasteStemWindowAction(
 }
 
 /**
+ * Appends the group-level (fadeIn/fadeOut) and stem-level (Tidy Up bus)
+ * metadata a fresh PASTE_RIFFF copy doesn't itself carry -- PASTE_RIFFF's
+ * reducer only ever applies vol/mute/off/stretch (see its own case in
+ * store.ts), never busOf/fadeIn/fadeOut, so without this every copy
+ * buildArrangeReplaceActions below produces would silently go grey (lose
+ * its Tidy Up bus color/name prefix) and lose any fade the user had set --
+ * the same bug class already found and fixed for UNGROUP (store.ts's
+ * UNGROUP case, "when i tidy... and then ungroup, they appear grey").
+ * fadeIn/fadeOut are GROUP-level fields, so every window-copy of a moved
+ * stem gets the same parent value duplicated onto it (mirroring UNGROUP's
+ * own groupFadeIn/groupFadeOut broadcast to every split-off child) --
+ * they're now independent clips, each getting its own copy of the edge
+ * fade the parent had. ASSIGN_TO_BUS's own reducer renames only the
+ * newly-affected rifff (renameRifffsForBusAssignment scopes to the
+ * groupIds touched by the given stemKey), so it's safe to fire once per
+ * pasted single-stem rifff without touching any unrelated clip.
+ */
+function pushCarryoverActions(
+  actions: Action[],
+  state: AppState,
+  sourceGroupId: string,
+  slot: number,
+  newGroupId: string,
+  sourceFadeIn: number,
+  sourceFadeOut: number
+): void {
+  if (sourceFadeIn > 0)
+    actions.push({ type: 'SET_FADE_IN', groupId: newGroupId, bars: sourceFadeIn })
+  if (sourceFadeOut > 0)
+    actions.push({ type: 'SET_FADE_OUT', groupId: newGroupId, bars: sourceFadeOut })
+  const bus = state.busOf[stemKey(sourceGroupId, slot)]
+  if (bus !== undefined) {
+    actions.push({ type: 'ASSIGN_TO_BUS', stemKey: stemKey(newGroupId, slot), busId: bus })
+  }
+}
+
+/**
  * Turns a finished auto-arrange build (its ArrangeMoveRecord[] move list --
  * see autoArrangeEngine.ts/autoArrangeApply.ts) into real actions by
  * replacing each touched rifff outright, rather than the old
@@ -688,13 +725,21 @@ function pasteStemWindowAction(
  *    via MOVE_TO_CHANNEL onto the first copy's own channel (same startBar,
  *    right after its own PASTE_RIFFF) -- so one original stem always ends
  *    up occupying exactly one channel row, its window-copies sitting in it
- *    as separate clips, not spread across many rows.
+ *    as separate clips, not spread across many rows. MOVE_TO_CHANNEL shares
+ *    placeOnTimeline with PLACE_ON_TIMELINE (store.ts), which
+ *    unconditionally sets stretch=true -- correct for its normal manual
+ *    drag-to-channel use, but it silently overwrites the correct
+ *    stretch=false PASTE_RIFFF just set for a tempo-locked stem. Every copy
+ *    after the first gets an explicit TOGGLE_STRETCH right after its
+ *    MOVE_TO_CHANNEL when the source was stretch-locked, to flip that back.
  *  - every OTHER stem in that same rifff -- excluded from auto-arrange, or
  *    included but never picked during the build -- still needs its own
  *    independent copy before its parent gets deleted below, so it gets
  *    exactly one PASTE_RIFFF preserving its current position/length
  *    unchanged (pasteStemAction, used as-is). Never more than one copy, so
  *    never a MOVE_TO_CHANNEL for these.
+ *  - every copy of every stem (moved or untouched) gets its bus/fade
+ *    metadata carried over via pushCarryoverActions above.
  * Then ONE DELETE_RIFFFS removes every touched groupId.
  *
  * A rifff with zero moved stems never enters touchedGroupIds, so it's left
@@ -730,6 +775,10 @@ export function buildArrangeReplaceActions(
     const source = state.rifffs[groupId]
     if (!source) continue // source already gone -- nothing left to replace
 
+    const sourceStretch = state.stretch[groupId] ?? true
+    const sourceFadeIn = state.fadeIn[groupId] ?? 0
+    const sourceFadeOut = state.fadeOut[groupId] ?? 0
+
     for (const stem of source.stems) {
       const key = stemKey(groupId, stem.slot)
       const stemMoves = movesByStemKey.get(key)
@@ -758,6 +807,15 @@ export function buildArrangeReplaceActions(
           if (!action || action.type !== 'PASTE_RIFFF') continue
           actions.push(action)
           const newGroupId = action.rifff.groupId
+          pushCarryoverActions(
+            actions,
+            state,
+            groupId,
+            stem.slot,
+            newGroupId,
+            sourceFadeIn,
+            sourceFadeOut
+          )
           if (firstCopyChannelId === null) {
             firstCopyChannelId = newGroupId
           } else {
@@ -769,6 +827,12 @@ export function buildArrangeReplaceActions(
               startBar: range.startBar,
               channelId: firstCopyChannelId
             })
+            // MOVE_TO_CHANNEL's shared placeOnTimeline unconditionally
+            // resets stretch to true -- see this function's own doc
+            // comment. Flip it back for a source that had stretch off.
+            if (!sourceStretch) {
+              actions.push({ type: 'TOGGLE_STRETCH', groupId: newGroupId })
+            }
           }
         }
       } else {
@@ -780,7 +844,18 @@ export function buildArrangeReplaceActions(
         // place (usePlacedFlatStems.ts).
         const currentStartBar = source.startBar ?? 0
         const action = pasteStemAction(state, groupId, stem.slot, currentStartBar)
-        if (action) actions.push(action)
+        if (action && action.type === 'PASTE_RIFFF') {
+          actions.push(action)
+          pushCarryoverActions(
+            actions,
+            state,
+            groupId,
+            stem.slot,
+            action.rifff.groupId,
+            sourceFadeIn,
+            sourceFadeOut
+          )
+        }
       }
     }
   }

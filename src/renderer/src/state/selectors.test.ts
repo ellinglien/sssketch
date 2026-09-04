@@ -22,7 +22,7 @@ import {
   buildArrangeReplaceActions
 } from './selectors'
 import { ARRANGE_STEP_BARS, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
-import type { Rifff, Stem } from '@shared/types'
+import { stemKey, type Rifff, type Stem } from '@shared/types'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -1188,5 +1188,56 @@ describe('buildArrangeReplaceActions', () => {
     // Two window-copies for the moved stem, one identity copy for the sibling.
     expect(remaining.filter((r) => r.stems[0]?.path === '/k.wav')).toHaveLength(2)
     expect(remaining.filter((r) => r.stems[0]?.path === '/b.wav')).toHaveLength(1)
+  })
+
+  it('a moved stem with more than one active window keeps stretch=false on every copy, not just the first -- regression: MOVE_TO_CHANNEL shares placeOnTimeline with PLACE_ON_TIMELINE, which unconditionally resets stretch to true, silently overwriting what PASTE_RIFFF just set for copies 2+', () => {
+    let state = setup()
+    state = reducer(state, { type: 'TOGGLE_STRETCH', groupId: 'r1' }) // true -> false
+
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 4)
+    for (const action of actions) state = reducer(state, action)
+
+    const copies = Object.values(state.rifffs).filter((r) => r.stems[0]?.path === '/k.wav')
+    expect(copies).toHaveLength(2)
+    for (const copy of copies) {
+      expect(state.stretch[copy.groupId]).toBe(false)
+    }
+  })
+
+  it('carries over busOf and fadeIn/fadeOut onto every copy of every stem -- moved windows and the untouched sibling alike -- so a Tidy Up bus color/name and any edge fade survive the replace instead of silently going grey (the same bug class fixed for UNGROUP)', () => {
+    let state = setup()
+    state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:1', busId: 'drums' })
+    state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:2', busId: 'bass' })
+    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 })
+    state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })
+
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 4)
+    for (const action of actions) state = reducer(state, action)
+
+    const kickCopies = Object.values(state.rifffs).filter((r) => r.stems[0]?.path === '/k.wav')
+    expect(kickCopies).toHaveLength(2)
+    for (const copy of kickCopies) {
+      expect(state.busOf[stemKey(copy.groupId, copy.stems[0].slot)]).toBe('drums')
+      expect(state.fadeIn[copy.groupId]).toBe(1)
+      expect(state.fadeOut[copy.groupId]).toBe(2)
+    }
+
+    const bassCopy = Object.values(state.rifffs).find((r) => r.stems[0]?.path === '/b.wav')
+    if (!bassCopy) throw new Error('expected the untouched sibling copy')
+    expect(state.busOf[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)]).toBe('bass')
+    expect(state.fadeIn[bassCopy.groupId]).toBe(1)
+    expect(state.fadeOut[bassCopy.groupId]).toBe(2)
   })
 })
