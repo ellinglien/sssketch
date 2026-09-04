@@ -369,7 +369,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         }}
       >
         <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
-          {PHASE_LABELS[buildState.phase]} -- step {buildState.stepsInPhase + 1} of{' '}
+          {PHASE_LABELS[buildState.phase]} -- step{' '}
+          {Math.min(buildState.stepsInPhase + 1, PHASE_STEP_TARGETS[buildState.phase])} of{' '}
           {PHASE_STEP_TARGETS[buildState.phase]} ({buildState.activeStemKeys.length} active)
         </div>
         {gridStems.length > 0 && (
@@ -489,7 +490,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         )}
         {candidates.length === 0 ? (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
-            no candidates -- finish below
+            no candidates -- use next step to keep going, or finish below to stop here.
           </div>
         ) : (
           candidates.map((c) => {
