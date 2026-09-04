@@ -36,14 +36,21 @@ const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
   'vocal'
 ]
 
-// Display labels for StemFrequency, in this app's lowercase, no-exclamation-
-// marks copy voice. Order matches the enum's own low-to-high intent.
-const FREQUENCY_OPTIONS: { value: StemFrequency; label: string }[] = [
-  { value: 'once', label: 'once' },
-  { value: 'occasional', label: 'occasional' },
-  { value: 'frequent', label: 'frequent' },
-  { value: 'veryFrequent', label: 'very frequent' }
-]
+// Ordered low-to-high -- index 0..3 maps directly onto the frequency
+// slider's own value (min=0, max=3, step=1). See StemFrequency's own doc
+// comment (shared/stemRole.ts) for what each level means to the engine
+// (re-entry eligibility + cooldown + enter-weight multiplier).
+const FREQUENCY_LEVELS: StemFrequency[] = ['once', 'occasional', 'frequent', 'veryFrequent']
+
+// Display labels, in this app's lowercase, no-exclamation-marks copy voice --
+// shown as text next to the slider so a bare slider position ("1") still
+// reads as something meaningful.
+const FREQUENCY_LABELS: Record<StemFrequency, string> = {
+  once: 'once',
+  occasional: 'occasional',
+  frequent: 'frequent',
+  veryFrequent: 'very frequent'
+}
 
 const selectStyle: React.CSSProperties = {
   height: 22,
@@ -295,6 +302,43 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
         justifyContent: 'center'
       }}
     >
+      {/* Custom range-input styling, matching ClusterStemsBrowser.tsx's own
+          .cluster-count-slider convention exactly (this app's one other
+          custom-styled <input type="range">) -- plain <style> tag, no
+          CSS-in-JS dependency, sharp corners throughout, no border-radius
+          anywhere. One shared class covers every per-row frequency slider
+          below. */}
+      <style>{`
+        .arrange-frequency-slider {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 70px;
+          height: 2px;
+          outline: none;
+          cursor: pointer;
+        }
+        .arrange-frequency-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 10px;
+          height: 10px;
+          background: var(--ra-stretch-on);
+          border: 1px solid var(--ra-stretch-on);
+          cursor: pointer;
+        }
+        .arrange-frequency-slider::-moz-range-thumb {
+          width: 10px;
+          height: 10px;
+          background: var(--ra-stretch-on);
+          border: 1px solid var(--ra-stretch-on);
+          border-radius: 0;
+          cursor: pointer;
+        }
+        .arrange-frequency-slider::-moz-range-track {
+          height: 2px;
+          background: transparent;
+        }
+      `}</style>
       <div
         style={{
           background: 'var(--ra-bg-bar)',
@@ -454,20 +498,36 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                     </option>
                   ))}
                 </select>
-                <select
-                  value={role.frequency}
-                  onChange={(e) =>
-                    updateRole(role.stemKey, { frequency: e.target.value as StemFrequency })
-                  }
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   title="how often this stem should re-enter during the release phase, and its priority relative to other stems"
-                  style={selectStyle}
                 >
-                  {FREQUENCY_OPTIONS.map((f) => (
-                    <option key={f.value} value={f.value}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
+                  <input
+                    className="arrange-frequency-slider"
+                    type="range"
+                    min={0}
+                    max={FREQUENCY_LEVELS.length - 1}
+                    step={1}
+                    value={FREQUENCY_LEVELS.indexOf(role.frequency)}
+                    onChange={(e) =>
+                      updateRole(role.stemKey, {
+                        frequency: FREQUENCY_LEVELS[Number(e.target.value)]
+                      })
+                    }
+                    style={{
+                      background: `linear-gradient(to right, var(--ra-stretch-on) ${
+                        (FREQUENCY_LEVELS.indexOf(role.frequency) / (FREQUENCY_LEVELS.length - 1)) *
+                        100
+                      }%, var(--ra-border) ${
+                        (FREQUENCY_LEVELS.indexOf(role.frequency) / (FREQUENCY_LEVELS.length - 1)) *
+                        100
+                      }%)`
+                    }}
+                  />
+                  <span style={{ fontSize: 10, color: 'var(--ra-text-2)', minWidth: 62 }}>
+                    {FREQUENCY_LABELS[role.frequency]}
+                  </span>
+                </div>
                 {/* Raw seeding signal (soundType, and busId when this stem was
                     already tidied) -- kept visible as context for the
                     arrangeRole guess above, same secondary-label treatment as
