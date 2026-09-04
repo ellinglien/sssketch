@@ -327,6 +327,49 @@ export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry
   }
 }
 
+/** A single stem's own on-timeline playback geometry -- where its owning
+ * clip starts (`startBar`), how many bars of that clip are actually
+ * audible on the timeline (`visibleBars`, tempo-scaled the same way
+ * clipGeometryFromFields's own `shownBars` is), and how many bars ONE
+ * repetition of the stem's raw source tile spans (`tileSpanBars`, also
+ * tempo-scaled). Extracted out of ClusterStemsBrowser.tsx's own inline
+ * `stems` useMemo after AutoArrangeRoleStep.tsx needed the exact same
+ * derivation for its own per-stem waveform thumbnails/playheads --
+ * skipping the stretch-off tempo scaling here was a real, reported bug for
+ * `visibleBars` (clicking the loudest part of a waveform would seek to the
+ * wrong point) and for `tileSpanBars` (the playhead would drift out of
+ * sync with the actual repeating waveform shape) -- see ClusterableStem's
+ * own doc comments (removed from there, now here) for the full history.
+ * Both callers must keep computing these off the SAME real rifff/override
+ * state (playedBars/leftCrop/stretch overrides, project bpm) rather than
+ * approximating, or the two UIs' preview seeking will silently diverge
+ * again. */
+export interface StemTileGeometry {
+  startBar: number
+  visibleBars: number
+  tileSpanBars: number
+}
+
+export function stemTileGeometryFromFields(fields: {
+  startBar: number
+  playedBarsOverride: number | undefined
+  leftCropBars: number
+  rifffBarLength: number
+  stretchOn: boolean
+  rifffBpm: number
+  stateBpm: number
+  stemBarLength: number
+}): StemTileGeometry {
+  const tempoScale = fields.stretchOn ? 1 : fields.rifffBpm / fields.stateBpm
+  const playedBars = resolvedPlayedBarsFromFields(fields.playedBarsOverride, fields.rifffBarLength)
+  const rawVisibleBars = playedBars - fields.leftCropBars
+  return {
+    startBar: fields.startBar,
+    visibleBars: rawVisibleBars * tempoScale,
+    tileSpanBars: fields.stemBarLength * tempoScale
+  }
+}
+
 /** A clip's screen position/width. Uses resolvePlayedBars (which reflects
  * an active playedBars resize override) rather than raw rifff.barLength, so
  * a resized clip's rendered width actually matches its resize — this used

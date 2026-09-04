@@ -18,7 +18,7 @@ import {
   suggestBus,
   type BusCentroidStore
 } from '@shared/busCentroids'
-import { resolvedPlayedBarsFromFields } from '../state/selectors'
+import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
@@ -170,30 +170,34 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     const out: ClusterableStem[] = []
     for (const rifff of Object.values(rifffs)) {
       if (rifff.startBar === undefined) continue
-      // Mirrors clipGeometryFromFields's own visibleBars/shownBars derivation
-      // exactly (selectors.ts) -- see ClusterableStem.visibleBars's own doc
-      // comment for why skipping the stretch-off tempo scaling here was a
-      // real bug, not just a cosmetic approximation.
-      const playedBars = resolvedPlayedBarsFromFields(
-        playedBarsOverrides[rifff.groupId],
-        rifff.barLength
-      )
-      const leftCropBars = leftCropOverrides[rifff.groupId] ?? 0
       const stretchOn = stretchOverrides[rifff.groupId] ?? true
-      const tempoScale = stretchOn ? 1 : rifff.bpm / stateBpm
-      const rawVisibleBars = playedBars - leftCropBars
-      const visibleBars = rawVisibleBars * tempoScale
       for (const stem of rifff.stems) {
+        // Mirrors clipGeometryFromFields's own visibleBars/shownBars
+        // derivation exactly (selectors.ts's stemTileGeometryFromFields,
+        // shared with AutoArrangeRoleStep.tsx's own per-stem thumbnails) --
+        // see that function's own doc comment for why skipping the
+        // stretch-off tempo scaling here was a real bug, not just a
+        // cosmetic approximation.
+        const geometry = stemTileGeometryFromFields({
+          startBar: rifff.startBar,
+          playedBarsOverride: playedBarsOverrides[rifff.groupId],
+          leftCropBars: leftCropOverrides[rifff.groupId] ?? 0,
+          rifffBarLength: rifff.barLength,
+          stretchOn,
+          rifffBpm: rifff.bpm,
+          stateBpm,
+          stemBarLength: stem.barLength
+        })
         out.push({
           key: stemKey(rifff.groupId, stem.slot),
           groupId: rifff.groupId,
           slot: stem.slot,
           name: `${rifff.name} - ${stem.name}`,
           path: stem.path,
-          tileSpanBars: stem.barLength * tempoScale,
+          tileSpanBars: geometry.tileSpanBars,
           color: stemColorVar(stem),
-          startBar: rifff.startBar,
-          visibleBars
+          startBar: geometry.startBar,
+          visibleBars: geometry.visibleBars
         })
       }
     }

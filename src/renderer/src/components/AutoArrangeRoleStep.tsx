@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
+import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/selectors'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
-import type { SoundType } from '@shared/types'
+import { Waveform } from './Waveform'
+import { typeColorVar } from '../theme/typeColor'
+import { stemKey, type SoundType } from '@shared/types'
 
 interface Props {
   onConfirm: (roles: StemRoleInfo[]) => void
@@ -61,7 +64,12 @@ function playButtonStyle(active: boolean): React.CSSProperties {
 export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
   const dispatch = useDispatch()
   const busOf = useAppSelector((s) => s.busOf)
+  const playedBarsOverrides = useAppSelector((s) => s.playedBars)
+  const leftCropOverrides = useAppSelector((s) => s.leftCrop)
+  const stretchOverrides = useAppSelector((s) => s.stretch)
+  const stateBpm = useAppSelector((s) => s.bpm)
   const playing = usePlaying()
+  const pos = usePos()
   const { placedRifffs, flatStems, flatStemsByKey } = usePlacedFlatStems()
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
@@ -76,18 +84,40 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
   // a second copy.
   const { previewingKeys, startPreview } = useStemPreviewPlayback()
 
-  // Where each placed rifff's own clip starts on the timeline, keyed by
-  // groupId -- this table has no per-stem waveform thumbnail to click/scrub
-  // (unlike ClusterStemsBrowser's ClusterRow), so a preview always starts
-  // from the owning clip's own start bar rather than an arbitrary click
-  // fraction within it.
-  const startBarByGroupId = useMemo(() => {
-    const map = new Map<string, number>()
+  // Per-stem playback geometry (where its clip starts, how many bars of it
+  // are actually on the timeline, how many bars one raw-tile repetition
+  // spans), keyed by stemKey -- shared verbatim with ClusterStemsBrowser.tsx
+  // (Tidy Up)'s own ClusterableStem derivation via selectors.ts's
+  // stemTileGeometryFromFields, now that this step ALSO renders a per-stem
+  // waveform thumbnail with click-to-scrub and a playhead overlay (see that
+  // function's own doc comment for why this can't be approximated -- both
+  // visibleBars and tileSpanBars have a real, previously-reported-bug
+  // history). Also replaces the old startBar-only startBarByGroupId map
+  // below: every stem in a rifff shares that rifff's own startBar, so a
+  // single per-stem geometry map covers both needs.
+  const stemGeometryByKey = useMemo(() => {
+    const map = new Map<string, StemTileGeometry>()
     for (const rifff of placedRifffs) {
-      if (rifff.startBar !== undefined) map.set(rifff.groupId, rifff.startBar)
+      if (rifff.startBar === undefined) continue
+      const stretchOn = stretchOverrides[rifff.groupId] ?? true
+      for (const stem of rifff.stems) {
+        map.set(
+          stemKey(rifff.groupId, stem.slot),
+          stemTileGeometryFromFields({
+            startBar: rifff.startBar,
+            playedBarsOverride: playedBarsOverrides[rifff.groupId],
+            leftCropBars: leftCropOverrides[rifff.groupId] ?? 0,
+            rifffBarLength: rifff.barLength,
+            stretchOn,
+            rifffBpm: rifff.bpm,
+            stateBpm,
+            stemBarLength: stem.barLength
+          })
+        )
+      }
     }
     return map
-  }, [placedRifffs])
+  }, [placedRifffs, playedBarsOverrides, leftCropOverrides, stretchOverrides, stateBpm])
 
   // Per-row play button -- pressing it again on the stem it's ALREADY
   // previewing stops playback instead of re-triggering it (a real toggle);
@@ -100,7 +130,33 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
       dispatch({ type: 'PAUSE' })
       return
     }
-    void startPreview(new Set([fs.stemKey]), fs.groupId, startBarByGroupId.get(fs.groupId) ?? 0)
+    void startPreview(
+      new Set([fs.stemKey]),
+      fs.groupId,
+      stemGeometryByKey.get(fs.stemKey)?.startBar ?? 0
+    )
+  }
+
+  // A single thumbnail click/scrub -- mirrors ClusterStemsBrowser.tsx's own
+  // handleThumbnailClick exactly: the click's fraction within the 64px-wide
+  // thumbnail is applied against tileSpanBars (one raw-tile repetition),
+  // NOT visibleBars (the whole clip's on-timeline span), because the
+  // thumbnail only ever renders that one pass of the raw source file. Not a
+  // toggle -- clicking anywhere in the waveform always re-previews from
+  // that exact point, even if this stem is already the one playing.
+  function handleThumbnailClick(
+    e: React.MouseEvent<HTMLDivElement>,
+    fs: FlatStem,
+    geometry: StemTileGeometry
+  ): void {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const fraction = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0
+    const clampedFraction = Math.max(0, Math.min(1, fraction))
+    void startPreview(
+      new Set([fs.stemKey]),
+      fs.groupId,
+      geometry.startBar + clampedFraction * geometry.tileSpanBars
+    )
   }
 
   // useEffect (not useMemo) -- this has a real async side effect and needs a
@@ -201,14 +257,13 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
       dispatch({ type: 'PAUSE' })
       return
     }
-    // Filters out any stemKey that can't resolve back to its owning
-    // rifff's groupId, rather than defaulting it into the Math.min
-    // aggregate at bar 0 -- a resolvable stem silently contributing a
-    // fabricated 0 would be a wrong seek target, not just a missing one.
+    // Filters out any stemKey that can't resolve a geometry entry, rather
+    // than defaulting it into the Math.min aggregate at bar 0 -- a
+    // resolvable stem silently contributing a fabricated 0 would be a
+    // wrong seek target, not just a missing one.
     const resolvedStartBars = includedKeys
-      .map((key) => flatStemsByKey.get(key)?.groupId)
-      .filter((groupId): groupId is string => groupId !== undefined)
-      .map((groupId) => startBarByGroupId.get(groupId) ?? 0)
+      .map((key) => stemGeometryByKey.get(key)?.startBar)
+      .filter((startBar): startBar is number => startBar !== undefined)
     if (resolvedStartBars.length === 0) return
     const targetBar = Math.min(...resolvedStartBars)
     void startPreview(new Set(includedKeys), undefined, targetBar)
@@ -237,7 +292,9 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
           border: '1px solid var(--ra-border-strong)',
           borderRadius: 0,
           padding: 20,
-          width: 480,
+          // Widened from the original 480 -- the per-row waveform thumbnail
+          // (64px, added alongside the existing controls) needs the room.
+          width: 560,
           maxHeight: '80vh',
           overflowY: 'auto'
         }}
@@ -269,6 +326,30 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
           const fs = flatStemsByKey.get(role.stemKey)
           const isPreviewing = previewingKeys.has(role.stemKey)
           const isThisStemPlaying = isPreviewing && playing
+          const geometry = fs ? stemGeometryByKey.get(fs.stemKey) : undefined
+
+          // Mirrors ClusterStemsBrowser.tsx's ClusterRow playhead derivation
+          // exactly -- see its own doc comment. showPlayhead's bounds check
+          // uses the whole clip's real on-timeline span (visibleBars), but
+          // playheadFraction's own position is "how far into the CURRENT
+          // tile repetition" (barsIntoClip mod tileSpanBars), to match what
+          // <Waveform> actually renders (one pass of the raw source file,
+          // not the whole tiled clip).
+          let showPlayhead = false
+          let playheadFraction = 0
+          if (geometry) {
+            const barsIntoClip = pos - geometry.startBar
+            const withinClip =
+              geometry.visibleBars > 0 && barsIntoClip >= 0 && barsIntoClip < geometry.visibleBars
+            const barsIntoTile =
+              geometry.tileSpanBars > 0
+                ? ((barsIntoClip % geometry.tileSpanBars) + geometry.tileSpanBars) %
+                  geometry.tileSpanBars
+                : 0
+            playheadFraction = geometry.tileSpanBars > 0 ? barsIntoTile / geometry.tileSpanBars : 0
+            showPlayhead = isPreviewing && playing && withinClip
+          }
+
           return (
             <div
               key={role.stemKey}
@@ -290,6 +371,38 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
               >
                 {isThisStemPlaying ? '■' : '▶'}
               </button>
+              {fs && geometry ? (
+                <div
+                  onClick={(e) => handleThumbnailClick(e, fs, geometry)}
+                  title={`${fs.stem.name} — click to preview from this point`}
+                  style={{
+                    width: 64,
+                    height: 32,
+                    flexShrink: 0,
+                    position: 'relative',
+                    cursor: 'pointer',
+                    outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
+                    outlineOffset: -1
+                  }}
+                >
+                  <Waveform path={fs.stem.path} color={typeColorVar(role.soundType)} opacity={1} />
+                  {showPlayhead && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${playheadFraction * 100}%`,
+                        width: 1,
+                        background: 'var(--ra-playhead)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  )}
+                </div>
+              ) : (
+                <div style={{ width: 64, height: 32, flexShrink: 0 }} />
+              )}
               <input
                 type="checkbox"
                 checked={role.included}
