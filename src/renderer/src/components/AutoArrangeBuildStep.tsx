@@ -174,7 +174,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   const [stepIndex, setStepIndex] = useState(0)
   const [buildState, setBuildState] = useState<ArrangeBuildState>({
     activeStemKeys: [],
-    peakReached: false,
+    phase: 'intro',
+    stepsInPhase: 0,
     lastExitStep: {}
   })
   const [moves, setMoves] = useState<ArrangeMoveRecord[]>([])

@@ -372,9 +372,7 @@ describe('advancePhase', () => {
 
 describe('isArrangementComplete', () => {
   it('is false while any stem is active, even in outro', () => {
-    expect(isArrangementComplete(buildState({ phase: 'outro', activeStemKeys: ['a'] }))).toBe(
-      false
-    )
+    expect(isArrangementComplete(buildState({ phase: 'outro', activeStemKeys: ['a'] }))).toBe(false)
   })
 
   it('is true once no stems remain active in outro', () => {
