@@ -77,10 +77,33 @@ export const PHASE_MOVE_TYPES: Record<ArrangePhase, ArrangeMoveType[]> = {
 
 `peak` deliberately allows only `fill`: peak should *hold*, not keep growing (that's `build`'s
 job) or start shrinking (that's `breakdown`'s job) — a `fill` can still flicker something in
-briefly without changing the held-steady layer. Re-entry (a previously-exited stem becoming an
-`enter` candidate again) is gated the same way as a fresh entry — only possible where `enter` is
-in that phase's allowed set (`intro`/`build`) — so `breakdown`/`outro` genuinely thin out instead
-of cycling stems back in.
+briefly without changing the held-steady layer.
+
+**Re-entry is gated separately from fresh entry, not by the same rule.** Phases only ever move
+forward through `PHASE_ORDER`, and `'exit'` is only ever allowed in `breakdown`/`outro` — both of
+which come *after* `build`, the last phase where `'enter'` is allowed. If a re-entry candidate
+(a previously-exited, frequency-eligible stem — see `REENTRY_COOLDOWN_STEPS`/
+`FREQUENCY_WEIGHT_MULTIPLIER`) required `'enter' ∈ PHASE_MOVE_TYPES[phase]` the same way a fresh
+entry does, no stem could ever satisfy it — nothing can have exited yet during `intro`/`build`,
+and `'enter'` is never allowed again after them. That would silently turn the entire
+`frequency`/re-entry feature (StemFrequency, the `MOVE_TO_CHANNEL` multi-window consolidation it
+drives in `buildArrangeReplaceActions`) into dead code — every stem would behave as `'once'`
+regardless of its actual `frequency`, with no visible failure.
+
+So `computeCandidates` gates the two kinds of `'enter'` candidate on *different* phase
+permissions: a **fresh** entry (a stem never yet active) still requires
+`'enter' ∈ PHASE_MOVE_TYPES[phase]` (`intro`/`build` only). A **re-entry** (a stem with an entry
+in `lastExitStep`) instead requires `'exit' ∈ PHASE_MOVE_TYPES[phase]` — i.e. it's allowed exactly
+where fresh exits are also happening (`breakdown`/`outro`), using the exact same
+cooldown/frequency-weighting math as today. Both still produce an `ArrangeCandidate` with
+`moveType: 'enter'` (there's no separate `ArrangeMoveType` for re-entry) — only the *gating check*
+inside `computeCandidates` differs by branch. Musically this reads well too: breakdown/outro can
+have some things dropping out while a favorite texture briefly cycles back in, a natural
+wind-down callback. `peak` still allows neither kind of `'enter'` (holds steady, as designed), and
+`intro`/`build` still can't produce a re-entry candidate in practice (nothing could have exited
+yet that early) even though the gate technically permits it — a harmless, never-triggered
+consequence of reusing the same `'exit'`-permission check, not a special case that needs its own
+guard.
 
 `isArrangementComplete` becomes:
 
@@ -109,12 +132,15 @@ export interface ArrangeBuildState {
 ```
 
 - `computeCandidates(stems, buildState, stepIndex)` — same signature. Internals replace the
-  `if (!buildState.peakReached) { ... } else { ... }` branch with a single loop gated by
-  `PHASE_MOVE_TYPES[buildState.phase]`: only emit an `enter` candidate (fresh or re-entry) if
-  `'enter'` is in that set, only emit `exit` candidates if `'exit'` is in that set. The existing
-  `enterWeight`/`roleDiversityBonus`/`FREQUENCY_WEIGHT_MULTIPLIER`/re-entry-cooldown logic is
-  reused unchanged for whichever candidates are still allowed. `bestFillCandidate` is only called
-  (and its result only included) when `'fill'` is in the phase's allowed set.
+  `if (!buildState.peakReached) { ... } else { ... }` branch with three independent checks against
+  `PHASE_MOVE_TYPES[buildState.phase]` (see "Re-entry is gated separately from fresh entry" above
+  for why fresh and re-entry aren't the same check): emit a **fresh** `enter` candidate for an
+  inactive, never-exited stem only when `'enter'` is in the allowed set; emit a **re-entry**
+  `enter` candidate for an inactive, previously-exited, frequency-eligible stem only when
+  `'exit'` is in the allowed set; emit `exit` candidates only when `'exit'` is in the allowed set.
+  The existing `enterWeight`/`roleDiversityBonus`/`FREQUENCY_WEIGHT_MULTIPLIER`/re-entry-cooldown
+  logic is reused unchanged for whichever candidates are still allowed. `bestFillCandidate` is
+  only called (and its result only included) when `'fill'` is in the phase's allowed set.
 - `advanceBuildState(buildState, stems, chosen, stepIndex)` — unchanged responsibility (updates
   `activeStemKeys`/`lastExitStep` for the one chosen candidate), minus the inline
   `peakReached`-flip logic it used to compute — phase transitions move to the new function below,
@@ -203,7 +229,9 @@ combined function.
 `src/shared/autoArrangeEngine.test.ts` and `src/shared/autoArrangeBuildStep.test.ts` get real
 vitest TDD coverage per this codebase's convention (pure logic, no Electron/DOM):
 `computeCandidates` gated correctly per phase (each phase only ever proposes its allowed move
-types, including the `peak`-is-`fill`-only and re-entry-follows-`enter`-gating cases),
+types, including the `peak`-is-`fill`-only case and, critically, that a re-entry candidate is
+gated by `'exit'`-permission rather than `'enter'`-permission — so a `veryFrequent` stem genuinely
+CAN re-enter during `breakdown`/`outro`, not just theoretically),
 `advancePhase`'s target-reached transition (including staying in `outro` once already there),
 `isArrangementComplete`'s new definition, and `applyCandidate`/`advanceToNextStep`'s split
 responsibilities (applying never touches `stepIndex`, advancing never appends a move record).
