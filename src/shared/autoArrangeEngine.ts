@@ -2,6 +2,52 @@ import type { StemFrequency } from './stemRole'
 
 export type ArrangeMoveType = 'enter' | 'exit' | 'fill'
 
+// The five-phase guided arc a build progresses through, replacing the old
+// binary peakReached. Phases only ever move FORWARD through PHASE_ORDER --
+// there's no looping back, and no manual skip for v1 (see the design spec's
+// own Non-goals).
+export type ArrangePhase = 'intro' | 'build' | 'peak' | 'breakdown' | 'outro'
+
+export const PHASE_ORDER: ArrangePhase[] = ['intro', 'build', 'peak', 'breakdown', 'outro']
+
+// How many "next step" advances (advancePhase calls) to spend in each phase
+// before automatically rolling to the next one -- hardcoded defaults for v1,
+// kept here as the one place to look when tuning (same convention as
+// ENTER_SPARSITY_WEIGHT etc. below).
+export const PHASE_STEP_TARGETS: Record<ArrangePhase, number> = {
+  intro: 2,
+  build: 3,
+  peak: 2,
+  breakdown: 2,
+  outro: 1
+}
+
+// Which move types computeCandidates may propose in each phase. 'peak'
+// deliberately allows ONLY 'fill' -- peak should hold, not keep growing
+// (build's job) or start shrinking (breakdown's job); a fill can still
+// flicker something in briefly without changing the held-steady layer.
+//
+// Re-entry (a previously-exited, frequency-eligible stem becoming an
+// 'enter' candidate again) is NOT gated by this table the same way a fresh
+// entry is -- see computeCandidates below. Gating it by 'enter' membership
+// would make re-entry structurally impossible (phases only move forward,
+// and 'exit' only becomes allowed in phases that come after every phase
+// permitting 'enter'), silently turning the whole frequency/re-entry
+// feature into dead code. Re-entry is instead gated by 'exit' membership --
+// allowed exactly where fresh exits are also happening.
+export const PHASE_MOVE_TYPES: Record<ArrangePhase, ArrangeMoveType[]> = {
+  intro: ['enter'],
+  build: ['enter', 'fill'],
+  peak: ['fill'],
+  breakdown: ['exit'],
+  outro: ['exit']
+}
+
+// Below this many included stems, the full five-phase arc has too little
+// material to say much -- AutoArrangeBuildStep.tsx uses this for its own
+// advisory (non-blocking) warning.
+export const MIN_STEMS_FOR_FULL_ARC = 4
+
 export interface ArrangeStemInput {
   stemKey: string
   // Opaque grouping key for role diversity -- the ArrangeRole string
@@ -17,7 +63,10 @@ export interface ArrangeStemInput {
 
 export interface ArrangeBuildState {
   activeStemKeys: string[]
-  peakReached: boolean
+  phase: ArrangePhase
+  // How many advancePhase calls have happened since the CURRENT phase
+  // started -- resets to 0 whenever advancePhase rolls to a new phase.
+  stepsInPhase: number
   // stepIndex at which each stem last exited -- absent for a stem that has
   // never exited (either still active, or never entered at all). Used to
   // gate re-entry eligibility by REENTRY_COOLDOWN_STEPS.
@@ -31,14 +80,10 @@ export interface ArrangeCandidate {
   reason: string
 }
 
-// Once at least this fraction of included stems are active, the arrangement
-// switches from building (enter/fill only) to releasing (exit/fill only).
-const PEAK_ACTIVE_FRACTION = 0.75
-
 // Enter-candidate weighting: how much a stem's own sparsity vs. its role's
 // under-representation among active stems should drive the pick. A first
 // pass, expected to be retuned after a real manual walkthrough -- keep these
-// (and PEAK_ACTIVE_FRACTION above) as the one place to look when tuning.
+// as the one place to look when tuning.
 const ENTER_SPARSITY_WEIGHT = 0.6
 const ENTER_DIVERSITY_WEIGHT = 0.4
 // Above this diversity bonus, a stem's role is treated as "not yet
@@ -111,10 +156,14 @@ export function computeCandidates(
 ): ArrangeCandidate[] {
   const candidateStems = includedStems(stems)
   const candidates: ArrangeCandidate[] = []
+  const allowed = PHASE_MOVE_TYPES[buildState.phase]
 
-  if (!buildState.peakReached) {
+  if (allowed.includes('enter')) {
+    // Fresh entries only -- a stem that has never exited. Re-entry (below)
+    // is gated separately, on 'exit' permission, not 'enter'.
     for (const stem of candidateStems) {
       if (buildState.activeStemKeys.includes(stem.stemKey)) continue
+      if (buildState.lastExitStep[stem.stemKey] !== undefined) continue
       const diversity = roleDiversityBonus(stem.role, buildState.activeStemKeys, stems)
       candidates.push({
         stemKey: stem.stemKey,
@@ -127,7 +176,9 @@ export function computeCandidates(
             : 'sparse -- good early/building material'
       })
     }
-  } else {
+  }
+
+  if (allowed.includes('exit')) {
     for (const stem of candidateStems) {
       if (buildState.activeStemKeys.includes(stem.stemKey)) {
         candidates.push({
@@ -141,7 +192,9 @@ export function computeCandidates(
 
       // Re-entry: an inactive stem that has exited before, has a
       // re-entry-eligible frequency preference, and has cleared its
-      // cooldown since that exit.
+      // cooldown since that exit. Gated by 'exit' membership (this same
+      // `if`), not 'enter' membership -- see PHASE_MOVE_TYPES's own doc
+      // comment for why.
       if (stem.frequency === 'once') continue
       const lastExit = buildState.lastExitStep[stem.stemKey]
       if (lastExit === undefined) continue
@@ -158,8 +211,10 @@ export function computeCandidates(
     }
   }
 
-  const fill = bestFillCandidate(candidateStems, buildState.activeStemKeys)
-  if (fill) candidates.push(fill)
+  if (allowed.includes('fill')) {
+    const fill = bestFillCandidate(candidateStems, buildState.activeStemKeys)
+    if (fill) candidates.push(fill)
+  }
 
   return candidates
 }
@@ -179,15 +234,29 @@ export function advanceBuildState(
     lastExitStep = { ...lastExitStep, [chosen.stemKey]: stepIndex }
   }
   // 'fill' does not change the persistent active set -- it's a brief blip,
-  // handled entirely at the apply-to-timeline stage (a later task).
+  // handled entirely at the apply-to-timeline stage.
 
-  const total = includedStems(stems).length
-  const peakReached =
-    buildState.peakReached || (total > 0 && activeStemKeys.length / total >= PEAK_ACTIVE_FRACTION)
+  return { ...buildState, activeStemKeys, lastExitStep }
+}
 
-  return { activeStemKeys, peakReached, lastExitStep }
+// Advances the build by one step: bumps stepsInPhase, and rolls to the next
+// PHASE_ORDER entry (resetting stepsInPhase to 0) once the current phase's
+// PHASE_STEP_TARGETS has been reached. Once already at the last phase
+// ('outro'), further calls just keep incrementing stepsInPhase with no
+// further transition -- the build's real end condition is
+// isArrangementComplete, not running out of phases. Pure, no other
+// arguments needed: phase targets are fixed constants, not stem-count- or
+// stepIndex-dependent.
+export function advancePhase(buildState: ArrangeBuildState): ArrangeBuildState {
+  const nextStepsInPhase = buildState.stepsInPhase + 1
+  const currentIndex = PHASE_ORDER.indexOf(buildState.phase)
+  const isLastPhase = currentIndex === PHASE_ORDER.length - 1
+  if (!isLastPhase && nextStepsInPhase >= PHASE_STEP_TARGETS[buildState.phase]) {
+    return { ...buildState, phase: PHASE_ORDER[currentIndex + 1], stepsInPhase: 0 }
+  }
+  return { ...buildState, stepsInPhase: nextStepsInPhase }
 }
 
 export function isArrangementComplete(buildState: ArrangeBuildState): boolean {
-  return buildState.peakReached && buildState.activeStemKeys.length === 0
+  return buildState.phase === 'outro' && buildState.activeStemKeys.length === 0
 }
