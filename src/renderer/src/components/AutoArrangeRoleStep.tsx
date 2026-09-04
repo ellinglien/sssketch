@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react'
-import { useAppSelector } from '../state/StoreContext'
-import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
+import { useEffect, useMemo, useState } from 'react'
+import { soloStemsMute } from '../state/store'
+import {
+  useAppSelector,
+  useDispatch,
+  useFlushEngineSyncNow,
+  usePlaying
+} from '../state/StoreContext'
+import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
+import { markManualSeek } from '../state/manualSeek'
 import type { SoundType } from '@shared/types'
 
 interface Props {
@@ -22,6 +29,29 @@ const SOUND_TYPE_OPTIONS: SoundType[] = [
   'audioIn'
 ]
 
+// Mirrors ClusterStemsBrowser.tsx's own buttonStyle 'confirmed' state
+// exactly -- bright near-white border/text vs. dim gray, reusing
+// ChannelRow.tsx's solo-button visual language rather than a background
+// swap (this modal's own panel background already reads too close to a
+// background-only "active" indicator, same reasoning documented there).
+// No 'suggested' state needed here -- this table has no bus-suggestion
+// concept, just "is this playing right now."
+function playButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    fontFamily: 'inherit',
+    fontSize: 9,
+    padding: '3px 8px',
+    borderRadius: 0,
+    background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
+    border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+    color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+    fontWeight: active ? 700 : 400,
+    cursor: 'pointer',
+    outline: 'none',
+    whiteSpace: 'nowrap'
+  }
+}
+
 /** Shown before an auto-arrangement run to let the user confirm/correct each
  * stem's soundType (and drop stems that shouldn't be arranged at all) before
  * autoArrangeEngine.ts sees them. `uncertain` (from resolveStemRole) flags
@@ -35,11 +65,103 @@ const SOUND_TYPE_OPTIONS: SoundType[] = [
  * rifff -- there's no "currently selected rifff" convention in this app for
  * a single-target design to hang off of. */
 export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
+  const dispatch = useDispatch()
+  const rifffs = useAppSelector((s) => s.rifffs)
+  const mute = useAppSelector((s) => s.mute)
   const busOf = useAppSelector((s) => s.busOf)
-  const { placedRifffs, flatStems } = usePlacedFlatStems()
+  const playing = usePlaying()
+  const flushEngineSyncNow = useFlushEngineSyncNow()
+  const { placedRifffs, flatStems, flatStemsByKey } = usePlacedFlatStems()
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
   const [densities, setDensities] = useState<Record<string, number>>({})
+
+  // Snapshot of the REAL mute state as it stood the moment this step
+  // mounted -- see ClusterStemsBrowser.tsx's own `muteSnapshot` doc comment
+  // for the full rationale (frozen via useState's lazy initializer, which
+  // runs exactly once). Restored below on unmount so any SOLO_STEMS
+  // preview-auditioning done while confirming roles never leaks into the
+  // real arrangement's mute state once the wizard moves on.
+  const [muteSnapshot] = useState(() => mute)
+
+  // Which exact stem keys are the current preview target -- mirrors
+  // ClusterStemsBrowser.tsx's own `previewingKeys` exactly: the single
+  // source of truth for "what's actually audible right now," used to
+  // highlight a row (or the play-all control) as currently playing.
+  const [previewingKeys, setPreviewingKeys] = useState<Set<string>>(() => new Set())
+
+  // Where each placed rifff's own clip starts on the timeline, keyed by
+  // groupId -- this table has no per-stem waveform thumbnail to click/scrub
+  // (unlike ClusterStemsBrowser's ClusterRow), so a preview always starts
+  // from the owning clip's own start bar rather than an arbitrary click
+  // fraction within it.
+  const startBarByGroupId = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const rifff of placedRifffs) {
+      if (rifff.startBar !== undefined) map.set(rifff.groupId, rifff.startBar)
+    }
+    return map
+  }, [placedRifffs])
+
+  // Playback started while confirming roles must never keep running once
+  // this step is gone -- whether that's the user pressing cancel, or
+  // AutoArrangeWizard.tsx advancing straight past this component to the
+  // build step on confirm. Both paths unmount AutoArrangeRoleStep (the
+  // wizard swaps its `step` state), so a single unmount cleanup here covers
+  // both without AutoArrangeWizard needing to know anything about preview
+  // playback at all. PAUSE (not STOP) so it stops right where it is rather
+  // than rewinding to bar 0, matching ClusterStemsBrowser.tsx's handleClose.
+  useEffect(() => {
+    return () => {
+      dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
+      dispatch({ type: 'PAUSE' })
+    }
+  }, [dispatch, muteSnapshot])
+
+  // Shared by the per-stem and play-all controls below -- see
+  // ClusterStemsBrowser.tsx's own startPreview for the full rationale,
+  // copied verbatim: solos exactly `keys`, jumps the transport to
+  // `targetBar` (seeking the live engine if already playing, or starting
+  // playback fresh otherwise), and marks `keys` as the current preview
+  // target. Critically, this AWAITS flushEngineSyncNow BEFORE seeking/
+  // playing, passing the solo's own mute map as an override rather than
+  // dispatching SOLO_STEMS and hoping stateRef catches up in time -- the
+  // exact ordering fix for the "I cannot hear the audio [in Tidy Up]"
+  // stale-mute-state bug reported 2026-08-22 (see ClusterStemsBrowser.tsx).
+  // A clip left muted in the arranger must never bleed into a preview
+  // started from here either.
+  async function startPreview(
+    keys: Set<string>,
+    groupIdToSelect: string | undefined,
+    targetBar: number
+  ): Promise<void> {
+    setPreviewingKeys(keys)
+    const soloedMute = soloStemsMute(rifffs, mute, [...keys])
+    dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
+    if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
+    dispatch({ type: 'SET_POS', pos: targetBar })
+    await flushEngineSyncNow({ mute: soloedMute })
+    if (playing) {
+      markManualSeek()
+      void window.rifffApi.engineSetPosition(targetBar)
+    } else {
+      dispatch({ type: 'PLAY' })
+    }
+  }
+
+  // Per-row play button -- pressing it again on the stem it's ALREADY
+  // previewing stops playback instead of re-triggering it (a real toggle);
+  // pressing it on a different stem always re-previews from that stem's own
+  // start, matching startPreview's own idempotent-not-toggling design.
+  function togglePreviewStem(fs: FlatStem): void {
+    const isThisStemAlreadyPlaying =
+      playing && previewingKeys.size === 1 && previewingKeys.has(fs.stemKey)
+    if (isThisStemAlreadyPlaying) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    void startPreview(new Set([fs.stemKey]), fs.groupId, startBarByGroupId.get(fs.groupId) ?? 0)
+  }
 
   // useEffect (not useMemo) -- this has a real async side effect and needs a
   // real cancellation cleanup on unmount/dep change, which only useEffect's
@@ -121,6 +243,37 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
     setRoles((prev) => prev!.map((r) => (r.stemKey === stemKey ? { ...r, ...patch } : r)))
   }
 
+  // Row-level "play all" -- mirrors ClusterStemsBrowser.tsx's own playRow,
+  // adapted from "this cluster's members" to "every currently-included
+  // stem," since "how do these stems sound together" is exactly what's
+  // relevant while confirming roles/inclusion. Same toggle-vs-re-preview
+  // semantics: pressing it again while it's already the active preview set
+  // stops playback; pressing it any other time re-previews from the
+  // earliest included clip's own start bar.
+  const includedKeys = roles.filter((r) => r.included).map((r) => r.stemKey)
+  function togglePlayAllIncluded(): void {
+    if (includedKeys.length === 0) return
+    const isAlreadyPlaying =
+      playing &&
+      previewingKeys.size === includedKeys.length &&
+      includedKeys.every((key) => previewingKeys.has(key))
+    if (isAlreadyPlaying) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    const targetBar = Math.min(
+      ...includedKeys.map(
+        (key) => startBarByGroupId.get(flatStemsByKey.get(key)?.groupId ?? '') ?? 0
+      )
+    )
+    void startPreview(new Set(includedKeys), undefined, targetBar)
+  }
+  const allIncludedPlaying =
+    playing &&
+    includedKeys.length > 0 &&
+    previewingKeys.size === includedKeys.length &&
+    includedKeys.every((key) => previewingKeys.has(key))
+
   return (
     <div
       style={{
@@ -144,51 +297,88 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
           overflowY: 'auto'
         }}
       >
-        <div className="ra-eyebrow" style={{ marginBottom: 12 }}>
-          confirm stem roles
-        </div>
-        {roles.map((role) => (
-          <div
-            key={role.stemKey}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            marginBottom: 12
+          }}
+        >
+          <div className="ra-eyebrow">confirm stem roles</div>
+          <button
+            onClick={togglePlayAllIncluded}
+            disabled={includedKeys.length === 0}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '6px 0',
-              borderBottom: '1px solid var(--ra-border-soft)'
+              ...playButtonStyle(allIncludedPlaying),
+              marginLeft: 'auto',
+              opacity: includedKeys.length === 0 ? 0.3 : 1,
+              cursor: includedKeys.length === 0 ? 'not-allowed' : 'pointer'
             }}
+            title="solo + play every currently included stem together, from the earliest one's own start"
           >
-            <input
-              type="checkbox"
-              checked={role.included}
-              onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
-            />
-            <select
-              value={role.soundType}
-              onChange={(e) => updateRole(role.stemKey, { soundType: e.target.value as SoundType })}
+            {allIncludedPlaying ? '■ playing all' : '▶ play all included'}
+          </button>
+        </div>
+        {roles.map((role) => {
+          const fs = flatStemsByKey.get(role.stemKey)
+          const isPreviewing = previewingKeys.has(role.stemKey)
+          const isThisStemPlaying = isPreviewing && playing
+          return (
+            <div
+              key={role.stemKey}
               style={{
-                height: 22,
-                borderRadius: 0,
-                fontSize: 10,
-                border: '1px solid var(--ra-border)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '6px 0',
+                borderBottom: '1px solid var(--ra-border-soft)',
+                outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
+                outlineOffset: -1
               }}
             >
-              {SOUND_TYPE_OPTIONS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-              {densityLabel(densities[role.stemKey] ?? 0)}
-            </span>
-            {role.uncertain && (
-              <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>uncertain</span>
-            )}
-          </div>
-        ))}
+              <button
+                onClick={() => fs && togglePreviewStem(fs)}
+                disabled={!fs}
+                style={playButtonStyle(isThisStemPlaying)}
+                title="solo + preview this stem, from its own clip start"
+              >
+                {isThisStemPlaying ? '■' : '▶'}
+              </button>
+              <input
+                type="checkbox"
+                checked={role.included}
+                onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
+              />
+              <select
+                value={role.soundType}
+                onChange={(e) =>
+                  updateRole(role.stemKey, { soundType: e.target.value as SoundType })
+                }
+                style={{
+                  height: 22,
+                  borderRadius: 0,
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)'
+                }}
+              >
+                {SOUND_TYPE_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+                {densityLabel(densities[role.stemKey] ?? 0)}
+              </span>
+              {role.uncertain && (
+                <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>uncertain</span>
+              )}
+            </div>
+          )
+        })}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
           <button
             onClick={onCancel}
