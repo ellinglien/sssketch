@@ -5,6 +5,7 @@ import {
   resolvedPlayedBarsFromFields,
   clipGeometry,
   clipGeometryFromFields,
+  stemTileGeometryFromFields,
   stretchRatio,
   loopLengthBars,
   placedTimelineSpanBars,
@@ -166,6 +167,64 @@ describe('clipGeometryFromFields', () => {
     })
     expect(bars.leftPx).toBe(96 - 24) // (4-1)*24
     expect(bars.widthPx).toBe((8 + 1) * 24)
+  })
+})
+
+describe('stemTileGeometryFromFields', () => {
+  it("passes startBar through unchanged and derives visibleBars/tileSpanBars independently -- a stem with its own barLength (e.g. one recorded at a different native tempo than the rest of its riff) tiles at ITS length, not the riff's", () => {
+    const geometry = stemTileGeometryFromFields({
+      startBar: 4,
+      playedBarsOverride: undefined,
+      leftCropBars: 0,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      stemBarLength: 4
+    })
+    expect(geometry).toEqual({ startBar: 4, visibleBars: 8, tileSpanBars: 4 })
+  })
+
+  it('scales both visibleBars and tileSpanBars by the same bpm ratio when stretch is off', () => {
+    // stretch off: tempoScale = rifffBpm/stateBpm = 150/100 = 1.5 -- mirrors
+    // clipGeometryFromFields's own "scales widthPx by the bpm ratio when
+    // stretch is off" case. Both fields must scale together, not just
+    // visibleBars -- a real, previously-reported bug (see this function's
+    // own doc comment) was tileSpanBars silently skipping this scaling,
+    // which drifted the playhead out of sync with the waveform the moment
+    // a clip's played span covered more than one tile.
+    const geometry = stemTileGeometryFromFields({
+      startBar: 0,
+      playedBarsOverride: undefined,
+      leftCropBars: 0,
+      rifffBarLength: 8,
+      stretchOn: false,
+      rifffBpm: 150,
+      stateBpm: 100,
+      stemBarLength: 8
+    })
+    expect(geometry.visibleBars).toBe(12) // 8 * 1.5
+    expect(geometry.tileSpanBars).toBe(12) // 8 * 1.5
+  })
+
+  it('extends visibleBars for a playedBars override beyond the rifff bar length, without affecting tileSpanBars', () => {
+    // Mirrors clipGeometryFromFields's own "uses the playedBars override
+    // over the rifff bar length" case. tileSpanBars is one raw-tile
+    // repetition's own length (stemBarLength), which a playedBars resize
+    // never changes -- only how many bars of that repeating tile are
+    // actually played (visibleBars) changes.
+    const geometry = stemTileGeometryFromFields({
+      startBar: 0,
+      playedBarsOverride: 16,
+      leftCropBars: 0,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      stemBarLength: 8
+    })
+    expect(geometry.visibleBars).toBe(16)
+    expect(geometry.tileSpanBars).toBe(8)
   })
 })
 
