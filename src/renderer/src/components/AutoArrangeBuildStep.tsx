@@ -22,6 +22,33 @@ interface Props {
   onCancel: () => void
 }
 
+// 'enter'/'exit' are this engine's own internal move-type vocabulary
+// (autoArrangeEngine.ts) -- clear to someone reading the code, not
+// necessarily to someone reading a button. Friendlier verbs for display only;
+// the underlying ArrangeCandidate.moveType value is untouched.
+const MOVE_LABELS: Record<string, string> = {
+  enter: 'bring in',
+  exit: 'pull out',
+  fill: 'fill'
+}
+
+// Stem names in real Endlesss material are frequently unintelligible
+// (auto-generated/generic) and can't be relied on to identify a candidate --
+// the stem's own arrangeRole (already user-confirmed in the previous wizard
+// step) is a far more useful label here. Mirrors the friendly-label intent
+// of AutoArrangeRoleStep.tsx's role dropdown, kept local since that
+// component shows the raw camelCase value in its own <option>s today.
+const ROLE_LABELS: Record<string, string> = {
+  drums: 'drums',
+  bass: 'bass',
+  lead: 'lead',
+  backing: 'backing',
+  aux: 'aux',
+  textureFx: 'texture/fx',
+  fill: 'fill',
+  vocal: 'vocal'
+}
+
 /** Second step of the auto-arrangement wizard, shown after AutoArrangeRoleStep.tsx
  * confirms each stem's role. Drives autoArrangeEngine.ts's computeCandidates/
  * advanceBuildState/isArrangementComplete one step at a time, letting the user
@@ -98,6 +125,29 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
     )
   }
 
+  // Plays every currently-ACTIVE stem (buildState.activeStemKeys) together --
+  // "what has the arrangement built up to so far, heard as one thing" -- as
+  // opposed to togglePreviewStem's single-stem audition of a candidate that
+  // hasn't been picked yet. This is the primary listening action for this
+  // step; per-candidate ▶ buttons are secondary (see their downplayed
+  // styling below) since candidates are ALTERNATIVES to choose between, not
+  // things meant to play together with each other.
+  function playCurrentArrangement(): void {
+    const isAlreadyPlayingCurrent =
+      playing &&
+      previewingKeys.size === buildState.activeStemKeys.length &&
+      buildState.activeStemKeys.every((k) => previewingKeys.has(k))
+    if (isAlreadyPlayingCurrent) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    const startBars = buildState.activeStemKeys
+      .map((k) => stemGeometryByKey.get(k)?.startBar)
+      .filter((b): b is number => b !== undefined)
+    if (startBars.length === 0) return
+    void startPreview(new Set(buildState.activeStemKeys), undefined, Math.min(...startBars))
+  }
+
   // Mirrors AutoArrangeRoleStep.tsx's handleThumbnailClick exactly -- the
   // click fraction is applied against tileSpanBars (one raw-tile
   // repetition), not visibleBars, because the thumbnail only ever renders
@@ -130,6 +180,12 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // at pick time, with this same stepIndex value to record an exit's
   // lastExitStep at the step it actually happened on.
   const candidates = selectTopCandidates(computeCandidates(stems, buildState, stepIndex))
+
+  const isPlayingCurrentArrangement =
+    playing &&
+    buildState.activeStemKeys.length > 0 &&
+    previewingKeys.size === buildState.activeStemKeys.length &&
+    buildState.activeStemKeys.every((k) => previewingKeys.has(k))
 
   const includedCount = stems.filter((s) => s.included).length
   const tooFewStems = includedCount < 2
@@ -177,8 +233,31 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           overflowY: 'auto'
         }}
       >
-        <div className="ra-eyebrow" style={{ marginBottom: 12 }}>
+        <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
           step {stepIndex + 1} -- {buildState.activeStemKeys.length} active
+        </div>
+        {buildState.activeStemKeys.length > 0 && (
+          <button
+            onClick={playCurrentArrangement}
+            style={{
+              ...playButtonStyle(isPlayingCurrentArrangement),
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 10px',
+              fontSize: 11,
+              marginBottom: 12
+            }}
+            title="play everything active so far, together"
+          >
+            {isPlayingCurrentArrangement ? '■' : '▶'} hear the arrangement so far (
+            {buildState.activeStemKeys.length} stem
+            {buildState.activeStemKeys.length === 1 ? '' : 's'})
+          </button>
+        )}
+        <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
+          pick a move below to apply it and continue -- each candidate&apos;s own small ▶ just
+          previews that one stem in isolation, it doesn&apos;t combine with the others
         </div>
         {tooFewStems && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
@@ -193,6 +272,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         ) : (
           candidates.map((c) => {
             const fs = flatStemsByKey.get(c.stemKey)
+            const stemRole = stems.find((s) => s.stemKey === c.stemKey)?.role
             const isPreviewing = previewingKeys.has(c.stemKey)
             const isThisStemPlaying = isPreviewing && playing
             const geometry = fs ? stemGeometryByKey.get(fs.stemKey) : undefined
@@ -272,18 +352,30 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                 )}
                 <button
                   onClick={() => pick(c)}
+                  title="apply this move and continue to the next step"
                   style={{
                     flex: 1,
                     textAlign: 'left',
                     padding: '6px 8px',
                     borderRadius: 0,
                     fontSize: 11,
-                    border: '1px solid var(--ra-border)',
-                    background: 'var(--ra-bg-row-active)',
-                    color: 'var(--ra-text)'
+                    // Deliberately distinct from the row's own background
+                    // (var(--ra-bg-row-active), matching the ▶ preview
+                    // button and the row container itself) -- this is the
+                    // one control in the row that COMMITS a change, so it
+                    // needs to read as an actionable button, not blend into
+                    // the row like a label. Confirmed by user feedback: the
+                    // prior identical-background styling made it unclear
+                    // this was clickable at all.
+                    border: '1px solid var(--ra-border-strong)',
+                    background: 'var(--ra-bg-row)',
+                    color: 'var(--ra-text)',
+                    cursor: 'pointer'
                   }}
                 >
-                  {c.moveType} {c.stemKey} -- {c.reason}
+                  {MOVE_LABELS[c.moveType] ?? c.moveType}{' '}
+                  {(stemRole && ROLE_LABELS[stemRole]) ?? stemRole ?? fs?.stem.name ?? c.stemKey} --{' '}
+                  {c.reason}
                 </button>
               </div>
             )
