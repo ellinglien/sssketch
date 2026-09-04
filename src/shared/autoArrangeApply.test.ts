@@ -2,132 +2,104 @@ import { describe, expect, it } from 'vitest'
 import {
   ARRANGE_FILL_BARS,
   ARRANGE_STEP_BARS,
-  buildArrangeActions,
+  activeRangesForStem,
+  groupIdFromStemKey,
   type ArrangeMoveRecord
 } from './autoArrangeApply'
 
-describe('buildArrangeActions', () => {
-  it('sets playedBars to totalSteps * ARRANGE_STEP_BARS keyed by groupId (once per arrangement)', () => {
-    const moves: ArrangeMoveRecord[] = [
-      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
-      { stepIndex: 1, stemKey: 'g1:1', moveType: 'enter' }
-    ]
-    const actions = buildArrangeActions(moves, 3)
-    expect(actions).toContainEqual({
-      type: 'SET_PLAYED_BARS',
-      key: 'g1',
-      bars: 3 * ARRANGE_STEP_BARS
-    })
-    // Exactly one SET_PLAYED_BARS per arrangement, not per stem
-    expect(actions.filter((a) => a.type === 'SET_PLAYED_BARS')).toHaveLength(1)
+// buildArrangeActions (the old SET_PLAYED_BARS/ADD_MUTE_REGION-based apply
+// path) and its own test suite were removed when auto-arrange's apply step
+// switched to buildArrangeReplaceActions (state/selectors.ts), which builds
+// independent PASTE_RIFFF clip copies per active window instead of muting
+// the gaps inside one long clip -- see that function's own doc comment and
+// selectors.test.ts for its coverage. activeRangesForStem is the one piece
+// of pure logic from the old path that's still directly relied on (by
+// buildArrangeReplaceActions), so its own behavior keeps direct coverage
+// here rather than only being exercised indirectly the way it used to be
+// (through buildArrangeActions's ADD_MUTE_REGION assertions).
+
+describe('groupIdFromStemKey', () => {
+  it('recovers the groupId by splitting on the last colon', () => {
+    expect(groupIdFromStemKey('g1:0')).toBe('g1')
   })
 
-  it('dispatches one SET_PLAYED_BARS per distinct groupId when moves span multiple rifffs', () => {
-    const moves: ArrangeMoveRecord[] = [
-      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
-      { stepIndex: 0, stemKey: 'g2:0', moveType: 'enter' }
-    ]
-    const actions = buildArrangeActions(moves, 3)
-    const playedBarsActions = actions.filter((a) => a.type === 'SET_PLAYED_BARS')
-    expect(playedBarsActions).toHaveLength(2)
-    expect(playedBarsActions).toContainEqual({
-      type: 'SET_PLAYED_BARS',
-      key: 'g1',
-      bars: 3 * ARRANGE_STEP_BARS
-    })
-    expect(playedBarsActions).toContainEqual({
-      type: 'SET_PLAYED_BARS',
-      key: 'g2',
-      bars: 3 * ARRANGE_STEP_BARS
-    })
+  it('handles a uuid-shaped groupId (no colons of its own)', () => {
+    expect(groupIdFromStemKey('550e8400-e29b-41d4-a716-446655440000:2')).toBe(
+      '550e8400-e29b-41d4-a716-446655440000'
+    )
+  })
+})
+
+describe('activeRangesForStem', () => {
+  it('a stem with no moves at all has no active ranges', () => {
+    expect(activeRangesForStem([], 2 * ARRANGE_STEP_BARS)).toEqual([])
   })
 
-  it('a stem that only ever exits (never enters) is muted for the whole arrangement', () => {
+  it('a stem that only ever exits (never enters) has no active ranges', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'exit' }]
-    const actions = buildArrangeActions(moves, 2)
-    const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: 0,
-      endBar: 2 * ARRANGE_STEP_BARS
-    })
+    expect(activeRangesForStem(moves, 2 * ARRANGE_STEP_BARS)).toEqual([])
   })
 
-  it('a stem entering at step 1 is muted before that and active after', () => {
+  it('a stem entering at step 1 is active from that step onward to the arrangement end', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 1, stemKey: 'g1:0', moveType: 'enter' }]
-    const actions = buildArrangeActions(moves, 3)
-    const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: 0,
-      endBar: 1 * ARRANGE_STEP_BARS
-    })
-    // no mute region should cover any part of bars [ARRANGE_STEP_BARS, 3*ARRANGE_STEP_BARS)
-    // since it's active there
-    expect(
-      muteRegions.some(
-        (r) =>
-          r.type === 'ADD_MUTE_REGION' &&
-          r.startBar < 3 * ARRANGE_STEP_BARS &&
-          r.endBar > 1 * ARRANGE_STEP_BARS
-      )
-    ).toBe(false)
+    expect(activeRangesForStem(moves, 3 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: 1 * ARRANGE_STEP_BARS, endBar: 3 * ARRANGE_STEP_BARS }
+    ])
   })
 
-  it('a stem entering then exiting produces two mute regions around the active window', () => {
+  it('a stem entering then exiting produces exactly the one active window in between', () => {
     const moves: ArrangeMoveRecord[] = [
       { stepIndex: 1, stemKey: 'g1:0', moveType: 'enter' },
       { stepIndex: 2, stemKey: 'g1:0', moveType: 'exit' }
     ]
-    const actions = buildArrangeActions(moves, 4)
-    const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: 0,
-      endBar: 1 * ARRANGE_STEP_BARS
-    })
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: 2 * ARRANGE_STEP_BARS,
-      endBar: 4 * ARRANGE_STEP_BARS
-    })
+    expect(activeRangesForStem(moves, 4 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: 1 * ARRANGE_STEP_BARS, endBar: 2 * ARRANGE_STEP_BARS }
+    ])
   })
 
   it('a fill at step 0 is active only for the last ARRANGE_FILL_BARS bars of that step', () => {
     const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'fill' }]
-    const actions = buildArrangeActions(moves, 2)
-    const muteRegions = actions.filter((a) => a.type === 'ADD_MUTE_REGION')
     const fillActiveStart = ARRANGE_STEP_BARS - ARRANGE_FILL_BARS
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: 0,
-      endBar: fillActiveStart
-    })
-    expect(muteRegions).toContainEqual({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: ['g1:0'],
-      startBar: ARRANGE_STEP_BARS,
-      endBar: 2 * ARRANGE_STEP_BARS
-    })
+    expect(activeRangesForStem(moves, 2 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: fillActiveStart, endBar: ARRANGE_STEP_BARS }
+    ])
   })
 
-  it('a stem with no moves at all is left alone entirely (no playedBars/mute actions for it)', () => {
-    const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' }]
-    const actions = buildArrangeActions(moves, 2)
-    expect(actions.some((a) => a.type === 'SET_PLAYED_BARS' && a.key === 'g1:1')).toBe(false)
-    expect(actions.some((a) => a.type === 'ADD_MUTE_REGION' && a.stemKeys.includes('g1:1'))).toBe(
-      false
-    )
+  it('sorts out-of-order moves by stepIndex before walking them', () => {
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 2, stemKey: 'g1:0', moveType: 'exit' },
+      { stepIndex: 1, stemKey: 'g1:0', moveType: 'enter' }
+    ]
+    expect(activeRangesForStem(moves, 4 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: 1 * ARRANGE_STEP_BARS, endBar: 2 * ARRANGE_STEP_BARS }
+    ])
   })
 
-  it('never emits a PLACE_ON_TIMELINE action', () => {
-    const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' }]
-    const actions = buildArrangeActions(moves, 2)
-    expect(actions.every((a) => (a as { type: string }).type !== 'PLACE_ON_TIMELINE')).toBe(true)
+  it('merges a fill that falls inside an already-active enter/exit window into one range', () => {
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'g1:0', moveType: 'fill' },
+      { stepIndex: 2, stemKey: 'g1:0', moveType: 'exit' }
+    ]
+    // The fill's own window (inside step 1) is already covered by the
+    // enter(step0)/exit(step2) span, so mergeOverlapping collapses both
+    // pushed ranges down to the one active window rather than leaving a
+    // redundant overlapping second range.
+    expect(activeRangesForStem(moves, 3 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: 0, endBar: 2 * ARRANGE_STEP_BARS }
+    ])
+  })
+
+  it('multiple enter/exit windows produce multiple separate active ranges', () => {
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'g1:0', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'g1:0', moveType: 'exit' },
+      { stepIndex: 3, stemKey: 'g1:0', moveType: 'enter' },
+      { stepIndex: 4, stemKey: 'g1:0', moveType: 'exit' }
+    ]
+    expect(activeRangesForStem(moves, 5 * ARRANGE_STEP_BARS)).toEqual([
+      { startBar: 0, endBar: 1 * ARRANGE_STEP_BARS },
+      { startBar: 3 * ARRANGE_STEP_BARS, endBar: 4 * ARRANGE_STEP_BARS }
+    ])
   })
 })

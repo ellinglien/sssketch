@@ -13,8 +13,9 @@ export const ARRANGE_FILL_BARS = 1
 // stepStartBar + ARRANGE_STEP_BARS - ARRANGE_FILL_BARS, which is only a
 // well-formed (non-negative, before fillEnd) range while this holds. Retuning
 // either constant without preserving it would silently produce a malformed
-// ADD_MUTE_REGION (startBar >= endBar) dispatched straight into real app
-// state -- the reducer does no validation of its own.
+// range (startBar >= endBar) fed straight into a PASTE_RIFFF's barLength via
+// selectors.ts's buildArrangeReplaceActions -- neither that nor the reducer
+// validates it.
 if (ARRANGE_FILL_BARS >= ARRANGE_STEP_BARS) {
   throw new Error('ARRANGE_FILL_BARS must be smaller than ARRANGE_STEP_BARS')
 }
@@ -25,22 +26,17 @@ export interface ArrangeMoveRecord {
   moveType: ArrangeMoveType
 }
 
-export type ArrangeAction =
-  | { type: 'SET_PLAYED_BARS'; key: string; bars: number }
-  | { type: 'ADD_MUTE_REGION'; stemKeys: string[]; startBar: number; endBar: number }
-
 // stemKey() (types.ts) joins with ':' and groupId is always a crypto.randomUUID()
 // (no colons of its own -- see buildRifff.ts/selectors.ts/importResolvedRiff.ts),
-// so splitting on the LAST ':' recovers the owning groupId. No shared parse
-// helper exists elsewhere in the codebase (every other call site only ever
-// builds a stemKey forward from a known groupId, e.g. selectors.ts/
-// buildEngineProject.ts) -- this is deliberately kept local rather than
-// promoted to types.ts until a second caller needs it.
-function groupIdFromStemKey(key: string): string {
+// so splitting on the LAST ':' recovers the owning groupId. Exported so
+// selectors.ts's buildArrangeReplaceActions (state/selectors.ts) can reuse
+// this exact parse rather than duplicating it -- that's now a second caller,
+// so this is no longer kept local the way this comment used to say.
+export function groupIdFromStemKey(key: string): string {
   return key.slice(0, key.lastIndexOf(':'))
 }
 
-interface BarRange {
+export interface BarRange {
   startBar: number
   endBar: number
 }
@@ -49,7 +45,12 @@ interface BarRange {
 // Enter/exit set the PERSISTENT state from that step's start bar onward;
 // fill is a one-off blip confined to the last ARRANGE_FILL_BARS bars of its
 // own step, independent of the surrounding persistent state.
-function activeRangesForStem(moves: ArrangeMoveRecord[], totalBars: number): BarRange[] {
+//
+// Exported: selectors.ts's buildArrangeReplaceActions reuses this directly
+// to compute each moved stem's active windows, which become independent
+// PASTE_RIFFF clip copies instead of this module's own ADD_MUTE_REGION
+// spans -- see that function's own doc comment.
+export function activeRangesForStem(moves: ArrangeMoveRecord[], totalBars: number): BarRange[] {
   const sorted = [...moves].sort((a, b) => a.stepIndex - b.stepIndex)
   const ranges: BarRange[] = []
   let activeFrom: number | null = null
@@ -90,53 +91,4 @@ function mergeOverlapping(ranges: BarRange[]): BarRange[] {
     }
   }
   return merged
-}
-
-// The complement of a stem's active ranges within [0, totalBars) -- these
-// become its ADD_MUTE_REGION spans, since a stem is muted everywhere except
-// when explicitly active.
-function inactiveRangesFrom(activeRanges: BarRange[], totalBars: number): BarRange[] {
-  const inactive: BarRange[] = []
-  let cursor = 0
-  for (const r of activeRanges) {
-    if (r.startBar > cursor) inactive.push({ startBar: cursor, endBar: r.startBar })
-    cursor = Math.max(cursor, r.endBar)
-  }
-  if (cursor < totalBars) inactive.push({ startBar: cursor, endBar: totalBars })
-  return inactive
-}
-
-export function buildArrangeActions(
-  moves: ArrangeMoveRecord[],
-  totalSteps: number
-): ArrangeAction[] {
-  const actions: ArrangeAction[] = []
-  const totalBars = totalSteps * ARRANGE_STEP_BARS
-
-  // SET_PLAYED_BARS is keyed by groupId, not per-stem. Auto-arrange now pools
-  // stems from every rifff placed on the timeline, so moves can span several
-  // groupIds -- all of them share the same totalBars extent (the whole
-  // arrangement plays out over one common span), so dispatch once per
-  // distinct groupId rather than once overall.
-  const groupIds = [...new Set(moves.map((m) => groupIdFromStemKey(m.stemKey)))]
-  for (const groupId of groupIds) {
-    actions.push({ type: 'SET_PLAYED_BARS', key: groupId, bars: totalBars })
-  }
-
-  const stemKeys = [...new Set(moves.map((m) => m.stemKey))]
-  for (const stemKey of stemKeys) {
-    const stemMoves = moves.filter((m) => m.stemKey === stemKey)
-    const activeRanges = activeRangesForStem(stemMoves, totalBars)
-    const inactiveRanges = inactiveRangesFrom(activeRanges, totalBars)
-    for (const range of inactiveRanges) {
-      actions.push({
-        type: 'ADD_MUTE_REGION',
-        stemKeys: [stemKey],
-        startBar: range.startBar,
-        endBar: range.endBar
-      })
-    }
-  }
-
-  return actions
 }
