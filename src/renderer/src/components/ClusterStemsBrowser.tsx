@@ -1,13 +1,7 @@
 // src/renderer/src/components/ClusterStemsBrowser.tsx
 import { useEffect, useMemo, useState } from 'react'
-import { soloStemsMute } from '../state/store'
-import {
-  useAppSelector,
-  useDispatch,
-  useFlushEngineSyncNow,
-  usePlaying,
-  usePos
-} from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
+import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
 import { stemKey, type BusId } from '@shared/types'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { toFeatureArray, standardizeFeatures } from '@shared/stemFeatures'
@@ -24,7 +18,6 @@ import {
   suggestBus,
   type BusCentroidStore
 } from '@shared/busCentroids'
-import { markManualSeek } from '../state/manualSeek'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
@@ -124,19 +117,15 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   const stateBpm = useAppSelector((s) => s.bpm)
   const playing = usePlaying()
   const pos = usePos()
-  const flushEngineSyncNow = useFlushEngineSyncNow()
 
-  // Snapshot of the REAL mute state as it was the moment this modal opened.
-  // `mute` itself is read fresh every render (it changes as SOLO_STEMS runs
-  // while browsing clusters below); `muteSnapshot` is deliberately frozen to
-  // whatever `mute` was on the very FIRST render only (useState's lazy
-  // initializer runs exactly once) so it stays the pre-solo baseline. On
-  // close, handleClose below restores exactly this snapshot, so any
-  // SOLO_STEMS preview-auditioning done while the modal was open never
-  // leaves a lasting mute change on the real arrangement once you're back
-  // playing it normally.
-  const mute = useAppSelector((s) => s.mute)
-  const [muteSnapshot] = useState(() => mute)
+  // previewingKeys/startPreview -- including the mute-snapshot-on-open,
+  // the unmount cleanup that restores it, and the async-ordering fix for
+  // the 2026-08-22 stale-mute-state bug -- are owned by
+  // useStemPreviewPlayback, shared with AutoArrangeRoleStep.tsx's own
+  // per-stem preview (built to mirror this modal's mechanism as closely as
+  // possible). See that hook's own doc comment for why this is a shared
+  // hook rather than two copies of correctness-critical async ordering.
+  const { previewingKeys, startPreview } = useStemPreviewPlayback()
   const busOf = useAppSelector((s) => s.busOf)
 
   // Global, cross-project classifier state (see busCentroids.ts) -- loaded
@@ -168,12 +157,12 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     })
   }, [])
 
+  // Restoring the pre-solo mute snapshot and pausing playback now happens
+  // automatically via useStemPreviewPlayback's own unmount-cleanup effect,
+  // the moment onClose's state flip (App.tsx) unmounts this component --
+  // see that hook's own doc comment. This wrapper is kept only because it's
+  // already the name the close button and the Escape handler below call.
   function handleClose(): void {
-    dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
-    // Leaving the labelling session should leave the transport silent, not
-    // still running whatever cluster was last soloed/previewed -- PAUSE
-    // (not STOP) so it just stops where it is, not rewinding to bar 0.
-    dispatch({ type: 'PAUSE' })
     onClose()
   }
 
@@ -392,54 +381,6 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // above for why this codebase's linter forbids that pattern).
   const [focusedRow, setFocusedRow] = useState(0)
   const clampedFocusedRow = Math.min(focusedRow, Math.max(0, clusters.length - 1))
-
-  // Which exact stem keys are the current preview target -- the single
-  // source of truth for "what's actually audible right now," decoupled
-  // from mere bar-range overlap with the transport's own position. A
-  // thumbnail only gets to show a playhead line when its OWN key is in
-  // this set (see ClusterRow below); previously the playhead was derived
-  // purely from "does this clip's bar range contain the current position,"
-  // which lit up any OTHER stem's thumbnail whenever the transport simply
-  // passed through that clip's bars on the timeline, muted or not.
-  const [previewingKeys, setPreviewingKeys] = useState<Set<string>>(() => new Set())
-
-  // Shared by playRow/previewStem below: solos exactly `keys`, jumps the
-  // transport to `targetBar` (seeking the live engine if already playing,
-  // or starting playback fresh at that bar otherwise), and marks `keys` as
-  // the current preview target. Centralizing the seek here -- rather than
-  // resuming from wherever the transport already happened to be -- is what
-  // makes "what's playing" deterministic: press a button, hear THAT thing,
-  // from its own start, every time.
-  //
-  // Awaits flushEngineSyncNow BEFORE seeking/playing, passing the solo's
-  // own mute map as an override rather than dispatching SOLO_STEMS and
-  // hoping stateRef catches up in time -- without this, a clip left muted
-  // in the arranger (a whole channel muted, or just that one clip) stayed
-  // muted here too: the play/seek IPC call was reaching the engine before
-  // the coalesced rAF sync elsewhere had a chance to send the corrected
-  // mute state, so the engine was still running the arranger's own mute
-  // state at the moment playback started. Reported 2026-08-22 as "I
-  // cannot hear the audio [[[in Tidy Up]]]... I think that channel is
-  // muted on the arrangement" -- mute set anywhere in the arranger must
-  // never bleed into a preview started from here.
-  async function startPreview(
-    keys: Set<string>,
-    groupIdToSelect: string | undefined,
-    targetBar: number
-  ): Promise<void> {
-    setPreviewingKeys(keys)
-    const soloedMute = soloStemsMute(rifffs, mute, [...keys])
-    dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
-    if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
-    dispatch({ type: 'SET_POS', pos: targetBar })
-    await flushEngineSyncNow({ mute: soloedMute })
-    if (playing) {
-      markManualSeek()
-      void window.rifffApi.engineSetPosition(targetBar)
-    } else {
-      dispatch({ type: 'PLAY' })
-    }
-  }
 
   // The row-level "play" button -- seeks to the EARLIEST member's own
   // clip start (not wherever the transport already was) so a cluster

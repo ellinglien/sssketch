@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { soloStemsMute } from '../state/store'
-import {
-  useAppSelector,
-  useDispatch,
-  useFlushEngineSyncNow,
-  usePlaying
-} from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
+import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
-import { markManualSeek } from '../state/manualSeek'
 import type { SoundType } from '@shared/types'
 
 interface Props {
@@ -66,29 +60,21 @@ function playButtonStyle(active: boolean): React.CSSProperties {
  * a single-target design to hang off of. */
 export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
   const dispatch = useDispatch()
-  const rifffs = useAppSelector((s) => s.rifffs)
-  const mute = useAppSelector((s) => s.mute)
   const busOf = useAppSelector((s) => s.busOf)
   const playing = usePlaying()
-  const flushEngineSyncNow = useFlushEngineSyncNow()
   const { placedRifffs, flatStems, flatStemsByKey } = usePlacedFlatStems()
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
   const [densities, setDensities] = useState<Record<string, number>>({})
 
-  // Snapshot of the REAL mute state as it stood the moment this step
-  // mounted -- see ClusterStemsBrowser.tsx's own `muteSnapshot` doc comment
-  // for the full rationale (frozen via useState's lazy initializer, which
-  // runs exactly once). Restored below on unmount so any SOLO_STEMS
-  // preview-auditioning done while confirming roles never leaks into the
-  // real arrangement's mute state once the wizard moves on.
-  const [muteSnapshot] = useState(() => mute)
-
-  // Which exact stem keys are the current preview target -- mirrors
-  // ClusterStemsBrowser.tsx's own `previewingKeys` exactly: the single
-  // source of truth for "what's actually audible right now," used to
-  // highlight a row (or the play-all control) as currently playing.
-  const [previewingKeys, setPreviewingKeys] = useState<Set<string>>(() => new Set())
+  // previewingKeys/startPreview -- including muteSnapshot, the unmount
+  // cleanup that restores it, and the async-ordering fix for the
+  // 2026-08-22 stale-mute-state bug -- are owned by useStemPreviewPlayback,
+  // shared verbatim with ClusterStemsBrowser.tsx (Tidy Up), which this
+  // step's own preview was built to mirror as closely as possible. See
+  // that hook's own doc comment for why this is a shared hook rather than
+  // a second copy.
+  const { previewingKeys, startPreview } = useStemPreviewPlayback()
 
   // Where each placed rifff's own clip starts on the timeline, keyed by
   // groupId -- this table has no per-stem waveform thumbnail to click/scrub
@@ -102,52 +88,6 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
     }
     return map
   }, [placedRifffs])
-
-  // Playback started while confirming roles must never keep running once
-  // this step is gone -- whether that's the user pressing cancel, or
-  // AutoArrangeWizard.tsx advancing straight past this component to the
-  // build step on confirm. Both paths unmount AutoArrangeRoleStep (the
-  // wizard swaps its `step` state), so a single unmount cleanup here covers
-  // both without AutoArrangeWizard needing to know anything about preview
-  // playback at all. PAUSE (not STOP) so it stops right where it is rather
-  // than rewinding to bar 0, matching ClusterStemsBrowser.tsx's handleClose.
-  useEffect(() => {
-    return () => {
-      dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
-      dispatch({ type: 'PAUSE' })
-    }
-  }, [dispatch, muteSnapshot])
-
-  // Shared by the per-stem and play-all controls below -- see
-  // ClusterStemsBrowser.tsx's own startPreview for the full rationale,
-  // copied verbatim: solos exactly `keys`, jumps the transport to
-  // `targetBar` (seeking the live engine if already playing, or starting
-  // playback fresh otherwise), and marks `keys` as the current preview
-  // target. Critically, this AWAITS flushEngineSyncNow BEFORE seeking/
-  // playing, passing the solo's own mute map as an override rather than
-  // dispatching SOLO_STEMS and hoping stateRef catches up in time -- the
-  // exact ordering fix for the "I cannot hear the audio [in Tidy Up]"
-  // stale-mute-state bug reported 2026-08-22 (see ClusterStemsBrowser.tsx).
-  // A clip left muted in the arranger must never bleed into a preview
-  // started from here either.
-  async function startPreview(
-    keys: Set<string>,
-    groupIdToSelect: string | undefined,
-    targetBar: number
-  ): Promise<void> {
-    setPreviewingKeys(keys)
-    const soloedMute = soloStemsMute(rifffs, mute, [...keys])
-    dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
-    if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
-    dispatch({ type: 'SET_POS', pos: targetBar })
-    await flushEngineSyncNow({ mute: soloedMute })
-    if (playing) {
-      markManualSeek()
-      void window.rifffApi.engineSetPosition(targetBar)
-    } else {
-      dispatch({ type: 'PLAY' })
-    }
-  }
 
   // Per-row play button -- pressing it again on the stem it's ALREADY
   // previewing stops playback instead of re-triggering it (a real toggle);
@@ -261,11 +201,16 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
       dispatch({ type: 'PAUSE' })
       return
     }
-    const targetBar = Math.min(
-      ...includedKeys.map(
-        (key) => startBarByGroupId.get(flatStemsByKey.get(key)?.groupId ?? '') ?? 0
-      )
-    )
+    // Filters out any stemKey that can't resolve back to its owning
+    // rifff's groupId, rather than defaulting it into the Math.min
+    // aggregate at bar 0 -- a resolvable stem silently contributing a
+    // fabricated 0 would be a wrong seek target, not just a missing one.
+    const resolvedStartBars = includedKeys
+      .map((key) => flatStemsByKey.get(key)?.groupId)
+      .filter((groupId): groupId is string => groupId !== undefined)
+      .map((groupId) => startBarByGroupId.get(groupId) ?? 0)
+    if (resolvedStartBars.length === 0) return
+    const targetBar = Math.min(...resolvedStartBars)
     void startPreview(new Set(includedKeys), undefined, targetBar)
   }
   const allIncludedPlaying =
