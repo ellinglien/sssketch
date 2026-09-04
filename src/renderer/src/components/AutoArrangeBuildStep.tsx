@@ -175,11 +175,45 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   })
   const [moves, setMoves] = useState<ArrangeMoveRecord[]>([])
 
+  // Select-then-confirm (2026-09): clicking a candidate row used to commit
+  // it immediately -- no way to back out, no way to tell "I'm auditing
+  // this" from "I meant to apply this." Per Elling's feedback, clicking a
+  // candidate now only SELECTS it (toggle -- click again to deselect, click
+  // a different one to switch); the bottom "apply" button is the only thing
+  // that actually calls pick(). Keyed on the SAME composite string as each
+  // row's own React `key` (`${stemKey}-${moveType}`) since one stemKey can
+  // appear in more than one candidate row (e.g. an 'enter' framing and a
+  // 'fill' framing of the same stem within a single step) and selection
+  // needs to distinguish between them, not just track a stemKey.
+  const [selectedCandidateKey, setSelectedCandidateKey] = useState<string | null>(null)
+
   // stepIndex here is the step candidates are being generated FOR (i.e. the
   // step about to be picked) -- applyBuildStep below is called separately,
   // at pick time, with this same stepIndex value to record an exit's
   // lastExitStep at the step it actually happened on.
   const candidates = selectTopCandidates(computeCandidates(stems, buildState, stepIndex))
+
+  // Defensive lookup, not a trust boundary in practice: candidates is this
+  // same step's own list, so a stale selectedCandidateKey (referring to a
+  // stemKey/moveType combo no longer present) shouldn't normally happen --
+  // but if it ever did, selectedCandidate comes back undefined and the
+  // apply button below simply reads as disabled rather than calling pick()
+  // with undefined.
+  const selectedCandidate = candidates.find(
+    (cand) => `${cand.stemKey}-${cand.moveType}` === selectedCandidateKey
+  )
+  const selectedRole = selectedCandidate
+    ? stems.find((s) => s.stemKey === selectedCandidate.stemKey)?.role
+    : undefined
+  const selectedFs = selectedCandidate ? flatStemsByKey.get(selectedCandidate.stemKey) : undefined
+  const applyLabel = selectedCandidate
+    ? `apply: ${MOVE_LABELS[selectedCandidate.moveType] ?? selectedCandidate.moveType} ${
+        (selectedRole && ROLE_LABELS[selectedRole]) ??
+        selectedRole ??
+        selectedFs?.stem.name ??
+        selectedCandidate.stemKey
+      }`
+    : 'apply move'
 
   const isPlayingCurrentArrangement =
     playing &&
@@ -204,6 +238,18 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
 
   function finishNow(): void {
     onComplete(moves, stepIndex + 1)
+  }
+
+  // The only caller of pick() now -- pick() itself is untouched, it just
+  // used to be invoked directly from each row's button. Resets the
+  // selection after applying (defensive: the component is about to
+  // re-render for the next step's own fresh candidate list anyway, but
+  // avoids any stale-selection carryover if step-transition logic ever
+  // changes).
+  function applySelected(): void {
+    if (!selectedCandidate) return
+    pick(selectedCandidate)
+    setSelectedCandidateKey(null)
   }
 
   return (
@@ -256,8 +302,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           </button>
         )}
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
-          pick a move below to apply it and continue -- each candidate&apos;s own small ▶ just
-          previews that one stem in isolation, it doesn&apos;t combine with the others
+          select a candidate below, then use apply to commit it and continue -- the small ▶ on each
+          just previews that one stem in isolation, it doesn&apos;t combine with the others
         </div>
         {tooFewStems && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
@@ -271,6 +317,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           </div>
         ) : (
           candidates.map((c) => {
+            const candidateKey = `${c.stemKey}-${c.moveType}`
+            const isSelected = candidateKey === selectedCandidateKey
             const fs = flatStemsByKey.get(c.stemKey)
             const stemRole = stems.find((s) => s.stemKey === c.stemKey)?.role
             const isPreviewing = previewingKeys.has(c.stemKey)
@@ -297,24 +345,50 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
 
             return (
               <div
-                key={`${c.stemKey}-${c.moveType}`}
+                key={candidateKey}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
                   marginBottom: 6,
                   padding: '4px 6px',
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
+                  // isSelected and isPreviewing are independent axes -- a
+                  // candidate can be selected but silent, or auditioned via
+                  // its own ▶ without being selected -- so they're kept on
+                  // different visual channels rather than fighting over the
+                  // same one: isPreviewing keeps the thin per-row outline it
+                  // always had (see the thumbnail box below too), while
+                  // isSelected gets its own border/background treatment on
+                  // this OUTER row so it reads at a glance even before
+                  // looking at the (now-secondary) select button inside it.
+                  border: `1px solid ${isSelected ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                  background: isSelected ? 'var(--ra-bg-row)' : 'var(--ra-bg-row-active)',
                   outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
-                  outlineOffset: -1
+                  outlineOffset: -3
                 }}
               >
                 <button
                   onClick={() => fs && togglePreviewStem(fs)}
                   disabled={!fs}
-                  style={playButtonStyle(isThisStemPlaying)}
-                  title="solo + preview this stem, from its own clip start"
+                  style={{
+                    ...playButtonStyle(isThisStemPlaying),
+                    // Downplayed relative to the select/apply flow, which is
+                    // now the primary interaction in this row -- this ▶ is
+                    // an auxiliary "audition just this one stem" action, not
+                    // a commit. Smaller footprint and a muted, borderless
+                    // default so it doesn't compete with the (now-primary)
+                    // select button next to it; the active/playing state
+                    // still uses playButtonStyle's own bright --ra-stretch-on
+                    // treatment unchanged, so "is this playing" stays just as
+                    // unambiguous as before.
+                    fontSize: 8,
+                    padding: '2px 6px',
+                    border: isThisStemPlaying
+                      ? '1px solid var(--ra-stretch-on)'
+                      : '1px solid transparent',
+                    color: isThisStemPlaying ? 'var(--ra-stretch-on)' : 'var(--ra-text-3)'
+                  }}
+                  title="preview only -- solo + play just this stem, from its own clip start"
                 >
                   {isThisStemPlaying ? '■' : '▶'}
                 </button>
@@ -351,25 +425,32 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                   <div style={{ width: 56, height: 28, flexShrink: 0 }} />
                 )}
                 <button
-                  onClick={() => pick(c)}
-                  title="apply this move and continue to the next step"
+                  onClick={() => {
+                    setSelectedCandidateKey(
+                      candidateKey === selectedCandidateKey ? null : candidateKey
+                    )
+                  }}
+                  title="select this move -- use apply below to commit it"
                   style={{
                     flex: 1,
                     textAlign: 'left',
                     padding: '6px 8px',
                     borderRadius: 0,
                     fontSize: 11,
-                    // Deliberately distinct from the row's own background
-                    // (var(--ra-bg-row-active), matching the ▶ preview
-                    // button and the row container itself) -- this is the
-                    // one control in the row that COMMITS a change, so it
-                    // needs to read as an actionable button, not blend into
-                    // the row like a label. Confirmed by user feedback: the
-                    // prior identical-background styling made it unclear
-                    // this was clickable at all.
-                    border: '1px solid var(--ra-border-strong)',
-                    background: 'var(--ra-bg-row)',
-                    color: 'var(--ra-text)',
+                    // Selected reads as a filled/bright control (the
+                    // --ra-stretch-on "on" treatment used elsewhere for a
+                    // committed toggle state) -- deliberately a DIFFERENT
+                    // visual channel than isPreviewing's thin outline on the
+                    // outer row/thumbnail, so a candidate that's selected
+                    // AND currently previewing shows both at once without
+                    // either reading as the other. This button no longer
+                    // commits anything by itself -- clicking it only
+                    // selects/deselects; the bottom "apply" button is the
+                    // sole thing that calls pick().
+                    border: `1px solid ${isSelected ? 'var(--ra-stretch-on)' : 'var(--ra-border-strong)'}`,
+                    background: isSelected ? 'var(--ra-stretch-on)' : 'var(--ra-bg-row)',
+                    color: isSelected ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
+                    fontWeight: isSelected ? 700 : 400,
                     cursor: 'pointer'
                   }}
                 >
@@ -381,7 +462,30 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             )
           })
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
+          <button
+            onClick={applySelected}
+            disabled={!selectedCandidate}
+            title={selectedCandidate ? applyLabel : 'select a candidate above first'}
+            style={{
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              fontWeight: 700,
+              border: '1px solid var(--ra-stretch-on)',
+              background: 'var(--ra-stretch-on)',
+              color: 'var(--ra-play-on-ink)',
+              // This app's disabled convention (docs/design.md, mirrored in
+              // ContextMenu.tsx): dim to 30% opacity + not-allowed cursor,
+              // rather than swapping to a separate "disabled" palette.
+              cursor: selectedCandidate ? 'pointer' : 'not-allowed',
+              opacity: selectedCandidate ? 1 : 0.3
+            }}
+          >
+            {applyLabel}
+          </button>
+          <div style={{ flex: 1 }} />
           <button
             onClick={onCancel}
             style={{
