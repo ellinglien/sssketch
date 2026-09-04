@@ -249,14 +249,28 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // (both mean "this stem sounds during the step"); it doesn't persist past
   // this preview since pick()/applyBuildStep (unchanged) are what actually
   // decide fill's real one-step-only effect once applied.
+  // Enter/exit moves already correctly mutate buildState.activeStemKeys the
+  // instant they're applied (advanceBuildState). A 'fill' move deliberately
+  // does NOT -- it's meant to be a transient blip, realized only at final
+  // export (activeRangesForStem's own separate fill-handling branch,
+  // autoArrangeApply.ts) -- so without this, an already-applied fill would
+  // vanish from the live preview (grid + "hear the arrangement so far")
+  // until nextStep() moves past it, looking exactly like the apply silently
+  // failed. Union in this step's own already-applied fills so the preview
+  // reflects reality while still mid-step.
+  const filledThisStep = moves
+    .filter((m) => m.stepIndex === stepIndex && m.moveType === 'fill')
+    .map((m) => m.stemKey)
+  const stepBaseline = new Set([...buildState.activeStemKeys, ...filledThisStep])
+
   const previewStemKeys = selectedCandidate
     ? (() => {
-        const next = new Set(buildState.activeStemKeys)
+        const next = new Set(stepBaseline)
         if (selectedCandidate.moveType === 'exit') next.delete(selectedCandidate.stemKey)
         else next.add(selectedCandidate.stemKey)
         return next
       })()
-    : new Set(buildState.activeStemKeys)
+    : stepBaseline
 
   const isPlayingCurrentArrangement =
     playing &&
@@ -379,7 +393,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
               {gridStems.map(({ stem, label }) => {
                 const fs = flatStemsByKey.get(stem.stemKey)
                 const color = fs ? typeColorVar(fs.stem.type) : 'var(--ra-text-3)'
-                const wasActive = buildState.activeStemKeys.includes(stem.stemKey)
+                const wasActive = stepBaseline.has(stem.stemKey)
                 const willBeActive = previewStemKeys.has(stem.stemKey)
                 const currentCell: 'active' | 'pending-add' | 'pending-remove' | 'empty' =
                   willBeActive && wasActive
