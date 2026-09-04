@@ -97,6 +97,16 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
     for (const action of actions) {
       dispatch(action)
     }
+    // Sketch mode's own eligibility (isSketchEligible, selectors.ts) assumes
+    // every placed rifff sits on one shared channel in a plain gapless
+    // sequence -- exactly what this apply step breaks: a touched rifff's
+    // stems land back on SEVERAL channels (one per original stem), each with
+    // its own now-possibly-different length. Left in sketch mode, that read
+    // as a jumble of oddly-sized tiles and played several at once instead of
+    // in sequence. Unconditional, not gated on isSketchEligible(state) --
+    // per Elling, switch back to arrange mode after auto-arrange "just to be
+    // safe" rather than trying to detect exactly when it's still sketch-safe.
+    dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
     onClose()
   }
 
