@@ -1,13 +1,13 @@
 // src/renderer/src/components/AutoArrangeWizard.tsx
 import { useState } from 'react'
-import { useAppSelector, useDispatch } from '../state/StoreContext'
+import { useAppState, useDispatch } from '../state/StoreContext'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
 import { computeDensityScore, computeFillScore } from '@shared/stemDensityScore'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import type { StemRoleInfo } from '@shared/stemRole'
 import type { ArrangeStemInput } from '@shared/autoArrangeEngine'
 import type { ArrangeMoveRecord } from '@shared/autoArrangeApply'
-import { buildArrangeActions } from '@shared/autoArrangeApply'
+import { buildArrangeReplaceActions } from '../state/selectors'
 import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
 import { AutoArrangeBuildStep } from './AutoArrangeBuildStep'
 
@@ -15,20 +15,18 @@ interface Props {
   onClose: () => void
 }
 
-type WizardStep =
-  | { phase: 'role' }
-  | { phase: 'build'; stems: ArrangeStemInput[] }
-  | {
-      phase: 'confirm-rerun'
-      pendingMoves: ArrangeMoveRecord[]
-      totalSteps: number
-      existingRegionCount: number
-    }
+type WizardStep = { phase: 'role' } | { phase: 'build'; stems: ArrangeStemInput[] }
 
 /** Orchestrates AutoArrangeRoleStep.tsx -> AutoArrangeBuildStep.tsx -> real
- * dispatch. Sits between the two click-through steps and buildArrangeActions
- * (autoArrangeApply.ts), which turns the finished move list into real
- * SET_PLAYED_BARS/ADD_MUTE_REGION actions.
+ * dispatch. Sits between the two click-through steps and
+ * buildArrangeReplaceActions (state/selectors.ts), which turns the finished
+ * move list into real PASTE_RIFFF/DELETE_RIFFFS actions -- each touched
+ * rifff's stems become independent, per-window clip copies, and the
+ * original rifff is deleted outright. (Formerly SET_PLAYED_BARS/
+ * ADD_MUTE_REGION edits to one continuous clip, via the now-removed
+ * buildArrangeActions in autoArrangeApply.ts -- changed on Elling's real-app
+ * feedback that gaps should be genuinely empty timeline space, not muted
+ * regions inside one long clip.)
  *
  * Scope: pools stems from EVERY rifff currently placed on the timeline, via
  * usePlacedFlatStems (state/usePlacedFlatStems.ts) -- the same hook
@@ -37,20 +35,21 @@ type WizardStep =
  * PLACE_ON_TIMELINE step here anymore either, since every rifff in scope is,
  * by that same selection criterion, already placed.
  *
- * Re-run guard: buildArrangeActions always emits a fresh, complete set of
- * mute regions for every targeted stem (it has no notion of "existing" state
- * -- see its own doc comments), so applying it a second time over a stem
- * that was already auto-arranged (or manually mute-region-edited) would
- * silently replace that state with no way back. handleBuildComplete checks
- * the REAL pre-apply state (muteRegions + playedBars) for every stem this
- * run would touch and, if either shows prior arrangement, routes through an
- * explicit confirm step instead of applying straight away -- never silently
- * clears, never silently layers on top.
+ * No re-run confirmation step: the old buildArrangeActions path warned
+ * before re-applying over a stem that showed signs (muteRegions/playedBars)
+ * of a prior arrangement run, because it would silently overwrite that
+ * state. That signal doesn't survive this rework -- buildArrangeReplaceActions
+ * deletes the whole source rifff and replaces it with fresh independent
+ * clips, so a "previous run" is no longer a detectable marker on a stem;
+ * it's indistinguishable from clips placed by hand. Rather than warn on a
+ * repurposed, misleading signal, this now matches how DELETE_RIFFFS already
+ * works everywhere else in the app (e.g. Shelf.tsx's Delete/Backspace
+ * handler) -- dispatched directly, undo-backed (useHistory/Cmd+Z), no
+ * confirm dialog.
  */
 export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
   const dispatch = useDispatch()
-  const muteRegions = useAppSelector((s) => s.muteRegions)
-  const playedBarsOverrides = useAppSelector((s) => s.playedBars)
+  const state = useAppState()
   const { flatStemsByKey } = usePlacedFlatStems()
 
   const [step, setStep] = useState<WizardStep>({ phase: 'role' })
@@ -94,33 +93,7 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
   }
 
   function handleBuildComplete(moves: ArrangeMoveRecord[], totalSteps: number): void {
-    const stemKeys = [...new Set(moves.map((m) => m.stemKey))]
-    const existingRegionCount = stemKeys.reduce(
-      (count, key) => count + (muteRegions[key]?.length ?? 0),
-      0
-    )
-    // Multi-rifff aware: a re-run warning fires if ANY rifff whose stems this
-    // run touches already carries a playedBars override -- not just one
-    // groupId, since moves can now span several placed rifffs at once.
-    const touchedGroupIds = [
-      ...new Set(
-        stemKeys
-          .map((key) => flatStemsByKey.get(key)?.groupId)
-          .filter((g): g is string => g !== undefined)
-      )
-    ]
-    const hasExtendedPlayedBars = touchedGroupIds.some(
-      (groupId) => playedBarsOverrides[groupId] !== undefined
-    )
-    if (existingRegionCount > 0 || hasExtendedPlayedBars) {
-      setStep({ phase: 'confirm-rerun', pendingMoves: moves, totalSteps, existingRegionCount })
-      return
-    }
-    apply(moves, totalSteps)
-  }
-
-  function apply(moves: ArrangeMoveRecord[], totalSteps: number): void {
-    const actions = buildArrangeActions(moves, totalSteps)
+    const actions = buildArrangeReplaceActions(state, moves, totalSteps)
     for (const action of actions) {
       dispatch(action)
     }
@@ -131,84 +104,7 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
     return <AutoArrangeRoleStep onConfirm={handleRoleConfirm} onCancel={onClose} />
   }
 
-  if (step.phase === 'build') {
-    return (
-      <AutoArrangeBuildStep
-        stems={step.stems}
-        onComplete={handleBuildComplete}
-        onCancel={onClose}
-      />
-    )
-  }
-
-  // confirm-rerun -- styled after AutoArrangeRoleStep.tsx / AutoArrangeBuildStep.tsx's
-  // own dialog conventions (see docs/design.md: dialogs share one visual
-  // treatment, no click-outside-to-dismiss on anything consequential).
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.5)',
-        zIndex: 100,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
-          borderRadius: 0,
-          padding: 20,
-          width: 360
-        }}
-      >
-        <div className="ra-eyebrow" style={{ marginBottom: 12 }}>
-          re-run auto-arrange
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--ra-text)', marginBottom: 16 }}>
-          {step.existingRegionCount > 0 ? (
-            <>
-              this will replace {step.existingRegionCount} existing mute region
-              {step.existingRegionCount === 1 ? '' : 's'} on these stems.
-            </>
-          ) : (
-            <>these stems were already arranged before -- this will replace that arrangement.</>
-          )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button
-            onClick={onClose}
-            style={{
-              height: 22,
-              borderRadius: 0,
-              padding: '0 10px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)'
-            }}
-          >
-            cancel
-          </button>
-          <button
-            onClick={() => apply(step.pendingMoves, step.totalSteps)}
-            style={{
-              height: 22,
-              borderRadius: 0,
-              padding: '0 10px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border-strong)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)'
-            }}
-          >
-            replace and apply
-          </button>
-        </div>
-      </div>
-    </div>
+    <AutoArrangeBuildStep stems={step.stems} onComplete={handleBuildComplete} onCancel={onClose} />
   )
 }
