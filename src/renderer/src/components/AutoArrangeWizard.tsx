@@ -86,7 +86,8 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
         role: role.arrangeRole,
         densityScore,
         fillScore,
-        included: true
+        included: true,
+        frequency: role.frequency
       }
     })
     setStep({ phase: 'build', stems })

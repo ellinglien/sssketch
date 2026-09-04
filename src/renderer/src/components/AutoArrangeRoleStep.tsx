@@ -4,11 +4,17 @@ import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
 import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/selectors'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
-import { resolveStemRole, type ArrangeRole, type StemRoleInfo } from '@shared/stemRole'
+import {
+  resolveStemRole,
+  type ArrangeRole,
+  type StemFrequency,
+  type StemRoleInfo
+} from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { Waveform } from './Waveform'
 import { typeColorVar } from '../theme/typeColor'
 import { stemKey } from '@shared/types'
+import { playButtonStyle } from './autoArrangeStyles'
 
 interface Props {
   onConfirm: (roles: StemRoleInfo[]) => void
@@ -30,27 +36,22 @@ const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
   'vocal'
 ]
 
-// Mirrors ClusterStemsBrowser.tsx's own buttonStyle 'confirmed' state
-// exactly -- bright near-white border/text vs. dim gray, reusing
-// ChannelRow.tsx's solo-button visual language rather than a background
-// swap (this modal's own panel background already reads too close to a
-// background-only "active" indicator, same reasoning documented there).
-// No 'suggested' state needed here -- this table has no bus-suggestion
-// concept, just "is this playing right now."
-function playButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    fontFamily: 'inherit',
-    fontSize: 9,
-    padding: '3px 8px',
-    borderRadius: 0,
-    background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
-    border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-    color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-    fontWeight: active ? 700 : 400,
-    cursor: 'pointer',
-    outline: 'none',
-    whiteSpace: 'nowrap'
-  }
+// Display labels for StemFrequency, in this app's lowercase, no-exclamation-
+// marks copy voice. Order matches the enum's own low-to-high intent.
+const FREQUENCY_OPTIONS: { value: StemFrequency; label: string }[] = [
+  { value: 'once', label: 'once' },
+  { value: 'occasional', label: 'occasional' },
+  { value: 'frequent', label: 'frequent' },
+  { value: 'veryFrequent', label: 'very frequent' }
+]
+
+const selectStyle: React.CSSProperties = {
+  height: 22,
+  borderRadius: 0,
+  fontSize: 10,
+  border: '1px solid var(--ra-border)',
+  background: 'var(--ra-bg-row-active)',
+  color: 'var(--ra-text)'
 }
 
 /** Shown before an auto-arrangement run to let the user confirm/correct each
@@ -358,98 +359,130 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
             showPlayhead = isPreviewing && playing && withinClip
           }
 
+          // Two sub-rows rather than one flat flex list: the row was already
+          // cramped at 7 inline controls before the frequency select landed
+          // (play button, 64px waveform, checkbox, arrangeRole select, raw
+          // soundType/busId provenance label, density label, optional
+          // uncertain badge) with no logical grouping and no wrap/overflow
+          // guard at the panel's fixed 560px width. Top line is media/
+          // playback (play button + waveform thumbnail); bottom line is
+          // role/metadata/preference controls (checkbox, arrangeRole select,
+          // frequency select, density/provenance labels, uncertain badge),
+          // allowed to wrap rather than overflow.
           return (
             <div
               key={role.stemKey}
               style={{
                 display: 'flex',
-                alignItems: 'center',
-                gap: 10,
+                flexDirection: 'column',
+                gap: 6,
                 padding: '6px 0',
                 borderBottom: '1px solid var(--ra-border-soft)',
                 outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
                 outlineOffset: -1
               }}
             >
-              <button
-                onClick={() => fs && togglePreviewStem(fs)}
-                disabled={!fs}
-                style={playButtonStyle(isThisStemPlaying)}
-                title="solo + preview this stem, from its own clip start"
-              >
-                {isThisStemPlaying ? '■' : '▶'}
-              </button>
-              {fs && geometry ? (
-                <div
-                  onClick={(e) => handleThumbnailClick(e, fs, geometry)}
-                  title={`${fs.stem.name} — click to preview from this point`}
-                  style={{
-                    width: 64,
-                    height: 32,
-                    flexShrink: 0,
-                    position: 'relative',
-                    cursor: 'pointer',
-                    outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
-                    outlineOffset: -1
-                  }}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  onClick={() => fs && togglePreviewStem(fs)}
+                  disabled={!fs}
+                  style={playButtonStyle(isThisStemPlaying)}
+                  title="solo + preview this stem, from its own clip start"
                 >
-                  <Waveform path={fs.stem.path} color={typeColorVar(role.soundType)} opacity={1} />
-                  {showPlayhead && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: `${playheadFraction * 100}%`,
-                        width: 1,
-                        background: 'var(--ra-playhead)',
-                        pointerEvents: 'none'
-                      }}
-                    />
-                  )}
-                </div>
-              ) : (
-                <div style={{ width: 64, height: 32, flexShrink: 0 }} />
-              )}
-              <input
-                type="checkbox"
-                checked={role.included}
-                onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
-              />
-              <select
-                value={role.arrangeRole}
-                onChange={(e) =>
-                  updateRole(role.stemKey, { arrangeRole: e.target.value as ArrangeRole })
-                }
+                  {isThisStemPlaying ? '■' : '▶'}
+                </button>
+                {fs && geometry ? (
+                  <div
+                    onClick={(e) => handleThumbnailClick(e, fs, geometry)}
+                    title={`${fs.stem.name} — click to preview from this point`}
+                    style={{
+                      width: 64,
+                      height: 32,
+                      flexShrink: 0,
+                      position: 'relative',
+                      cursor: 'pointer',
+                      outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
+                      outlineOffset: -1
+                    }}
+                  >
+                    <Waveform path={fs.stem.path} color={typeColorVar(fs.stem.type)} opacity={1} />
+                    {showPlayhead && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          left: `${playheadFraction * 100}%`,
+                          width: 1,
+                          background: 'var(--ra-playhead)',
+                          pointerEvents: 'none'
+                        }}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ width: 64, height: 32, flexShrink: 0 }} />
+                )}
+                <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                  {fs?.stem.name ?? role.stemKey}
+                </span>
+              </div>
+              <div
                 style={{
-                  height: 22,
-                  borderRadius: 0,
-                  fontSize: 10,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text)'
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                  paddingLeft: 74
                 }}
               >
-                {ARRANGE_ROLE_OPTIONS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-              {/* Raw seeding signal (soundType, and busId when this stem was
-                  already tidied) -- kept visible as context for the
-                  arrangeRole guess above, same secondary-label treatment as
-                  density. */}
-              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-                {role.soundType}
-                {role.busId ? ` · ${role.busId}` : ''}
-              </span>
-              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
-                {densityLabel(densities[role.stemKey] ?? 0)}
-              </span>
-              {role.uncertain && (
-                <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>uncertain</span>
-              )}
+                <input
+                  type="checkbox"
+                  checked={role.included}
+                  onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
+                />
+                <select
+                  value={role.arrangeRole}
+                  onChange={(e) =>
+                    updateRole(role.stemKey, { arrangeRole: e.target.value as ArrangeRole })
+                  }
+                  style={selectStyle}
+                >
+                  {ARRANGE_ROLE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={role.frequency}
+                  onChange={(e) =>
+                    updateRole(role.stemKey, { frequency: e.target.value as StemFrequency })
+                  }
+                  title="how often this stem should re-enter during the release phase, and its priority relative to other stems"
+                  style={selectStyle}
+                >
+                  {FREQUENCY_OPTIONS.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+                {/* Raw seeding signal (soundType, and busId when this stem was
+                    already tidied) -- kept visible as context for the
+                    arrangeRole guess above, same secondary-label treatment as
+                    density. */}
+                <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+                  {role.soundType}
+                  {role.busId ? ` · ${role.busId}` : ''}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+                  {densityLabel(densities[role.stemKey] ?? 0)}
+                </span>
+                {role.uncertain && (
+                  <span style={{ fontSize: 10, color: 'var(--ra-mute-on)' }}>uncertain</span>
+                )}
+              </div>
             </div>
           )
         })}

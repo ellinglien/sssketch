@@ -14,27 +14,7 @@ import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/sele
 import { Waveform } from './Waveform'
 import { typeColorVar } from '../theme/typeColor'
 import { stemKey as buildStemKey } from '@shared/types'
-
-// Byte-for-byte copy of AutoArrangeRoleStep.tsx's own playButtonStyle --
-// not imported from there because react-refresh's only-export-components
-// rule forbids a component file from also exporting a plain function, and
-// this is too small a style helper to justify a new shared file just to
-// share it between the two auto-arrange wizard steps.
-function playButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    fontFamily: 'inherit',
-    fontSize: 9,
-    padding: '3px 8px',
-    borderRadius: 0,
-    background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
-    border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-    color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-    fontWeight: active ? 700 : 400,
-    cursor: 'pointer',
-    outline: 'none',
-    whiteSpace: 'nowrap'
-  }
-}
+import { playButtonStyle } from './autoArrangeStyles'
 
 interface Props {
   stems: ArrangeStemInput[]
@@ -140,11 +120,16 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   const [stepIndex, setStepIndex] = useState(0)
   const [buildState, setBuildState] = useState<ArrangeBuildState>({
     activeStemKeys: [],
-    peakReached: false
+    peakReached: false,
+    lastExitStep: {}
   })
   const [moves, setMoves] = useState<ArrangeMoveRecord[]>([])
 
-  const candidates = selectTopCandidates(computeCandidates(stems, buildState))
+  // stepIndex here is the step candidates are being generated FOR (i.e. the
+  // step about to be picked) -- applyBuildStep below is called separately,
+  // at pick time, with this same stepIndex value to record an exit's
+  // lastExitStep at the step it actually happened on.
+  const candidates = selectTopCandidates(computeCandidates(stems, buildState, stepIndex))
 
   const includedCount = stems.filter((s) => s.included).length
   const tooFewStems = includedCount < 2
