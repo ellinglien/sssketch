@@ -64,7 +64,8 @@ describe('buildArrangeActions', () => {
       startBar: 0,
       endBar: 1 * ARRANGE_STEP_BARS
     })
-    // no mute region should cover any part of bars [8, 24) since it's active there
+    // no mute region should cover any part of bars [ARRANGE_STEP_BARS, 3*ARRANGE_STEP_BARS)
+    // since it's active there
     expect(
       muteRegions.some(
         (r) =>
