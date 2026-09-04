@@ -664,7 +664,12 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           </button>
           <button
             onClick={nextStep}
-            title="move on to the next step -- rolls into the next phase once its target is reached"
+            disabled={!!selectedCandidate}
+            title={
+              selectedCandidate
+                ? 'apply or deselect your pick before moving to the next step'
+                : 'move on to the next step -- rolls into the next phase once its target is reached'
+            }
             style={{
               height: 22,
               borderRadius: 0,
@@ -672,7 +677,12 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
               fontSize: 10,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)'
+              color: 'var(--ra-text)',
+              // Same disabled convention as applySelected above (docs/design.md,
+              // mirrored in ContextMenu.tsx): dim to 30% opacity + not-allowed
+              // cursor rather than a separate "disabled" palette.
+              cursor: selectedCandidate ? 'not-allowed' : 'pointer',
+              opacity: selectedCandidate ? 0.3 : 1
             }}
           >
             next step
