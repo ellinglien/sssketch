@@ -16,12 +16,15 @@ export type ArrangeRole =
   'drums' | 'bass' | 'lead' | 'backing' | 'aux' | 'textureFx' | 'fill' | 'vocal'
 
 /** Per-stem re-entry/priority preference for autoArrangeEngine.ts. 'once' is
- * the current-behavior baseline (a stem enters at most once and never
- * re-enters after exiting during the releasing phase) -- every other value
- * both allows re-entry (after a cooldown, see REENTRY_COOLDOWN_STEPS) and
- * boosts the stem's enter-candidate weight (see
+ * the original, pre-frequency-feature baseline (a stem enters at most once
+ * and never re-enters after exiting during the releasing phase) -- every
+ * other value both allows re-entry (after a cooldown, see
+ * REENTRY_COOLDOWN_STEPS) and boosts the stem's enter-candidate weight (see
  * FREQUENCY_WEIGHT_MULTIPLIER), so it doubles as a priority signal among
- * competing stems even before any re-entry happens. */
+ * competing stems even before any re-entry happens. resolveStemRole defaults
+ * new stems to 'occasional' rather than 'once' -- Elling wants some baseline
+ * re-entry/movement without requiring every stem to be manually opted in
+ * (2026-09-04). */
 export type StemFrequency = 'once' | 'occasional' | 'frequent' | 'veryFrequent'
 
 const BUS_ID_TO_ARRANGE_ROLE: Record<BusId, ArrangeRole> = {
@@ -59,8 +62,9 @@ export interface StemRoleInfo {
   uncertain: boolean
   included: boolean
   // Re-entry/priority preference, edited independently of arrangeRole. See
-  // StemFrequency's own doc comment. Defaults to 'once' -- the safe,
-  // no-behavior-change default for any stem the user doesn't touch.
+  // StemFrequency's own doc comment. Defaults to 'occasional' -- some
+  // baseline re-entry/movement without requiring the user to manually opt
+  // every stem in.
   frequency: StemFrequency
 }
 
@@ -75,6 +79,6 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
     arrangeRole,
     uncertain,
     included: true,
-    frequency: 'once'
+    frequency: 'occasional'
   }
 }

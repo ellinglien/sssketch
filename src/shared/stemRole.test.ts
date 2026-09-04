@@ -38,6 +38,11 @@ describe('resolveStemRole', () => {
     expect(role.included).toBe(true)
   })
 
+  it("defaults frequency to 'occasional' -- some baseline re-entry/movement without manual opt-in", () => {
+    const role = resolveStemRole(stem({ type: 'drums' }), 'g1:0', null)
+    expect(role.frequency).toBe('occasional')
+  })
+
   it('carries the stemKey through unchanged', () => {
     const role = resolveStemRole(stem({}), 'g1:3', null)
     expect(role.stemKey).toBe('g1:3')
