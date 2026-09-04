@@ -110,8 +110,16 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // pause-toggle on the outer candidate button, since a stemKey can appear
   // in more than one candidate row (an enter framing and a fill framing of
   // the same stem within one step) and this is still fundamentally "preview
-  // this one stem," not "preview this one row."
-  function togglePreviewStem(fs: FlatStem): void {
+  // this one stem," not "preview this one row." Also selects the candidate
+  // row this play button belongs to (candidateKey, the same composite string
+  // used by the select button) -- per Elling's feedback, playing a move
+  // option should select it too, not leave selection as a separate click.
+  // Selecting still isn't committing (apply below remains the only thing
+  // that calls pick()), and this always selects rather than toggling, even
+  // on the click that PAUSES playback -- pausing to re-listen to something
+  // else shouldn't also lose your place.
+  function togglePreviewStem(fs: FlatStem, candidateKey: string): void {
+    setSelectedCandidateKey(candidateKey)
     const isThisStemAlreadyPlaying =
       playing && previewingKeys.size === 1 && previewingKeys.has(fs.stemKey)
     if (isThisStemAlreadyPlaying) {
@@ -428,8 +436,9 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           </button>
         )}
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
-          select a candidate below, then use apply to commit it and continue -- the small ▶ on each
-          just previews that one stem in isolation, it doesn&apos;t combine with the others
+          select a candidate below (or play its small ▶, which selects it too), then use apply to
+          commit it and continue -- that small ▶ previews just that one stem in isolation, it
+          doesn&apos;t combine with the others
         </div>
         {tooFewStems && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
@@ -478,15 +487,14 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                   gap: 8,
                   marginBottom: 6,
                   padding: '4px 6px',
-                  // isSelected and isPreviewing are independent axes -- a
-                  // candidate can be selected but silent, or auditioned via
-                  // its own ▶ without being selected -- so they're kept on
-                  // different visual channels rather than fighting over the
-                  // same one: isPreviewing keeps the thin per-row outline it
-                  // always had (see the thumbnail box below too), while
-                  // isSelected gets its own border/background treatment on
-                  // this OUTER row so it reads at a glance even before
-                  // looking at the (now-secondary) select button inside it.
+                  // isSelected and isPreviewing are kept on different visual
+                  // channels even though playing a candidate now also selects
+                  // it (togglePreviewStem above): a candidate can still be
+                  // selected but silent (selected via the select button,
+                  // never played), so isPreviewing's thin outline (also on
+                  // the thumbnail box below) and isSelected's own border/
+                  // background treatment on this OUTER row read as separate
+                  // facts rather than being collapsed into one.
                   border: `1px solid ${isSelected ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                   background: isSelected ? 'var(--ra-bg-row)' : 'var(--ra-bg-row-active)',
                   outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
@@ -494,19 +502,20 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                 }}
               >
                 <button
-                  onClick={() => fs && togglePreviewStem(fs)}
+                  onClick={() => fs && togglePreviewStem(fs, candidateKey)}
                   disabled={!fs}
                   style={{
                     ...playButtonStyle(isThisStemPlaying),
                     // Downplayed relative to the select/apply flow, which is
-                    // now the primary interaction in this row -- this ▶ is
-                    // an auxiliary "audition just this one stem" action, not
-                    // a commit. Smaller footprint and a muted, borderless
-                    // default so it doesn't compete with the (now-primary)
-                    // select button next to it; the active/playing state
-                    // still uses playButtonStyle's own bright --ra-stretch-on
-                    // treatment unchanged, so "is this playing" stays just as
-                    // unambiguous as before.
+                    // still the primary interaction in this row -- this ▶
+                    // now also selects the row it's on (togglePreviewStem
+                    // above), but it's still not a commit: apply below
+                    // remains the only thing that calls pick(). Smaller
+                    // footprint and a muted, borderless default so it
+                    // doesn't compete with the select button next to it; the
+                    // active/playing state still uses playButtonStyle's own
+                    // bright --ra-stretch-on treatment unchanged, so "is this
+                    // playing" stays just as unambiguous as before.
                     fontSize: 8,
                     padding: '2px 6px',
                     border: isThisStemPlaying
@@ -514,7 +523,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                       : '1px solid transparent',
                     color: isThisStemPlaying ? 'var(--ra-stretch-on)' : 'var(--ra-text-3)'
                   }}
-                  title="preview only -- solo + play just this stem, from its own clip start"
+                  title="preview this stem, and select this move"
                 >
                   {isThisStemPlaying ? '■' : '▶'}
                 </button>
