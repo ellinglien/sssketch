@@ -226,6 +226,26 @@ describe('stemTileGeometryFromFields', () => {
     expect(geometry.visibleBars).toBe(16)
     expect(geometry.tileSpanBars).toBe(8)
   })
+
+  it('shrinks visibleBars for a left crop, without affecting tileSpanBars', () => {
+    // Mirrors clipGeometryFromFields's own "shrinks the width... when
+    // cropped from the left" case. leftCropBars trims how much of the
+    // played span is actually visible/audible -- it has nothing to do with
+    // one raw-tile repetition's own length, so tileSpanBars must be
+    // unaffected by it.
+    const geometry = stemTileGeometryFromFields({
+      startBar: 4,
+      playedBarsOverride: undefined,
+      leftCropBars: 2,
+      rifffBarLength: 8,
+      stretchOn: true,
+      rifffBpm: 150,
+      stateBpm: 150,
+      stemBarLength: 8
+    })
+    expect(geometry.visibleBars).toBe(6) // 8 (rifffBarLength) - 2 (leftCropBars)
+    expect(geometry.tileSpanBars).toBe(8)
+  })
 })
 
 describe('tileOffsetsPx', () => {
