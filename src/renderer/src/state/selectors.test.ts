@@ -1240,4 +1240,34 @@ describe('buildArrangeReplaceActions', () => {
     expect(state.fadeIn[bassCopy.groupId]).toBe(1)
     expect(state.fadeOut[bassCopy.groupId]).toBe(2)
   })
+
+  it('carries leftCrop and muteRegions onto the untouched siblings identity copy, but never onto a moved stems window-copies -- their startBar/barLength come from a different coordinate space (the 0-based build), so the source crop/mute window no longer describes the same span', () => {
+    let state = setup()
+    state = reducer(state, { type: 'SET_LEFT_CROP_BARS', groupId: 'r1', bars: 2 })
+    state = reducer(state, { type: 'ADD_MUTE_REGION', stemKeys: ['r1:1'], startBar: 5, endBar: 6 })
+    state = reducer(state, { type: 'ADD_MUTE_REGION', stemKeys: ['r1:2'], startBar: 5, endBar: 6 })
+
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 3, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 4)
+    for (const action of actions) state = reducer(state, action)
+
+    const kickCopies = Object.values(state.rifffs).filter((r) => r.stems[0]?.path === '/k.wav')
+    expect(kickCopies).toHaveLength(2)
+    for (const copy of kickCopies) {
+      expect(state.leftCrop[copy.groupId] ?? 0).toBe(0)
+      expect(state.muteRegions[stemKey(copy.groupId, copy.stems[0].slot)] ?? []).toEqual([])
+    }
+
+    const bassCopy = Object.values(state.rifffs).find((r) => r.stems[0]?.path === '/b.wav')
+    if (!bassCopy) throw new Error('expected the untouched sibling copy')
+    expect(state.leftCrop[bassCopy.groupId]).toBe(2)
+    expect(state.muteRegions[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)]).toEqual([
+      { startBar: 5, endBar: 6 }
+    ])
+  })
 })

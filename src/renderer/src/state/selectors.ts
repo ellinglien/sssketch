@@ -705,6 +705,48 @@ function pushCarryoverActions(
 }
 
 /**
+ * Appends leftCrop/muteRegions -- two more "real arrangement data, not a UI
+ * toggle" fields (see leftCrop's own doc comment in store.ts) that UNGROUP
+ * itself doesn't carry either, both defined relative to a clip's own
+ * position on the timeline. ONLY safe to call for an untouched sibling's
+ * identity copy, never a moved stem's window-copy: a window-copy's
+ * startBar/barLength come from activeRangesForStem's own 0-based build
+ * coordinates (stepIndex*ARRANGE_STEP_BARS, with no offset for the source
+ * rifff's actual placement -- see AutoArrangeWizard.tsx's
+ * handleBuildComplete), a completely different coordinate space from where
+ * the source stem actually sat, AND its barLength is the window's own
+ * (often much shorter) duration, not the source's resolved played length --
+ * reapplying the source's own leftCropBars there could easily crop past the
+ * new, shorter barLength (an inverted/zero-width window). An untouched
+ * sibling's copy is the one case where startBar/barLength are provably
+ * identical to the source's (see pasteStemAction's call site below), so the
+ * source's crop and mute regions still describe the exact same window.
+ */
+function pushSiblingPositionalCarryover(
+  actions: Action[],
+  state: AppState,
+  sourceGroupId: string,
+  slot: number,
+  newGroupId: string
+): void {
+  const leftCropBars = state.leftCrop[sourceGroupId] ?? 0
+  if (leftCropBars !== 0) {
+    actions.push({ type: 'SET_LEFT_CROP_BARS', groupId: newGroupId, bars: leftCropBars })
+  }
+  const sourceKey = stemKey(sourceGroupId, slot)
+  const regions = state.muteRegions[sourceKey] ?? []
+  const newKey = stemKey(newGroupId, slot)
+  for (const region of regions) {
+    actions.push({
+      type: 'ADD_MUTE_REGION',
+      stemKeys: [newKey],
+      startBar: region.startBar,
+      endBar: region.endBar
+    })
+  }
+}
+
+/**
  * Turns a finished auto-arrange build (its ArrangeMoveRecord[] move list --
  * see autoArrangeEngine.ts/autoArrangeApply.ts) into real actions by
  * replacing each touched rifff outright, rather than the old
@@ -739,7 +781,11 @@ function pushCarryoverActions(
  *    unchanged (pasteStemAction, used as-is). Never more than one copy, so
  *    never a MOVE_TO_CHANNEL for these.
  *  - every copy of every stem (moved or untouched) gets its bus/fade
- *    metadata carried over via pushCarryoverActions above.
+ *    metadata carried over via pushCarryoverActions above. The untouched
+ *    sibling's copy ADDITIONALLY carries leftCrop/muteRegions via
+ *    pushSiblingPositionalCarryover -- see that function's own doc comment
+ *    for why a moved stem's window-copies can't safely get the same
+ *    treatment (different coordinate space, different barLength).
  * Then ONE DELETE_RIFFFS removes every touched groupId.
  *
  * A rifff with zero moved stems never enters touchedGroupIds, so it's left
@@ -855,6 +901,7 @@ export function buildArrangeReplaceActions(
             sourceFadeIn,
             sourceFadeOut
           )
+          pushSiblingPositionalCarryover(actions, state, groupId, stem.slot, action.rifff.groupId)
         }
       }
     }
