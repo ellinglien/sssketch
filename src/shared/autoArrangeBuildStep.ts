@@ -35,6 +35,26 @@ export function applyCandidate(
   stepIndex: number,
   candidate: ArrangeCandidate
 ): ApplyCandidateResult {
+  // Defensive dedup: without this, a 'fill' candidate (whose apply leaves
+  // buildState completely unchanged by design) would keep being offered
+  // identically by computeCandidates forever at a fixed stepIndex, and
+  // nothing else bounds how many times it could be re-applied -- unlike
+  // enter/exit, which are naturally self-limiting (an active stem is never
+  // re-offered as an enter candidate; an exited one stops being an exit
+  // candidate). MAX_BUILD_STEPS alone no longer catches this, since it's
+  // only checked in advanceToNextStep, not here. A no-op reject on an
+  // exact stemKey+moveType repeat at the SAME step closes that gap
+  // generally, not just for fill.
+  const alreadyAppliedThisStep = moves.some(
+    (m) =>
+      m.stepIndex === stepIndex &&
+      m.stemKey === candidate.stemKey &&
+      m.moveType === candidate.moveType
+  )
+  if (alreadyAppliedThisStep) {
+    return { moves, buildState, complete: isArrangementComplete(buildState) }
+  }
+
   const nextMoves: ArrangeMoveRecord[] = [
     ...moves,
     { stepIndex, stemKey: candidate.stemKey, moveType: candidate.moveType }

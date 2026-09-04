@@ -138,6 +138,60 @@ describe('applyCandidate', () => {
     expect(result.buildState.activeStemKeys).toEqual(['a'])
     expect(result.complete).toBe(false)
   })
+
+  it('is a no-op when the identical stemKey+moveType is applied again at the same stepIndex', () => {
+    // Guards against unbounded growth from a repeatedly-applied 'fill'
+    // candidate: advanceBuildState leaves buildState unchanged for fill,
+    // so computeCandidates would keep re-offering the exact same
+    // candidate forever at a fixed stepIndex with nothing else to stop it.
+    const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
+    const priorMoves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'b', moveType: 'fill' }]
+    const priorState = buildState({ phase: 'build', activeStemKeys: ['a'] })
+    const result = applyCandidate(
+      priorMoves,
+      priorState,
+      stems,
+      0,
+      candidate({ stemKey: 'b', moveType: 'fill', weight: 0.3 })
+    )
+    expect(result.moves).toEqual(priorMoves)
+    expect(result.moves).toBe(priorMoves)
+    expect(result.buildState).toBe(priorState)
+  })
+
+  it('does not block a different moveType for the same stemKey at the same stepIndex', () => {
+    const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
+    const priorMoves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'a', moveType: 'enter' }]
+    const result = applyCandidate(
+      priorMoves,
+      buildState({ phase: 'outro', activeStemKeys: ['a'], stepsInPhase: 1 }),
+      stems,
+      0,
+      candidate({ stemKey: 'a', moveType: 'exit', weight: 0.9 })
+    )
+    expect(result.moves).toEqual<ArrangeMoveRecord[]>([
+      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
+      { stepIndex: 0, stemKey: 'a', moveType: 'exit' }
+    ])
+  })
+
+  it('does not block the same stemKey+moveType repeating at a different stepIndex', () => {
+    // e.g. a stem exits, then re-enters later -- the dedup guard is scoped
+    // to a single step, not global across the whole build.
+    const stems = [stemInput({ stemKey: 'a' })]
+    const priorMoves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'a', moveType: 'exit' }]
+    const result = applyCandidate(
+      priorMoves,
+      buildState({ phase: 'build', activeStemKeys: [], lastExitStep: { a: 0 } }),
+      stems,
+      3,
+      candidate({ stemKey: 'a', moveType: 'exit', weight: 0.5 })
+    )
+    expect(result.moves).toEqual<ArrangeMoveRecord[]>([
+      { stepIndex: 0, stemKey: 'a', moveType: 'exit' },
+      { stepIndex: 3, stemKey: 'a', moveType: 'exit' }
+    ])
+  })
 })
 
 describe('advanceToNextStep', () => {
