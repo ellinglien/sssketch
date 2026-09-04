@@ -1,12 +1,19 @@
 import { useMemo, useState } from 'react'
 import {
   computeCandidates,
+  MIN_STEMS_FOR_FULL_ARC,
+  PHASE_STEP_TARGETS,
   type ArrangeBuildState,
   type ArrangeCandidate,
+  type ArrangePhase,
   type ArrangeStemInput
 } from '@shared/autoArrangeEngine'
 import { activeStemKeysPerStep, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
-import { applyBuildStep, selectTopCandidates } from '@shared/autoArrangeBuildStep'
+import {
+  advanceToNextStep,
+  applyCandidate,
+  selectTopCandidates
+} from '@shared/autoArrangeBuildStep'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
@@ -47,6 +54,18 @@ const ROLE_LABELS: Record<string, string> = {
   textureFx: 'texture/fx',
   fill: 'fill',
   vocal: 'vocal'
+}
+
+// Lowercase, no jargon -- matches MOVE_LABELS/ROLE_LABELS's own convention.
+// 'build' reads as "building up" rather than the bare engine phase name,
+// since "build" on its own reads more like a verb/button than a section
+// name in the eyebrow's sentence context.
+const PHASE_LABELS: Record<ArrangePhase, string> = {
+  intro: 'intro',
+  build: 'building up',
+  peak: 'peak',
+  breakdown: 'breakdown',
+  outro: 'outro'
 }
 
 /** Second step of the auto-arrangement wizard, shown after AutoArrangeRoleStep.tsx
@@ -274,18 +293,36 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   })()
 
   const includedCount = stems.filter((s) => s.included).length
-  const tooFewStems = includedCount < 2
+  const tooFewStems = includedCount < MIN_STEMS_FOR_FULL_ARC
 
+  // Applies one candidate and stays on the CURRENT step -- multi-move-per-
+  // step: computeCandidates below recomputes fresh against the updated
+  // buildState on the next render, so another candidate can be picked and
+  // applied immediately without leaving this step. nextStep() (below) is
+  // the only thing that now advances stepIndex.
   function pick(candidate: ArrangeCandidate): void {
-    const result = applyBuildStep(moves, buildState, stems, stepIndex, candidate)
+    const result = applyCandidate(moves, buildState, stems, stepIndex, candidate)
     setMoves(result.moves)
     setBuildState(result.buildState)
 
     if (result.complete) {
       onComplete(result.moves, stepIndex + 1)
-      return
     }
-    setStepIndex(stepIndex + 1)
+  }
+
+  // Advances to the next step (and, once the current phase's target is
+  // reached, rolls into the next phase) -- the explicit action multi-move-
+  // per-step needs now that applying a candidate no longer does this by
+  // itself.
+  function nextStep(): void {
+    const result = advanceToNextStep(buildState, stepIndex)
+    setBuildState(result.buildState)
+    setStepIndex(result.stepIndex)
+    setSelectedCandidateKey(null)
+
+    if (result.complete) {
+      onComplete(moves, result.stepIndex + 1)
+    }
   }
 
   function finishNow(): void {
@@ -332,7 +369,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         }}
       >
         <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
-          step {stepIndex + 1} -- {buildState.activeStemKeys.length} active
+          {PHASE_LABELS[buildState.phase]} -- step {buildState.stepsInPhase + 1} of{' '}
+          {PHASE_STEP_TARGETS[buildState.phase]} ({buildState.activeStemKeys.length} active)
         </div>
         {gridStems.length > 0 && (
           <div style={{ overflowX: 'auto', marginBottom: 12 }}>
@@ -438,13 +476,15 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         )}
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
           select a candidate below (or play its small ▶, which selects it too), then use apply to
-          commit it and continue -- that small ▶ previews just that one stem in isolation, it
-          doesn&apos;t combine with the others
+          commit it -- applying keeps you on this step, so you can layer or pull several moves
+          together before using next step to move on. That small ▶ previews just that one stem in
+          isolation, it doesn&apos;t combine with the others.
         </div>
         {tooFewStems && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
-            only {includedCount} stem{includedCount === 1 ? '' : 's'} included -- not enough
-            material for a real build/breakdown arc, this will be a trivial arrangement.
+            only {includedCount} stem{includedCount === 1 ? '' : 's'} included -- the full
+            intro/build/peak/breakdown/outro arc works best with more variety; expect it to feel
+            thin.
           </div>
         )}
         {candidates.length === 0 ? (
@@ -620,6 +660,21 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             }}
           >
             {applyLabel}
+          </button>
+          <button
+            onClick={nextStep}
+            title="move on to the next step -- rolls into the next phase once its target is reached"
+            style={{
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border-strong)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text)'
+            }}
+          >
+            next step
           </button>
           <div style={{ flex: 1 }} />
           <button
