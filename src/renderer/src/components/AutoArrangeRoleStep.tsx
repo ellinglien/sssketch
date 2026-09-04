@@ -4,26 +4,30 @@ import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
 import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/selectors'
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
-import { resolveStemRole, type StemRoleInfo } from '@shared/stemRole'
+import { resolveStemRole, type ArrangeRole, type StemRoleInfo } from '@shared/stemRole'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { Waveform } from './Waveform'
 import { typeColorVar } from '../theme/typeColor'
-import { stemKey, type SoundType } from '@shared/types'
+import { stemKey } from '@shared/types'
 
 interface Props {
   onConfirm: (roles: StemRoleInfo[]) => void
   onCancel: () => void
 }
 
-const SOUND_TYPE_OPTIONS: SoundType[] = [
+// The 8 arrangement-oriented categories, replacing the old raw-SoundType
+// dropdown per direct feedback (2026-09-01: "audioIn doesn't really help
+// with arrangement, does it?"). See ArrangeRole's own doc comment
+// (shared/stemRole.ts) for what each of the non-obvious ones means.
+const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
   'drums',
-  'notes',
   'bass',
-  'extInst',
-  'sampler',
-  'fx',
-  'extFx',
-  'audioIn'
+  'lead',
+  'backing',
+  'aux',
+  'textureFx',
+  'fill',
+  'vocal'
 ]
 
 // Mirrors ClusterStemsBrowser.tsx's own buttonStyle 'confirmed' state
@@ -50,10 +54,14 @@ function playButtonStyle(active: boolean): React.CSSProperties {
 }
 
 /** Shown before an auto-arrangement run to let the user confirm/correct each
- * stem's soundType (and drop stems that shouldn't be arranged at all) before
- * autoArrangeEngine.ts sees them. `uncertain` (from resolveStemRole) flags
- * stems this can't classify with any real signal -- never tidied AND still
- * on the unresolved 'fx' default -- so the user knows which rows are guesses.
+ * stem's arrangeRole (and drop stems that shouldn't be arranged at all)
+ * before autoArrangeEngine.ts sees them. arrangeRole is an arrangement-
+ * oriented taxonomy (see ArrangeRole's own doc comment in shared/stemRole.ts)
+ * seeded from busId/soundType but edited independently -- the raw soundType/
+ * busId signal is still shown alongside it as context. `uncertain` (from
+ * resolveStemRole) flags stems this can't classify with any real signal --
+ * never tidied AND still on the unresolved 'fx' default -- so the user knows
+ * which rows are guesses.
  * Styled after TidyUpNudgeModal.tsx's conventions: see docs/design.md.
  *
  * Scope: like Tidy Up, this pools stems from EVERY rifff currently placed on
@@ -409,9 +417,9 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                 onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
               />
               <select
-                value={role.soundType}
+                value={role.arrangeRole}
                 onChange={(e) =>
-                  updateRole(role.stemKey, { soundType: e.target.value as SoundType })
+                  updateRole(role.stemKey, { arrangeRole: e.target.value as ArrangeRole })
                 }
                 style={{
                   height: 22,
@@ -422,12 +430,20 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                   color: 'var(--ra-text)'
                 }}
               >
-                {SOUND_TYPE_OPTIONS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                {ARRANGE_ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
                   </option>
                 ))}
               </select>
+              {/* Raw seeding signal (soundType, and busId when this stem was
+                  already tidied) -- kept visible as context for the
+                  arrangeRole guess above, same secondary-label treatment as
+                  density. */}
+              <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+                {role.soundType}
+                {role.busId ? ` · ${role.busId}` : ''}
+              </span>
               <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
                 {densityLabel(densities[role.stemKey] ?? 0)}
               </span>

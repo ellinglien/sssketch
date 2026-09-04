@@ -83,7 +83,7 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
       const fillScore = result.status === 'fulfilled' ? computeFillScore(result.value) : 0
       return {
         stemKey: role.stemKey,
-        role: role.busId ?? role.soundType,
+        role: role.arrangeRole,
         densityScore,
         fillScore,
         included: true
