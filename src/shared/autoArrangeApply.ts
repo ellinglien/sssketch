@@ -1,7 +1,13 @@
 import type { ArrangeMoveType } from './autoArrangeEngine'
 
-export const ARRANGE_STEP_BARS = 8
-export const ARRANGE_FILL_BARS = 2
+// Shrunk from 8/2 to 4/1 (same 25% fill-to-step ratio) -- feedback from a
+// real manual walkthrough was that the completed arrangement took too many
+// bars to reach a satisfying density; halving the per-step span reaches the
+// same target density in half the timeline length without changing the
+// build engine's own step-count logic (MAX_BUILD_STEPS et al. are a STEP
+// count, not a bar count, so they're unaffected).
+export const ARRANGE_STEP_BARS = 4
+export const ARRANGE_FILL_BARS = 1
 
 // activeRangesForStem's fill branch computes fillStart as
 // stepStartBar + ARRANGE_STEP_BARS - ARRANGE_FILL_BARS, which is only a
