@@ -5,7 +5,7 @@ import {
   type ArrangeCandidate,
   type ArrangeStemInput
 } from '@shared/autoArrangeEngine'
-import type { ArrangeMoveRecord } from '@shared/autoArrangeApply'
+import { activeStemKeysPerStep, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import { applyBuildStep, selectTopCandidates } from '@shared/autoArrangeBuildStep'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
@@ -133,19 +133,15 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // styling below) since candidates are ALTERNATIVES to choose between, not
   // things meant to play together with each other.
   function playCurrentArrangement(): void {
-    const isAlreadyPlayingCurrent =
-      playing &&
-      previewingKeys.size === buildState.activeStemKeys.length &&
-      buildState.activeStemKeys.every((k) => previewingKeys.has(k))
-    if (isAlreadyPlayingCurrent) {
+    if (isPlayingCurrentArrangement) {
       dispatch({ type: 'PAUSE' })
       return
     }
-    const startBars = buildState.activeStemKeys
+    const startBars = [...previewStemKeys]
       .map((k) => stemGeometryByKey.get(k)?.startBar)
       .filter((b): b is number => b !== undefined)
     if (startBars.length === 0) return
-    void startPreview(new Set(buildState.activeStemKeys), undefined, Math.min(...startBars))
+    void startPreview(previewStemKeys, undefined, Math.min(...startBars))
   }
 
   // Mirrors AutoArrangeRoleStep.tsx's handleThumbnailClick exactly -- the
@@ -215,11 +211,58 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
       }`
     : 'apply move'
 
+  // What "hear the arrangement so far" (and the build-progress grid's
+  // current column) should actually play. With nothing selected, that's
+  // just the locked-in baseline (buildState.activeStemKeys). With a
+  // candidate selected but not yet applied, this previews what picking it
+  // WOULD do instead -- letting the user hear a prospective move before
+  // committing to it, not just the stem in isolation the way each row's own
+  // small ▶ does. 'fill' is treated the same as 'enter' for this preview
+  // (both mean "this stem sounds during the step"); it doesn't persist past
+  // this preview since pick()/applyBuildStep (unchanged) are what actually
+  // decide fill's real one-step-only effect once applied.
+  const previewStemKeys = selectedCandidate
+    ? (() => {
+        const next = new Set(buildState.activeStemKeys)
+        if (selectedCandidate.moveType === 'exit') next.delete(selectedCandidate.stemKey)
+        else next.add(selectedCandidate.stemKey)
+        return next
+      })()
+    : new Set(buildState.activeStemKeys)
+
   const isPlayingCurrentArrangement =
     playing &&
-    buildState.activeStemKeys.length > 0 &&
-    previewingKeys.size === buildState.activeStemKeys.length &&
-    buildState.activeStemKeys.every((k) => previewingKeys.has(k))
+    previewStemKeys.size > 0 &&
+    previewingKeys.size === previewStemKeys.size &&
+    [...previewStemKeys].every((k) => previewingKeys.has(k))
+
+  // Build-progress grid: one row per included stem, one column per step so
+  // far -- see this component's own module doc comment / activeStemKeysPerStep's
+  // (autoArrangeApply.ts) for why this exists (Elling: "not sure what, but
+  // visual connection seems important" -- the step counter alone gave no
+  // sense of the shape being built). historyPerStep covers every ALREADY-
+  // DECIDED step (0..stepIndex-1); the current, in-progress step is rendered
+  // separately below using previewStemKeys, so a selected-but-not-yet-applied
+  // pick shows up immediately as a distinct (hollow/dimmed) preview instead
+  // of only appearing once committed.
+  const historyPerStep = activeStemKeysPerStep(moves, stepIndex - 1)
+  const gridStems = (() => {
+    const included = stems.filter((s) => s.included)
+    const totalByLabel = new Map<string, number>()
+    for (const s of included) {
+      const label = ROLE_LABELS[s.role] ?? s.role
+      totalByLabel.set(label, (totalByLabel.get(label) ?? 0) + 1)
+    }
+    const seen = new Map<string, number>()
+    return included.map((s) => {
+      const label = ROLE_LABELS[s.role] ?? s.role
+      const total = totalByLabel.get(label) ?? 1
+      if (total <= 1) return { stem: s, label }
+      const index = (seen.get(label) ?? 0) + 1
+      seen.set(label, index)
+      return { stem: s, label: `${label} ${index}` }
+    })
+  })()
 
   const includedCount = stems.filter((s) => s.included).length
   const tooFewStems = includedCount < 2
@@ -282,7 +325,85 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
           step {stepIndex + 1} -- {buildState.activeStemKeys.length} active
         </div>
-        {buildState.activeStemKeys.length > 0 && (
+        {gridStems.length > 0 && (
+          <div style={{ overflowX: 'auto', marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 'fit-content' }}>
+              {gridStems.map(({ stem, label }) => {
+                const fs = flatStemsByKey.get(stem.stemKey)
+                const color = fs ? typeColorVar(fs.stem.type) : 'var(--ra-text-3)'
+                const wasActive = buildState.activeStemKeys.includes(stem.stemKey)
+                const willBeActive = previewStemKeys.has(stem.stemKey)
+                const currentCell: 'active' | 'pending-add' | 'pending-remove' | 'empty' =
+                  willBeActive && wasActive
+                    ? 'active'
+                    : willBeActive
+                      ? 'pending-add'
+                      : wasActive
+                        ? 'pending-remove'
+                        : 'empty'
+                return (
+                  <div key={stem.stemKey} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div
+                      style={{
+                        width: 62,
+                        flexShrink: 0,
+                        fontSize: 9,
+                        color: 'var(--ra-text-3)',
+                        textAlign: 'right',
+                        paddingRight: 4,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                      title={label}
+                    >
+                      {label}
+                    </div>
+                    <div style={{ display: 'flex', gap: 2 }}>
+                      {historyPerStep.map((activeAtStep, i) => (
+                        <div
+                          key={i}
+                          title={`step ${i + 1}`}
+                          style={{
+                            width: 10,
+                            height: 10,
+                            flexShrink: 0,
+                            background: activeAtStep.includes(stem.stemKey) ? color : 'transparent',
+                            border: `1px solid ${
+                              activeAtStep.includes(stem.stemKey)
+                                ? 'transparent'
+                                : 'var(--ra-border)'
+                            }`
+                          }}
+                        />
+                      ))}
+                      <div
+                        title={`step ${stepIndex + 1} (current)`}
+                        style={{
+                          width: 10,
+                          height: 10,
+                          flexShrink: 0,
+                          background:
+                            currentCell === 'active' || currentCell === 'pending-remove'
+                              ? color
+                              : 'transparent',
+                          opacity: currentCell === 'pending-remove' ? 0.35 : 1,
+                          border:
+                            currentCell === 'pending-add'
+                              ? `1px dashed ${color}`
+                              : currentCell === 'empty'
+                                ? '1px solid var(--ra-border)'
+                                : `1px solid var(--ra-stretch-on)`
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+        {previewStemKeys.size > 0 && (
           <button
             onClick={playCurrentArrangement}
             style={{
@@ -294,11 +415,16 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
               fontSize: 11,
               marginBottom: 12
             }}
-            title="play everything active so far, together"
+            title={
+              selectedCandidate
+                ? 'play everything active so far, PLUS the currently selected (not yet applied) pick'
+                : 'play everything active so far, together'
+            }
           >
-            {isPlayingCurrentArrangement ? '■' : '▶'} hear the arrangement so far (
-            {buildState.activeStemKeys.length} stem
-            {buildState.activeStemKeys.length === 1 ? '' : 's'})
+            {isPlayingCurrentArrangement ? '■' : '▶'}{' '}
+            {selectedCandidate ? 'hear with this pick' : 'hear the arrangement so far'} (
+            {previewStemKeys.size} stem
+            {previewStemKeys.size === 1 ? '' : 's'})
           </button>
         )}
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>

@@ -79,6 +79,46 @@ export function activeRangesForStem(moves: ArrangeMoveRecord[], totalBars: numbe
   return mergeOverlapping(ranges)
 }
 
+/**
+ * Per-step active-stem snapshot, one entry per step from 0 to
+ * uptoStepInclusive (empty array if uptoStepInclusive < 0) -- for
+ * AutoArrangeBuildStep.tsx's build-progress grid, which needs to show
+ * "what's active in each step so far" rather than activeRangesForStem's own
+ * collapsed bar ranges. Same enter/exit/fill semantics: enter/exit persist
+ * from that step onward, fill is a one-step blip that doesn't affect
+ * whether the stem is considered active in any OTHER step. Each entry is
+ * sorted for deterministic comparison (tests, and a stable render order).
+ */
+export function activeStemKeysPerStep(
+  moves: ArrangeMoveRecord[],
+  uptoStepInclusive: number
+): string[][] {
+  if (uptoStepInclusive < 0) return []
+
+  const movesByStep = new Map<number, ArrangeMoveRecord[]>()
+  for (const move of moves) {
+    const list = movesByStep.get(move.stepIndex)
+    if (list) list.push(move)
+    else movesByStep.set(move.stepIndex, [move])
+  }
+
+  const persistent = new Set<string>()
+  const result: string[][] = []
+  for (let step = 0; step <= uptoStepInclusive; step++) {
+    const stepMoves = movesByStep.get(step) ?? []
+    for (const move of stepMoves) {
+      if (move.moveType === 'enter') persistent.add(move.stemKey)
+      else if (move.moveType === 'exit') persistent.delete(move.stemKey)
+    }
+    const active = new Set(persistent)
+    for (const move of stepMoves) {
+      if (move.moveType === 'fill') active.add(move.stemKey)
+    }
+    result.push([...active].sort())
+  }
+  return result
+}
+
 function mergeOverlapping(ranges: BarRange[]): BarRange[] {
   const sorted = [...ranges].sort((a, b) => a.startBar - b.startBar)
   const merged: BarRange[] = []
