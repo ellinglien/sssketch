@@ -1,19 +1,27 @@
+import type { StemFrequency } from './stemRole'
+
 export type ArrangeMoveType = 'enter' | 'exit' | 'fill'
 
 export interface ArrangeStemInput {
   stemKey: string
-  // Opaque grouping key for role diversity -- a BusId or SoundType string,
-  // whichever StemRoleInfo resolved. The engine only compares equality, it
-  // doesn't need to know the concrete type.
+  // Opaque grouping key for role diversity -- the ArrangeRole string
+  // StemRoleInfo resolved. The engine only compares equality, it doesn't
+  // need to know the concrete type.
   role: string
   densityScore: number // 0..1, from computeDensityScore
   fillScore: number // 0..1, from computeFillScore
   included: boolean
+  // Re-entry/priority preference -- see StemFrequency's own doc comment.
+  frequency: StemFrequency
 }
 
 export interface ArrangeBuildState {
   activeStemKeys: string[]
   peakReached: boolean
+  // stepIndex at which each stem last exited -- absent for a stem that has
+  // never exited (either still active, or never entered at all). Used to
+  // gate re-entry eligibility by REENTRY_COOLDOWN_STEPS.
+  lastExitStep: Record<string, number>
 }
 
 export interface ArrangeCandidate {
@@ -37,6 +45,28 @@ const ENTER_DIVERSITY_WEIGHT = 0.4
 // represented" for the candidate's explanatory reason text -- kept in sync
 // with ENTER_DIVERSITY_WEIGHT's meaning, not an independent tuning knob.
 const DIVERSITY_NOTABLE_THRESHOLD = 0.5
+
+// Re-entry cooldown (in build steps) before an exited stem becomes eligible
+// to enter again -- lower for higher-frequency preferences, so a
+// "veryFrequent" stem can cycle back in almost immediately while "occasional"
+// waits longer.
+export const REENTRY_COOLDOWN_STEPS: Record<Exclude<StemFrequency, 'once'>, number> = {
+  occasional: 3,
+  frequent: 2,
+  veryFrequent: 1
+}
+
+// Multiplies a stem's enter-candidate weight (both its FIRST entry and any
+// re-entry) -- this is the "priority" half of the frequency preference: among
+// two competing stems with similar density/diversity scores, the
+// higher-frequency one is favored more often. 'once' is the neutral/current
+// baseline.
+export const FREQUENCY_WEIGHT_MULTIPLIER: Record<StemFrequency, number> = {
+  once: 1.0,
+  occasional: 1.2,
+  frequent: 1.4,
+  veryFrequent: 1.7
+}
 
 function includedStems(stems: ArrangeStemInput[]): ArrangeStemInput[] {
   return stems.filter((s) => s.included)
@@ -76,7 +106,8 @@ function bestFillCandidate(
 
 export function computeCandidates(
   stems: ArrangeStemInput[],
-  buildState: ArrangeBuildState
+  buildState: ArrangeBuildState,
+  stepIndex: number
 ): ArrangeCandidate[] {
   const candidateStems = includedStems(stems)
   const candidates: ArrangeCandidate[] = []
@@ -88,7 +119,8 @@ export function computeCandidates(
       candidates.push({
         stemKey: stem.stemKey,
         moveType: 'enter',
-        weight: enterWeight(stem.densityScore, diversity),
+        weight:
+          enterWeight(stem.densityScore, diversity) * FREQUENCY_WEIGHT_MULTIPLIER[stem.frequency],
         reason:
           diversity > DIVERSITY_NOTABLE_THRESHOLD
             ? 'sparse and a role not yet represented'
@@ -97,12 +129,31 @@ export function computeCandidates(
     }
   } else {
     for (const stem of candidateStems) {
-      if (!buildState.activeStemKeys.includes(stem.stemKey)) continue
+      if (buildState.activeStemKeys.includes(stem.stemKey)) {
+        candidates.push({
+          stemKey: stem.stemKey,
+          moveType: 'exit',
+          weight: stem.densityScore,
+          reason: 'dense -- good candidate to thin out first'
+        })
+        continue
+      }
+
+      // Re-entry: an inactive stem that has exited before, has a
+      // re-entry-eligible frequency preference, and has cleared its
+      // cooldown since that exit.
+      if (stem.frequency === 'once') continue
+      const lastExit = buildState.lastExitStep[stem.stemKey]
+      if (lastExit === undefined) continue
+      if (stepIndex - lastExit < REENTRY_COOLDOWN_STEPS[stem.frequency]) continue
+
+      const diversity = roleDiversityBonus(stem.role, buildState.activeStemKeys, stems)
       candidates.push({
         stemKey: stem.stemKey,
-        moveType: 'exit',
-        weight: stem.densityScore,
-        reason: 'dense -- good candidate to thin out first'
+        moveType: 'enter',
+        weight:
+          enterWeight(stem.densityScore, diversity) * FREQUENCY_WEIGHT_MULTIPLIER[stem.frequency],
+        reason: `re-entering -- ${stem.frequency} preference`
       })
     }
   }
@@ -116,13 +167,16 @@ export function computeCandidates(
 export function advanceBuildState(
   buildState: ArrangeBuildState,
   stems: ArrangeStemInput[],
-  chosen: ArrangeCandidate
+  chosen: ArrangeCandidate,
+  stepIndex: number
 ): ArrangeBuildState {
   let activeStemKeys = buildState.activeStemKeys
+  let lastExitStep = buildState.lastExitStep
   if (chosen.moveType === 'enter') {
     activeStemKeys = [...activeStemKeys, chosen.stemKey]
   } else if (chosen.moveType === 'exit') {
     activeStemKeys = activeStemKeys.filter((k) => k !== chosen.stemKey)
+    lastExitStep = { ...lastExitStep, [chosen.stemKey]: stepIndex }
   }
   // 'fill' does not change the persistent active set -- it's a brief blip,
   // handled entirely at the apply-to-timeline stage (a later task).
@@ -131,7 +185,7 @@ export function advanceBuildState(
   const peakReached =
     buildState.peakReached || (total > 0 && activeStemKeys.length / total >= PEAK_ACTIVE_FRACTION)
 
-  return { activeStemKeys, peakReached }
+  return { activeStemKeys, peakReached, lastExitStep }
 }
 
 export function isArrangementComplete(buildState: ArrangeBuildState): boolean {

@@ -39,7 +39,7 @@ export function applyBuildStep(
     ...moves,
     { stepIndex, stemKey: candidate.stemKey, moveType: candidate.moveType }
   ]
-  const nextState = advanceBuildState(buildState, stems, candidate)
+  const nextState = advanceBuildState(buildState, stems, candidate, stepIndex)
   const complete = isArrangementComplete(nextState) || stepIndex + 1 >= MAX_BUILD_STEPS
   return { moves: nextMoves, buildState: nextState, complete }
 }

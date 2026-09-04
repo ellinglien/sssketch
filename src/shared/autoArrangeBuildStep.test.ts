@@ -10,6 +10,7 @@ function stemInput(overrides: Partial<ArrangeStemInput>): ArrangeStemInput {
     densityScore: 0.5,
     fillScore: 0.5,
     included: true,
+    frequency: 'once',
     ...overrides
   }
 }
@@ -28,7 +29,7 @@ describe('applyBuildStep', () => {
   it('appends a move record stamped with the given stepIndex', () => {
     const result = applyBuildStep(
       [],
-      { activeStemKeys: [], peakReached: false },
+      { activeStemKeys: [], peakReached: false, lastExitStep: {} },
       [stemInput({ stemKey: 'a' })],
       0,
       candidate({ stemKey: 'a', moveType: 'enter' })
@@ -42,7 +43,7 @@ describe('applyBuildStep', () => {
     const priorMoves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'a', moveType: 'enter' }]
     const result = applyBuildStep(
       priorMoves,
-      { activeStemKeys: ['a'], peakReached: false },
+      { activeStemKeys: ['a'], peakReached: false, lastExitStep: {} },
       [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })],
       1,
       candidate({ stemKey: 'b', moveType: 'enter' })
@@ -57,14 +58,15 @@ describe('applyBuildStep', () => {
     const stems = [stemInput({ stemKey: 'a' })]
     const result = applyBuildStep(
       [],
-      { activeStemKeys: [], peakReached: false },
+      { activeStemKeys: [], peakReached: false, lastExitStep: {} },
       stems,
       0,
       candidate({ stemKey: 'a', moveType: 'enter' })
     )
     expect(result.buildState).toEqual<ArrangeBuildState>({
       activeStemKeys: ['a'],
-      peakReached: true
+      peakReached: true,
+      lastExitStep: {}
     })
   })
 
@@ -72,7 +74,7 @@ describe('applyBuildStep', () => {
     const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
     const result = applyBuildStep(
       [],
-      { activeStemKeys: ['b'], peakReached: true },
+      { activeStemKeys: ['b'], peakReached: true, lastExitStep: {} },
       stems,
       3,
       candidate({ stemKey: 'a', moveType: 'enter' })
@@ -84,12 +86,16 @@ describe('applyBuildStep', () => {
     const stems = [stemInput({ stemKey: 'a' })]
     const result = applyBuildStep(
       [],
-      { activeStemKeys: ['a'], peakReached: true },
+      { activeStemKeys: ['a'], peakReached: true, lastExitStep: {} },
       stems,
       5,
       candidate({ stemKey: 'a', moveType: 'exit', weight: 0.9 })
     )
-    expect(result.buildState).toEqual<ArrangeBuildState>({ activeStemKeys: [], peakReached: true })
+    expect(result.buildState).toEqual<ArrangeBuildState>({
+      activeStemKeys: [],
+      peakReached: true,
+      lastExitStep: { a: 5 }
+    })
     expect(result.complete).toBe(true)
   })
 
@@ -97,7 +103,7 @@ describe('applyBuildStep', () => {
     const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
     const result = applyBuildStep(
       [],
-      { activeStemKeys: ['a'], peakReached: false },
+      { activeStemKeys: ['a'], peakReached: false, lastExitStep: {} },
       stems,
       0,
       candidate({ stemKey: 'b', moveType: 'fill', weight: 0.3 })
@@ -112,7 +118,7 @@ describe('applyBuildStep', () => {
     // alone would be false) -- only the step cap should force completion.
     const result = applyBuildStep(
       [],
-      { activeStemKeys: ['a'], peakReached: true },
+      { activeStemKeys: ['a'], peakReached: true, lastExitStep: {} },
       stems,
       MAX_BUILD_STEPS - 1,
       candidate({ stemKey: 'a', moveType: 'enter', weight: 0.1 })
@@ -124,7 +130,7 @@ describe('applyBuildStep', () => {
     const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
     const result = applyBuildStep(
       [],
-      { activeStemKeys: ['a'], peakReached: false },
+      { activeStemKeys: ['a'], peakReached: false, lastExitStep: {} },
       stems,
       MAX_BUILD_STEPS - 2,
       candidate({ stemKey: 'b', moveType: 'enter', weight: 0.1 })
