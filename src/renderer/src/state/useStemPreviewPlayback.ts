@@ -69,7 +69,26 @@ export function useStemPreviewPlayback(): {
   // (the wizard advancing past AutoArrangeRoleStep to its build step).
   // PAUSE (not STOP) so it stops right where it is rather than rewinding
   // to bar 0, matching ClusterStemsBrowser.tsx's original handleClose.
+  //
+  // The `cancelledRef.current = false` in the setup body (not just the
+  // useRef(false) initializer) is load-bearing, not redundant -- this app
+  // runs under <StrictMode> (main.tsx), which in development mounts every
+  // component with an extra synchronous setup -> cleanup -> setup cycle
+  // (same class of gotcha as App.tsx's startupResolvedRef). Without this
+  // line, that first fake "cleanup" flips cancelledRef.current to true and
+  // NOTHING ever flipped it back -- the following fake "setup" re-run
+  // re-registers this same cleanup closure but never touches the ref, so
+  // every real startPreview() call for the rest of this component's life
+  // hit `if (cancelledRef.current) return` right after its await and
+  // silently no-opped: SOLO_STEMS/SELECT/SET_POS had already dispatched
+  // (so a row still visibly highlighted as "previewing") and the engine
+  // had already received the correctly-soloed project, but the actual
+  // PLAY/seek call after the guard never ran -- audible as "the preview
+  // button doesn't actually play anything." Real (non-StrictMode) unmounts
+  // are single-shot, so this reset is a harmless no-op for them; it only
+  // matters for undoing StrictMode's synthetic extra cycle.
   useEffect(() => {
+    cancelledRef.current = false
     return () => {
       cancelledRef.current = true
       dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
