@@ -8,7 +8,11 @@ import {
   type ArrangePhase,
   type ArrangeStemInput
 } from '@shared/autoArrangeEngine'
-import { activeStemKeysPerStep, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
+import {
+  ARRANGE_STEP_BARS,
+  activeStemKeysPerStep,
+  type ArrangeMoveRecord
+} from '@shared/autoArrangeApply'
 import {
   advanceToNextStep,
   applyCandidate,
@@ -66,6 +70,21 @@ const PHASE_LABELS: Record<ArrangePhase, string> = {
   peak: 'peak',
   breakdown: 'breakdown',
   outro: 'outro'
+}
+
+// The engine's own candidate.reason strings (autoArrangeEngine.ts) are full
+// sentences meant for a spec/test context -- too much repeated text for a
+// candidate row (Elling: "it's just too much text"). Maps each of the
+// engine's current distinct reasons down to a short parenthetical tag;
+// returns null (renders nothing extra) rather than guessing if the engine's
+// wording ever changes underneath this.
+function reasonTag(reason: string): string | null {
+  if (reason.includes('re-entering')) return 'returning'
+  if (reason.includes('not yet represented')) return 'new role'
+  if (reason.includes('sparse')) return 'sparse'
+  if (reason.includes('dense')) return 'dense'
+  if (reason.includes('bright')) return 'bright'
+  return null
 }
 
 /** Second step of the auto-arrangement wizard, shown after AutoArrangeRoleStep.tsx
@@ -237,7 +256,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         selectedFs?.stem.name ??
         selectedCandidate.stemKey
       }`
-    : 'apply move'
+    : 'apply'
 
   // What "hear the arrangement so far" (and the build-progress grid's
   // current column) should actually play. With nothing selected, that's
@@ -383,7 +402,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         }}
       >
         <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
-          {PHASE_LABELS[buildState.phase]} -- step{' '}
+          {PHASE_LABELS[buildState.phase]} -- {ARRANGE_STEP_BARS}-bar section{' '}
           {Math.min(buildState.stepsInPhase + 1, PHASE_STEP_TARGETS[buildState.phase])} of{' '}
           {PHASE_STEP_TARGETS[buildState.phase]} ({buildState.activeStemKeys.length} active)
         </div>
@@ -425,7 +444,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                       {historyPerStep.map((activeAtStep, i) => (
                         <div
                           key={i}
-                          title={`step ${i + 1}`}
+                          title={`section ${i + 1}`}
                           style={{
                             width: 10,
                             height: 10,
@@ -440,7 +459,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                         />
                       ))}
                       <div
-                        title={`step ${stepIndex + 1} (current)`}
+                        title={`section ${stepIndex + 1} (current)`}
                         style={{
                           width: 10,
                           height: 10,
@@ -489,12 +508,6 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             {previewStemKeys.size === 1 ? '' : 's'})
           </button>
         )}
-        <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
-          select a candidate below (or play its small ▶, which selects it too), then use apply to
-          commit it -- applying keeps you on this step, so you can layer or pull several moves
-          together before using next step to move on. That small ▶ previews just that one stem in
-          isolation, it doesn&apos;t combine with the others.
-        </div>
         {tooFewStems && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
             only {includedCount} stem{includedCount === 1 ? '' : 's'} included -- the full
@@ -504,7 +517,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
         )}
         {candidates.length === 0 ? (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
-            no candidates -- use next step to keep going, or finish below to stop here.
+            no candidates -- use next section to keep going, or finish below to stop here.
           </div>
         ) : (
           candidates.map((c) => {
@@ -515,6 +528,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             const isPreviewing = previewingKeys.has(c.stemKey)
             const isThisStemPlaying = isPreviewing && playing
             const geometry = fs ? stemGeometryByKey.get(fs.stemKey) : undefined
+            const tag = reasonTag(c.reason)
 
             // Mirrors AutoArrangeRoleStep.tsx's own playhead derivation
             // exactly -- see that component's doc comment.
@@ -646,8 +660,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                   }}
                 >
                   {MOVE_LABELS[c.moveType] ?? c.moveType}{' '}
-                  {(stemRole && ROLE_LABELS[stemRole]) ?? stemRole ?? fs?.stem.name ?? c.stemKey} --{' '}
-                  {c.reason}
+                  {(stemRole && ROLE_LABELS[stemRole]) ?? stemRole ?? fs?.stem.name ?? c.stemKey}
+                  {tag ? ` (${tag})` : ''}
                 </button>
               </div>
             )
@@ -681,8 +695,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             disabled={!!selectedCandidate}
             title={
               selectedCandidate
-                ? 'apply or deselect your pick before moving to the next step'
-                : 'move on to the next step -- rolls into the next phase once its target is reached'
+                ? 'apply or deselect your pick before moving to the next section'
+                : 'move on to the next section -- rolls into the next phase once its target is reached'
             }
             style={{
               height: 22,
@@ -699,7 +713,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
               opacity: selectedCandidate ? 0.3 : 1
             }}
           >
-            next step
+            next section
           </button>
           <div style={{ flex: 1 }} />
           <button
