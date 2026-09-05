@@ -54,6 +54,7 @@ import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
 import { buildPluginStatesMap } from '@shared/pluginStates'
+import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
@@ -588,20 +589,18 @@ function ProjectMenu({
     void runExportProject(format)
   }
 
-  // Auto-arrange pools every stem from every rifff placed on the timeline
-  // (usePlacedFlatStems.ts) -- per Elling, only offered for "relatively
-  // short arrangements", guarded here at 64 bars of real timeline span
-  // (raised from an original 32, which real use hit immediately -- a plain
-  // 32-bar rifff already sat right at that old limit) rather than left to
-  // open a wizard that's unusable/misleading on a large project.
-  // placedTimelineSpanBars (not loopLengthBars) specifically because
-  // loopLengthBars falls back to a 32-bar *default* when nothing is placed
-  // at all -- using that here would silently treat an empty timeline as
-  // "right at the limit" for the wrong reason. Nothing placed (span 0) is
-  // also disabled: there's nothing to arrange, and disabling here beats
-  // opening a wizard just to show its own "no rifffs on the timeline yet"
-  // empty state.
-  const AUTO_ARRANGE_MAX_BARS = 64
+  // Auto-arrange (and Draw Arrangement, DrawArrangeWizard.tsx) pool every
+  // stem from every rifff placed on the timeline (usePlacedFlatStems.ts) --
+  // per Elling, only offered for "relatively short arrangements", guarded
+  // here at AUTO_ARRANGE_MAX_BARS (shared/autoArrangeApply.ts) bars of real
+  // timeline span rather than left to open a wizard that's
+  // unusable/misleading on a large project. placedTimelineSpanBars (not
+  // loopLengthBars) specifically because loopLengthBars falls back to a
+  // 32-bar *default* when nothing is placed at all -- using that here would
+  // silently treat an empty timeline as "right at the limit" for the wrong
+  // reason. Nothing placed (span 0) is also disabled: there's nothing to
+  // arrange, and disabling here beats opening a wizard just to show its own
+  // "no rifffs on the timeline yet" empty state.
   const autoArrangeSpanBars = placedTimelineSpanBars(state)
   const autoArrangeDisabledReason =
     autoArrangeSpanBars === 0

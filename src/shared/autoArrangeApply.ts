@@ -20,6 +20,14 @@ if (ARRANGE_FILL_BARS >= ARRANGE_STEP_BARS) {
   throw new Error('ARRANGE_FILL_BARS must be smaller than ARRANGE_STEP_BARS')
 }
 
+// The auto-arrange gear-menu trigger's own eligibility cap (App.tsx) -- also
+// shared by Draw Arrangement (DRAW_ARRANGE_SECTIONS below) so both features
+// stay tied to one real limit rather than two independently-tunable numbers
+// that could silently drift apart. Raised from an original 32 (2026-09) --
+// real use hit that immediately, a plain 32-bar rifff already sat right at
+// the old limit.
+export const AUTO_ARRANGE_MAX_BARS = 64
+
 export interface ArrangeMoveRecord {
   stepIndex: number
   stemKey: string
