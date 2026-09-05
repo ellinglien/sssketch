@@ -401,8 +401,8 @@ export function AutoArrangeRoleStep({
           </button>
         </div>
         <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
-          auto-arrange treats every stem currently placed on the timeline as fresh material --
-          finishing it replaces what&apos;s there now, even if you&apos;ve already run it before.
+          this treats every stem currently placed on the timeline as fresh material -- finishing it
+          replaces what&apos;s there now, even if you&apos;ve already run it before.
         </div>
         {roles.map((role) => {
           const fs = flatStemsByKey.get(role.stemKey)
@@ -545,7 +545,7 @@ export function AutoArrangeRoleStep({
                           e.target.value === '' ? undefined : (e.target.value as DrumSubRole)
                       })
                     }
-                    title="optionally refine which drum kit piece this is -- helps auto-arrange treat different drum stems as genuinely different roles"
+                    title="optionally refine which drum kit piece this is -- helps treat different drum stems as genuinely different roles"
                     style={selectStyle}
                   >
                     <option value="">drums (generic)</option>

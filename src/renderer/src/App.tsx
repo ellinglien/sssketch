@@ -609,9 +609,9 @@ function ProjectMenu({
   const autoArrangeSpanBars = placedTimelineSpanBars(state)
   const autoArrangeDisabledReason =
     autoArrangeSpanBars === 0
-      ? 'auto-arrange needs at least one rifff placed on the timeline'
+      ? 'needs at least one rifff placed on the timeline'
       : autoArrangeSpanBars >= AUTO_ARRANGE_MAX_BARS
-        ? `auto-arrange is only available for short arrangements (currently ${autoArrangeSpanBars} bars, limit ${AUTO_ARRANGE_MAX_BARS})`
+        ? `only available for short arrangements (currently ${autoArrangeSpanBars} bars, limit ${AUTO_ARRANGE_MAX_BARS})`
         : undefined
 
   const buttonStyle = {

@@ -5,8 +5,14 @@ import {
   type ArrangeMoveRecord
 } from '@shared/autoArrangeApply'
 
+export interface GridStem {
+  stemKey: string
+  label: string
+  typeColor: string
+}
+
 interface Props {
-  stems: Array<{ stemKey: string; label: string; typeColor: string }>
+  stems: GridStem[]
   onApply: (moves: ArrangeMoveRecord[], totalSteps: number) => void
   onCancel: () => void
 }

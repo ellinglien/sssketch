@@ -6,15 +6,13 @@ import { engineRoleFor, type StemRoleInfo } from '@shared/stemRole'
 import type { ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import { buildArrangeReplaceActions } from '../state/selectors'
 import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
-import { DrawArrangeGridStep } from './DrawArrangeGridStep'
+import { DrawArrangeGridStep, type GridStem } from './DrawArrangeGridStep'
 import { stemLabelsByKey } from './autoArrangeLabels'
 import { typeColorVar } from '../theme/typeColor'
 
 interface Props {
   onClose: () => void
 }
-
-type GridStem = { stemKey: string; label: string; typeColor: string }
 
 type WizardStep = { phase: 'role' } | { phase: 'grid'; stems: GridStem[] }
 
