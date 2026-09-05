@@ -38,6 +38,7 @@ import { LibraryBrowser } from './components/LibraryBrowser'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
+import { DrawArrangeWizard } from './components/DrawArrangeWizard'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
@@ -432,7 +433,8 @@ function ProjectMenu({
   handleSave,
   onOpenLibrary,
   onOpenClusterStems,
-  onOpenAutoArrange
+  onOpenAutoArrange,
+  onOpenDrawArrange
 }: {
   currentSketch: CurrentSketch
   setCurrentSketch: (sketch: CurrentSketch) => void
@@ -452,6 +454,9 @@ function ProjectMenu({
   /** Opens AutoArrangeWizard -- project-wide, same "no groupId" shape as
    * onOpenClusterStems above, wired to setAutoArrangeOpen(true) in Frame. */
   onOpenAutoArrange: () => void
+  /** Opens DrawArrangeWizard -- Draw Arrangement's own equivalent of
+   * onOpenAutoArrange above, wired to setDrawArrangeOpen(true) in Frame. */
+  onOpenDrawArrange: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -696,6 +701,12 @@ function ProjectMenu({
             {
               label: 'auto-arrange',
               onClick: onOpenAutoArrange,
+              disabled: autoArrangeDisabledReason !== undefined,
+              title: autoArrangeDisabledReason
+            },
+            {
+              label: 'draw arrangement',
+              onClick: onOpenDrawArrange,
               disabled: autoArrangeDisabledReason !== undefined,
               title: autoArrangeDisabledReason
             },
@@ -1415,6 +1426,7 @@ function Frame(): React.JSX.Element {
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   const [autoArrangeOpen, setAutoArrangeOpen] = useState(false)
+  const [drawArrangeOpen, setDrawArrangeOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
   // jam's clock phase, in their original import order — set alongside
   // pickerGroupId so BeatPicker opens on just the first one. Drives two
@@ -2052,6 +2064,7 @@ function Frame(): React.JSX.Element {
               onOpenLibrary={openLibraryBrowser}
               onOpenClusterStems={() => setClusterStemsOpen(true)}
               onOpenAutoArrange={() => setAutoArrangeOpen(true)}
+              onOpenDrawArrange={() => setDrawArrangeOpen(true)}
             />
           </div>
         </div>
@@ -2253,6 +2266,7 @@ function Frame(): React.JSX.Element {
         )}
         {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
         {autoArrangeOpen && <AutoArrangeWizard onClose={() => setAutoArrangeOpen(false)} />}
+        {drawArrangeOpen && <DrawArrangeWizard onClose={() => setDrawArrangeOpen(false)} />}
         {newProjectModal && (
           <NewProjectModal
             defaultName={newProjectModal.defaultName}
