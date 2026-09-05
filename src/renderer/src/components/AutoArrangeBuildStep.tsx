@@ -16,6 +16,7 @@ import {
 import {
   advanceToNextStep,
   applyCandidate,
+  retreatToPreviousStep,
   selectTopCandidates
 } from '@shared/autoArrangeBuildStep'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
@@ -370,6 +371,18 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
     }
   }
 
+  // Undoes an accidental "next section" click -- the inverse of nextStep().
+  // Deliberately does NOT touch `moves` or undo any move already applied;
+  // it only rewinds which section a new pick lands in (see
+  // retreatToPreviousStep's own doc comment for why). No completion check
+  // needed -- retreating can never finish the build.
+  function prevStep(): void {
+    const result = retreatToPreviousStep(buildState, stepIndex)
+    setBuildState(result.buildState)
+    setStepIndex(result.stepIndex)
+    setSelectedCandidateKey(null)
+  }
+
   function finishNow(): void {
     onComplete(moves, stepIndex + 1)
   }
@@ -700,6 +713,33 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             }}
           >
             {applyLabel}
+          </button>
+          <button
+            onClick={prevStep}
+            disabled={!!selectedCandidate || stepIndex === 0}
+            title={
+              selectedCandidate
+                ? 'apply or deselect your pick before going back'
+                : stepIndex === 0
+                  ? "you're already on the very first section"
+                  : "go back to the previous section, in case you moved on by accident -- doesn't undo moves you already applied"
+            }
+            style={{
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border-strong)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text)',
+              // Same disabled convention as applySelected above (docs/design.md,
+              // mirrored in ContextMenu.tsx): dim to 30% opacity + not-allowed
+              // cursor rather than a separate "disabled" palette.
+              cursor: selectedCandidate || stepIndex === 0 ? 'not-allowed' : 'pointer',
+              opacity: selectedCandidate || stepIndex === 0 ? 0.3 : 1
+            }}
+          >
+            back
           </button>
           <button
             onClick={nextStep}

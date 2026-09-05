@@ -257,6 +257,34 @@ export function advancePhase(buildState: ArrangeBuildState): ArrangeBuildState {
   return { ...buildState, stepsInPhase: nextStepsInPhase }
 }
 
+// The exact inverse of advancePhase -- for a "back" control that steps back
+// one "next step"/"next section" click's worth of phase progress, in case
+// the user advances by accident. If stepsInPhase > 0, this phase absorbs
+// the step back (plain decrement, no transition -- the precise inverse of
+// advancePhase's own "below target" branch). If stepsInPhase === 0, this
+// phase was JUST entered by the last forward call, so retreating rolls back
+// to the PREVIOUS PHASE_ORDER entry with stepsInPhase set to THAT phase's
+// own PHASE_STEP_TARGETS - 1 -- exactly the state advancePhase's own
+// boundary-crossing branch transitioned FROM. Already at 'intro' with
+// stepsInPhase === 0 is the very start of the build (nothing recorded
+// happened yet) -- a no-op, returning buildState unchanged. Callers should
+// also guard on stepIndex > 0 before invoking this (see
+// autoArrangeBuildStep.ts's retreatToPreviousStep), since retreating the
+// phase without also decrementing stepIndex would desync the two.
+export function retreatPhase(buildState: ArrangeBuildState): ArrangeBuildState {
+  if (buildState.stepsInPhase > 0) {
+    return { ...buildState, stepsInPhase: buildState.stepsInPhase - 1 }
+  }
+  const currentIndex = PHASE_ORDER.indexOf(buildState.phase)
+  if (currentIndex === 0) return buildState
+  const previousPhase = PHASE_ORDER[currentIndex - 1]
+  return {
+    ...buildState,
+    phase: previousPhase,
+    stepsInPhase: PHASE_STEP_TARGETS[previousPhase] - 1
+  }
+}
+
 export function isArrangementComplete(buildState: ArrangeBuildState): boolean {
   return buildState.phase === 'outro' && buildState.activeStemKeys.length === 0
 }

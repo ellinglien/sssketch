@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   advanceToNextStep,
   applyCandidate,
+  retreatToPreviousStep,
   MAX_BUILD_STEPS,
   selectTopCandidates
 } from './autoArrangeBuildStep'
@@ -240,6 +241,39 @@ describe('advanceToNextStep', () => {
       MAX_BUILD_STEPS - 2
     )
     expect(result.complete).toBe(false)
+  })
+})
+
+describe('retreatToPreviousStep', () => {
+  it('decrements stepIndex by 1', () => {
+    const result = retreatToPreviousStep(buildState(), 4)
+    expect(result.stepIndex).toBe(3)
+  })
+
+  it('calls the engine retreatPhase transition', () => {
+    const result = retreatToPreviousStep(buildState({ phase: 'build', stepsInPhase: 0 }), 5)
+    expect(result.buildState.phase).toBe('intro')
+    expect(result.buildState.stepsInPhase).toBe(1) // PHASE_STEP_TARGETS.intro - 1
+  })
+
+  it('is a genuine no-op (both buildState and stepIndex unchanged) at stepIndex 0', () => {
+    const state = buildState({ phase: 'intro', stepsInPhase: 0, activeStemKeys: ['a'] })
+    const result = retreatToPreviousStep(state, 0)
+    expect(result.buildState).toBe(state) // same reference, not just equal value
+    expect(result.stepIndex).toBe(0)
+  })
+
+  it('exactly undoes one advanceToNextStep call', () => {
+    const start = buildState({ phase: 'intro', stepsInPhase: 1, activeStemKeys: ['a'] })
+    const forward = advanceToNextStep(start, 3)
+    const back = retreatToPreviousStep(forward.buildState, forward.stepIndex)
+    expect(back.buildState).toEqual(start)
+    expect(back.stepIndex).toBe(3)
+  })
+
+  it('has no complete field -- retreating can never itself finish the build', () => {
+    const result = retreatToPreviousStep(buildState({ phase: 'outro' }), 5)
+    expect(result).not.toHaveProperty('complete')
   })
 })
 

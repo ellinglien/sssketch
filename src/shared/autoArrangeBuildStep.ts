@@ -2,6 +2,7 @@ import {
   advanceBuildState,
   advancePhase,
   isArrangementComplete,
+  retreatPhase,
   type ArrangeBuildState,
   type ArrangeCandidate,
   type ArrangeStemInput
@@ -83,6 +84,31 @@ export function advanceToNextStep(
   const nextState = advancePhase(buildState)
   const complete = isArrangementComplete(nextState) || nextStepIndex >= MAX_BUILD_STEPS
   return { buildState: nextState, stepIndex: nextStepIndex, complete }
+}
+
+export interface RetreatStepResult {
+  buildState: ArrangeBuildState
+  stepIndex: number
+}
+
+// The inverse of advanceToNextStep -- for a "back" control that undoes an
+// accidental "next section" click. Decrements stepIndex and calls the
+// engine's retreatPhase (which may roll back a phase boundary), symmetric
+// to how advanceToNextStep calls advancePhase. Deliberately does NOT touch
+// `moves` or the moves-derived parts of buildState (activeStemKeys/
+// lastExitStep) -- those are governed entirely by applyCandidate, a
+// separate action; going back only rewinds which section new picks land
+// in, it never un-applies a move that was already committed. No `complete`
+// field: retreating can never itself finish the build, only advancing can.
+// A no-op (same buildState reference, unchanged stepIndex) at stepIndex 0 --
+// callers should also disable their own "back" control there rather than
+// relying on this alone, matching retreatPhase's own equivalent guard.
+export function retreatToPreviousStep(
+  buildState: ArrangeBuildState,
+  stepIndex: number
+): RetreatStepResult {
+  if (stepIndex <= 0) return { buildState, stepIndex }
+  return { buildState: retreatPhase(buildState), stepIndex: stepIndex - 1 }
 }
 
 // Top-N candidates by weight, for capping how many choices the build-step UI

@@ -4,6 +4,7 @@ import {
   advancePhase,
   computeCandidates,
   isArrangementComplete,
+  retreatPhase,
   FREQUENCY_WEIGHT_MULTIPLIER,
   PHASE_ORDER,
   PHASE_STEP_TARGETS,
@@ -367,6 +368,78 @@ describe('advancePhase', () => {
     const next = advancePhase(state)
     expect(next.activeStemKeys).toEqual(['a'])
     expect(next.lastExitStep).toEqual({ b: 2 })
+  })
+})
+
+describe('retreatPhase', () => {
+  it('is the exact inverse of advancePhase within one phase (no boundary crossed)', () => {
+    const state = buildState({ phase: 'intro', stepsInPhase: 1 })
+    const forward = advancePhase(buildState({ phase: 'intro', stepsInPhase: 0 }))
+    expect(forward).toEqual(state)
+    expect(retreatPhase(forward)).toEqual(buildState({ phase: 'intro', stepsInPhase: 0 }))
+  })
+
+  it('is the exact inverse of advancePhase across a phase boundary', () => {
+    // intro's own target is 2 -- advancing from stepsInPhase=1 crosses into
+    // build. Retreating from the result must land exactly back on
+    // {intro, stepsInPhase: 1}, not just "some earlier-looking state".
+    const beforeBoundary = buildState({ phase: 'intro', stepsInPhase: 1 })
+    const afterBoundary = advancePhase(beforeBoundary)
+    expect(afterBoundary.phase).toBe('build')
+    expect(afterBoundary.stepsInPhase).toBe(0)
+    expect(retreatPhase(afterBoundary)).toEqual(beforeBoundary)
+  })
+
+  it('walks PHASE_ORDER backwards symmetrically to how advancePhase walks it forwards', () => {
+    let state = buildState({ phase: 'intro', stepsInPhase: 0 })
+    const totalForwardCalls =
+      PHASE_STEP_TARGETS.intro +
+      PHASE_STEP_TARGETS.build +
+      PHASE_STEP_TARGETS.peak +
+      PHASE_STEP_TARGETS.breakdown
+    const history: ArrangeBuildState[] = [state]
+    for (let i = 0; i < totalForwardCalls; i++) {
+      state = advancePhase(state)
+      history.push(state)
+    }
+    expect(state.phase).toBe('outro')
+    // Walk back down the exact same history, one retreatPhase per forward
+    // advancePhase call, and confirm each intermediate state matches exactly.
+    for (let i = history.length - 1; i > 0; i--) {
+      state = retreatPhase(state)
+      expect(state).toEqual(history[i - 1])
+    }
+  })
+
+  it('retreating within the terminal outro phase just decrements, no wraparound', () => {
+    const deepInOutro = buildState({ phase: 'outro', stepsInPhase: 5 })
+    const back = retreatPhase(deepInOutro)
+    expect(back.phase).toBe('outro')
+    expect(back.stepsInPhase).toBe(4)
+  })
+
+  it('retreating from outro at stepsInPhase 0 rolls back into breakdown', () => {
+    const justEnteredOutro = buildState({ phase: 'outro', stepsInPhase: 0 })
+    const back = retreatPhase(justEnteredOutro)
+    expect(back.phase).toBe('breakdown')
+    expect(back.stepsInPhase).toBe(PHASE_STEP_TARGETS.breakdown - 1)
+  })
+
+  it('is a no-op at the very start (intro, stepsInPhase 0) -- nothing to retreat to', () => {
+    const veryStart = buildState({ phase: 'intro', stepsInPhase: 0 })
+    expect(retreatPhase(veryStart)).toEqual(veryStart)
+  })
+
+  it('does not touch activeStemKeys or lastExitStep', () => {
+    const state = buildState({
+      phase: 'build',
+      stepsInPhase: 1,
+      activeStemKeys: ['a'],
+      lastExitStep: { b: 2 }
+    })
+    const back = retreatPhase(state)
+    expect(back.activeStemKeys).toEqual(['a'])
+    expect(back.lastExitStep).toEqual({ b: 2 })
   })
 })
 
