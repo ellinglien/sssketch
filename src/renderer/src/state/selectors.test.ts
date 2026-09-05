@@ -1085,7 +1085,7 @@ describe('buildArrangeReplaceActions', () => {
     expect(paste.stretch).toBe(false)
   })
 
-  it('an untouched sibling stem gets exactly one identity-preserving copy at its current position/length', () => {
+  it('an untouched sibling stem gets exactly one copy spanning the whole [0, totalBars) arrangement, not its old position', () => {
     const state = setup()
     const moves: ArrangeMoveRecord[] = [
       { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
@@ -1097,8 +1097,8 @@ describe('buildArrangeReplaceActions', () => {
         a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 2
     )
     expect(siblingPastes).toHaveLength(1)
-    expect(siblingPastes[0].rifff.startBar).toBe(4) // r1's current startBar, unchanged
-    expect(siblingPastes[0].rifff.barLength).toBe(8) // r1's resolved played bars, unchanged
+    expect(siblingPastes[0].rifff.startBar).toBe(0)
+    expect(siblingPastes[0].rifff.barLength).toBe(2 * ARRANGE_STEP_BARS)
   })
 
   it('emits exactly one DELETE_RIFFFS covering the touched groupId, not the untouched one', () => {
@@ -1241,7 +1241,7 @@ describe('buildArrangeReplaceActions', () => {
     expect(state.fadeOut[bassCopy.groupId]).toBe(2)
   })
 
-  it('carries leftCrop and muteRegions onto the untouched siblings identity copy, but never onto a moved stems window-copies -- their startBar/barLength come from a different coordinate space (the 0-based build), so the source crop/mute window no longer describes the same span', () => {
+  it('never carries leftCrop or muteRegions onto ANY copy -- moved window-copies or the untouched sibling alike -- since neither keeps the sources old position/length', () => {
     let state = setup()
     state = reducer(state, { type: 'SET_LEFT_CROP_BARS', groupId: 'r1', bars: 2 })
     state = reducer(state, { type: 'ADD_MUTE_REGION', stemKeys: ['r1:1'], startBar: 5, endBar: 6 })
@@ -1265,9 +1265,51 @@ describe('buildArrangeReplaceActions', () => {
 
     const bassCopy = Object.values(state.rifffs).find((r) => r.stems[0]?.path === '/b.wav')
     if (!bassCopy) throw new Error('expected the untouched sibling copy')
-    expect(state.leftCrop[bassCopy.groupId]).toBe(2)
-    expect(state.muteRegions[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)]).toEqual([
-      { startBar: 5, endBar: 6 }
-    ])
+    expect(state.leftCrop[bassCopy.groupId] ?? 0).toBe(0)
+    expect(state.muteRegions[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)] ?? []).toEqual([])
+  })
+
+  it('an untouched sibling spans the whole arrangement regardless of the source rifffs own original startBar', () => {
+    // The bug this locks in: r1 was placed at startBar 4 (see setup()) -- the
+    // untouched sibling must NOT stay stranded there once the moved stems
+    // anchor to the build's own 0-based coordinates, or it ends up in a
+    // completely different, disconnected part of the timeline.
+    const state = setup()
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2)
+    const siblingPaste = actions.find(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 2
+    )
+    if (!siblingPaste) throw new Error('expected the untouched sibling copy')
+    expect(siblingPaste.rifff.startBar).not.toBe(4) // r1's own original startBar
+    expect(siblingPaste.rifff.startBar).toBe(0)
+  })
+
+  it('an untouched siblings copy windows to totalBars even when the sources own resolved length was longer', () => {
+    // Locks in a deliberate consequence, not an oversight: barLength is only
+    // ever a tiling-window parameter (how many bars the loop plays for),
+    // never the underlying audio -- pasteStemWindowAction shares the same
+    // source file, nothing is duplicated or destroyed on disk. A sibling
+    // resized to a length longer than this particular build's own totalBars
+    // should window DOWN to totalBars, not keep playing past the end of the
+    // arrangement it now belongs to.
+    let state = setup()
+    state = reducer(state, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 20 })
+    const moves: ArrangeMoveRecord[] = [
+      { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'r1:1', moveType: 'exit' }
+    ]
+    const actions = buildArrangeReplaceActions(state, moves, 2) // totalBars = 2 * ARRANGE_STEP_BARS = 8
+    const siblingPaste = actions.find(
+      (a): a is Extract<typeof a, { type: 'PASTE_RIFFF' }> =>
+        a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 2
+    )
+    if (!siblingPaste) throw new Error('expected the untouched sibling copy')
+    expect(siblingPaste.rifff.barLength).toBe(2 * ARRANGE_STEP_BARS)
+    expect(siblingPaste.rifff.barLength).not.toBe(20)
   })
 })

@@ -705,48 +705,6 @@ function pushCarryoverActions(
 }
 
 /**
- * Appends leftCrop/muteRegions -- two more "real arrangement data, not a UI
- * toggle" fields (see leftCrop's own doc comment in store.ts) that UNGROUP
- * itself doesn't carry either, both defined relative to a clip's own
- * position on the timeline. ONLY safe to call for an untouched sibling's
- * identity copy, never a moved stem's window-copy: a window-copy's
- * startBar/barLength come from activeRangesForStem's own 0-based build
- * coordinates (stepIndex*ARRANGE_STEP_BARS, with no offset for the source
- * rifff's actual placement -- see AutoArrangeWizard.tsx's
- * handleBuildComplete), a completely different coordinate space from where
- * the source stem actually sat, AND its barLength is the window's own
- * (often much shorter) duration, not the source's resolved played length --
- * reapplying the source's own leftCropBars there could easily crop past the
- * new, shorter barLength (an inverted/zero-width window). An untouched
- * sibling's copy is the one case where startBar/barLength are provably
- * identical to the source's (see pasteStemAction's call site below), so the
- * source's crop and mute regions still describe the exact same window.
- */
-function pushSiblingPositionalCarryover(
-  actions: Action[],
-  state: AppState,
-  sourceGroupId: string,
-  slot: number,
-  newGroupId: string
-): void {
-  const leftCropBars = state.leftCrop[sourceGroupId] ?? 0
-  if (leftCropBars !== 0) {
-    actions.push({ type: 'SET_LEFT_CROP_BARS', groupId: newGroupId, bars: leftCropBars })
-  }
-  const sourceKey = stemKey(sourceGroupId, slot)
-  const regions = state.muteRegions[sourceKey] ?? []
-  const newKey = stemKey(newGroupId, slot)
-  for (const region of regions) {
-    actions.push({
-      type: 'ADD_MUTE_REGION',
-      stemKeys: [newKey],
-      startBar: region.startBar,
-      endBar: region.endBar
-    })
-  }
-}
-
-/**
  * Turns a finished auto-arrange build (its ArrangeMoveRecord[] move list --
  * see autoArrangeEngine.ts/autoArrangeApply.ts) into real actions by
  * replacing each touched rifff outright, rather than the old
@@ -777,15 +735,22 @@ function pushSiblingPositionalCarryover(
  *  - every OTHER stem in that same rifff -- excluded from auto-arrange, or
  *    included but never picked during the build -- still needs its own
  *    independent copy before its parent gets deleted below, so it gets
- *    exactly one PASTE_RIFFF preserving its current position/length
- *    unchanged (pasteStemAction, used as-is). Never more than one copy, so
- *    never a MOVE_TO_CHANNEL for these.
+ *    exactly one PASTE_RIFFF (via pasteStemWindowAction) spanning the SAME
+ *    [0, totalBars) the moved stems anchor to, not its old absolute
+ *    position. It was never moved, so it keeps doing what it always did --
+ *    play continuously -- against the new arrangement. Keeping its OLD
+ *    position instead (the original behavior) orphaned it in a completely
+ *    different coordinate space from the rest of the arrangement whenever
+ *    the source rifff wasn't already sitting at bar 0, reading as a stray,
+ *    empty-looking channel row (Elling, 2026-09-05, on a real multi-rifff
+ *    project). Never more than one copy, so never a MOVE_TO_CHANNEL for
+ *    these. leftCrop/muteRegions are NOT carried over for this copy (unlike
+ *    UNGROUP, which doesn't carry them either) -- both describe a window
+ *    relative to the source's OLD position/length, which this copy no
+ *    longer shares, the same reasoning that already excluded a moved stem's
+ *    window-copies from that carryover.
  *  - every copy of every stem (moved or untouched) gets its bus/fade
- *    metadata carried over via pushCarryoverActions above. The untouched
- *    sibling's copy ADDITIONALLY carries leftCrop/muteRegions via
- *    pushSiblingPositionalCarryover -- see that function's own doc comment
- *    for why a moved stem's window-copies can't safely get the same
- *    treatment (different coordinate space, different barLength).
+ *    metadata carried over via pushCarryoverActions above.
  * Then ONE DELETE_RIFFFS removes every touched groupId.
  *
  * A rifff with zero moved stems never enters touchedGroupIds, so it's left
@@ -882,14 +847,31 @@ export function buildArrangeReplaceActions(
           }
         }
       } else {
-        // Untouched sibling -- give it independence at its current
-        // position/length, unchanged, rather than relocating it. Every
-        // stem reachable here belongs to a rifff that has at least one
-        // moved stem, so it's necessarily already placed (startBar set) --
-        // auto-arrange only ever pools placed stems' moves in the first
-        // place (usePlacedFlatStems.ts).
-        const currentStartBar = source.startBar ?? 0
-        const action = pasteStemAction(state, groupId, stem.slot, currentStartBar)
+        // Untouched sibling -- was never moved, so it should keep doing
+        // what it always did: play continuously, for the whole thing. That
+        // means spanning the SAME [0, totalBars) anchor the moved stems use
+        // (pasteStemWindowAction, not pasteStemAction), not its old absolute
+        // position -- keeping the old position orphaned it in a totally
+        // different coordinate space from the new arrangement (moved stems
+        // anchor to the build's own 0-based coordinates regardless of where
+        // the source rifff actually sat), which read as a stray, empty-
+        // looking channel row wherever the rest of the arrangement didn't
+        // happen to overlap the source's old position. Per Elling's real-app
+        // report (2026-09-05).
+        //
+        // barLength here is totalBars, NOT the source's own
+        // resolvePlayedBars -- a deliberate consequence of "spans the whole
+        // thing", not an oversight: barLength is only ever a tiling-window
+        // parameter (how many bars the loop is windowed to play for), never
+        // the underlying audio itself -- pasteStemWindowAction shares the
+        // same source file, nothing is duplicated or destroyed on disk. If
+        // the sibling's own resolved length previously differed from
+        // totalBars (longer OR shorter), its copy now tiles/windows to
+        // exactly the new arrangement's own length instead -- correct under
+        // "plays continuously across the new arrangement", since that
+        // arrangement's own length IS totalBars, not whatever the sibling's
+        // unrelated old length happened to be.
+        const action = pasteStemWindowAction(state, groupId, stem.slot, 0, totalBars)
         if (action && action.type === 'PASTE_RIFFF') {
           actions.push(action)
           pushCarryoverActions(
@@ -901,7 +883,6 @@ export function buildArrangeReplaceActions(
             sourceFadeIn,
             sourceFadeOut
           )
-          pushSiblingPositionalCarryover(actions, state, groupId, stem.slot, action.rifff.groupId)
         }
       }
     }
