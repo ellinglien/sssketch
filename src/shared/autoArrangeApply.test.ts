@@ -155,8 +155,12 @@ describe('movesFromDrawnGrid', () => {
     expect(movesFromDrawnGrid({})).toEqual([])
   })
 
-  it('returns an empty array for a stem with every section false', () => {
-    expect(movesFromDrawnGrid({ a: [false, false, false] })).toEqual([])
+  it('a stem with every section false gets a synthetic exit at section 0, not zero moves', () => {
+    // Zero moves would be indistinguishable, downstream (buildArrangeReplaceActions),
+    // from "never part of the grid at all" -- see this function's own doc
+    // comment for why that matters.
+    const moves = movesFromDrawnGrid({ a: [false, false, false] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([{ stepIndex: 0, stemKey: 'a', moveType: 'exit' }])
   })
 
   it('a stem active from section 0 with no exit produces one enter, no exit', () => {

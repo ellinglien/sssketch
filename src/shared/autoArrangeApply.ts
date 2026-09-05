@@ -139,10 +139,25 @@ export const DRAW_ARRANGE_SECTIONS = AUTO_ARRANGE_MAX_BARS / ARRANGE_STEP_BARS
 // ZERO changes to consume either source. Emits an 'enter' on every
 // false->true transition and an 'exit' on every true->false transition,
 // walking each stem's own row in section order.
+//
+// A stem whose row is entirely false gets a synthetic {stepIndex: 0,
+// stemKey, moveType: 'exit'} instead of zero moves. Without this,
+// buildArrangeReplaceActions can't tell "deliberately drawn blank" apart
+// from "never part of the grid at all" -- both would hit its own
+// untouched-sibling fallback, pasting the stem as ONE CONTINUOUS clip
+// spanning the entire new arrangement, exactly backwards from what an
+// all-blank row means here (the user wanted this stem OUT of the new
+// arrangement). An exit with no preceding enter is a no-op for
+// activeRangesForStem -- already covered by its own "a stem that only
+// ever exits (never enters) has no active ranges" test -- so this marks
+// the stem's own rifff as touched while producing zero window copies for
+// the stem itself, correctly keeping it silent/absent instead of
+// defaulting to "plays throughout".
 export function movesFromDrawnGrid(grid: Record<string, boolean[]>): ArrangeMoveRecord[] {
   const moves: ArrangeMoveRecord[] = []
   for (const [stemKey, cells] of Object.entries(grid)) {
     let wasActive = false
+    const movesBeforeThisStem = moves.length
     for (let stepIndex = 0; stepIndex < cells.length; stepIndex++) {
       const isActive = cells[stepIndex]
       if (isActive && !wasActive) {
@@ -151,6 +166,9 @@ export function movesFromDrawnGrid(grid: Record<string, boolean[]>): ArrangeMove
         moves.push({ stepIndex, stemKey, moveType: 'exit' })
       }
       wasActive = isActive
+    }
+    if (moves.length === movesBeforeThisStem) {
+      moves.push({ stepIndex: 0, stemKey, moveType: 'exit' })
     }
   }
   return moves
