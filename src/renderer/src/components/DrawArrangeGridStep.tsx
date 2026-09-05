@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
+import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
+import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
+import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/selectors'
+import { stemKey as buildStemKey } from '@shared/types'
+import { Waveform } from './Waveform'
+import { playButtonStyle } from './autoArrangeStyles'
 import {
   DRAW_ARRANGE_SECTIONS,
   movesFromDrawnGrid,
@@ -15,31 +22,6 @@ interface Props {
   stems: GridStem[]
   onApply: (moves: ArrangeMoveRecord[], totalSteps: number) => void
   onCancel: () => void
-}
-
-// Two-button mode switch (draw / erase) -- deliberately its own tiny local
-// helper rather than reusing autoArrangeStyles.ts's playButtonStyle, since
-// this component has no audio preview at all (see this file's own module
-// doc comment) and "is this the current mode" is a different kind of
-// on/off than "is this stem currently playing." Visual contrast mirrors
-// playButtonStyle's own anyway: bright --ra-stretch-on border/text for the
-// active one, dim --ra-border/--ra-text-2 for the other -- kept as a plain
-// non-exported function (not a second file) since react-refresh's
-// only-export-components rule only bites a file that ALSO exports a
-// component, and this one doesn't export this helper.
-function modeButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    height: 24,
-    borderRadius: 0,
-    fontSize: 10,
-    fontFamily: 'inherit',
-    fontWeight: active ? 700 : 400,
-    border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-    background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
-    color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-    cursor: 'pointer'
-  }
 }
 
 const CELL_SIZE = 18
@@ -63,26 +45,52 @@ const CELL_SIZE = 18
  * conventions: see docs/design.md. The build-progress grid in
  * AutoArrangeBuildStep.tsx is this component's closest visual reference --
  * same left-label-column + colored-square-per-active-section language, just
- * editable here instead of read-only. */
+ * editable here instead of read-only. Per-row waveform/play button and the
+ * section-preview button below reuse those same two components' own
+ * placedRifffs/stemGeometryByKey/useStemPreviewPlayback plumbing verbatim --
+ * this plays back the REAL, currently-placed stems from their own real
+ * positions (a proxy for what the drawn arrangement will sound like), not a
+ * simulation of the eventual built/windowed result -- same approximation
+ * AutoArrangeBuildStep.tsx's own "hear the arrangement so far" already uses. */
 export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.JSX.Element {
+  const dispatch = useDispatch()
+  const playedBarsOverrides = useAppSelector((s) => s.playedBars)
+  const leftCropOverrides = useAppSelector((s) => s.leftCrop)
+  const stretchOverrides = useAppSelector((s) => s.stretch)
+  const stateBpm = useAppSelector((s) => s.bpm)
+  const playing = usePlaying()
+  const pos = usePos()
+  const { placedRifffs, flatStemsByKey } = usePlacedFlatStems()
+  const { previewingKeys, startPreview } = useStemPreviewPlayback()
+
   const [grid, setGrid] = useState<Record<string, boolean[]>>(() =>
     Object.fromEntries(stems.map((s) => [s.stemKey, new Array(DRAW_ARRANGE_SECTIONS).fill(false)]))
   )
-  const [mode, setMode] = useState<'draw' | 'erase'>('draw')
 
-  // Tracks an in-progress click-and-drag paint gesture. A ref, not state --
-  // this never needs to trigger a re-render on its own (only the grid
-  // content changing does), and using state here would mean every
-  // pointerenter during a drag re-renders the WHOLE component twice (once
-  // for the drag flag, once for the cell value) for no benefit.
+  // Which section the clickable strip above the grid (and the outline on
+  // the grid's own matching column) currently has selected -- what "preview
+  // section" below plays.
+  const [selectedSection, setSelectedSection] = useState(0)
+
+  // Tracks an in-progress click-and-drag paint gesture, and the single
+  // on/off value that gesture paints with -- decided ONCE, from the cell
+  // the drag started on (the OPPOSITE of its own current state), then
+  // applied uniformly to every cell the drag touches afterward, regardless
+  // of which stem's row it crosses into. A plain click (no drag) is exactly
+  // this same rule with zero additional cells touched, which is what makes
+  // it read as a plain toggle -- click a hollow cell to fill it, click a
+  // filled one to clear it -- with no separate draw/erase mode control
+  // needed: dragging FROM a filled cell erases the cells it crosses,
+  // dragging from a hollow one draws them. Both refs, not state -- neither
+  // needs to trigger a render on its own.
   const isDraggingRef = useRef(false)
+  const dragValueRef = useRef(false)
 
-  // Document-level, not a plain onPointerUp on the grid element -- the
-  // pointer can be released outside the grid's own bounds (dragged off the
-  // edge while painting a run of cells) and the drag still needs to end
-  // cleanly in that case, or a later pointerenter somewhere else entirely
-  // would keep painting. See this task's own spec for why this is a
-  // deliberate, already-decided implementation choice.
+  // Document-level, not a plain onPointerUp on the grid -- the pointer can
+  // be released outside the grid's own bounds (dragged off the edge while
+  // painting a run of cells) and the drag still needs to end cleanly in
+  // that case, or a later pointerenter somewhere else entirely would keep
+  // painting.
   useEffect(() => {
     function handlePointerUp(): void {
       isDraggingRef.current = false
@@ -91,12 +99,7 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
     return () => document.removeEventListener('pointerup', handlePointerUp)
   }, [])
 
-  // Applying a value to a cell always uses the CURRENT mode's value --
-  // never inferred from the cell's own starting state -- so a drag that
-  // crosses already-active and already-inactive cells alike paints them
-  // all the same way in one consistent stroke.
-  function paintCell(stemKey: string, index: number): void {
-    const value = mode === 'draw'
+  function setCellValue(stemKey: string, index: number, value: boolean): void {
     setGrid((prev) => {
       const row = prev[stemKey]
       if (!row || row[index] === value) return prev
@@ -106,11 +109,113 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
     })
   }
 
+  function handleCellPointerDown(stemKey: string, index: number): void {
+    const current = grid[stemKey]?.[index] ?? false
+    const value = !current
+    dragValueRef.current = value
+    isDraggingRef.current = true
+    setCellValue(stemKey, index, value)
+  }
+
+  function handleCellPointerEnter(stemKey: string, index: number): void {
+    if (!isDraggingRef.current) return
+    setCellValue(stemKey, index, dragValueRef.current)
+  }
+
   const nothingDrawn = Object.values(grid).every((cells) => cells.every((c) => !c))
 
   function handleApply(): void {
     if (nothingDrawn) return
     onApply(movesFromDrawnGrid(grid), DRAW_ARRANGE_SECTIONS)
+  }
+
+  // Per-stem geometry (real current placement on the real timeline) --
+  // copied verbatim from AutoArrangeRoleStep.tsx/AutoArrangeBuildStep.tsx.
+  const stemGeometryByKey = useMemo(() => {
+    const map = new Map<string, StemTileGeometry>()
+    for (const rifff of placedRifffs) {
+      if (rifff.startBar === undefined) continue
+      const stretchOn = stretchOverrides[rifff.groupId] ?? true
+      for (const stem of rifff.stems) {
+        map.set(
+          buildStemKey(rifff.groupId, stem.slot),
+          stemTileGeometryFromFields({
+            startBar: rifff.startBar,
+            playedBarsOverride: playedBarsOverrides[rifff.groupId],
+            leftCropBars: leftCropOverrides[rifff.groupId] ?? 0,
+            rifffBarLength: rifff.barLength,
+            stretchOn,
+            rifffBpm: rifff.bpm,
+            stateBpm,
+            stemBarLength: stem.barLength
+          })
+        )
+      }
+    }
+    return map
+  }, [placedRifffs, playedBarsOverrides, leftCropOverrides, stretchOverrides, stateBpm])
+
+  // Per-row play button -- mirrors AutoArrangeRoleStep.tsx's togglePreviewStem
+  // exactly: pressing it again on the stem it's ALREADY previewing pauses;
+  // pressing it on a different stem always re-previews from that stem's own
+  // real current start bar.
+  function togglePreviewStem(fs: FlatStem): void {
+    const isThisStemAlreadyPlaying =
+      playing && previewingKeys.size === 1 && previewingKeys.has(fs.stemKey)
+    if (isThisStemAlreadyPlaying) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    void startPreview(
+      new Set([fs.stemKey]),
+      fs.groupId,
+      stemGeometryByKey.get(fs.stemKey)?.startBar ?? 0
+    )
+  }
+
+  // Mirrors AutoArrangeRoleStep.tsx's handleThumbnailClick exactly -- the
+  // click fraction is applied against tileSpanBars (one raw-tile
+  // repetition), not visibleBars, since the thumbnail only ever renders
+  // that one pass of the raw source file.
+  function handleThumbnailClick(
+    e: React.MouseEvent<HTMLDivElement>,
+    fs: FlatStem,
+    geometry: StemTileGeometry
+  ): void {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const fraction = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0
+    const clampedFraction = Math.max(0, Math.min(1, fraction))
+    void startPreview(
+      new Set([fs.stemKey]),
+      fs.groupId,
+      geometry.startBar + clampedFraction * geometry.tileSpanBars
+    )
+  }
+
+  // "preview section N" -- plays every stem active in the currently
+  // SELECTED section together, from each one's own real current start bar.
+  // Mirrors AutoArrangeBuildStep.tsx's own playCurrentArrangement exactly,
+  // just filtered to one drawn section instead of buildState.activeStemKeys.
+  const activeInSelectedSection = stems
+    .filter((s) => grid[s.stemKey]?.[selectedSection])
+    .map((s) => s.stemKey)
+
+  const isPreviewingSelectedSection =
+    playing &&
+    activeInSelectedSection.length > 0 &&
+    previewingKeys.size === activeInSelectedSection.length &&
+    activeInSelectedSection.every((k) => previewingKeys.has(k))
+
+  function previewSelectedSection(): void {
+    if (isPreviewingSelectedSection) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    const startBars = activeInSelectedSection
+      .map((k) => stemGeometryByKey.get(k)?.startBar)
+      .filter((b): b is number => b !== undefined)
+    if (startBars.length === 0) return
+    void startPreview(new Set(activeInSelectedSection), undefined, Math.min(...startBars))
   }
 
   return (
@@ -139,14 +244,27 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
         <div className="ra-eyebrow" style={{ marginBottom: 8 }}>
           draw arrangement
         </div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, maxWidth: 200 }}>
-          <button style={modeButtonStyle(mode === 'draw')} onClick={() => setMode('draw')}>
-            draw
-          </button>
-          <button style={modeButtonStyle(mode === 'erase')} onClick={() => setMode('erase')}>
-            erase
-          </button>
-        </div>
+        <button
+          onClick={previewSelectedSection}
+          disabled={activeInSelectedSection.length === 0}
+          style={{
+            ...playButtonStyle(isPreviewingSelectedSection),
+            display: 'block',
+            width: '100%',
+            textAlign: 'left',
+            padding: '8px 10px',
+            fontSize: 11,
+            marginBottom: 12,
+            opacity: activeInSelectedSection.length === 0 ? 0.3 : 1,
+            cursor: activeInSelectedSection.length === 0 ? 'not-allowed' : 'pointer'
+          }}
+          title="play everything active in the selected section, together, from each stem's own current position"
+        >
+          {isPreviewingSelectedSection ? '■' : '▶'} preview section {selectedSection + 1}
+          {activeInSelectedSection.length > 0
+            ? ` (${activeInSelectedSection.length} stem${activeInSelectedSection.length === 1 ? '' : 's'})`
+            : ''}
+        </button>
         {stems.length === 0 ? (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
             no stems to draw an arrangement for
@@ -154,10 +272,107 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
         ) : (
           <div style={{ overflowX: 'auto', marginBottom: 16 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 'fit-content' }}>
+              {/* Section-selector strip -- a clickable progress-bar-like row
+                  of thin segments, one per section, aligned with the grid
+                  columns below via the same fixed-width spacers every stem
+                  row uses for its own play button/waveform/label. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 24, flexShrink: 0 }} />
+                <div style={{ width: 56, flexShrink: 0 }} />
+                <div style={{ width: 90, flexShrink: 0 }} />
+                <div style={{ display: 'flex', gap: 2 }}>
+                  {Array.from({ length: DRAW_ARRANGE_SECTIONS }, (_, i) => (
+                    <div
+                      key={i}
+                      onClick={() => setSelectedSection(i)}
+                      title={`select section ${i + 1} to preview`}
+                      style={{
+                        width: CELL_SIZE,
+                        height: 8,
+                        flexShrink: 0,
+                        borderRadius: 0,
+                        cursor: 'pointer',
+                        background:
+                          i === selectedSection ? 'var(--ra-stretch-on)' : 'var(--ra-border)'
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
               {stems.map((stem) => {
                 const cells = grid[stem.stemKey] ?? []
+                const fs = flatStemsByKey.get(stem.stemKey)
+                const isPreviewing = previewingKeys.has(stem.stemKey)
+                const isThisStemPlaying = isPreviewing && playing
+                const geometry = fs ? stemGeometryByKey.get(fs.stemKey) : undefined
+
+                // Mirrors AutoArrangeRoleStep.tsx's own playhead derivation
+                // exactly -- see that component's doc comment.
+                let showPlayhead = false
+                let playheadFraction = 0
+                if (geometry) {
+                  const barsIntoClip = pos - geometry.startBar
+                  const withinClip =
+                    geometry.visibleBars > 0 &&
+                    barsIntoClip >= 0 &&
+                    barsIntoClip < geometry.visibleBars
+                  const barsIntoTile =
+                    geometry.tileSpanBars > 0
+                      ? ((barsIntoClip % geometry.tileSpanBars) + geometry.tileSpanBars) %
+                        geometry.tileSpanBars
+                      : 0
+                  playheadFraction =
+                    geometry.tileSpanBars > 0 ? barsIntoTile / geometry.tileSpanBars : 0
+                  showPlayhead = isPreviewing && playing && withinClip
+                }
+
                 return (
                   <div key={stem.stemKey} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      onClick={() => fs && togglePreviewStem(fs)}
+                      disabled={!fs}
+                      style={{
+                        ...playButtonStyle(isThisStemPlaying),
+                        width: 24,
+                        padding: '3px 0',
+                        textAlign: 'center'
+                      }}
+                      title="preview this stem, from its own current position"
+                    >
+                      {isThisStemPlaying ? '■' : '▶'}
+                    </button>
+                    {fs && geometry ? (
+                      <div
+                        onClick={(e) => handleThumbnailClick(e, fs, geometry)}
+                        title={`${fs.stem.name} — click to preview from this point`}
+                        style={{
+                          width: 56,
+                          height: 28,
+                          flexShrink: 0,
+                          position: 'relative',
+                          cursor: 'pointer',
+                          outline: isPreviewing ? '1px solid var(--ra-stretch-on)' : 'none',
+                          outlineOffset: -1
+                        }}
+                      >
+                        <Waveform path={fs.stem.path} color={stem.typeColor} opacity={1} />
+                        {showPlayhead && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              bottom: 0,
+                              left: `${playheadFraction * 100}%`,
+                              width: 1,
+                              background: 'var(--ra-playhead)',
+                              pointerEvents: 'none'
+                            }}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ width: 56, height: 28, flexShrink: 0 }} />
+                    )}
                     <div
                       style={{
                         width: 90,
@@ -179,13 +394,8 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
                         <div
                           key={i}
                           title={`section ${i + 1}`}
-                          onPointerDown={() => {
-                            isDraggingRef.current = true
-                            paintCell(stem.stemKey, i)
-                          }}
-                          onPointerEnter={() => {
-                            if (isDraggingRef.current) paintCell(stem.stemKey, i)
-                          }}
+                          onPointerDown={() => handleCellPointerDown(stem.stemKey, i)}
+                          onPointerEnter={() => handleCellPointerEnter(stem.stemKey, i)}
                           style={{
                             width: CELL_SIZE,
                             height: CELL_SIZE,
@@ -194,6 +404,9 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
                             cursor: 'pointer',
                             background: active ? stem.typeColor : 'transparent',
                             border: `1px solid ${active ? stem.typeColor : 'var(--ra-border)'}`,
+                            outline:
+                              i === selectedSection ? '1px solid var(--ra-stretch-on)' : 'none',
+                            outlineOffset: -1,
                             touchAction: 'none'
                           }}
                         />
