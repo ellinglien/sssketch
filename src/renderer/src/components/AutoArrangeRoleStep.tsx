@@ -20,6 +20,11 @@ import { playButtonStyle } from './autoArrangeStyles'
 interface Props {
   onConfirm: (roles: StemRoleInfo[]) => void
   onCancel: () => void
+  // New, both optional -- omitting either preserves today's exact
+  // Auto-Arrange behavior unchanged. Added for Draw Arrangement's reuse
+  // of this same role-confirmation step (see DrawArrangeWizard.tsx).
+  showFrequency?: boolean
+  skippable?: boolean
 }
 
 // The 8 arrangement-oriented categories, replacing the old raw-SoundType
@@ -92,7 +97,12 @@ const selectStyle: React.CSSProperties = {
  * uses throughout, e.g. groupIdAtPosition/loopLengthBars), not one target
  * rifff -- there's no "currently selected rifff" convention in this app for
  * a single-target design to hang off of. */
-export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.Element {
+export function AutoArrangeRoleStep({
+  onConfirm,
+  onCancel,
+  showFrequency = true,
+  skippable = false
+}: Props): React.JSX.Element {
   const dispatch = useDispatch()
   const busOf = useAppSelector((s) => s.busOf)
   const playedBarsOverrides = useAppSelector((s) => s.playedBars)
@@ -546,36 +556,40 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                     ))}
                   </select>
                 )}
-                <div
-                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                  title="how often this stem should re-enter during the release phase, and its priority relative to other stems"
-                >
-                  <input
-                    className="arrange-frequency-slider"
-                    type="range"
-                    min={0}
-                    max={FREQUENCY_LEVELS.length - 1}
-                    step={1}
-                    value={FREQUENCY_LEVELS.indexOf(role.frequency)}
-                    onChange={(e) =>
-                      updateRole(role.stemKey, {
-                        frequency: FREQUENCY_LEVELS[Number(e.target.value)]
-                      })
-                    }
-                    style={{
-                      background: `linear-gradient(to right, var(--ra-stretch-on) ${
-                        (FREQUENCY_LEVELS.indexOf(role.frequency) / (FREQUENCY_LEVELS.length - 1)) *
-                        100
-                      }%, var(--ra-border) ${
-                        (FREQUENCY_LEVELS.indexOf(role.frequency) / (FREQUENCY_LEVELS.length - 1)) *
-                        100
-                      }%)`
-                    }}
-                  />
-                  <span style={{ fontSize: 10, color: 'var(--ra-text-2)', minWidth: 62 }}>
-                    {FREQUENCY_LABELS[role.frequency]}
-                  </span>
-                </div>
+                {showFrequency && (
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    title="how often this stem should re-enter during the release phase, and its priority relative to other stems"
+                  >
+                    <input
+                      className="arrange-frequency-slider"
+                      type="range"
+                      min={0}
+                      max={FREQUENCY_LEVELS.length - 1}
+                      step={1}
+                      value={FREQUENCY_LEVELS.indexOf(role.frequency)}
+                      onChange={(e) =>
+                        updateRole(role.stemKey, {
+                          frequency: FREQUENCY_LEVELS[Number(e.target.value)]
+                        })
+                      }
+                      style={{
+                        background: `linear-gradient(to right, var(--ra-stretch-on) ${
+                          (FREQUENCY_LEVELS.indexOf(role.frequency) /
+                            (FREQUENCY_LEVELS.length - 1)) *
+                          100
+                        }%, var(--ra-border) ${
+                          (FREQUENCY_LEVELS.indexOf(role.frequency) /
+                            (FREQUENCY_LEVELS.length - 1)) *
+                          100
+                        }%)`
+                      }}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--ra-text-2)', minWidth: 62 }}>
+                      {FREQUENCY_LABELS[role.frequency]}
+                    </span>
+                  </div>
+                )}
                 {/* Raw seeding signal (soundType, and busId when this stem was
                     already tidied) -- kept visible as context for the
                     arrangeRole guess above, same secondary-label treatment as
@@ -609,6 +623,22 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
           >
             cancel
           </button>
+          {skippable && (
+            <button
+              onClick={() => onConfirm(roles)}
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              skip
+            </button>
+          )}
           <button
             onClick={() => onConfirm(roles)}
             style={{
