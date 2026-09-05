@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveStemRole } from './stemRole'
+import { engineRoleFor, resolveStemRole, type StemRoleInfo } from './stemRole'
 import type { Stem } from './types'
 
 function stem(overrides: Partial<Stem>): Stem {
@@ -72,5 +72,42 @@ describe('resolveStemRole', () => {
       const role = resolveStemRole(stem({ type: 'audioIn' }), 'k', 'lead')
       expect(role.arrangeRole).toBe('lead')
     })
+  })
+
+  it('defaults drumSubRole to undefined -- no auto-detection, manual-only per this feature design', () => {
+    const role = resolveStemRole(stem({ type: 'drums' }), 'k', null)
+    expect(role.drumSubRole).toBeUndefined()
+  })
+})
+
+describe('engineRoleFor', () => {
+  function roleInfo(overrides: Partial<StemRoleInfo>): StemRoleInfo {
+    return {
+      stemKey: 'k',
+      soundType: 'drums',
+      busId: null,
+      arrangeRole: 'drums',
+      uncertain: false,
+      included: true,
+      frequency: 'occasional',
+      ...overrides
+    }
+  }
+
+  it('returns the plain arrangeRole when arrangeRole is drums but no sub-role was set', () => {
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'drums', drumSubRole: undefined }))).toBe('drums')
+  })
+
+  it('returns the drum sub-role instead of the generic "drums" bucket when one is set', () => {
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'drums', drumSubRole: 'kick' }))).toBe('kick')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'drums', drumSubRole: 'hihat' }))).toBe('hihat')
+  })
+
+  it('ignores drumSubRole entirely when arrangeRole is not drums', () => {
+    // Shouldn't be reachable through the real UI (the sub-role picker only
+    // shows for arrangeRole === 'drums'), but the engine-facing string must
+    // never silently read a stale sub-role left over from a prior role
+    // switch as if it still applied to some other role.
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'bass', drumSubRole: 'kick' }))).toBe('bass')
   })
 })

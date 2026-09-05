@@ -50,6 +50,11 @@ const MOVE_LABELS: Record<string, string> = {
 // step) is a far more useful label here. Mirrors the friendly-label intent
 // of AutoArrangeRoleStep.tsx's role dropdown, kept local since that
 // component shows the raw camelCase value in its own <option>s today.
+// Includes DrumSubRole's own values (kick/snare/hihat/clap/perc) alongside
+// the 8 ArrangeRole values -- engineRoleFor (shared/stemRole.ts) substitutes
+// a drum sub-role in for the plain 'drums' bucket before this ever reaches
+// the engine, so `role` here (ArrangeStemInput.role, an opaque string as
+// far as the engine's concerned) can genuinely be either.
 const ROLE_LABELS: Record<string, string> = {
   drums: 'drums',
   bass: 'bass',
@@ -58,7 +63,12 @@ const ROLE_LABELS: Record<string, string> = {
   aux: 'aux',
   textureFx: 'texture/fx',
   fill: 'fill',
-  vocal: 'vocal'
+  vocal: 'vocal',
+  kick: 'kick',
+  snare: 'snare',
+  hihat: 'hi-hat',
+  clap: 'clap',
+  perc: 'perc / other'
 }
 
 // Lowercase, no jargon -- matches MOVE_LABELS/ROLE_LABELS's own convention.

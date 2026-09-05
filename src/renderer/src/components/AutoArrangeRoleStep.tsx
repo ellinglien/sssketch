@@ -7,6 +7,7 @@ import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stem
 import {
   resolveStemRole,
   type ArrangeRole,
+  type DrumSubRole,
   type StemFrequency,
   type StemRoleInfo
 } from '@shared/stemRole'
@@ -35,6 +36,20 @@ const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
   'fill',
   'vocal'
 ]
+
+// Shown only for a row whose arrangeRole is 'drums' -- see DrumSubRole's own
+// doc comment (shared/stemRole.ts). '' (empty string) is the <select>'s own
+// "no sub-role, stay generic" option, mapped to/from `undefined` at the
+// onChange boundary rather than adding a real '' value to the DrumSubRole
+// type itself.
+const DRUM_SUB_ROLE_OPTIONS: DrumSubRole[] = ['kick', 'snare', 'hihat', 'clap', 'perc']
+const DRUM_SUB_ROLE_LABELS: Record<DrumSubRole, string> = {
+  kick: 'kick',
+  snare: 'snare',
+  hihat: 'hi-hat',
+  clap: 'clap',
+  perc: 'perc / other'
+}
 
 // Ordered low-to-high -- index 0..3 maps directly onto the frequency
 // slider's own value (min=0, max=3, step=1). See StemFrequency's own doc
@@ -491,9 +506,18 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                 />
                 <select
                   value={role.arrangeRole}
-                  onChange={(e) =>
-                    updateRole(role.stemKey, { arrangeRole: e.target.value as ArrangeRole })
-                  }
+                  onChange={(e) => {
+                    const nextRole = e.target.value as ArrangeRole
+                    // Clear a stale sub-role the instant arrangeRole moves
+                    // away from 'drums' -- engineRoleFor already ignores
+                    // drumSubRole for any other role, but leaving it set
+                    // would silently reappear (and read as meaningful) if
+                    // the user switches back to 'drums' later.
+                    updateRole(role.stemKey, {
+                      arrangeRole: nextRole,
+                      drumSubRole: nextRole === 'drums' ? role.drumSubRole : undefined
+                    })
+                  }}
                   style={selectStyle}
                 >
                   {ARRANGE_ROLE_OPTIONS.map((r) => (
@@ -502,6 +526,26 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
                     </option>
                   ))}
                 </select>
+                {role.arrangeRole === 'drums' && (
+                  <select
+                    value={role.drumSubRole ?? ''}
+                    onChange={(e) =>
+                      updateRole(role.stemKey, {
+                        drumSubRole:
+                          e.target.value === '' ? undefined : (e.target.value as DrumSubRole)
+                      })
+                    }
+                    title="optionally refine which drum kit piece this is -- helps auto-arrange treat different drum stems as genuinely different roles"
+                    style={selectStyle}
+                  >
+                    <option value="">drums (generic)</option>
+                    {DRUM_SUB_ROLE_OPTIONS.map((r) => (
+                      <option key={r} value={r}>
+                        {DRUM_SUB_ROLE_LABELS[r]}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <div
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   title="how often this stem should re-enter during the release phase, and its priority relative to other stems"

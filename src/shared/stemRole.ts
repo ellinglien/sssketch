@@ -15,6 +15,21 @@ import type { BusId, SoundType, Stem } from './types'
 export type ArrangeRole =
   'drums' | 'bass' | 'lead' | 'backing' | 'aux' | 'textureFx' | 'fill' | 'vocal'
 
+/** Finer-grained sub-categorization under the 'drums' ArrangeRole -- kick,
+ * snare, hihat, clap, and perc/other, so a build with several drums-typed
+ * stems doesn't read them all as one interchangeable role for diversity
+ * purposes (see engineRoleFor below). Deliberately its OWN standalone
+ * field, not folded into ArrangeRole's own string union: neither Endlesss's
+ * SoundType nor Tidy Up's BusId has any concept of "which kit piece is
+ * this," so there's no existing signal to auto-detect from (and no new
+ * audio classification is being added here either -- see this feature's
+ * own non-goals) -- this is manual-only, same as arrangeRole's own
+ * dropdown. 'drums' itself stays a valid, un-refined choice; nothing is
+ * ever forced to pick a specific piece. Scoped to drums only for now
+ * (2026-09-05) -- if other roles (backing, vocal, ...) end up wanting the
+ * same treatment later, generalize then, don't speculatively build it now. */
+export type DrumSubRole = 'kick' | 'snare' | 'hihat' | 'clap' | 'perc'
+
 /** Per-stem re-entry/priority preference for autoArrangeEngine.ts. 'once' is
  * the original, pre-frequency-feature baseline (a stem enters at most once
  * and never re-enters after exiting during the releasing phase) -- every
@@ -55,6 +70,10 @@ export interface StemRoleInfo {
   // already a subset of ArrangeRole's 8), else guessed from soundType. See
   // ArrangeRole's own doc comment for the taxonomy's rationale.
   arrangeRole: ArrangeRole
+  // Only meaningful when arrangeRole is 'drums' -- see DrumSubRole's own doc
+  // comment. undefined means "generic drums, not further refined," the
+  // default for every stem (resolveStemRole never auto-guesses this).
+  drumSubRole?: DrumSubRole
   // True only when NEITHER signal has a real classification: soundType is still
   // the unresolved 'fx' default AND this stem has never been through Tidy Up
   // (busOf has no entry for it). The role-confirmation UI must flag this rather
@@ -81,4 +100,22 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
     included: true,
     frequency: 'occasional'
   }
+}
+
+/** What autoArrangeEngine.ts should actually treat this stem's "role" as,
+ * for diversity-weighting/candidate-labeling purposes: the drum sub-role
+ * (if arrangeRole is 'drums' and one was manually picked) instead of the
+ * generic 'drums' bucket, otherwise the plain arrangeRole. The engine's own
+ * roleDiversityBonus only ever compares role strings for equality -- it has
+ * no idea what a "sub-role" is and needs no changes at all for this to
+ * work: three drums-typed stems tagged kick/snare/hihat now correctly read
+ * as three DIFFERENT roles there, instead of all three being "drums" and
+ * getting zero diversity bonus for entering together. drumSubRole is
+ * ignored whenever arrangeRole isn't 'drums', even if one is somehow still
+ * set (e.g. left over from switching arrangeRole away from 'drums' without
+ * clearing it) -- a stale sub-role must never leak into an unrelated role's
+ * own identity. */
+export function engineRoleFor(role: StemRoleInfo): string {
+  if (role.arrangeRole === 'drums' && role.drumSubRole) return role.drumSubRole
+  return role.arrangeRole
 }

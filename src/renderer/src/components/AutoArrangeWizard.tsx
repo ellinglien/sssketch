@@ -4,7 +4,7 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
 import { computeDensityScore, computeFillScore } from '@shared/stemDensityScore'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
-import type { StemRoleInfo } from '@shared/stemRole'
+import { engineRoleFor, type StemRoleInfo } from '@shared/stemRole'
 import type { ArrangeStemInput } from '@shared/autoArrangeEngine'
 import type { ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import { buildArrangeReplaceActions } from '../state/selectors'
@@ -82,7 +82,7 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
       const fillScore = result.status === 'fulfilled' ? computeFillScore(result.value) : 0
       return {
         stemKey: role.stemKey,
-        role: role.arrangeRole,
+        role: engineRoleFor(role),
         densityScore,
         fillScore,
         included: true,
