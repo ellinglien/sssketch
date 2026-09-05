@@ -5,6 +5,7 @@ import {
   activeRangesForStem,
   activeStemKeysPerStep,
   groupIdFromStemKey,
+  movesFromDrawnGrid,
   type ArrangeMoveRecord
 } from './autoArrangeApply'
 
@@ -146,5 +147,51 @@ describe('activeStemKeysPerStep', () => {
       { stepIndex: 1, stemKey: 'b', moveType: 'fill' }
     ]
     expect(activeStemKeysPerStep(moves, 2)).toEqual([['a'], ['a', 'b'], ['a']])
+  })
+})
+
+describe('movesFromDrawnGrid', () => {
+  it('returns an empty array for an empty grid', () => {
+    expect(movesFromDrawnGrid({})).toEqual([])
+  })
+
+  it('returns an empty array for a stem with every section false', () => {
+    expect(movesFromDrawnGrid({ a: [false, false, false] })).toEqual([])
+  })
+
+  it('a stem active from section 0 with no exit produces one enter, no exit', () => {
+    const moves = movesFromDrawnGrid({ a: [true, true, true] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([{ stepIndex: 0, stemKey: 'a', moveType: 'enter' }])
+  })
+
+  it('a stem that only becomes active partway through produces an enter at that section, not section 0', () => {
+    const moves = movesFromDrawnGrid({ a: [false, false, true, true] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([{ stepIndex: 2, stemKey: 'a', moveType: 'enter' }])
+  })
+
+  it('a stem active then inactive produces a matching enter and exit', () => {
+    const moves = movesFromDrawnGrid({ a: [true, true, false, false] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([
+      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
+      { stepIndex: 2, stemKey: 'a', moveType: 'exit' }
+    ])
+  })
+
+  it('on/off/on-again produces two enters and one exit at the correct indices', () => {
+    const moves = movesFromDrawnGrid({ a: [true, false, true] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([
+      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'a', moveType: 'exit' },
+      { stepIndex: 2, stemKey: 'a', moveType: 'enter' }
+    ])
+  })
+
+  it('multiple stems moves interleave in the grids own key order', () => {
+    const moves = movesFromDrawnGrid({ a: [true, false], b: [false, true] })
+    expect(moves).toEqual<ArrangeMoveRecord[]>([
+      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
+      { stepIndex: 1, stemKey: 'a', moveType: 'exit' },
+      { stepIndex: 1, stemKey: 'b', moveType: 'enter' }
+    ])
   })
 })

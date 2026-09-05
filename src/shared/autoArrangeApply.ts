@@ -127,6 +127,35 @@ export function activeStemKeysPerStep(
   return result
 }
 
+// Fixed section count for Draw Arrangement's own grid (DrawArrangeGridStep.tsx)
+// -- derived from AUTO_ARRANGE_MAX_BARS/ARRANGE_STEP_BARS, never a hardcoded
+// literal, so it can never silently drift from either. Currently 64/4 = 16.
+export const DRAW_ARRANGE_SECTIONS = AUTO_ARRANGE_MAX_BARS / ARRANGE_STEP_BARS
+
+// The inverse of activeStemKeysPerStep -- turns a directly-drawn grid (one
+// boolean array per stemKey, section-by-section "is this stem active here")
+// into the same ArrangeMoveRecord[] shape the weighted-candidate engine
+// already produces, so buildArrangeReplaceActions (state/selectors.ts) needs
+// ZERO changes to consume either source. Emits an 'enter' on every
+// false->true transition and an 'exit' on every true->false transition,
+// walking each stem's own row in section order.
+export function movesFromDrawnGrid(grid: Record<string, boolean[]>): ArrangeMoveRecord[] {
+  const moves: ArrangeMoveRecord[] = []
+  for (const [stemKey, cells] of Object.entries(grid)) {
+    let wasActive = false
+    for (let stepIndex = 0; stepIndex < cells.length; stepIndex++) {
+      const isActive = cells[stepIndex]
+      if (isActive && !wasActive) {
+        moves.push({ stepIndex, stemKey, moveType: 'enter' })
+      } else if (!isActive && wasActive) {
+        moves.push({ stepIndex, stemKey, moveType: 'exit' })
+      }
+      wasActive = isActive
+    }
+  }
+  return moves
+}
+
 function mergeOverlapping(ranges: BarRange[]): BarRange[] {
   const sorted = [...ranges].sort((a, b) => a.startBar - b.startBar)
   const merged: BarRange[] = []
