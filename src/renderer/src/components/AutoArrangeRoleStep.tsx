@@ -375,6 +375,10 @@ export function AutoArrangeRoleStep({ onConfirm, onCancel }: Props): React.JSX.E
             {allIncludedPlaying ? '■ playing all' : '▶ play all included'}
           </button>
         </div>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-3)', marginBottom: 12 }}>
+          auto-arrange treats every stem currently placed on the timeline as fresh material --
+          finishing it replaces what&apos;s there now, even if you&apos;ve already run it before.
+        </div>
         {roles.map((role) => {
           const fs = flatStemsByKey.get(role.stemKey)
           const isPreviewing = previewingKeys.has(role.stemKey)
