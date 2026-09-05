@@ -230,6 +230,36 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // needs to distinguish between them, not just track a stemKey.
   const [selectedCandidateKey, setSelectedCandidateKey] = useState<string | null>(null)
 
+  // Disambiguating label per stem (e.g. "drums 2" when 3 stems all share the
+  // "drums" role) -- computed ONCE here and shared by the candidate list's
+  // move labels, the apply button's own label, and the build-progress grid
+  // (gridStems below), so the same stem always reads as the same number
+  // everywhere rather than each computing its own (possibly different)
+  // numbering. Per Elling: a bare "bring in drums" is ambiguous whenever
+  // more than one drums stem is in play.
+  const stemLabelByKey = (() => {
+    const included = stems.filter((s) => s.included)
+    const totalByLabel = new Map<string, number>()
+    for (const s of included) {
+      const label = ROLE_LABELS[s.role] ?? s.role
+      totalByLabel.set(label, (totalByLabel.get(label) ?? 0) + 1)
+    }
+    const seen = new Map<string, number>()
+    const byKey = new Map<string, string>()
+    for (const s of included) {
+      const label = ROLE_LABELS[s.role] ?? s.role
+      const total = totalByLabel.get(label) ?? 1
+      if (total <= 1) {
+        byKey.set(s.stemKey, label)
+        continue
+      }
+      const index = (seen.get(label) ?? 0) + 1
+      seen.set(label, index)
+      byKey.set(s.stemKey, `${label} ${index}`)
+    }
+    return byKey
+  })()
+
   // stepIndex here is the step candidates are being generated FOR (i.e. the
   // step about to be picked) -- applyBuildStep below is called separately,
   // at pick time, with this same stepIndex value to record an exit's
@@ -245,14 +275,10 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   const selectedCandidate = candidates.find(
     (cand) => `${cand.stemKey}-${cand.moveType}` === selectedCandidateKey
   )
-  const selectedRole = selectedCandidate
-    ? stems.find((s) => s.stemKey === selectedCandidate.stemKey)?.role
-    : undefined
   const selectedFs = selectedCandidate ? flatStemsByKey.get(selectedCandidate.stemKey) : undefined
   const applyLabel = selectedCandidate
     ? `apply: ${MOVE_LABELS[selectedCandidate.moveType] ?? selectedCandidate.moveType} ${
-        (selectedRole && ROLE_LABELS[selectedRole]) ??
-        selectedRole ??
+        stemLabelByKey.get(selectedCandidate.stemKey) ??
         selectedFs?.stem.name ??
         selectedCandidate.stemKey
       }`
@@ -307,23 +333,9 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
   // pick shows up immediately as a distinct (hollow/dimmed) preview instead
   // of only appearing once committed.
   const historyPerStep = activeStemKeysPerStep(moves, stepIndex - 1)
-  const gridStems = (() => {
-    const included = stems.filter((s) => s.included)
-    const totalByLabel = new Map<string, number>()
-    for (const s of included) {
-      const label = ROLE_LABELS[s.role] ?? s.role
-      totalByLabel.set(label, (totalByLabel.get(label) ?? 0) + 1)
-    }
-    const seen = new Map<string, number>()
-    return included.map((s) => {
-      const label = ROLE_LABELS[s.role] ?? s.role
-      const total = totalByLabel.get(label) ?? 1
-      if (total <= 1) return { stem: s, label }
-      const index = (seen.get(label) ?? 0) + 1
-      seen.set(label, index)
-      return { stem: s, label: `${label} ${index}` }
-    })
-  })()
+  const gridStems = stems
+    .filter((s) => s.included)
+    .map((s) => ({ stem: s, label: stemLabelByKey.get(s.stemKey) ?? s.role }))
 
   const includedCount = stems.filter((s) => s.included).length
   const tooFewStems = includedCount < MIN_STEMS_FOR_FULL_ARC
@@ -524,7 +536,6 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             const candidateKey = `${c.stemKey}-${c.moveType}`
             const isSelected = candidateKey === selectedCandidateKey
             const fs = flatStemsByKey.get(c.stemKey)
-            const stemRole = stems.find((s) => s.stemKey === c.stemKey)?.role
             const isPreviewing = previewingKeys.has(c.stemKey)
             const isThisStemPlaying = isPreviewing && playing
             const geometry = fs ? stemGeometryByKey.get(fs.stemKey) : undefined
@@ -660,7 +671,7 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
                   }}
                 >
                   {MOVE_LABELS[c.moveType] ?? c.moveType}{' '}
-                  {(stemRole && ROLE_LABELS[stemRole]) ?? stemRole ?? fs?.stem.name ?? c.stemKey}
+                  {stemLabelByKey.get(c.stemKey) ?? fs?.stem.name ?? c.stemKey}
                   {tag ? ` (${tag})` : ''}
                 </button>
               </div>
