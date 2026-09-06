@@ -11,7 +11,7 @@ import type {
   RiffPage
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
-import { ownRiffLibraryRoot } from './riffLibrarySchema'
+import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 
 const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
@@ -167,16 +167,33 @@ export function riffLibraryAvailable(): boolean {
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
   const root = riffLibraryRootPath()
-  if (root === ownRiffLibraryRoot()) {
+  // Shared Feed (and anything else auto-synced into sssketch's own
+  // database -- see dbForJam below) always downloads its stems to the
+  // same content-addressed endlesss-cache regardless of which root is
+  // currently configured for browsing here -- an external LORE archive's
+  // root never receives that data (riffLibrarySync.ts's syncSharedFeed
+  // always writes through openOwnRiffLibraryDb, unconditionally). Checking
+  // the jamCID directly, not just whether root === own root, is what keeps
+  // this correct even while root is pointed elsewhere.
+  if (jamCID.startsWith('shared:') || root === ownRiffLibraryRoot()) {
     return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
   }
   return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)
 }
 
-export function listJams(filterText: string): RiffLibraryJam[] {
-  const db = getRiffLibraryDb()
-  if (!db) return []
-  const rows = db
+/** Whichever db actually holds `jamCID`'s rows. Shared Feed jams (jamCID
+ * prefixed "shared:") are ALWAYS synced into sssketch's own database
+ * (openOwnRiffLibraryDb, via riffLibrarySync.ts's syncSharedFeed),
+ * regardless of which root the user has configured for browsing here (e.g.
+ * an external LORE archive) -- see riffLibrarySchema.ts's own doc comment.
+ * Everything else follows whatever root is currently configured
+ * (getRiffLibraryDb). */
+function dbForJam(jamCID: string): Database.Database | null {
+  return jamCID.startsWith('shared:') ? openOwnRiffLibraryDb() : getRiffLibraryDb()
+}
+
+function queryJamsFromDb(db: Database.Database, filterText: string): RiffLibraryJam[] {
+  return db
     .prepare(
       `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime
        FROM Jams j
@@ -186,7 +203,22 @@ export function listJams(filterText: string): RiffLibraryJam[] {
        ORDER BY lastRiffTime DESC`
     )
     .all(`%${filterText}%`) as RiffLibraryJam[]
-  return rows
+}
+
+export function listJams(filterText: string): RiffLibraryJam[] {
+  const db = getRiffLibraryDb()
+  const rows = db ? queryJamsFromDb(db, filterText) : []
+  // Shared Feed always lives in sssketch's own database regardless of
+  // which root is configured for browsing (see dbForJam) -- when that's
+  // NOT the currently active root, merge its own real Jams row(s) in
+  // separately, so "Shared Feed" still shows its real lastRiffTime instead
+  // of silently reading as never-synced just because browsing is currently
+  // pointed at an external archive.
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return rows
+  const ownRows = queryJamsFromDb(openOwnRiffLibraryDb(), filterText).filter((j) =>
+    j.jamCID.startsWith('shared:')
+  )
+  return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }
 
 interface RiffRow {
@@ -221,7 +253,7 @@ interface StemLookupRow {
 const RIFF_PAGE_SIZE = 1000
 
 export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
-  const db = getRiffLibraryDb()
+  const db = dbForJam(jamCID)
   const offset = filters.offset ?? 0
   const limit = filters.limit ?? RIFF_PAGE_SIZE
   if (!db) return { riffs: [], hasMore: false, nextOffset: offset }
@@ -346,19 +378,24 @@ interface FullStemRow {
   FileKey: string | null
 }
 
-export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
-  const db = getRiffLibraryDb()
-  if (!db) return null
+/** Every db that might hold a bare riffCID's row, in lookup order: the
+ * currently-configured browsing root first (the common case -- a real jam,
+ * whether sssketch's own or an external LORE archive), then sssketch's own
+ * database as a fallback. A bare riffCID lookup has no jamCID to route by
+ * (unlike dbForJam), so a shared-feed riff -- which only ever lives in the
+ * own database, see dbForJam's own doc comment -- would otherwise be
+ * invisible to resolveRiff/resolveRiffWithContext/downloadMissingStems
+ * whenever an external archive is the configured root. Skips the fallback
+ * when the configured root already IS the own root, to avoid a redundant
+ * second lookup against the exact same file. */
+function candidateDbsForRiff(): Database.Database[] {
+  const primary = getRiffLibraryDb()
+  const dbs: Database.Database[] = primary ? [primary] : []
+  if (riffLibraryRootPath() !== ownRiffLibraryRoot()) dbs.push(openOwnRiffLibraryDb())
+  return dbs
+}
 
-  const riffRow = db
-    .prepare(
-      `SELECT RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, GainsJSON, Root, Scale,
-              StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8
-       FROM Riffs WHERE RiffCID = ?`
-    )
-    .get(riffCID) as FullRiffRow | undefined
-  if (!riffRow) return null
-
+function buildResolvedRiff(db: Database.Database, riffRow: FullRiffRow): RiffLibraryResolvedRiff {
   // GainsJSON keys are slot numbers as strings (e.g. {"1": 0.8}) — malformed
   // or absent JSON just means every stem falls back to the default gain,
   // not a thrown error.
@@ -367,7 +404,7 @@ export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
     try {
       gains = JSON.parse(riffRow.GainsJSON) as Record<string, number>
     } catch (err) {
-      console.error(`resolveRiff: malformed GainsJSON for riff ${riffCID}:`, err)
+      console.error(`resolveRiff: malformed GainsJSON for riff ${riffRow.RiffCID}:`, err)
     }
   }
 
@@ -428,6 +465,20 @@ export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
   }
 }
 
+export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
+  for (const db of candidateDbsForRiff()) {
+    const riffRow = db
+      .prepare(
+        `SELECT RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, GainsJSON, Root, Scale,
+                StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8
+         FROM Riffs WHERE RiffCID = ?`
+      )
+      .get(riffCID) as FullRiffRow | undefined
+    if (riffRow) return buildResolvedRiff(db, riffRow)
+  }
+  return null
+}
+
 export interface RiffContextResult {
   jamCID: string
   /** Offset to pass to listRiffs(jamCID, { offset }) to fetch a ~20-riff
@@ -455,37 +506,38 @@ const RIFF_CONTEXT_WINDOW_BEFORE = 10
  * and case-insensitive, before giving up. Returns null (never throws) if
  * neither matches, or if the warehouse itself is unavailable. */
 export function resolveRiffWithContext(riffCID: string): RiffContextResult | null {
-  const db = getRiffLibraryDb()
-  if (!db) return null
-
   const trimmed = riffCID.trim()
-  const exactRow = db
-    .prepare(`SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ?`)
-    .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined
-  const row =
-    exactRow ??
-    (db
-      .prepare(
-        `SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ? COLLATE NOCASE`
-      )
-      .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined)
-  if (!row) return null
 
-  // Rank in the jam's most-recent-first ordering (listRiffs' own
-  // `ORDER BY CreationTime DESC`, unchanged) -- how many riffs in this jam
-  // are newer than this one. Riffs sharing the exact same unix-second
-  // CreationTime have no stable secondary sort in listRiffs either; this is
-  // an accepted, pre-existing simplification (see the design spec) that can
-  // land the window a few positions off-center in that rare case.
-  const { rank } = db
-    .prepare(`SELECT COUNT(*) as rank FROM Riffs WHERE OwnerJamCID = ? AND CreationTime > ?`)
-    .get(row.OwnerJamCID, row.CreationTime) as { rank: number }
+  for (const db of candidateDbsForRiff()) {
+    const exactRow = db
+      .prepare(`SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ?`)
+      .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined
+    const row =
+      exactRow ??
+      (db
+        .prepare(
+          `SELECT RiffCID, OwnerJamCID, CreationTime FROM Riffs WHERE RiffCID = ? COLLATE NOCASE`
+        )
+        .get(trimmed) as { RiffCID: string; OwnerJamCID: string; CreationTime: number } | undefined)
+    if (!row) continue
 
-  return {
-    jamCID: row.OwnerJamCID,
-    offset: Math.max(0, rank - RIFF_CONTEXT_WINDOW_BEFORE),
-    matchedRiffCID: row.RiffCID
+    // Rank in the jam's most-recent-first ordering (listRiffs' own
+    // `ORDER BY CreationTime DESC`, unchanged) -- how many riffs in this jam
+    // are newer than this one. Riffs sharing the exact same unix-second
+    // CreationTime have no stable secondary sort in listRiffs either; this is
+    // an accepted, pre-existing simplification (see the design spec) that can
+    // land the window a few positions off-center in that rare case.
+    const { rank } = db
+      .prepare(`SELECT COUNT(*) as rank FROM Riffs WHERE OwnerJamCID = ? AND CreationTime > ?`)
+      .get(row.OwnerJamCID, row.CreationTime) as { rank: number }
+
+    return {
+      jamCID: row.OwnerJamCID,
+      offset: Math.max(0, rank - RIFF_CONTEXT_WINDOW_BEFORE),
+      matchedRiffCID: row.RiffCID
+    }
   }
+  return null
 }
 
 /** Downloads one stem's audio to exactly the local path resolveStemPath
@@ -531,18 +583,25 @@ async function downloadOneStem(
 export async function downloadMissingStems(
   riffCID: string
 ): Promise<RiffLibraryResolvedRiff | null> {
-  const db = getRiffLibraryDb()
-  if (!db) return null
-  const riffRow = db.prepare('SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?').get(riffCID) as
-    { OwnerJamCID: string } | undefined
-  if (!riffRow) return null
+  // Same candidate-db search resolveRiff itself uses -- a shared-feed riff
+  // only ever lives in sssketch's own database, invisible to a plain
+  // getRiffLibraryDb() lookup whenever an external archive is the
+  // configured root (see candidateDbsForRiff's own doc comment).
+  let ownerJamCID: string | undefined
+  for (const db of candidateDbsForRiff()) {
+    const riffRow = db.prepare('SELECT OwnerJamCID FROM Riffs WHERE RiffCID = ?').get(riffCID) as
+      { OwnerJamCID: string } | undefined
+    if (riffRow) {
+      ownerJamCID = riffRow.OwnerJamCID
+      break
+    }
+  }
+  if (ownerJamCID === undefined) return null
 
   const resolved = resolveRiff(riffCID)
   if (!resolved) return null
   const missing = resolved.stems.filter((s) => s.path === null && s.downloadUrl !== null)
-  await Promise.all(
-    missing.map((s) => downloadOneStem(riffRow.OwnerJamCID, s.stemCID, s.downloadUrl!))
-  )
+  await Promise.all(missing.map((s) => downloadOneStem(ownerJamCID, s.stemCID, s.downloadUrl!)))
   return resolveRiff(riffCID)
 }
 

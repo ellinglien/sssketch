@@ -752,3 +752,107 @@ describe('downloadMissingStems', () => {
     expect(await downloadMissingStems('riff-1')).toBeNull()
   })
 })
+
+// Real bug (reported live): Elling's Shared Feed sync-status badge showed
+// "850 riffs" (from getWarehouseSyncStatus, which always reads
+// openOwnRiffLibraryDb() regardless of the configured root) while the riff
+// grid showed none at all. Root cause: he'd separately pointed his browsing
+// root at an external LORE archive (riffLibraryPrefs.json), but
+// syncSharedFeed always writes into sssketch's own database, unconditionally
+// -- every read function below queried the EXTERNAL archive instead, which
+// never received that data. Confirmed against his real warehouse.db3: 844
+// fully-resolved shared:elling rows sitting in the own db, zero in the
+// external one.
+describe("shared-feed jams always read from sssketch's own database, regardless of the configured browsing root", () => {
+  let externalRoot: string
+
+  beforeEach(async () => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-shared-feed-test-'))
+    const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    const ownDb = openOwnRiffLibraryDb()
+    ownDb.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:elling', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1, GainsJSON, AppVersion)
+        VALUES ('shared-riff-1', 'shared:elling', 5000, 140, 8, 'elling', 'stem-shared-1', '{"1":1.0}', 1);
+      INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s, FileEndpoint, FileBucket, FileKey)
+        VALUES ('stem-shared-1', 'shared:elling', 'elling', 'Lead', 1, 140, 128,
+                'endlesss-dev.fra1.digitaloceanspaces.com', '', 'attachments/oggAudio/shared/stem-shared-1');
+    `)
+
+    // A separate, external "LORE archive" root -- a real jam, but
+    // deliberately with NO shared: rows at all, matching the real bug
+    // (confirmed directly against the external volume: zero shared:% rows).
+    externalRoot = mkdtempSync(join(tmpdir(), 'sssketch-lore-external-test-'))
+    createSeededFixtureWarehouse(externalRoot)
+    setRiffLibraryRootForTests(externalRoot)
+  })
+
+  afterEach(async () => {
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    setRiffLibraryRootForTests(null)
+    rmSync(externalRoot, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('listRiffs still returns the shared-feed riffs even though the configured root is external', () => {
+    const { riffs } = listRiffs('shared:elling', {})
+    expect(riffs.map((r) => r.riffCID)).toEqual(['shared-riff-1'])
+  })
+
+  it('listJams still includes Shared Feed with its real lastRiffTime, merged in from the own db', () => {
+    const jams = listJams('')
+    expect(jams.find((j) => j.jamCID === 'shared:elling')).toEqual({
+      jamCID: 'shared:elling',
+      name: 'Shared Feed',
+      lastRiffTime: 5000
+    })
+    // The external root's own real jam is still there too -- this isn't a
+    // replacement, just a merge.
+    expect(jams.some((j) => j.jamCID === 'jam-techno')).toBe(true)
+  })
+
+  it('resolveStemPath uses the own content-addressed cache for a shared-feed stem even though root is external', () => {
+    expect(resolveStemPath('shared:elling', 'stem-shared-1')).toBe(
+      join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem-shared-1')
+    )
+  })
+
+  it('resolveRiff still resolves a shared-feed riff even though the configured root is external', () => {
+    const resolved = resolveRiff('shared-riff-1')
+    expect(resolved).not.toBeNull()
+    expect(resolved!.bpm).toBe(140)
+    expect(resolved!.stems).toHaveLength(1)
+  })
+
+  it('resolveRiffWithContext still finds a shared-feed riff even though the configured root is external', () => {
+    const result = resolveRiffWithContext('shared-riff-1')
+    expect(result).not.toBeNull()
+    expect(result!.jamCID).toBe('shared:elling')
+    expect(result!.matchedRiffCID).toBe('shared-riff-1')
+  })
+
+  it('downloadMissingStems still works for a shared-feed riff even though the configured root is external', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('fake ogg bytes').buffer
+          }) as Response
+      )
+    )
+    const result = await downloadMissingStems('shared-riff-1')
+    expect(result).not.toBeNull()
+    expect(result!.stems[0].path).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it('a real (non-shared) jam in the external root is unaffected -- still reads from there, not the own db', () => {
+    const { riffs } = listRiffs('jam-techno', {})
+    expect(riffs.map((r) => r.riffCID).sort()).toEqual(['riff-1', 'riff-2'])
+  })
+})
