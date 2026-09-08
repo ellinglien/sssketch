@@ -25,10 +25,13 @@ export const ROLE_LABELS: Record<string, string> = {
 }
 
 // Disambiguating label per stem (e.g. "drums 2" when 3 stems all share the
-// "drums" role) -- shared by AutoArrangeBuildStep.tsx's candidate list/apply
-// button label/build-progress grid AND DrawArrangeWizard.tsx's own grid-row
-// labels, so the same stem always reads as the same number everywhere
-// rather than each caller computing its own (possibly different) numbering.
+// "drums" role) -- used by DrawArrangeWizard.tsx's own grid-row labels.
+// Originally shared with the interactive auto-arrange build screen's own
+// candidate list/apply button/build-progress grid too (that's why this is
+// its own file, not inlined into one component); that screen was replaced
+// by an automated build and deleted, but this stays its own module so a
+// future second UI consumer doesn't have to duplicate the numbering logic
+// either.
 export function stemLabelsByKey(
   stems: Pick<ArrangeStemInput, 'stemKey' | 'role' | 'included'>[]
 ): Map<string, string> {
