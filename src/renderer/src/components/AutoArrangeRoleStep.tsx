@@ -517,9 +517,11 @@ export function AutoArrangeRoleStep({
             </div>
             {includedKeys.length < MIN_STEMS_FOR_FULL_ARC && (
               <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
-                only {includedKeys.length} stem{includedKeys.length === 1 ? '' : 's'} included --
-                the full intro/build/peak/breakdown/outro arc works best with more variety; expect
-                it to feel thin.
+                only {includedKeys.length} stem{includedKeys.length === 1 ? '' : 's'} included --{' '}
+                {shape === 'startFull'
+                  ? 'thinning everything out works best with more variety'
+                  : 'the full intro/build/peak/breakdown/outro arc works best with more variety'}
+                ; expect it to feel thin.
               </div>
             )}
           </>
@@ -748,6 +750,8 @@ export function AutoArrangeRoleStep({
               onClick={() =>
                 onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
               }
+              disabled={includedKeys.length === 0}
+              title={includedKeys.length === 0 ? 'include at least one stem first' : undefined}
               style={{
                 height: 22,
                 borderRadius: 0,
@@ -755,7 +759,16 @@ export function AutoArrangeRoleStep({
                 fontSize: 10,
                 border: '1px solid var(--ra-border)',
                 background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text-2)'
+                color: 'var(--ra-text-2)',
+                // This app's disabled convention (docs/design.md): dim to
+                // 30% opacity + not-allowed cursor, rather than a separate
+                // disabled color palette. Without this, confirming with
+                // nothing included silently does nothing at all -- the old
+                // interactive build screen at least showed "no candidates"
+                // for a click or two; the automated build has no such
+                // implicit feedback.
+                opacity: includedKeys.length === 0 ? 0.3 : 1,
+                cursor: includedKeys.length === 0 ? 'not-allowed' : 'pointer'
               }}
             >
               skip
@@ -765,6 +778,8 @@ export function AutoArrangeRoleStep({
             onClick={() =>
               onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
             }
+            disabled={includedKeys.length === 0}
+            title={includedKeys.length === 0 ? 'include at least one stem first' : undefined}
             style={{
               height: 22,
               borderRadius: 0,
@@ -772,7 +787,11 @@ export function AutoArrangeRoleStep({
               fontSize: 10,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)'
+              color: 'var(--ra-text)',
+              // Same disabled convention as above -- see that button's own
+              // comment for why this matters more now than it used to.
+              opacity: includedKeys.length === 0 ? 0.3 : 1,
+              cursor: includedKeys.length === 0 ? 'not-allowed' : 'pointer'
             }}
           >
             continue

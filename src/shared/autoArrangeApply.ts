@@ -87,54 +87,14 @@ export function activeRangesForStem(moves: ArrangeMoveRecord[], totalBars: numbe
   return mergeOverlapping(ranges)
 }
 
-/**
- * Per-step active-stem snapshot, one entry per step from 0 to
- * uptoStepInclusive (empty array if uptoStepInclusive < 0) -- for
- * AutoArrangeBuildStep.tsx's build-progress grid, which needs to show
- * "what's active in each step so far" rather than activeRangesForStem's own
- * collapsed bar ranges. Same enter/exit/fill semantics: enter/exit persist
- * from that step onward, fill is a one-step blip that doesn't affect
- * whether the stem is considered active in any OTHER step. Each entry is
- * sorted for deterministic comparison (tests, and a stable render order).
- */
-export function activeStemKeysPerStep(
-  moves: ArrangeMoveRecord[],
-  uptoStepInclusive: number
-): string[][] {
-  if (uptoStepInclusive < 0) return []
-
-  const movesByStep = new Map<number, ArrangeMoveRecord[]>()
-  for (const move of moves) {
-    const list = movesByStep.get(move.stepIndex)
-    if (list) list.push(move)
-    else movesByStep.set(move.stepIndex, [move])
-  }
-
-  const persistent = new Set<string>()
-  const result: string[][] = []
-  for (let step = 0; step <= uptoStepInclusive; step++) {
-    const stepMoves = movesByStep.get(step) ?? []
-    for (const move of stepMoves) {
-      if (move.moveType === 'enter') persistent.add(move.stemKey)
-      else if (move.moveType === 'exit') persistent.delete(move.stemKey)
-    }
-    const active = new Set(persistent)
-    for (const move of stepMoves) {
-      if (move.moveType === 'fill') active.add(move.stemKey)
-    }
-    result.push([...active].sort())
-  }
-  return result
-}
-
 // Fixed section count for Draw Arrangement's own grid (DrawArrangeGridStep.tsx)
 // -- derived from AUTO_ARRANGE_MAX_BARS/ARRANGE_STEP_BARS, never a hardcoded
 // literal, so it can never silently drift from either. Currently 64/4 = 16.
 export const DRAW_ARRANGE_SECTIONS = AUTO_ARRANGE_MAX_BARS / ARRANGE_STEP_BARS
 
-// The inverse of activeStemKeysPerStep -- turns a directly-drawn grid (one
-// boolean array per stemKey, section-by-section "is this stem active here")
-// into the same ArrangeMoveRecord[] shape the weighted-candidate engine
+// Turns a directly-drawn grid (one boolean array per stemKey, section-by-
+// section "is this stem active here") into the same ArrangeMoveRecord[]
+// shape the weighted-candidate engine
 // already produces, so buildArrangeReplaceActions (state/selectors.ts) needs
 // ZERO changes to consume either source. Emits an 'enter' on every
 // false->true transition and an 'exit' on every true->false transition,

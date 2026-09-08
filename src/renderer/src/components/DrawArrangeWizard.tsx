@@ -30,8 +30,9 @@ type WizardStep = { phase: 'role' } | { phase: 'grid'; stems: GridStem[] }
  * unlike AutoArrangeWizard.tsx, Draw Arrangement never scores a stem's
  * density/fill (that's exclusively autoArrangeEngine.ts's candidate-
  * weighting concern); it only needs each included stem's disambiguated
- * label (stemLabelsByKey, shared with AutoArrangeBuildStep.tsx so a stem
- * reads as the same number in both flows) and its identity color.
+ * label (stemLabelsByKey -- see that module's own doc comment for why it's
+ * a shared, standalone file rather than inlined here) and its identity
+ * color.
  *
  * handleApply reuses buildArrangeReplaceActions unchanged, same as
  * AutoArrangeWizard.tsx's own handleBuildComplete -- see that function's

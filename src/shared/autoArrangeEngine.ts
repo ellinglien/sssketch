@@ -44,7 +44,7 @@ export const PHASE_MOVE_TYPES: Record<ArrangePhase, ArrangeMoveType[]> = {
 }
 
 // Below this many included stems, the full five-phase arc has too little
-// material to say much -- AutoArrangeBuildStep.tsx uses this for its own
+// material to say much -- AutoArrangeRoleStep.tsx uses this for its own
 // advisory (non-blocking) warning.
 export const MIN_STEMS_FOR_FULL_ARC = 4
 

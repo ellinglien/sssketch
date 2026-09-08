@@ -3,7 +3,6 @@ import {
   ARRANGE_FILL_BARS,
   ARRANGE_STEP_BARS,
   activeRangesForStem,
-  activeStemKeysPerStep,
   groupIdFromStemKey,
   movesFromDrawnGrid,
   type ArrangeMoveRecord
@@ -103,50 +102,6 @@ describe('activeRangesForStem', () => {
       { startBar: 0, endBar: 1 * ARRANGE_STEP_BARS },
       { startBar: 3 * ARRANGE_STEP_BARS, endBar: 4 * ARRANGE_STEP_BARS }
     ])
-  })
-})
-
-describe('activeStemKeysPerStep', () => {
-  it('a negative uptoStepInclusive returns an empty array', () => {
-    expect(activeStemKeysPerStep([], -1)).toEqual([])
-  })
-
-  it('no moves at all returns one empty entry per step', () => {
-    expect(activeStemKeysPerStep([], 2)).toEqual([[], [], []])
-  })
-
-  it('an entered stem is active from its own step through the end', () => {
-    const moves: ArrangeMoveRecord[] = [{ stepIndex: 0, stemKey: 'a', moveType: 'enter' }]
-    expect(activeStemKeysPerStep(moves, 2)).toEqual([['a'], ['a'], ['a']])
-  })
-
-  it('an exit stops the stem from that step onward, not before', () => {
-    const moves: ArrangeMoveRecord[] = [
-      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
-      { stepIndex: 1, stemKey: 'a', moveType: 'exit' }
-    ]
-    expect(activeStemKeysPerStep(moves, 2)).toEqual([['a'], [], []])
-  })
-
-  it('a fill only marks its own step active, never the ones after it', () => {
-    const moves: ArrangeMoveRecord[] = [{ stepIndex: 1, stemKey: 'a', moveType: 'fill' }]
-    expect(activeStemKeysPerStep(moves, 2)).toEqual([[], ['a'], []])
-  })
-
-  it('multiple stems in one step are sorted in each entry', () => {
-    const moves: ArrangeMoveRecord[] = [
-      { stepIndex: 0, stemKey: 'z', moveType: 'enter' },
-      { stepIndex: 0, stemKey: 'a', moveType: 'enter' }
-    ]
-    expect(activeStemKeysPerStep(moves, 0)).toEqual([['a', 'z']])
-  })
-
-  it('a persistent stem and a same-step fill on a different stem coexist correctly', () => {
-    const moves: ArrangeMoveRecord[] = [
-      { stepIndex: 0, stemKey: 'a', moveType: 'enter' },
-      { stepIndex: 1, stemKey: 'b', moveType: 'fill' }
-    ]
-    expect(activeStemKeysPerStep(moves, 2)).toEqual([['a'], ['a', 'b'], ['a']])
   })
 })
 
