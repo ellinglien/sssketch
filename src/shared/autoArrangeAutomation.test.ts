@@ -71,6 +71,24 @@ describe('phaseStepTargetsForShape', () => {
     const targets = phaseStepTargetsForShape('stayBusy', 7)
     expect(targets.intro + targets.build + targets.peak + targets.breakdown + targets.outro).toBe(7)
   })
+
+  it('stayBusy at its own minimum (5) gives every phase exactly 1 -- exercises the negative-remainder clawback branch', () => {
+    // stayBusy's weights [1,4,3,1,1] (sum 10) at target 5: raw shares are
+    // [0.5, 2, 1.5, 0.5, 0.5]; floored-with-min-1 is [1,2,1,1,1] (sum 6),
+    // one MORE than the target -- scaleToTarget's negative-remainder branch
+    // has to claw one back from build (its own largest floor) to land on
+    // [1,1,1,1,1]. Every other existing test in this describe block only
+    // ever needs the POSITIVE-remainder (hand out extra) branch or exactly
+    // zero adjustment, so without this test a broken clawback branch could
+    // regress silently.
+    expect(phaseStepTargetsForShape('stayBusy', 5)).toEqual({
+      intro: 1,
+      build: 1,
+      peak: 1,
+      breakdown: 1,
+      outro: 1
+    })
+  })
 })
 
 describe('initialBuildStateForShape', () => {
