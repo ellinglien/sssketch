@@ -662,6 +662,19 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             title={selectedCandidate ? applyLabel : 'select a candidate above first'}
             style={{
               height: 22,
+              // flex+minWidth:0 lets this button shrink instead of pushing
+              // cancel/finish now out past the panel's own edge; the text
+              // styles below then truncate a long label (e.g. "apply: bring
+              // in texture/fx 2") to an ellipsis instead of wrapping to a
+              // second line and blowing out the row's height -- both were
+              // real overflow bugs once this row also had to fit the ◀/▶
+              // step buttons. The full label is still always available via
+              // the title tooltip above.
+              flex: '1 1 auto',
+              minWidth: 0,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
               borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
@@ -678,20 +691,31 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
           >
             {applyLabel}
           </button>
+          {/* Arrow icon buttons, not gated on selectedCandidate -- per direct
+              feedback, moving between sections should always work even
+              while a candidate is selected/previewed. nextStep/prevStep
+              already unconditionally clear selectedCandidateKey themselves,
+              so navigating away from an unapplied pick just discards it
+              (never applies it), exactly like clicking a candidate row again
+              to deselect it would. Bare-glyph icon buttons mirror
+              BeatPicker.tsx's own prev/next riff navigation (◀/▶, 22x22,
+              title-only label) rather than this row's own text-button
+              convention, since these are now always-available step controls
+              rather than an occasionally-disabled pair. */}
           <button
             onClick={prevStep}
-            disabled={!!selectedCandidate || stepIndex === 0}
+            disabled={stepIndex === 0}
             title={
-              selectedCandidate
-                ? 'apply or deselect your pick before going back'
-                : stepIndex === 0
-                  ? "you're already on the very first section"
-                  : "go back to the previous section, in case you moved on by accident -- doesn't undo moves you already applied"
+              stepIndex === 0
+                ? "you're already on the very first section"
+                : 'back to the previous section -- discards an unapplied pick, but never undoes a move you already applied'
             }
             style={{
               height: 22,
+              width: 22,
+              flexShrink: 0,
               borderRadius: 0,
-              padding: '0 10px',
+              padding: 0,
               fontSize: 10,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
@@ -699,42 +723,37 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
               // Same disabled convention as applySelected above (docs/design.md,
               // mirrored in ContextMenu.tsx): dim to 30% opacity + not-allowed
               // cursor rather than a separate "disabled" palette.
-              cursor: selectedCandidate || stepIndex === 0 ? 'not-allowed' : 'pointer',
-              opacity: selectedCandidate || stepIndex === 0 ? 0.3 : 1
+              cursor: stepIndex === 0 ? 'not-allowed' : 'pointer',
+              opacity: stepIndex === 0 ? 0.3 : 1
             }}
           >
-            back
+            ◀
           </button>
           <button
             onClick={nextStep}
-            disabled={!!selectedCandidate}
-            title={
-              selectedCandidate
-                ? 'apply or deselect your pick before moving to the next section'
-                : 'move on to the next section -- rolls into the next phase once its target is reached'
-            }
+            title="next section -- rolls into the next phase once its target is reached; discards an unapplied pick"
             style={{
               height: 22,
+              width: 22,
+              flexShrink: 0,
               borderRadius: 0,
-              padding: '0 10px',
+              padding: 0,
               fontSize: 10,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
               color: 'var(--ra-text)',
-              // Same disabled convention as applySelected above (docs/design.md,
-              // mirrored in ContextMenu.tsx): dim to 30% opacity + not-allowed
-              // cursor rather than a separate "disabled" palette.
-              cursor: selectedCandidate ? 'not-allowed' : 'pointer',
-              opacity: selectedCandidate ? 0.3 : 1
+              cursor: 'pointer'
             }}
           >
-            next section
+            ▶
           </button>
           <div style={{ flex: 1 }} />
           <button
             onClick={onCancel}
             style={{
               height: 22,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
@@ -749,6 +768,8 @@ export function AutoArrangeBuildStep({ stems, onComplete, onCancel }: Props): Re
             onClick={finishNow}
             style={{
               height: 22,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
