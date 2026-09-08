@@ -210,7 +210,18 @@ export function runAutoArrangeBuild(
     }
     const advanced = advanceToNextStep(buildState, stepIndex, phaseStepTargets)
     buildState = advanced.buildState
+    // advanced.stepIndex is already stepIndex + 1 -- advanceToNextStep's
+    // own return value is the NEXT step about to start, not the one just
+    // finished. Unlike the inner loop's own `stepIndex + 1` above (where
+    // stepIndex is still the CURRENT, unadvanced step being built),
+    // stepIndex here has already been reassigned to that advanced value,
+    // so it's already the correct "one past the last real section built"
+    // count on its own -- adding another +1 double-counts a section that
+    // was never actually built (real bug, caught by code review: it
+    // silently tacked on a whole extra 4-bar section of dead air whenever
+    // completion was discovered at a phase transition or the MAX_BUILD_STEPS
+    // safety net, rather than mid-section).
     stepIndex = advanced.stepIndex
-    if (advanced.complete) return { moves, totalSteps: stepIndex + 1 }
+    if (advanced.complete) return { moves, totalSteps: stepIndex }
   }
 }

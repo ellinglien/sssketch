@@ -197,6 +197,24 @@ describe('runAutoArrangeBuild', () => {
     expect(result.totalSteps).toBeLessThan(64) // MAX_BUILD_STEPS
   })
 
+  it('totalSteps is exactly one past the highest stepIndex any move actually touched -- not inflated by a phase-transition completion', () => {
+    // Both stems enter at step 0, both exit at step 3 (breakdown's own
+    // single step target at this scaled-down length) -- completion is then
+    // discovered on the FOLLOWING advanceToNextStep call, at the
+    // breakdown -> outro transition, not mid-section. Real bug this
+    // regression-tests: totalSteps used to double-count that transition,
+    // returning 5 instead of the correct 4 (moves only ever touch steps
+    // 0..3 -- four real sections, not five).
+    const stems = [
+      stemInput({ stemKey: 'a', densityScore: 0.2, role: 'drums' }),
+      stemInput({ stemKey: 'b', densityScore: 0.8, role: 'bass' })
+    ]
+    const result = runAutoArrangeBuild(stems, 'buildUp', 5, () => 0)
+    const highestStepTouched = Math.max(...result.moves.map((m) => m.stepIndex))
+    expect(result.totalSteps).toBe(highestStepTouched + 1)
+    expect(result.totalSteps).toBe(4)
+  })
+
   it('terminates for startFull too, without hitting MAX_BUILD_STEPS, for a small stem set', () => {
     const stems = [
       stemInput({ stemKey: 'a', densityScore: 0.2 }),
