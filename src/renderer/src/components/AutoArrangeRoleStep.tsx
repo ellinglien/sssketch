@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { usePlacedFlatStems, type FlatStem } from '../state/usePlacedFlatStems'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
@@ -11,20 +11,34 @@ import {
   type StemFrequency,
   type StemRoleInfo
 } from '@shared/stemRole'
+import { MIN_STEMS_FOR_FULL_ARC } from '@shared/autoArrangeEngine'
 import { getStemFeatures } from '../audio/stemFeaturesCache'
 import { Waveform } from './Waveform'
 import { typeColorVar } from '../theme/typeColor'
 import { stemKey } from '@shared/types'
 import { playButtonStyle } from './autoArrangeStyles'
+import { startPointerDrag } from './dragUtils'
+import { elapsedLabel } from '@shared/visuals'
+import { ARRANGE_STEP_BARS, DRAW_ARRANGE_SECTIONS } from '@shared/autoArrangeApply'
+import { minSectionsForShape, type ArrangeShape } from '@shared/autoArrangeAutomation'
 
 interface Props {
-  onConfirm: (roles: StemRoleInfo[]) => void
+  onConfirm: (
+    roles: StemRoleInfo[],
+    buildOptions?: { targetSections: number; shape: ArrangeShape }
+  ) => void
   onCancel: () => void
   // New, both optional -- omitting either preserves today's exact
   // Auto-Arrange behavior unchanged. Added for Draw Arrangement's reuse
   // of this same role-confirmation step (see DrawArrangeWizard.tsx).
   showFrequency?: boolean
   skippable?: boolean
+  // Default true -- Auto-Arrange's own call site (AutoArrangeWizard.tsx)
+  // needs these; Draw Arrangement's (DrawArrangeWizard.tsx) explicitly
+  // passes false, since a drawn arrangement's length/shape come from the
+  // grid itself, not an upfront choice, and the warning text below
+  // specifically references phases Draw Arrangement doesn't have.
+  showLengthAndShape?: boolean
 }
 
 // The 8 arrangement-oriented categories, replacing the old raw-SoundType
@@ -101,7 +115,8 @@ export function AutoArrangeRoleStep({
   onConfirm,
   onCancel,
   showFrequency = true,
-  skippable = false
+  skippable = false,
+  showLengthAndShape = true
 }: Props): React.JSX.Element {
   const dispatch = useDispatch()
   const busOf = useAppSelector((s) => s.busOf)
@@ -115,6 +130,29 @@ export function AutoArrangeRoleStep({
 
   const [roles, setRoles] = useState<StemRoleInfo[] | null>(null)
   const [densities, setDensities] = useState<Record<string, number>>({})
+
+  // Default 10 sections (40 bars) -- identical to today's fixed total, so a
+  // user who never touches the drag control gets the same length auto-arrange
+  // has always produced.
+  const [targetSections, setTargetSections] = useState(10)
+  const [shape, setShape] = useState<ArrangeShape>('buildUp')
+  const [isDraggingLength, setIsDraggingLength] = useState(false)
+  const targetSectionsAtDragStart = useRef(targetSections)
+
+  // Switching shape can raise the minimum selectable length (e.g. from
+  // startFull's 2 up to buildUp's 5) -- clamp up, never down, so a
+  // previously-chosen longer length is never silently shortened just
+  // because you changed shape. Applied directly in the shape button's own
+  // onClick below rather than via a useEffect keyed on `shape` -- shape
+  // only ever changes from that one click, and a setState-on-shape-change
+  // effect would fire synchronously in the effect body, tripping this
+  // codebase's react-hooks/set-state-in-effect rule (see
+  // ClusterStemsBrowser.tsx/BeatPicker.tsx's own comments on the same
+  // rule for precedent).
+  function selectShape(next: ArrangeShape): void {
+    setShape(next)
+    setTargetSections((prev) => Math.max(prev, minSectionsForShape(next)))
+  }
 
   // previewingKeys/startPreview -- including muteSnapshot, the unmount
   // cleanup that restores it, and the async-ordering fix for the
@@ -159,6 +197,33 @@ export function AutoArrangeRoleStep({
     }
     return map
   }, [placedRifffs, playedBarsOverrides, leftCropOverrides, stretchOverrides, stateBpm])
+
+  // Mirrors SketchStrip.tsx's own draggable-bar-count control: reuses the
+  // same shared startPointerDrag helper (dragUtils.ts), drag up increases
+  // the value (screen Y decreases upward, so -deltaY is positive going
+  // up), committed live as you drag rather than only on release -- there's
+  // no separate "confirm" step here the way SketchStrip's SET_PLAYED_BARS
+  // dispatch needs, since nothing is dispatched until "continue"/"skip" is
+  // clicked anyway.
+  const LENGTH_DRAG_PX_PER_STEP = 20
+
+  function handleLengthPointerDown(e: React.MouseEvent): void {
+    targetSectionsAtDragStart.current = targetSections
+    setIsDraggingLength(true)
+    startPointerDrag(
+      e,
+      (_deltaX, deltaY) => {
+        const stepsMoved = Math.round(-deltaY / LENGTH_DRAG_PX_PER_STEP)
+        const min = minSectionsForShape(shape)
+        const next = Math.max(
+          min,
+          Math.min(DRAW_ARRANGE_SECTIONS, targetSectionsAtDragStart.current + stepsMoved)
+        )
+        setTargetSections(next)
+      },
+      () => setIsDraggingLength(false)
+    )
+  }
 
   // Per-row play button -- pressing it again on the stem it's ALREADY
   // previewing stops playback instead of re-triggering it (a real toggle);
@@ -404,6 +469,61 @@ export function AutoArrangeRoleStep({
           this treats every stem currently placed on the timeline as fresh material -- finishing it
           replaces what&apos;s there now, even if you&apos;ve already run it before.
         </div>
+        {showLengthAndShape && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>length</span>
+                <span
+                  onMouseDown={handleLengthPointerDown}
+                  title="drag up/down to change the built arrangement's length"
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: 'ns-resize',
+                    color: isDraggingLength ? 'var(--ra-stretch-on)' : 'var(--ra-text)',
+                    userSelect: 'none'
+                  }}
+                >
+                  {elapsedLabel(targetSections * ARRANGE_STEP_BARS, stateBpm)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {(
+                  [
+                    { value: 'buildUp', label: 'build up' },
+                    { value: 'stayBusy', label: 'stay busy' },
+                    { value: 'startFull', label: 'start full' }
+                  ] as const
+                ).map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => selectShape(value)}
+                    style={{
+                      height: 20,
+                      borderRadius: 0,
+                      padding: '0 8px',
+                      fontSize: 9,
+                      border: `1px solid ${shape === value ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                      background: shape === value ? 'var(--ra-stretch-on-bg)' : 'transparent',
+                      color: shape === value ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {includedKeys.length < MIN_STEMS_FOR_FULL_ARC && (
+              <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginBottom: 10 }}>
+                only {includedKeys.length} stem{includedKeys.length === 1 ? '' : 's'} included --
+                the full intro/build/peak/breakdown/outro arc works best with more variety; expect
+                it to feel thin.
+              </div>
+            )}
+          </>
+        )}
         {roles.map((role) => {
           const fs = flatStemsByKey.get(role.stemKey)
           const isPreviewing = previewingKeys.has(role.stemKey)
@@ -625,7 +745,9 @@ export function AutoArrangeRoleStep({
           </button>
           {skippable && (
             <button
-              onClick={() => onConfirm(roles)}
+              onClick={() =>
+                onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
+              }
               style={{
                 height: 22,
                 borderRadius: 0,
@@ -640,7 +762,9 @@ export function AutoArrangeRoleStep({
             </button>
           )}
           <button
-            onClick={() => onConfirm(roles)}
+            onClick={() =>
+              onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
+            }
             style={{
               height: 22,
               borderRadius: 0,
