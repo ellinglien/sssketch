@@ -369,6 +369,21 @@ describe('advancePhase', () => {
     expect(next.activeStemKeys).toEqual(['a'])
     expect(next.lastExitStep).toEqual({ b: 2 })
   })
+
+  it('uses a custom phaseStepTargets record when one is provided, instead of the default', () => {
+    const custom = { intro: 1, build: 1, peak: 1, breakdown: 1, outro: 1 }
+    const next = advancePhase(buildState({ phase: 'intro', stepsInPhase: 0 }), custom)
+    // Default PHASE_STEP_TARGETS.intro is 2 -- with a custom target of 1,
+    // a single advance should already cross into 'build'.
+    expect(next.phase).toBe('build')
+    expect(next.stepsInPhase).toBe(0)
+  })
+
+  it('omitting phaseStepTargets keeps using the default PHASE_STEP_TARGETS, unchanged', () => {
+    const next = advancePhase(buildState({ phase: 'intro', stepsInPhase: 0 }))
+    expect(next.phase).toBe('intro')
+    expect(next.stepsInPhase).toBe(1)
+  })
 })
 
 describe('retreatPhase', () => {

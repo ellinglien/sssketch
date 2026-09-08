@@ -242,6 +242,12 @@ describe('advanceToNextStep', () => {
     )
     expect(result.complete).toBe(false)
   })
+
+  it('forwards a custom phaseStepTargets through to advancePhase', () => {
+    const custom = { intro: 1, build: 1, peak: 1, breakdown: 1, outro: 1 }
+    const result = advanceToNextStep(buildState({ phase: 'intro', stepsInPhase: 0 }), 0, custom)
+    expect(result.buildState.phase).toBe('build')
+  })
 })
 
 describe('retreatToPreviousStep', () => {

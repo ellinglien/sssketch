@@ -5,6 +5,7 @@ import {
   retreatPhase,
   type ArrangeBuildState,
   type ArrangeCandidate,
+  type ArrangePhase,
   type ArrangeStemInput
 } from './autoArrangeEngine'
 import type { ArrangeMoveRecord } from './autoArrangeApply'
@@ -78,10 +79,11 @@ export interface AdvanceStepResult {
 // via this function now).
 export function advanceToNextStep(
   buildState: ArrangeBuildState,
-  stepIndex: number
+  stepIndex: number,
+  phaseStepTargets?: Record<ArrangePhase, number>
 ): AdvanceStepResult {
   const nextStepIndex = stepIndex + 1
-  const nextState = advancePhase(buildState)
+  const nextState = advancePhase(buildState, phaseStepTargets)
   const complete = isArrangementComplete(nextState) || nextStepIndex >= MAX_BUILD_STEPS
   return { buildState: nextState, stepIndex: nextStepIndex, complete }
 }

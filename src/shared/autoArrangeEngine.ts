@@ -247,11 +247,19 @@ export function advanceBuildState(
 // isArrangementComplete, not running out of phases. Pure, no other
 // arguments needed: phase targets are fixed constants, not stem-count- or
 // stepIndex-dependent.
-export function advancePhase(buildState: ArrangeBuildState): ArrangeBuildState {
+// phaseStepTargets defaults to the module's own PHASE_STEP_TARGETS, so
+// every existing caller keeps its exact current behavior unchanged. The
+// automated build (autoArrangeAutomation.ts, a later task) is the only
+// caller that ever passes a different record -- a scaled-to-fit-a-
+// requested-length version of these same five numbers.
+export function advancePhase(
+  buildState: ArrangeBuildState,
+  phaseStepTargets: Record<ArrangePhase, number> = PHASE_STEP_TARGETS
+): ArrangeBuildState {
   const nextStepsInPhase = buildState.stepsInPhase + 1
   const currentIndex = PHASE_ORDER.indexOf(buildState.phase)
   const isLastPhase = currentIndex === PHASE_ORDER.length - 1
-  if (!isLastPhase && nextStepsInPhase >= PHASE_STEP_TARGETS[buildState.phase]) {
+  if (!isLastPhase && nextStepsInPhase >= phaseStepTargets[buildState.phase]) {
     return { ...buildState, phase: PHASE_ORDER[currentIndex + 1], stepsInPhase: 0 }
   }
   return { ...buildState, stepsInPhase: nextStepsInPhase }
