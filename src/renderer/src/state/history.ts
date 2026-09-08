@@ -1,6 +1,17 @@
 import { reducer, type Action, type AppState } from './store'
 
-export type HistoryAction = Action | { type: 'UNDO' } | { type: 'REDO' }
+export type HistoryAction =
+  | Action
+  | { type: 'UNDO' }
+  | { type: 'REDO' }
+  // Applies every action in `actions`, in order, but pushes exactly ONE
+  // `past` checkpoint for the whole group -- for any caller that dispatches
+  // several real edits as one logical operation (e.g. buildArrangeReplaceActions'
+  // own PASTE_RIFFF-per-clip-copy-plus-one-DELETE_RIFFFS output) and wants
+  // undo to treat it as one step, not N. `reducer`/`Action` itself never
+  // needs to know this exists -- entirely a history-layer concept, same as
+  // UNDO/REDO/LOAD_STATE below.
+  | { type: 'BATCH'; actions: Action[] }
 
 export interface HistoryState {
   past: AppState[]
@@ -108,6 +119,12 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
   // one's state — starts a fresh history.
   if (action.type === 'LOAD_STATE') {
     return createHistoryState(reducer(state.present, action))
+  }
+
+  if (action.type === 'BATCH') {
+    const past = [...state.past, state.present].slice(-MAX_HISTORY)
+    const present = action.actions.reduce((s, a) => reducer(s, a), state.present)
+    return { past, present, future: [] }
   }
 
   if (TRANSIENT_ACTION_TYPES.has(action.type)) {

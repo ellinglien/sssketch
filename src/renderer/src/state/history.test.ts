@@ -177,3 +177,86 @@ describe('historyReducer', () => {
     expect(h.past.length).toBeLessThanOrEqual(100)
   })
 })
+
+// BATCH -- folds an arbitrary list of Actions through the same reducer but
+// pushes exactly ONE checkpoint for the whole group, for any caller (e.g.
+// an auto-arrange/Draw-Arrangement "apply") that dispatches several real
+// edits as one logical operation and wants undo to treat it as one step.
+describe('historyReducer BATCH', () => {
+  it('applies every wrapped action, producing the same present state as dispatching them one at a time', () => {
+    const start = createHistoryState(initialState)
+    const batched = historyReducer(start, {
+      type: 'BATCH',
+      actions: [{ type: 'SET_TEMPO', bpm: 140 }, { type: 'TOGGLE_TIDIED_VIEW' }]
+    })
+
+    let sequential = start
+    sequential = historyReducer(sequential, { type: 'SET_TEMPO', bpm: 140 })
+    sequential = historyReducer(sequential, { type: 'TOGGLE_TIDIED_VIEW' })
+
+    expect(batched.present).toEqual(sequential.present)
+  })
+
+  it('pushes exactly ONE past entry for the whole batch, not one per wrapped action', () => {
+    const start = createHistoryState(initialState)
+    const batched = historyReducer(start, {
+      type: 'BATCH',
+      actions: [
+        { type: 'SET_TEMPO', bpm: 121 },
+        { type: 'SET_TEMPO', bpm: 122 },
+        { type: 'SET_TEMPO', bpm: 123 }
+      ]
+    })
+    expect(batched.past).toHaveLength(1)
+    expect(batched.past[0]).toEqual(start.present)
+  })
+
+  it('one UNDO after a batch restores the exact pre-batch state, not just the last wrapped action undone', () => {
+    const start = createHistoryState(initialState)
+    const batched = historyReducer(start, {
+      type: 'BATCH',
+      actions: [{ type: 'SET_TEMPO', bpm: 140 }, { type: 'TOGGLE_TIDIED_VIEW' }]
+    })
+    const undone = historyReducer(batched, { type: 'UNDO' })
+    expect(undone.present.bpm).toBe(80)
+    expect(undone.present.tidiedView).toBe(false)
+    expect(undone.past).toHaveLength(0)
+  })
+
+  it('clears future, same as any other tracked action', () => {
+    const start = createHistoryState(initialState)
+    const afterOneEdit = historyReducer(start, { type: 'SET_TEMPO', bpm: 110 })
+    const afterUndo = historyReducer(afterOneEdit, { type: 'UNDO' })
+    expect(afterUndo.future).toHaveLength(1)
+    const afterBatch = historyReducer(afterUndo, {
+      type: 'BATCH',
+      actions: [{ type: 'SET_TEMPO', bpm: 130 }]
+    })
+    expect(afterBatch.future).toHaveLength(0)
+  })
+
+  it("a batch containing a normally-transient action type still counts toward the batch's single checkpoint, not silently dropped", () => {
+    const start = createHistoryState({ ...initialState, mode: 'sketch' })
+    const batched = historyReducer(start, {
+      type: 'BATCH',
+      actions: [
+        { type: 'SET_TEMPO', bpm: 105 },
+        // SET_ARRANGER_MODE is in TRANSIENT_ACTION_TYPES -- dispatched on
+        // its own it wouldn't push a checkpoint at all. Inside a batch, it
+        // must still be APPLIED (present.mode changes), just without
+        // contributing a SEPARATE checkpoint of its own.
+        { type: 'SET_ARRANGER_MODE', mode: 'normal' }
+      ]
+    })
+    expect(batched.present.mode).toBe('normal')
+    expect(batched.present.bpm).toBe(105)
+    expect(batched.past).toHaveLength(1)
+  })
+
+  it('an empty actions array is a no-op that still pushes a checkpoint (present unchanged)', () => {
+    const start = createHistoryState(initialState)
+    const batched = historyReducer(start, { type: 'BATCH', actions: [] })
+    expect(batched.present).toEqual(start.present)
+    expect(batched.past).toHaveLength(1)
+  })
+})

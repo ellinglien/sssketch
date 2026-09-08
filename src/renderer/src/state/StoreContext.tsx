@@ -10,9 +10,9 @@ import {
   type Dispatch,
   type ReactNode
 } from 'react'
-import { initialState, type Action, type AppState } from './store'
+import { initialState, type AppState } from './store'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
-import { createHistoryState, historyReducer } from './history'
+import { createHistoryState, historyReducer, type HistoryAction } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
@@ -42,7 +42,14 @@ export type TransportAction =
   | { type: 'SET_ZOOM'; multiplier: number }
   | { type: 'RESET_ZOOM' }
 
-export type DispatchableAction = Action | TransportAction
+// HistoryAction (not just Action) so that BATCH -- and UNDO/REDO, though
+// those are dispatched today via historyControls.undo/redo rather than
+// through this dispatch -- are dispatchable through the public dispatch()/
+// useDispatch(), not just through the internal rawDispatch below. Widened
+// here specifically so BATCH doesn't need a cast at any future call site
+// (e.g. an auto-arrange/Draw-Arrangement apply) that wants one undo
+// checkpoint for a group of actions.
+export type DispatchableAction = HistoryAction | TransportAction
 
 // A passive mirror of the reducer's own state (history.present, below),
 // letting components subscribe to specific fields via useAppSelector
