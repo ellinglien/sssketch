@@ -65,10 +65,14 @@ export function DrawArrangeWizard({ onClose }: Props): React.JSX.Element {
 
   function handleApply(moves: ArrangeMoveRecord[], totalSteps: number): void {
     const actions = buildArrangeReplaceActions(state, moves, totalSteps)
-    for (const action of actions) {
-      dispatch(action)
-    }
-    dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
+    // One BATCH dispatch, not a loop -- see AutoArrangeWizard.tsx's own
+    // identical change for why: without this, undoing a drawn arrangement
+    // cost one Cmd+Z per pasted clip copy instead of one for the whole
+    // apply.
+    dispatch({
+      type: 'BATCH',
+      actions: [...actions, { type: 'SET_ARRANGER_MODE', mode: 'normal' }]
+    })
     onClose()
   }
 
