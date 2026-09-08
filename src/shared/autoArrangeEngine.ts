@@ -241,12 +241,12 @@ export function advanceBuildState(
 
 // Advances the build by one step: bumps stepsInPhase, and rolls to the next
 // PHASE_ORDER entry (resetting stepsInPhase to 0) once the current phase's
-// PHASE_STEP_TARGETS has been reached. Once already at the last phase
+// phaseStepTargets has been reached. Once already at the last phase
 // ('outro'), further calls just keep incrementing stepsInPhase with no
 // further transition -- the build's real end condition is
-// isArrangementComplete, not running out of phases. Pure, no other
-// arguments needed: phase targets are fixed constants, not stem-count- or
-// stepIndex-dependent.
+// isArrangementComplete, not running out of phases. Pure -- no stem-count
+// or stepIndex dependency in the transition logic itself.
+//
 // phaseStepTargets defaults to the module's own PHASE_STEP_TARGETS, so
 // every existing caller keeps its exact current behavior unchanged. The
 // automated build (autoArrangeAutomation.ts, a later task) is the only
