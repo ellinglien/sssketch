@@ -20,7 +20,10 @@ type WizardStep = { phase: 'role' } | { phase: 'grid'; stems: GridStem[] }
  * dispatch -- Draw Arrangement's own equivalent of AutoArrangeWizard.tsx,
  * reusing that same role-confirmation step (showFrequency/skippable both
  * off/on respectively, since Draw Arrangement's grid has no concept of
- * re-entry frequency) but wiring it to the drawing grid instead of the
+ * re-entry frequency; showLengthAndShape off too, since a drawn
+ * arrangement's length/shape come from the grid itself, not an upfront
+ * choice, and that step's own advisory text references phases this flow
+ * doesn't have) but wiring it to the drawing grid instead of the
  * weighted-candidate build step.
  *
  * handleRoleConfirm here is synchronous and does no feature extraction --
@@ -76,6 +79,7 @@ export function DrawArrangeWizard({ onClose }: Props): React.JSX.Element {
         onCancel={onClose}
         showFrequency={false}
         skippable={true}
+        showLengthAndShape={false}
       />
     )
   }
