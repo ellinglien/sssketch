@@ -9,7 +9,11 @@ import {
 } from './autoArrangeEngine'
 import type { ArrangeMoveRecord } from './autoArrangeApply'
 
-export const MAX_CANDIDATES_SHOWN = 3
+// How many of the current top-weighted candidates are even in consideration
+// for a pick -- used both by selectTopCandidates below (today's only
+// caller) and by the automated build's weighted-random selection
+// (autoArrangeAutomation.ts's pickWeightedRandomCandidate, a later task).
+export const TOP_CANDIDATE_POOL_SIZE = 3
 // Safety cap so a pathological weighting (or a single included stem that can
 // never reach outro) can't loop forever.
 export const MAX_BUILD_STEPS = 64
@@ -94,7 +98,7 @@ export function advanceToNextStep(
 // rather than shuffling unpredictably between renders.
 export function selectTopCandidates(
   candidates: ArrangeCandidate[],
-  max: number = MAX_CANDIDATES_SHOWN
+  max: number = TOP_CANDIDATE_POOL_SIZE
 ): ArrangeCandidate[] {
   return [...candidates].sort((a, b) => b.weight - a.weight).slice(0, max)
 }
