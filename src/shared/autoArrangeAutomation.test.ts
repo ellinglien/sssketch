@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   minSectionsForShape,
   phaseStepTargetsForShape,
-  initialBuildStateForShape
+  initialBuildStateForShape,
+  pickWeightedRandomCandidate,
+  runAutoArrangeBuild,
+  MAX_AUTO_MOVES_PER_SECTION
 } from './autoArrangeAutomation'
-import { PHASE_STEP_TARGETS, type ArrangeStemInput } from './autoArrangeEngine'
+import {
+  PHASE_STEP_TARGETS,
+  type ArrangeStemInput,
+  type ArrangeCandidate
+} from './autoArrangeEngine'
 
 function stemInput(overrides: Partial<ArrangeStemInput>): ArrangeStemInput {
   return {
@@ -123,5 +130,137 @@ describe('initialBuildStateForShape', () => {
     const state = initialBuildStateForShape('startFull', [stemInput({ included: false })])
     expect(state.activeStemKeys).toEqual([])
     expect(state.phase).toBe('breakdown')
+  })
+})
+
+function candidate(overrides: Partial<ArrangeCandidate>): ArrangeCandidate {
+  return {
+    stemKey: 's1',
+    moveType: 'enter',
+    weight: 0.5,
+    reason: 'sparse -- good early/building material',
+    ...overrides
+  }
+}
+
+describe('pickWeightedRandomCandidate', () => {
+  it('returns undefined for an empty candidate list', () => {
+    expect(pickWeightedRandomCandidate([], () => 0)).toBeUndefined()
+  })
+
+  it('with random() returning 0, always picks the single highest-weighted candidate', () => {
+    const candidates = [
+      candidate({ stemKey: 'low', weight: 0.1 }),
+      candidate({ stemKey: 'high', weight: 0.9 }),
+      candidate({ stemKey: 'mid', weight: 0.5 })
+    ]
+    expect(pickWeightedRandomCandidate(candidates, () => 0)!.stemKey).toBe('high')
+  })
+
+  it('with random() returning just under 1, picks the lowest-weighted candidate in the top pool', () => {
+    const candidates = [
+      candidate({ stemKey: 'low', weight: 0.1 }),
+      candidate({ stemKey: 'high', weight: 0.9 }),
+      candidate({ stemKey: 'mid', weight: 0.5 })
+    ]
+    expect(pickWeightedRandomCandidate(candidates, () => 0.9999)!.stemKey).toBe('low')
+  })
+
+  it('only considers the current top TOP_CANDIDATE_POOL_SIZE candidates, never one ranked below it', () => {
+    const candidates = Array.from({ length: 6 }, (_, i) =>
+      candidate({ stemKey: `s${i}`, weight: i })
+    ) // s0..s5, weight == index -- s0/s1/s2 are the bottom three, never in the top-3 pool
+    for (const r of [0, 0.3, 0.6, 0.9999]) {
+      const picked = pickWeightedRandomCandidate(candidates, () => r)!.stemKey
+      expect(['s3', 's4', 's5']).toContain(picked)
+    }
+  })
+
+  it('falls back to a uniform pick when every candidate in the pool has zero weight', () => {
+    const candidates = [
+      candidate({ stemKey: 'a', weight: 0 }),
+      candidate({ stemKey: 'b', weight: 0 })
+    ]
+    expect(pickWeightedRandomCandidate(candidates, () => 0)!.stemKey).toBe('a')
+    expect(pickWeightedRandomCandidate(candidates, () => 0.9999)!.stemKey).toBe('b')
+  })
+})
+
+describe('runAutoArrangeBuild', () => {
+  it('terminates for buildUp with a small stem set, without hitting MAX_BUILD_STEPS', () => {
+    const stems = [
+      stemInput({ stemKey: 'a', densityScore: 0.2, role: 'drums' }),
+      stemInput({ stemKey: 'b', densityScore: 0.8, role: 'bass' })
+    ]
+    const result = runAutoArrangeBuild(stems, 'buildUp', 5, () => 0)
+    expect(result.moves.length).toBeGreaterThan(0)
+    expect(result.totalSteps).toBeLessThan(64) // MAX_BUILD_STEPS
+  })
+
+  it('terminates for startFull too, without hitting MAX_BUILD_STEPS, for a small stem set', () => {
+    const stems = [
+      stemInput({ stemKey: 'a', densityScore: 0.2 }),
+      stemInput({ stemKey: 'b', densityScore: 0.8 })
+    ]
+    const result = runAutoArrangeBuild(stems, 'startFull', 2, () => 0)
+    expect(result.totalSteps).toBeLessThan(64)
+  })
+
+  it("startFull's every included stem has 'exit' as its EARLIEST move, never 'enter' -- confirms it truly starts active, not entering", () => {
+    const stems = [
+      stemInput({ stemKey: 'a', densityScore: 0.3 }),
+      stemInput({ stemKey: 'b', densityScore: 0.7 })
+    ]
+    const result = runAutoArrangeBuild(stems, 'startFull', 4, () => 0)
+    const earliestByStem = new Map<string, (typeof result.moves)[number]>()
+    for (const move of result.moves) {
+      const existing = earliestByStem.get(move.stemKey)
+      if (!existing || move.stepIndex < existing.stepIndex) earliestByStem.set(move.stemKey, move)
+    }
+    for (const move of earliestByStem.values()) {
+      expect(move.moveType).toBe('exit')
+    }
+  })
+
+  it('a fake random sequence produces a genuinely different result than a different fake sequence, for the same input', () => {
+    const stems = [
+      stemInput({ stemKey: 'sparse', densityScore: 0.1, role: 'drums' }),
+      stemInput({ stemKey: 'dense', densityScore: 0.9, role: 'bass' })
+    ]
+    const alwaysTop = runAutoArrangeBuild(stems, 'buildUp', 5, () => 0)
+    const alwaysBottomOfPool = runAutoArrangeBuild(stems, 'buildUp', 5, () => 0.9999)
+    // The very first move applied should differ: alwaysTop picks the
+    // highest-weighted (sparsest) stem first every time; alwaysBottomOfPool
+    // -- with only 2 stems, both always in the top-2 pool -- picks
+    // whichever ranks LOWEST of the (at most 2) available each time,
+    // meaning it picks the OTHER one first instead.
+    expect(alwaysTop.moves[0].stemKey).not.toBe(alwaysBottomOfPool.moves[0].stemKey)
+  })
+
+  it('zero included stems produces zero moves and terminates quickly', () => {
+    const result = runAutoArrangeBuild([stemInput({ included: false })], 'buildUp', 10, () => 0)
+    expect(result.moves).toEqual([])
+    expect(result.totalSteps).toBeLessThan(64)
+  })
+
+  it('fewer than MIN_STEMS_FOR_FULL_ARC stems still runs and terminates -- the "too few stems" warning is advisory only, not enforced here', () => {
+    const result = runAutoArrangeBuild([stemInput({ stemKey: 'only-one' })], 'buildUp', 5, () => 0)
+    expect(result.totalSteps).toBeLessThan(64)
+  })
+
+  it('defaults random to Math.random when omitted -- does not throw, produces a plausible result', () => {
+    const stems = [stemInput({ stemKey: 'a' }), stemInput({ stemKey: 'b' })]
+    const result = runAutoArrangeBuild(stems, 'buildUp', 5)
+    expect(result.totalSteps).toBeGreaterThan(0)
+    expect(result.totalSteps).toBeLessThan(64)
+  })
+
+  it('applies at most MAX_AUTO_MOVES_PER_SECTION moves within a single section before advancing', () => {
+    const stems = Array.from({ length: 5 }, (_, i) =>
+      stemInput({ stemKey: `s${i}`, densityScore: i / 10, role: `role${i}` })
+    )
+    const result = runAutoArrangeBuild(stems, 'buildUp', 10, () => 0)
+    const movesInFirstSection = result.moves.filter((m) => m.stepIndex === 0)
+    expect(movesInFirstSection.length).toBeLessThanOrEqual(MAX_AUTO_MOVES_PER_SECTION)
   })
 })

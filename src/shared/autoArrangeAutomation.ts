@@ -1,4 +1,17 @@
-import type { ArrangeBuildState, ArrangePhase, ArrangeStemInput } from './autoArrangeEngine'
+import {
+  computeCandidates,
+  type ArrangeBuildState,
+  type ArrangeCandidate,
+  type ArrangePhase,
+  type ArrangeStemInput
+} from './autoArrangeEngine'
+import {
+  applyCandidate,
+  advanceToNextStep,
+  selectTopCandidates,
+  TOP_CANDIDATE_POOL_SIZE
+} from './autoArrangeBuildStep'
+import type { ArrangeMoveRecord } from './autoArrangeApply'
 
 export type ArrangeShape = 'buildUp' | 'stayBusy' | 'startFull'
 
@@ -120,4 +133,84 @@ export function initialBuildStateForShape(
     }
   }
   return { activeStemKeys: [], phase: 'intro', stepsInPhase: 0, lastExitStep: {} }
+}
+
+// Picks one candidate from the current top TOP_CANDIDATE_POOL_SIZE (by
+// weight), with probability proportional to weight -- the single
+// best-weighted candidate is still the *most likely* pick, but not the
+// *only possible* one. This is what makes an undo-then-rerun actually
+// produce a different result instead of deterministically reproducing the
+// same build every time. Returns undefined for an empty candidate list
+// (nothing to pick).
+export function pickWeightedRandomCandidate(
+  candidates: ArrangeCandidate[],
+  random: () => number
+): ArrangeCandidate | undefined {
+  const pool = selectTopCandidates(candidates, TOP_CANDIDATE_POOL_SIZE)
+  if (pool.length === 0) return undefined
+  const totalWeight = pool.reduce((sum, c) => sum + c.weight, 0)
+  // Every candidate's weight is non-negative by construction (see
+  // autoArrangeEngine.ts's own weight formulas) -- a zero total means every
+  // candidate in the pool weighs exactly 0, so fall back to a plain
+  // uniform pick rather than dividing by zero.
+  if (totalWeight <= 0) {
+    return pool[Math.floor(random() * pool.length)]
+  }
+  const draw = random() * totalWeight
+  let cumulative = 0
+  for (const c of pool) {
+    cumulative += c.weight
+    if (draw < cumulative) return c
+  }
+  return pool[pool.length - 1] // floating-point safety net
+}
+
+export interface AutomatedBuildResult {
+  moves: ArrangeMoveRecord[]
+  totalSteps: number
+}
+
+// How many top-weighted picks the automated build applies within one
+// section before moving to the next -- per direct feedback ("multiple
+// moves per section, like a careful manual build"), not just one. Shares
+// TOP_CANDIDATE_POOL_SIZE's own value rather than inventing a second magic
+// number for a closely related idea, but stays its own independently-
+// tunable constant since "how many candidates to consider" and "how many
+// moves to commit per section" are different questions that could drift
+// apart later.
+export const MAX_AUTO_MOVES_PER_SECTION = TOP_CANDIDATE_POOL_SIZE
+
+// Runs the weighted engine to completion with no per-step human input.
+// Reuses computeCandidates/applyCandidate/advanceToNextStep completely
+// unchanged; this function only decides the STARTING state
+// (initialBuildStateForShape), the per-phase step BUDGET
+// (phaseStepTargetsForShape), and WHICH candidate to apply at each pick
+// (pickWeightedRandomCandidate) -- the engine itself has no idea any of
+// this is automated.
+export function runAutoArrangeBuild(
+  stems: ArrangeStemInput[],
+  shape: ArrangeShape,
+  targetSections: number,
+  random: () => number = Math.random
+): AutomatedBuildResult {
+  const phaseStepTargets = phaseStepTargetsForShape(shape, targetSections)
+  let buildState = initialBuildStateForShape(shape, stems)
+  let moves: ArrangeMoveRecord[] = []
+  let stepIndex = 0
+
+  for (;;) {
+    for (let i = 0; i < MAX_AUTO_MOVES_PER_SECTION; i++) {
+      const candidates = computeCandidates(stems, buildState, stepIndex)
+      const picked = pickWeightedRandomCandidate(candidates, random)
+      if (!picked) break
+      const result = applyCandidate(moves, buildState, stems, stepIndex, picked)
+      moves = result.moves
+      buildState = result.buildState
+      if (result.complete) return { moves, totalSteps: stepIndex + 1 }
+    }
+    const advanced = advanceToNextStep(buildState, stepIndex, phaseStepTargets)
+    buildState = advanced.buildState
+    stepIndex = advanced.stepIndex
+    if (advanced.complete) return { moves, totalSteps: stepIndex + 1 }
+  }
 }
