@@ -49,11 +49,7 @@ export function minSectionsForShape(shape: ArrangeShape): number {
 // `targetTotal >= phases.length` (minSectionsForShape's own job) -- below
 // that there's no way to keep every phase at its floor of 1, and this
 // function does not guard against it.
-function scaleToTarget(
-  _phases: ArrangePhase[],
-  weights: number[],
-  targetTotal: number
-): number[] {
+function scaleToTarget(_phases: ArrangePhase[], weights: number[], targetTotal: number): number[] {
   const totalWeight = weights.reduce((a, b) => a + b, 0)
   const raw = weights.map((w) => (w / totalWeight) * targetTotal)
   const floors = raw.map((r) => Math.max(1, Math.floor(r)))
