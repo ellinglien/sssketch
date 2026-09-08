@@ -7,7 +7,11 @@ automated build: confirm roles, then the arrangement builds and applies itself i
 Elling's own words: "auto-arrangement can go completely automated maybe? instead of step by
 step. i find the step by step tedious for now." Since this removes all per-step manual
 control, three new upfront controls replace it: a target length, a choice of arc shape, and
-(with no new UI at all) the ability to get a different result by simply re-running.
+(with no new "regenerate" UI) the ability to get a different result by undoing and re-running.
+Getting that last one right turned out to need a real, general fix to how undo handles an
+arrangement apply — see §3 below; this wasn't part of the original ask, but came up when
+Elling asked "will re-running actually work... what would happen if I stack a bunch of clips
+in 32 bars?" and the honest answer, verified against the real code, was "not correctly, yet."
 
 ## Background — what exists today
 
@@ -37,10 +41,10 @@ This design reuses every one of those pieces completely unchanged. Nothing in
 
 - **No preview/scrub screen for the built result.** The automated build applies directly to
   the timeline the moment it finishes, exactly like today's "finish now" and Draw
-  Arrangement's "apply arrangement" already do. Undo (Cmd+Z) or simply re-running (which
-  already warns that it starts fresh) are how you back out of a result you don't like — this
-  was deliberately confirmed with Elling rather than assumed, since it's the one part of this
-  design that could have gone either way.
+  Arrangement's "apply arrangement" already do — deliberately confirmed with Elling
+  rather than assumed, since it's the one part of this design that could have gone either
+  way. Undo, then re-running, is how you back out of a result you don't like — see §3 for why
+  that needed a real fix to actually work, not just a claim that it already did.
 - **No moving position indicator on Draw Arrangement's own "preview section" button.**
   Elling separately noticed that button has no visual feedback for where playback currently
   is. That's real, but scoped as its own small follow-up task after this one, not part of
@@ -120,24 +124,65 @@ exactly):
   is pre-existing engine behavior, not something new this design introduces, but is more
   likely to actually be visible under "start full" than under the other two shapes.
 
-### 3. Regeneration, with no new UI
+### 3. Undo, batched into one checkpoint per arrangement
 
-Since there's no more per-candidate manual picking, the automated build would otherwise be
-fully deterministic — same roles in, same result out, every time. Rather than adding a
-"regenerate" button (and the preview screen it would imply, which was deliberately ruled
-out above), candidate selection at each step becomes **weighted-random** instead of
-strictly-top-weighted: at each pick, take the current top `MAX_CANDIDATES_SHOWN` (3)
-candidates (freshly recomputed after every apply, exactly as today), and choose among them
-with probability proportional to weight — so the single best-weighted candidate is still the
-*most likely* pick every time, but not the *only possible* one. Re-running auto-arrange
-(already possible today, and already warns that it starts fresh) now naturally gives a
-genuinely different result if the first one didn't land right, with zero new UI surface.
+**The problem, verified against the real code, not assumed.** `buildArrangeReplaceActions`
+deletes every touched original rifff and replaces it with independent per-stem windowed
+clips — confirmed unchanged, and not something this design touches. But nothing marks a
+result as "produced by auto-arrange" (`AutoArrangeWizard.tsx` already says so explicitly:
+"a 'previous run' is no longer a detectable marker on a stem; it's indistinguishable from
+clips placed by hand"), so re-running without undoing first doesn't get you back to your
+original material — it pools the *first run's own output* as the new "fresh material,"
+which can fragment a stem that had multiple re-entry windows into several separate ones on
+each successive run. And undo, while genuinely wired up (`useHistory`, confirmed
+undo-backed), isn't currently batched: `historyReducer` (`src/renderer/src/state/
+history.ts`) pushes one snapshot of the *entire* `AppState` onto its `past` stack per
+non-transient action, and today's apply dispatches one `PASTE_RIFFF`/`SET_FADE_IN`/
+`SET_FADE_OUT`/`ASSIGN_TO_BUS`/`MOVE_TO_CHANNEL`/`TOGGLE_STRETCH` *per clip copy*, plus one
+`DELETE_RIFFFS` — a real build easily costs 15-30+ individual undo presses to unwind, not
+the one you'd expect.
 
-The new automated-runner function takes an injectable `random: () => number` (defaulting to
-`Math.random`), matching this codebase's existing convention for testable non-determinism —
-tests supply a fixed sequence to assert exact, reproducible candidate choices.
+**The fix — general, not specific to auto-arrange.** A new `{ type: 'BATCH', actions:
+Action[] }` `HistoryAction`, handled by `historyReducer` the same way it already
+special-cases `UNDO`/`REDO`/`LOAD_STATE`: push exactly **one** snapshot of `state.present`
+(the state *before* the whole batch), fold every wrapped action through the existing
+`reducer` in sequence to compute the final `present`, clear `future` — same net state result
+as dispatching each action individually, but one checkpoint instead of many. `reducer`/
+`Action` itself never needs to know `BATCH` exists; this stays entirely a history-layer
+concept, exactly how `UNDO`/`REDO` already are. `SET_ARRANGER_MODE` (already harmless to
+include, since it's separately marked transient) folds into the same batch rather than being
+dispatched after it, so the whole apply — arrangement plus the mode switch — really is one
+single `dispatch({ type: 'BATCH', actions: [...] })` call, one undo press to unwind.
 
-### 4. What gets deleted
+This directly replaces both wizards' current `for (const action of actions) dispatch(action)`
+loops (`AutoArrangeWizard.tsx`'s soon-to-be-replaced `handleBuildComplete`, and
+`DrawArrangeWizard.tsx`'s `handleApply`) — meaning **Draw Arrangement's apply becomes a
+single undo step too**, not just the new automated auto-arrange flow. A real, if modest,
+general improvement this feature happens to motivate, not a special-case hack scoped only to
+itself.
+
+### 4. Regeneration, via undo + re-run — no new button
+
+With apply batched to one undo checkpoint, "try a different build" becomes genuinely just
+"press Cmd+Z, then run auto-arrange again" — undo now cleanly restores your original placed
+material (the stack of clips, exactly as it was), and re-running pools *that*, not the
+previous result. No caching of confirmed roles/stems needed, no dedicated "try again"
+button — the existing re-derivation from the timeline (`usePlacedFlatStems`) already does
+the right thing once the timeline itself is correctly restored.
+
+One more piece is still worth keeping: without it, undo-then-rerun would deterministically
+reproduce the *exact same* arrangement (same roles in, same weighted picks out, every time),
+which isn't really "try a different one." So candidate selection at each step becomes
+**weighted-random** instead of strictly-top-weighted: at each pick, take the current top
+`MAX_CANDIDATES_SHOWN` (3) candidates (freshly recomputed after every apply, exactly as
+today), and choose among them with probability proportional to weight — the single
+best-weighted candidate is still the *most likely* pick every time, but not the *only
+possible* one. The new automated-runner function takes an injectable `random: () => number`
+(defaulting to `Math.random`), matching this codebase's existing convention for testable
+non-determinism — tests supply a fixed sequence to assert exact, reproducible candidate
+choices.
+
+### 5. What gets deleted
 
 `AutoArrangeBuildStep.tsx` in full — its build-progress grid, per-candidate audio preview,
 next/back/finish-now controls, and the `autoArrangeBuildStep.ts` step-orchestration functions
@@ -146,7 +191,7 @@ it alone drove (`applyCandidate`/`advanceToNextStep`/`retreatToPreviousStep`/
 underlying pieces but drives them itself rather than from click handlers. `stemLabelsByKey`/
 `ROLE_LABELS` (`autoArrangeLabels.ts`) stay — Draw Arrangement's own wizard still uses them.
 
-### 5. Testing
+### 6. Testing
 
 The new automated-runner function is real `src/shared/` pure logic — TDD'd per this
 codebase's convention, covering: it terminates for every arc shape without hitting
@@ -154,8 +199,17 @@ codebase's convention, covering: it terminates for every arc shape without hitti
 up/stay busy; "start full" seeds every included stem active in its very first move-derived
 window; the too-few-stems and zero-included-stems edge cases; and that an injected fake
 `random` produces a specific, assertable sequence of picks (proving the weighted-random
-selection is real, not just "trust me it's random"). The role-confirm screen's own two new
-controls (length drag, shape picker) are typecheck+lint-verified only, per this codebase's
-standing convention for React components with no way to click-test a drag gesture in this
-environment — the drag interaction itself needs Elling's own manual walkthrough, same as
-Draw Arrangement's own drag-paint gesture did.
+selection is real, not just "trust me it's random").
+
+`historyReducer`'s new `BATCH` handling is also real, framework-free `src/renderer/src/
+state/` logic — TDD'd covering: a batch of N actions produces exactly one new `past` entry;
+`present` after the batch matches what dispatching each action individually would have
+produced; one `UNDO` after a batch restores the exact pre-batch state (not just the effect of
+the batch's last action); `future` is cleared same as any other tracked action; and a batch
+containing a normally-transient action type (`SET_ARRANGER_MODE`) still contributes to the
+batch's single checkpoint rather than being silently dropped or double-counted.
+
+The role-confirm screen's own two new controls (length drag, shape picker) are
+typecheck+lint-verified only, per this codebase's standing convention for React components
+with no way to click-test a drag gesture in this environment — the drag interaction itself
+needs Elling's own manual walkthrough, same as Draw Arrangement's own drag-paint gesture did.
