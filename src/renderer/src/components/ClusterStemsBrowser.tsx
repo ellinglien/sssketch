@@ -621,7 +621,10 @@ export function ClusterStemsBrowser({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 640,
+          // Widened from 640 (2026-09-14, direct request) -- the 8-category
+          // picker (up from the original 5 buses) was wrapping to 2 lines
+          // on most rows, and this gives most of them room to fit on one.
+          width: 860,
           maxHeight: '80vh',
           overflowY: 'auto',
           background: 'var(--ra-bg-bar)',
