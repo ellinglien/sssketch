@@ -21,6 +21,7 @@ function freshDb(): Database.Database {
       Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY);
+    CREATE TABLE StemFeatureCache (StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL);
   `)
   return db
 }

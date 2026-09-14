@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 import { listLibrarySketches, sketchProjectPath } from './projectLibrary'
 import { upsertStemCategoryBus, type StemBusCategoryEntry } from './stemCategoriesStore'
 import { candidateDbsForRiff } from './riffLibraryStore'
+import { trainCentroidsFromBusEntries } from './categoryCentroidTraining'
 import type { BusId } from '@shared/types'
 
 export interface BackfillSummary {
@@ -89,14 +90,16 @@ export function backfillStemCategoriesFromProjectLibrary(db: Database.Database):
       // back to iteration order instead, which is exactly what this
       // migration must not depend on (see this function's own doc
       // comment).
+      const extraCandidateDbs = candidateDbsForRiff()
       upsertStemCategoryBus(
         db,
         entries,
         'backfill',
         projectPath,
         sketch.mtimeMs / 1000,
-        candidateDbsForRiff()
+        extraCandidateDbs
       )
+      trainCentroidsFromBusEntries(db, entries, extraCandidateDbs)
       categorizedStems += entries.length
     }
   }
