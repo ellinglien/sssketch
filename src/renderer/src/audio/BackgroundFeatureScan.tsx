@@ -1,6 +1,7 @@
 // src/renderer/src/audio/BackgroundFeatureScan.tsx
 import { useEffect, useRef } from 'react'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
+import { getOrExtractStemEmbedding } from './stemEmbeddingCache'
 import { getStemFeatures } from './stemFeaturesCache'
 
 // Small batches with a real delay between them, rather than firing every
@@ -47,8 +48,17 @@ export function BackgroundFeatureScan(): null {
       for (const fs of batch) {
         attemptedRef.current.add(fs.stem.path)
         void getStemFeatures(fs.stem.path).catch((err: unknown) => {
-          console.error('BackgroundFeatureScan: extraction failed for stem', fs.stem.path, err)
+          console.error(
+            'BackgroundFeatureScan: feature extraction failed for stem',
+            fs.stem.path,
+            err
+          )
         })
+        // Embedding extraction (Plan B2) rides the exact same batch/
+        // throttle loop as the hand-crafted feature extraction above,
+        // rather than a second parallel scan -- getOrExtractStemEmbedding
+        // never throws (see its own doc comment), so no .catch needed here.
+        void getOrExtractStemEmbedding(fs.stem.path)
       }
       const nextIndex = startIndex + BATCH_SIZE
       if (nextIndex < toScan.length) {
