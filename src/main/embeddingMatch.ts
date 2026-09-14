@@ -21,7 +21,16 @@ const COLUMN_FOR_AXIS: Record<CategoryAxis, string> = {
  * embeddingMatch.ts's (src/shared/) own suggestCategoryFromEmbedding.
  * `db` is checked first, then each of `extraCandidateDbs` in order -- same
  * convention as every other StemCategories/StemFeatureCache reader in this
- * codebase (stemCategoriesStore.ts's own stemCIDForPath). */
+ * codebase (stemCategoriesStore.ts's own stemCIDForPath).
+ *
+ * Unlike loadCategoryCentroidStore (a small, fixed-shape JSON file read),
+ * this result set grows unboundedly with library size -- every confirmed
+ * AND embedded stem ever, forever, each row carrying a 1024-dim float
+ * array (2026-09-14 code quality review). No caching here yet; whichever
+ * caller(s) end up invoking this once per axis per mount (a later task)
+ * should revisit whether that cost is worth memoizing once the real call
+ * pattern and real library sizes are known -- don't let this silently ride
+ * unbounded as the confirmed-embeddings history grows over months of use. */
 export function getConfirmedEmbeddings(
   db: Database.Database,
   axis: CategoryAxis,

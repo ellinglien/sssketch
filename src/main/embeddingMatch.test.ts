@@ -102,4 +102,42 @@ describe('getConfirmedEmbeddings', () => {
       { category: 'lead', embedding: [7, 8, 9] }
     ])
   })
+
+  it('accumulates rows from BOTH the primary db and an external db when both have valid confirmed embeddings', () => {
+    const db = freshDb()
+    seedStem(db, 'own1')
+    seedCategory(db, 'own1', { busId: 'drums' })
+    seedEmbedding(db, 'own1', [1, 1, 1])
+    const externalDb = freshDb()
+    seedStem(externalDb, 'ext1')
+    seedCategory(externalDb, 'ext1', { busId: 'lead' })
+    seedEmbedding(externalDb, 'ext1', [2, 2, 2])
+
+    expect(getConfirmedEmbeddings(db, 'bus', [externalDb])).toEqual(
+      expect.arrayContaining([
+        { category: 'drums', embedding: [1, 1, 1] },
+        { category: 'lead', embedding: [2, 2, 2] }
+      ])
+    )
+    expect(getConfirmedEmbeddings(db, 'bus', [externalDb])).toHaveLength(2)
+  })
+
+  it('silently skips a row whose EmbeddingJSON fails to parse, rather than throwing', () => {
+    const db = freshDb()
+    seedStem(db, 'good')
+    seedCategory(db, 'good', { busId: 'drums' })
+    seedEmbedding(db, 'good', [1, 2, 3])
+    seedStem(db, 'corrupt')
+    seedCategory(db, 'corrupt', { busId: 'bass' })
+    // Bypasses seedEmbedding's own JSON.stringify to insert genuinely
+    // malformed JSON directly, simulating a corrupted DB file -- same
+    // defensive scenario stemEmbeddingCacheStore.ts's own
+    // getStemEmbeddingCache is documented to handle identically.
+    db.prepare(
+      `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt) VALUES (?, ?, ?)`
+    ).run('corrupt', 'not valid json{{{', 1000)
+
+    expect(() => getConfirmedEmbeddings(db, 'bus')).not.toThrow()
+    expect(getConfirmedEmbeddings(db, 'bus')).toEqual([{ category: 'drums', embedding: [1, 2, 3] }])
+  })
 })
