@@ -34,6 +34,18 @@ export const TYPE_CSS_VAR: Record<SoundType, string> = {
  * set -- few enough to label by ear quickly. */
 export type BusId = 'drums' | 'bass' | 'lead' | 'backing' | 'aux'
 
+/** Serializable reference to "which currently-open project" a forward-
+ * captured StemCategories write came from -- crosses the IPC boundary as
+ * plain data. Structurally identical to App.tsx's own local `CurrentSketch`
+ * state (kept as a separate declaration here rather than imported from
+ * App.tsx, since main-process code needs this same shape without pulling in
+ * any renderer-only module, and TypeScript's structural typing means a
+ * `CurrentSketch` value assigns into a `ProjectRef`-typed prop with no cast
+ * needed). null means nothing has been saved/opened yet -- the resulting
+ * StemCategories row's SourceProject is null in that case. */
+export type ProjectRef =
+  { kind: 'library'; name: string } | { kind: 'external'; path: string } | null
+
 export interface Stem {
   slot: number
   author: string
