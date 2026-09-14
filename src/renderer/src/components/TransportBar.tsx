@@ -136,7 +136,9 @@ export function TransportBar({
   onStop,
   onShowWelcome,
   onOpenEndlesss,
-  onStartTour
+  onStartTour,
+  discoverConsented,
+  toggleDiscoverConsent
 }: {
   onEnableGatedRecording: () => void
   onDisableGatedRecording: () => void
@@ -159,6 +161,15 @@ export function TransportBar({
    * true -- see App.tsx's replayTour for the confirm-if-existing-content
    * guard this shares with the welcome modal's own onStartTour). */
   onStartTour: () => void
+  /** Whether Elling has opted into Discover's whole-library background
+   * scan (DiscoverPanel.tsx's own one-time consent prompt) -- App.tsx
+   * loads this once on mount via `getDiscoverSettings`, same as
+   * DiscoverPanel.tsx's own `settings` state, so this menu's label stays
+   * in sync without this component polling settings itself. */
+  discoverConsented: boolean
+  /** Settings menu's revoke/re-enable entry -- flips consentedToLibraryScan
+   * and persists via `setDiscoverSettings`, mirrored in App.tsx. */
+  toggleDiscoverConsent: () => Promise<void>
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -716,6 +727,12 @@ export function TransportBar({
             {
               label: 'change riff archive location…',
               onClick: () => void handleChangeRiffLibraryLocation()
+            },
+            {
+              label: discoverConsented
+                ? 'turn off discover library scan'
+                : 'turn on discover library scan',
+              onClick: () => void toggleDiscoverConsent()
             },
             {
               label: 'audio…',

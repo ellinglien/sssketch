@@ -9,6 +9,7 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { useAppSelector } from '../state/StoreContext'
 import type { ProjectRef, SoundType, Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import { DiscoverLibraryScan } from '../audio/DiscoverLibraryScan'
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
  * `Stem` -- reused verbatim by both this component's own slot-preview
@@ -130,6 +131,34 @@ export function DiscoverPanel({
   const rerollGenerationRef = useRef<Map<string, number>>(new Map())
   const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
+  // One-time consent prompt for the whole-library background scan (Task
+  // 10) -- gates ONLY that scan, not candidate fetching itself (see the
+  // prompt's own copy below and rerollSlot above, which reads existing
+  // StemCategories rows regardless of consent).
+  const [settings, setSettings] = useState<{ consentedToLibraryScan: boolean } | null>(null)
+  const [showConsentPrompt, setShowConsentPrompt] = useState(false)
+
+  useEffect(() => {
+    void window.rifffApi.getDiscoverSettings().then((s) => {
+      setSettings(s)
+      if (!s.consentedToLibraryScan) setShowConsentPrompt(true)
+    })
+  }, [])
+
+  function acceptScanConsent(): void {
+    const next = { consentedToLibraryScan: true }
+    setSettings(next)
+    setShowConsentPrompt(false)
+    void window.rifffApi.setDiscoverSettings(next)
+  }
+
+  function declineScanConsent(): void {
+    setShowConsentPrompt(false)
+    // consentedToLibraryScan stays false -- nothing persisted here, so the
+    // prompt shows again next time Discover opens, matching "ask again
+    // rather than silently remember a decline forever."
+  }
+
   function addSlot(role: ArrangeRole): void {
     setSlots((prev) => [...prev, { id: freshSlotId(), role, locked: false, candidate: null }])
   }
@@ -209,6 +238,39 @@ export function DiscoverPanel({
 
   return (
     <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
+      {showConsentPrompt && (
+        <div
+          style={{
+            border: '1px solid var(--ra-border-strong)',
+            padding: 12,
+            marginBottom: 10,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <p style={{ margin: '0 0 8px' }}>
+            discover can analyze your whole synced library in the background to find compatible
+            stems -- this can take a while and uses some cpu. analyze now?
+          </p>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={acceptScanConsent}
+              style={{ fontFamily: 'inherit', fontSize: 9, padding: '4px 8px' }}
+            >
+              yes, analyze
+            </button>
+            <button
+              onClick={declineScanConsent}
+              style={{ fontFamily: 'inherit', fontSize: 9, padding: '4px 8px' }}
+            >
+              not now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {settings?.consentedToLibraryScan && <DiscoverLibraryScan />}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tight</span>
         <input

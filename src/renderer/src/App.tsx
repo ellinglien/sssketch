@@ -1368,6 +1368,28 @@ function Frame(): React.JSX.Element {
       })
   }, [])
 
+  // TransportBar's settings-menu revoke/re-enable toggle for Discover's
+  // whole-library background scan (DiscoverPanel.tsx's own one-time
+  // consent prompt writes the same `consentedToLibraryScan` flag via
+  // `setDiscoverSettings`) -- loaded once here, same "fetch on mount"
+  // pattern as endlesssLoggedIn just above, so the gear menu's label is
+  // correct without polling settings on every menu open.
+  const [discoverConsented, setDiscoverConsented] = useState(false)
+  useEffect(() => {
+    void window.rifffApi
+      .getDiscoverSettings()
+      .then((s) => setDiscoverConsented(s.consentedToLibraryScan))
+      .catch((err) => {
+        console.error('Frame: getDiscoverSettings() failed:', err)
+      })
+  }, [])
+
+  async function toggleDiscoverConsent(): Promise<void> {
+    const next = { consentedToLibraryScan: !discoverConsented }
+    setDiscoverConsented(next.consentedToLibraryScan)
+    await window.rifffApi.setDiscoverSettings(next)
+  }
+
   async function startTour(): Promise<void> {
     dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
     const rifff = await window.rifffApi.importDemoRifff()
@@ -2078,6 +2100,8 @@ function Frame(): React.JSX.Element {
           onShowWelcome={showWelcomeAgain}
           onOpenEndlesss={openRiffLibrary}
           onStartTour={replayTour}
+          discoverConsented={discoverConsented}
+          toggleDiscoverConsent={toggleDiscoverConsent}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
