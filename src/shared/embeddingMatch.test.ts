@@ -1,0 +1,72 @@
+// src/shared/embeddingMatch.test.ts
+import { describe, expect, it } from 'vitest'
+import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from './embeddingMatch'
+
+function vec(...values: number[]): number[] {
+  return values
+}
+
+describe('suggestCategoryFromEmbedding', () => {
+  it('returns null when fewer than 2 categories have enough confirmed samples', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) }
+    ]
+    expect(suggestCategoryFromEmbedding(confirmed, vec(1, 0, 0))).toBeNull()
+  })
+
+  it('returns null when a query is far from any trained category, even with only one candidate', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) }
+    ]
+    // Same regression scenario as categoryCentroids.ts's own 2026-09-14 fix
+    // -- a single trained category must never force a match.
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0, 0, 1))).toBeNull()
+  })
+
+  it('picks the nearest (highest cosine similarity) category once at least 2 are trained', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) }
+    ]
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0.9, 0.1, 0))).toBe('drums')
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0.1, 0.9, 0))).toBe('vocal')
+  })
+
+  it('declines to guess when the nearest and second-nearest DIFFERENT-category neighbors are too close to call', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) }
+    ]
+    // Exactly equidistant (45 degrees from both) -- must not force a pick.
+    expect(suggestCategoryFromEmbedding(confirmed, vec(1, 1, 0))).toBeNull()
+  })
+
+  it('ignores a category with fewer than MIN_SAMPLES_PER_CATEGORY confirmed embeddings', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      // Only 2 vocal samples -- below the minimum, so 'vocal' isn't a real
+      // candidate yet even though it exists in the confirmed list.
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) }
+    ]
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0, 1, 0))).toBeNull()
+  })
+
+  it('returns null for an empty confirmed list', () => {
+    expect(suggestCategoryFromEmbedding([], vec(1, 0, 0))).toBeNull()
+  })
+})
