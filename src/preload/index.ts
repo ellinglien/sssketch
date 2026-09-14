@@ -11,6 +11,7 @@ import type { PluginCatalog } from '../main/pluginCatalog'
 import type { BusCentroidStore } from '@shared/busCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
+import type { StemFeatures } from '@shared/stemFeatures'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -188,6 +189,10 @@ const api = {
     source: string,
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),
+  getStemFeatureCache: (path: string): Promise<StemFeatures | null> =>
+    ipcRenderer.invoke('get-stem-feature-cache', path),
+  setStemFeatureCache: (path: string, features: StemFeatures): Promise<void> =>
+    ipcRenderer.invoke('set-stem-feature-cache', path, features),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
     ipcRenderer.invoke('engine-get-plugin-states'),

@@ -80,6 +80,8 @@ import {
   type StemBusCategoryEntry,
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
+import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
+import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
@@ -731,6 +733,14 @@ app.whenReady().then(async () => {
       )
     }
   )
+
+  ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>
+    getStemFeatureCache(openOwnRiffLibraryDb(), path)
+  )
+
+  ipcMain.handle('set-stem-feature-cache', (_event, path: string, features: StemFeatures) => {
+    setStemFeatureCache(openOwnRiffLibraryDb(), path, features, Math.floor(Date.now() / 1000))
+  })
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
     if (!playbackEngine) return null
