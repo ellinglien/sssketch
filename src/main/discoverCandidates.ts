@@ -55,7 +55,18 @@ interface RiffCandidateRow {
  * external LORE archive db never has a StemCategories table at all (fixed
  * commit 14505a0 today, after this exact assumption caused a real
  * "SqliteError: no such table" crash in getConfirmedEmbeddings). Never
- * repeat that mistake here. */
+ * repeat that mistake here.
+ *
+ * SCAN DIRECTION: starts from StemCategories WHERE ArrangeRole = ? on ownDb
+ * FIRST -- that table holds only human-confirmed rows (a few hundred, real
+ * production scale) -- and only then looks up those specific StemCIDs'
+ * owning riffs/stem rows per jam. This is the inverse of the naive "walk
+ * every Riffs row in the whole library" shape: the whole point of Discover
+ * calling this once per slot's role is that the confirmed set is tiny next
+ * to a 50k+-stem library, so the per-call cost should track the confirmed
+ * set's size, not the library's (2026-09-15 code quality review, finding
+ * 2). StemCategories is still read ONLY from ownDb, per the note above --
+ * this inversion doesn't touch that. */
 export function getDiscoverCandidates({
   ownDb,
   jams,
@@ -69,9 +80,25 @@ export function getDiscoverCandidates({
   onlyOwnStems?: boolean
   targetUser?: string
 }): DiscoverCandidate[] {
-  const categoryStmt = ownDb.prepare(
-    `SELECT ArrangeRole, DrumSubRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole = ?`
-  )
+  // No inner try/catch here (removed 2026-09-15, finding 1): StemCategories
+  // on ownDb is guaranteed present by a real migration that runs on every
+  // app start, same established convention as embeddingMatch.ts's own
+  // getConfirmedEmbeddings. A real SQL error here (e.g. a typo) should
+  // throw, not silently produce an empty Discover pool with no diagnostic
+  // trail.
+  const confirmedRows = ownDb
+    .prepare(`SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories WHERE ArrangeRole = ?`)
+    .all(arrangeRole) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
+
+  if (confirmedRows.length === 0) return []
+
+  const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
+  const confirmedStemCIDs = confirmedRows.map((row) => row.StemCID)
+  const placeholders = confirmedStemCIDs.map(() => '?').join(', ')
+  const eightColumnWhere = [1, 2, 3, 4, 5, 6, 7, 8]
+    .map((slot) => `StemCID_${slot} IN (${placeholders})`)
+    .join(' OR ')
+
   const out: DiscoverCandidate[] = []
 
   for (const { jamCID, dbForJam } of jams) {
@@ -82,46 +109,43 @@ export function getDiscoverCandidates({
           `SELECT RiffCID, BPMrnd,
                   StemCID_1, StemCID_2, StemCID_3, StemCID_4,
                   StemCID_5, StemCID_6, StemCID_7, StemCID_8
-           FROM Riffs WHERE OwnerJamCID = ?`
+           FROM Riffs WHERE OwnerJamCID = ? AND (${eightColumnWhere})`
         )
-        .all(jamCID) as RiffCandidateRow[]
+        .all(jamCID, ...Array<string[]>(8).fill(confirmedStemCIDs).flat()) as RiffCandidateRow[]
     } catch {
-      // A jam whose own db lacks even Riffs/Stems (shouldn't happen for a
-      // real synced db, but this function is also exercised against
-      // ad-hoc in-memory test dbs) -- skip rather than throw, same
-      // resilience convention as getConfirmedEmbeddings' own corrupted-row
-      // handling.
+      // Kept defensive, unlike StemCategories-on-ownDb above: dbForJam is an
+      // EXTERNAL file (could be a real synced LORE archive, or a partial/
+      // corrupted one) whose lifecycle this app doesn't fully control --
+      // ownDb's migration guarantee doesn't extend to it. A jam missing
+      // even a core table like Riffs shouldn't abort the whole multi-jam
+      // scan; see the "does not crash the whole scan on a jam with no
+      // Riffs table" test below for the case this actually guards.
       continue
     }
 
-    const stemStmt = dbForJam.prepare(
-      `SELECT PresetName, CreatorUserName FROM Stems WHERE StemCID = ?`
-    )
+    if (riffRows.length === 0) continue
+
+    const stemRows = dbForJam
+      .prepare(
+        `SELECT StemCID, PresetName, CreatorUserName FROM Stems WHERE StemCID IN (${placeholders})`
+      )
+      .all(...confirmedStemCIDs) as {
+      StemCID: string
+      PresetName: string | null
+      CreatorUserName: string | null
+    }[]
+    const stemByCID = new Map(stemRows.map((row) => [row.StemCID, row]))
 
     for (const riff of riffRows) {
-      const stemCIDs: string[] = []
       for (let slot = 1; slot <= 8; slot++) {
-        const cid = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
-        if (cid) stemCIDs.push(cid)
-      }
-      for (const stemCID of stemCIDs) {
-        let category: { ArrangeRole: string; DrumSubRole: string | null } | undefined
-        try {
-          category = categoryStmt.get(stemCID, arrangeRole) as
-            | { ArrangeRole: string; DrumSubRole: string | null }
-            | undefined
-        } catch {
-          // ownDb genuinely should always have this table -- but a test or
-          // a not-yet-migrated db shouldn't crash the whole scan over one
-          // missing table.
-          continue
-        }
-        if (!category) continue
+        const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
+        if (!stemCID) continue
 
-        const stemRow = stemStmt.get(stemCID) as
-          | { PresetName: string | null; CreatorUserName: string | null }
-          | undefined
-        if (!stemRow) continue
+        const category = categoryByStemCID.get(stemCID)
+        if (!category) continue // this slot's stem isn't confirmed for the requested role
+
+        const stemRow = stemByCID.get(stemCID)
+        if (!stemRow) continue // confirmed, but no resolvable Stems row (e.g. stale/orphaned data)
 
         if (onlyOwnStems && stemRow.CreatorUserName !== targetUser) continue
 

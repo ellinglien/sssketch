@@ -150,26 +150,83 @@ describe('getDiscoverCandidates', () => {
     expect(candidates[0].stemCID).toBe('s1')
   })
 
-  it('does not throw when a jam\'s own db lacks StemCategories entirely (a real external archive)', () => {
+  // Renamed/rewritten 2026-09-15 (code quality review, finding 1): the old
+  // version of this test seeded an EXTERNAL db lacking StemCategories, but
+  // the code never queries external dbs for StemCategories (only ownDb) --
+  // so it passed trivially without exercising the outer catch at all. This
+  // version actually exercises it: a jam whose own db genuinely lacks a
+  // Riffs table (a real, if rare, possibility for a corrupted/partial
+  // external LORE archive this app doesn't control the lifecycle of).
+  it('skips a jam whose own db lacks a Riffs table, without aborting the whole multi-jam scan', () => {
     const own = freshDb()
-    const external = new Database(':memory:')
-    external.exec(`
-      CREATE TABLE Riffs (
-        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
-        StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT
-      );
-      CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT, PresetName TEXT, CreatorUserName TEXT, BPMrnd REAL);
-    `)
-    seedRiff(external, 'r1', 'jamExt', 128, ['s1'])
-    seedStem(external, 's1', 'jamExt')
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
 
-    expect(() =>
-      getDiscoverCandidates({ ownDb: own, jams: [{ jamCID: 'jamExt', dbForJam: external }], arrangeRole: 'drums' })
-    ).not.toThrow()
-    expect(
-      getDiscoverCandidates({ ownDb: own, jams: [{ jamCID: 'jamExt', dbForJam: external }], arrangeRole: 'drums' })
-    ).toEqual([])
+    const brokenExternal = new Database(':memory:')
+    // Deliberately no Riffs (or Stems) table at all -- simulates a
+    // corrupted/partial external archive db.
+
+    const candidates = getDiscoverCandidates({
+      ownDb: own,
+      jams: [
+        { jamCID: 'jamBroken', dbForJam: brokenExternal },
+        { jamCID: 'jam1', dbForJam: own }
+      ],
+      arrangeRole: 'drums'
+    })
+
+    // The broken jam is skipped silently; the good jam's candidate still
+    // comes through -- one bad db doesn't sink the whole scan.
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+  })
+
+  it('finds a confirmed stem in a jam that also has many other, unrelated stems with no StemCategories row', () => {
+    const own = freshDb()
+    const stemCIDs = Array.from({ length: 20 }, (_, i) => `other-${i}`)
+    seedRiff(own, 'r1', 'jam1', 128, [...stemCIDs.slice(0, 7), 's1'])
+    for (const cid of stemCIDs) seedStem(own, cid, 'jam1')
+    seedStem(own, 's1', 'jam1', { presetName: 'kick', creatorUserName: 'elling' })
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    // Plenty of OTHER riffs/stems in the same jam that have no
+    // StemCategories row at all, and are unrelated to the requested role --
+    // a more realistic library shape than the other tests' small,
+    // all-relevant fixtures.
+    for (let i = 0; i < 10; i++) {
+      const extraStems = [`extra-${i}-a`, `extra-${i}-b`]
+      seedRiff(own, `extra-riff-${i}`, 'jam1', 120, extraStems)
+      for (const cid of extraStems) seedStem(own, cid, 'jam1')
+    }
+
+    const candidates = getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({ stemCID: 's1', riffCID: 'r1', presetName: 'kick' })
+  })
+
+  it('silently excludes a confirmed StemCID whose owning riff cannot be found in any jam (stale/orphaned StemCategories row)', () => {
+    const own = freshDb()
+    // A real candidate, findable in jam1.
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    // An orphaned confirmation: StemCategories says this stem is a
+    // confirmed drum, but no riff in any jam we're given actually contains
+    // it (e.g. the jam was deleted/unsynced after the confirmation was
+    // made).
+    seedCategory(own, 'orphan-stem', { arrangeRole: 'drums', busId: 'drums' })
+
+    const candidates = getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
 
   it('filters by ownership when onlyOwnStems is true, reusing computeOwnerFraction-equivalent per-stem authorship', () => {
