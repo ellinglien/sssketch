@@ -21,7 +21,9 @@ function freshDb(): Database.Database {
       Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY);
-    CREATE TABLE StemFeatureCache (StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL);
+    CREATE TABLE StemFeatureCache (
+      StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
+    );
   `)
   return db
 }
@@ -127,5 +129,40 @@ describe('stemCategoriesBackfill', () => {
     const summary = backfillStemCategoriesFromProjectLibrary(db)
     expect(summary.skippedProjects).toEqual(['broken'])
     expect(summary.categorizedStems).toBe(0)
+  })
+
+  it('trains centroid classifiers when backfill entries have cached features', async () => {
+    const db = freshDb()
+    // Seed a stem with cached features
+    const stemCID = 'cid-1'
+    db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(stemCID)
+    const features = {
+      transientDensity: 0.5,
+      bassEnergyRatio: 0.3,
+      spectralCentroidHz: 1200,
+      zcrBrightness: 0.4,
+      voicedFraction: 0.1,
+      pitchVarianceCents: 20,
+      mfcc: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+    }
+    const timestamp = Date.now()
+    db.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, ?)`
+    ).run(stemCID, JSON.stringify(features), timestamp)
+
+    // Write a sketch that assigns this stem to the 'drums' bus
+    writeSketch('my-sketch', {
+      busOf: { 'group-a:1': 'drums' },
+      rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+    })
+
+    const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const summary = backfillStemCategoriesFromProjectLibrary(db)
+    expect(summary.categorizedStems).toBe(1)
+
+    // Verify the centroid store was actually trained with this stem's category
+    const store = loadCategoryCentroidStore()
+    expect(store.buses.drums?.count).toBe(1)
   })
 })
