@@ -192,6 +192,10 @@ const api = {
     ipcRenderer.invoke('get-stem-feature-cache', path),
   setStemFeatureCache: (path: string, features: StemFeatures): Promise<void> =>
     ipcRenderer.invoke('set-stem-feature-cache', path, features),
+  getStemEmbeddingCache: (path: string): Promise<number[] | null> =>
+    ipcRenderer.invoke('get-stem-embedding-cache', path),
+  setStemEmbeddingCache: (path: string, embedding: number[]): Promise<void> =>
+    ipcRenderer.invoke('set-stem-embedding-cache', path, embedding),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>

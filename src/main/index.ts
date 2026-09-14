@@ -86,6 +86,7 @@ import {
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
+import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { readYamnetModelBytes } from './yamnetModel'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
@@ -761,6 +762,23 @@ app.whenReady().then(async () => {
       openOwnRiffLibraryDb(),
       path,
       features,
+      Math.floor(Date.now() / 1000),
+      candidateDbsForRiff()
+    )
+  })
+
+  ipcMain.handle('get-stem-embedding-cache', (_event, path: string): number[] | null =>
+    getStemEmbeddingCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
+  )
+
+  ipcMain.handle('set-stem-embedding-cache', (_event, path: string, embedding: number[]) => {
+    // Floored, same reasoning as set-stem-feature-cache right above --
+    // StemEmbeddingCache has exactly one writer and its own upsert has no
+    // WHERE-guarded comparison against a prior write's timestamp.
+    setStemEmbeddingCache(
+      openOwnRiffLibraryDb(),
+      path,
+      embedding,
       Math.floor(Date.now() / 1000),
       candidateDbsForRiff()
     )
