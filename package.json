@@ -21,7 +21,8 @@
     "dist:mac": "npm run build && electron-builder --mac --arm64",
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "vendor:onnxruntime-wasm": "bash scripts/vendor-onnxruntime-wasm.sh"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

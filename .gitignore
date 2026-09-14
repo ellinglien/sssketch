@@ -5,6 +5,7 @@ out/
 electron-builder.x64-test.generated.yml
 resources/rubberband/
 resources/yamnet/
+src/renderer/public/onnxruntime/
 .DS_Store
 .eslintcache
 *.log*
