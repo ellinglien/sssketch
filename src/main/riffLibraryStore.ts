@@ -387,8 +387,13 @@ interface FullStemRow {
  * invisible to resolveRiff/resolveRiffWithContext/downloadMissingStems
  * whenever an external archive is the configured root. Skips the fallback
  * when the configured root already IS the own root, to avoid a redundant
- * second lookup against the exact same file. */
-function candidateDbsForRiff(): Database.Database[] {
+ * second lookup against the exact same file. Also reused by
+ * stemCategoriesStore.ts/stemFeatureCacheStore.ts to validate a stem's
+ * StemCID against every db that might hold its Stems row -- the same
+ * "which physical db files might have a real row" logic applies identically
+ * whether the row in question is a Riffs row or a Stems row, since both
+ * live in the same candidate database files. */
+export function candidateDbsForRiff(): Database.Database[] {
   const primary = getRiffLibraryDb()
   const dbs: Database.Database[] = primary ? [primary] : []
   if (riffLibraryRootPath() !== ownRiffLibraryRoot()) dbs.push(openOwnRiffLibraryDb())

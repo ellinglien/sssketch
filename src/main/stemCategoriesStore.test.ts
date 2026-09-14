@@ -170,4 +170,39 @@ describe('stemCategoriesStore', () => {
       expect(getStemCategory(db, 'nonexistent')).toBe(null)
     })
   })
+
+  describe('extraCandidateDbs', () => {
+    it('validates a stem via an extra candidate db when the primary db does not have it', async () => {
+      const db = freshDb()
+      const externalDb = freshDb()
+      externalDb.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-external')
+      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      upsertStemCategoryBus(
+        db,
+        [{ path: '/lore-archive/cid-external', busId: 'drums' }],
+        'tidyup',
+        null,
+        1000,
+        [externalDb]
+      )
+      // The row is written into `db` (the primary/own warehouse), even
+      // though the StemCID was only validated against `externalDb`.
+      expect(getStemCategory(db, 'cid-external')?.busId).toBe('drums')
+    })
+
+    it('skips a stem not found in the primary db or any extra candidate db', async () => {
+      const db = freshDb()
+      const externalDb = freshDb()
+      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      upsertStemCategoryBus(
+        db,
+        [{ path: '/local/one-shot.wav', busId: 'drums' }],
+        'tidyup',
+        null,
+        1000,
+        [externalDb]
+      )
+      expect(getStemCategory(db, 'one-shot.wav')).toBe(null)
+    })
+  })
 })

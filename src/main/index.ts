@@ -51,7 +51,8 @@ import {
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
-  downloadMissingStems
+  downloadMissingStems,
+  candidateDbsForRiff
 } from './riffLibraryStore'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -716,7 +717,8 @@ app.whenReady().then(async () => {
         entries,
         source,
         resolveSourceProjectPath(project),
-        Date.now() / 1000
+        Date.now() / 1000,
+        candidateDbsForRiff()
       )
     }
   )
@@ -729,13 +731,14 @@ app.whenReady().then(async () => {
         entries,
         source,
         resolveSourceProjectPath(project),
-        Date.now() / 1000
+        Date.now() / 1000,
+        candidateDbsForRiff()
       )
     }
   )
 
   ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>
-    getStemFeatureCache(openOwnRiffLibraryDb(), path)
+    getStemFeatureCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
   )
 
   ipcMain.handle('set-stem-feature-cache', (_event, path: string, features: StemFeatures) => {
@@ -745,7 +748,13 @@ app.whenReady().then(async () => {
     // write's timestamp, unlike StemCategories.UpdatedAt (fixed in 175cd8d after a
     // real cross-writer precision bug). There's nothing here for extra precision
     // to protect against.
-    setStemFeatureCache(openOwnRiffLibraryDb(), path, features, Math.floor(Date.now() / 1000))
+    setStemFeatureCache(
+      openOwnRiffLibraryDb(),
+      path,
+      features,
+      Math.floor(Date.now() / 1000),
+      candidateDbsForRiff()
+    )
   })
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {

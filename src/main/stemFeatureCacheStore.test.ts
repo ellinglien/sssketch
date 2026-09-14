@@ -57,4 +57,19 @@ describe('stemFeatureCacheStore', () => {
     const count = db.prepare(`SELECT COUNT(*) as n FROM StemFeatureCache`).get() as { n: number }
     expect(count.n).toBe(0)
   })
+
+  it('validates and writes a stem via an extra candidate db when the primary db does not have it', () => {
+    const db = freshDb()
+    const externalDb = freshDb()
+    externalDb.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-external')
+    const features = fakeFeatures()
+    setStemFeatureCache(db, '/lore-archive/cid-external', features, 1000, [externalDb])
+    // The row is written into `db` (the primary/own warehouse), even
+    // though the StemCID was only validated against `externalDb`.
+    expect(getStemFeatureCache(db, '/lore-archive/cid-external', [externalDb])).toEqual(features)
+    const ownRow = db
+      .prepare(`SELECT COUNT(*) as n FROM StemFeatureCache WHERE StemCID = ?`)
+      .get('cid-external') as { n: number }
+    expect(ownRow.n).toBe(1)
+  })
 })

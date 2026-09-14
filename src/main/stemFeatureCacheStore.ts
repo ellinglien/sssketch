@@ -11,9 +11,20 @@ import { stemCIDForPath } from './stemCategoriesStore'
  * getStemFeatures) treats both identically: compute fresh. A row whose
  * FeaturesJSON fails to parse (shouldn't happen -- only ever written by
  * setStemFeatureCache below -- but defensive against a corrupted DB file)
- * is treated the same as a miss rather than throwing. */
-export function getStemFeatureCache(db: Database.Database, path: string): StemFeatures | null {
-  const stemCID = stemCIDForPath(db, path)
+ * is treated the same as a miss rather than throwing.
+ *
+ * `extraCandidateDbs` (default empty) are additional databases -- typically
+ * the currently-configured browsing root when it differs from the own
+ * warehouse (an external LORE archive) -- checked after `db` when
+ * resolving the StemCID, same as stemCategoriesStore.ts's own
+ * stemCIDForPath. The cache row itself is always read from/written to
+ * `db`. */
+export function getStemFeatureCache(
+  db: Database.Database,
+  path: string,
+  extraCandidateDbs: Database.Database[] = []
+): StemFeatures | null {
+  const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return null
   const row = db
     .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
@@ -31,14 +42,20 @@ export function getStemFeatureCache(db: Database.Database, path: string): StemFe
  * doesn't resolve to a real Stems row -- a locally-dropped file, one-shot
  * sample, or in-app recording has nothing to persist against, exactly
  * matching stemCategoriesStore.ts's own upsert functions' same silent-skip
- * behavior for the same reason. */
+ * behavior for the same reason.
+ *
+ * `extraCandidateDbs` (default empty), same as getStemFeatureCache above,
+ * are additional databases checked after `db` only to validate the
+ * StemCID -- the row is always written into `db` itself, never into one
+ * of the extra candidates. */
 export function setStemFeatureCache(
   db: Database.Database,
   path: string,
   features: StemFeatures,
-  extractedAt: number
+  extractedAt: number,
+  extraCandidateDbs: Database.Database[] = []
 ): void {
-  const stemCID = stemCIDForPath(db, path)
+  const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
   db.prepare(
     `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt)

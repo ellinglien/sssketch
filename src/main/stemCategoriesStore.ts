@@ -26,11 +26,29 @@ export function resolveSourceProjectPath(project: ProjectRef): string | null {
  * has no such relationship, so the candidate is validated against the real
  * Stems table before anything is written -- silently skipped (not an
  * error) rather than writing a StemCategories row for a StemCID that isn't
- * real. */
-export function stemCIDForPath(db: Database.Database, path: string): string | null {
+ * real.
+ *
+ * `db` (the primary/first-checked argument) is what the resulting
+ * StemCategories/StemFeatureCache row will actually be WRITTEN into
+ * (always openOwnRiffLibraryDb() in real production use) and is also
+ * checked first for the stem's existence. `extraCandidateDbs` are
+ * additional databases -- typically the currently-configured browsing
+ * root, when it differs from the own warehouse (e.g. an external LORE
+ * archive, see riffLibraryStore.ts's candidateDbsForRiff) -- checked in
+ * order after `db`, for a stem whose Stems row lives somewhere else
+ * entirely. Defaults to empty so every existing caller (and every existing
+ * test) is completely unaffected unless it explicitly opts in. */
+export function stemCIDForPath(
+  db: Database.Database,
+  path: string,
+  extraCandidateDbs: Database.Database[] = []
+): string | null {
   const candidate = basename(path)
-  const row = db.prepare(`SELECT 1 FROM Stems WHERE StemCID = ?`).get(candidate)
-  return row ? candidate : null
+  for (const candidateDb of [db, ...extraCandidateDbs]) {
+    const row = candidateDb.prepare(`SELECT 1 FROM Stems WHERE StemCID = ?`).get(candidate)
+    if (row) return candidate
+  }
+  return null
 }
 
 export interface StemBusCategoryEntry {
@@ -49,7 +67,8 @@ export function upsertStemCategoryBus(
   entries: StemBusCategoryEntry[],
   source: string,
   sourceProject: string | null,
-  updatedAt: number
+  updatedAt: number,
+  extraCandidateDbs: Database.Database[] = []
 ): void {
   const stmt = db.prepare(
     `INSERT INTO StemCategories (StemCID, BusId, Source, SourceProject, UpdatedAt)
@@ -63,7 +82,7 @@ export function upsertStemCategoryBus(
   )
   const txn = db.transaction((rows: StemBusCategoryEntry[]) => {
     for (const row of rows) {
-      const stemCID = stemCIDForPath(db, row.path)
+      const stemCID = stemCIDForPath(db, row.path, extraCandidateDbs)
       if (!stemCID) continue
       stmt.run({ stemCID, busId: row.busId, source, sourceProject, updatedAt })
     }
@@ -84,7 +103,8 @@ export function upsertStemCategoryRole(
   entries: StemRoleCategoryEntry[],
   source: string,
   sourceProject: string | null,
-  updatedAt: number
+  updatedAt: number,
+  extraCandidateDbs: Database.Database[] = []
 ): void {
   const stmt = db.prepare(
     `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, Source, SourceProject, UpdatedAt)
@@ -99,7 +119,7 @@ export function upsertStemCategoryRole(
   )
   const txn = db.transaction((rows: StemRoleCategoryEntry[]) => {
     for (const row of rows) {
-      const stemCID = stemCIDForPath(db, row.path)
+      const stemCID = stemCIDForPath(db, row.path, extraCandidateDbs)
       if (!stemCID) continue
       stmt.run({
         stemCID,
