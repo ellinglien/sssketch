@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { useStemPreviewPlayback } from '../state/useStemPreviewPlayback'
 import { stemKey, type BusId } from '@shared/types'
-import { getStemFeatures } from '../audio/stemFeaturesCache'
+import { useStemFeatureScan } from '../audio/useStemFeatureScan'
 import { toFeatureArray, standardizeFeatures } from '@shared/stemFeatures'
 import {
   computeMergeSequence,
@@ -204,85 +204,27 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     return out
   }, [rifffs, playedBarsOverrides, leftCropOverrides, stretchOverrides, stateBpm])
 
-  // Bundles the merge sequence together with the exact `stems` array
-  // reference it was computed for, in one state slot -- lets `loading` be
-  // DERIVED (computed !== null && computed.forStems === stems) instead of
-  // tracked as its own separate useState flipped synchronously at the top
-  // of the effect below. react-hooks/set-state-in-effect (this codebase's
-  // configured linter, see BeatPicker.tsx's/ChannelRow.tsx's own comments
-  // on the same rule) flags a setState call that runs synchronously in an
-  // effect's setup body; a plain "setLoading(true)" before the async work
-  // starts is exactly that. Every setComputed call below happens only
-  // after an `await` (inside the async IIFE's continuation, or in its
-  // .catch handler), which is not synchronous within the effect body, so
-  // this restructuring sidesteps the rule instead of suppressing it.
-  const [computed, setComputed] = useState<{
-    forStems: ClusterableStem[]
-    // The subset of `forStems` that successfully extracted features --
-    // everything downstream (rawVectorsByKey, suggestions, mergeSequence,
-    // and clusters built via cutAtK below) is indexed against THIS array,
-    // not `forStems` itself, so a stem dropped for a failed extraction
-    // can't desync the index mapping. `forStems` is kept only as the
-    // staleness key against the outer `stems` memo (see `loading` below)
-    // -- it must stay the exact reference the effect was launched with,
-    // not the filtered subset, or a `stems` identity change would never be
-    // detected.
-    analyzedStems: ClusterableStem[]
-    // RAW (unstandardized) feature vectors, keyed by stem -- kept
-    // separately from the DSP-clustering population's own standardized
-    // vectors below, since these are also what assignCluster feeds
-    // recordConfirmedStem to train the (raw-space) centroid store. See
-    // busCentroids.ts's own doc comment for why centroids are trained in
-    // raw space rather than this-run-standardized space.
-    rawVectorsByKey: Map<string, number[]>
-  } | null>(null)
-  const loading = computed === null || computed.forStems !== stems
   const [clusterCount, setClusterCount] = useState(DEFAULT_CLUSTER_COUNT)
 
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      // Promise.allSettled, not Promise.all -- a single stem with a
-      // corrupt/unreadable file rejecting shouldn't sink feature
-      // extraction for every OTHER stem in the project (Promise.all would
-      // reject as a whole the instant any one input rejects). Each
-      // rejected stem is logged and excluded from the clustering
-      // population entirely, rather than either crashing the modal or
-      // substituting a zero vector -- a fake zero-vector data point would
-      // corrupt standardizeFeatures' per-dimension mean/stddev for every
-      // OTHER stem too.
-      const results = await Promise.allSettled(
-        stems.map(async (s) => {
-          const features = await getStemFeatures(s.path)
-          return toFeatureArray(features)
-        })
-      )
-      if (cancelled) return
-      const analyzedStems: ClusterableStem[] = []
-      const rawVectorsByKey = new Map<string, number[]>()
-      results.forEach((result, i) => {
-        if (result.status === 'fulfilled') {
-          analyzedStems.push(stems[i])
-          rawVectorsByKey.set(stems[i].key, result.value)
-        } else {
-          console.error(
-            'ClusterStemsBrowser: feature extraction failed for stem',
-            stems[i].path,
-            result.reason
-          )
-        }
-      })
-      setComputed({ forStems: stems, analyzedStems, rawVectorsByKey })
-    })().catch((err) => {
-      if (!cancelled) {
-        console.error('ClusterStemsBrowser: feature extraction failed', err)
-        setComputed({ forStems: stems, analyzedStems: [], rawVectorsByKey: new Map() })
-      }
-    })
-    return () => {
-      cancelled = true
+  const scanItems = useMemo(() => stems.map((s) => ({ key: s.key, path: s.path })), [stems])
+  const { loading, featuresByKey } = useStemFeatureScan(scanItems)
+
+  // Mirrors the old `computed` shape's own two derived pieces exactly --
+  // analyzedStems (only the stems that scanned successfully) and
+  // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized, since
+  // trainCentroids below needs raw space -- see busCentroids.ts's own doc
+  // comment) -- so every downstream consumer needs zero further changes
+  // beyond what Step 2 below updates.
+  const computed = useMemo(() => {
+    if (loading) return null
+    const analyzedStems = stems.filter((s) => featuresByKey.has(s.key))
+    const rawVectorsByKey = new Map<string, number[]>()
+    for (const s of analyzedStems) {
+      const features = featuresByKey.get(s.key)
+      if (features) rawVectorsByKey.set(s.key, toFeatureArray(features))
     }
-  }, [stems])
+    return { analyzedStems, rawVectorsByKey }
+  }, [loading, stems, featuresByKey])
 
   // Splits the analyzed population in two: stems the centroid classifier
   // confidently auto-slots (excluded from DSP clustering entirely, shown
@@ -299,7 +241,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   // the expensive O(n^3) part -- only ever re-runs when the actual DSP
   // population changes, not on every keystroke elsewhere in the modal.
   const partitioned = useMemo(() => {
-    if (!computed || computed.forStems !== stems) return null
+    if (!computed) return null
     const { analyzedStems, rawVectorsByKey } = computed
     const suggestions = new Map<BusId, ClusterableStem[]>()
     const dspStems: ClusterableStem[] = []
@@ -324,7 +266,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
       dspStems,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [computed, stems, busOf, centroidStoreSnapshot])
+  }, [computed, busOf, centroidStoreSnapshot])
 
   const suggestedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
     if (!partitioned) return []
