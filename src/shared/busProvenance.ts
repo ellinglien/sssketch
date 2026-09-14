@@ -2,8 +2,8 @@ import { guessSoundTypeFromPresetName } from './presetNames'
 
 // 'suggested' is never returned by clusterProvenance below -- it's set
 // directly by ClusterStemsBrowser.tsx for a row built from the bus-centroid
-// classifier's own auto-slot suggestion (see busCentroids.ts), which has no
-// name/clustering signal of its own to infer from.
+// classifier's own auto-slot suggestion (see categoryCentroids.ts), which has
+// no name/clustering signal of its own to infer from.
 export type BusProvenance = 'clustered' | 'from preset name' | 'unknown' | 'suggested'
 
 /**
