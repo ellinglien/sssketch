@@ -83,6 +83,7 @@ import {
 import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
+import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
 import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
@@ -282,6 +283,12 @@ app.whenReady().then(async () => {
   // riffFavouritesMigration.ts's own doc comment for why this is safe to
   // run unconditionally on every startup.
   migrateLegacyFavourites(openOwnRiffLibraryDb())
+
+  // One-time-in-spirit, safe-to-call-on-every-startup migration recovering
+  // busOf bus assignments trapped in old .sssketchproj files under the
+  // project library folder -- see stemCategoriesBackfill.ts's own doc
+  // comment.
+  backfillStemCategoriesFromProjectLibrary(openOwnRiffLibraryDb())
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
