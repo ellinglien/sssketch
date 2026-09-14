@@ -57,6 +57,7 @@ import { hasUnsavedChanges } from './state/unsavedChanges'
 import { buildPluginStatesMap } from '@shared/pluginStates'
 import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
+import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
@@ -2028,6 +2029,7 @@ function Frame(): React.JSX.Element {
   return (
     <div className="ra-viewport">
       <SketchModeAutoFollow />
+      <BackgroundFeatureScan />
       <div className="ra-frame">
         <div
           style={{
