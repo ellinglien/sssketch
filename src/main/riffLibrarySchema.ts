@@ -95,6 +95,12 @@ CREATE TABLE IF NOT EXISTS StemCategories (
   SourceProject TEXT,
   UpdatedAt INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS StemFeatureCache (
+  StemCID TEXT PRIMARY KEY,
+  FeaturesJSON TEXT NOT NULL,
+  ExtractedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null
