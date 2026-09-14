@@ -14,7 +14,12 @@ import type { StemFeatureScanItem } from './useStemFeatureScan'
  * Reuses StemFeatureScanItem's own {key, path}[] shape (useStemFeatureScan.ts)
  * rather than inventing a parallel type -- every call site already builds
  * this exact shape for the feature scan, so it's passed straight through
- * to this hook too. */
+ * to this hook too.
+ *
+ * `items` must be referentially stable across renders (e.g. built via
+ * useMemo), same requirement as useStemFeatureScan.ts's own -- this hook's
+ * effect keys off `items`' own identity, not deep equality, so an unstable
+ * array would trigger a full reset+refetch every render. */
 export function useCachedStemEmbeddings(items: StemFeatureScanItem[]): Map<string, number[]> {
   const [embeddingByKey, setEmbeddingByKey] = useState<Map<string, number[]>>(new Map())
 
@@ -29,14 +34,27 @@ export function useCachedStemEmbeddings(items: StemFeatureScanItem[]): Map<strin
       if (!cancelled) setEmbeddingByKey(new Map())
     })
     for (const item of items) {
-      void window.rifffApi.getStemEmbeddingCache(item.path).then((embedding) => {
-        if (cancelled || !embedding) return
-        setEmbeddingByKey((prev) => {
-          const next = new Map(prev)
-          next.set(item.key, embedding)
-          return next
-        })
-      })
+      window.rifffApi.getStemEmbeddingCache(item.path).then(
+        (embedding) => {
+          if (cancelled || !embedding) return
+          setEmbeddingByKey((prev) => {
+            const next = new Map(prev)
+            next.set(item.key, embedding)
+            return next
+          })
+        },
+        (err: unknown) => {
+          // A real SQLite failure (locked/corrupted DB, closed handle) in
+          // the main-process handler rejects here rather than resolving
+          // null -- without this rejection handler, that becomes a silent
+          // unhandled promise rejection with no diagnostic (2026-09-14
+          // code quality review). Matches useStemFeatureScan.ts's own
+          // per-item failure logging.
+          if (!cancelled) {
+            console.error('useCachedStemEmbeddings: read failed for stem', item.path, err)
+          }
+        }
+      )
     }
     return () => {
       cancelled = true
