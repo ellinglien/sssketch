@@ -73,6 +73,14 @@ import {
   listWarehouseFavourites,
   toggleWarehouseFavourite
 } from './riffLibraryWriter'
+import {
+  upsertStemCategoryBus,
+  upsertStemCategoryRole,
+  resolveSourceProjectPath,
+  type StemBusCategoryEntry,
+  type StemRoleCategoryEntry
+} from './stemCategoriesStore'
+import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
@@ -689,6 +697,32 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('save-bus-centroids', (_event, store: BusCentroidStore) =>
     saveBusCentroidStore(store)
+  )
+
+  ipcMain.handle(
+    'upsert-stem-category-bus',
+    (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef) => {
+      upsertStemCategoryBus(
+        openOwnRiffLibraryDb(),
+        entries,
+        source,
+        resolveSourceProjectPath(project),
+        Math.floor(Date.now() / 1000)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'upsert-stem-category-role',
+    (_event, entries: StemRoleCategoryEntry[], source: string, project: ProjectRef) => {
+      upsertStemCategoryRole(
+        openOwnRiffLibraryDb(),
+        entries,
+        source,
+        resolveSourceProjectPath(project),
+        Math.floor(Date.now() / 1000)
+      )
+    }
   )
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Rifff, Stem } from '@shared/types'
+import type { Rifff, Stem, BusId, ProjectRef } from '@shared/types'
+import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type {
   RiffLibraryJam,
@@ -177,6 +178,16 @@ const api = {
   getBusCentroids: (): Promise<BusCentroidStore> => ipcRenderer.invoke('get-bus-centroids'),
   saveBusCentroids: (store: BusCentroidStore): Promise<void> =>
     ipcRenderer.invoke('save-bus-centroids', store),
+  upsertStemCategoryBus: (
+    entries: { path: string; busId: BusId }[],
+    source: string,
+    project: ProjectRef
+  ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-bus', entries, source, project),
+  upsertStemCategoryRole: (
+    entries: { path: string; arrangeRole: ArrangeRole; drumSubRole?: DrumSubRole }[],
+    source: string,
+    project: ProjectRef
+  ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
     ipcRenderer.invoke('engine-get-plugin-states'),
