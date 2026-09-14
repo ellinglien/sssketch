@@ -250,22 +250,30 @@ export function ClusterStemsBrowser({
     return { analyzedStems, rawVectorsByKey }
   }, [loading, stems, featuresByKey])
 
-  // Splits the analyzed population in two: stems that get a confident
-  // auto-slot suggestion (excluded from DSP clustering entirely, shown
-  // instead as their own "suggested" rows below) vs. everything else
-  // (already busOf-assigned, or no confident suggestion) which goes
-  // through the original DSP clustering exactly as before. A suggestion
-  // prefers an embedding-nearest-neighbor match (suggestCategoryFromEmbedding,
-  // confirmedBusEmbeddings) when this stem's embedding has been extracted
-  // and one is confident, falling back to the centroid classifier
-  // (suggestCategory, centroidStoreSnapshot) otherwise -- same
-  // embedding-preferred, centroid-fallback shape as
+  // Splits the analyzed population in three: stems already confirmed to a
+  // bus (their own stable "confirmed" rows below, grouped by bus -- see
+  // confirmedGroups), stems that get a confident auto-slot suggestion
+  // (their own "suggested" rows), and everything else (no confident
+  // suggestion) which goes through DSP clustering. Confirmed stems are
+  // EXCLUDED from the DSP population entirely (2026-09-15, real bug
+  // reported during Elling's own live testing: confirming any row was
+  // re-running the dendrogram over a population that still included every
+  // already-confirmed stem, reshuffling and re-sorting every OTHER
+  // still-unassigned row's membership out from under the user on every
+  // single confirmation -- "it sometimes jumps to another location". Confirmed
+  // rows now live in their own stable, bus-grouped section instead (same
+  // shape as suggestedGroups), so confirming one never perturbs the DSP
+  // clustering of what's left).
+  //
+  // A suggestion prefers an embedding-nearest-neighbor match
+  // (suggestCategoryFromEmbedding, confirmedBusEmbeddings) when this stem's
+  // embedding has been extracted and one is confident, falling back to the
+  // centroid classifier (suggestCategory, centroidStoreSnapshot) otherwise
+  // -- same embedding-preferred, centroid-fallback shape as
   // roleEmbeddingRefinement.ts's own refineRoleWithEmbeddingOrCentroidSuggestion.
-  // Recomputed whenever busOf changes (accepting a suggestion or a DSP row
-  // removes that stem from `stems` -- wait, no, it stays placed; busOf
-  // just gains an entry, which flips that stem into the "already assigned"
-  // bucket on the next pass), centroidStoreSnapshot changes -- which,
-  // deliberately, only happens once per modal session (see
+  // Recomputed whenever busOf changes (a fresh confirmation moves a stem
+  // from "suggested"/DSP into "confirmed"), centroidStoreSnapshot changes
+  // -- which, deliberately, only happens once per modal session (see
   // centroidStoreSnapshot's own doc comment above for why suggestions read
   // the frozen snapshot rather than a live, continuously-retraining
   // store) -- or embeddingByKey/confirmedBusEmbeddings change (the former
@@ -277,11 +285,15 @@ export function ClusterStemsBrowser({
   const partitioned = useMemo(() => {
     if (!computed) return null
     const { analyzedStems, rawVectorsByKey } = computed
+    const confirmed = new Map<BusId, ClusterableStem[]>()
     const suggestions = new Map<BusId, ClusterableStem[]>()
     const dspStems: ClusterableStem[] = []
     for (const stem of analyzedStems) {
-      if (busOf[stem.key] !== undefined) {
-        dspStems.push(stem)
+      const existingBus = busOf[stem.key]
+      if (existingBus !== undefined) {
+        const list = confirmed.get(existingBus) ?? []
+        list.push(stem)
+        confirmed.set(existingBus, list)
         continue
       }
       const raw = rawVectorsByKey.get(stem.key)
@@ -302,6 +314,7 @@ export function ClusterStemsBrowser({
     }
     const dspVectors = dspStems.map((s) => rawVectorsByKey.get(s.key)!)
     return {
+      confirmed,
       suggestions,
       dspStems,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
@@ -312,6 +325,19 @@ export function ClusterStemsBrowser({
     if (!partitioned) return []
     return BUS_IDS.filter((busId) => (partitioned.suggestions.get(busId)?.length ?? 0) > 0).map(
       (busId) => ({ busId, members: partitioned.suggestions.get(busId)! })
+    )
+  }, [partitioned])
+
+  // Every already-confirmed stem, grouped by its own current bus -- a
+  // stable "done" section (2026-09-15) that never feeds the DSP dendrogram,
+  // unlike suggestedGroups it isn't cleared by clicking a bus button
+  // (there's nothing left to confirm), but the buttons stay live so a
+  // mis-click can still be corrected by picking a different category --
+  // see assignSuggestedGroup below, reused as-is for confirmed rows too.
+  const confirmedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
+    if (!partitioned) return []
+    return BUS_IDS.filter((busId) => (partitioned.confirmed.get(busId)?.length ?? 0) > 0).map(
+      (busId) => ({ busId, members: partitioned.confirmed.get(busId)! })
     )
   }, [partitioned])
 
@@ -722,6 +748,34 @@ export function ClusterStemsBrowser({
                 provenanceOverride="suggested"
                 splittable={false}
                 suggestedBus={busId}
+                onAssign={(category) => assignSuggestedGroup(busId, members, category)}
+                onAssignDrumSubRole={(drumSubRole) =>
+                  assignDrumSubRoleForSuggestedGroup(members, drumSubRole)
+                }
+                onPlay={() => playSuggestedGroup(members)}
+                onSplit={() => {}}
+                onPreviewStem={previewStem}
+                previewingKeys={previewingKeys}
+                playing={playing}
+                pos={pos}
+              />
+            ))}
+          </div>
+        )}
+
+        {!loading && confirmedGroups.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
+              confirmed this session -- click a different bus to correct one
+            </p>
+            {confirmedGroups.map(({ busId, members }) => (
+              <ClusterRow
+                key={`confirmed-${busId}`}
+                members={members}
+                focused={false}
+                celebrating={celebratingSuggestedBus === busId}
+                provenanceOverride="confirmed"
+                splittable={false}
                 onAssign={(category) => assignSuggestedGroup(busId, members, category)}
                 onAssignDrumSubRole={(drumSubRole) =>
                   assignDrumSubRoleForSuggestedGroup(members, drumSubRole)
