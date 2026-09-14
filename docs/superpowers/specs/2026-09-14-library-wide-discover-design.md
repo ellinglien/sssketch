@@ -246,6 +246,10 @@ which were all just reworked or extended this session and shouldn't absorb more 
   see `pasteStemWindowAction`/`pasteStemAction` in `state/selectors.ts`) and places it on the
   current timeline via the existing `PLACE_ON_TIMELINE` mechanism. The discover screen is a
   real way to build, not just a browser.
+- **Library-wide background scanning**: this is the one screen that genuinely needs features
+  for stems nobody has ever placed on any timeline, so this is where §9's ambient background
+  scan (built for placed-only stems in the foundation work) extends to the whole synced
+  library — same persistent `StemFeatureCache` store, same throttled approach, wider scope.
 
 ### 9. Phase 3 — consolidating overlapping analysis infrastructure (ongoing priority)
 
@@ -284,6 +288,37 @@ time analysis/matching code is proposed anywhere in this app.
   its own downstream step on top — density/fill scoring, clustering, or nearest-centroid
   classification respectively. `AutoArrangeRoleStep.tsx` and `ClusterStemsBrowser.tsx` get
   migrated onto it as part of this work, not left duplicated alongside a third copy.
+- **Persistent, cross-session feature caching — extending the same unification, not a separate
+  system.** `getStemFeatures` (`stemFeaturesCache.ts`) today caches only in renderer memory
+  (a plain `Map`, wiped on every reload) — so even with the shared scan hook above, EVERY fresh
+  app session re-decodes and re-analyzes a stem the first time any screen touches it. Elling's
+  own framing: individual screens shouldn't each have "their own scanning feature" at all, not
+  even a shared-but-still-per-screen-triggered one — stems should be scanned once, ever, ahead
+  of any screen needing them, so opening Tidy Up/Auto-Arrange/discover doesn't visibly wait on
+  analysis at all in the common case. This means `getStemFeatures`'s cache moves from
+  renderer-memory-only to a durable, library-wide store (a new `StemFeatureCache` table in the
+  same `warehouse.db3`, keyed by `StemCID` — same home as `StemCategories`, same per-stem-row
+  shape) that `getStemFeatures` checks first, computing (and persisting) only on a genuine
+  miss. A stem whose `path` doesn't resolve to a real `StemCID` (a locally-dropped file,
+  one-shot, or in-app recording — see §1's own `StemCID`-derivation discussion) has nothing to
+  key persistence by, so it keeps today's renderer-memory-only behavior; this only changes
+  anything for real library stems.
+
+  Persistence alone only helps once a stem has been scanned at least once, though — the
+  visible first-time wait Elling wants gone entirely still needs something to trigger
+  extraction BEFORE a screen needs it, not just remember the result after. An ambient,
+  app-wide background pass — mounted once at the top level, independent of whether Tidy Up or
+  Auto-Arrange happen to be open — proactively calls `getStemFeatures` for every stem currently
+  placed on the timeline that isn't cached yet, lightly throttled so it doesn't compete with
+  real interaction. By the time a user actually opens Tidy Up or Auto-Arrange, whatever's
+  already on the timeline has typically been scanned and persisted already, and the shared
+  hook's own loading state resolves instantly (cache hit) rather than triggering a visible
+  wait. This is deliberately scoped to PLACED stems, not the whole synced library (which can
+  run to thousands of stems never placed on any timeline) — scanning the entire library ahead
+  of time is the discover screen's own concern (§8), since library-wide candidates are the
+  first place this app actually needs features for stems nobody has placed anywhere yet; it
+  reuses this exact same persistent store and extends the background pass to the whole
+  library rather than building a second caching mechanism.
 
 **Confirmed genuinely separate, and should stay that way — this is not something to force
 together:** Tidy Up's `agglomerativeCluster.ts` (average-linkage agglomerative clustering,
