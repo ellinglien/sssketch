@@ -713,8 +713,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-category-centroids', (): CategoryCentroidStore => loadCategoryCentroidStore())
 
+  // No candidateDbsForRiff() here, unlike most other openOwnRiffLibraryDb()
+  // handlers in this file -- see getConfirmedEmbeddings's own doc comment
+  // (2026-09-15 real-world bug fix) for why StemCategories/StemEmbeddingCache
+  // can only ever live in the own db, never an external candidate.
   ipcMain.handle('get-confirmed-embeddings', (_event, axis: CategoryAxis): ConfirmedEmbedding[] =>
-    getConfirmedEmbeddings(openOwnRiffLibraryDb(), axis, candidateDbsForRiff())
+    getConfirmedEmbeddings(openOwnRiffLibraryDb(), axis)
   )
 
   ipcMain.handle(

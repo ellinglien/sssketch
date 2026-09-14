@@ -90,36 +90,20 @@ describe('getConfirmedEmbeddings', () => {
     ])
   })
 
-  it('checks extraCandidateDbs for stems that live in an external LORE archive', () => {
-    const db = freshDb()
-    const externalDb = freshDb()
-    seedStem(externalDb, 'ext1')
-    seedCategory(externalDb, 'ext1', { busId: 'lead' })
-    seedEmbedding(externalDb, 'ext1', [7, 8, 9])
-
-    expect(getConfirmedEmbeddings(db, 'bus')).toEqual([])
-    expect(getConfirmedEmbeddings(db, 'bus', [externalDb])).toEqual([
-      { category: 'lead', embedding: [7, 8, 9] }
-    ])
-  })
-
-  it('accumulates rows from BOTH the primary db and an external db when both have valid confirmed embeddings', () => {
+  // No extraCandidateDbs param (removed 2026-09-15, real-world bug fix) --
+  // an external LORE archive db never has StemCategories/StemEmbeddingCache
+  // at all (they're sssketch-exclusive tables), so querying one would throw
+  // "no such table" rather than just correctly finding nothing. Confirmed
+  // embeddings can only ever live in the own db -- see getConfirmedEmbeddings's
+  // own doc comment.
+  it('does not throw or query anything beyond the given db (no extraCandidateDbs param)', () => {
     const db = freshDb()
     seedStem(db, 'own1')
     seedCategory(db, 'own1', { busId: 'drums' })
     seedEmbedding(db, 'own1', [1, 1, 1])
-    const externalDb = freshDb()
-    seedStem(externalDb, 'ext1')
-    seedCategory(externalDb, 'ext1', { busId: 'lead' })
-    seedEmbedding(externalDb, 'ext1', [2, 2, 2])
 
-    expect(getConfirmedEmbeddings(db, 'bus', [externalDb])).toEqual(
-      expect.arrayContaining([
-        { category: 'drums', embedding: [1, 1, 1] },
-        { category: 'lead', embedding: [2, 2, 2] }
-      ])
-    )
-    expect(getConfirmedEmbeddings(db, 'bus', [externalDb])).toHaveLength(2)
+    expect(() => getConfirmedEmbeddings(db, 'bus')).not.toThrow()
+    expect(getConfirmedEmbeddings(db, 'bus')).toEqual([{ category: 'drums', embedding: [1, 1, 1] }])
   })
 
   it('silently skips a row whose EmbeddingJSON fails to parse, rather than throwing', () => {
