@@ -14,13 +14,23 @@ function fakeAudioBuffer(): { getChannelData: () => Float32Array; sampleRate: nu
 describe('stemFeaturesCache', () => {
   let readAudioFileMock: ReturnType<typeof vi.fn>
   let decodeAudioDataMock: ReturnType<typeof vi.fn>
+  let getStemFeatureCacheMock: ReturnType<typeof vi.fn>
+  let setStemFeatureCacheMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.resetModules()
     readAudioFileMock = vi.fn()
     decodeAudioDataMock = vi.fn()
+    getStemFeatureCacheMock = vi.fn().mockResolvedValue(null)
+    setStemFeatureCacheMock = vi.fn().mockResolvedValue(undefined)
 
-    vi.stubGlobal('window', { rifffApi: { readAudioFile: readAudioFileMock } })
+    vi.stubGlobal('window', {
+      rifffApi: {
+        readAudioFile: readAudioFileMock,
+        getStemFeatureCache: getStemFeatureCacheMock,
+        setStemFeatureCache: setStemFeatureCacheMock
+      }
+    })
     class FakeAudioContext {
       decodeAudioData = decodeAudioDataMock
     }
@@ -70,5 +80,35 @@ describe('stemFeaturesCache', () => {
     await expect(getStemFeatures('/some/stem.wav')).rejects.toThrow('permission denied')
     const features = await getStemFeatures('/some/stem.wav')
     expect(features.mfcc).toHaveLength(13)
+  })
+
+  it('returns a persisted feature set without decoding at all', async () => {
+    const persisted = {
+      transientDensity: 0.7,
+      bassEnergyRatio: 0.2,
+      spectralCentroidHz: 900,
+      zcrBrightness: 0.3,
+      voicedFraction: 0.5,
+      pitchVarianceCents: 15,
+      mfcc: Array.from({ length: 13 }, (_, i) => i)
+    }
+    getStemFeatureCacheMock.mockResolvedValue(persisted)
+
+    const { getStemFeatures } = await import('./stemFeaturesCache')
+    const features = await getStemFeatures('/some/stem.wav')
+
+    expect(features).toEqual(persisted)
+    expect(readAudioFileMock).not.toHaveBeenCalled()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+  })
+
+  it('persists a freshly computed feature set via setStemFeatureCache', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getStemFeatures } = await import('./stemFeaturesCache')
+    const features = await getStemFeatures('/some/stem.wav')
+
+    expect(setStemFeatureCacheMock).toHaveBeenCalledWith('/some/stem.wav', features)
   })
 })

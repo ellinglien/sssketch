@@ -82,6 +82,15 @@ export function getStemFeatures(path: string): Promise<StemFeatures> {
 
   const promise = (async () => {
     try {
+      // Persistent, cross-session cache first (stemFeatureCacheStore.ts,
+      // via IPC) -- a stem the background scan (BackgroundFeatureScan.tsx)
+      // or any prior session already extracted needs no decode at all.
+      // Returns null both for "never scanned" and "not a real library
+      // stem" (see stemFeatureCacheStore.ts's own doc comment) -- either
+      // way, fall through to computing fresh below.
+      const persisted = await window.rifffApi.getStemFeatureCache(path)
+      if (persisted) return persisted
+
       const [brightness, pitchContour, bytes] = await Promise.all([
         getBrightness(path),
         getPitchContour(path),
@@ -91,7 +100,14 @@ export function getStemFeatures(path: string): Promise<StemFeatures> {
       const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
       const samples = audioBuffer.getChannelData(0)
       const pitchFeatures = voicedPitchFeatures(pitchContour)
-      return computeFeatures(samples, audioBuffer.sampleRate, brightness, pitchFeatures)
+      const features = computeFeatures(samples, audioBuffer.sampleRate, brightness, pitchFeatures)
+      // Fire-and-forget -- a real library stem's path persists for next
+      // time (this session's own renderer-memory `cache` above already
+      // covers repeat calls within THIS session regardless of whether this
+      // write succeeds); a non-library path is silently skipped by the
+      // main-process side (see stemFeatureCacheStore.ts).
+      void window.rifffApi.setStemFeatureCache(path, features)
+      return features
     } catch (err) {
       cache.delete(path)
       throw err
