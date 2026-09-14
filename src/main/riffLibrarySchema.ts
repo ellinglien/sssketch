@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS StemFeatureCache (
   FeaturesJSON TEXT NOT NULL,
   ExtractedAt INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS StemEmbeddingCache (
+  StemCID TEXT PRIMARY KEY,
+  EmbeddingJSON TEXT NOT NULL,
+  ExtractedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null

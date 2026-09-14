@@ -40,6 +40,7 @@ describe('riffLibrarySchema', () => {
       'Jams',
       'Riffs',
       'StemCategories',
+      'StemEmbeddingCache',
       'StemFeatureCache',
       'StemLedger',
       'Stems',
