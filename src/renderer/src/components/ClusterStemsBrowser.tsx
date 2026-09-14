@@ -17,6 +17,14 @@ import {
   suggestCategory,
   type CategoryCentroidStore
 } from '@shared/categoryCentroids'
+import {
+  ARRANGE_ROLE_OPTIONS,
+  ARRANGE_ROLE_TO_BUS,
+  DRUM_SUB_ROLE_OPTIONS,
+  DRUM_SUB_ROLE_LABELS,
+  type ArrangeRole,
+  type DrumSubRole
+} from '@shared/stemRole'
 import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
@@ -385,6 +393,31 @@ export function ClusterStemsBrowser({
     )
   }
 
+  // The ArrangeRole equivalent of recordBusCategories above, added
+  // 2026-09-14 (direct request) alongside the 8-category picker below --
+  // every Tidy Up assignment now trains BOTH the bus and arrangeRole/
+  // drumSubRole centroid classifiers, not just AutoArrangeWizard/
+  // DrawArrangeWizard's own role-confirmation step (see
+  // categoryCentroidTraining.ts's trainCentroidsFromRoleEntries, wired into
+  // the SAME upsert-stem-category-role IPC handler this calls into) --
+  // Tidy Up is used far more often than the auto-arrange role step, so this
+  // is a real accuracy win with no extra clicks for the 5 shared
+  // categories, where arrangeRole is always fully determined by the bus
+  // just assigned. Fire-and-forget, matching recordBusCategories exactly;
+  // a member whose path doesn't resolve to a real StemCID is silently
+  // skipped by the main-process side, not an error here.
+  function recordRoleCategories(
+    members: ClusterableStem[],
+    arrangeRole: ArrangeRole,
+    drumSubRole?: DrumSubRole
+  ): void {
+    void window.rifffApi.upsertStemCategoryRole(
+      members.map((m) => ({ path: m.path, arrangeRole, drumSubRole })),
+      'tidyup',
+      currentSketch
+    )
+  }
+
   // Assigning a bus no longer auto-advances/plays the next row -- that
   // read as the UI making a decision FOR you mid-listen. Instead a brief
   // celebratory pulse on the just-assigned row acknowledges the action
@@ -395,12 +428,57 @@ export function ClusterStemsBrowser({
   // ClusterRow.
   const [celebratingRow, setCelebratingRow] = useState<number | null>(null)
 
-  function assignCluster(rowIndex: number, members: ClusterableStem[], busId: BusId): void {
+  // `category` is one of ARRANGE_ROLE_OPTIONS' 8 values, not just a BusId --
+  // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
+  // (see ARRANGE_ROLE_TO_BUS's own doc comment, shared/stemRole.ts) while
+  // still recording the finer category via recordRoleCategories. For the 5
+  // shared categories this is unchanged from before except for also now
+  // calling recordRoleCategories (see its own doc comment above).
+  function assignCluster(
+    rowIndex: number,
+    members: ClusterableStem[],
+    category: ArrangeRole
+  ): void {
+    const busId = ARRANGE_ROLE_TO_BUS[category]
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
+    recordRoleCategories(members, category)
     setCelebratingRow(rowIndex)
     window.setTimeout(() => {
       setCelebratingRow((current) => (current === rowIndex ? null : current))
+    }, 500)
+  }
+
+  // Refines an already-'drums'-assigned row to a specific kit piece --
+  // never changes busId (already 'drums', assigned via assignCluster
+  // above) or re-dispatches ASSIGN_STEMS_TO_BUS, just records the finer
+  // drumSubRole. Two thin wrappers below (one per celebration scheme, DSP
+  // row index vs. suggested-row busId -- same split as assignCluster vs.
+  // assignSuggestedGroup) share this celebration-free core.
+  function assignDrumSubRole(members: ClusterableStem[], drumSubRole: DrumSubRole): void {
+    recordRoleCategories(members, 'drums', drumSubRole)
+  }
+
+  function assignDrumSubRoleForRow(
+    rowIndex: number,
+    members: ClusterableStem[],
+    drumSubRole: DrumSubRole
+  ): void {
+    assignDrumSubRole(members, drumSubRole)
+    setCelebratingRow(rowIndex)
+    window.setTimeout(() => {
+      setCelebratingRow((current) => (current === rowIndex ? null : current))
+    }, 500)
+  }
+
+  function assignDrumSubRoleForSuggestedGroup(
+    members: ClusterableStem[],
+    drumSubRole: DrumSubRole
+  ): void {
+    assignDrumSubRole(members, drumSubRole)
+    setCelebratingSuggestedBus('drums')
+    window.setTimeout(() => {
+      setCelebratingSuggestedBus((current) => (current === 'drums' ? null : current))
     }, 500)
   }
 
@@ -427,10 +505,12 @@ export function ClusterStemsBrowser({
   function assignSuggestedGroup(
     suggestedBus: BusId,
     members: ClusterableStem[],
-    busId: BusId
+    category: ArrangeRole
   ): void {
+    const busId = ARRANGE_ROLE_TO_BUS[category]
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
+    recordRoleCategories(members, category)
     setCelebratingSuggestedBus(suggestedBus)
     window.setTimeout(() => {
       setCelebratingSuggestedBus((current) => (current === suggestedBus ? null : current))
@@ -450,10 +530,11 @@ export function ClusterStemsBrowser({
     })
   }
 
-  // Arrow keys move focus between rows; number keys 1-5 assign the
-  // focused row's cluster to the corresponding bus (BUS_IDS[0..4]).
-  // Escape closes the modal, matching this app's existing modal-dismiss
-  // convention.
+  // Arrow keys move focus between rows; number keys 1-8 assign the focused
+  // row's cluster to the corresponding category (ARRANGE_ROLE_OPTIONS[0..7],
+  // extended from the original 1-5/BUS_IDS[0..4] range when the picker grew
+  // to 8 categories, 2026-09-14). Escape closes the modal, matching this
+  // app's existing modal-dismiss convention.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key === 'ArrowDown') {
@@ -464,11 +545,13 @@ export function ClusterStemsBrowser({
         setFocusedRow((row) => Math.max(0, row - 1))
       } else if (e.key === 'Escape') {
         handleClose()
-      } else if (e.key >= '1' && e.key <= '5') {
-        const busIndex = Number(e.key) - 1
-        const busId = BUS_IDS[busIndex]
+      } else if (e.key >= '1' && e.key <= '8') {
+        const categoryIndex = Number(e.key) - 1
+        const category = ARRANGE_ROLE_OPTIONS[categoryIndex]
         const activeCluster = clusters[clampedFocusedRow]
-        if (busId && activeCluster) assignCluster(clampedFocusedRow, activeCluster.members, busId)
+        if (category && activeCluster) {
+          assignCluster(clampedFocusedRow, activeCluster.members, category)
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -610,7 +693,10 @@ export function ClusterStemsBrowser({
                 provenanceOverride="suggested"
                 splittable={false}
                 suggestedBus={busId}
-                onAssign={(assignBusId) => assignSuggestedGroup(busId, members, assignBusId)}
+                onAssign={(category) => assignSuggestedGroup(busId, members, category)}
+                onAssignDrumSubRole={(drumSubRole) =>
+                  assignDrumSubRoleForSuggestedGroup(members, drumSubRole)
+                }
                 onPlay={() => playSuggestedGroup(members)}
                 onSplit={() => {}}
                 onPreviewStem={previewStem}
@@ -629,7 +715,10 @@ export function ClusterStemsBrowser({
               members={members}
               focused={i === clampedFocusedRow}
               celebrating={i === celebratingRow}
-              onAssign={(busId) => assignCluster(i, members, busId)}
+              onAssign={(category) => assignCluster(i, members, category)}
+              onAssignDrumSubRole={(drumSubRole) =>
+                assignDrumSubRoleForRow(i, members, drumSubRole)
+              }
               onPlay={() => playRow(i, members)}
               onSplit={() => splitCluster(id)}
               onPreviewStem={previewStem}
@@ -646,6 +735,7 @@ export function ClusterStemsBrowser({
 function ClusterRow({
   members,
   onAssign,
+  onAssignDrumSubRole,
   onPlay,
   onSplit,
   onPreviewStem,
@@ -659,7 +749,16 @@ function ClusterRow({
   suggestedBus
 }: {
   members: ClusterableStem[]
-  onAssign: (busId: BusId) => void
+  /** One of ARRANGE_ROLE_OPTIONS' 8 values -- see ARRANGE_ROLE_TO_BUS's own
+   * doc comment (shared/stemRole.ts) for how the 3 without a real bus
+   * (textureFx/fill/vocal) still resolve to a concrete BusId assignment. */
+  onAssign: (category: ArrangeRole) => void
+  /** Only ever fires for 'kick'/'snare'/'hihat'/'clap'/'perc' -- write-only,
+   * same as onAssign for the 3 bus-less categories: there's no persisted
+   * signal to derive "which sub-role is currently assigned" from (busOf
+   * only tracks BusId), so the select below always starts back at "drums
+   * (generic)" rather than remembering a prior pick across reopens. */
+  onAssignDrumSubRole: (drumSubRole: DrumSubRole) => void
   onPlay: () => void
   onSplit: () => void
   onPreviewStem: (stem: ClusterableStem, targetBar: number) => void
@@ -771,26 +870,63 @@ function ClusterRow({
             split
           </button>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          {BUS_IDS.map((busId, i) => (
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {ARRANGE_ROLE_OPTIONS.map((category, i) => (
             <button
-              key={busId}
-              onClick={() => onAssign(busId)}
+              key={category}
+              onClick={() => onAssign(category)}
               style={buttonStyle(
-                assignedBus === busId
+                assignedBus === ARRANGE_ROLE_TO_BUS[category]
                   ? 'confirmed'
-                  : suggestedBus === busId
+                  : suggestedBus === category
                     ? 'suggested'
                     : undefined
               )}
-              title={`press ${i + 1} while this row is focused`}
+              title={`press ${i + 1} while this row is focused${
+                category === 'textureFx' || category === 'fill' || category === 'vocal'
+                  ? ' -- routes to the aux bus, tagged as ' + category
+                  : ''
+              }`}
             >
-              {busId}
+              {category}
             </button>
           ))}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 3, overflowX: 'auto' }}>
+      {/* Only meaningful once this row is drums-assigned (any of: the DRUMS
+          button above, or a past confirmation -- both land on busId
+          'drums') -- see onAssignDrumSubRole's own doc comment above for why
+          this is write-only and always starts back at "drums (generic)"
+          rather than remembering a prior pick. */}
+      {assignedBus === 'drums' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+          <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>kit piece</span>
+          <select
+            value=""
+            onChange={(e) => {
+              const value = e.target.value
+              if (value) onAssignDrumSubRole(value as DrumSubRole)
+            }}
+            title="optionally refine which drum kit piece this is -- helps treat different drum stems as genuinely different roles"
+            style={{
+              height: 20,
+              borderRadius: 0,
+              fontSize: 9,
+              border: '1px solid var(--ra-border)',
+              background: 'transparent',
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            <option value="">drums (generic)</option>
+            {DRUM_SUB_ROLE_OPTIONS.map((r) => (
+              <option key={r} value={r}>
+                {DRUM_SUB_ROLE_LABELS[r]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 3, overflowX: 'auto', marginTop: 6 }}>
         {members.slice(0, 8).map((m) => {
           const isPreviewTarget = previewingKeys.has(m.key)
           // showPlayhead's bounds check uses the whole clip's real

@@ -16,6 +16,23 @@ import { guessArrangeRoleFromPresetName } from './presetNames'
 export type ArrangeRole =
   'drums' | 'bass' | 'lead' | 'backing' | 'aux' | 'textureFx' | 'fill' | 'vocal'
 
+/** The 8 ArrangeRole values in the app's own canonical display order,
+ * replacing the old raw-SoundType dropdown per direct feedback (2026-09-01:
+ * "audioIn doesn't really help with arrangement, does it?"). Shared between
+ * AutoArrangeRoleStep.tsx's dropdown and ClusterStemsBrowser.tsx's own Tidy
+ * Up picker (added 2026-09-14) so both pickers offer the same 8 options in
+ * the same order. */
+export const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
+  'drums',
+  'bass',
+  'lead',
+  'backing',
+  'aux',
+  'textureFx',
+  'fill',
+  'vocal'
+]
+
 /** Finer-grained sub-categorization under the 'drums' ArrangeRole -- kick,
  * snare, hihat, clap, and perc/other, so a build with several drums-typed
  * stems doesn't read them all as one interchangeable role for diversity
@@ -30,6 +47,19 @@ export type ArrangeRole =
  * (2026-09-05) -- if other roles (backing, vocal, ...) end up wanting the
  * same treatment later, generalize then, don't speculatively build it now. */
 export type DrumSubRole = 'kick' | 'snare' | 'hihat' | 'clap' | 'perc'
+
+/** DrumSubRole's own UI vocabulary -- shared between every picker that
+ * offers it (AutoArrangeRoleStep.tsx's dropdown, ClusterStemsBrowser.tsx's
+ * own Tidy Up picker added 2026-09-14) so the option list/labels can't
+ * silently drift apart between the two. */
+export const DRUM_SUB_ROLE_OPTIONS: DrumSubRole[] = ['kick', 'snare', 'hihat', 'clap', 'perc']
+export const DRUM_SUB_ROLE_LABELS: Record<DrumSubRole, string> = {
+  kick: 'kick',
+  snare: 'snare',
+  hihat: 'hi-hat',
+  clap: 'clap',
+  perc: 'perc / other'
+}
 
 /** Per-stem re-entry/priority preference for autoArrangeEngine.ts. 'once' is
  * the original, pre-frequency-feature baseline (a stem enters at most once
@@ -49,6 +79,27 @@ const BUS_ID_TO_ARRANGE_ROLE: Record<BusId, ArrangeRole> = {
   lead: 'lead',
   backing: 'backing',
   aux: 'aux'
+}
+
+/** The real Ableton export bus each of ArrangeRole's 8 values routes a stem
+ * to -- BusId only has 5 values, so the 3 that ArrangeRole adds on top
+ * (textureFx/fill/vocal) have no bus of their own and route to 'aux', same
+ * as the generic aux catch-all. Added for ClusterStemsBrowser.tsx's own
+ * Tidy Up picker (2026-09-14, direct request): picking one of those 3
+ * there still needs a real busId to assign (Tidy Up's whole export model is
+ * bus-based), while ALSO recording the finer arrangeRole via
+ * upsertStemCategoryRole so it isn't lost and still trains the arrangeRole
+ * classifier. The inverse of BUS_ID_TO_ARRANGE_ROLE above for the 5 shared
+ * values; the 3 extras are the only genuinely new mappings. */
+export const ARRANGE_ROLE_TO_BUS: Record<ArrangeRole, BusId> = {
+  drums: 'drums',
+  bass: 'bass',
+  lead: 'lead',
+  backing: 'backing',
+  aux: 'aux',
+  textureFx: 'aux',
+  fill: 'aux',
+  vocal: 'aux'
 }
 
 const SOUND_TYPE_TO_ARRANGE_ROLE: Record<SoundType, ArrangeRole> = {

@@ -6,6 +6,9 @@ import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/sele
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import {
   resolveStemRole,
+  ARRANGE_ROLE_OPTIONS,
+  DRUM_SUB_ROLE_OPTIONS,
+  DRUM_SUB_ROLE_LABELS,
   type ArrangeRole,
   type DrumSubRole,
   type StemFrequency,
@@ -44,34 +47,11 @@ interface Props {
   showLengthAndShape?: boolean
 }
 
-// The 8 arrangement-oriented categories, replacing the old raw-SoundType
-// dropdown per direct feedback (2026-09-01: "audioIn doesn't really help
-// with arrangement, does it?"). See ArrangeRole's own doc comment
-// (shared/stemRole.ts) for what each of the non-obvious ones means.
-const ARRANGE_ROLE_OPTIONS: ArrangeRole[] = [
-  'drums',
-  'bass',
-  'lead',
-  'backing',
-  'aux',
-  'textureFx',
-  'fill',
-  'vocal'
-]
-
-// Shown only for a row whose arrangeRole is 'drums' -- see DrumSubRole's own
-// doc comment (shared/stemRole.ts). '' (empty string) is the <select>'s own
-// "no sub-role, stay generic" option, mapped to/from `undefined` at the
-// onChange boundary rather than adding a real '' value to the DrumSubRole
-// type itself.
-const DRUM_SUB_ROLE_OPTIONS: DrumSubRole[] = ['kick', 'snare', 'hihat', 'clap', 'perc']
-const DRUM_SUB_ROLE_LABELS: Record<DrumSubRole, string> = {
-  kick: 'kick',
-  snare: 'snare',
-  hihat: 'hi-hat',
-  clap: 'clap',
-  perc: 'perc / other'
-}
+// '' (empty string) is the drum sub-role <select>'s own "no sub-role, stay
+// generic" option, mapped to/from `undefined` at the onChange boundary
+// rather than adding a real '' value to the DrumSubRole type itself. Shown
+// only for a row whose arrangeRole is 'drums' -- see DrumSubRole's own doc
+// comment (shared/stemRole.ts).
 
 // Ordered low-to-high -- index 0..3 maps directly onto the frequency
 // slider's own value (min=0, max=3, step=1). See StemFrequency's own doc

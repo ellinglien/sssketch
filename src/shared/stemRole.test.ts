@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { engineRoleFor, resolveStemRole, type StemRoleInfo } from './stemRole'
+import { ARRANGE_ROLE_TO_BUS, engineRoleFor, resolveStemRole, type StemRoleInfo } from './stemRole'
 import type { Stem } from './types'
 
 function stem(overrides: Partial<Stem>): Stem {
@@ -102,6 +102,22 @@ describe('resolveStemRole', () => {
   it('stays "uncertain" when SoundType is still fx and neither busId nor PresetName resolve it', () => {
     const role = resolveStemRole(stem({ name: 'My Custom Take', type: 'fx' }), 'k', null)
     expect(role.uncertain).toBe(true)
+  })
+})
+
+describe('ARRANGE_ROLE_TO_BUS', () => {
+  it('maps the 5 shared values to their own same-named bus', () => {
+    expect(ARRANGE_ROLE_TO_BUS.drums).toBe('drums')
+    expect(ARRANGE_ROLE_TO_BUS.bass).toBe('bass')
+    expect(ARRANGE_ROLE_TO_BUS.lead).toBe('lead')
+    expect(ARRANGE_ROLE_TO_BUS.backing).toBe('backing')
+    expect(ARRANGE_ROLE_TO_BUS.aux).toBe('aux')
+  })
+
+  it('maps the 3 bus-less arrangeRole values to aux', () => {
+    expect(ARRANGE_ROLE_TO_BUS.textureFx).toBe('aux')
+    expect(ARRANGE_ROLE_TO_BUS.fill).toBe('aux')
+    expect(ARRANGE_ROLE_TO_BUS.vocal).toBe('aux')
   })
 })
 
