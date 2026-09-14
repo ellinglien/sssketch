@@ -739,6 +739,12 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('set-stem-feature-cache', (_event, path: string, features: StemFeatures) => {
+    // Floored (not unrounded like the upsert-stem-category-* handlers above) is
+    // correct here: StemFeatureCache has exactly one writer and its own upsert
+    // (stemFeatureCacheStore.ts) has no WHERE-guarded comparison against a prior
+    // write's timestamp, unlike StemCategories.UpdatedAt (fixed in 175cd8d after a
+    // real cross-writer precision bug). There's nothing here for extra precision
+    // to protect against.
     setStemFeatureCache(openOwnRiffLibraryDb(), path, features, Math.floor(Date.now() / 1000))
   })
 
