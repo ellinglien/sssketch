@@ -152,6 +152,17 @@ export function DiscoverPanel({
   const rerollGenerationRef = useRef<Map<string, number>>(new Map())
   const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
+  // In-flight tracking for plunkInArranger -- same disabled/label-swap
+  // convention as rerollingSlotIds above, just a single boolean rather than
+  // a per-slot Set since there's only ever one "plunk in arranger" button.
+  // Doesn't fix a correctness bug on its own (the groupId fix above already
+  // makes a genuine double-click safe from corrupting existing placements),
+  // but without it a double-click before the first click's own
+  // Promise.all/resolveCandidateStem round trip resolves would still fire
+  // TWO separate, fully-valid PLACE_LOOP_ON_TIMELINE dispatches from one
+  // intended click -- two full copies of the loop placed back-to-back.
+  const [placing, setPlacing] = useState(false)
+
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
   // prompt's own copy below and rerollSlot above, which reads existing
@@ -273,37 +284,54 @@ export function DiscoverPanel({
   // the others" resilience useStemFeatureScan.ts gets from
   // Promise.allSettled, without needing that API.
   async function plunkInArranger(): Promise<void> {
-    const placeable = slots.filter(
-      (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
-    )
-    if (placeable.length === 0) return
+    setPlacing(true)
+    try {
+      const placeable = slots.filter(
+        (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
+      )
+      if (placeable.length === 0) return
 
-    const resolvedStems = await Promise.all(
-      placeable.map(async ({ candidate, role }, i): Promise<Rifff | null> => {
-        const stem = await resolveCandidateStem(candidate)
-        if (!stem) return null
-        return {
-          groupId: `discover-${candidate.stemCID}-${i}`,
-          name: `discover: ${role}`,
-          bpm: candidate.riffBpm,
-          barLength: stem.barLength,
-          folderPath: '',
-          stems: [{ slot: 1, ...stem }]
-        }
-      })
-    )
-    const rifffs = resolvedStems.filter((r): r is Rifff => r !== null)
-    if (rifffs.length === 0) return
+      const resolvedStems = await Promise.all(
+        placeable.map(async ({ candidate, role }): Promise<Rifff | null> => {
+          const stem = await resolveCandidateStem(candidate)
+          if (!stem) return null
+          return {
+            // crypto.randomUUID(), matching buildRifff.ts's own established
+            // convention for minting a brand-new rifff's groupId -- NOT
+            // deterministic from candidate content. A second "plunk in
+            // arranger" click with the same slots still showing (nothing
+            // clears `slots` after a successful plunk, so re-plunking the
+            // same loop further along the timeline is normal usage) must
+            // mint fresh groupIds, since PLACE_LOOP_ON_TIMELINE's reducer
+            // case writes `rifffs[rifff.groupId] = {...}` -- a deterministic
+            // id recomputed from the same candidates would silently
+            // overwrite (relocate) the first placement instead of adding a
+            // second copy alongside it, contradicting this feature's own
+            // "adds alongside, never replaces" guarantee (design spec §8.4).
+            groupId: crypto.randomUUID(),
+            name: `discover: ${role}`,
+            bpm: candidate.riffBpm,
+            barLength: stem.barLength,
+            folderPath: '',
+            stems: [{ slot: 1, ...stem }]
+          }
+        })
+      )
+      const rifffs = resolvedStems.filter((r): r is Rifff => r !== null)
+      if (rifffs.length === 0) return
 
-    // Appends after the furthest-right currently-placed clip, matching
-    // "adds alongside, never replaces" from the design spec's own §8.4 --
-    // never touches an existing rifff's own startBar.
-    const placedEnds = Object.values(rifffsState)
-      .filter((r) => r.startBar !== undefined)
-      .map((r) => (r.startBar ?? 0) + r.barLength)
-    const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
+      // Appends after the furthest-right currently-placed clip, matching
+      // "adds alongside, never replaces" from the design spec's own §8.4 --
+      // never touches an existing rifff's own startBar.
+      const placedEnds = Object.values(rifffsState)
+        .filter((r) => r.startBar !== undefined)
+        .map((r) => (r.startBar ?? 0) + r.barLength)
+      const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
-    dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar })
+      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar })
+    } finally {
+      setPlacing(false)
+    }
   }
 
   return (
@@ -392,18 +420,19 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void plunkInArranger()}
+          disabled={placing}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'var(--ra-stretch-on-bg)',
             border: '1px solid var(--ra-stretch-on)',
-            color: 'var(--ra-stretch-on)',
+            color: placing ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
             fontWeight: 700,
-            cursor: 'pointer'
+            cursor: placing ? 'default' : 'pointer'
           }}
         >
-          plunk in arranger
+          {placing ? 'placing…' : 'plunk in arranger'}
         </button>
       </div>
 
