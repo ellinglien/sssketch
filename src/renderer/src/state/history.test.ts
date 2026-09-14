@@ -169,6 +169,75 @@ describe('historyReducer', () => {
     expect(h.present.rifffs.r1.stems).toHaveLength(1)
   })
 
+  it('DOES push history for PLACE_LOOP_ON_TIMELINE, and it is exactly one undo step for however many stems the loop has', () => {
+    let h = createHistoryState(initialState)
+    const pastLengthAfterInitial = h.past.length
+    h = historyReducer(h, {
+      type: 'PLACE_LOOP_ON_TIMELINE',
+      startBar: 0,
+      stems: [
+        {
+          groupId: 'a',
+          name: 'a',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [
+            {
+              slot: 1,
+              author: 'elling',
+              name: 'a.wav',
+              path: '/tmp/a.wav',
+              type: 'drums',
+              durationSec: 2,
+              barLength: 4
+            }
+          ]
+        },
+        {
+          groupId: 'b',
+          name: 'b',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [
+            {
+              slot: 1,
+              author: 'elling',
+              name: 'b.wav',
+              path: '/tmp/b.wav',
+              type: 'bass',
+              durationSec: 2,
+              barLength: 4
+            }
+          ]
+        },
+        {
+          groupId: 'c',
+          name: 'c',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [
+            {
+              slot: 1,
+              author: 'elling',
+              name: 'c.wav',
+              path: '/tmp/c.wav',
+              type: 'notes',
+              durationSec: 2,
+              barLength: 4
+            }
+          ]
+        }
+      ]
+    })
+    expect(h.past.length).toBe(pastLengthAfterInitial + 1)
+    expect(Object.keys(h.present.rifffs)).toHaveLength(3)
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(Object.keys(h.present.rifffs)).toHaveLength(0)
+  })
+
   it('caps history length rather than growing unboundedly', () => {
     let h = createHistoryState(initialState)
     for (let i = 0; i < 150; i++) {

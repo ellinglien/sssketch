@@ -2064,4 +2064,118 @@ describe('reducer', () => {
       expect(state.busOf['r1:0']).toBeUndefined()
     })
   })
+
+  // Places several whole new rifffs (one per Discover slot) in a single
+  // dispatch -- the "N items, one undo step" shape ASSIGN_STEMS_TO_BUS
+  // already established, but for fresh PASTE_RIFFF-shaped whole rifffs
+  // rather than mutating existing entries. The actual "one undo step"
+  // property is a consequence of this being a single, non-transient Action
+  // (see history.ts's TRANSIENT_ACTION_TYPES) and is verified against
+  // historyReducer in history.test.ts, not here -- this file's `reducer`
+  // doesn't understand UNDO/REDO at all (that's a history.ts-only concept).
+  describe('PLACE_LOOP_ON_TIMELINE', () => {
+    it('adds one new rifff per loop stem, each on its own channel, in one action', () => {
+      const before = Object.keys(initialState.rifffs).length
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 4,
+        stems: [
+          {
+            groupId: 'discover-drums',
+            name: 'discover: drums',
+            bpm: 128,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'kick.wav',
+                path: '/tmp/kick.wav',
+                type: 'drums',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          },
+          {
+            groupId: 'discover-bass',
+            name: 'discover: bass',
+            bpm: 128,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'bass.wav',
+                path: '/tmp/bass.wav',
+                type: 'bass',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(Object.keys(next.rifffs).length).toBe(before + 2)
+      expect(next.rifffs['discover-drums'].startBar).toBe(4)
+      expect(next.rifffs['discover-bass'].startBar).toBe(4)
+      expect(next.channelOf['discover-drums']).toBe('discover-drums')
+      expect(next.channelOf['discover-bass']).toBe('discover-bass')
+      expect(next.channelOrder).toEqual(expect.arrayContaining(['discover-drums', 'discover-bass']))
+    })
+
+    it('never touches an existing placed rifff already on the timeline', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: {
+          groupId: 'existing',
+          name: 'existing',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [
+            {
+              slot: 1,
+              author: 'elling',
+              name: 'x.wav',
+              path: '/tmp/x.wav',
+              type: 'drums',
+              durationSec: 2,
+              barLength: 4
+            }
+          ]
+        }
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'existing', startBar: 0 })
+      const before = state.rifffs['existing']
+
+      const next = reducer(state, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 8,
+        stems: [
+          {
+            groupId: 'new',
+            name: 'new',
+            bpm: 120,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'y.wav',
+                path: '/tmp/y.wav',
+                type: 'bass',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(next.rifffs['existing']).toEqual(before)
+    })
+  })
 })

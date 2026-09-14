@@ -349,6 +349,14 @@ export type Action =
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
   | { type: 'ASSIGN_TO_BUS'; stemKey: string; busId: BusId }
   | { type: 'ASSIGN_STEMS_TO_BUS'; stemKeys: string[]; busId: BusId }
+  | {
+      type: 'PLACE_LOOP_ON_TIMELINE'
+      /** Every slot's own full Rifff -- one groupId per Discover slot, each
+       * carrying exactly one Stem (a Discover slot is always a single
+       * stem, never a multi-stem group of its own). */
+      stems: Rifff[]
+      startBar: number
+    }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
   | { type: 'SET_TEMPO'; bpm: number }
@@ -1006,6 +1014,24 @@ export function reducer(state: AppState, action: Action): AppState {
         channelOf: { ...state.channelOf, [action.rifff.groupId]: action.rifff.groupId },
         channelOrder: [...state.channelOrder, action.rifff.groupId]
       }
+
+    // Batched counterpart to PASTE_RIFFF, for placing an entire Discover
+    // loop (one fresh whole rifff per slot) onto the timeline at once --
+    // same "N items, one undo step" reasoning as ASSIGN_STEMS_TO_BUS above,
+    // just for adding brand-new rifffs instead of mutating existing ones.
+    // Each slot's rifff gets its own fresh channel, same "own groupId as
+    // channel id" treatment PASTE_RIFFF gives a single pasted clip.
+    case 'PLACE_LOOP_ON_TIMELINE': {
+      const rifffs = { ...state.rifffs }
+      const channelOf = { ...state.channelOf }
+      const channelOrder = [...state.channelOrder]
+      for (const rifff of action.stems) {
+        rifffs[rifff.groupId] = { ...rifff, startBar: action.startBar }
+        channelOf[rifff.groupId] = rifff.groupId
+        channelOrder.push(rifff.groupId)
+      }
+      return { ...state, rifffs, channelOf, channelOrder }
+    }
 
     case 'SET_VOLUME':
       return {
