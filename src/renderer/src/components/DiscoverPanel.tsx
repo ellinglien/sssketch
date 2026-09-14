@@ -30,27 +30,32 @@ async function resolveCandidateStem(candidate: DiscoverCandidate): Promise<{
   durationSec: number
   barLength: number
 } | null> {
-  const resolved = await window.rifffApi.riffLibraryResolveRiff(candidate.riffCID)
-  if (!resolved) return null
-  const withStems = resolved.stems.some((s) => s.path === null)
-    ? ((await window.rifffApi.riffLibraryDownloadMissingStems(candidate.riffCID)) ?? resolved)
-    : resolved
-  const stem = withStems.stems.find((s) => s.stemCID === candidate.stemCID)
-  if (!stem || stem.path === null) return null
-  return {
-    author: stem.creatorUserName,
-    name: stem.presetName,
-    type:
-      instrumentMaskToSoundType(stem.instrumentMask) ??
-      guessSoundTypeFromPresetName(stem.presetName) ??
-      'fx',
-    path: stem.path,
-    durationSec: stem.durationSec,
-    barLength: stem.barLength
+  try {
+    const resolved = await window.rifffApi.riffLibraryResolveRiff(candidate.riffCID)
+    if (!resolved) return null
+    const withStems = resolved.stems.some((s) => s.path === null)
+      ? ((await window.rifffApi.riffLibraryDownloadMissingStems(candidate.riffCID)) ?? resolved)
+      : resolved
+    const stem = withStems.stems.find((s) => s.stemCID === candidate.stemCID)
+    if (!stem || stem.path === null) return null
+    return {
+      author: stem.creatorUserName,
+      name: stem.presetName,
+      type:
+        instrumentMaskToSoundType(stem.instrumentMask) ??
+        guessSoundTypeFromPresetName(stem.presetName) ??
+        'fx',
+      path: stem.path,
+      durationSec: stem.durationSec,
+      barLength: stem.barLength
+    }
+  } catch (err) {
+    console.error('resolveCandidateStem: failed to resolve candidate', candidate.riffCID, err)
+    return null
   }
 }
 
-interface DiscoverSlot {
+export interface DiscoverSlot {
   id: string
   role: ArrangeRole
   locked: boolean
@@ -63,15 +68,34 @@ function freshSlotId(): string {
   return `slot-${nextSlotId}`
 }
 
-export function DiscoverPanel({ currentSketch }: { currentSketch: ProjectRef }): React.JSX.Element {
+export function DiscoverPanel({
+  currentSketch,
+  slots,
+  setSlots,
+  chaos,
+  setChaos
+}: {
+  currentSketch: ProjectRef
+  /** Lifted up into LibraryBrowser.tsx (the parent, which does NOT unmount
+   * on a `libraryMode` tab switch) rather than owned here -- this component
+   * itself DOES unmount/remount on every 'discover' <-> 'browse' switch
+   * (LibraryBrowser renders it conditionally, as a sibling of the 'browse'
+   * block), so state owned internally here would be wiped on every switch.
+   * Controlled from above so the in-progress loop survives switching tabs
+   * within one open LibraryBrowser session, per
+   * docs/superpowers/specs/2026-09-14-library-wide-discover-design.md
+   * §8.1. */
+  slots: DiscoverSlot[]
+  setSlots: React.Dispatch<React.SetStateAction<DiscoverSlot[]>>
+  chaos: number
+  setChaos: React.Dispatch<React.SetStateAction<number>>
+}): React.JSX.Element {
   // Unused for now -- accepted here because this component's real
   // consumer (LibraryBrowser.tsx) already passes it and Task 11 ("plunk
   // in arranger") will need it once placement lands. This `void` is only
   // to satisfy this project's tsconfig noUnusedParameters /
   // @typescript-eslint/no-unused-vars until that wiring exists.
   void currentSketch
-  const [slots, setSlots] = useState<DiscoverSlot[]>([])
-  const [chaos, setChaos] = useState(35)
 
   function addSlot(role: ArrangeRole): void {
     setSlots((prev) => [...prev, { id: freshSlotId(), role, locked: false, candidate: null }])

@@ -40,7 +40,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
-import { DiscoverPanel } from './DiscoverPanel'
+import { DiscoverPanel, type DiscoverSlot } from './DiscoverPanel'
 
 // Persisted locally (not in project files or app state) since it's a
 // per-person identity setting, not something that travels with a project —
@@ -183,6 +183,17 @@ export function LibraryBrowser({
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
   const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>('browse')
+  // Lifted out of DiscoverPanel (rather than owned internally there) so
+  // the in-progress discover loop survives switching `libraryMode` back
+  // and forth within one open LibraryBrowser session -- DiscoverPanel
+  // itself unmounts/remounts every time `libraryMode` flips (it's
+  // rendered conditionally below, as a sibling of the 'browse' block),
+  // but LibraryBrowser does not, so state living here (not in
+  // DiscoverPanel) survives that unmount. See
+  // docs/superpowers/specs/2026-09-14-library-wide-discover-design.md
+  // §8.1 ("survives closing and reopening the Discover tab").
+  const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  const [discoverChaos, setDiscoverChaos] = useState(35)
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -2038,7 +2049,15 @@ export function LibraryBrowser({
             )}
           </>
         )}
-        {libraryMode === 'discover' && <DiscoverPanel currentSketch={currentSketch} />}
+        {libraryMode === 'discover' && (
+          <DiscoverPanel
+            currentSketch={currentSketch}
+            slots={discoverSlots}
+            setSlots={setDiscoverSlots}
+            chaos={discoverChaos}
+            setChaos={setDiscoverChaos}
+          />
+        )}
       </div>
       {/* Rendered INSIDE the modal's own zIndex:1000 stacking context
             (not as a sibling of it) -- ContextMenu's own zIndex is only 20,
