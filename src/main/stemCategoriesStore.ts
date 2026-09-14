@@ -27,7 +27,7 @@ export function resolveSourceProjectPath(project: ProjectRef): string | null {
  * Stems table before anything is written -- silently skipped (not an
  * error) rather than writing a StemCategories row for a StemCID that isn't
  * real. */
-function stemCIDForPath(db: Database.Database, path: string): string | null {
+export function stemCIDForPath(db: Database.Database, path: string): string | null {
   const candidate = basename(path)
   const row = db.prepare(`SELECT 1 FROM Stems WHERE StemCID = ?`).get(candidate)
   return row ? candidate : null
