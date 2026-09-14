@@ -233,23 +233,175 @@ fall back to), but both ship in this one implementation, not a follow-up.
 
 ### 8. The discover screen
 
-A new, standalone screen off the gear menu — separate from Tidy Up/LibraryBrowser/Auto-Arrange,
-which were all just reworked or extended this session and shouldn't absorb more scope.
+**SUPERSEDES this section's own original framing below (kept struck-through-in-spirit, not
+deleted, so the "seed vs. unprompted" split this replaces is visible in context) — revised
+2026-09-15 after live-testing Plan B2 surfaced a much more concrete reference and Elling's own
+direct steer on where this belongs in the app. Confirmed by direct code read, not assumed, same
+discipline as the rest of this spec.**
 
-- **Seed-based**: pick one stem (from the current timeline, or the library browser) as a
-  starting point; the screen shows compatible/complementary stems from anywhere in the
-  library, ranked per §4.
-- **Unprompted**: browse proactively-surfaced multi-stem combinations with no seed needed —
-  the harder of the two ranking problems, but requested explicitly rather than assumed.
-- **Placing a result**: clicking a suggested stem imports it (constructing a new
-  single-stem clip — the same shape `buildArrangeReplaceActions`' own output already uses,
-  see `pasteStemWindowAction`/`pasteStemAction` in `state/selectors.ts`) and places it on the
-  current timeline via the existing `PLACE_ON_TIMELINE` mechanism. The discover screen is a
-  real way to build, not just a browser.
-- **Library-wide background scanning**: this is the one screen that genuinely needs features
-  for stems nobody has ever placed on any timeline, so this is where §9's ambient background
-  scan (built for placed-only stems in the foundation work) extends to the whole synced
-  library — same persistent `StemFeatureCache` store, same throttled approach, wider scope.
+**Original framing (superseded):** *A new, standalone screen off the gear menu — separate from
+Tidy Up/LibraryBrowser/Auto-Arrange. Seed-based (pick a stem, see compatible library-wide
+matches) and unprompted (browse proactively-surfaced combos with no seed) as two distinct
+modes; placing a result meant importing and placing ONE stem at a time.*
+
+#### 8.0 Why this changed
+
+Elling's own reference, mid-session, while live-testing Plan B2: Aria Labs' **Upcycle** — a
+slot-based loop builder (one stem per category slot, each independently lockable, a "reroll
+slot"/"reroll all" mechanic, a chaos↔safe looseness control, and a way to commit the current
+loop out to a DAW). This single mechanic elegantly **unifies** the original "seed-based vs.
+unprompted" split rather than needing two modes: locking a slot IS the seed concept (pin what
+you like, reroll the rest around it), and an all-unlocked grid IS the unprompted case. One
+screen, one mechanic, not two.
+
+Also per direct steer: this is **not** a standalone gear-menu screen. "Import" today is exactly
+one thing — the `import` button on `Shelf.tsx` (`Shelf.tsx:362-374`, `onOpenLibrary` prop,
+wired in `App.tsx:2073`), which calls `openRiffLibrary()` (`App.tsx:1424-1427`) to open
+`LibraryBrowser.tsx` (`App.tsx:2184`), the modal that already browses/filters/imports synced
+Endlesss/LORE content. Discover becomes a **new tab/mode inside that same modal** ("browse" vs.
+"discover"), reached through the existing import button — not a new gear-menu entry alongside
+Tidy Up/Auto-Arrange/Draw Arrangement (`App.tsx:695-719`).
+
+`LibraryBrowser.tsx` is already ~2020 lines. Per this spec's own "design for isolation" — and
+so Discover doesn't become a fourth thing crammed into an already-large file the way Tidy Up's
+own picker outgrew its original 5-button width earlier this session — Discover's own UI lives
+in a new sibling component (`DiscoverPanel.tsx`) that `LibraryBrowser.tsx` renders when its own
+new tab state selects "discover," not inlined into the existing file.
+
+#### 8.1 The loop builder
+
+A stacked-rack layout (rows, not cards) — matching the row-based pattern every other list in
+this app already uses (`ChannelRow`, `ClusterRow`, `LibraryBrowser`'s own riff rows), rather
+than introducing a card-grid pattern found nowhere else in sssketch. Confirmed by a real
+side-by-side mockup shown to and picked by Elling over a card-grid alternative.
+
+- **Slots**: one stem per slot, each tagged with one of the 8 `ArrangeRole` values
+  (`ARRANGE_ROLE_OPTIONS`, `shared/stemRole.ts` — same taxonomy Tidy Up's own picker already
+  uses, not a new one). Duplicates allowed (e.g. two `drums` slots for a layered kit). "add
+  slot" appends a new, initially-empty slot with a role the user picks from that same 8-value
+  set.
+- **Lock**: a per-slot toggle. A locked slot survives "reroll all" untouched; an unlocked slot
+  gets a fresh candidate. This is the ENTIRE "seed" mechanism from the original framing above —
+  no separate seed UI needed.
+- **Reroll slot / reroll all**: replaces that slot's (or every unlocked slot's) current stem
+  with a freshly-selected candidate — see 8.2 for selection.
+- **Target tempo/key**: always the CURRENT project's (`AppState.bpm`, and whatever key/scale
+  context the project already carries) — no separate BPM/Key controls on the screen itself,
+  unlike Upcycle's own standalone-tool framing. Discover is for building into a project you
+  already have open, not a tool used independent of one.
+- **Persistence**: the in-progress loop (which slots exist, which are locked, what's currently
+  in each) persists for the app session — survives closing and reopening the Discover tab, lost
+  on quit. No "Saved Sets" browser (Upcycle has one; out of scope here, YAGNI unless real use
+  demonstrates the need).
+
+#### 8.2 Candidate ranking and the reroll mechanism
+
+A reroll must not be either extreme: always picking the single best-ranked candidate makes
+"reroll" feel broken (nothing changes once you've seen the best option); picking uniformly at
+random from every eligible candidate ignores §4's own compatibility ranking entirely (directly
+contradicts Elling's own "prioritize stuff that's categorized by hand"). Reroll therefore does
+a **weighted-random pick from a ranked top-K pool** — candidates scored by §4's own
+compatible+complementary+confidence ranking (key/tempo closeness, role diversity, a
+`StemCategories` row outranking an auto-guess), then one is picked from the top K, weighted
+toward the higher-ranked end rather than uniformly.
+
+The **Chaos ↔ Safe slider** (from the Upcycle reference) is the user-facing control over this:
+"safe" narrows K and steepens the weighting toward the very top of the ranking (closer to
+always-best); "chaos" widens K and flattens the weighting (closer to uniform-random across a
+looser compatibility bar). This is new selection logic, not a reuse of an existing function —
+§4's own ranking function needs to return a scored, orderable candidate LIST (not just a single
+best pick) for this to have something to sample from.
+
+#### 8.3 The library-wide candidate query — the largest genuinely new piece of this plan
+
+Confirmed by direct code read: **no existing function already answers "compatible candidates,
+library-wide, filterable by role."** `listRiffs(jamCID, filters)` (`riffLibraryStore.ts:255`)
+is scoped to exactly one jam (`WHERE OwnerJamCID = ?`, via `dbForJam(jamCID)`) and its
+`RiffFilters` (`shared/riffLibraryTypes.ts:78-104`) — `bpmMin/bpmMax`, `root/scale`, `userName`,
+`onlyContainsUser` — has no `BusId`/`ArrangeRole` filter at all, because `listRiffs` never joins
+against `StemCategories` (that table is only ever read per-stem, via
+`getStemCategory(db, stemCID)`, `stemCategoriesStore.ts:147`). Building Discover's candidate
+pool needs genuinely new code:
+
+1. Enumerate every synced jam (`listJams()`), not one.
+2. Per jam, join `Stems`/`Riffs` against `StemCategories` (role + confidence) and, per §7, 
+   `StemEmbeddingCache` (embedding, when present) — reusing `getConfirmedEmbeddings`'s own
+   per-axis query shape (`main/embeddingMatch.ts`) as the closest existing precedent for a
+   bulk `StemCategories`-joined read, even though that function itself is scoped to
+   confirmed+embedded rows only and would need a sibling, not a direct reuse, for "every stem
+   with at least a role guess."
+3. Filter by ownership, reusing `computeOwnerFraction` (`riffLibraryTypes.ts:168-175`) exactly
+   as `listRiffs` already does (`riffLibraryStore.ts:341`) and as `LibraryBrowser.tsx:824`
+   already exposes via its own "only my stems" toggle (`onlyContainsMe`) — same mechanism, same
+   default-on-for-safety posture as §5.
+4. Filter/score by BPM/key closeness against the current project's own values (8.1).
+
+This is real, non-trivial backend work — the implementation plan should give it its own
+dedicated phase, sequenced before the UI that consumes it (same "don't build the picker before
+the data it picks from exists" ordering §7 already used for Phase 1 vs. Phase 2).
+
+#### 8.4 Placing a loop — "plunk in arranger"
+
+Adds the current loop **alongside** whatever's already on the current timeline (confirmed
+directly, not assumed to be "replace" or "new project") — as one new group of stems, not
+touching anything already placed.
+
+Confirmed by direct code read: there is **no existing single-call mechanism for placing several
+stems as one cohesive unit.** `pasteStemAction`/`pasteStemWindowAction`
+(`state/selectors.ts:579-668`) each take one `(state, sourceGroupId, slot, startBar[,
+barLength])` and build a `Rifff` with exactly one stem; `PLACE_ON_TIMELINE`
+(`state/store.ts:348`, reducer `:569-586`) takes one `groupId`. Placing a multi-stem loop today
+would mean N separate dispatches, one per stem — and per this codebase's own established
+convention (`ASSIGN_STEMS_TO_BUS`, `store.ts:351,633-638`, added specifically so confirming a
+whole Tidy Up cluster is one undo step, not one per stem — commit `2fa4995`), undo granularity
+is exactly "one dispatched action," full stop. Plunking a 4-slot loop as N separate
+`PASTE_RIFFF`/`PLACE_ON_TIMELINE` dispatches would cost 4+ undo steps for what should read as
+one build action. This needs a **new batch action type** (e.g. `PLACE_LOOP_ON_TIMELINE`,
+carrying every locked/rerolled slot's stem + its own target slot/channel) so plunking a loop is
+one undo step — new reducer work, not a reuse of the existing single-stem path.
+
+#### 8.5 Scan consent and progress
+
+The one screen that genuinely needs features/embeddings for stems nobody has ever placed on any
+timeline, so this is where the ambient background scan (§9 — built for PLACED stems only in the
+Plan A/B2 foundation work) would need to extend to the whole synced library. Per Elling's own
+direct requirement, raised live while testing Plan B2's placed-stems-only scan: **a whole-
+library scan is a different order of magnitude (his own library: 52,493 stems) and must not
+start silently the way the small, placed-stems-only scan does.**
+
+- **When**: a one-time consent prompt the first time the "discover" tab is opened, before any
+  whole-library scan starts. Accepted once, never asked again (a settings-menu toggle,
+  alongside the gear/settings menu's existing "change save location"/"change riff archive
+  location" items, `TransportBar.tsx:689-740`, lets it be turned off/on again later).
+- **Declining**: Discover stays usable, but its candidate pool is limited to whatever's already
+  been analyzed from ordinary placed-stem use (§9's existing small scan) — never a silent
+  full-library scan. A visible, plain-language note explains why results are limited and how to
+  turn scanning on.
+- **Progress, once accepted**: an ambient, non-blocking "analyzed X of Y in scope" indicator
+  (the one piece of Upcycle's own UI kept close to verbatim — its bottom-bar analysis-progress
+  readout is a good, proven pattern for exactly this) — not a blocking spinner; the loop builder
+  works throughout with whatever's already analyzed, same layered-fallback posture §7 already
+  established (embedding → centroid → preset name → SoundType default) for a single stem's own
+  classification.
+
+#### 8.6 Error and empty states
+
+- A slot with no qualifying candidate (chaos/safe set too tight, or genuinely nothing
+  compatible exists yet) shows a clear "no match" state, not a crash or a silently-stuck
+  spinner — "reroll slot" simply retries against the same query.
+- If scanning was declined (or hasn't had time to run) and the candidate pool for a role is
+  entirely empty, the empty state says so explicitly ("nothing analyzed yet for this role") —
+  distinct from "no match," so a brand-new/cold-start user understands *why*, not just an empty
+  row.
+
+#### 8.7 Non-goals (this section specifically)
+
+- No Upcycle-style "Saved Sets" (multiple named, persisted loop configurations) — session
+  persistence (8.1) is the whole of what's built here.
+- No independent BPM/Key controls on the Discover tab itself (8.1) — always the current
+  project's.
+- No manual candidate-pool tuning UI beyond the Chaos↔Safe slider (8.2) — no separate
+  key-tolerance/tempo-tolerance controls, at least for a first version.
 
 ### 9. Phase 3 — consolidating overlapping analysis infrastructure (ongoing priority)
 
@@ -318,7 +470,12 @@ time analysis/matching code is proposed anywhere in this app.
   of time is the discover screen's own concern (§8), since library-wide candidates are the
   first place this app actually needs features for stems nobody has placed anywhere yet; it
   reuses this exact same persistent store and extends the background pass to the whole
-  library rather than building a second caching mechanism.
+  library rather than building a second caching mechanism. Unlike this section's own
+  placed-stems-only pass, that library-wide extension is NOT silent — see §8.5 for the
+  one-time consent prompt this specifically requires (raised directly by Elling during
+  Plan B2's own live testing, after this smaller placed-stems-only pass was already shipped
+  and working silently, precisely because a whole-library pass is a different order of
+  magnitude of cost).
 
 **Confirmed genuinely separate, and should stay that way — this is not something to force
 together:** Tidy Up's `agglomerativeCluster.ts` (average-linkage agglomerative clustering,
@@ -356,11 +513,15 @@ lost, not proposed as in scope for this spec.
 `PresetName` keyword matcher, the centroid classifiers (§6), the embedding nearest-neighbor
 search and its augment/fallback selection logic (§7), and the compatibility-ranking function
 are all real `src/shared/`-or-`src/main/`-style pure/testable logic — TDD'd per this
-codebase's convention, same as Phase 1's classifier. The discover screen's own UI (both modes,
-plus the "place on timeline" action) is typecheck+lint-verified only, per this codebase's
-standing convention for React components with no way to click-test a discovery/browsing flow
-in this environment — needs Elling's own manual walkthrough, same as every other UI feature
-built this session.
+codebase's convention, same as Phase 1's classifier. §8's own new additions split the same way:
+the library-wide candidate query (§8.3, `src/main/`) and the weighted-top-K reroll selection
+(§8.2, `src/shared/`) are pure/testable logic and get real tests; the new `DiscoverPanel.tsx`
+UI (slots, lock, reroll, the Chaos↔Safe slider) and the new `PLACE_LOOP_ON_TIMELINE` batch
+reducer action (§8.4 — the reducer case itself is testable store logic, same convention as
+`ASSIGN_STEMS_TO_BUS`'s own test coverage; only the UI that dispatches it is
+typecheck+lint-only) are typecheck+lint-verified only, per this codebase's standing convention
+for React components with no way to click-test a discovery/browsing flow in this environment —
+needs Elling's own manual walkthrough, same as every other UI feature built this session.
 
 **Phase 2 (§7) specifically** — the actual YAMNet extraction and `onnxruntime-web` integration
 is Electron/Web-Worker-dependent, real-model-loading code, not pure logic: per this codebase's
