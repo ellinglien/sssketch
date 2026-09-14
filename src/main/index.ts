@@ -40,7 +40,9 @@ import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngine
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
-import type { CategoryCentroidStore } from '@shared/categoryCentroids'
+import { getConfirmedEmbeddings } from './embeddingMatch'
+import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
+import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import {
   trainCentroidsFromBusEntries,
   trainCentroidsFromRoleEntries
@@ -710,6 +712,10 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('get-category-centroids', (): CategoryCentroidStore => loadCategoryCentroidStore())
+
+  ipcMain.handle('get-confirmed-embeddings', (_event, axis: CategoryAxis): ConfirmedEmbedding[] =>
+    getConfirmedEmbeddings(openOwnRiffLibraryDb(), axis, candidateDbsForRiff())
+  )
 
   ipcMain.handle(
     'upsert-stem-category-bus',

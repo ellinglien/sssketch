@@ -8,10 +8,11 @@ import type {
   RiffLibraryResolvedRiff
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
-import type { CategoryCentroidStore } from '@shared/categoryCentroids'
+import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
+import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -178,6 +179,8 @@ const api = {
     ipcRenderer.invoke('engine-set-output-device', deviceName),
   getCategoryCentroids: (): Promise<CategoryCentroidStore> =>
     ipcRenderer.invoke('get-category-centroids'),
+  getConfirmedEmbeddings: (axis: CategoryAxis): Promise<ConfirmedEmbedding[]> =>
+    ipcRenderer.invoke('get-confirmed-embeddings', axis),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,
