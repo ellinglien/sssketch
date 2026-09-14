@@ -185,7 +185,7 @@ const api = {
   getDiscoverCandidates: (
     arrangeRole: ArrangeRole,
     onlyOwnStems: boolean,
-    targetUser: string
+    targetUser?: string
   ): Promise<DiscoverCandidate[]> =>
     ipcRenderer.invoke('get-discover-candidates', arrangeRole, onlyOwnStems, targetUser),
   upsertStemCategoryBus: (

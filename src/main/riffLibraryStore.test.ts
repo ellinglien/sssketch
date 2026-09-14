@@ -11,6 +11,7 @@ import {
   setRiffLibraryRootForTests,
   hasStoredRiffLibraryRootOverride,
   listJams,
+  listJamsWithDb,
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
@@ -854,5 +855,125 @@ describe("shared-feed jams always read from sssketch's own database, regardless 
   it('a real (non-shared) jam in the external root is unaffected -- still reads from there, not the own db', () => {
     const { riffs } = listRiffs('jam-techno', {})
     expect(riffs.map((r) => r.riffCID).sort()).toEqual(['riff-1', 'riff-2'])
+  })
+})
+
+describe('listJamsWithDb', () => {
+  let root: string
+
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+  })
+
+  it('pairs every jam listJams() returns with a working db connection to its own data', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+
+    const pairs = listJamsWithDb()
+    expect(pairs.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+
+    // Each pair's db is a real, queryable connection to the SAME data
+    // listJams/listRiffs would read -- not just a truthy placeholder.
+    const technoPair = pairs.find((p) => p.jamCID === 'jam-techno')!
+    const rows = technoPair.db
+      .prepare('SELECT RiffCID FROM Riffs WHERE OwnerJamCID = ? ORDER BY CreationTime')
+      .all('jam-techno') as { RiffCID: string }[]
+    expect(rows.map((r) => r.RiffCID)).toEqual(['riff-1', 'riff-2'])
+  })
+
+  it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
+    setRiffLibraryRootForTests('/no/such/path')
+    expect(listJamsWithDb()).toEqual([])
+  })
+
+  describe('with a shared-feed jam involved', () => {
+    let externalRoot: string
+
+    beforeEach(async () => {
+      userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-listjamswithdb-test-'))
+      const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+      closeOwnRiffLibraryDb()
+      const ownDb = openOwnRiffLibraryDb()
+      ownDb.exec(`
+        INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:elling', 'Shared Feed', 1);
+        INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName)
+          VALUES ('shared-riff-1', 'shared:elling', 5000, 140, 8, 'elling');
+      `)
+    })
+
+    afterEach(async () => {
+      const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+      closeOwnRiffLibraryDb()
+      setRiffLibraryRootForTests(null)
+      rmSync(userDataDir, { recursive: true, force: true })
+    })
+
+    it('routes a shared-feed jam to the own db, and a regular jam to the configured (external) root db', () => {
+      externalRoot = mkdtempSync(join(tmpdir(), 'sssketch-lore-external-test-'))
+      createSeededFixtureWarehouse(externalRoot) // real jam-techno data, no shared: rows at all
+      setRiffLibraryRootForTests(externalRoot)
+
+      const pairs = listJamsWithDb()
+
+      const sharedPair = pairs.find((p) => p.jamCID === 'shared:elling')
+      expect(sharedPair).toBeDefined()
+      const sharedRows = sharedPair!.db
+        .prepare('SELECT RiffCID FROM Riffs WHERE OwnerJamCID = ?')
+        .all('shared:elling') as { RiffCID: string }[]
+      expect(sharedRows.map((r) => r.RiffCID)).toEqual(['shared-riff-1'])
+
+      // Proves technoPair.db is really the EXTERNAL root's own connection
+      // (the own db has no jam-techno rows at all) -- dbForJam routed each
+      // jamCID to the correct db, not just the same one for everything.
+      const technoPair = pairs.find((p) => p.jamCID === 'jam-techno')
+      expect(technoPair).toBeDefined()
+      const technoRows = technoPair!.db
+        .prepare('SELECT RiffCID FROM Riffs WHERE OwnerJamCID = ?')
+        .all('jam-techno') as { RiffCID: string }[]
+      expect(technoRows.map((r) => r.RiffCID)).toEqual(['riff-1', 'riff-2'])
+
+      rmSync(externalRoot, { recursive: true, force: true })
+    })
+
+    // This is as close as the module's own current invariants allow to
+    // exercising dbForJam's null-returning branch (finding 2026-09-15 code
+    // review, listJamsWithDb has one real branch -- filtering out a jam
+    // whose dbForJam() call returns null -- with zero coverage). Traced
+    // dbForJam (private, unexported) closely before writing this:
+    //
+    //   function dbForJam(jamCID) {
+    //     return jamCID.startsWith('shared:') ? openOwnRiffLibraryDb() : getRiffLibraryDb()
+    //   }
+    //
+    // getRiffLibraryDb() is the ONLY branch that can ever return null (it
+    // has a try/catch around opening the db and returns null on failure);
+    // openOwnRiffLibraryDb() (riffLibrarySchema.ts) has no try/catch at all
+    // and either succeeds or throws -- never null. And getRiffLibraryDb()
+    // caches its connection at module scope, so any jamCID listJams() (via
+    // that same getRiffLibraryDb() call) already surfaced is guaranteed to
+    // resolve identically -- non-null -- moments later in dbForJam(). So a
+    // *listed* non-shared jam can never turn up null here; confirmed this is
+    // not just an untested case but a currently-unreachable one given
+    // dbForJam's real implementation, not something this test can trigger
+    // without faking a failure inside listJams() itself (which would just
+    // make the jam never get listed at all, not "listed then filtered").
+    //
+    // What IS real, and worth covering here: a totally-unavailable
+    // configured root (a common real case -- unmounted external LORE drive,
+    // never-synced warehouse) contributes nothing, while the always-local
+    // own db's shared-feed jam still resolves and is still included --
+    // proving listJamsWithDb() degrades gracefully rather than crashing or
+    // silently dropping a jam it COULD otherwise resolve.
+    it('excludes the configured root entirely when it is unavailable, while a shared-feed jam (own db) still resolves', () => {
+      setRiffLibraryRootForTests('/no/such/path/at/all')
+
+      const pairs = listJamsWithDb()
+      expect(pairs.map((p) => p.jamCID)).toEqual(['shared:elling'])
+      const rows = pairs[0].db
+        .prepare('SELECT RiffCID FROM Riffs WHERE OwnerJamCID = ?')
+        .all('shared:elling') as { RiffCID: string }[]
+      expect(rows.map((r) => r.RiffCID)).toEqual(['shared-riff-1'])
+    })
   })
 })

@@ -61,8 +61,7 @@ import {
   candidateDbsForRiff,
   listJamsWithDb
 } from './riffLibraryStore'
-import { getDiscoverCandidates } from './discoverCandidates'
-import type { DiscoverCandidate } from './discoverCandidates'
+import { getDiscoverCandidates, type DiscoverCandidate } from './discoverCandidates'
 import type { ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -731,7 +730,7 @@ app.whenReady().then(async () => {
       _event,
       arrangeRole: ArrangeRole,
       onlyOwnStems: boolean,
-      targetUser: string
+      targetUser?: string
     ): DiscoverCandidate[] =>
       getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
