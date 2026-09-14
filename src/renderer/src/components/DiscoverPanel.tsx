@@ -6,8 +6,8 @@ import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { useAppSelector } from '../state/StoreContext'
-import type { ProjectRef, SoundType, Stem } from '@shared/types'
+import { useAppSelector, useDispatch } from '../state/StoreContext'
+import type { ProjectRef, Rifff, SoundType, Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
@@ -122,13 +122,17 @@ export function DiscoverPanel({
    * already-mounted scan until this panel next remounted. */
   setDiscoverConsented: (value: boolean) => Promise<void>
 }): React.JSX.Element {
-  // Unused for now -- accepted here because this component's real
-  // consumer (LibraryBrowser.tsx) already passes it and Task 11 ("plunk
-  // in arranger") will need it once placement lands. This `void` is only
-  // to satisfy this project's tsconfig noUnusedParameters /
-  // @typescript-eslint/no-unused-vars until that wiring exists.
+  // Unused -- accepted here because this component's real consumer
+  // (LibraryBrowser.tsx) already passes it. Task 11 ("plunk in arranger")
+  // turned out not to need it after all: PLACE_LOOP_ON_TIMELINE takes a
+  // flat startBar computed from the timeline's own existing rifffs, not
+  // anything scoped to the current sketch. This `void` is only to satisfy
+  // this project's tsconfig noUnusedParameters / @typescript-eslint/no-
+  // unused-vars until a real use turns up.
   void currentSketch
 
+  const dispatch = useDispatch()
+  const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
@@ -256,6 +260,52 @@ export function DiscoverPanel({
     }
   }
 
+  // Commits whatever loop is currently built in Discover onto the real
+  // timeline, as one undo step -- every slot that currently has a
+  // candidate (locked or not: "plunk" commits whatever's visible right
+  // now, the same loop the slot rows' own PolarGlyph previews are already
+  // showing, not a filtered subset). Each slot becomes its own fresh
+  // single-stem Rifff; resolveCandidateStem (above, also used by the slot
+  // rows themselves) does the real download/resolve work, since a
+  // Discover candidate isn't necessarily cached locally yet. It never
+  // throws/rejects -- only ever resolves to null on failure -- so a plain
+  // Promise.all here already gives the same "one bad stem doesn't block
+  // the others" resilience useStemFeatureScan.ts gets from
+  // Promise.allSettled, without needing that API.
+  async function plunkInArranger(): Promise<void> {
+    const placeable = slots.filter(
+      (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
+    )
+    if (placeable.length === 0) return
+
+    const resolvedStems = await Promise.all(
+      placeable.map(async ({ candidate, role }, i): Promise<Rifff | null> => {
+        const stem = await resolveCandidateStem(candidate)
+        if (!stem) return null
+        return {
+          groupId: `discover-${candidate.stemCID}-${i}`,
+          name: `discover: ${role}`,
+          bpm: candidate.riffBpm,
+          barLength: stem.barLength,
+          folderPath: '',
+          stems: [{ slot: 1, ...stem }]
+        }
+      })
+    )
+    const rifffs = resolvedStems.filter((r): r is Rifff => r !== null)
+    if (rifffs.length === 0) return
+
+    // Appends after the furthest-right currently-placed clip, matching
+    // "adds alongside, never replaces" from the design spec's own §8.4 --
+    // never touches an existing rifff's own startBar.
+    const placedEnds = Object.values(rifffsState)
+      .filter((r) => r.startBar !== undefined)
+      .map((r) => (r.startBar ?? 0) + r.barLength)
+    const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
+
+    dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar })
+  }
+
   return (
     <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
       {showConsentPrompt && (
@@ -339,6 +389,21 @@ export function DiscoverPanel({
           }}
         >
           {rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
+        </button>
+        <button
+          onClick={() => void plunkInArranger()}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 14px',
+            background: 'var(--ra-stretch-on-bg)',
+            border: '1px solid var(--ra-stretch-on)',
+            color: 'var(--ra-stretch-on)',
+            fontWeight: 700,
+            cursor: 'pointer'
+          }}
+        >
+          plunk in arranger
         </button>
       </div>
 
