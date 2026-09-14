@@ -293,6 +293,22 @@ side-by-side mockup shown to and picked by Elling over a card-grid alternative.
   in each) persists for the app session — survives closing and reopening the Discover tab, lost
   on quit. No "Saved Sets" browser (Upcycle has one; out of scope here, YAGNI unless real use
   demonstrates the need).
+- **Radial waveforms, not linear ones — reusing `PolarGlyph.tsx`, not a new component.** Direct
+  request. Confirmed by code read: this codebase already has exactly this — `PolarGlyph`
+  (`components/PolarGlyph.tsx`), a concentric-ring SVG glyph (three band-energy rings —
+  bass/mid/treble — plus a pitch-contour line) already in production use for a rifff's own
+  identity glyph in `Shelf.tsx:330-334` and `LibraryBrowser.tsx:1892` (a whole riff's `stems`
+  array in, one composite glyph out). Each Discover slot renders `<PolarGlyph stems={[stem]}
+  identityColor={stemColorVar(stem)} size={...} />` — the single-stem case is already a valid
+  input shape, nothing new needed there. `PolarGlyph` itself has no click/scrub interaction of
+  its own in either existing call site (the click handling wraps the button/row AROUND it,
+  same as `Shelf.tsx`'s own `<button>` wrapper) — Discover's own "click to preview" follows that
+  same established pattern rather than porting `Waveform.tsx`'s linear click-to-scrub-by-x-
+  position logic, which has no natural radial equivalent. As a bonus this component's own
+  `stems: Stem[]` shape already generalizes to "every stem in the loop at once," so an optional
+  composite glyph at the top of the panel (all current slots' stems together) is a natural,
+  ~zero-new-code extension worth including — one glance at what the whole loop "looks like"
+  together, not just each slot individually.
 
 #### 8.2 Candidate ranking and the reroll mechanism
 
