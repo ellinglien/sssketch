@@ -73,6 +73,27 @@ export function useStemPreviewPlayback(): {
   // which synchronously swaps the wizard's own step state.
   const cancelledRef = useRef(false)
 
+  // Guards against a SECOND startPreview call superseding a first one that's
+  // still mid-flight, rather than the reverse -- real bug reported
+  // 2026-09-14 on a large (41-clip) cluster: flushEngineSyncNow's own round
+  // trip (full buildEngineProject + rubberband resolve + engineLoadProject)
+  // scales with project size and can take long enough for a second click
+  // (a different thumbnail, or the same row's play button again) to fire
+  // BEFORE the first call's await resolves. Nothing previously stopped both
+  // calls from running concurrently and both eventually calling
+  // engineSetPosition/dispatch(PLAY) -- whichever happened to resolve LAST
+  // won, not whichever was clicked last, so a slow first click (e.g. "play
+  // whole cluster" from its earliest bar) could resolve after a fast second
+  // click (scrub to a specific point) and silently snap playback back to
+  // the first click's target. Symptoms reported: scrubbing "stubbornly"
+  // jumping back to a clip's own start, a new preview "sometimes doesn't
+  // start right away," and it being unclear what's actually playing (all
+  // three are this same race touching previewingKeys/pos/playing together).
+  // Each call captures its own generation number before its first await and
+  // bails out after if a newer call has since started, exactly like
+  // cancelledRef above but for "superseded" rather than "unmounted."
+  const callGenerationRef = useRef(0)
+
   // Playback started by a caller's own preview must never keep running
   // once that caller is gone -- whether closed explicitly (a close
   // button/Escape) or unmounted as a side effect of its own flow moving on
@@ -128,6 +149,11 @@ export function useStemPreviewPlayback(): {
     groupIdToSelect: string | undefined,
     targetBar: number
   ): Promise<void> {
+    // Claimed BEFORE the first await -- see callGenerationRef's own doc
+    // comment above. Any call that started earlier and is still awaiting
+    // flushEngineSyncNow when THIS call resolves is now stale and must not
+    // apply its own (older) target.
+    const myGeneration = ++callGenerationRef.current
     setPreviewingKeys(keys)
     const soloedMute = soloStemsMute(rifffs, mute, [...keys])
     // Boosts every previewed stem to the same "as if it were the only/an
@@ -150,6 +176,7 @@ export function useStemPreviewPlayback(): {
     dispatch({ type: 'SET_POS', pos: targetBar })
     await flushEngineSyncNow({ mute: soloedMute, vol: soloedVol })
     if (cancelledRef.current) return
+    if (callGenerationRef.current !== myGeneration) return
     if (playing) {
       markManualSeek()
       void window.rifffApi.engineSetPosition(targetBar)
