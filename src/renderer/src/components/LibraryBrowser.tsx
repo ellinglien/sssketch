@@ -2056,6 +2056,7 @@ export function LibraryBrowser({
             setSlots={setDiscoverSlots}
             chaos={discoverChaos}
             setChaos={setDiscoverChaos}
+            currentUsername={riffLibraryUsername}
           />
         )}
       </div>

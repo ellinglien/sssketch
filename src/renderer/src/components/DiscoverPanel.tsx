@@ -5,6 +5,8 @@ import { stemColorVar } from '../theme/typeColor'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
+import { rankCandidates, pickReroll } from '@shared/discoverRanking'
+import { useAppSelector } from '../state/StoreContext'
 import type { ProjectRef, SoundType, Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
@@ -73,7 +75,8 @@ export function DiscoverPanel({
   slots,
   setSlots,
   chaos,
-  setChaos
+  setChaos,
+  currentUsername
 }: {
   currentSketch: ProjectRef
   /** Lifted up into LibraryBrowser.tsx (the parent, which does NOT unmount
@@ -89,6 +92,17 @@ export function DiscoverPanel({
   setSlots: React.Dispatch<React.SetStateAction<DiscoverSlot[]>>
   chaos: number
   setChaos: React.Dispatch<React.SetStateAction<number>>
+  /** The real, live "who am I" for this codebase -- LibraryBrowser.tsx's
+   * own `riffLibraryUsername` state (seeded from localStorage via
+   * loadStoredRiffLibraryUsername, editable through its own "your
+   * username" field, already the value its 'browse' tab's own
+   * `filters.targetUser` uses). `@shared/riffLibraryTypes`'s
+   * `RIFF_LIBRARY_USERNAME` is only that loader's compile-time fallback
+   * ('elling') for a machine that's never set a username -- NOT itself
+   * the live value -- so it's deliberately not used here; passing the
+   * real per-machine value down keeps "only own stems" rerolls scoped to
+   * whoever is actually using this install. */
+  currentUsername: string
 }): React.JSX.Element {
   // Unused for now -- accepted here because this component's real
   // consumer (LibraryBrowser.tsx) already passes it and Task 11 ("plunk
@@ -96,6 +110,9 @@ export function DiscoverPanel({
   // to satisfy this project's tsconfig noUnusedParameters /
   // @typescript-eslint/no-unused-vars until that wiring exists.
   void currentSketch
+
+  const bpm = useAppSelector((s) => s.bpm)
+  const [onlyOwnStems, setOnlyOwnStems] = useState(true)
 
   function addSlot(role: ArrangeRole): void {
     setSlots((prev) => [...prev, { id: freshSlotId(), role, locked: false, candidate: null }])
@@ -107,6 +124,29 @@ export function DiscoverPanel({
 
   function toggleLock(id: string): void {
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, locked: !s.locked } : s)))
+  }
+
+  async function rerollSlot(id: string): Promise<void> {
+    const slot = slots.find((s) => s.id === id)
+    if (!slot) return
+    const candidates = await window.rifffApi.getDiscoverCandidates(
+      slot.role,
+      onlyOwnStems,
+      currentUsername
+    )
+    const ranked = rankCandidates(candidates, { targetBpm: bpm })
+    const picked = pickReroll(ranked, chaos)
+    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, candidate: picked } : s)))
+  }
+
+  async function rerollAll(): Promise<void> {
+    // Sequential, not Promise.all -- each slot's own reroll is a real IPC
+    // round trip; running them one at a time keeps this simple and avoids
+    // hammering the main process with N simultaneous full-library scans at
+    // once for a loop with many slots. Locked slots are skipped entirely.
+    for (const slot of slots) {
+      if (!slot.locked) await rerollSlot(slot.id)
+    }
   }
 
   return (
@@ -121,6 +161,39 @@ export function DiscoverPanel({
           onChange={(e) => setChaos(Number(e.target.value))}
         />
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>loose</span>
+        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={onlyOwnStems}
+            onChange={(e) => setOnlyOwnStems(e.target.checked)}
+          />
+          only my stems
+        </label>
+        <button
+          onClick={() => void rerollAll()}
+          style={{
+            marginLeft: 'auto',
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '4px 10px',
+            background: 'var(--ra-stretch-on-bg)',
+            border: '1px solid var(--ra-stretch-on)',
+            color: 'var(--ra-stretch-on)',
+            fontWeight: 700,
+            cursor: 'pointer'
+          }}
+        >
+          ⚄ reroll all
+        </button>
       </div>
 
       {slots.length === 0 && (
@@ -135,6 +208,7 @@ export function DiscoverPanel({
           slot={slot}
           onToggleLock={() => toggleLock(slot.id)}
           onRemove={() => removeSlot(slot.id)}
+          onReroll={() => void rerollSlot(slot.id)}
         />
       ))}
 
@@ -164,11 +238,13 @@ export function DiscoverPanel({
 function DiscoverSlotRow({
   slot,
   onToggleLock,
-  onRemove
+  onRemove,
+  onReroll
 }: {
   slot: DiscoverSlot
   onToggleLock: () => void
   onRemove: () => void
+  onReroll: () => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- PolarGlyph needs a real
@@ -252,9 +328,23 @@ function DiscoverSlotRow({
         {slot.candidate?.presetName ?? 'no candidate yet'}
       </span>
       <button
-        onClick={onRemove}
+        onClick={onReroll}
         style={{
           marginLeft: 'auto',
+          fontFamily: 'inherit',
+          fontSize: 9,
+          padding: '3px 8px',
+          background: 'transparent',
+          border: '1px solid var(--ra-border)',
+          color: 'var(--ra-text-2)',
+          cursor: 'pointer'
+        }}
+      >
+        ⚄ reroll
+      </button>
+      <button
+        onClick={onRemove}
+        style={{
           fontFamily: 'inherit',
           fontSize: 9,
           padding: '3px 8px',
