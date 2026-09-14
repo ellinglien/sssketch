@@ -78,6 +78,31 @@ describe('resolveStemRole', () => {
     const role = resolveStemRole(stem({ type: 'drums' }), 'k', null)
     expect(role.drumSubRole).toBeUndefined()
   })
+
+  it('a confirmed busId always wins, even when the preset name would also match', () => {
+    const role = resolveStemRole(stem({ name: 'Keymasher', type: 'fx' }), 'k', 'drums')
+    expect(role.arrangeRole).toBe('drums')
+  })
+
+  it('falls back to a PresetName match when there is no busId', () => {
+    const role = resolveStemRole(stem({ name: 'Keymasher', type: 'fx' }), 'k', null)
+    expect(role.arrangeRole).toBe('textureFx')
+  })
+
+  it('falls back to the raw SoundType mapping when neither busId nor PresetName match', () => {
+    const role = resolveStemRole(stem({ name: 'My Custom Take', type: 'notes' }), 'k', null)
+    expect(role.arrangeRole).toBe('lead')
+  })
+
+  it('a stem is no longer "uncertain" once a PresetName match is found, even with SoundType still fx', () => {
+    const role = resolveStemRole(stem({ name: 'Keymasher', type: 'fx' }), 'k', null)
+    expect(role.uncertain).toBe(false)
+  })
+
+  it('stays "uncertain" when SoundType is still fx and neither busId nor PresetName resolve it', () => {
+    const role = resolveStemRole(stem({ name: 'My Custom Take', type: 'fx' }), 'k', null)
+    expect(role.uncertain).toBe(true)
+  })
 })
 
 describe('engineRoleFor', () => {

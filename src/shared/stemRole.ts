@@ -1,4 +1,5 @@
 import type { BusId, SoundType, Stem } from './types'
+import { guessArrangeRoleFromPresetName } from './presetNames'
 
 /** Arrangement-oriented role taxonomy for the auto-arrange role-confirmation
  * step -- a purpose-built set distinct from both SoundType (Endlesss's raw
@@ -88,14 +89,22 @@ export interface StemRoleInfo {
 }
 
 export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null): StemRoleInfo {
-  const uncertain = stem.type === 'fx' && busId === null
+  // Checked only when there's no confirmed busId -- a human confirmation
+  // in Tidy Up always wins outright, unchanged from before this lookup
+  // existed. See presetNames.ts's own doc comment on ArrangeRoleGuess for
+  // why drumSubRole is always undefined with today's preset-name corpus.
+  const presetGuess = busId === null ? guessArrangeRoleFromPresetName(stem.name) : null
+  const uncertain = stem.type === 'fx' && busId === null && presetGuess === null
   const arrangeRole =
-    busId !== null ? BUS_ID_TO_ARRANGE_ROLE[busId] : SOUND_TYPE_TO_ARRANGE_ROLE[stem.type]
+    busId !== null
+      ? BUS_ID_TO_ARRANGE_ROLE[busId]
+      : (presetGuess?.arrangeRole ?? SOUND_TYPE_TO_ARRANGE_ROLE[stem.type])
   return {
     stemKey,
     soundType: stem.type,
     busId,
     arrangeRole,
+    drumSubRole: busId === null ? presetGuess?.drumSubRole : undefined,
     uncertain,
     included: true,
     frequency: 'occasional'
