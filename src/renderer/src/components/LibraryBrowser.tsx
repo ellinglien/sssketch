@@ -165,7 +165,9 @@ function syncKeyFor(jamCID: string): string {
 export function LibraryBrowser({
   onClose,
   onImported,
-  currentSketch
+  currentSketch,
+  discoverConsented,
+  setDiscoverConsented
 }: {
   onClose: () => void
   /** Called once import(s) succeed with every newly-created groupId (one for
@@ -179,6 +181,13 @@ export function LibraryBrowser({
    * (React hasn't re-rendered yet). */
   onImported: (groupIds: string[], rifffs?: Rifff[]) => void
   currentSketch: ProjectRef
+  /** App.tsx's Frame() own single source of truth for Discover's
+   * whole-library-scan consent — threaded straight through to
+   * DiscoverPanel below, same lift-up-and-thread-down pattern already
+   * used for discoverSlots/discoverChaos just below (this component
+   * itself doesn't read either, it's purely a pass-through here). */
+  discoverConsented: boolean
+  setDiscoverConsented: (value: boolean) => Promise<void>
 }): React.JSX.Element {
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
@@ -2057,6 +2066,8 @@ export function LibraryBrowser({
             chaos={discoverChaos}
             setChaos={setDiscoverChaos}
             currentUsername={riffLibraryUsername}
+            discoverConsented={discoverConsented}
+            setDiscoverConsented={setDiscoverConsented}
           />
         )}
       </div>

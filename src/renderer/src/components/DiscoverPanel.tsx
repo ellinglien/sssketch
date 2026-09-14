@@ -9,7 +9,6 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { useAppSelector } from '../state/StoreContext'
 import type { ProjectRef, SoundType, Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
-import { DiscoverLibraryScan } from '../audio/DiscoverLibraryScan'
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
  * `Stem` -- reused verbatim by both this component's own slot-preview
@@ -77,7 +76,9 @@ export function DiscoverPanel({
   setSlots,
   chaos,
   setChaos,
-  currentUsername
+  currentUsername,
+  discoverConsented,
+  setDiscoverConsented
 }: {
   currentSketch: ProjectRef
   /** Lifted up into LibraryBrowser.tsx (the parent, which does NOT unmount
@@ -104,6 +105,22 @@ export function DiscoverPanel({
    * real per-machine value down keeps "only own stems" rerolls scoped to
    * whoever is actually using this install. */
   currentUsername: string
+  /** App.tsx's Frame() own single source of truth for Discover's
+   * whole-library-scan consent, threaded down through LibraryBrowser.tsx
+   * -- the real scan itself (DiscoverLibraryScan) is mounted once at that
+   * same top level, gated on this same value, NOT mounted here anymore
+   * (this component unmounts/remounts on every 'browse' <-> 'discover'
+   * tab switch, which used to restart the scan's throttled batch loop
+   * from its own beginning every time). Read here only to decide whether
+   * to show the one-time consent prompt below. */
+  discoverConsented: boolean
+  /** Persists + updates the shared consent value above (App.tsx's
+   * setDiscoverConsented) -- the "yes, analyze" button below calls this
+   * directly with `true` rather than maintaining its own independently
+   * persisted copy, which used to mean toggling consent from the
+   * settings menu while Discover was already open didn't affect the
+   * already-mounted scan until this panel next remounted. */
+  setDiscoverConsented: (value: boolean) => Promise<void>
 }): React.JSX.Element {
   // Unused for now -- accepted here because this component's real
   // consumer (LibraryBrowser.tsx) already passes it and Task 11 ("plunk
@@ -134,22 +151,25 @@ export function DiscoverPanel({
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
   // prompt's own copy below and rerollSlot above, which reads existing
-  // StemCategories rows regardless of consent).
-  const [settings, setSettings] = useState<{ consentedToLibraryScan: boolean } | null>(null)
-  const [showConsentPrompt, setShowConsentPrompt] = useState(false)
-
-  useEffect(() => {
-    void window.rifffApi.getDiscoverSettings().then((s) => {
-      setSettings(s)
-      if (!s.consentedToLibraryScan) setShowConsentPrompt(true)
-    })
-  }, [])
+  // StemCategories rows regardless of consent). `discoverConsented` itself
+  // is owned by App.tsx (threaded down as a prop, see this component's own
+  // prop doc comment) -- only whether to currently SHOW this prompt is
+  // local here, and it's fine for that to reset on every remount: that's
+  // the intentional "ask again" behavior for a decline (declineScanConsent
+  // below never persists anything).
+  // Lazy initializer (runs once, at mount, not a synced-via-effect value) --
+  // deliberately NOT re-derived from `discoverConsented` on every render:
+  // reacting to it changing later (e.g. the settings-menu toggle, flipped
+  // while this panel happens to be open) would fight with a user who just
+  // explicitly clicked "not now" in this same session. By the time this
+  // panel can mount at all, App.tsx's own getDiscoverSettings() fetch (its
+  // Frame(), on app startup) has long since resolved, so this reads the
+  // real persisted value, not a stale default.
+  const [showConsentPrompt, setShowConsentPrompt] = useState(() => !discoverConsented)
 
   function acceptScanConsent(): void {
-    const next = { consentedToLibraryScan: true }
-    setSettings(next)
     setShowConsentPrompt(false)
-    void window.rifffApi.setDiscoverSettings(next)
+    void setDiscoverConsented(true)
   }
 
   function declineScanConsent(): void {
@@ -269,8 +289,6 @@ export function DiscoverPanel({
           </div>
         </div>
       )}
-
-      {settings?.consentedToLibraryScan && <DiscoverLibraryScan />}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tight</span>

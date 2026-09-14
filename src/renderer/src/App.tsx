@@ -58,6 +58,7 @@ import { buildPluginStatesMap } from '@shared/pluginStates'
 import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
+import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
@@ -1368,26 +1369,40 @@ function Frame(): React.JSX.Element {
       })
   }, [])
 
-  // TransportBar's settings-menu revoke/re-enable toggle for Discover's
-  // whole-library background scan (DiscoverPanel.tsx's own one-time
-  // consent prompt writes the same `consentedToLibraryScan` flag via
-  // `setDiscoverSettings`) -- loaded once here, same "fetch on mount"
-  // pattern as endlesssLoggedIn just above, so the gear menu's label is
-  // correct without polling settings on every menu open.
-  const [discoverConsented, setDiscoverConsented] = useState(false)
+  // Single source of truth for Discover's whole-library background scan
+  // consent -- TransportBar's settings-menu revoke/re-enable toggle reads
+  // it (via toggleDiscoverConsent below), DiscoverLibraryScan's own mount
+  // just below is gated directly on it, and DiscoverPanel.tsx's one-time
+  // consent prompt now reads/writes this SAME state (threaded down through
+  // LibraryBrowser.tsx, same lift-up-and-thread-down pattern already used
+  // for discoverSlots/discoverChaos there) rather than keeping its own
+  // independently-fetched copy, which used to let the two go out of sync
+  // (toggling consent from the settings menu while Discover was already
+  // open didn't affect the already-mounted scan until DiscoverPanel next
+  // remounted). Loaded once here, same "fetch on mount" pattern as
+  // endlesssLoggedIn just above.
+  const [discoverConsented, setDiscoverConsentedState] = useState(false)
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
-      .then((s) => setDiscoverConsented(s.consentedToLibraryScan))
+      .then((s) => setDiscoverConsentedState(s.consentedToLibraryScan))
       .catch((err) => {
         console.error('Frame: getDiscoverSettings() failed:', err)
       })
   }, [])
 
+  /** The one real setter for discoverConsented -- updates the local mirror
+   * AND persists, so every caller (TransportBar's toggle below, and
+   * DiscoverPanel's "yes, analyze" button via the prop threaded down
+   * through LibraryBrowser) goes through the same path rather than each
+   * keeping its own persistence logic. */
+  async function setDiscoverConsented(value: boolean): Promise<void> {
+    setDiscoverConsentedState(value)
+    await window.rifffApi.setDiscoverSettings({ consentedToLibraryScan: value })
+  }
+
   async function toggleDiscoverConsent(): Promise<void> {
-    const next = { consentedToLibraryScan: !discoverConsented }
-    setDiscoverConsented(next.consentedToLibraryScan)
-    await window.rifffApi.setDiscoverSettings(next)
+    await setDiscoverConsented(!discoverConsented)
   }
 
   async function startTour(): Promise<void> {
@@ -2052,6 +2067,14 @@ function Frame(): React.JSX.Element {
     <div className="ra-viewport">
       <SketchModeAutoFollow />
       <BackgroundFeatureScan />
+      {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
+       * mount-once-per-app-session pattern as BackgroundFeatureScan just
+       * above, and gated on the same `discoverConsented` state the
+       * settings-menu toggle and DiscoverPanel's own consent prompt both
+       * now share -- see DiscoverLibraryScan.tsx's own doc comment for
+       * the full "why" (fixes the scan restarting on every Discover tab
+       * switch). */}
+      {discoverConsented && <DiscoverLibraryScan />}
       <div className="ra-frame">
         <div
           style={{
@@ -2209,6 +2232,8 @@ function Frame(): React.JSX.Element {
             onClose={() => setRiffLibraryOpen(false)}
             onImported={handleLibraryImported}
             currentSketch={currentSketch}
+            discoverConsented={discoverConsented}
+            setDiscoverConsented={setDiscoverConsented}
           />
         )}
         {libraryBrowserOpen && (
