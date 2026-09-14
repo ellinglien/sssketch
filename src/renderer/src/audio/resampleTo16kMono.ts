@@ -21,8 +21,11 @@ export async function resampleTo16kMono(audioBuffer: AudioBuffer): Promise<Float
   // Downmix every source channel into one mono buffer BEFORE feeding it to
   // the OfflineAudioContext -- simplest way to guarantee mono output
   // regardless of how many channels the source has, without relying on the
-  // destination's own implicit channel-count behavior (which downmixes by
-  // a different, non-simple-average formula for stereo->mono).
+  // destination's own implicit channel-count behavior. For plain
+  // mono/stereo sources the Web Audio spec's own default downmix is
+  // already a simple average (0.5*(L+R) for stereo), so this mostly
+  // matters for a >2-channel source (quad/5.1), where the spec's own
+  // formula uses non-uniform per-channel weights instead.
   const monoSamples = new Float32Array(audioBuffer.length)
   const numChannels = audioBuffer.numberOfChannels
   for (let ch = 0; ch < numChannels; ch++) {
@@ -30,6 +33,13 @@ export async function resampleTo16kMono(audioBuffer: AudioBuffer): Promise<Float
     for (let i = 0; i < channelData.length; i++) monoSamples[i] += channelData[i] / numChannels
   }
 
+  // Deliberately still at the SOURCE sample rate (not YAMNET_SAMPLE_RATE)
+  // -- no resampling happens here. The actual rate conversion happens when
+  // this buffer is played through offlineCtx below, which was constructed
+  // at the target rate; changing this to YAMNET_SAMPLE_RATE would silently
+  // corrupt playback speed/pitch instead of throwing, since Web Audio
+  // doesn't validate a buffer's declared rate against its actual sample
+  // count.
   const monoBuffer = offlineCtx.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate)
   monoBuffer.copyToChannel(monoSamples, 0)
 
