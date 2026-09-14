@@ -313,10 +313,13 @@ export function AutoArrangeRoleStep({
     if (flatStems.length === 0) return
     if (scanLoading) return
     // Role resolution itself is synchronous and can't fail -- resolve it
-    // for every stem once the shared scan hook has settled, then let the
-    // centroid classifier refine any stem with no confirmed busId (see
-    // roleCentroidRefinement.ts's own doc comment for the full priority
-    // order and why this ranks above a PresetName match too).
+    // for every stem once the shared scan hook has settled, then let
+    // refineRoleWithEmbeddingOrCentroidSuggestion refine any stem with no
+    // confirmed busId: an embedding-nearest-neighbor match when confident,
+    // falling back to the centroid classifier otherwise (see that
+    // function's own doc comment, roleEmbeddingRefinement.ts, and
+    // roleCentroidRefinement.ts's for the full priority order and why this
+    // ranks above a PresetName match too).
     const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) => {
       const base = resolveStemRole(stem, key, busOf[key] ?? null)
       const features = featuresByKey.get(key)
