@@ -52,13 +52,16 @@ const BATCH_DELAY_MS = 500
  * Progress is a SESSION-LOCAL count (how far THIS mount's own loop has
  * gotten), not a live re-query of the persistent cache's real hit count --
  * re-querying actual StemFeatureCache/StemEmbeddingCache row counts against
- * a 50k+-row target list on every batch tick would itself be wasteful. It
- * resets to 0 on every fresh mount (e.g. reopening Discover) even though a
- * prior session's own progress is still real, persisted work underneath
- * (getStemFeatures/getOrExtractStemEmbedding's own caches make a
- * re-attempt on an already-cached stem cheap, not wasted) -- this display
- * just doesn't claim credit for a prior session's work, rather than
- * inventing a persisted cursor this v1 doesn't have. */
+ * a 50k+-row target list on every batch tick would itself be wasteful. Now
+ * that this mounts once at the app's top level (see above), it resets to 0
+ * only when consent is toggled off then back on, or the app restarts --
+ * NOT on reopening the Discover tab or the Import modal, since neither of
+ * those remounts this component anymore. Even across one of those genuine
+ * remounts, a prior pass's own progress is still real, persisted work
+ * underneath (getStemFeatures/getOrExtractStemEmbedding's own caches make
+ * a re-attempt on an already-cached stem cheap, not wasted) -- this
+ * display just doesn't claim credit for it, rather than inventing a
+ * persisted cursor this v1 doesn't have. */
 export function DiscoverLibraryScan(): React.JSX.Element | null {
   const [total, setTotal] = useState<number | null>(null)
   const [completed, setCompleted] = useState(0)
