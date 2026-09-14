@@ -8,6 +8,7 @@ import type {
   RiffLibraryResolvedRiff
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
+import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
@@ -181,6 +182,12 @@ const api = {
     ipcRenderer.invoke('get-category-centroids'),
   getConfirmedEmbeddings: (axis: CategoryAxis): Promise<ConfirmedEmbedding[]> =>
     ipcRenderer.invoke('get-confirmed-embeddings', axis),
+  getDiscoverCandidates: (
+    arrangeRole: ArrangeRole,
+    onlyOwnStems: boolean,
+    targetUser: string
+  ): Promise<DiscoverCandidate[]> =>
+    ipcRenderer.invoke('get-discover-candidates', arrangeRole, onlyOwnStems, targetUser),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,

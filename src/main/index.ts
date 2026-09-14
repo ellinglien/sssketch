@@ -58,8 +58,12 @@ import {
   resolveRiff,
   resolveRiffWithContext,
   downloadMissingStems,
-  candidateDbsForRiff
+  candidateDbsForRiff,
+  listJamsWithDb
 } from './riffLibraryStore'
+import { getDiscoverCandidates } from './discoverCandidates'
+import type { DiscoverCandidate } from './discoverCandidates'
+import type { ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
@@ -719,6 +723,23 @@ app.whenReady().then(async () => {
   // can only ever live in the own db, never an external candidate.
   ipcMain.handle('get-confirmed-embeddings', (_event, axis: CategoryAxis): ConfirmedEmbedding[] =>
     getConfirmedEmbeddings(openOwnRiffLibraryDb(), axis)
+  )
+
+  ipcMain.handle(
+    'get-discover-candidates',
+    (
+      _event,
+      arrangeRole: ArrangeRole,
+      onlyOwnStems: boolean,
+      targetUser: string
+    ): DiscoverCandidate[] =>
+      getDiscoverCandidates({
+        ownDb: openOwnRiffLibraryDb(),
+        jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+        arrangeRole,
+        onlyOwnStems,
+        targetUser
+      })
   )
 
   ipcMain.handle(

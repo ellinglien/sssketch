@@ -221,6 +221,20 @@ export function listJams(filterText: string): RiffLibraryJam[] {
   return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }
 
+/** Resolves every currently-synced jam to the db its own Riffs/Stems rows
+ * actually live in -- Discover's own library-wide candidate query
+ * (discoverCandidates.ts) needs exactly this {jamCID, db} pairing, and
+ * `dbForJam` above is this module's own established per-jam resolution
+ * logic, just not previously exposed outside this file. */
+export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
+  return listJams('')
+    .map((jam) => {
+      const db = dbForJam(jam.jamCID)
+      return db ? { jamCID: jam.jamCID, db } : null
+    })
+    .filter((pair): pair is { jamCID: string; db: Database.Database } => pair !== null)
+}
+
 interface RiffRow {
   RiffCID: string
   CreationTime: number
