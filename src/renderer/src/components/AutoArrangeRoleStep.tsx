@@ -345,7 +345,7 @@ export function AutoArrangeRoleStep({
     return () => {
       cancelled = true
     }
-  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults, centroidStore])
+  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults, centroidStore, featuresByKey])
 
   if (placedRifffs.length === 0) {
     return (
