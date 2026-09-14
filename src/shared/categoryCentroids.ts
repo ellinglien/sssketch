@@ -133,14 +133,12 @@ export function recordConfirmedCategory(
 ): CategoryCentroidStore {
   if (!trainableCategoriesFor(axis).includes(category)) return store
   const key = storeKeyFor(axis)
+  const bucket: Record<string, Centroid | undefined> = store[key]
   return {
     ...store,
     [key]: {
-      ...store[key],
-      [category]: updateRunningMean(
-        (store[key] as Record<string, Centroid | undefined>)[category],
-        rawFeatureVector
-      )
+      ...bucket,
+      [category]: updateRunningMean(bucket[category], rawFeatureVector)
     },
     global: updateWelford(store.global, rawFeatureVector)
   }
@@ -182,7 +180,7 @@ export function suggestCategory(
   rawFeatureVector: number[]
 ): string | null {
   const key = storeKeyFor(axis)
-  const bucket = store[key] as Record<string, Centroid | undefined>
+  const bucket: Record<string, Centroid | undefined> = store[key]
   const trainedCategories = trainableCategoriesFor(axis).filter(
     (c) => (bucket[c]?.count ?? 0) >= MIN_SAMPLES_PER_CATEGORY
   )
