@@ -1,3 +1,4 @@
+import type { ArrangeRole, DrumSubRole } from './stemRole'
 import type { SoundType } from './types'
 
 /**
@@ -273,4 +274,45 @@ const PRESET_NAME_TO_TYPE = new Map<string, SoundType>([
  * not in the table, including a user's own custom-named stems. */
 export function guessSoundTypeFromPresetName(name: string): SoundType | null {
   return PRESET_NAME_TO_TYPE.get(name.trim().toLowerCase()) ?? null
+}
+
+/** A guessed ArrangeRole (and, when the matched preset name happens to
+ * imply one, a DrumSubRole) for a stem's PresetName -- the ArrangeRole/
+ * DrumSubRole-keyed counterpart to guessSoundTypeFromPresetName above,
+ * reusing the exact same ~250-name corpus (not a new or expanded list --
+ * see this plan's own "Important context" for why) mapped onto
+ * ArrangeRole's own taxonomy instead of SoundType's. drumSubRole is
+ * always undefined today: none of FX_PRESET_NAMES/NOTES_PRESET_NAMES/
+ * AUDIO_IN_PRESET_NAMES are drum presets, so there's nothing in the
+ * current corpus that could ever populate it -- the field exists so a
+ * future, separately-sourced expansion of real drum preset names doesn't
+ * need a second lookup function or a breaking signature change. */
+export interface ArrangeRoleGuess {
+  arrangeRole: ArrangeRole
+  drumSubRole?: DrumSubRole
+}
+
+function buildArrangeRoleLookup(
+  names: string[],
+  guess: ArrangeRoleGuess
+): [string, ArrangeRoleGuess][] {
+  return names.map((name) => [name.toLowerCase(), guess])
+}
+
+// Mirrors SOUND_TYPE_TO_ARRANGE_ROLE's own fx->textureFx/notes->lead/
+// audioIn->vocal mapping (stemRole.ts) -- the same three SoundType
+// buckets these preset names already resolve to, just expressed directly
+// in ArrangeRole terms instead of routing through SoundType first.
+const PRESET_NAME_TO_ARRANGE_ROLE = new Map<string, ArrangeRoleGuess>([
+  ...buildArrangeRoleLookup(FX_PRESET_NAMES, { arrangeRole: 'textureFx' }),
+  ...buildArrangeRoleLookup(NOTES_PRESET_NAMES, { arrangeRole: 'lead' }),
+  ...buildArrangeRoleLookup(AUDIO_IN_PRESET_NAMES, { arrangeRole: 'vocal' })
+])
+
+/** Exact, case-insensitive lookup of a stem's preset/source name against
+ * the ArrangeRole/DrumSubRole-keyed table above. Returns null (no
+ * confident mapping) for anything not in the table -- the same
+ * "unrecognized name" case guessSoundTypeFromPresetName already has. */
+export function guessArrangeRoleFromPresetName(name: string): ArrangeRoleGuess | null {
+  return PRESET_NAME_TO_ARRANGE_ROLE.get(name.trim().toLowerCase()) ?? null
 }

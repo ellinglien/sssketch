@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { guessSoundTypeFromPresetName } from './presetNames'
+import { guessSoundTypeFromPresetName, guessArrangeRoleFromPresetName } from './presetNames'
 
 describe('guessSoundTypeFromPresetName', () => {
   it('matches a built-in FX preset name', () => {
@@ -30,5 +30,32 @@ describe('guessSoundTypeFromPresetName', () => {
   it('requires an exact match, not a substring', () => {
     // "Bitcrusher Deluxe" contains a known name but isn't one itself.
     expect(guessSoundTypeFromPresetName('Bitcrusher Deluxe')).toBeNull()
+  })
+})
+
+describe('guessArrangeRoleFromPresetName', () => {
+  it('maps a known FX preset name to textureFx', () => {
+    expect(guessArrangeRoleFromPresetName('Keymasher')).toEqual({ arrangeRole: 'textureFx' })
+  })
+
+  it('maps a known Notes preset name to lead', () => {
+    expect(guessArrangeRoleFromPresetName('Eardrop')).toEqual({ arrangeRole: 'lead' })
+  })
+
+  it('maps the literal "Microphone" preset name to vocal', () => {
+    expect(guessArrangeRoleFromPresetName('Microphone')).toEqual({ arrangeRole: 'vocal' })
+  })
+
+  it('is case-insensitive and trims whitespace, matching guessSoundTypeFromPresetName', () => {
+    expect(guessArrangeRoleFromPresetName('  keymasher  ')).toEqual({ arrangeRole: 'textureFx' })
+  })
+
+  it('returns null for an unrecognized name', () => {
+    expect(guessArrangeRoleFromPresetName('My Custom Take 3')).toBeNull()
+  })
+
+  it('never returns a drumSubRole today -- the reused preset-name corpus has no drum entries', () => {
+    const result = guessArrangeRoleFromPresetName('Keymasher')
+    expect(result?.drumSubRole).toBeUndefined()
   })
 })
