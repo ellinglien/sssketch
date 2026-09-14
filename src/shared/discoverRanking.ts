@@ -10,6 +10,14 @@ export interface RankedCandidate {
 // (score floors at 0 past this) -- wide enough that a half-time/double-time
 // match (off by a clean factor of 2) still scores something, narrow enough
 // that a genuinely unrelated tempo doesn't rank alongside a close one.
+//
+// NOT YET VALIDATED against real data (2026-09-14 code quality review) --
+// this hasn't been checked against Elling's own actual riff-tempo
+// distribution, only reasoned about in the abstract. Likely needs the same
+// kind of live-data tuning pass CONFIDENCE_RATIO got (see
+// categoryCentroids.ts's own 0.7->0.85 fix, 2026-09-14) once there's a real
+// library of Discover picks to check it against -- don't treat 40 as tuned
+// or final.
 const BPM_FALLOFF = 40
 
 /** Scores every candidate by BPM closeness to the target -- see this plan's
@@ -42,10 +50,18 @@ function poolSizeForChaos(rankedLength: number, chaos: number): number {
  * descending score) for a reroll -- weighted toward the top of a pool
  * whose SIZE is controlled by `chaos` (0 = safest, only the single best
  * candidate is ever eligible; 100 = loosest, the whole ranked list is
- * eligible). Within the eligible pool, weights are inverse-rank (the top
- * of the pool is still more likely than the bottom of it, at every chaos
- * setting) rather than uniform, so "reroll" never feels like it ignores
- * the ranking entirely even at chaos=100. Returns null only for an empty
+ * eligible). Within the eligible pool, weights are proportional to each
+ * candidate's own `score` (not its rank/position in the pool) -- the same
+ * score-proportional approach as autoArrangeAutomation.ts's own
+ * pickWeightedRandomCandidate, reused here rather than reinvented. This
+ * means two candidates with nearly identical scores get odds close to a
+ * coin flip regardless of which one happens to sort first, while a
+ * candidate whose score is far below the pool's best is picked
+ * correspondingly rarely -- rank position no longer has any effect except
+ * through each candidate's own actual score. If every candidate in the
+ * pool scores exactly 0 (possible once BPM distance passes BPM_FALLOFF for
+ * all of them), falls back to a uniform pick within the pool rather than
+ * dividing by a zero total weight. Returns null only for an empty
  * `ranked` list. */
 export function pickReroll(ranked: RankedCandidate[], chaos: number): DiscoverCandidate | null {
   if (ranked.length === 0) return null
@@ -53,15 +69,15 @@ export function pickReroll(ranked: RankedCandidate[], chaos: number): DiscoverCa
   const pool = ranked.slice(0, poolSize)
   if (pool.length === 1) return pool[0].candidate
 
-  // Inverse-rank weighting: index 0 gets weight poolSize, the last gets
-  // weight 1 -- a simple, stable-enough curve without needing to reason
-  // about each candidate's own absolute score gaps.
-  const weights = pool.map((_, i) => poolSize - i)
-  const totalWeight = weights.reduce((a, b) => a + b, 0)
-  let roll = Math.random() * totalWeight
-  for (let i = 0; i < pool.length; i++) {
-    roll -= weights[i]
-    if (roll <= 0) return pool[i].candidate
+  const totalWeight = pool.reduce((sum, c) => sum + c.score, 0)
+  if (totalWeight <= 0) {
+    return pool[Math.floor(Math.random() * pool.length)].candidate
   }
-  return pool[pool.length - 1].candidate
+  const draw = Math.random() * totalWeight
+  let cumulative = 0
+  for (const c of pool) {
+    cumulative += c.score
+    if (draw < cumulative) return c.candidate
+  }
+  return pool[pool.length - 1].candidate // floating-point safety net
 }

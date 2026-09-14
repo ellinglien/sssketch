@@ -82,4 +82,39 @@ describe('pickReroll', () => {
       expect(pickReroll(ranked, chaos)?.stemCID).toBe('only-one')
     }
   })
+
+  it("weights by each candidate's own score, not its rank position: near-tied scores split much closer to evenly than far-apart scores do", () => {
+    // Same deterministic-sequence approach as the chaos=100 test above --
+    // 20 evenly spaced draws covering [0,1), so both scenarios see an
+    // identical sampling of the RNG and only the scores differ.
+    const values = Array.from({ length: 20 }, (_, i) => i / 20)
+
+    function countPicks(scoreA: number, scoreB: number): { a: number; b: number } {
+      const ranked = [
+        { candidate: candidate({ stemCID: 'a' }), score: scoreA },
+        { candidate: candidate({ stemCID: 'b' }), score: scoreB }
+      ]
+      let call = 0
+      vi.spyOn(Math, 'random').mockImplementation(() => values[call++ % values.length])
+      const counts = { a: 0, b: 0 }
+      for (let i = 0; i < values.length; i++) {
+        const pick = pickReroll(ranked, 100)
+        if (pick?.stemCID === 'a') counts.a++
+        else if (pick?.stemCID === 'b') counts.b++
+      }
+      vi.restoreAllMocks()
+      return counts
+    }
+
+    // Two candidates whose scores are almost identical (e.g. ~1 BPM apart)
+    // should land close to a 50/50 split.
+    const nearTied = countPicks(0.51, 0.5)
+    // Two candidates with a large score gap should land heavily skewed
+    // toward the higher-scored one.
+    const farApart = countPicks(0.9, 0.1)
+
+    const nearTiedGap = Math.abs(nearTied.a - nearTied.b)
+    const farApartGap = Math.abs(farApart.a - farApart.b)
+    expect(nearTiedGap).toBeLessThan(farApartGap)
+  })
 })
