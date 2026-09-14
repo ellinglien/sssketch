@@ -9,6 +9,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
+import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
@@ -188,6 +189,9 @@ const api = {
     targetUser?: string
   ): Promise<DiscoverCandidate[]> =>
     ipcRenderer.invoke('get-discover-candidates', arrangeRole, onlyOwnStems, targetUser),
+  getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
+  setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
+    ipcRenderer.invoke('set-discover-settings', settings),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,

@@ -62,6 +62,8 @@ import {
   listJamsWithDb
 } from './riffLibraryStore'
 import { getDiscoverCandidates, type DiscoverCandidate } from './discoverCandidates'
+import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
+import type { DiscoverSettings } from './discoverSettingsStore'
 import type { ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -739,6 +741,11 @@ app.whenReady().then(async () => {
         onlyOwnStems,
         targetUser
       })
+  )
+
+  ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
+  ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
+    saveDiscoverSettings(settings)
   )
 
   ipcMain.handle(
