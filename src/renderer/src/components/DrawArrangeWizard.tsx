@@ -9,9 +9,12 @@ import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
 import { DrawArrangeGridStep, type GridStem } from './DrawArrangeGridStep'
 import { stemLabelsByKey } from './autoArrangeLabels'
 import { typeColorVar } from '../theme/typeColor'
+import type { ProjectRef } from '@shared/types'
+import { recordRoleCategorization } from '../state/stemCategoryCapture'
 
 interface Props {
   onClose: () => void
+  currentSketch: ProjectRef
 }
 
 type WizardStep = { phase: 'role' } | { phase: 'grid'; stems: GridStem[] }
@@ -40,7 +43,7 @@ type WizardStep = { phase: 'role' } | { phase: 'grid'; stems: GridStem[] }
  * channels as independent clips, and why that means switching back to
  * normal arranger mode afterward regardless of which flow produced the
  * moves. */
-export function DrawArrangeWizard({ onClose }: Props): React.JSX.Element {
+export function DrawArrangeWizard({ onClose, currentSketch }: Props): React.JSX.Element {
   const dispatch = useDispatch()
   const state = useAppState()
   const { flatStemsByKey } = usePlacedFlatStems()
@@ -49,6 +52,7 @@ export function DrawArrangeWizard({ onClose }: Props): React.JSX.Element {
 
   function handleRoleConfirm(roles: StemRoleInfo[]): void {
     const included = roles.filter((r) => r.included)
+    recordRoleCategorization(roles, flatStemsByKey, 'drawarrange', currentSketch)
     const labelByKey = stemLabelsByKey(
       included.map((r) => ({ stemKey: r.stemKey, role: engineRoleFor(r), included: true }))
     )

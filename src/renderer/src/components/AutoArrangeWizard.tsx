@@ -8,9 +8,12 @@ import type { ArrangeStemInput } from '@shared/autoArrangeEngine'
 import { runAutoArrangeBuild, type ArrangeShape } from '@shared/autoArrangeAutomation'
 import { buildArrangeReplaceActions } from '../state/selectors'
 import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
+import type { ProjectRef } from '@shared/types'
+import { recordRoleCategorization } from '../state/stemCategoryCapture'
 
 interface Props {
   onClose: () => void
+  currentSketch: ProjectRef
 }
 
 /** Confirms roles, then builds and applies the arrangement fully
@@ -27,7 +30,7 @@ interface Props {
  * one Cmd+Z, not fifteen-plus: without that, re-running auto-arrange after
  * a build you don't like re-arranges its own output rather than your
  * original material. */
-export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
+export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.Element {
   const dispatch = useDispatch()
   const state = useAppState()
   const { flatStemsByKey } = usePlacedFlatStems()
@@ -43,6 +46,7 @@ export function AutoArrangeWizard({ onClose }: Props): React.JSX.Element {
     const { targetSections, shape } = buildOptions!
 
     const included = roles.filter((r) => r.included)
+    recordRoleCategorization(roles, flatStemsByKey, 'autoarrange', currentSketch)
     // Promise.allSettled, not a plain await loop -- mirrors
     // AutoArrangeRoleStep.tsx's own handling of getStemFeatures, which is
     // documented (stemFeaturesCache.ts) as able to reject on a corrupt/

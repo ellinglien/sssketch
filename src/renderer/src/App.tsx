@@ -2272,8 +2272,18 @@ function Frame(): React.JSX.Element {
             currentSketch={currentSketch}
           />
         )}
-        {autoArrangeOpen && <AutoArrangeWizard onClose={() => setAutoArrangeOpen(false)} />}
-        {drawArrangeOpen && <DrawArrangeWizard onClose={() => setDrawArrangeOpen(false)} />}
+        {autoArrangeOpen && (
+          <AutoArrangeWizard
+            onClose={() => setAutoArrangeOpen(false)}
+            currentSketch={currentSketch}
+          />
+        )}
+        {drawArrangeOpen && (
+          <DrawArrangeWizard
+            onClose={() => setDrawArrangeOpen(false)}
+            currentSketch={currentSketch}
+          />
+        )}
         {newProjectModal && (
           <NewProjectModal
             defaultName={newProjectModal.defaultName}
