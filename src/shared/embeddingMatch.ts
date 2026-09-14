@@ -28,6 +28,14 @@ const MIN_CATEGORIES_FOR_SUGGESTION = 2
 // expressed as a similarity gap instead of a distance ratio (cosine
 // similarity's own [-1, 1] range doesn't have a natural ratio
 // interpretation the way a Euclidean distance ratio does).
+//
+// NOT YET VALIDATED against real YAMNet embeddings (2026-09-14 code quality
+// review) -- this module's own tests use clean, orthogonal synthetic
+// vectors (0.0 vs ~0.99 similarity), but real embeddings of genuinely
+// different sounds may cluster far more tightly than that. Likely needs
+// the same live-data tuning pass CONFIDENCE_RATIO got (see
+// categoryCentroids.ts's own 0.7->0.85 fix, 2026-09-14) once real confirmed
+// embeddings exist to test against -- don't treat 0.05 as validated.
 const SIMILARITY_MARGIN = 0.05
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -58,8 +66,21 @@ export function suggestCategoryFromEmbedding(
   confirmed: ConfirmedEmbedding[],
   queryEmbedding: number[]
 ): string | null {
+  // Excludes any confirmed embedding whose dimensionality doesn't match the
+  // query's -- cosineSimilarity's own loop runs to a.length regardless of
+  // b's actual length, so a mismatch would otherwise silently produce
+  // either NaN (b shorter -- NaN then sorts unpredictably, since
+  // Array.prototype.sort treats a NaN comparator result as tied rather than
+  // "last") or a numerically wrong-but-plausible-looking similarity (b
+  // longer -- silently truncated). There's a single producer today (the
+  // YAMNet worker, always 1024-dim), so this is currently latent, not
+  // live, but a future model-version bump or a hand-edited DB row could
+  // otherwise silently corrupt a suggestion instead of just being excluded
+  // (2026-09-14 code quality review).
+  const comparable = confirmed.filter((c) => c.embedding.length === queryEmbedding.length)
+
   const countsByCategory = new Map<string, number>()
-  for (const c of confirmed) {
+  for (const c of comparable) {
     countsByCategory.set(c.category, (countsByCategory.get(c.category) ?? 0) + 1)
   }
   const eligibleCategories = new Set(
@@ -69,7 +90,7 @@ export function suggestCategoryFromEmbedding(
   )
   if (eligibleCategories.size < MIN_CATEGORIES_FOR_SUGGESTION) return null
 
-  const eligible = confirmed.filter((c) => eligibleCategories.has(c.category))
+  const eligible = comparable.filter((c) => eligibleCategories.has(c.category))
   const withSimilarity = eligible
     .map((c) => ({
       category: c.category,

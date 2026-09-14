@@ -69,4 +69,50 @@ describe('suggestCategoryFromEmbedding', () => {
   it('returns null for an empty confirmed list', () => {
     expect(suggestCategoryFromEmbedding([], vec(1, 0, 0))).toBeNull()
   })
+
+  it('finds the true global nearest-other-category with 3+ eligible categories, not just the first runner-up in list order', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'bass', embedding: vec(0, 0, 1) },
+      { category: 'bass', embedding: vec(0, 0, 1) },
+      { category: 'bass', embedding: vec(0, 0, 1) }
+    ]
+    // Close to drums, clearly far from both vocal and bass -- confirms the
+    // margin check isn't accidentally comparing against the wrong runner-up
+    // when more than 2 categories are present.
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0.95, 0.05, 0.05))).toBe('drums')
+  })
+
+  it('treats an all-zero query as 0 similarity to everything (not NaN/crash), and declines to guess', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) }
+    ]
+    expect(() => suggestCategoryFromEmbedding(confirmed, vec(0, 0, 0))).not.toThrow()
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0, 0, 0))).toBeNull()
+  })
+
+  it('excludes a confirmed embedding whose dimensionality does not match the query, rather than corrupting the comparison', () => {
+    const confirmed: ConfirmedEmbedding[] = [
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      { category: 'drums', embedding: vec(1, 0, 0) },
+      // 'vocal' only has 2 REAL (matching-dimension) samples -- below
+      // MIN_SAMPLES_PER_CATEGORY -- plus one mismatched-dimension entry
+      // that must NOT count toward its sample total.
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1, 0) },
+      { category: 'vocal', embedding: vec(0, 1) } // wrong length -- excluded
+    ]
+    expect(suggestCategoryFromEmbedding(confirmed, vec(0, 1, 0))).toBeNull()
+  })
 })
