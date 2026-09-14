@@ -33,8 +33,8 @@ type OutMessage = ReadyMessage | ResultMessage | ErrorMessage
 
 function getWorker(): Worker {
   if (worker) return worker
-  worker = new Worker(new URL('./yamnetWorker.ts', import.meta.url), { type: 'module' })
-  worker.onmessage = (event: MessageEvent<OutMessage>) => {
+  const w = new Worker(new URL('./yamnetWorker.ts', import.meta.url), { type: 'module' })
+  w.onmessage = (event: MessageEvent<OutMessage>) => {
     const msg = event.data
     if (msg.type === 'result') {
       pending.get(msg.requestId)?.resolve(msg.embedding)
@@ -46,7 +46,27 @@ function getWorker(): Worker {
       }
     }
   }
-  return worker
+  // A genuine worker crash (uncaught native/WASM exception, OOM, forcible
+  // termination) never posts a message back for whatever request was in
+  // flight -- without this, that request's own pending entry would hang
+  // forever instead of resolving null like every other failure mode this
+  // module documents (2026-09-14 code quality review). Also resets
+  // worker/readyPromise so the NEXT call gets a fresh worker instead of
+  // staying permanently stuck on a dead one for the rest of the renderer
+  // process's lifetime -- guarded by identity (`worker === w`) so a crash
+  // event for an OLD, already-replaced worker instance can't clobber a
+  // newer one that's since taken over.
+  w.onerror = (event: ErrorEvent) => {
+    const err = new Error(`yamnetClient: worker crashed: ${event.message}`)
+    for (const p of pending.values()) p.reject(err)
+    pending.clear()
+    if (worker === w) {
+      worker = null
+      readyPromise = null
+    }
+  }
+  worker = w
+  return w
 }
 
 /** Resolves once the model has loaded in the worker and is ready to run
@@ -76,7 +96,15 @@ function ensureReady(): Promise<void> {
       }
       w.addEventListener('message', onMessage)
     })
-  })()
+  })().catch((err: unknown) => {
+    // Un-caches the rejection (2026-09-14 code quality review) -- without
+    // this, one transient failure (e.g. a one-off IPC hiccup fetching
+    // model bytes) would permanently disable YAMNet for the rest of the
+    // renderer process's lifetime, since every future call would just
+    // replay this same cached rejection instead of trying again.
+    readyPromise = null
+    throw err instanceof Error ? err : new Error(String(err))
+  })
   return readyPromise
 }
 
@@ -103,6 +131,17 @@ export async function extractEmbedding(pcm: Float32Array): Promise<number[] | nu
       }
     })
     const pcmCopy = pcm.slice()
-    getWorker().postMessage({ type: 'infer', requestId, pcm: pcmCopy }, [pcmCopy.buffer])
+    try {
+      getWorker().postMessage({ type: 'infer', requestId, pcm: pcmCopy }, [pcmCopy.buffer])
+    } catch (err) {
+      // A synchronous postMessage throw (2026-09-14 code quality review)
+      // would otherwise both leak this pending entry forever AND violate
+      // this function's own "never throws" contract, since the Promise
+      // executor here only takes a `resolve` param -- an uncaught throw
+      // inside it auto-rejects the promise this function returns.
+      console.error('yamnetClient: failed to post infer message', err)
+      pending.delete(requestId)
+      resolve(null)
+    }
   })
 }
