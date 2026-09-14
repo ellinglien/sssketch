@@ -28,10 +28,15 @@ const BATCH_DELAY_MS = 500
  * `(): null` shape). */
 export function BackgroundFeatureScan(): null {
   const { flatStems } = usePlacedFlatStems()
+  // Track attempted stems by path (the actual file identity), not stemKey (a
+  // project-local groupId:slot identifier) -- getStemFeatures and its persistent
+  // cache both dedupe by path, so this ensures two different placements of the
+  // same underlying stem correctly get treated as "already attempted" after the
+  // first runs, rather than each triggering their own attempt.
   const attemptedRef = useRef(new Set<string>())
 
   useEffect(() => {
-    const toScan = flatStems.filter((fs) => !attemptedRef.current.has(fs.stemKey))
+    const toScan = flatStems.filter((fs) => !attemptedRef.current.has(fs.stem.path))
     if (toScan.length === 0) return
     let cancelled = false
 
@@ -40,7 +45,7 @@ export function BackgroundFeatureScan(): null {
       const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
       if (batch.length === 0) return
       for (const fs of batch) {
-        attemptedRef.current.add(fs.stemKey)
+        attemptedRef.current.add(fs.stem.path)
         void getStemFeatures(fs.stem.path).catch((err: unknown) => {
           console.error('BackgroundFeatureScan: extraction failed for stem', fs.stem.path, err)
         })
