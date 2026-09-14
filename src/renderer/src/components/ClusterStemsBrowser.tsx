@@ -30,6 +30,8 @@ import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
 import type { ProjectRef } from '@shared/types'
+import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
+import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 const DEFAULT_CLUSTER_COUNT = 8
 const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
@@ -169,6 +171,15 @@ export function ClusterStemsBrowser({
     void window.rifffApi.getCategoryCentroids().then(setCentroidStoreSnapshot)
   }, [])
 
+  // Same frozen-once-per-mount pattern as centroidStoreSnapshot above --
+  // confirmed bus-axis embeddings, fetched once and read by `partitioned`
+  // below via suggestCategoryFromEmbedding, which ranks above the centroid
+  // classifier when confident.
+  const [confirmedBusEmbeddings, setConfirmedBusEmbeddings] = useState<ConfirmedEmbedding[]>([])
+  useEffect(() => {
+    void window.rifffApi.getConfirmedEmbeddings('bus').then(setConfirmedBusEmbeddings)
+  }, [])
+
   // Restoring the pre-solo mute snapshot and pausing playback now happens
   // automatically via useStemPreviewPlayback's own unmount-cleanup effect,
   // the moment onClose's state flip (App.tsx) unmounts this component --
@@ -220,6 +231,7 @@ export function ClusterStemsBrowser({
 
   const scanItems = useMemo(() => stems.map((s) => ({ key: s.key, path: s.path })), [stems])
   const { loading, featuresByKey } = useStemFeatureScan(scanItems)
+  const embeddingByKey = useCachedStemEmbeddings(scanItems)
 
   // Mirrors the old `computed` shape's own two derived pieces exactly --
   // analyzedStems (only the stems that scanned successfully) and
@@ -263,9 +275,13 @@ export function ClusterStemsBrowser({
         continue
       }
       const raw = rawVectorsByKey.get(stem.key)
-      const suggestedBus = raw
-        ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null)
+      const embedding = embeddingByKey.get(stem.key)
+      const embeddingSuggestedBus = embedding
+        ? (suggestCategoryFromEmbedding(confirmedBusEmbeddings, embedding) as BusId | null)
         : null
+      const suggestedBus =
+        embeddingSuggestedBus ??
+        (raw ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null) : null)
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -280,7 +296,7 @@ export function ClusterStemsBrowser({
       dspStems,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [computed, busOf, centroidStoreSnapshot])
+  }, [computed, busOf, centroidStoreSnapshot, embeddingByKey, confirmedBusEmbeddings])
 
   const suggestedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
     if (!partitioned) return []

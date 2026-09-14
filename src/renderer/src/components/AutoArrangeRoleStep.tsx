@@ -25,8 +25,10 @@ import { elapsedLabel } from '@shared/visuals'
 import { ARRANGE_STEP_BARS, DRAW_ARRANGE_SECTIONS } from '@shared/autoArrangeApply'
 import { minSectionsForShape, type ArrangeShape } from '@shared/autoArrangeAutomation'
 import { emptyCategoryCentroidStore, type CategoryCentroidStore } from '@shared/categoryCentroids'
-import { refineRoleWithCentroidSuggestion } from '@shared/roleCentroidRefinement'
 import { toFeatureArray } from '@shared/stemFeatures'
+import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
+import { refineRoleWithEmbeddingOrCentroidSuggestion } from '@shared/roleEmbeddingRefinement'
+import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 interface Props {
   onConfirm: (
@@ -262,11 +264,31 @@ export function AutoArrangeRoleStep({
     void window.rifffApi.getCategoryCentroids().then(setCentroidStore)
   }, [])
 
+  // Same frozen-once-per-mount pattern as centroidStore above -- confirmed
+  // embeddings for both role axes (arrangeRole, drumSubRole), fetched once
+  // and read by the role-resolution effect below via
+  // refineRoleWithEmbeddingOrCentroidSuggestion.
+  const [confirmedArrangeRoleEmbeddings, setConfirmedArrangeRoleEmbeddings] = useState<
+    ConfirmedEmbedding[]
+  >([])
+  const [confirmedDrumSubRoleEmbeddings, setConfirmedDrumSubRoleEmbeddings] = useState<
+    ConfirmedEmbedding[]
+  >([])
+  useEffect(() => {
+    void window.rifffApi
+      .getConfirmedEmbeddings('arrangeRole')
+      .then(setConfirmedArrangeRoleEmbeddings)
+    void window.rifffApi
+      .getConfirmedEmbeddings('drumSubRole')
+      .then(setConfirmedDrumSubRoleEmbeddings)
+  }, [])
+
   const scanItems = useMemo(
     () => flatStems.map(({ stem, stemKey: key }) => ({ key, path: stem.path })),
     [flatStems]
   )
   const { loading: scanLoading, featuresByKey } = useStemFeatureScan(scanItems)
+  const embeddingByKey = useCachedStemEmbeddings(scanItems)
 
   // buildDensityMap's own PromiseSettledResult<number>[] shape (one entry
   // per stem, in flatStems order, 'fulfilled' with a density score or
@@ -299,7 +321,16 @@ export function AutoArrangeRoleStep({
       const base = resolveStemRole(stem, key, busOf[key] ?? null)
       const features = featuresByKey.get(key)
       const raw = features ? toFeatureArray(features) : null
-      return refineRoleWithCentroidSuggestion(base, raw, centroidStore)
+      return refineRoleWithEmbeddingOrCentroidSuggestion(
+        base,
+        raw,
+        centroidStore,
+        {
+          arrangeRoles: confirmedArrangeRoleEmbeddings,
+          drumSubRoles: confirmedDrumSubRoleEmbeddings
+        },
+        embeddingByKey.get(key) ?? null
+      )
     })
     // buildDensityMap is keyed to one groupId per call -- build it per
     // owning rifff over the matching slice of `densityResults` (flatStems is
@@ -325,7 +356,18 @@ export function AutoArrangeRoleStep({
     return () => {
       cancelled = true
     }
-  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults, centroidStore, featuresByKey])
+  }, [
+    flatStems,
+    placedRifffs,
+    busOf,
+    scanLoading,
+    densityResults,
+    centroidStore,
+    featuresByKey,
+    embeddingByKey,
+    confirmedArrangeRoleEmbeddings,
+    confirmedDrumSubRoleEmbeddings
+  ])
 
   if (placedRifffs.length === 0) {
     return (
