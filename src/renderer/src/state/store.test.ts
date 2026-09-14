@@ -1404,6 +1404,28 @@ describe('reducer', () => {
     })
   })
 
+  describe('RESTORE_VOL', () => {
+    it('replaces the whole vol map verbatim, undoing whatever a preview boost did since', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      // A real pre-existing volume the user had set deliberately, before any
+      // preview boost happened -- this is the exact state RESTORE_VOL must
+      // bring back, not a blanket "reset everything to unity."
+      state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 0.2 })
+      const snapshot = state.vol
+
+      state = reducer(state, { type: 'SET_VOLUME', stemKey: 'r1:1', volume: 1 })
+      expect(state.vol).not.toEqual(snapshot)
+
+      state = reducer(state, { type: 'RESTORE_VOL', vol: snapshot })
+      expect(state.vol).toEqual(snapshot)
+      expect(state.vol['r1:1']).toBe(0.2)
+    })
+  })
+
   describe('SET_GROUP_VOLUME', () => {
     it('sets every stem in the rifff to the same volume at once', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })

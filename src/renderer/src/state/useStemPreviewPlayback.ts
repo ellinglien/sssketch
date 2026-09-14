@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { soloStemsMute } from './store'
 import { useAppSelector, useDispatch, useFlushEngineSyncNow, usePlaying } from './StoreContext'
 import { markManualSeek } from './manualSeek'
+import { sqrtGain } from '@shared/mixGain'
 
 /** Solo-and-seek stem preview playback -- extracted out of
  * ClusterStemsBrowser.tsx (Tidy Up), which AutoArrangeRoleStep.tsx's own
@@ -35,16 +36,25 @@ export function useStemPreviewPlayback(): {
   const dispatch = useDispatch()
   const rifffs = useAppSelector((s) => s.rifffs)
   const mute = useAppSelector((s) => s.mute)
+  const vol = useAppSelector((s) => s.vol)
   const playing = usePlaying()
   const flushEngineSyncNow = useFlushEngineSyncNow()
 
-  // Snapshot of the REAL mute state as it stood the moment this hook first
-  // mounted (useState's lazy initializer runs exactly once) -- restored
-  // verbatim on unmount below so any SOLO_STEMS preview-auditioning done
-  // by a caller never leaks into the real arrangement's mute state once
+  // Snapshot of the REAL mute/vol state as it stood the moment this hook
+  // first mounted (useState's lazy initializer runs exactly once) --
+  // restored verbatim on unmount below so any SOLO_STEMS preview-auditioning
+  // (mute) or preview-volume boost (vol, see startPreview below) done by a
+  // caller never leaks into the real arrangement's mute/volume state once
   // its own UI (the cluster browser, the role-confirmation step, ...)
   // closes/advances.
   const [muteSnapshot] = useState(() => mute)
+  // 2026-09-14: previewing a stem here is meant to answer "what does this
+  // sound like," not "how loud is it mixed into the real rifff/arrangement"
+  // -- a stem quietly mixed on import (see LibraryBrowser.tsx's own gain
+  // import, which carries over Endlesss's real per-slot gain verbatim) would
+  // otherwise preview as apparently silent even though playback is working
+  // correctly. See startPreview's own soloedVol computation below.
+  const [volSnapshot] = useState(() => vol)
 
   const [previewingKeys, setPreviewingKeys] = useState<Set<string>>(() => new Set())
 
@@ -92,9 +102,10 @@ export function useStemPreviewPlayback(): {
     return () => {
       cancelledRef.current = true
       dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
+      dispatch({ type: 'RESTORE_VOL', vol: volSnapshot })
       dispatch({ type: 'PAUSE' })
     }
-  }, [dispatch, muteSnapshot])
+  }, [dispatch, muteSnapshot, volSnapshot])
 
   // Centralizing the seek here -- rather than resuming from wherever the
   // transport already happened to be -- is what makes "what's playing"
@@ -119,10 +130,25 @@ export function useStemPreviewPlayback(): {
   ): Promise<void> {
     setPreviewingKeys(keys)
     const soloedMute = soloStemsMute(rifffs, mute, [...keys])
+    // Boosts every previewed stem to the same "as if it were the only/an
+    // equal source" level (sqrtGain, @shared/mixGain.ts -- the exact same
+    // headroom math ADD_TO_SHELF uses to seed a fresh rifff's stems and
+    // BeatPicker.tsx uses for its own preview) rather than reusing whatever
+    // the real arrangement currently has it mixed at -- a single previewed
+    // stem plays at full volume; several previewed together (play all
+    // included) each get scaled down just enough that summing them won't
+    // clip, without any one of them staying inaudibly quiet because that's
+    // how it happens to be mixed right now. Only the PREVIEWED keys are
+    // touched; every other entry carries over unchanged (irrelevant anyway,
+    // since soloedMute already silences everything else).
+    const previewGain = sqrtGain(keys.size)
+    const soloedVol = { ...vol }
+    for (const key of keys) soloedVol[key] = previewGain
     dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
+    dispatch({ type: 'RESTORE_VOL', vol: soloedVol })
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
-    await flushEngineSyncNow({ mute: soloedMute })
+    await flushEngineSyncNow({ mute: soloedMute, vol: soloedVol })
     if (cancelledRef.current) return
     if (playing) {
       markManualSeek()

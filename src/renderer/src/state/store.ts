@@ -416,6 +416,7 @@ export type Action =
   | { type: 'SOLO_CHANNEL'; channelId: string }
   | { type: 'SOLO_STEMS'; stemKeys: string[] }
   | { type: 'RESTORE_MUTE'; mute: Record<string, boolean> }
+  | { type: 'RESTORE_VOL'; vol: Record<string, number> }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
   | { type: 'TOGGLE_STRETCH'; groupId: string }
   | { type: 'UNGROUP'; groupId: string }
@@ -1132,6 +1133,19 @@ export function reducer(state: AppState, action: Action): AppState {
     // closed it and gone back to just play the project normally.
     case 'RESTORE_MUTE':
       return { ...state, mute: action.mute }
+
+    // Replaces the whole vol map verbatim -- the volume equivalent of
+    // RESTORE_MUTE above, added for useStemPreviewPlayback.ts's own preview-
+    // volume boost (2026-09-14: previewing a stem in Tidy Up/Auto-Arrange
+    // should let you actually hear it regardless of how quiet it's mixed in
+    // the real rifff/arrangement -- see that hook's own doc comment). Used
+    // BOTH directions there: applying the temporary full-volume-ish preview
+    // override, and restoring the real vol map once that preview's own
+    // caller closes/unmounts. Not mute-specific in name or shape on
+    // purpose -- a plain "set the whole map" primitive, same as RESTORE_MUTE
+    // already is in practice even though only one caller uses it today.
+    case 'RESTORE_VOL':
+      return { ...state, vol: action.vol }
 
     // Sets every stem in the rifff to the same volume in one atomic edit —
     // the collapsed view's own envelope drag, which (like SET_GROUP_MUTE)
