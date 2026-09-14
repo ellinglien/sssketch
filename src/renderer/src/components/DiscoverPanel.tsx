@@ -1,5 +1,5 @@
 // src/renderer/src/components/DiscoverPanel.tsx
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar } from '../theme/typeColor'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
@@ -113,6 +113,22 @@ export function DiscoverPanel({
 
   const bpm = useAppSelector((s) => s.bpm)
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
+  const hasUsername = currentUsername.trim() !== ''
+
+  // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins
+  // race LibraryBrowser.tsx's useStemPreviewPlayback.ts's own
+  // callGenerationRef was built (this same session) to fix, adapted to a
+  // per-slot shape (a Map keyed by slot id, rather than a single ref) since
+  // several DIFFERENT slots can legitimately have their own rerolls in
+  // flight at once -- a click on slot A's reroll must not be superseded by
+  // an unrelated click on slot B, only by a NEWER click on slot A itself.
+  // Bumped synchronously before rerollSlot's own first await; checked again
+  // after it resolves, and the (now-stale) result is discarded rather than
+  // written into `setSlots` if a newer call for the same slot has since
+  // started. `rerollingSlotIds` is the paired UI-visible half -- which
+  // slot's own reroll button should render disabled/"rerolling…" right now.
+  const rerollGenerationRef = useRef<Map<string, number>>(new Map())
+  const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
   function addSlot(role: ArrangeRole): void {
     setSlots((prev) => [...prev, { id: freshSlotId(), role, locked: false, candidate: null }])
@@ -129,14 +145,52 @@ export function DiscoverPanel({
   async function rerollSlot(id: string): Promise<void> {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
-    const candidates = await window.rifffApi.getDiscoverCandidates(
-      slot.role,
-      onlyOwnStems,
-      currentUsername
-    )
-    const ranked = rankCandidates(candidates, { targetBpm: bpm })
-    const picked = pickReroll(ranked, chaos)
-    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, candidate: picked } : s)))
+    // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
+    // comment above. Any earlier call for this SAME slot id that's still
+    // awaiting getDiscoverCandidates when THIS call resolves is now stale
+    // and must not write its own (older) result over this one.
+    const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
+    rerollGenerationRef.current.set(id, myGeneration)
+    setRerollingSlotIds((prev) => new Set(prev).add(id))
+    try {
+      // An empty currentUsername means "no known identity," not "filter to
+      // the empty string" -- mirrors LibraryBrowser.tsx's own
+      // buildRiffFilters guard (`riffLibraryUsername.trim() !== ''`) around
+      // its `filters.targetUser` assignment. Without this, a cleared
+      // username field combined with the checkbox left checked silently
+      // passes (onlyOwnStems: true, targetUser: '') to
+      // getDiscoverCandidates, whose own `CreatorUserName !== targetUser`
+      // check then excludes essentially every real stem -- zero candidates,
+      // forever, with no error and no hint why.
+      const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
+      const candidates = await window.rifffApi.getDiscoverCandidates(
+        slot.role,
+        effectiveOnlyOwnStems,
+        currentUsername
+      )
+      if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      const ranked = rankCandidates(candidates, { targetBpm: bpm })
+      const picked = pickReroll(ranked, chaos)
+      setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, candidate: picked } : s)))
+    } catch (err) {
+      // Degrade gracefully, log, don't throw -- same convention as this
+      // file's own resolveCandidateStem above and LibraryBrowser.tsx's
+      // established try/catch + console.error-with-prefix handlers.
+      // getDiscoverCandidates's own real SQL errors are deliberately left
+      // to throw (see discoverCandidates.ts's doc comment) rather than
+      // silently producing an empty pool, so a genuine failure here is a
+      // real one worth surfacing to the console -- just not by crashing the
+      // renderer or nulling out a slot's existing candidate.
+      console.error(`DiscoverPanel: rerollSlot(${slot.role}) failed:`, err)
+    } finally {
+      if (rerollGenerationRef.current.get(id) === myGeneration) {
+        setRerollingSlotIds((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }
+    }
   }
 
   async function rerollAll(): Promise<void> {
@@ -144,6 +198,10 @@ export function DiscoverPanel({
     // round trip; running them one at a time keeps this simple and avoids
     // hammering the main process with N simultaneous full-library scans at
     // once for a loop with many slots. Locked slots are skipped entirely.
+    //
+    // No try/catch of its own -- rerollSlot itself never throws (it catches
+    // and logs internally, above), so one slot failing can't abort this
+    // loop and silently leave every LATER unlocked slot untouched.
     for (const slot of slots) {
       if (!slot.locked) await rerollSlot(slot.id)
     }
@@ -168,18 +226,25 @@ export function DiscoverPanel({
             alignItems: 'center',
             gap: 4,
             fontSize: 10,
-            color: 'var(--ra-text-2)'
+            color: hasUsername ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
           }}
         >
           <input
             type="checkbox"
             checked={onlyOwnStems}
+            disabled={!hasUsername}
+            title={
+              hasUsername
+                ? undefined
+                : 'set "your username" in the browse tab first -- an empty username can\'t filter to "only mine"'
+            }
             onChange={(e) => setOnlyOwnStems(e.target.checked)}
           />
           only my stems
         </label>
         <button
           onClick={() => void rerollAll()}
+          disabled={rerollingSlotIds.size > 0}
           style={{
             marginLeft: 'auto',
             fontFamily: 'inherit',
@@ -187,12 +252,12 @@ export function DiscoverPanel({
             padding: '4px 10px',
             background: 'var(--ra-stretch-on-bg)',
             border: '1px solid var(--ra-stretch-on)',
-            color: 'var(--ra-stretch-on)',
+            color: rerollingSlotIds.size > 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
             fontWeight: 700,
-            cursor: 'pointer'
+            cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          ⚄ reroll all
+          {rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
         </button>
       </div>
 
@@ -206,6 +271,7 @@ export function DiscoverPanel({
         <DiscoverSlotRow
           key={slot.id}
           slot={slot}
+          rerolling={rerollingSlotIds.has(slot.id)}
           onToggleLock={() => toggleLock(slot.id)}
           onRemove={() => removeSlot(slot.id)}
           onReroll={() => void rerollSlot(slot.id)}
@@ -237,11 +303,17 @@ export function DiscoverPanel({
 
 function DiscoverSlotRow({
   slot,
+  rerolling,
   onToggleLock,
   onRemove,
   onReroll
 }: {
   slot: DiscoverSlot
+  /** True while THIS slot's own rerollSlot call is in flight -- drives the
+   * reroll button's disabled/label-swap state, matching
+   * LibraryBrowser.tsx's own downloadingRiffCID-driven disabled + label
+   * convention. */
+  rerolling: boolean
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
@@ -325,10 +397,11 @@ function DiscoverSlotRow({
         />
       )}
       <span style={{ fontSize: 9, color: 'var(--ra-text)' }}>
-        {slot.candidate?.presetName ?? 'no candidate yet'}
+        {rerolling ? 'rerolling…' : (slot.candidate?.presetName ?? 'no candidate yet')}
       </span>
       <button
         onClick={onReroll}
+        disabled={rerolling}
         style={{
           marginLeft: 'auto',
           fontFamily: 'inherit',
@@ -336,11 +409,11 @@ function DiscoverSlotRow({
           padding: '3px 8px',
           background: 'transparent',
           border: '1px solid var(--ra-border)',
-          color: 'var(--ra-text-2)',
-          cursor: 'pointer'
+          color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+          cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        ⚄ reroll
+        {rerolling ? 'rerolling…' : 'reroll'}
       </button>
       <button
         onClick={onRemove}
