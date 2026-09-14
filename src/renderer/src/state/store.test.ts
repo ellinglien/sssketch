@@ -2177,5 +2177,127 @@ describe('reducer', () => {
       })
       expect(next.rifffs['existing']).toEqual(before)
     })
+
+    // Bug fix: every other "place a fresh rifff" path (placeOnTimeline,
+    // PASTE_RIFFF's own case) initializes stretch[groupId] = true at
+    // placement time. PLACE_LOOP_ON_TIMELINE originally skipped this --
+    // UI reads default the absence to true via `?? true`, so it LOOKED
+    // right, but TOGGLE_STRETCH's own naked `!state.stretch[groupId]`
+    // negation has no such fallback, so the first toggle after placement
+    // silently wrote `true` right back instead of turning stretch off.
+    it('initializes stretch[groupId] to true for every placed loop stem', () => {
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 4,
+        stems: [
+          {
+            groupId: 'discover-drums',
+            name: 'discover: drums',
+            bpm: 128,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'kick.wav',
+                path: '/tmp/kick.wav',
+                type: 'drums',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(next.stretch['discover-drums']).toBe(true)
+
+      // Proves the actual bug: a single TOGGLE_STRETCH right after placement
+      // must flip stretch off on the first click, not require two clicks.
+      const toggled = reducer(next, { type: 'TOGGLE_STRETCH', groupId: 'discover-drums' })
+      expect(toggled.stretch['discover-drums']).toBe(false)
+    })
+
+    // Bug fix: channelOrder has a codebase-wide invariant (see its own doc
+    // comment and channelsInOrder's dedup fallback in selectors.ts, documented
+    // as a safety net only) that reducers never write a duplicate entry. The
+    // original channelOrder.push(rifff.groupId) was unconditional.
+    it('never writes a duplicate channelOrder entry, even for a repeated groupId', () => {
+      // Case 1: two stems in the same dispatch share a groupId.
+      const dupeInSameDispatch = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 0,
+        stems: [
+          {
+            groupId: 'dupe',
+            name: 'a',
+            bpm: 120,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'a.wav',
+                path: '/tmp/a.wav',
+                type: 'drums',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          },
+          {
+            groupId: 'dupe',
+            name: 'b',
+            bpm: 120,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'b.wav',
+                path: '/tmp/b.wav',
+                type: 'bass',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(dupeInSameDispatch.channelOrder.filter((id) => id === 'dupe').length).toBe(1)
+
+      // Case 2: the targeted groupId already exists in channelOrder from
+      // prior state (e.g. re-placing over a stale/reused groupId).
+      const alreadyPresent = reducer(
+        { ...initialState, channelOrder: ['pre-existing'] },
+        {
+          type: 'PLACE_LOOP_ON_TIMELINE',
+          startBar: 0,
+          stems: [
+            {
+              groupId: 'pre-existing',
+              name: 'c',
+              bpm: 120,
+              barLength: 4,
+              folderPath: '',
+              stems: [
+                {
+                  slot: 1,
+                  author: 'elling',
+                  name: 'c.wav',
+                  path: '/tmp/c.wav',
+                  type: 'drums',
+                  durationSec: 2,
+                  barLength: 4
+                }
+              ]
+            }
+          ]
+        }
+      )
+      expect(alreadyPresent.channelOrder.filter((id) => id === 'pre-existing').length).toBe(1)
+    })
   })
 })

@@ -1025,12 +1025,28 @@ export function reducer(state: AppState, action: Action): AppState {
       const rifffs = { ...state.rifffs }
       const channelOf = { ...state.channelOf }
       const channelOrder = [...state.channelOrder]
+      const stretch = { ...state.stretch }
       for (const rifff of action.stems) {
         rifffs[rifff.groupId] = { ...rifff, startBar: action.startBar }
         channelOf[rifff.groupId] = rifff.groupId
-        channelOrder.push(rifff.groupId)
+        // Same duplicate guard PLACE_ON_TIMELINE/MOVE_TO_CHANNEL already use --
+        // channelOrder must never gain a repeated entry (see its own doc
+        // comment and channelsInOrder's fallback dedup in selectors.ts, which
+        // is documented as a safety net only, not something reducers may rely
+        // on). No real caller exists yet (the Discover UI that mints these
+        // groupIds is a later task), so nothing today guarantees every
+        // action.stems entry -- or every entry against prior state -- is
+        // actually unique.
+        if (!channelOrder.includes(rifff.groupId)) channelOrder.push(rifff.groupId)
+        // Matches placeOnTimeline/PASTE_RIFFF's own "freshly placed rifff
+        // defaults to stretch on" behavior -- without this, TOGGLE_STRETCH's
+        // own naked `!state.stretch[action.groupId]` negation (no `?? true`
+        // fallback) reads `undefined`, so the first toggle after a Discover
+        // placement silently writes `true` right back instead of turning
+        // stretch off.
+        stretch[rifff.groupId] = true
       }
-      return { ...state, rifffs, channelOf, channelOrder }
+      return { ...state, rifffs, channelOf, channelOrder, stretch }
     }
 
     case 'SET_VOLUME':
