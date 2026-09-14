@@ -64,6 +64,8 @@ import {
 import { getDiscoverCandidates, type DiscoverCandidate } from './discoverCandidates'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
+import { listLibraryScanTargets } from './discoverLibraryStems'
+import type { LibraryScanTarget } from './discoverLibraryStems'
 import type { ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -746,6 +748,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
     saveDiscoverSettings(settings)
+  )
+
+  ipcMain.handle('get-discover-library-scan-targets', (): LibraryScanTarget[] =>
+    listLibraryScanTargets(listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })))
   )
 
   ipcMain.handle(

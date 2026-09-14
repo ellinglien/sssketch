@@ -250,7 +250,8 @@ export function DiscoverPanel({
         >
           <p style={{ margin: '0 0 8px' }}>
             discover can analyze your whole synced library in the background to find compatible
-            stems -- this can take a while and uses some cpu. analyze now?
+            stems -- for a large library this can take hours to fully finish, running quietly and
+            throttled so it doesn&apos;t compete with normal use. analyze now?
           </p>
           <div style={{ display: 'flex', gap: 6 }}>
             <button
