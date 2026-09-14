@@ -169,19 +169,50 @@ export function DiscoverPanel({
   // is neither). Direct report: Discover shipped with no way to hear a
   // candidate before plunking it in, which this closes.
   //
-  // One shared "who's currently previewing" state here (not per-row) so
-  // clicking a second slot's glyph correctly stops the first -- mirrors
-  // Shelf.tsx's own `previewingGroupId` shape exactly, scoped to one slot
-  // id instead of one rifff groupId. The underlying
-  // registerActivePreview/unregisterActivePreview registry (previewLoop.ts)
-  // separately ensures this also stops (and gets stopped by) a preview
-  // started anywhere ELSE in the app (Shelf, LibraryBrowser's own browse
-  // tab, BeatPicker) -- that part needs no extra code here, it's already
-  // global.
-  const [previewingSlotId, setPreviewingSlotId] = useState<string | null>(null)
+  // Direct follow-up: toggled-on slots play TOGETHER, looped, like the
+  // Upcycle reference this whole screen is modeled on -- not Shelf.tsx's
+  // own one-at-a-time "starting a new preview stops the old one" model.
+  // `previewingSlotIds` is the set of slots currently included in the
+  // mix; `resolvedStemsRef` (a ref, not state -- restarting the mix
+  // doesn't need to trigger a DiscoverPanel re-render on its own) tracks
+  // whichever real, locally-resolved stem each row last reported for
+  // itself (reportSlotResolution below, called from each row's own
+  // resolve effect) -- DiscoverPanel doesn't resolve candidates itself,
+  // Task 7's resolveCandidateStem lives in each row. `restartMix` is the
+  // one place that actually starts/stops audio: called on every toggle
+  // AND whenever a toggled-on slot's own resolution changes (a reroll
+  // landing while that slot is playing swaps its contribution in, rather
+  // than freezing on whatever was playing at toggle-on time).
+  //
+  // The underlying registerActivePreview/unregisterActivePreview registry
+  // (previewLoop.ts) is a single-active-preview-anywhere mechanism --
+  // still exactly right for "something previewed elsewhere in the app
+  // (Shelf, LibraryBrowser's own browse tab, BeatPicker) stops this whole
+  // mix," just not used per-slot anymore. `restartMix` registers/
+  // unregisters the CURRENT mix as one unit; re-registering the same
+  // `stopSlotPreview` reference on every restart is safe -- `stopSlotPreview`
+  // itself already ran synchronously a few lines above THIS SAME restartMix
+  // call, which unregisters it (nulling previewLoop.ts's own `activeStop`)
+  // before the later re-registration -- so `registerActivePreview`'s own
+  // `activeStop?.()` never fires against this call's freshly-started
+  // sources, only ever against whatever a genuinely different, earlier
+  // preview left behind.
+  const [previewingSlotIds, setPreviewingSlotIds] = useState<Set<string>>(new Set())
+  const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number }>>(new Map())
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const previewGenerationRef = useRef(0)
   const previewTokenRef = useRef(0)
+  // AudioContext.currentTime the CURRENT mix generation's sources actually
+  // started at -- null while nothing is playing. Every source in a mix is
+  // started together in one synchronous pass (startPreviewLoop's own doc
+  // comment), so one shared timestamp is enough for every row's own
+  // orbiting position dot (DiscoverSlotRow, below) to compute its own
+  // elapsed-time-mod-its-own-durationSec lap, the same "position dot orbits
+  // a PolarGlyph" convention SketchStrip.tsx already established for the
+  // real arranger transport -- just driven off wall-clock/AudioContext time
+  // here instead of the project's own playhead, since this preview mix
+  // isn't going through the native engine at all.
+  const [mixStartTime, setMixStartTime] = useState<number | null>(null)
 
   const stopSlotPreview = useCallback(() => {
     stopPreviewSources(previewSourcesRef.current)
@@ -190,35 +221,86 @@ export function DiscoverPanel({
   }, [])
 
   useEffect(() => {
-    return () => stopSlotPreview()
+    return () => {
+      // Bumping the generation here (not just stopping current sources) is
+      // load-bearing: reportSlotResolution below can itself trigger a fresh
+      // restartMix (e.g. a row's own report-up effect cleanup firing during
+      // this SAME unmount pass, right as a reroll lands). Without this, that
+      // straggling restartMix's async decode has no generation bump ahead
+      // of it to invalidate it once it resolves -- it would still push
+      // sources, .start() them, and register them as the active preview
+      // with no component left alive to ever stop them again. Caught by
+      // independent review, not observed directly.
+      previewGenerationRef.current += 1
+      stopSlotPreview()
+    }
   }, [stopSlotPreview])
 
-  function toggleSlotPreview(id: string, stem: { path: string; durationSec: number }): void {
-    previewGenerationRef.current += 1
-    const generation = previewGenerationRef.current
-    stopSlotPreview()
-    if (previewingSlotId === id) {
-      setPreviewingSlotId(null)
-      return
-    }
-    setPreviewingSlotId(id)
-    // Same "don't let a preview and the real arranger transport play at
-    // once" courtesy Shelf.tsx's own tile-click preview already gives --
-    // auditioning a Discover candidate while the project is mid-playback
-    // would otherwise layer a second, unrelated loop on top.
-    if (playing) dispatch({ type: 'PAUSE' })
-    void startPreviewLoop(
-      getAudioContext(),
-      [{ path: stem.path, durationSec: stem.durationSec }],
-      () => previewGenerationRef.current !== generation
-    ).then((sources) => {
-      if (previewGenerationRef.current !== generation) {
-        stopPreviewSources(sources)
+  const restartMix = useCallback(
+    (ids: Set<string>, pauseTransportIfPlaying: boolean) => {
+      previewGenerationRef.current += 1
+      const generation = previewGenerationRef.current
+      stopSlotPreview()
+      const stems = [...ids]
+        .map((id) => resolvedStemsRef.current.get(id))
+        .filter((s): s is { path: string; durationSec: number } => s !== undefined)
+      if (stems.length === 0) {
+        setMixStartTime(null)
         return
       }
-      previewSourcesRef.current.push(...sources)
-      if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopSlotPreview)
-    })
+      // Same "don't let a preview and the real arranger transport play at
+      // once" courtesy Shelf.tsx's own tile-click preview already gives --
+      // auditioning a Discover loop while the project is mid-playback would
+      // otherwise layer a second, unrelated loop on top. Only for a direct
+      // user toggle, though (pauseTransportIfPlaying) -- reportSlotResolution
+      // below also calls restartMix, but purely to swap a landed reroll's
+      // audio into an already-playing mix, with no click of the user's own
+      // to explain a sudden transport pause; gating this to the explicit
+      // toggle path keeps that background swap silent on the transport.
+      if (pauseTransportIfPlaying && playing) dispatch({ type: 'PAUSE' })
+      void startPreviewLoop(
+        getAudioContext(),
+        stems,
+        () => previewGenerationRef.current !== generation
+      ).then((sources) => {
+        if (previewGenerationRef.current !== generation) {
+          stopPreviewSources(sources)
+          return
+        }
+        previewSourcesRef.current.push(...sources)
+        if (sources.length > 0) {
+          previewTokenRef.current = registerActivePreview(stopSlotPreview)
+          // Approximate, not sample-accurate -- good enough for a visual
+          // lap indicator, off by at most the time this .then() callback
+          // took to run after the sources' own .start(0) calls inside
+          // startPreviewLoop (same microtask tick, no await between).
+          setMixStartTime(getAudioContext().currentTime)
+        }
+      })
+    },
+    [stopSlotPreview, playing, dispatch]
+  )
+
+  function toggleSlotPreview(id: string): void {
+    const next = new Set(previewingSlotIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setPreviewingSlotIds(next)
+    restartMix(next, true)
+  }
+
+  // Called by each DiscoverSlotRow whenever its OWN resolved stem changes
+  // (a fresh resolution lands, a reroll invalidates the old one, or the
+  // slot unmounts/gets removed) -- keeps `resolvedStemsRef` accurate and,
+  // if this particular slot is currently part of the playing mix, restarts
+  // it so the audible loop actually reflects what's now showing on screen.
+  function reportSlotResolution(
+    id: string,
+    stem: { path: string; durationSec: number } | null
+  ): void {
+    if (stem) resolvedStemsRef.current.set(id, stem)
+    else resolvedStemsRef.current.delete(id)
+    if (previewingSlotIds.has(id)) restartMix(previewingSlotIds, false)
   }
 
   // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins
@@ -287,6 +369,19 @@ export function DiscoverPanel({
 
   function removeSlot(id: string): void {
     setSlots((prev) => prev.filter((s) => s.id !== id))
+    // The removed row's own unmount effect already reports its resolution
+    // as null (clearing resolvedStemsRef and restarting the mix without
+    // it, if it was part of one) -- this just also drops the id from
+    // `previewingSlotIds` itself, so it doesn't sit there forever as a
+    // stale, harmless-but-pointless member of a Set for a slot that no
+    // longer exists.
+    resolvedStemsRef.current.delete(id)
+    setPreviewingSlotIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
   }
 
   function toggleLock(id: string): void {
@@ -551,11 +646,13 @@ export function DiscoverPanel({
           key={slot.id}
           slot={slot}
           rerolling={rerollingSlotIds.has(slot.id)}
-          previewing={previewingSlotId === slot.id}
+          previewing={previewingSlotIds.has(slot.id)}
+          mixStartTime={mixStartTime}
           onToggleLock={() => toggleLock(slot.id)}
           onRemove={() => removeSlot(slot.id)}
           onReroll={() => void rerollSlot(slot.id)}
-          onTogglePreview={(stem) => toggleSlotPreview(slot.id, stem)}
+          onTogglePreview={() => toggleSlotPreview(slot.id)}
+          onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
         />
       ))}
 
@@ -586,10 +683,12 @@ function DiscoverSlotRow({
   slot,
   rerolling,
   previewing,
+  mixStartTime,
   onToggleLock,
   onRemove,
   onReroll,
-  onTogglePreview
+  onTogglePreview,
+  onResolvedChange
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -597,18 +696,34 @@ function DiscoverSlotRow({
    * LibraryBrowser.tsx's own downloadingRiffCID-driven disabled + label
    * convention. */
   rerolling: boolean
-  /** True while THIS slot's own resolved stem is the one currently looping
-   * via previewLoop.ts -- drives the glyph's own "now playing" outline. */
+  /** True while THIS slot is currently included in the playing mix
+   * (DiscoverPanel's own `previewingSlotIds`) -- drives the glyph's own
+   * "now playing" outline. Toggled-on slots play TOGETHER, looped, like
+   * the Upcycle reference this screen is modeled on -- not a one-at-a-time
+   * solo. */
   previewing: boolean
+  /** AudioContext.currentTime the shared preview mix's CURRENT generation
+   * started at (DiscoverPanel's own `mixStartTime`), or null while nothing
+   * is playing -- this row's own orbiting position dot below is derived
+   * from it. */
+  mixStartTime: number | null
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
-  /** Only ever called with a REAL resolved stem (the button that triggers
-   * it is disabled until resolvedStem exists) -- DiscoverPanel owns the
-   * actual playback state/audio graph (one shared "who's previewing" set
-   * across every row, see its own doc comment), this just hands up which
-   * stem to play. */
-  onTogglePreview: (stem: { path: string; durationSec: number }) => void
+  /** Toggles whether THIS slot is included in DiscoverPanel's own shared
+   * playing mix -- the row itself doesn't own any audio state, it only
+   * asks the parent to flip its own membership (see DiscoverPanel's own
+   * toggleSlotPreview). The button that triggers this is entirely absent
+   * (not merely disabled) until resolvedStem exists -- nothing to add to
+   * the mix before then. */
+  onTogglePreview: () => void
+  /** Reports this row's own effective resolved stem (or null) up to
+   * DiscoverPanel every time it changes -- resolved on arrival, invalidated
+   * on reroll, cleared on unmount/removal -- so the parent's
+   * resolvedStemsRef and any currently-playing mix this slot is part of
+   * stay in sync with what's actually showing on screen, rather than
+   * DiscoverPanel needing to re-resolve candidates itself. */
+  onResolvedChange: (stem: { path: string; durationSec: number } | null) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- PolarGlyph needs a real
@@ -680,6 +795,68 @@ function DiscoverSlotRow({
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
 
+  // Orbiting position dot around this row's own PolarGlyph, mirroring
+  // SketchStrip.tsx's real-transport playhead dot and BeatPicker.tsx's own
+  // AudioContext-time-driven sweep -- but read-only (no drag/scrub; this is
+  // a passive preview, not a transport) and keyed off `mixStartTime`
+  // (AudioContext.currentTime the shared mix last (re)started at) rather
+  // than the project's own playhead, since this preview never touches the
+  // native engine. Direct report: multi-slot looping preview shipped with
+  // no visual indication of playback position, leaving no way to tell the
+  // loop was actually running versus stalled.
+  //
+  // Each row orbits at its OWN lap speed (its own resolvedStem.durationSec)
+  // -- same "duration communicated through lap speed, not tile size"
+  // convention SketchStrip's own doc comment establishes, since two stems
+  // in the same mix can have different loop lengths.
+  //
+  // Coordinates are in PolarGlyph's own 100x100 viewBox space (SketchStrip's
+  // exact convention, including its OUTER_MARGIN=42-vs-orbitRadius=46
+  // numbers) rather than this row's actual 40px pixel size, so the overlay
+  // SVG below can reuse the same viewBox and scale down with it.
+  const [dot, setDot] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    // No setState here on the "nothing to animate" path -- same
+    // early-return-with-no-setState shape BeatPicker.tsx's own sweep effect
+    // uses, since setState synchronously in an effect body (even guarded)
+    // trips this codebase's react-hooks/set-state-in-effect rule. The reset
+    // instead lives in the cleanup below, which only ever runs once a raf
+    // loop was actually started.
+    if (!previewing || mixStartTime === null || !resolvedStem || resolvedStem.durationSec <= 0) {
+      return
+    }
+    const durationSec = resolvedStem.durationSec
+    let raf: number
+    const tick = (): void => {
+      const elapsed = getAudioContext().currentTime - mixStartTime
+      const fraction = (((elapsed % durationSec) + durationSec) % durationSec) / durationSec
+      const angleRad = fraction * 2 * Math.PI - Math.PI / 2 // start at 12 o'clock
+      const orbitRadius = 46 // just outside PolarGlyph's own outermost ring (OUTER_MARGIN=42)
+      setDot({ x: 50 + orbitRadius * Math.cos(angleRad), y: 50 + orbitRadius * Math.sin(angleRad) })
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(raf)
+      setDot(null)
+    }
+  }, [previewing, mixStartTime, resolvedStem])
+
+  // Reports the effective resolved stem up to DiscoverPanel every time it
+  // changes -- on the way in (a fresh resolution lands), on the way out (a
+  // reroll invalidates the old one, this row unmounts/gets removed). Does
+  // NOT depend on `onResolvedChange` itself: that's a fresh closure every
+  // DiscoverPanel render (it wraps reportSlotResolution with this row's own
+  // slot.id), and depending on it would re-fire this effect -- and
+  // potentially restart a playing mix -- on every unrelated parent
+  // re-render instead of only when THIS row's own resolvedStem actually
+  // changes.
+  useEffect(() => {
+    onResolvedChange(resolvedStem)
+    return () => onResolvedChange(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
+  }, [resolvedStem])
+
   return (
     <div
       style={{
@@ -707,15 +884,22 @@ function DiscoverSlotRow({
       </button>
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>{slot.role}</span>
       {resolvedStem ? (
-        // Clicking the glyph previews the resolved stem -- same
-        // click-the-thumbnail-to-hear-it convention Shelf.tsx's own tiles
-        // and ClusterStemsBrowser.tsx's own waveform rows already use
-        // elsewhere in this app. The bright outline while `previewing`
-        // mirrors ClusterRow's own `rowIsPreviewing` treatment.
+        // Clicking the glyph toggles this slot in/out of the shared,
+        // looping mix -- same click-the-thumbnail-to-hear-it convention
+        // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
+        // rows already use elsewhere in this app, adapted so multiple
+        // slots play TOGETHER (Upcycle-style) rather than one at a time.
+        // The bright outline while `previewing` mirrors ClusterRow's own
+        // `rowIsPreviewing` treatment.
         <button
-          onClick={() => onTogglePreview(resolvedStem)}
-          title={previewing ? 'playing -- click to stop' : 'click to preview'}
+          onClick={onTogglePreview}
+          title={
+            previewing
+              ? 'playing in the loop -- click to remove'
+              : 'click to add to the loop preview'
+          }
           style={{
+            position: 'relative',
             width: 40,
             height: 40,
             flexShrink: 0,
@@ -729,6 +913,23 @@ function DiscoverSlotRow({
           }}
         >
           <PolarGlyph stems={[resolvedStem]} identityColor={stemColorVar(resolvedStem)} size={40} />
+          {dot && (
+            <svg
+              width={40}
+              height={40}
+              viewBox="0 0 100 100"
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+            >
+              <circle
+                cx={dot.x}
+                cy={dot.y}
+                r={5}
+                fill="var(--ra-text)"
+                stroke="#000"
+                strokeWidth={1.5}
+              />
+            </svg>
+          )}
         </button>
       ) : (
         <div
@@ -757,9 +958,11 @@ function DiscoverSlotRow({
       )}
       <span style={{ fontSize: 9, color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)' }}>
         {rerolling
-          ? 'rerolling…'
+          ? slot.candidate
+            ? 'rerolling…'
+            : 'rolling…'
           : resolveFailed
-            ? "couldn't load -- try reroll"
+            ? "couldn't load -- try again"
             : slot.candidate
               ? slot.candidate.presetName
               : slot.hasRerolled
@@ -780,7 +983,16 @@ function DiscoverSlotRow({
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        {rerolling ? 'rerolling…' : 'reroll'}
+        {/* "roll" for a slot's first pick, "reroll" once it already has a
+            candidate -- an empty slot has never been rolled, so
+            "rerolling" was never the correct verb for it. */}
+        {rerolling
+          ? slot.candidate
+            ? 'rerolling…'
+            : 'rolling…'
+          : slot.candidate
+            ? 'reroll'
+            : 'roll'}
       </button>
       <button
         onClick={onRemove}
