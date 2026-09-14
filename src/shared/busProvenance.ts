@@ -1,11 +1,10 @@
 import { guessSoundTypeFromPresetName } from './presetNames'
 
-// 'suggested' and 'confirmed' are never returned by clusterProvenance below
-// -- both are set directly by ClusterStemsBrowser.tsx as a provenanceOverride,
-// for a row built from the bus-centroid/embedding classifier's own auto-slot
-// suggestion, or from stems already confirmed to a bus this session, neither
-// of which has a name/clustering signal of its own to infer from.
-export type BusProvenance = 'clustered' | 'from preset name' | 'unknown' | 'suggested' | 'confirmed'
+// 'suggested' is never returned by clusterProvenance below -- it's set
+// directly by ClusterStemsBrowser.tsx for a row built from the bus-centroid/
+// embedding classifier's own auto-slot suggestion, which has no name/
+// clustering signal of its own to infer from.
+export type BusProvenance = 'clustered' | 'from preset name' | 'unknown' | 'suggested'
 
 /**
  * Plain-text explanation of why a cluster looks the way it does, shown in

@@ -32,9 +32,58 @@ import { stemColorVar } from '../theme/typeColor'
 import type { ProjectRef } from '@shared/types'
 import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
 import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
+import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
 
 const DEFAULT_CLUSTER_COUNT = 8
 const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+
+// Shared across every unsplit suggested group so `.get(busId) ?? EMPTY_NODE_ID_SET`
+// doesn't allocate a fresh empty Set on every render.
+const EMPTY_NODE_ID_SET: ReadonlySet<number> = new Set()
+
+/** Lazily splits a flat, non-dendrogram group (a "suggested" row's own
+ * members -- there's no real clustering behind it until this is actually
+ * called) into however many rows `splitNodeIds` has flagged, via the same
+ * agglomerativeCluster.ts primitives (computeMergeSequence/cutAtKWithIds/
+ * splitNode) the real DSP `clusters` useMemo below already uses -- computes
+ * a fresh local dendrogram over just THESE members every call rather than
+ * sharing the DSP population's own mergeSequence, since a suggested
+ * group's membership has nothing to do with which stems the DSP side is
+ * clustering (2026-09-15, direct request: "real split, on demand" for
+ * suggested rows). `members.length <= 1` short-circuits (nothing to
+ * cluster) as does an unsplit group (no ids flagged yet, the common case)
+ * -- both return the whole group as a single row, matching a plain
+ * suggested row's original shape exactly when nothing's been split. */
+function expandFlatGroupIntoRows(
+  members: ClusterableStem[],
+  rawVectorsByKey: Map<string, number[]>,
+  splitNodeIds: ReadonlySet<number>
+): { nodeId: number; members: ClusterableStem[] }[] {
+  if (members.length <= 1 || splitNodeIds.size === 0) {
+    return [{ nodeId: -1, members }]
+  }
+  const vectors = members.map((m) => rawVectorsByKey.get(m.key)!)
+  const mergeSequence = computeMergeSequence(standardizeFeatures(vectors))
+  let nodes: CutNode[] = cutAtKWithIds(mergeSequence, members.length, 1)
+  let changed = true
+  while (changed) {
+    changed = false
+    const next: CutNode[] = []
+    for (const node of nodes) {
+      const children = splitNodeIds.has(node.id)
+        ? splitNode(mergeSequence, members.length, node.id)
+        : null
+      if (children) {
+        next.push(children[0], children[1])
+        changed = true
+      } else {
+        next.push(node)
+      }
+    }
+    nodes = next
+  }
+  return nodes.map((node) => ({ nodeId: node.id, members: node.members.map((i) => members[i]) }))
+}
 
 interface ClusterableStem {
   key: string
@@ -73,6 +122,16 @@ interface ClusterableStem {
    * moment a clip's played span covers more than one tile -- a real,
    * reported bug ("the waveform doesn't represent what I'm hearing"). */
   tileSpanBars: number
+  /** The stem's own raw Endlesss preset/type name (Stem.name), NOT this
+   * interface's own `name` above (which is a "rifff - stem" DISPLAY string
+   * for the UI) -- guessArrangeRoleFromPresetName below needs the real,
+   * unprefixed name to match against its lookup table. Added 2026-09-15,
+   * closing a real gap: AutoArrangeRoleStep.tsx's own suggestions already
+   * consult this via resolveStemRole, but Tidy Up's never did, which is
+   * why Arrange mode's suggestions felt meaningfully better -- reported
+   * directly by Elling ("arrange mode is much better at guessing
+   * currently... tidy up doesn't seem to be using it at all"). */
+  presetName: string
 }
 
 interface ClusterGroup {
@@ -143,6 +202,23 @@ export function ClusterStemsBrowser({
   // hook rather than two copies of correctness-critical async ordering.
   const { previewingKeys, startPreview } = useStemPreviewPlayback()
   const busOf = useAppSelector((s) => s.busOf)
+
+  // Frozen the moment this component mounts (useState's lazy initializer
+  // runs exactly once, and busOf is already-available store state, not an
+  // async fetch -- no separate mount-effect needed, unlike
+  // centroidStoreSnapshot below). `partitioned` reads THIS, not live busOf,
+  // to decide which row/section a stem belongs to (2026-09-15, real bug
+  // reported twice during Elling's own live testing: first as rows "jumping
+  // to another location" when confirming one, then -- after an earlier fix
+  // attempt moved confirmed stems into their own separate section -- as
+  // "confirmed suggested stems relocate when they're approved... they
+  // should stay where they are"). A stem's row placement (which suggested
+  // group, or the DSP cluster it landed in) is decided once, from whatever
+  // busOf looked like the moment Tidy Up opened, and never moves again for
+  // the rest of this session -- confirming a bus only ever changes that
+  // row's OWN button highlighting (ClusterRow's `assignedBus`, which reads
+  // live busOf independently), never which row it's in.
+  const [busOfSnapshot] = useState(() => busOf)
 
   // Global, cross-project classifier state (see categoryCentroids.ts) --
   // loaded once on mount. Starts empty (every suggestCategory() call returns
@@ -216,6 +292,7 @@ export function ClusterStemsBrowser({
           groupId: rifff.groupId,
           slot: stem.slot,
           name: `${rifff.name} - ${stem.name}`,
+          presetName: stem.name,
           path: stem.path,
           tileSpanBars: geometry.tileSpanBars,
           color: stemColorVar(stem),
@@ -250,20 +327,25 @@ export function ClusterStemsBrowser({
     return { analyzedStems, rawVectorsByKey }
   }, [loading, stems, featuresByKey])
 
-  // Splits the analyzed population in three: stems already confirmed to a
-  // bus (their own stable "confirmed" rows below, grouped by bus -- see
-  // confirmedGroups), stems that get a confident auto-slot suggestion
-  // (their own "suggested" rows), and everything else (no confident
-  // suggestion) which goes through DSP clustering. Confirmed stems are
-  // EXCLUDED from the DSP population entirely (2026-09-15, real bug
-  // reported during Elling's own live testing: confirming any row was
-  // re-running the dendrogram over a population that still included every
-  // already-confirmed stem, reshuffling and re-sorting every OTHER
-  // still-unassigned row's membership out from under the user on every
-  // single confirmation -- "it sometimes jumps to another location". Confirmed
-  // rows now live in their own stable, bus-grouped section instead (same
-  // shape as suggestedGroups), so confirming one never perturbs the DSP
-  // clustering of what's left).
+  // Splits the analyzed population in two: stems that get a confident
+  // auto-slot suggestion (excluded from DSP clustering entirely, shown
+  // instead as their own "suggested" rows below) vs. everything else
+  // (already assigned per busOfSnapshot, or no confident suggestion) which
+  // goes through the original DSP clustering exactly as before. Reads
+  // busOfSnapshot, NOT live busOf -- deliberately does NOT react to a
+  // confirmation made during this session (2026-09-15, real bug reported
+  // twice during Elling's own live testing: first as rows "jumping to
+  // another location" when confirming one -- because busOf changing
+  // retriggered the DSP dendrogram over a population that still included
+  // the just-confirmed stem, reshuffling every OTHER row's own membership
+  // -- then, after an earlier fix attempt moved confirmed stems into their
+  // own separate section instead, as "confirmed suggested stems relocate
+  // when they're approved... they should stay where they are". A stem's
+  // row placement is decided ONCE, from whatever busOfSnapshot captured at
+  // mount, and never recomputed from confirmations made in this session --
+  // a row's own "confirmed" highlighting still updates live and correctly,
+  // since ClusterRow's `assignedBus` reads live busOf independently of
+  // this partitioning decision.
   //
   // A suggestion prefers an embedding-nearest-neighbor match
   // (suggestCategoryFromEmbedding, confirmedBusEmbeddings) when this stem's
@@ -271,29 +353,20 @@ export function ClusterStemsBrowser({
   // centroid classifier (suggestCategory, centroidStoreSnapshot) otherwise
   // -- same embedding-preferred, centroid-fallback shape as
   // roleEmbeddingRefinement.ts's own refineRoleWithEmbeddingOrCentroidSuggestion.
-  // Recomputed whenever busOf changes (a fresh confirmation moves a stem
-  // from "suggested"/DSP into "confirmed"), centroidStoreSnapshot changes
-  // -- which, deliberately, only happens once per modal session (see
-  // centroidStoreSnapshot's own doc comment above for why suggestions read
-  // the frozen snapshot rather than a live, continuously-retraining
-  // store) -- or embeddingByKey/confirmedBusEmbeddings change (the former
-  // updates opportunistically as BackgroundFeatureScan persists new
-  // extractions; the latter is fetched once on mount, same frozen-snapshot
-  // pattern). mergeSequence -- the expensive O(n^3) part -- only ever
+  // centroidStoreSnapshot/confirmedBusEmbeddings are themselves frozen once
+  // per modal session for the exact same "don't jolt the user mid-session"
+  // reason busOfSnapshot now is (see centroidStoreSnapshot's own doc
+  // comment above). mergeSequence -- the expensive O(n^3) part -- only ever
   // re-runs when the actual DSP population changes, not on every keystroke
   // elsewhere in the modal.
   const partitioned = useMemo(() => {
     if (!computed) return null
     const { analyzedStems, rawVectorsByKey } = computed
-    const confirmed = new Map<BusId, ClusterableStem[]>()
     const suggestions = new Map<BusId, ClusterableStem[]>()
     const dspStems: ClusterableStem[] = []
     for (const stem of analyzedStems) {
-      const existingBus = busOf[stem.key]
-      if (existingBus !== undefined) {
-        const list = confirmed.get(existingBus) ?? []
-        list.push(stem)
-        confirmed.set(existingBus, list)
+      if (busOfSnapshot[stem.key] !== undefined) {
+        dspStems.push(stem)
         continue
       }
       const raw = rawVectorsByKey.get(stem.key)
@@ -301,9 +374,23 @@ export function ClusterStemsBrowser({
       const embeddingSuggestedBus = embedding
         ? (suggestCategoryFromEmbedding(confirmedBusEmbeddings, embedding) as BusId | null)
         : null
-      const suggestedBus =
-        embeddingSuggestedBus ??
-        (raw ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null) : null)
+      const centroidSuggestedBus = raw
+        ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null)
+        : null
+      // Falls back to a real Endlesss preset-name match (same
+      // guessArrangeRoleFromPresetName lookup resolveStemRole.ts's own
+      // priority chain already uses for AutoArrangeRoleStep.tsx) when
+      // neither the embedding nor the centroid classifier has anything --
+      // added 2026-09-15, closing a real gap reported directly by Elling:
+      // Arrange mode's suggestions felt meaningfully better than Tidy Up's
+      // because AutoArrangeRoleStep.tsx already consulted preset names via
+      // resolveStemRole, while this suggestion path never did. Mapped from
+      // ArrangeRole to BusId via ARRANGE_ROLE_TO_BUS -- same mapping
+      // assignCluster/assignSuggestedGroup already use for the picker's
+      // own 8 buttons.
+      const presetGuess = guessArrangeRoleFromPresetName(stem.presetName)
+      const presetSuggestedBus = presetGuess ? ARRANGE_ROLE_TO_BUS[presetGuess.arrangeRole] : null
+      const suggestedBus = embeddingSuggestedBus ?? centroidSuggestedBus ?? presetSuggestedBus
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -314,32 +401,49 @@ export function ClusterStemsBrowser({
     }
     const dspVectors = dspStems.map((s) => rawVectorsByKey.get(s.key)!)
     return {
-      confirmed,
       suggestions,
       dspStems,
+      rawVectorsByKey,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [computed, busOf, centroidStoreSnapshot, embeddingByKey, confirmedBusEmbeddings])
+  }, [computed, busOfSnapshot, centroidStoreSnapshot, embeddingByKey, confirmedBusEmbeddings])
 
-  const suggestedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
-    if (!partitioned) return []
-    return BUS_IDS.filter((busId) => (partitioned.suggestions.get(busId)?.length ?? 0) > 0).map(
-      (busId) => ({ busId, members: partitioned.suggestions.get(busId)! })
-    )
-  }, [partitioned])
+  // Node ids the user has manually split a SUGGESTED group further into,
+  // keyed by that group's own bus -- same idea as splitNodeIds below (for
+  // real DSP-cluster rows), but scoped per suggested-group since a
+  // suggested row has no dendrogram of its own until split is actually
+  // clicked (2026-09-15, direct request: "real split, on demand" for
+  // suggested rows, which previously had no split button at all -- see
+  // expandFlatGroupIntoRows below).
+  const [suggestedSplitNodeIds, setSuggestedSplitNodeIds] = useState<Map<BusId, Set<number>>>(
+    () => new Map()
+  )
 
-  // Every already-confirmed stem, grouped by its own current bus -- a
-  // stable "done" section (2026-09-15) that never feeds the DSP dendrogram,
-  // unlike suggestedGroups it isn't cleared by clicking a bus button
-  // (there's nothing left to confirm), but the buttons stay live so a
-  // mis-click can still be corrected by picking a different category --
-  // see assignSuggestedGroup below, reused as-is for confirmed rows too.
-  const confirmedGroups = useMemo<{ busId: BusId; members: ClusterableStem[] }[]>(() => {
+  function splitSuggestedGroup(busId: BusId, nodeId: number): void {
+    setSuggestedSplitNodeIds((prev) => {
+      const next = new Map(prev)
+      const nodeIds = new Set(next.get(busId) ?? [])
+      nodeIds.add(nodeId)
+      next.set(busId, nodeIds)
+      return next
+    })
+  }
+
+  const suggestedGroups = useMemo<
+    { busId: BusId; nodeId: number; members: ClusterableStem[] }[]
+  >(() => {
     if (!partitioned) return []
-    return BUS_IDS.filter((busId) => (partitioned.confirmed.get(busId)?.length ?? 0) > 0).map(
-      (busId) => ({ busId, members: partitioned.confirmed.get(busId)! })
-    )
-  }, [partitioned])
+    const out: { busId: BusId; nodeId: number; members: ClusterableStem[] }[] = []
+    for (const busId of BUS_IDS) {
+      const members = partitioned.suggestions.get(busId)
+      if (!members || members.length === 0) continue
+      const splitIds = suggestedSplitNodeIds.get(busId) ?? EMPTY_NODE_ID_SET
+      for (const sub of expandFlatGroupIntoRows(members, partitioned.rawVectorsByKey, splitIds)) {
+        out.push({ busId, nodeId: sub.nodeId, members: sub.members })
+      }
+    }
+    return out
+  }, [partitioned, suggestedSplitNodeIds])
 
   // Node ids the user has manually split further via a row's own "split"
   // button, layered on TOP of the slider's global cut (see clusters below)
@@ -524,13 +628,18 @@ export function ClusterStemsBrowser({
   }
 
   function assignDrumSubRoleForSuggestedGroup(
+    busId: BusId,
+    nodeId: number,
     members: ClusterableStem[],
     drumSubRole: DrumSubRole
   ): void {
     assignDrumSubRole(members, drumSubRole)
-    setCelebratingSuggestedBus('drums')
+    const target = { busId, nodeId }
+    setCelebratingSuggested(target)
     window.setTimeout(() => {
-      setCelebratingSuggestedBus((current) => (current === 'drums' ? null : current))
+      setCelebratingSuggested((current) =>
+        current?.busId === target.busId && current.nodeId === target.nodeId ? null : current
+      )
     }, 500)
   }
 
@@ -538,8 +647,14 @@ export function ClusterStemsBrowser({
   // dendrogram's own row indices -- own play-toggle/celebration state
   // rather than reusing playRow/celebratingRow's numeric indices, which
   // would otherwise collide (row 0 of "suggested" isn't row 0 of the DSP
-  // clusters below it).
-  const [celebratingSuggestedBus, setCelebratingSuggestedBus] = useState<BusId | null>(null)
+  // clusters below it). Keyed by {busId, nodeId} rather than busId alone
+  // (2026-09-15) -- now that a suggested group can be split into several
+  // rows sharing the same busId (see expandFlatGroupIntoRows), busId alone
+  // could no longer identify a single row.
+  const [celebratingSuggested, setCelebratingSuggested] = useState<{
+    busId: BusId
+    nodeId: number
+  } | null>(null)
 
   function playSuggestedGroup(members: ClusterableStem[]): void {
     const isThisGroupAlreadyPlaying =
@@ -556,6 +671,7 @@ export function ClusterStemsBrowser({
 
   function assignSuggestedGroup(
     suggestedBus: BusId,
+    nodeId: number,
     members: ClusterableStem[],
     category: ArrangeRole
   ): void {
@@ -563,9 +679,12 @@ export function ClusterStemsBrowser({
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
     recordRoleCategories(members, category)
-    setCelebratingSuggestedBus(suggestedBus)
+    const target = { busId: suggestedBus, nodeId }
+    setCelebratingSuggested(target)
     window.setTimeout(() => {
-      setCelebratingSuggestedBus((current) => (current === suggestedBus ? null : current))
+      setCelebratingSuggested((current) =>
+        current?.busId === target.busId && current.nodeId === target.nodeId ? null : current
+      )
     }, 500)
   }
 
@@ -739,49 +858,22 @@ export function ClusterStemsBrowser({
             <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
               suggested from past tidy-ups -- click a bus to confirm, or pick a different one
             </p>
-            {suggestedGroups.map(({ busId, members }) => (
+            {suggestedGroups.map(({ busId, nodeId, members }) => (
               <ClusterRow
-                key={`suggested-${busId}`}
+                key={`suggested-${busId}-${nodeId}`}
                 members={members}
                 focused={false}
-                celebrating={celebratingSuggestedBus === busId}
+                celebrating={
+                  celebratingSuggested?.busId === busId && celebratingSuggested.nodeId === nodeId
+                }
                 provenanceOverride="suggested"
-                splittable={false}
                 suggestedBus={busId}
-                onAssign={(category) => assignSuggestedGroup(busId, members, category)}
+                onAssign={(category) => assignSuggestedGroup(busId, nodeId, members, category)}
                 onAssignDrumSubRole={(drumSubRole) =>
-                  assignDrumSubRoleForSuggestedGroup(members, drumSubRole)
+                  assignDrumSubRoleForSuggestedGroup(busId, nodeId, members, drumSubRole)
                 }
                 onPlay={() => playSuggestedGroup(members)}
-                onSplit={() => {}}
-                onPreviewStem={previewStem}
-                previewingKeys={previewingKeys}
-                playing={playing}
-                pos={pos}
-              />
-            ))}
-          </div>
-        )}
-
-        {!loading && confirmedGroups.length > 0 && (
-          <div style={{ marginBottom: 14 }}>
-            <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
-              confirmed this session -- click a different bus to correct one
-            </p>
-            {confirmedGroups.map(({ busId, members }) => (
-              <ClusterRow
-                key={`confirmed-${busId}`}
-                members={members}
-                focused={false}
-                celebrating={celebratingSuggestedBus === busId}
-                provenanceOverride="confirmed"
-                splittable={false}
-                onAssign={(category) => assignSuggestedGroup(busId, members, category)}
-                onAssignDrumSubRole={(drumSubRole) =>
-                  assignDrumSubRoleForSuggestedGroup(members, drumSubRole)
-                }
-                onPlay={() => playSuggestedGroup(members)}
-                onSplit={() => {}}
+                onSplit={() => splitSuggestedGroup(busId, nodeId)}
                 onPreviewStem={previewStem}
                 previewingKeys={previewingKeys}
                 playing={playing}
