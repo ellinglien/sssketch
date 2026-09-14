@@ -37,14 +37,40 @@ case the guess is really just that hand-confirmed bus, relabeled), otherwise `st
 (`SoundType`) — eight coarse, Endlesss-self-reported categories (`drums` / `notes` / `bass` /
 `extInst` / `sampler` / `fx` / `extFx` / `audioIn`) representing whichever instrument button
 the *original creator* happened to click when recording, not anything about how the stem
-actually sounds. A stem nobody has ever tidied has no better signal than that. Two things
-already exist, unused, that change this:
-- `Stems.PresetName` (`riffLibraryStore.ts`) — a real, synced, free-text patch/preset name
-  (e.g. "808 Kick," "Warm Pad") that `resolveStemRole` never looks at.
-- `src/renderer/src/audio/`'s existing per-stem analysis caches (`peakCache.ts`,
-  `bandEnergyCache.ts`, `pitchCache.ts`) and `stemDensityScore.ts`'s density/fill scoring —
-  all renderer-side, Web-Audio-decode-based, cache-by-file-path. Real audio-content signal,
-  already built, currently used only for waveform rendering and auto-arrange's own weighting.
+actually sounds. A stem nobody has ever tidied has no better signal than that. But
+`resolveStemRole` not using better signal doesn't mean better signal doesn't already exist
+elsewhere in the app — three real pieces of it do, none wired into `resolveStemRole` itself,
+and §6 below builds directly on all three rather than re-inventing any of them (see §9 for why
+that distinction — extend vs. re-invent — is being treated as a standing priority, not just a
+one-off correction here):
+- **`Stems.PresetName` (`riffLibraryStore.ts`)** — a real, synced, free-text patch/preset name
+  (e.g. "808 Kick," "Warm Pad") that `resolveStemRole` never looks at. A keyword lookup against
+  preset names isn't hypothetical, either — `src/shared/presetNames.ts`'s
+  `guessSoundTypeFromPresetName` already does exact-match, case-insensitive keyword lookup
+  against ~250 known Endlesss pack preset names, and is already in production use today (the
+  drag-and-drop import fallback, and LORE's own low-confidence-`instrumentMask` fallback) — it
+  just only resolves to `SoundType` (8 buckets), not the finer `ArrangeRole`/`DrumSubRole`
+  granularity Auto-Arrange's role step works in.
+- **The canonical shared feature-extraction pipeline** — `src/shared/stemFeatures.ts`'s
+  `StemFeatures`/`toFeatureArray`/`standardizeFeatures`, computed by
+  `src/renderer/src/audio/stemFeaturesCache.ts`'s `getStemFeatures(path)` (transient density,
+  bass energy ratio, spectral centroid, zero-crossing brightness, voiced fraction, pitch
+  variance, 13 MFCCs). Confirmed by reading both call sites: this is the SAME pipeline both
+  Tidy Up's clustering (`agglomerativeCluster.ts`) and Auto-Arrange's density/fill scoring
+  (`stemDensityScore.ts`) already consume today — one shared source of real audio-content
+  signal, not three independent ones.
+- **A working, GLOBAL, incrementally-trained nearest-centroid classifier already exists —
+  for `BusId` specifically.** `src/shared/busCentroids.ts`'s `BusCentroidStore`/`suggestBus`,
+  persisted cross-project as `busCentroids.json` in Electron's `userData` directory
+  (`src/main/busCentroidStore.ts`, whose own doc comment explicitly calls it out as
+  "deliberately GLOBAL... the whole point of a classifier here is to generalize across every
+  sketch the user tidies, not start over cold on each new one"). It trains on exactly the
+  feature pipeline above, live, every time a user confirms a bus in Tidy Up
+  (`ClusterStemsBrowser.tsx`'s `trainCentroids`), and already surfaces "suggested" bus
+  assignments for un-clustered stems in that same screen today. This is real, shipped
+  precedent that cross-project ML-lite classification already works in this codebase — for
+  one category. §6 builds Phase 1 by extending this exact mechanism to the other two
+  categories, rather than standing up a second, differently-shaped classifier next to it.
 
 **Existing compatibility-adjacent logic worth reusing conceptually:** `autoArrangeEngine.ts`'s
 `roleDiversityBonus` already favors bringing in a role not yet represented among active
@@ -147,17 +173,33 @@ widens scope to the whole library, any creator.
 
 ### 6. Auto-classification accuracy — Phase 1 (ships with everything else above)
 
-Two additions to `resolveStemRole`'s own guessing, in priority order above raw `SoundType`:
+Two additions to `resolveStemRole`'s own guessing, in priority order above raw `SoundType` —
+both extending an existing mechanism from Background rather than building a parallel one:
 
-- **`PresetName` keyword matching**: a small, explicit keyword→role/drum-sub-role table
-  (kick/snare/hat/clap/bass/vox/pad/lead/etc.) checked against the stem's `PresetName` before
-  falling back to `SoundType`.
-- **Nearest-neighbor from `StemCategories`**: for a stem with no `StemCategories` row at all,
-  compute its existing hand-crafted feature signature (reusing `bandEnergyCache`/`pitchCache`/
-  `stemDensityScore`'s output, not new analysis) and find its closest already-categorized
-  neighbors by that signature — inferring a role from what it most resembles, weighted by how
-  close the match is. Gets better the more the library gets used normally; not a separate
-  "training" step.
+- **`PresetName` keyword matching**: extend `src/shared/presetNames.ts`'s existing
+  `guessSoundTypeFromPresetName` table, not a second, parallel one — add an
+  `ArrangeRole`/`DrumSubRole`-keyed lookup alongside its current `SoundType`-keyed lookup (same
+  ~250-name table, same exact-match/case-insensitive convention), checked against the stem's
+  `PresetName` before falling back to `SoundType`.
+- **Nearest-centroid classification, extending `busCentroids.ts`'s own architecture — not a
+  second, differently-shaped nearest-neighbor mechanism reading `StemCategories` rows
+  directly.** `BusId` already has a working, trained, global classifier (Background); Phase 1
+  does not re-derive `BusId` guesses from scratch. It generalizes two things about the
+  existing mechanism instead:
+  1. `recordConfirmedStem` gets called from §2's forward-capture write path (every
+     `StemCategories` write, from Tidy Up, backfill, or anywhere else), not only from Tidy
+     Up's own `trainCentroids` call site — so one store keeps training from every source of
+     confirmed categorization, not just the screen it was first built for.
+  2. The same running-centroid-plus-global-Welford-stats architecture gets two sibling
+     stores, keyed by `ArrangeRole` and `DrumSubRole` instead of `BusId`, trained the same way
+     from the same feature vectors (`getStemFeatures`/`toFeatureArray`/`standardizeFeatures` —
+     Background).
+
+  `StemCategories` stays the source-of-truth record of what a human actually confirmed for one
+  stem; the centroid stores are the derived, aggregate classifiers trained *from* those
+  confirmations — same relationship the `BusId` case already has today. This spec does not
+  replace `StemCategories` with the centroid stores; the two serve different purposes and both
+  stay (see §9).
 
 ### 7. Auto-classification accuracy — Phase 2 (separately scoped upgrade, not v1)
 
@@ -189,18 +231,51 @@ which were all just reworked or extended this session and shouldn't absorb more 
   current timeline via the existing `PLACE_ON_TIMELINE` mechanism. The discover screen is a
   real way to build, not just a browser.
 
-## Future reuse (not this spec's own scope)
+### 9. Phase 3 — consolidating overlapping analysis infrastructure (ongoing priority)
 
-Every piece of analysis this spec adds — §6's `PresetName` matching and nearest-neighbor
-classifier, §7's YAMNet embeddings — is written as standalone, reusable logic (matching how
-`bandEnergyCache`/`pitchCache`/`stemDensityScore` already work today), not code baked into the
-discover screen specifically. That means Tidy Up's own bus-clustering could, in the future,
-call the same similarity function discover uses instead of (or alongside) whatever it
-clusters on today — real, low-cost reuse once this exists, not something this spec needs to
-build. Re-one (loop-start/downbeat detection, `BeatPicker.tsx`) is a related but genuinely
-different analysis problem — onset/rhythm detection, not timbral classification — worth a
-future look with the same "build it reusable" mindset, but not something this spec's own
-techniques directly solve; noted here so it isn't lost, not proposed as in scope.
+Elling's own framing, worth stating as a standing principle rather than a one-off note: as
+sssketch keeps growing, merging pre-existing similar processes and scans should be treated as
+a priority whenever new analysis work is being designed — not a someday cleanup task, and not
+something to defer to "after it ships." §6 above is itself the first real application of that
+discipline, not a future intention: it was written by first checking whether Phase 1's
+proposed classifier already existed in some form (it did, for `BusId`) and extending that
+instead of adding a second one next to it. This section documents what's now confirmed shared,
+what's confirmed genuinely separate and should stay that way, and what to re-check the next
+time analysis/matching code is proposed anywhere in this app.
+
+**Already unified — build on these, don't reintroduce them:**
+- **Feature extraction**: `getStemFeatures`/`StemFeatures`/`toFeatureArray`/
+  `standardizeFeatures` (`stemFeatures.ts` + `stemFeaturesCache.ts`) is the one real
+  audio-content signal in this codebase. Tidy Up's clustering, Auto-Arrange's density/fill
+  scoring, and this spec's own Phase 1/Phase 2 classifiers (§6/§7) all consume it. Any future
+  per-stem analysis feature should extend this pipeline (a new derived value on `StemFeatures`,
+  or a new cache alongside `stemFeaturesCache.ts` decoding the same audio) before reaching for
+  a fresh decode-and-analyze path of its own.
+- **Cross-project classification**: `busCentroids.ts`'s running-centroid architecture, already
+  proven live in Tidy Up for `BusId`, is what §6 extends to `ArrangeRole`/`DrumSubRole` rather
+  than duplicating. Any future "guess a category for something new based on what's been
+  confirmed before" need in this app should be asked against this same architecture first.
+
+**Confirmed genuinely separate, and should stay that way — this is not something to force
+together:** Tidy Up's `agglomerativeCluster.ts` (average-linkage agglomerative clustering,
+explicitly documented as O(n³), "fine for realistic stem counts (a few hundred at most)") and
+this spec's own library-wide nearest-centroid matching are not the same algorithm doing the
+same job with different names — they solve genuinely different problems at genuinely different
+scales. Tidy Up clusters everything currently on one project's timeline (at most a few hundred
+stems) with no prior labels at all. Discover matches one query against a whole library
+(potentially thousands of stems) that already has *some* labeled examples to classify against.
+The shared feature vectors make both possible; the O(n³) clustering algorithm itself does not
+scale to the second problem, and the centroid/nearest-neighbor approach doesn't solve the
+first (it needs labeled examples to compare against, which is exactly what Tidy Up's raw
+timeline doesn't have yet). Keep both algorithms — don't try to unify them into one just
+because they now share a feature pipeline underneath.
+
+**Left for a future look, not solved here:** Re-one (loop-start/downbeat detection,
+`BeatPicker.tsx`) is a related but genuinely different analysis problem — onset/rhythm
+detection, not timbral classification — that deserves the same "check for reuse before
+building new" scrutiny in its own future design, but isn't something this spec's own
+techniques (timbral/spectral feature classification) directly solve. Noted here so it isn't
+lost, not proposed as in scope for this spec.
 
 ## Non-goals
 
