@@ -21,6 +21,9 @@ import { startPointerDrag } from './dragUtils'
 import { elapsedLabel } from '@shared/visuals'
 import { ARRANGE_STEP_BARS, DRAW_ARRANGE_SECTIONS } from '@shared/autoArrangeApply'
 import { minSectionsForShape, type ArrangeShape } from '@shared/autoArrangeAutomation'
+import { emptyCategoryCentroidStore, type CategoryCentroidStore } from '@shared/categoryCentroids'
+import { refineRoleWithCentroidSuggestion } from '@shared/roleCentroidRefinement'
+import { toFeatureArray } from '@shared/stemFeatures'
 
 interface Props {
   onConfirm: (
@@ -265,6 +268,20 @@ export function AutoArrangeRoleStep({
     )
   }
 
+  // Loaded once on mount, same "frozen for this session" pattern as
+  // ClusterStemsBrowser.tsx's own centroidStoreSnapshot -- there's no
+  // equivalent "jolting suggestions mid-session" concern here (this
+  // component shows one role per stem, not a reshuffling suggested-groups
+  // list), but loading once and never refetching is still the simplest
+  // correct choice, and keeps this consistent with the established
+  // pattern rather than inventing a second one.
+  const [centroidStore, setCentroidStore] = useState<CategoryCentroidStore>(
+    emptyCategoryCentroidStore
+  )
+  useEffect(() => {
+    void window.rifffApi.getCategoryCentroids().then(setCentroidStore)
+  }, [])
+
   const scanItems = useMemo(
     () => flatStems.map(({ stem, stemKey: key }) => ({ key, path: stem.path })),
     [flatStems]
@@ -294,10 +311,16 @@ export function AutoArrangeRoleStep({
     if (flatStems.length === 0) return
     if (scanLoading) return
     // Role resolution itself is synchronous and can't fail -- resolve it
-    // for every stem once the shared scan hook has settled.
-    const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) =>
-      resolveStemRole(stem, key, busOf[key] ?? null)
-    )
+    // for every stem once the shared scan hook has settled, then let the
+    // centroid classifier refine any stem with no confirmed busId (see
+    // roleCentroidRefinement.ts's own doc comment for the full priority
+    // order and why this ranks above a PresetName match too).
+    const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) => {
+      const base = resolveStemRole(stem, key, busOf[key] ?? null)
+      const features = featuresByKey.get(key)
+      const raw = features ? toFeatureArray(features) : null
+      return refineRoleWithCentroidSuggestion(base, raw, centroidStore)
+    })
     // buildDensityMap is keyed to one groupId per call -- build it per
     // owning rifff over the matching slice of `densityResults` (flatStems is
     // built by flatMap over placedRifffs in the same order, so slices line
@@ -322,7 +345,7 @@ export function AutoArrangeRoleStep({
     return () => {
       cancelled = true
     }
-  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults])
+  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults, centroidStore])
 
   if (placedRifffs.length === 0) {
     return (
