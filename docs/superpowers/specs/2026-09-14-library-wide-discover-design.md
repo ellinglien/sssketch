@@ -255,6 +255,19 @@ time analysis/matching code is proposed anywhere in this app.
   proven live in Tidy Up for `BusId`, is what §6 extends to `ArrangeRole`/`DrumSubRole` rather
   than duplicating. Any future "guess a category for something new based on what's been
   confirmed before" need in this app should be asked against this same architecture first.
+- **Scan orchestration — real, in-scope work for this spec, not just a note.** Beyond sharing
+  `getStemFeatures` itself, `AutoArrangeRoleStep.tsx` and `ClusterStemsBrowser.tsx` each
+  independently re-implement the identical wrapper around it: a `useEffect` running
+  `Promise.allSettled(stems.map(s => getStemFeatures(s.path)...))`, the same "analyzing N
+  stems…" loading state, and the same `Promise.allSettled`-not-`Promise.all` reasoning (one bad
+  stem's rejection shouldn't block every other stem's analysis). The discover screen (§8) needs
+  this exact same orchestration to run §6's nearest-centroid classification over its own
+  candidate pool — a third consumer of the identical pattern, not a hypothetical future one.
+  This spec's implementation extracts a shared hook (e.g. `useStemFeatureScan(stems)`,
+  returning `{loading, featuresByPath}` or equivalent) that all three screens use, each keeping
+  its own downstream step on top — density/fill scoring, clustering, or nearest-centroid
+  classification respectively. `AutoArrangeRoleStep.tsx` and `ClusterStemsBrowser.tsx` get
+  migrated onto it as part of this work, not left duplicated alongside a third copy.
 
 **Confirmed genuinely separate, and should stay that way — this is not something to force
 together:** Tidy Up's `agglomerativeCluster.ts` (average-linkage agglomerative clustering,
@@ -297,3 +310,10 @@ codebase's convention. The discover screen's own UI (both modes, plus the "place
 action) is typecheck+lint-verified only, per this codebase's standing convention for React
 components with no way to click-test a discovery/browsing flow in this environment — needs
 Elling's own manual walkthrough, same as every other UI feature built this session.
+
+The §9 `useStemFeatureScan` extraction carries real regression risk of its own: it's not new
+code, it's a refactor of the scan step inside two already-shipped, working screens (Tidy Up,
+Auto-Arrange). Typecheck+lint-verified only, same as the rest of this spec's UI work — but
+Elling's manual walkthrough of this spec explicitly needs to confirm both Tidy Up's clustering
+and Auto-Arrange's role step still analyze stems and reach their "analyzing stems..." →
+results transition exactly as before, not just that the new discover screen works.
