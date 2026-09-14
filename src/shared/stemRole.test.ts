@@ -33,6 +33,24 @@ describe('resolveStemRole', () => {
     expect(role.uncertain).toBe(true)
   })
 
+  it('is uncertain for an unmatched audioIn stem too -- soundType->vocal is a blunt guess, not a real classification', () => {
+    const role = resolveStemRole(
+      stem({ type: 'audioIn', name: 'not a known preset' }),
+      'g1:0',
+      null
+    )
+    expect(role.uncertain).toBe(true)
+    expect(role.arrangeRole).toBe('vocal')
+  })
+
+  it('is not uncertain for an audioIn stem once a real signal resolves it (busId or PresetName)', () => {
+    const withBus = resolveStemRole(stem({ type: 'audioIn' }), 'g1:0', 'lead')
+    expect(withBus.uncertain).toBe(false)
+    // 'Microphone' is a real, known AUDIO_IN_PRESET_NAMES entry (presetNames.ts).
+    const withPreset = resolveStemRole(stem({ type: 'audioIn', name: 'Microphone' }), 'g1:0', null)
+    expect(withPreset.uncertain).toBe(false)
+  })
+
   it('defaults included to true', () => {
     const role = resolveStemRole(stem({ type: 'drums' }), 'g1:0', null)
     expect(role.included).toBe(true)

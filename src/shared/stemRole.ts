@@ -126,10 +126,12 @@ export interface StemRoleInfo {
   // comment. undefined means "generic drums, not further refined," the
   // default for every stem (resolveStemRole never auto-guesses this).
   drumSubRole?: DrumSubRole
-  // True only when NEITHER signal has a real classification: soundType is still
-  // the unresolved 'fx' default AND this stem has never been through Tidy Up
-  // (busOf has no entry for it). The role-confirmation UI must flag this rather
-  // than silently trust it, per the design spec.
+  // True only when NEITHER signal has a real classification: soundType is
+  // still one of its own unresolved defaults (the 'fx' catch-all, or
+  // 'audioIn' -- added 2026-09-14, see resolveStemRole's own comment) AND
+  // this stem has never been through Tidy Up (busOf has no entry for it).
+  // The role-confirmation UI must flag this rather than silently trust it,
+  // per the design spec.
   uncertain: boolean
   included: boolean
   // Re-entry/priority preference, edited independently of arrangeRole. See
@@ -145,7 +147,22 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
   // existed. See presetNames.ts's own doc comment on ArrangeRoleGuess for
   // why drumSubRole is always undefined with today's preset-name corpus.
   const presetGuess = busId === null ? guessArrangeRoleFromPresetName(stem.name) : null
-  const uncertain = stem.type === 'fx' && busId === null && presetGuess === null
+  // 'audioIn' joined 'fx' here 2026-09-14: SOUND_TYPE_TO_ARRANGE_ROLE's own
+  // audioIn->'vocal' mapping is a blunt guess (live-recorded mic input is
+  // very often NOT a vocal take), not a real classification -- unlike 'fx'
+  // it was never flagged as such, so it confidently asserted "vocal" for
+  // every unclassified audioIn stem with no real signal behind it. Direct
+  // report after real-library testing: most audioIn stems in a working
+  // library are exactly this unflagged case (no busId yet, no PresetName
+  // match -- raw recorded audio has no synth/plugin preset to match
+  // against), so this was the single most common source of a confidently-
+  // wrong-looking suggestion. Still defaults the dropdown to 'vocal' below
+  // (an OK starting guess, just no longer asserted as a confident one) --
+  // the centroid classifier (categoryCentroids.ts) can still override this
+  // default with a real suggestion once it has enough diverse training data,
+  // same as it already can for 'fx'.
+  const uncertain =
+    (stem.type === 'fx' || stem.type === 'audioIn') && busId === null && presetGuess === null
   const arrangeRole =
     busId !== null
       ? BUS_ID_TO_ARRANGE_ROLE[busId]
