@@ -62,6 +62,21 @@ export interface DiscoverSlot {
   role: ArrangeRole
   locked: boolean
   candidate: DiscoverCandidate | null
+  /** True once this slot's own rerollSlot has actually resolved at least
+   * once (regardless of outcome -- a genuinely empty result sets this same
+   * as a found one does), so DiscoverSlotRow below can distinguish "nobody
+   * has clicked reroll on this slot yet" from "rerolled, and there's
+   * really nothing compatible for this role." Only the reroll call whose
+   * result actually lands (i.e. survives rerollSlot's own generation-guard
+   * check) sets this -- a superseded/stale call's result is discarded
+   * wholesale, this field included, same as `candidate` itself. Left
+   * unset (stays false) on a genuine error (the catch path below) rather
+   * than treated as "resolved empty" -- a thrown IPC/SQL error never
+   * actually completed a search, so marking it "no match" would misreport
+   * an error as a confirmed-empty result; leaving it false keeps the slot
+   * reading as retriable ("no candidate yet") instead of falsely
+   * conclusive. */
+  hasRerolled: boolean
 }
 
 let nextSlotId = 0
@@ -195,7 +210,10 @@ export function DiscoverPanel({
   }
 
   function addSlot(role: ArrangeRole): void {
-    setSlots((prev) => [...prev, { id: freshSlotId(), role, locked: false, candidate: null }])
+    setSlots((prev) => [
+      ...prev,
+      { id: freshSlotId(), role, locked: false, candidate: null, hasRerolled: false }
+    ])
   }
 
   function removeSlot(id: string): void {
@@ -235,7 +253,14 @@ export function DiscoverPanel({
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       const ranked = rankCandidates(candidates, { targetBpm: bpm })
       const picked = pickReroll(ranked, chaos)
-      setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, candidate: picked } : s)))
+      // hasRerolled set true in this same setSlots call, alongside
+      // candidate -- see DiscoverSlot's own doc comment above for why this
+      // only happens on the generation-guarded path (never for a stale,
+      // discarded result) and why the catch block below deliberately
+      // leaves it untouched on a real error.
+      setSlots((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, candidate: picked, hasRerolled: true } : s))
+      )
     } catch (err) {
       // Degrade gracefully, log, don't throw -- same convention as this
       // file's own resolveCandidateStem above and LibraryBrowser.tsx's
@@ -572,7 +597,13 @@ function DiscoverSlotRow({
         />
       )}
       <span style={{ fontSize: 9, color: 'var(--ra-text)' }}>
-        {rerolling ? 'rerolling…' : (slot.candidate?.presetName ?? 'no candidate yet')}
+        {rerolling
+          ? 'rerolling…'
+          : slot.candidate
+            ? slot.candidate.presetName
+            : slot.hasRerolled
+              ? 'no match for this role yet'
+              : 'no candidate yet'}
       </span>
       <button
         onClick={onReroll}
