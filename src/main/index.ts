@@ -748,7 +748,7 @@ app.whenReady().then(async () => {
     getStemFeatureCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
   )
 
-  ipcMain.handle('get-yamnet-model', (): Uint8Array | null => readYamnetModelBytes())
+  ipcMain.handle('get-yamnet-model', (): Promise<Uint8Array | null> => readYamnetModelBytes())
 
   ipcMain.handle('set-stem-feature-cache', (_event, path: string, features: StemFeatures) => {
     // Floored (not unrounded like the upsert-stem-category-* handlers above) is
