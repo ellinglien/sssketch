@@ -2266,7 +2266,12 @@ function Frame(): React.JSX.Element {
             }}
           />
         )}
-        {clusterStemsOpen && <ClusterStemsBrowser onClose={() => setClusterStemsOpen(false)} />}
+        {clusterStemsOpen && (
+          <ClusterStemsBrowser
+            onClose={() => setClusterStemsOpen(false)}
+            currentSketch={currentSketch}
+          />
+        )}
         {autoArrangeOpen && <AutoArrangeWizard onClose={() => setAutoArrangeOpen(false)} />}
         {drawArrangeOpen && <DrawArrangeWizard onClose={() => setDrawArrangeOpen(false)} />}
         {newProjectModal && (

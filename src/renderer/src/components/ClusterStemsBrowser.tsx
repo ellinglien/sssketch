@@ -22,6 +22,7 @@ import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
+import type { ProjectRef } from '@shared/types'
 
 const DEFAULT_CLUSTER_COUNT = 8
 const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
@@ -108,7 +109,13 @@ function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
   }
 }
 
-export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function ClusterStemsBrowser({
+  onClose,
+  currentSketch
+}: {
+  onClose: () => void
+  currentSketch: ProjectRef
+}): React.JSX.Element {
   const dispatch = useDispatch()
   const rifffs = useAppSelector((s) => s.rifffs)
   const playedBarsOverrides = useAppSelector((s) => s.playedBars)
@@ -383,6 +390,22 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
     }
   }
 
+  // Forward-captures every member's BusId into the library-wide
+  // StemCategories table (design spec §2) -- fire-and-forget, mirrors how
+  // trainCentroids above already sits alongside the ASSIGN_STEMS_TO_BUS
+  // dispatch rather than blocking on it. Uses each member's own `path`
+  // (content-addressed by StemCID for a real library stem -- see
+  // stemCategoriesStore.ts's own doc comment); a member whose path doesn't
+  // resolve to a real StemCID is silently skipped by the main-process side,
+  // not an error here.
+  function recordBusCategories(members: ClusterableStem[], busId: BusId): void {
+    void window.rifffApi.upsertStemCategoryBus(
+      members.map((m) => ({ path: m.path, busId })),
+      'tidyup',
+      currentSketch
+    )
+  }
+
   // Assigning a bus no longer auto-advances/plays the next row -- that
   // read as the UI making a decision FOR you mid-listen. Instead a brief
   // celebratory pulse on the just-assigned row acknowledges the action
@@ -396,6 +419,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   function assignCluster(rowIndex: number, members: ClusterableStem[], busId: BusId): void {
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     trainCentroids(members, busId)
+    recordBusCategories(members, busId)
     setCelebratingRow(rowIndex)
     window.setTimeout(() => {
       setCelebratingRow((current) => (current === rowIndex ? null : current))
@@ -429,6 +453,7 @@ export function ClusterStemsBrowser({ onClose }: { onClose: () => void }): React
   ): void {
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     trainCentroids(members, busId)
+    recordBusCategories(members, busId)
     setCelebratingSuggestedBus(suggestedBus)
     window.setTimeout(() => {
       setCelebratingSuggestedBus((current) => (current === suggestedBus ? null : current))
