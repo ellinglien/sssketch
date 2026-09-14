@@ -1,12 +1,19 @@
 // src/renderer/src/components/DiscoverPanel.tsx
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar } from '../theme/typeColor'
+import { getAudioContext } from '../audio/peakCache'
+import {
+  startPreviewLoop,
+  stopPreviewSources,
+  registerActivePreview,
+  unregisterActivePreview
+} from '../audio/previewLoop'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { useAppSelector, useDispatch } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 import type { ProjectRef, Rifff, SoundType, Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
@@ -147,10 +154,72 @@ export function DiscoverPanel({
   void currentSketch
 
   const dispatch = useDispatch()
+  const playing = usePlaying()
   const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
+
+  // Click-to-preview a slot's own resolved stem, before it's ever placed on
+  // the timeline -- reuses previewLoop.ts's own plain-Web-Audio mechanism
+  // (Shelf.tsx/LibraryBrowser.tsx's established convention for auditioning
+  // audio that isn't part of the current project yet), NOT
+  // useStemPreviewPlayback.ts (that hook drives the native engine for stems
+  // ALREADY placed in this project's own timeline -- a Discover candidate
+  // is neither). Direct report: Discover shipped with no way to hear a
+  // candidate before plunking it in, which this closes.
+  //
+  // One shared "who's currently previewing" state here (not per-row) so
+  // clicking a second slot's glyph correctly stops the first -- mirrors
+  // Shelf.tsx's own `previewingGroupId` shape exactly, scoped to one slot
+  // id instead of one rifff groupId. The underlying
+  // registerActivePreview/unregisterActivePreview registry (previewLoop.ts)
+  // separately ensures this also stops (and gets stopped by) a preview
+  // started anywhere ELSE in the app (Shelf, LibraryBrowser's own browse
+  // tab, BeatPicker) -- that part needs no extra code here, it's already
+  // global.
+  const [previewingSlotId, setPreviewingSlotId] = useState<string | null>(null)
+  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const previewGenerationRef = useRef(0)
+  const previewTokenRef = useRef(0)
+
+  const stopSlotPreview = useCallback(() => {
+    stopPreviewSources(previewSourcesRef.current)
+    previewSourcesRef.current = []
+    unregisterActivePreview(previewTokenRef.current)
+  }, [])
+
+  useEffect(() => {
+    return () => stopSlotPreview()
+  }, [stopSlotPreview])
+
+  function toggleSlotPreview(id: string, stem: { path: string; durationSec: number }): void {
+    previewGenerationRef.current += 1
+    const generation = previewGenerationRef.current
+    stopSlotPreview()
+    if (previewingSlotId === id) {
+      setPreviewingSlotId(null)
+      return
+    }
+    setPreviewingSlotId(id)
+    // Same "don't let a preview and the real arranger transport play at
+    // once" courtesy Shelf.tsx's own tile-click preview already gives --
+    // auditioning a Discover candidate while the project is mid-playback
+    // would otherwise layer a second, unrelated loop on top.
+    if (playing) dispatch({ type: 'PAUSE' })
+    void startPreviewLoop(
+      getAudioContext(),
+      [{ path: stem.path, durationSec: stem.durationSec }],
+      () => previewGenerationRef.current !== generation
+    ).then((sources) => {
+      if (previewGenerationRef.current !== generation) {
+        stopPreviewSources(sources)
+        return
+      }
+      previewSourcesRef.current.push(...sources)
+      if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopSlotPreview)
+    })
+  }
 
   // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins
   // race LibraryBrowser.tsx's useStemPreviewPlayback.ts's own
@@ -361,6 +430,16 @@ export function DiscoverPanel({
 
   return (
     <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
+      {/* One-time keyframes for a resolving slot's own spinning placeholder
+          ring (DiscoverSlotRow, below) -- injected once here rather than
+          per-row, same "one <style> tag for the whole list" convention
+          ClusterStemsBrowser.tsx's own row-assignment pulse animation
+          already uses. */}
+      <style>{`
+        @keyframes discover-slot-spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
       {showConsentPrompt && (
         <div
           style={{
@@ -472,9 +551,11 @@ export function DiscoverPanel({
           key={slot.id}
           slot={slot}
           rerolling={rerollingSlotIds.has(slot.id)}
+          previewing={previewingSlotId === slot.id}
           onToggleLock={() => toggleLock(slot.id)}
           onRemove={() => removeSlot(slot.id)}
           onReroll={() => void rerollSlot(slot.id)}
+          onTogglePreview={(stem) => toggleSlotPreview(slot.id, stem)}
         />
       ))}
 
@@ -504,9 +585,11 @@ export function DiscoverPanel({
 function DiscoverSlotRow({
   slot,
   rerolling,
+  previewing,
   onToggleLock,
   onRemove,
-  onReroll
+  onReroll,
+  onTogglePreview
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -514,9 +597,18 @@ function DiscoverSlotRow({
    * LibraryBrowser.tsx's own downloadingRiffCID-driven disabled + label
    * convention. */
   rerolling: boolean
+  /** True while THIS slot's own resolved stem is the one currently looping
+   * via previewLoop.ts -- drives the glyph's own "now playing" outline. */
+  previewing: boolean
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
+  /** Only ever called with a REAL resolved stem (the button that triggers
+   * it is disabled until resolvedStem exists) -- DiscoverPanel owns the
+   * actual playback state/audio graph (one shared "who's previewing" set
+   * across every row, see its own doc comment), this just hands up which
+   * stem to play. */
+  onTogglePreview: (stem: { path: string; durationSec: number }) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- PolarGlyph needs a real
@@ -539,24 +631,54 @@ function DiscoverSlotRow({
   // `slot.candidate` identity, so a fresh reroll reads as unresolved
   // immediately (same visible behavior as an explicit reset) without ever
   // calling setState synchronously in the effect body.
-  const [resolved, setResolved] = useState<{ candidate: DiscoverCandidate; stem: Stem } | null>(
-    null
-  )
+  //
+  // Real, reported bug this tri-state status fixes: resolveCandidateStem
+  // returns null (never throws) for its own documented, EXPECTED failure
+  // modes (a since-deleted riff, a download that doesn't actually contain
+  // the target stem, ...) -- a plain {candidate, stem} pair had no way to
+  // represent that outcome, so a failed resolution left `resolved` (and
+  // therefore the "resolving" spinner below) stuck exactly where it
+  // started: indistinguishable from "still genuinely in progress," forever.
+  // That's the identical "looks hung, no indication anything happened"
+  // symptom this whole loading-state feature was added to fix, just moved
+  // onto the failure path instead of the loading path. `status: 'failed'`
+  // gives the failure path its own real, terminal, visually distinct
+  // state instead.
+  const [resolved, setResolved] = useState<
+    | { candidate: DiscoverCandidate; status: 'ready'; stem: Stem }
+    | { candidate: DiscoverCandidate; status: 'failed' }
+    | null
+  >(null)
 
   useEffect(() => {
     let cancelled = false
     if (!slot.candidate) return
     const candidate = slot.candidate
     void resolveCandidateStem(candidate).then((stem) => {
-      if (cancelled || !stem) return
-      setResolved({ candidate, stem: { slot: 1, ...stem } })
+      if (cancelled) return
+      setResolved(
+        stem
+          ? { candidate, status: 'ready', stem: { slot: 1, ...stem } }
+          : { candidate, status: 'failed' }
+      )
     })
     return () => {
       cancelled = true
     }
   }, [slot.candidate])
 
-  const resolvedStem = resolved?.candidate === slot.candidate ? resolved.stem : null
+  const resolvedForCurrent = resolved?.candidate === slot.candidate ? resolved : null
+  const resolvedStem = resolvedForCurrent?.status === 'ready' ? resolvedForCurrent.stem : null
+  const resolveFailed = resolvedForCurrent?.status === 'failed'
+  // A candidate exists but hasn't SETTLED yet either way (no ready stem,
+  // no confirmed failure) -- genuinely in flight (downloading/decoding via
+  // resolveCandidateStem above), not "empty" and not "failed." Direct
+  // report: without this distinction the placeholder ring looked identical
+  // whether a slot had nothing at all, was actively working, or had
+  // already failed for good (e.g. a since-deleted riff) -- reading as
+  // stuck/broken in every one of those cases, including the one where the
+  // spinner would otherwise have kept insisting it was still working.
+  const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
 
   return (
     <div
@@ -585,25 +707,64 @@ function DiscoverSlotRow({
       </button>
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>{slot.role}</span>
       {resolvedStem ? (
-        <PolarGlyph stems={[resolvedStem]} identityColor={stemColorVar(resolvedStem)} size={40} />
-      ) : (
-        <div
+        // Clicking the glyph previews the resolved stem -- same
+        // click-the-thumbnail-to-hear-it convention Shelf.tsx's own tiles
+        // and ClusterStemsBrowser.tsx's own waveform rows already use
+        // elsewhere in this app. The bright outline while `previewing`
+        // mirrors ClusterRow's own `rowIsPreviewing` treatment.
+        <button
+          onClick={() => onTogglePreview(resolvedStem)}
+          title={previewing ? 'playing -- click to stop' : 'click to preview'}
           style={{
             width: 40,
             height: 40,
-            border: '1px dashed var(--ra-border)',
-            borderRadius: '50%'
+            flexShrink: 0,
+            padding: 0,
+            background: 'transparent',
+            border: 'none',
+            borderRadius: '50%',
+            outline: previewing ? '1px solid var(--ra-stretch-on)' : 'none',
+            outlineOffset: 1,
+            cursor: 'pointer'
+          }}
+        >
+          <PolarGlyph stems={[resolvedStem]} identityColor={stemColorVar(resolvedStem)} size={40} />
+        </button>
+      ) : (
+        <div
+          title={
+            resolving
+              ? 'downloading + analyzing…'
+              : resolveFailed
+                ? "couldn't load this stem -- try reroll"
+                : undefined
+          }
+          style={{
+            width: 40,
+            height: 40,
+            flexShrink: 0,
+            border: `1px dashed ${
+              resolving
+                ? 'var(--ra-stretch-on)'
+                : resolveFailed
+                  ? 'var(--ra-mute-on)'
+                  : 'var(--ra-border)'
+            }`,
+            borderRadius: '50%',
+            animation: resolving ? 'discover-slot-spin 900ms linear infinite' : undefined
           }}
         />
       )}
-      <span style={{ fontSize: 9, color: 'var(--ra-text)' }}>
+      <span style={{ fontSize: 9, color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)' }}>
         {rerolling
           ? 'rerolling…'
-          : slot.candidate
-            ? slot.candidate.presetName
-            : slot.hasRerolled
-              ? 'no match for this role yet'
-              : 'no candidate yet'}
+          : resolveFailed
+            ? "couldn't load -- try reroll"
+            : slot.candidate
+              ? slot.candidate.presetName
+              : slot.hasRerolled
+                ? 'no match for this role yet'
+                : 'no candidate yet'}
       </span>
       <button
         onClick={onReroll}
