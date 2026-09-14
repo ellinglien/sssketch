@@ -25,7 +25,8 @@ function fakeStem(overrides: Partial<Stem> = {}): Stem {
 describe('refineRoleWithCentroidSuggestion', () => {
   it('leaves a role with a confirmed busId completely untouched, even with a confident suggestion available', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
     const role = resolveStemRole(fakeStem(), 'k', 'drums')
     const refined = refineRoleWithCentroidSuggestion(role, vec(0), store)
     expect(refined).toEqual(role)
@@ -46,8 +47,16 @@ describe('refineRoleWithCentroidSuggestion', () => {
   })
 
   it('overrides arrangeRole with a confident suggestion, and clears uncertain', () => {
+    // suggestCategory declines to guess with only one trained category on an
+    // axis (nothing to discriminate against, see categoryCentroids.ts's own
+    // 2026-09-14 fix) -- every test below that wants a confident suggestion
+    // needs a second, well-separated category trained too, even though only
+    // one is ever the expected answer.
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(50))
     const role = resolveStemRole(fakeStem({ type: 'fx' }), 'k', null)
     expect(role.uncertain).toBe(true)
     const refined = refineRoleWithCentroidSuggestion(role, vec(0), store)
@@ -57,8 +66,14 @@ describe('refineRoleWithCentroidSuggestion', () => {
 
   it('also suggests a drumSubRole when the arrangeRole suggestion is drums and drumSubRole has a confident match', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(0))
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', vec(50))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'drumSubRole', 'snare', vec(50))
     const role = resolveStemRole(fakeStem(), 'k', null)
     const refined = refineRoleWithCentroidSuggestion(role, vec(0), store)
     expect(refined.arrangeRole).toBe('drums')
@@ -67,8 +82,12 @@ describe('refineRoleWithCentroidSuggestion', () => {
 
   it('does not set a drumSubRole when the suggested arrangeRole is not drums', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(50))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(0))
     const role = resolveStemRole(fakeStem(), 'k', null)
     const refined = refineRoleWithCentroidSuggestion(role, vec(0), store)
     expect(refined.arrangeRole).toBe('vocal')
@@ -77,7 +96,10 @@ describe('refineRoleWithCentroidSuggestion', () => {
 
   it('overrides a PresetName-based guess too, not just the raw SoundType fallback -- centroid ranks above PresetName', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(50))
     // 'Keymasher' is a real, known FX preset name -- resolveStemRole alone
     // would guess 'textureFx' from it.
     const role = resolveStemRole(fakeStem({ name: 'Keymasher', type: 'fx' }), 'k', null)

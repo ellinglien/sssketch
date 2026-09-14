@@ -177,8 +177,14 @@ function euclideanDistance(a: number[], b: number[]): number {
  * on the given axis only -- never returns a category trained on a
  * different axis. Returns null (not a forced guess) when fewer than
  * MIN_SAMPLES_PER_CATEGORY samples back the nearest category on this axis,
- * or when the nearest and second-nearest are too close to call
- * confidently.
+ * when only ONE category on this axis has enough samples (there's nothing
+ * to compare it against, so "confidence" is meaningless -- see the
+ * MIN_TRAINED_CATEGORIES_FOR_SUGGESTION doc comment below; a real bug
+ * caught 2026-09-14: an axis cold-starting with only one category trained
+ * so far returned that category unconditionally for every query, however
+ * poor the actual fit, since the ratio check below never runs without a
+ * second-nearest to compare against), or when the nearest and second-
+ * nearest are too close to call confidently.
  */
 export function suggestCategory(
   store: CategoryCentroidStore,
@@ -190,7 +196,14 @@ export function suggestCategory(
   const trainedCategories = trainableCategoriesFor(axis).filter(
     (c) => (bucket[c]?.count ?? 0) >= MIN_SAMPLES_PER_CATEGORY
   )
-  if (trainedCategories.length === 0) return null
+  // A real classification requires discriminating between at least two real
+  // options -- with only one category trained on this axis so far (a real,
+  // observed cold-start state on the arrangeRole/drumSubRole axes shortly
+  // after Tidy Up started training them: 2026-09-14), there's no second
+  // candidate to rule it out against, so every query would otherwise get
+  // force-matched to that one category regardless of actual distance.
+  const MIN_TRAINED_CATEGORIES_FOR_SUGGESTION = 2
+  if (trainedCategories.length < MIN_TRAINED_CATEGORIES_FOR_SUGGESTION) return null
 
   const query = standardize(rawFeatureVector, store.global)
   const distances = trainedCategories

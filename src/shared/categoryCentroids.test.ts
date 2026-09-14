@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { emptyCategoryCentroidStore, recordConfirmedCategory, suggestCategory } from './categoryCentroids'
+import {
+  emptyCategoryCentroidStore,
+  recordConfirmedCategory,
+  suggestCategory
+} from './categoryCentroids'
 
 const DIM = 19
 function vec(fillValue: number): number[] {
@@ -80,16 +84,33 @@ describe('suggestCategory', () => {
     expect(suggestCategory(store, 'bus', vec(0))).toBeNull()
   })
 
-  it('suggests the nearest trained category once it has enough samples, with only one trained', () => {
+  it('declines to guess when only one category on the axis has enough samples, even for a query right on top of it', () => {
+    // Regression test for a real bug (2026-09-14): with only one trained
+    // category, the old code had nothing to compare it against, so it
+    // returned that category unconditionally for every query, however far
+    // away -- observed live as an arrangeRole axis that had only just
+    // crossed the sample threshold for 'bass' suggesting "bass" for every
+    // single stem regardless of actual fit. A real classification needs at
+    // least two real candidates to discriminate between.
     let store = emptyCategoryCentroidStore()
     for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'bus', 'drums', vec(0))
+    expect(suggestCategory(store, 'bus', vec(1))).toBeNull()
+    expect(suggestCategory(store, 'bus', vec(500))).toBeNull()
+  })
+
+  it('suggests the nearest of two trained categories once both have enough samples', () => {
+    let store = emptyCategoryCentroidStore()
+    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'bus', 'drums', vec(0))
+    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'bus', 'bass', vec(20))
     expect(suggestCategory(store, 'bus', vec(1))).toBe('drums')
   })
 
   it('picks the closer of two well-separated trained categories on the arrangeRole axis', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(0))
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(20))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', vec(0))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', vec(20))
     expect(suggestCategory(store, 'arrangeRole', vec(1))).toBe('drums')
     expect(suggestCategory(store, 'arrangeRole', vec(19))).toBe('vocal')
   })
@@ -103,7 +124,10 @@ describe('suggestCategory', () => {
 
   it('a category with a variance of zero across every trained sample does not blow up standardization', () => {
     let store = emptyCategoryCentroidStore()
-    for (let i = 0; i < 5; i++) store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(3))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'drumSubRole', 'kick', vec(3))
+    for (let i = 0; i < 5; i++)
+      store = recordConfirmedCategory(store, 'drumSubRole', 'snare', vec(30))
     expect(() => suggestCategory(store, 'drumSubRole', vec(3))).not.toThrow()
     expect(suggestCategory(store, 'drumSubRole', vec(3))).toBe('kick')
   })
