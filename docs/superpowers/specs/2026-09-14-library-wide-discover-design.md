@@ -87,8 +87,10 @@ are feasible to run fully locally in this exact stack — confirmed via research
 (14MB, Apache 2.0, official TensorFlow.js export) via `onnxruntime-web`, running in the
 renderer on the same decoded audio the existing caches already use — but this is a genuinely
 separate subsystem (new WASM runtime dependency, a bundled model file, worker-thread
-plumbing), not a small addition. Scoped as this spec's own explicit Phase 2 (§7), not folded
-invisibly into Phase 1.
+plumbing), not a small addition. Documented as this spec's own explicit Phase 2 (§7), kept
+distinct from Phase 1 in the design (different technique, different risk) but — per Elling's
+own call — built in the same implementation pass as Phase 1, not deferred to a future spec;
+see §7 for what that trade-off actually gives up.
 
 ## Design
 
@@ -201,19 +203,33 @@ both extending an existing mechanism from Background rather than building a para
   replace `StemCategories` with the centroid stores; the two serve different purposes and both
   stay (see §9).
 
-### 7. Auto-classification accuracy — Phase 2 (separately scoped upgrade, not v1)
+### 7. Auto-classification accuracy — Phase 2 (built in the same implementation as Phase 1)
 
 Real learned audio embeddings: YAMNet (14MB, Apache 2.0, official TensorFlow.js export) run
 via `onnxruntime-web`, in the renderer, on the same Web-Audio-decoded PCM the existing
 analysis caches already work from — no new decode path, no involvement from the native JUCE
 engine (this is offline batch analysis, not real-time playback). A new path-keyed cache
 (matching `peakCache.ts`'s own convention) stores each stem's embedding vector; nearest-
-neighbor search over embeddings then either replaces or augments §6's hand-crafted-feature
-version for both classification confidence and the discover screen's own ranking (§4).
-Extraction runs in a Web Worker so a first-time scan of a large library doesn't block the UI.
-Built and evaluated only after Phase 1 ships and it's clear whether accuracy is actually
-still a real problem in practice — this section documents the *shape* of that upgrade so it's
-not a vague future maybe, but building it is explicitly not part of this spec's own plan.
+neighbor search over embeddings then **augments** §6's hand-crafted-feature classification,
+rather than replacing it: an embedding-based match is preferred whenever a stem's embedding
+has already been computed, with §6's hand-crafted-feature/centroid classification as the
+fallback for a stem whose embedding hasn't been extracted yet (first scan of a large library,
+or extraction still running in its Web Worker) — the same layered-fallback shape
+`resolveStemRole` already uses today (`busId` → `SoundType`), not a new pattern. Both
+classification confidence and the discover screen's own ranking (§4) prefer the embedding
+result when one exists.
+
+**Originally scoped as a separate future spec, evaluated only after Phase 1 shipped and proved
+accuracy was still a real problem — Elling's own call was to build both together instead,**
+skipping that "confirm it's needed first" checkpoint in exchange for having the stronger
+classifier from day one. What that gives up, worth stating plainly rather than glossing over:
+Phase 1 alone (§6) is a small, low-risk addition to code that already exists (`presetNames.ts`,
+`busCentroids.ts`); Phase 2 is a genuinely separate subsystem (new WASM runtime dependency,
+~14MB model file to bundle, worker-thread plumbing) landing without the checkpoint that would
+have confirmed the hand-crafted-feature version wasn't already good enough on its own. The
+implementation plan should sequence Phase 2's tasks after Phase 1's are working end-to-end
+(Phase 1's classifier needs to exist for Phase 2's fallback path above to have something to
+fall back to), but both ship in this one implementation, not a follow-up.
 
 ### 8. The discover screen
 
@@ -298,18 +314,26 @@ lost, not proposed as in scope for this spec.
   already has, same as everything else in `riffLibraryStore.ts` today.
 - **No role/drum-sub-role backfill** — established in Background/§3 as genuinely impossible,
   not merely deferred.
-- **Phase 2 (§7) is design-only in this spec** — evaluated and built as its own follow-up
-  once Phase 1 is real, not bundled into this implementation.
 
 ## Testing
 
 `StemCategories` read/write functions, the backfill migration's conflict resolution, the
-`PresetName` keyword matcher, the nearest-neighbor classifier, and the compatibility-ranking
-function are all real `src/shared/`-or-`src/main/`-style pure/testable logic — TDD'd per this
-codebase's convention. The discover screen's own UI (both modes, plus the "place on timeline"
-action) is typecheck+lint-verified only, per this codebase's standing convention for React
-components with no way to click-test a discovery/browsing flow in this environment — needs
-Elling's own manual walkthrough, same as every other UI feature built this session.
+`PresetName` keyword matcher, the centroid classifiers (§6), the embedding nearest-neighbor
+search and its augment/fallback selection logic (§7), and the compatibility-ranking function
+are all real `src/shared/`-or-`src/main/`-style pure/testable logic — TDD'd per this
+codebase's convention, same as Phase 1's classifier. The discover screen's own UI (both modes,
+plus the "place on timeline" action) is typecheck+lint-verified only, per this codebase's
+standing convention for React components with no way to click-test a discovery/browsing flow
+in this environment — needs Elling's own manual walkthrough, same as every other UI feature
+built this session.
+
+**Phase 2 (§7) specifically** — the actual YAMNet extraction and `onnxruntime-web` integration
+is Electron/Web-Worker-dependent, real-model-loading code, not pure logic: per this codebase's
+convention for things a coding agent can't automate (real plugin scanning, live playback —
+root `CLAUDE.md`'s Testing conventions), extraction accuracy and worker-thread behavior need
+Elling's own manual walkthrough against real library stems, not a mocked model. The nearest-
+neighbor comparison logic *over* an embedding vector, once extracted, is ordinary pure logic
+and gets normal unit tests same as §6's classifiers.
 
 The §9 `useStemFeatureScan` extraction carries real regression risk of its own: it's not new
 code, it's a refactor of the scan step inside two already-shipped, working screens (Tidy Up,
