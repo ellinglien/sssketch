@@ -4,6 +4,7 @@ dist-electron/
 out/
 electron-builder.x64-test.generated.yml
 resources/rubberband/
+resources/yamnet/
 .DS_Store
 .eslintcache
 *.log*

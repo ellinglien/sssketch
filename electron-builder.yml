@@ -23,6 +23,12 @@ extraResources:
   # of requiring every tester to `brew install rubberband` themselves.
   - from: resources/rubberband
     to: rubberband
+  # Produced by scripts/vendor-yamnet.sh (run in CI before packaging, same
+  # as rubberband above) -- the YAMNet ONNX model used for stem-similarity
+  # embeddings (src/main/yamnetModel.ts). Gitignored, not committed --
+  # ~14MB, fetched at vendor time rather than bloating a now-public repo.
+  - from: resources/yamnet
+    to: yamnet
   - from: resources/demo-rifff
     to: demo-rifff
 win:
