@@ -16,10 +16,23 @@
 //   Out: { type: 'ready' }
 //        { type: 'result', requestId: number, embedding: number[] }
 //        { type: 'error', requestId: number | null, message: string }
-
-import * as ort from 'onnxruntime-web'
-
-ort.env.wasm.wasmPaths = '/onnxruntime/'
+//
+// Imports from 'onnxruntime-web/wasm' specifically, NOT the bare
+// 'onnxruntime-web' package entry -- verified directly (2026-09-14, real
+// `electron-vite build` runs) that the bare entry's own source has a
+// hardcoded `new URL("ort-wasm-simd-threaded.jsep.wasm", import.meta.url)`
+// reference (the WebGPU/WebNN-interop variant, ~28MB) that Vite's asset
+// bundler picks up unconditionally regardless of the `executionProviders`
+// this worker actually requests -- this app only ever uses the plain
+// `wasm` CPU backend, which has no JS-interop need at all. The `/wasm`
+// subpath's own bundle references only the plain
+// ort-wasm-simd-threaded.wasm (~14MB) instead. Also: no manual
+// `ort.env.wasm.wasmPaths` override is set here -- Vite's own `new
+// URL(..., import.meta.url)` handling resolves and bundles the correct
+// WASM asset automatically (confirmed via the same build runs: identical
+// output with or without a wasmPaths override), so a hand-vendored static
+// copy under a public/ directory is unnecessary and was removed.
+import * as ort from 'onnxruntime-web/wasm'
 
 let session: ort.InferenceSession | null = null
 

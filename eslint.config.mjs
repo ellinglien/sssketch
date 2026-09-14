@@ -22,13 +22,7 @@ export default defineConfig(
       'native-engine/build-x64',
       'native-engine-bridge/build',
       'build',
-      '.worktrees',
-      // Vendored, gitignored third-party runtime files (onnxruntime-web's
-      // own WASM binaries + minified JS glue, copied verbatim by
-      // scripts/vendor-onnxruntime-wasm.sh) -- not this project's own
-      // source, and the minified .mjs files there trip lint rules
-      // (explicit-function-return-type etc.) meant for hand-written code.
-      'src/renderer/public'
+      '.worktrees'
     ]
   },
   tseslint.configs.recommended,
