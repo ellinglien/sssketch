@@ -1,3 +1,4 @@
+/// <reference lib="webworker" />
 // src/renderer/src/audio/yamnetWorker.ts
 //
 // Runs YAMNet inference off the main thread -- model loading and each
@@ -59,13 +60,32 @@ async function handleInit(modelBytes: Uint8Array): Promise<void> {
 
 async function handleInfer(requestId: number, pcm: Float32Array): Promise<void> {
   if (!session) throw new Error('yamnetWorker: infer requested before init completed')
-  const input = new ort.Tensor('float32', pcm, [pcm.length])
-  const outputs = await session.run({ waveform: input })
-  const embeddingOutput = outputs.output_1
-  const embeddingDim = 1024
-  const numFrames = embeddingOutput.dims[0]
-  const embedding = meanPoolEmbedding(embeddingOutput.data as Float32Array, numFrames, embeddingDim)
-  postMessage({ type: 'result', requestId, embedding })
+  try {
+    const input = new ort.Tensor('float32', pcm, [pcm.length])
+    const outputs = await session.run({ waveform: input })
+    // outputs is a bare string-indexed map (OnnxValueMapType) -- a typo'd
+    // key or a re-exported model with different output names typechecks
+    // fine either way and would otherwise only fail with a cryptic
+    // "Cannot read properties of undefined" deep inside meanPoolEmbedding;
+    // guard explicitly so a real name mismatch is diagnosable.
+    const embeddingOutput = outputs.output_1
+    if (!embeddingOutput) {
+      throw new Error(
+        `expected output "output_1", got: ${Object.keys(outputs).join(', ') || '(none)'}`
+      )
+    }
+    const embeddingDim = 1024
+    const numFrames = embeddingOutput.dims[0]
+    const embedding = meanPoolEmbedding(
+      embeddingOutput.data as Float32Array,
+      numFrames,
+      embeddingDim
+    )
+    postMessage({ type: 'result', requestId, embedding })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`yamnetWorker: infer failed (pcm.length=${pcm.length}): ${message}`)
+  }
 }
 
 self.onmessage = (event: MessageEvent<InMessage>) => {
