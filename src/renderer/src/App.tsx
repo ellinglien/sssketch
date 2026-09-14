@@ -2184,6 +2184,7 @@ function Frame(): React.JSX.Element {
           <LibraryBrowser
             onClose={() => setRiffLibraryOpen(false)}
             onImported={handleLibraryImported}
+            currentSketch={currentSketch}
           />
         )}
         {libraryBrowserOpen && (
