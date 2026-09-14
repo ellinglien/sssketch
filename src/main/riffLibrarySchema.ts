@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS StemLedger (
   Type TEXT NOT NULL,
   Note TEXT
 );
+
+CREATE TABLE IF NOT EXISTS StemCategories (
+  StemCID TEXT PRIMARY KEY,
+  ArrangeRole TEXT,
+  DrumSubRole TEXT,
+  BusId TEXT,
+  Source TEXT NOT NULL,
+  SourceProject TEXT,
+  UpdatedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null

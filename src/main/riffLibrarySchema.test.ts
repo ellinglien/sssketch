@@ -36,7 +36,14 @@ describe('riffLibrarySchema', () => {
     const tables = db
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
       .all() as { name: string }[]
-    expect(tables.map((t) => t.name)).toEqual(['Jams', 'Riffs', 'StemLedger', 'Stems', 'Tags'])
+    expect(tables.map((t) => t.name)).toEqual([
+      'Jams',
+      'Riffs',
+      'StemCategories',
+      'StemLedger',
+      'Stems',
+      'Tags'
+    ])
   })
 
   it('opening twice returns the same cached connection, not a second one', async () => {
