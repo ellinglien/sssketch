@@ -12,7 +12,7 @@ import {
   type StemRoleInfo
 } from '@shared/stemRole'
 import { MIN_STEMS_FOR_FULL_ARC } from '@shared/autoArrangeEngine'
-import { getStemFeatures } from '../audio/stemFeaturesCache'
+import { useStemFeatureScan } from '../audio/useStemFeatureScan'
 import { Waveform } from './Waveform'
 import { typeColorVar } from '../theme/typeColor'
 import { stemKey } from '@shared/types'
@@ -265,71 +265,64 @@ export function AutoArrangeRoleStep({
     )
   }
 
-  // useEffect (not useMemo) -- this has a real async side effect and needs a
-  // real cancellation cleanup on unmount/dep change, which only useEffect's
-  // return value actually wires up (see ClusterStemsBrowser.tsx's own
-  // load-on-mount effects for the same pattern in this codebase).
+  const scanItems = useMemo(
+    () => flatStems.map(({ stem, stemKey: key }) => ({ key, path: stem.path })),
+    [flatStems]
+  )
+  const { loading: scanLoading, featuresByKey } = useStemFeatureScan(scanItems)
+
+  // buildDensityMap's own PromiseSettledResult<number>[] shape (one entry
+  // per stem, in flatStems order, 'fulfilled' with a density score or
+  // 'rejected') is reused as-is here -- rather than changing that shared
+  // helper's own signature, a scanned-but-missing feature (a stem
+  // useStemFeatureScan's own Promise.allSettled excluded) is turned back
+  // into an equivalent 'rejected' entry, and buildDensityMap's existing
+  // "rejected -> density score 0, 'sparse'" fallback handles it exactly
+  // the same way a genuinely rejected extraction always has.
+  const densityResults = useMemo<PromiseSettledResult<number>[]>(
+    () =>
+      flatStems.map(({ stem, stemKey: key }) => {
+        const features = featuresByKey.get(key)
+        return features
+          ? { status: 'fulfilled', value: computeDensityScore(features) }
+          : { status: 'rejected', reason: new Error(`no scanned features for stem ${stem.path}`) }
+      }),
+    [flatStems, featuresByKey]
+  )
+
   useEffect(() => {
     if (flatStems.length === 0) return
-    let cancelled = false
-    async function load(): Promise<void> {
-      // Role resolution itself is synchronous and can't fail -- resolve it
-      // up front for every stem regardless of how feature extraction goes.
-      const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) =>
-        resolveStemRole(stem, key, busOf[key] ?? null)
-      )
-      // Promise.allSettled, not Promise.all/a plain await loop -- mirrors
-      // ClusterStemsBrowser.tsx's own handling of getStemFeatures, which is
-      // documented (stemFeaturesCache.ts) as able to reject on a corrupt/
-      // unreadable stem file. Unlike that browser (which excludes a failed
-      // stem from clustering entirely), a failed stem here still needs a row
-      // in the roles list, so it falls back to density score 0 ('sparse') --
-      // the least presumptuous default -- rather than being dropped.
-      const results = await Promise.allSettled(
-        flatStems.map(({ stem }) => getStemFeatures(stem.path).then(computeDensityScore))
-      )
-      if (cancelled) return
-      results.forEach((result, i) => {
-        if (result.status === 'rejected') {
-          console.error(
-            'AutoArrangeRoleStep: feature extraction failed for stem',
-            flatStems[i].stem.path,
-            result.reason
-          )
-        }
-      })
-      setRoles(resolved)
-      // buildDensityMap is keyed to one groupId per call -- build it per
-      // owning rifff over the matching slice of `results` (flatStems is built
-      // by flatMap over placedRifffs in the same order, so slices line up),
-      // then merge. Keeps the shared helper's single-rifff shape intact
-      // rather than reshaping it for a multi-rifff caller.
-      let cursor = 0
-      const densityMap: Record<string, number> = {}
-      for (const rifff of placedRifffs) {
-        const sliceResults = results.slice(cursor, cursor + rifff.stems.length)
-        Object.assign(densityMap, buildDensityMap(rifff.stems, rifff.groupId, sliceResults))
-        cursor += rifff.stems.length
-      }
-      setDensities(densityMap)
+    if (scanLoading) return
+    // Role resolution itself is synchronous and can't fail -- resolve it
+    // for every stem once the shared scan hook has settled.
+    const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) =>
+      resolveStemRole(stem, key, busOf[key] ?? null)
+    )
+    // buildDensityMap is keyed to one groupId per call -- build it per
+    // owning rifff over the matching slice of `densityResults` (flatStems is
+    // built by flatMap over placedRifffs in the same order, so slices line
+    // up), then merge. Keeps the shared helper's single-rifff shape intact
+    // rather than reshaping it for a multi-rifff caller.
+    let cursor = 0
+    const densityMap: Record<string, number> = {}
+    for (const rifff of placedRifffs) {
+      const sliceResults = densityResults.slice(cursor, cursor + rifff.stems.length)
+      Object.assign(densityMap, buildDensityMap(rifff.stems, rifff.groupId, sliceResults))
+      cursor += rifff.stems.length
     }
-    // Promise.allSettled above only guards a getStemFeatures rejection --
-    // this outer .catch() is a second, wider net (mirrors
-    // ClusterStemsBrowser.tsx:283-288) so anything else unexpected thrown
-    // inside load() still lands on a safe fallback state instead of leaving
-    // the modal wedged on "analyzing stems..." forever with an unhandled
-    // rejection.
-    load().catch((err: unknown) => {
-      if (!cancelled) {
-        console.error('AutoArrangeRoleStep: role/feature load failed', err)
-        setRoles([])
-        setDensities({})
-      }
+    // Deferred through a microtask (not called directly) so this doesn't
+    // read as a synchronous setState-in-effect -- same established
+    // workaround as BeatPicker.tsx's own initialStepsRef reset effect.
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (cancelled) return
+      setRoles(resolved)
+      setDensities(densityMap)
     })
     return () => {
       cancelled = true
     }
-  }, [flatStems, placedRifffs, busOf])
+  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults])
 
   if (placedRifffs.length === 0) {
     return (
