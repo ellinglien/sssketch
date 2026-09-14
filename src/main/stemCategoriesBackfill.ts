@@ -77,17 +77,17 @@ export function backfillStemCategoriesFromProjectLibrary(db: Database.Database):
     }
 
     if (entries.length > 0) {
-      // Deliberately NOT Math.floor()'d to whole seconds: this needs to
-      // stay the same seconds-since-epoch SCALE as the live forward-capture
-      // IPC handlers' own `Math.floor(Date.now() / 1000)` (so a stale
-      // backfilled row can never permanently outrank a real future live
-      // edit just because it happened to be stored in a bigger unit), while
-      // still preserving real sub-second ordering between two project
-      // files modified within the same wall-clock second -- flooring both
-      // away would make upsertStemCategoryBus's own "most recent wins"
-      // guard silently fall back to iteration order instead, which is
-      // exactly what this migration must not depend on (see this
-      // function's own doc comment).
+      // Deliberately NOT Math.floor()'d to whole seconds: unrounded
+      // fractional-seconds-since-epoch is this whole subsystem's house
+      // style for StemCategories.UpdatedAt (the live forward-capture IPC
+      // handlers use the same `Date.now() / 1000`, unrounded), so there's
+      // no scale mismatch to guard against here. Staying fractional also
+      // preserves real sub-second ordering between two project files
+      // modified within the same wall-clock second -- flooring would make
+      // upsertStemCategoryBus's own "most recent wins" guard silently fall
+      // back to iteration order instead, which is exactly what this
+      // migration must not depend on (see this function's own doc
+      // comment).
       upsertStemCategoryBus(db, entries, 'backfill', projectPath, sketch.mtimeMs / 1000)
       categorizedStems += entries.length
     }

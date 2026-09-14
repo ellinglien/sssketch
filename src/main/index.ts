@@ -714,7 +714,7 @@ app.whenReady().then(async () => {
         entries,
         source,
         resolveSourceProjectPath(project),
-        Math.floor(Date.now() / 1000)
+        Date.now() / 1000
       )
     }
   )
@@ -727,7 +727,7 @@ app.whenReady().then(async () => {
         entries,
         source,
         resolveSourceProjectPath(project),
-        Math.floor(Date.now() / 1000)
+        Date.now() / 1000
       )
     }
   )
