@@ -8,7 +8,7 @@ import type {
   RiffLibraryResolvedRiff
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
-import type { BusCentroidStore } from '@shared/busCentroids'
+import type { CategoryCentroidStore } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -176,9 +176,8 @@ const api = {
     deviceName: string
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-output-device', deviceName),
-  getBusCentroids: (): Promise<BusCentroidStore> => ipcRenderer.invoke('get-bus-centroids'),
-  saveBusCentroids: (store: BusCentroidStore): Promise<void> =>
-    ipcRenderer.invoke('save-bus-centroids', store),
+  getCategoryCentroids: (): Promise<CategoryCentroidStore> =>
+    ipcRenderer.invoke('get-category-centroids'),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,

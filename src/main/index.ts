@@ -39,8 +39,12 @@ import {
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
-import { loadBusCentroidStore, saveBusCentroidStore } from './busCentroidStore'
-import type { BusCentroidStore } from '@shared/busCentroids'
+import { loadCategoryCentroidStore } from './categoryCentroidStore'
+import type { CategoryCentroidStore } from '@shared/categoryCentroids'
+import {
+  trainCentroidsFromBusEntries,
+  trainCentroidsFromRoleEntries
+} from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
 import type { RiffFilters } from '@shared/riffLibraryTypes'
 import {
@@ -703,37 +707,39 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('get-bus-centroids', (): BusCentroidStore => loadBusCentroidStore())
-
-  ipcMain.handle('save-bus-centroids', (_event, store: BusCentroidStore) =>
-    saveBusCentroidStore(store)
-  )
+  ipcMain.handle('get-category-centroids', (): CategoryCentroidStore => loadCategoryCentroidStore())
 
   ipcMain.handle(
     'upsert-stem-category-bus',
     (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef) => {
+      const db = openOwnRiffLibraryDb()
+      const extraCandidateDbs = candidateDbsForRiff()
       upsertStemCategoryBus(
-        openOwnRiffLibraryDb(),
+        db,
         entries,
         source,
         resolveSourceProjectPath(project),
         Date.now() / 1000,
-        candidateDbsForRiff()
+        extraCandidateDbs
       )
+      trainCentroidsFromBusEntries(db, entries, extraCandidateDbs)
     }
   )
 
   ipcMain.handle(
     'upsert-stem-category-role',
     (_event, entries: StemRoleCategoryEntry[], source: string, project: ProjectRef) => {
+      const db = openOwnRiffLibraryDb()
+      const extraCandidateDbs = candidateDbsForRiff()
       upsertStemCategoryRole(
-        openOwnRiffLibraryDb(),
+        db,
         entries,
         source,
         resolveSourceProjectPath(project),
         Date.now() / 1000,
-        candidateDbsForRiff()
+        extraCandidateDbs
       )
+      trainCentroidsFromRoleEntries(db, entries, extraCandidateDbs)
     }
   )
 
