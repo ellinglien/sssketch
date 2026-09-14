@@ -192,6 +192,7 @@ const api = {
     ipcRenderer.invoke('get-stem-feature-cache', path),
   setStemFeatureCache: (path: string, features: StemFeatures): Promise<void> =>
     ipcRenderer.invoke('set-stem-feature-cache', path, features),
+  getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
     ipcRenderer.invoke('engine-get-plugin-states'),

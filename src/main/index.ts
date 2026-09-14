@@ -86,6 +86,7 @@ import {
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
+import { readYamnetModelBytes } from './yamnetModel'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
@@ -746,6 +747,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>
     getStemFeatureCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
   )
+
+  ipcMain.handle('get-yamnet-model', (): Uint8Array | null => readYamnetModelBytes())
 
   ipcMain.handle('set-stem-feature-cache', (_event, path: string, features: StemFeatures) => {
     // Floored (not unrounded like the upsert-stem-category-* handlers above) is
