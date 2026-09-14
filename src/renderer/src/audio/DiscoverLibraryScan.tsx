@@ -115,6 +115,11 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
 
   if (total === null) return null
 
+  // total === 0 (a library with nothing locally cached yet) would otherwise
+  // divide by zero -- reads as "done" rather than NaN%, which is the
+  // correct display for "nothing to scan" anyway.
+  const fraction = total > 0 ? Math.min(1, completed / total) : 1
+
   return (
     // Fixed position -- this component now mounts once at the app's own
     // top level (App.tsx's Frame()), independent of whether the Discover
@@ -125,22 +130,58 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
     // the transport bar / titlebar chrome and every modal's own z-index
     // (every modal/menu in this app sits at 20-1000; this stays well
     // under that).
-    <p
+    <div
       style={{
         position: 'fixed',
         left: 8,
         bottom: 8,
         zIndex: 10,
-        margin: 0,
-        padding: '3px 6px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        width: 180,
+        padding: '4px 6px',
         background: 'var(--ra-bg-row-active)',
         border: '1px solid var(--ra-border)',
-        fontSize: 9,
-        color: 'var(--ra-text-3)',
         pointerEvents: 'none'
       }}
     >
-      analyzing library in background: {completed} / {total} locally-cached stems this session
-    </p>
+      <p
+        style={{
+          margin: 0,
+          fontSize: 9,
+          color: 'var(--ra-text-3)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }}
+      >
+        analyzing library: {completed} / {total} this session
+      </p>
+      {/* Sharp corners, no border-radius, matching this app's own design
+          system throughout -- bright fill on a dim track is the same
+          "brightness = live/active" convention buttonStyle's own 'confirmed'
+          state already uses elsewhere (ClusterStemsBrowser.tsx), reused here
+          since a moving fill is itself a live-activity signal. */}
+      <div
+        role="progressbar"
+        aria-valuenow={Math.round(fraction * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        style={{
+          height: 3,
+          background: 'var(--ra-border)',
+          overflow: 'hidden'
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: `${fraction * 100}%`,
+            background: 'var(--ra-stretch-on)'
+          }}
+        />
+      </div>
+    </div>
   )
 }
