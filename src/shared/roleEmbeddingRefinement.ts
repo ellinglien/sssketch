@@ -43,9 +43,10 @@ export function refineRoleWithEmbeddingOrCentroidSuggestion(
     if (suggestedArrangeRole) {
       const drumSubRole =
         suggestedArrangeRole === 'drums'
-          ? ((suggestCategoryFromEmbedding(confirmedEmbeddings.drumSubRoles, embedding) as
-              | DrumSubRole
-              | null) ?? undefined)
+          ? ((suggestCategoryFromEmbedding(
+              confirmedEmbeddings.drumSubRoles,
+              embedding
+            ) as DrumSubRole | null) ?? undefined)
           : undefined
       return { ...role, arrangeRole: suggestedArrangeRole, drumSubRole, uncertain: false }
     }

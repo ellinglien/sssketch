@@ -42,10 +42,20 @@ describe('refineRoleWithEmbeddingOrCentroidSuggestion', () => {
   it('prefers a confident embedding match over the centroid classifier', () => {
     let centroidStore = emptyCategoryCentroidStore()
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'bass', new Array(19).fill(0))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'bass',
+        new Array(19).fill(0)
+      )
     }
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'lead', new Array(19).fill(50))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'lead',
+        new Array(19).fill(50)
+      )
     }
     const confirmedArrangeRoles: ConfirmedEmbedding[] = [
       { category: 'vocal', embedding: [1, 0, 0] },
@@ -69,10 +79,20 @@ describe('refineRoleWithEmbeddingOrCentroidSuggestion', () => {
   it('falls back to the centroid classifier when there is no embedding yet', () => {
     let centroidStore = emptyCategoryCentroidStore()
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'bass', new Array(19).fill(0))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'bass',
+        new Array(19).fill(0)
+      )
     }
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'lead', new Array(19).fill(50))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'lead',
+        new Array(19).fill(50)
+      )
     }
     const role = resolveStemRole(fakeStem(), 'k', null)
     const refined = refineRoleWithEmbeddingOrCentroidSuggestion(
@@ -88,10 +108,20 @@ describe('refineRoleWithEmbeddingOrCentroidSuggestion', () => {
   it('falls back to the centroid classifier when the embedding match declines to guess', () => {
     let centroidStore = emptyCategoryCentroidStore()
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'bass', new Array(19).fill(0))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'bass',
+        new Array(19).fill(0)
+      )
     }
     for (let i = 0; i < 5; i++) {
-      centroidStore = recordConfirmedCategory(centroidStore, 'arrangeRole', 'lead', new Array(19).fill(50))
+      centroidStore = recordConfirmedCategory(
+        centroidStore,
+        'arrangeRole',
+        'lead',
+        new Array(19).fill(50)
+      )
     }
     // Only one embedding-trained category -- suggestCategoryFromEmbedding
     // declines (same guard as categoryCentroids.ts's own fix).
