@@ -13,11 +13,10 @@ import {
 } from '@shared/agglomerativeCluster'
 import { clusterProvenance, type BusProvenance } from '@shared/busProvenance'
 import {
-  emptyBusCentroidStore,
-  recordConfirmedStem,
-  suggestBus,
-  type BusCentroidStore
-} from '@shared/busCentroids'
+  emptyCategoryCentroidStore,
+  suggestCategory,
+  type CategoryCentroidStore
+} from '@shared/categoryCentroids'
 import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
@@ -135,33 +134,31 @@ export function ClusterStemsBrowser({
   const { previewingKeys, startPreview } = useStemPreviewPlayback()
   const busOf = useAppSelector((s) => s.busOf)
 
-  // Global, cross-project classifier state (see busCentroids.ts) -- loaded
-  // once on mount. Starts empty (every suggestBus() call returns null,
-  // i.e. no suggestions at all) until enough real confirmations have
-  // trained it, which is the correct cold-start behavior: this modal falls
-  // straight back to its original all-DSP-clustering flow rather than ever
-  // blocking on the fetch.
+  // Global, cross-project classifier state (see categoryCentroids.ts) --
+  // loaded once on mount. Starts empty (every suggestCategory() call returns
+  // null, i.e. no suggestions at all) until enough real confirmations have
+  // trained it server-side, which is the correct cold-start behavior: this
+  // modal falls straight back to its original all-DSP-clustering flow
+  // rather than ever blocking on the fetch.
   //
-  // centroidStore keeps updating live (trainCentroids below writes to it on
-  // every real confirm, and persists it for future sessions) but
-  // centroidStoreSnapshot is set ONCE, the first time the real store loads,
-  // and never again -- `partitioned` below reads suggestions from the
-  // frozen snapshot, not the live store. Without this split, confirming
-  // ANY bus mid-tidy-up retrains the live store, which can immediately
-  // flip an unrelated, already-visible DSP-cluster stem into "suggested"
-  // and yank it out of the list the user is actively working through --
-  // reported as the suggestion UI feeling "jolting"/like it "took over."
-  // Freezing the snapshot means the suggested/DSP split for this session is
-  // decided once, at open time, and stays put no matter how much training
-  // happens while the user works.
-  const [centroidStore, setCentroidStore] = useState<BusCentroidStore>(emptyBusCentroidStore)
-  const [centroidStoreSnapshot, setCentroidStoreSnapshot] =
-    useState<BusCentroidStore>(emptyBusCentroidStore)
+  // Frozen the first time the real store loads, never again -- `partitioned`
+  // below reads suggestions from this frozen snapshot, not a live,
+  // continuously-retraining store (training itself is now entirely
+  // server-side, see categoryCentroidTraining.ts, triggered by the
+  // upsert-stem-category-bus IPC handler that recordBusCategories below
+  // calls). Without freezing this snapshot, confirming ANY bus mid-tidy-up
+  // would retrain the suggestion set shown here, which can immediately flip
+  // an unrelated, already-visible DSP-cluster stem into "suggested" and yank
+  // it out of the list the user is actively working through -- reported as
+  // the suggestion UI feeling "jolting"/like it "took over." Freezing the
+  // snapshot means the suggested/DSP split for this session is decided
+  // once, at open time, and stays put no matter how much training happens
+  // server-side while the user works.
+  const [centroidStoreSnapshot, setCentroidStoreSnapshot] = useState<CategoryCentroidStore>(
+    emptyCategoryCentroidStore
+  )
   useEffect(() => {
-    void window.rifffApi.getBusCentroids().then((store) => {
-      setCentroidStore(store)
-      setCentroidStoreSnapshot(store)
-    })
+    void window.rifffApi.getCategoryCentroids().then(setCentroidStoreSnapshot)
   }, [])
 
   // Restoring the pre-solo mute snapshot and pausing playback now happens
@@ -219,8 +216,8 @@ export function ClusterStemsBrowser({
   // Mirrors the old `computed` shape's own two derived pieces exactly --
   // analyzedStems (only the stems that scanned successfully) and
   // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized, since
-  // trainCentroids below needs raw space -- see busCentroids.ts's own doc
-  // comment) -- so every downstream consumer needs zero further changes
+  // suggestCategory below needs raw space -- see categoryCentroids.ts's own
+  // doc comment) -- so every downstream consumer needs zero further changes
   // beyond what Step 2 below updates.
   const computed = useMemo(() => {
     if (loading) return null
@@ -244,7 +241,7 @@ export function ClusterStemsBrowser({
   // the next pass) or centroidStoreSnapshot changes -- which, deliberately,
   // only happens once per modal session (see centroidStoreSnapshot's own
   // doc comment above for why suggestions read the frozen snapshot rather
-  // than the live, continuously-training centroidStore). mergeSequence --
+  // than a live, continuously-retraining store). mergeSequence --
   // the expensive O(n^3) part -- only ever re-runs when the actual DSP
   // population changes, not on every keystroke elsewhere in the modal.
   const partitioned = useMemo(() => {
@@ -258,7 +255,9 @@ export function ClusterStemsBrowser({
         continue
       }
       const raw = rawVectorsByKey.get(stem.key)
-      const suggestedBus = raw ? suggestBus(centroidStoreSnapshot, raw) : null
+      const suggestedBus = raw
+        ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null)
+        : null
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -368,36 +367,16 @@ export function ClusterStemsBrowser({
     void startPreview(new Set([stem.key]), stem.groupId, targetBar)
   }
 
-  // Folds every member's own raw feature vector into the centroid store
-  // and persists the result -- called from EVERY real confirm (both a
-  // suggestion accept and an ordinary DSP-cluster assign), so the
-  // classifier keeps learning from all real tidy-up activity, not just
-  // from the suggestion flow specifically. A no-op if `computed` hasn't
-  // resolved yet (shouldn't happen -- assignCluster is only reachable once
-  // rows are already showing, which implies feature extraction finished)
-  // or if every member is going to 'aux' (recordConfirmedStem's own no-op,
-  // see busCentroids.ts).
-  function trainCentroids(members: ClusterableStem[], busId: BusId): void {
-    if (!computed) return
-    let nextStore = centroidStore
-    for (const m of members) {
-      const raw = computed.rawVectorsByKey.get(m.key)
-      if (raw) nextStore = recordConfirmedStem(nextStore, busId, raw)
-    }
-    if (nextStore !== centroidStore) {
-      setCentroidStore(nextStore)
-      void window.rifffApi.saveBusCentroids(nextStore)
-    }
-  }
-
   // Forward-captures every member's BusId into the library-wide
-  // StemCategories table (design spec §2) -- fire-and-forget, mirrors how
-  // trainCentroids above already sits alongside the ASSIGN_STEMS_TO_BUS
-  // dispatch rather than blocking on it. Uses each member's own `path`
-  // (content-addressed by StemCID for a real library stem -- see
-  // stemCategoriesStore.ts's own doc comment); a member whose path doesn't
-  // resolve to a real StemCID is silently skipped by the main-process side,
-  // not an error here.
+  // StemCategories table (design spec §2) -- fire-and-forget, sits alongside
+  // the ASSIGN_STEMS_TO_BUS dispatch rather than blocking on it. This call
+  // is also what triggers server-side centroid training (see
+  // categoryCentroidTraining.ts, wired into the upsert-stem-category-bus IPC
+  // handler) -- there is no client-side training left to mirror. Uses each
+  // member's own `path` (content-addressed by StemCID for a real library
+  // stem -- see stemCategoriesStore.ts's own doc comment); a member whose
+  // path doesn't resolve to a real StemCID is silently skipped by the
+  // main-process side, not an error here.
   function recordBusCategories(members: ClusterableStem[], busId: BusId): void {
     void window.rifffApi.upsertStemCategoryBus(
       members.map((m) => ({ path: m.path, busId })),
@@ -418,7 +397,6 @@ export function ClusterStemsBrowser({
 
   function assignCluster(rowIndex: number, members: ClusterableStem[], busId: BusId): void {
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
-    trainCentroids(members, busId)
     recordBusCategories(members, busId)
     setCelebratingRow(rowIndex)
     window.setTimeout(() => {
@@ -452,7 +430,6 @@ export function ClusterStemsBrowser({
     busId: BusId
   ): void {
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
-    trainCentroids(members, busId)
     recordBusCategories(members, busId)
     setCelebratingSuggestedBus(suggestedBus)
     window.setTimeout(() => {
