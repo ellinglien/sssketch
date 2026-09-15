@@ -384,6 +384,24 @@ export function DiscoverPanel({
   // the moment resolution lands) -- `resolvedStemsRef` doesn't otherwise
   // track gain on its own, updateSlotGain below is what keeps it in sync
   // with LATER slider drags on an already-resolved slot.
+  //
+  // Real bug, found live (root cause of "stems aren't playing together
+  // anymore, just the new one" and "muting one slot affects a different
+  // one"): this function is invoked from EACH ROW's own useEffect, which
+  // deliberately does NOT depend on onResolvedChange itself (only on
+  // resolvedStem, see DiscoverSlotRow's own effect below) -- so the
+  // CLOSURE this callback runs with is whichever one was captured the
+  // last time THIS row's resolvedStem changed, not necessarily the most
+  // recent DiscoverPanel render. With real rolls now taking many seconds
+  // (a slow, still-being-optimized IPC round trip), it's very likely for
+  // ANOTHER slot to be added/resolved in the meantime -- a resolution
+  // landing through a stale closure read a STALE `previewingSlotIds`
+  // (missing whatever joined since), then wrote its own smaller/wrong
+  // set back over the real one via setPreviewingSlotIds, silently
+  // dropping other slots from the mix. previewingSlotIdsRef (below) was
+  // already built for exactly this class of bug -- updateSlotGain's own
+  // debounced restart already uses it -- this just applies the SAME fix
+  // here, the other place a real staleness window exists.
   function reportSlotResolution(
     id: string,
     stem: { path: string; durationSec: number; barLength: number } | null
@@ -405,13 +423,14 @@ export function DiscoverPanel({
         return next
       })
     }
-    if (stem && !previewingSlotIds.has(id)) {
-      const next = new Set(previewingSlotIds).add(id)
+    const currentlyPreviewing = previewingSlotIdsRef.current
+    if (stem && !currentlyPreviewing.has(id)) {
+      const next = new Set(currentlyPreviewing).add(id)
       setPreviewingSlotIds(next)
       restartMix(next, false)
       return
     }
-    if (previewingSlotIds.has(id)) restartMix(previewingSlotIds, false)
+    if (currentlyPreviewing.has(id)) restartMix(currentlyPreviewing, false)
   }
 
   // Live-updates a slot's own committed gain -- both in `slots` state (so
