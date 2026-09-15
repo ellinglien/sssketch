@@ -1185,22 +1185,21 @@ export function DiscoverPanel({
           same "one <style> tag for the whole list" convention
           ClusterStemsBrowser.tsx's own row-assignment pulse animation
           already uses. discover-slot-pulse (opacity-only) is still used for
-          the FAILED state -- a static "this stopped" cue. Direct request
-          ("like a slot machine loading animation until a new waveform
-          appears"): the RESOLVING state instead gets discover-slot-reel, a
-          striped bar pattern sliding horizontally -- no real waveform data
-          exists yet to show, so this fakes the shape of one spinning past,
-          same spirit as Upcycle's own reel animation, drawn with this
-          app's existing dim/bright tokens rather than a literal fruit-reel
-          graphic. */}
+          the FAILED state -- a static "this stopped" cue.
+          discover-slot-reel-scroll drives SlotReelColumn's own vertical
+          symbol strips (see that component's own doc comment) -- a real
+          multi-column reel (direct reference, 2026-09-15: johakr/
+          html5-slot-machine and atlanteh/react-native-slot-machine),
+          replacing an earlier single striped-bar-pattern version that read
+          as a generic loading texture rather than an actual slot machine. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
         }
-        @keyframes discover-slot-reel {
-          from { background-position: 0 0; }
-          to { background-position: -28px 0; }
+        @keyframes discover-slot-reel-scroll {
+          from { transform: translateY(0); }
+          to { transform: translateY(-50%); }
         }
         /* DiceIcon/ShuffleIcon's own spin while a roll/reroll is actually
            in flight -- a full rotation plus a little overshoot-and-settle
@@ -1544,6 +1543,104 @@ function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
       <path d="M13 3.5 l2 2 l-2 2" />
       <path d="M9.6 6.6 l0.8 -0.9 a3 3 0 0 1 2.2 -1 h1.5" />
     </svg>
+  )
+}
+
+// Four simple, geometrically-safe glyphs cycled through the reel columns
+// below -- unlike a real slot machine's fruit/number symbols there's no
+// "winning combination," these just need to read as visually distinct
+// shapes scrolling past. Drawn as plain geometric primitives (rects/
+// circles/lines) rather than anything more illustrative (a musical note,
+// say) specifically because those render reliably correct without a
+// browser to visually proof them against, matching this file's own
+// established preference for simple, safe SVG geometry (LockGlyph/
+// DiceIcon/ShuffleIcon above).
+function SlotReelSymbol({ kind }: { kind: 0 | 1 | 2 | 3 }): React.JSX.Element {
+  switch (kind) {
+    case 0: // a tiny bar cluster -- echoes a waveform blip
+      return (
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
+          <rect x="1" y="6" width="2.6" height="7" />
+          <rect x="5.7" y="1.5" width="2.6" height="11.5" />
+          <rect x="10.4" y="8.5" width="2.6" height="4.5" />
+        </svg>
+      )
+    case 1:
+      return (
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 14 14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+        >
+          <circle cx="7" cy="7" r="5" />
+        </svg>
+      )
+    case 2:
+      return (
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
+          <rect x="3" y="3" width="8" height="8" transform="rotate(45 7 7)" />
+        </svg>
+      )
+    default: // spark -- four short lines radiating from center
+      return (
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 14 14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        >
+          <path d="M7 1 V4.2 M7 9.8 V13 M1 7 H4.2 M9.8 7 H13 M2.6 2.6 L4.7 4.7 M9.3 9.3 L11.4 11.4 M11.4 2.6 L9.3 4.7 M4.7 9.3 L2.6 11.4" />
+        </svg>
+      )
+  }
+}
+
+// One column of DiscoverSlotRow's own resolving-placeholder reel (below) --
+// a vertically-scrolling strip of SlotReelSymbol glyphs, alternating the
+// same dim/bright two-tone treatment the old single-stripe version used.
+// The strip renders its own symbol sequence TWICE back to back and
+// animates translateY from 0 to -50% -- a seamless loop regardless of the
+// strip's real rendered height, rather than hand-tuning a fixed pixel
+// distance per column. `durationMs` varies per column (see its own
+// callers) so the columns visibly desync from each other, reading as
+// independent spinning reels rather than one uniform block moving in
+// lockstep -- the real behavior actual slot machines (and both of
+// Elling's own reference links) have.
+function SlotReelColumn({
+  symbols,
+  durationMs
+}: {
+  symbols: (0 | 1 | 2 | 3)[]
+  durationMs: number
+}): React.JSX.Element {
+  const doubled = [...symbols, ...symbols]
+  return (
+    <div style={{ width: 13, height: '100%', overflow: 'hidden', flexShrink: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 8,
+          animation: `discover-slot-reel-scroll ${durationMs}ms linear infinite`
+        }}
+      >
+        {doubled.map((kind, i) => (
+          <span
+            key={i}
+            style={{ color: i % 2 === 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)' }}
+          >
+            <SlotReelSymbol kind={kind} />
+          </span>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -1968,6 +2065,11 @@ function DiscoverSlotRow({
             flex: '1 1 auto',
             minWidth: 140,
             height: 40,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            overflow: 'hidden',
             border: `1px dashed ${
               resolving
                 ? 'var(--ra-stretch-on)'
@@ -1975,20 +2077,24 @@ function DiscoverSlotRow({
                   ? 'var(--ra-mute-on)'
                   : 'var(--ra-border)'
             }`,
-            // Slot-machine reel while genuinely resolving -- a striped bar
-            // pattern sliding horizontally, since there's no real waveform
-            // to show yet. Static (no background/animation) once settled
-            // either way (failed or truly empty).
-            backgroundImage: resolving
-              ? 'repeating-linear-gradient(90deg, var(--ra-text-4) 0px, var(--ra-text-4) 2px, transparent 2px, transparent 7px, var(--ra-stretch-on) 7px, var(--ra-stretch-on) 9px, transparent 9px, transparent 14px, var(--ra-text-4) 14px, var(--ra-text-4) 17px, transparent 17px, transparent 28px)'
-              : undefined,
-            animation: resolving
-              ? 'discover-slot-reel 700ms linear infinite'
-              : resolveFailed
-                ? 'discover-slot-pulse 900ms ease-in-out infinite'
-                : undefined
+            // Real multi-column slot-machine reel while genuinely
+            // resolving (direct reference, 2026-09-15: johakr/
+            // html5-slot-machine, atlanteh/react-native-slot-machine) --
+            // see SlotReelColumn's own doc comment. Static (no animation)
+            // once settled either way (failed or truly empty).
+            animation: resolveFailed ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
           }}
-        />
+        >
+          {resolving && (
+            <>
+              <SlotReelColumn symbols={[0, 1, 2, 3]} durationMs={550} />
+              <SlotReelColumn symbols={[2, 3, 0, 1]} durationMs={680} />
+              <SlotReelColumn symbols={[1, 0, 3, 2]} durationMs={480} />
+              <SlotReelColumn symbols={[3, 2, 1, 0]} durationMs={620} />
+              <SlotReelColumn symbols={[0, 3, 1, 2]} durationMs={590} />
+            </>
+          )}
+        </div>
       )}
       {/* Direct request, 2026-09-15: "waveforms should have a fixed area
           they occupy... right now the different names change the width of
