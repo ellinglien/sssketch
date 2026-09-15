@@ -22,6 +22,17 @@ export interface PreviewStemInput {
    * perfectly in sync. Optional so a caller without this metadata handy
    * still gets the old (buffer-length) behavior rather than a type error. */
   durationSec?: number
+  /** Buffer offset (seconds) to START playback from, instead of the loop's
+   * own beginning -- direct request, 2026-09-15: "any button press...
+   * triggers the samples to start from the beginning." DiscoverPanel's own
+   * restartMix uses this so a source joining an ALREADY-PLAYING mix (an
+   * unmute, a reroll landing new audio) starts phase-aligned to wherever
+   * the rest of the tempo-synced mix already is in its own loop, rather
+   * than audibly retriggering at position 0 out of sync with everyone
+   * else. Must be < durationSec (or < the decoded buffer's own duration
+   * when durationSec is unset) to land within one loop's own length;
+   * defaults to 0 (start of buffer), the previous, only behavior. */
+  startOffsetSec?: number
 }
 
 /** One started preview source, paired with its own GainNode and the
@@ -77,7 +88,7 @@ async function buildPreviewSources(
     gainNode.gain.value = stem.gain ?? 1
     source.connect(gainNode)
     gainNode.connect(ctx.destination)
-    source.start(0)
+    source.start(0, Math.max(0, stem.startOffsetSec ?? 0))
     pairs.push({ source, gainNode, stem })
   }
   return pairs

@@ -261,16 +261,44 @@ export function DiscoverPanel({
   const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number; gain: number }>>(
     new Map()
   )
-  const previewSourcesRef = useRef<PreviewSourceWithGain[]>([])
-  // Direct request, 2026-09-15: "dragging envelope/volume shouldn't
-  // retrigger start of samples... should not affect playhead." Maps each
-  // CURRENTLY-mixed slot's own id to its real, live GainNode -- rebuilt
-  // every restartMix, below -- so updateSlotGain can set `.gain.value`
-  // directly instead of tearing down and re-starting the whole mix just
-  // to change one slot's own level (previously audible as every OTHER
-  // slot's own loop position visibly jumping back to its start).
-  const gainNodesBySlotIdRef = useRef<Map<string, GainNode>>(new Map())
-  const previewGenerationRef = useRef(0)
+  // Every slot CURRENTLY in the playing mix, keyed by slot id -- one
+  // {source, gainNode, stem} triple per slot, the same shape
+  // startPreviewLoopWithGain itself returns. Direct request, 2026-09-15:
+  // "dragging envelope/volume shouldn't retrigger start of samples...
+  // should not affect playhead" and, a second real bug found live right
+  // after: "any button press on there triggers the samples to start from
+  // the beginning... it's not just the envelope adjust." Root cause of
+  // BOTH: restartMix (below) used to unconditionally stop EVERY currently-
+  // playing source and rebuild the whole mix from scratch on every single
+  // call -- muting one slot, a reroll landing for one slot, anything --
+  // audible as every OTHER already-playing slot's own loop position
+  // jumping back to 0, not just the one that actually changed. Keyed by id
+  // (not a flat array) so restartMix can diff "what's already correctly
+  // playing" against "what should be playing" and touch only the slots
+  // that actually changed -- see restartMix's own doc comment below for
+  // the full incremental-sync design. updateSlotGain also reads this
+  // directly (`.get(id)?.gainNode`) to set `.gain.value` live without
+  // going through restartMix at all.
+  const mixPairsRef = useRef<Map<string, PreviewSourceWithGain>>(new Map())
+  // Per-slot generation counter for restartMix's own async joins, mirroring
+  // stretchGenerationRef's already-established pattern -- since restartMix
+  // no longer rebuilds the WHOLE mix on every call (see mixPairsRef's own
+  // doc comment), a single shared "generation" would wrongly cancel an
+  // unrelated slot's still-in-flight join the moment any OTHER slot's own
+  // restartMix call came in. Scoped per id instead: only a NEWER join for
+  // THE SAME slot supersedes an older one.
+  const mixJoinGenerationRef = useRef<Map<string, number>>(new Map())
+  // Set true by the unmount effect below, checked at the top of restartMix
+  // -- load-bearing, not defensive fluff: reportSlotResolution can itself
+  // trigger a fresh restartMix from a CHILD row's own cleanup effect firing
+  // during this SAME unmount pass (e.g. a reroll landing right as the panel
+  // closes). Without this guard that straggling call would still kick off
+  // a real async decode/start with no live component left to ever stop it
+  // again once it lands -- the exact leak previewGenerationRef used to
+  // guard against under the old single-shared-generation design, before
+  // restartMix became incremental/per-id (mixJoinGenerationRef, above) and
+  // a single generation stopped being the right tool for that job.
+  const unmountedRef = useRef(false)
   const previewTokenRef = useRef(0)
   // Reactive (unlike resolvedStemsRef) so the row waveforms' own tiled
   // width -- see DiscoverSlotRow's own `loopBars`/tileOffsetsPx usage below
@@ -298,35 +326,88 @@ export function DiscoverPanel({
   const [mixStartTime, setMixStartTime] = useState<number | null>(null)
 
   const stopSlotPreview = useCallback(() => {
-    stopPreviewSources(previewSourcesRef.current.map((p) => p.source))
-    previewSourcesRef.current = []
-    gainNodesBySlotIdRef.current = new Map()
+    stopPreviewSources([...mixPairsRef.current.values()].map((p) => p.source))
+    mixPairsRef.current = new Map()
+    setMixStartTime(null)
     unregisterActivePreview(previewTokenRef.current)
   }, [])
 
   useEffect(() => {
     return () => {
-      // Bumping the generation here (not just stopping current sources) is
-      // load-bearing: reportSlotResolution below can itself trigger a fresh
-      // restartMix (e.g. a row's own report-up effect cleanup firing during
-      // this SAME unmount pass, right as a reroll lands). Without this, that
-      // straggling restartMix's async decode has no generation bump ahead
-      // of it to invalidate it once it resolves -- it would still push
-      // sources, .start() them, and register them as the active preview
-      // with no component left alive to ever stop them again. Caught by
-      // independent review, not observed directly.
-      previewGenerationRef.current += 1
+      unmountedRef.current = true
       stopSlotPreview()
     }
   }, [stopSlotPreview])
 
+  /** Syncs the playing mix to exactly `ids` -- INCREMENTALLY, not a full
+   * stop-everyone/restart-everyone rebuild. Direct request, 2026-09-15,
+   * found live right after the gain-drag fix above: "any button press on
+   * there triggers the samples to start from the beginning... it's not
+   * just the envelope adjust." The old version unconditionally called
+   * stopSlotPreview() (stopping EVERY currently-playing source) before
+   * rebuilding the whole mix from `ids` -- so muting one slot, a reroll
+   * landing for one slot, or a slot being removed all reset every OTHER
+   * already-playing slot's own loop position back to 0, the exact same
+   * class of bug the gain fix addressed for volume drags specifically.
+   *
+   * Now: diff `ids` (what SHOULD be playing) against `mixPairsRef.current`
+   * (what IS playing) and only touch what actually changed --
+   *   - a currently-playing id no longer in `ids`, or whose own resolved
+   *     stem's path changed underneath it (a reroll landed different
+   *     audio for that slot) -> stop THAT ONE source only.
+   *   - an id in `ids` with no currently-playing source (newly muted-in,
+   *     or a reroll that changed its path) -> start a NEW source for JUST
+   *     that slot.
+   *   - an id in `ids` whose currently-playing source's own stem path is
+   *     unchanged -> left completely untouched, source/gainNode/playhead
+   *     all exactly as they were.
+   * Matched by `stem.path`, not object identity -- resolvedStemsRef gets a
+   * FRESH object on every land (including a gain-only update, via
+   * updateSlotGain), so identity would falsely treat every call as "this
+   * slot's audio changed."
+   *
+   * A newly-joining source is phase-aligned to the REST of the mix, not
+   * started at its own buffer position 0 -- every Discover stem is already
+   * tempo-synced to the same project tempo (see resolvePreviewAudio's own
+   * doc comment), so unmuting/rerolling one slot should sound like it's
+   * joining an in-progress, in-the-pocket loop, not retriggering from
+   * scratch out of phase with everyone else. `mixStartTime` is the shared
+   * anchor every row's own playhead sweep already reads (DiscoverSlotRow,
+   * below) -- reused here as "how far into its own loop should a NEW
+   * source start" (elapsed-time-mod-its-own-durationSec, same formula the
+   * sweep itself uses). */
   const restartMix = useCallback(
     (ids: Set<string>, pauseTransportIfPlaying: boolean) => {
-      previewGenerationRef.current += 1
-      const generation = previewGenerationRef.current
-      stopSlotPreview()
-      const stemsWithIds = [...ids]
+      if (unmountedRef.current) return
+      if (pauseTransportIfPlaying && playing) dispatch({ type: 'PAUSE' })
+
+      const currentPairs = mixPairsRef.current
+      for (const [id, pair] of [...currentPairs]) {
+        const stem = ids.has(id) ? resolvedStemsRef.current.get(id) : undefined
+        if (!stem || stem.path !== pair.stem.path) {
+          stopPreviewSources([pair.source])
+          currentPairs.delete(id)
+        }
+      }
+      // Captured BEFORE the async join below lands -- whether this call's
+      // new source(s) will be the ONLY thing playing once they land, i.e.
+      // whether this component needs to (re-)register itself as the
+      // active preview. registerActivePreview() unconditionally stops
+      // whatever was PREVIOUSLY registered before installing the new stop
+      // function -- fine under the old full-rebuild design (its own
+      // explicit stopSlotPreview() at the top had already cleared the
+      // registry every time), but real bug found while writing this
+      // incremental version: re-registering on every subsequent
+      // incremental join (this component's OWN stopSlotPreview already
+      // being the registered one from an earlier join) would immediately
+      // invoke that same stopSlotPreview and stop the sources this exact
+      // call just added. Only register once, when the mix is transitioning
+      // from empty to non-empty.
+      const hadNoSources = currentPairs.size === 0
+
+      const toStart = [...ids]
         .map((id) => {
+          if (currentPairs.has(id)) return null // already playing this exact audio, untouched
           const stem = resolvedStemsRef.current.get(id)
           return stem ? { id, stem } : null
         })
@@ -334,56 +415,76 @@ export function DiscoverPanel({
           (x): x is { id: string; stem: { path: string; durationSec: number; gain: number } } =>
             x !== null
         )
-      if (stemsWithIds.length === 0) {
-        setMixStartTime(null)
+
+      if (toStart.length === 0) {
+        if (currentPairs.size === 0) setMixStartTime(null)
         return
       }
+
+      const ctx = getAudioContext()
+      const anchor = mixStartTime
+      const myGenerations = new Map(
+        toStart.map(({ id }) => [id, (mixJoinGenerationRef.current.get(id) ?? 0) + 1])
+      )
+      for (const [id, gen] of myGenerations) mixJoinGenerationRef.current.set(id, gen)
+
+      const stemsToStart = toStart.map(({ stem }) => ({
+        ...stem,
+        startOffsetSec:
+          anchor !== null && stem.durationSec > 0
+            ? (((ctx.currentTime - anchor) % stem.durationSec) + stem.durationSec) %
+              stem.durationSec
+            : 0
+      }))
       // Object IDENTITY, not path/id string matching -- each stem object
-      // below is constructed exactly once, right here, so comparing by
+      // above is constructed exactly once, right here, so comparing by
       // reference is safe and avoids assuming stem.path is unique (two
       // slots could in principle resolve the same candidate).
       const stemToId = new Map<PreviewStemInput, string>(
-        stemsWithIds.map(({ id, stem }) => [stem, id])
+        toStart.map(({ id }, i) => [stemsToStart[i], id])
       )
-      const stems = stemsWithIds.map(({ stem }) => stem)
-      // Same "don't let a preview and the real arranger transport play at
-      // once" courtesy Shelf.tsx's own tile-click preview already gives --
-      // auditioning a Discover loop while the project is mid-playback would
-      // otherwise layer a second, unrelated loop on top. Only for a direct
-      // user toggle, though (pauseTransportIfPlaying) -- reportSlotResolution
-      // below also calls restartMix, but purely to swap a landed reroll's
-      // audio into an already-playing mix, with no click of the user's own
-      // to explain a sudden transport pause; gating this to the explicit
-      // toggle path keeps that background swap silent on the transport.
-      if (pauseTransportIfPlaying && playing) dispatch({ type: 'PAUSE' })
+
       void startPreviewLoopWithGain(
-        getAudioContext(),
-        stems,
-        () => previewGenerationRef.current !== generation
+        ctx,
+        stemsToStart,
+        () =>
+          unmountedRef.current ||
+          [...myGenerations].every(([id, gen]) => mixJoinGenerationRef.current.get(id) !== gen)
       ).then((pairs) => {
-        if (previewGenerationRef.current !== generation) {
+        if (unmountedRef.current) {
           stopPreviewSources(pairs.map((p) => p.source))
           return
         }
-        previewSourcesRef.current.push(...pairs)
-        const newGainNodes = new Map<string, GainNode>()
+        let joined = false
         for (const pair of pairs) {
           const id = stemToId.get(pair.stem)
-          if (id) newGainNodes.set(id, pair.gainNode)
+          if (!id || mixJoinGenerationRef.current.get(id) !== myGenerations.get(id)) {
+            // Superseded (a newer restartMix call already replaced this
+            // specific slot) -- stop just this one stale source.
+            stopPreviewSources([pair.source])
+            continue
+          }
+          mixPairsRef.current.set(id, pair)
+          joined = true
         }
-        gainNodesBySlotIdRef.current = newGainNodes
-        if (pairs.length > 0) {
-          previewTokenRef.current = registerActivePreview(stopSlotPreview)
-          // Approximate, not sample-accurate -- good enough for a visual
-          // lap indicator, off by at most the time this .then() callback
-          // took to run after the sources' own .start(0) calls inside
-          // startPreviewLoopWithGain (same microtask tick, no await
-          // between).
-          setMixStartTime(getAudioContext().currentTime)
+        if (joined) {
+          // See hadNoSources's own doc comment above -- only register (and
+          // thus only stop whatever ELSE was previously active) the first
+          // time this mix goes from empty to non-empty, never on a later
+          // incremental join into an already-registered, already-playing
+          // mix.
+          if (hadNoSources) previewTokenRef.current = registerActivePreview(stopSlotPreview)
+          // First-ever source in the mix sets the shared phase anchor --
+          // `prev ?? ctx.currentTime` (not an unconditional set) so a
+          // later join can never stomp the anchor everyone else is already
+          // playing against.
+          setMixStartTime((prev) => prev ?? ctx.currentTime)
+        } else if (mixPairsRef.current.size === 0) {
+          setMixStartTime(null)
         }
       })
     },
-    [stopSlotPreview, playing, dispatch]
+    [stopSlotPreview, playing, dispatch, mixStartTime]
   )
 
   function toggleSlotPreview(id: string): void {
@@ -551,14 +652,14 @@ export function DiscoverPanel({
   // source in the mix), audible as every OTHER currently-playing slot's own
   // loop position jumping back to 0, not just the one being dragged. Now
   // that startPreviewLoopWithGain exposes each source's own GainNode
-  // (gainNodesBySlotIdRef, populated by restartMix), a drag just writes
+  // (mixPairsRef, populated by restartMix), a drag just writes
   // `.gain.value` directly on this one slot's node -- genuinely live,
   // zero-latency, and touches nothing else's playback position.
   function updateSlotGain(id: string, gain: number): void {
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, gain } : s)))
     const existing = resolvedStemsRef.current.get(id)
     if (existing) resolvedStemsRef.current.set(id, { ...existing, gain })
-    const gainNode = gainNodesBySlotIdRef.current.get(id)
+    const gainNode = mixPairsRef.current.get(id)?.gainNode
     if (gainNode) gainNode.gain.value = gain
   }
 
@@ -1550,7 +1651,30 @@ function DiscoverSlotRow({
           }}
         />
       )}
-      <span style={{ fontSize: 9, color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)' }}>
+      {/* Direct request, 2026-09-15: "waveforms should have a fixed area
+          they occupy... right now the different names change the width of
+          the thing as well." Root cause: this span had no width of its own,
+          so as a plain flex sibling of the waveform's `flex: 1 1 auto` box
+          it took exactly as much room as its own text needed -- a long
+          preset name ("hybrid cine") ate into the waveform's remaining
+          flex space, a short one ("fiin") didn't, so every row's waveform
+          rendered at a different width even though every row uses the SAME
+          maxBarLength/tileOffsetsPx proportional-tiling math above. A fixed
+          width (with ellipsis overflow, same convention as the role label
+          span just above) keeps this span's own footprint constant across
+          every row, so the waveform's flex-grow area -- and therefore its
+          tile width -- is identical row to row regardless of name length. */}
+      <span
+        style={{
+          fontSize: 9,
+          color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)',
+          width: 110,
+          flexShrink: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}
+      >
         {rerolling
           ? slot.candidate
             ? 'rerolling…'
