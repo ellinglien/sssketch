@@ -150,13 +150,17 @@ const MIN_SAMPLES_PER_CATEGORY = 3
 
 // The nearest category must be at least this much closer than the
 // SECOND-nearest (on the SAME axis) to count as a confident suggestion.
-// Loosened from the original 0.7 (2026-09-14, direct request after real-
-// library testing showed suggestions firing too rarely to be useful in
-// practice at 0.7 -- verified against Elling's own live library that this
-// value roughly doubles the suggestion rate) -- a real accuracy/coverage
-// trade-off, not a bug fix: more borderline cases now get suggested, some
-// of which will be wrong and need correcting by hand.
-const CONFIDENCE_RATIO = 0.85
+// Loosened from 0.7 to 0.85 (2026-09-14, direct request after real-library
+// testing showed suggestions firing too rarely to be useful in practice at
+// 0.7), then to 0.95 (2026-09-15, direct request after diagnostic logging
+// against Elling's own live, trained arrangeRole data -- against a real
+// ~45,000-stem backlog -- showed nearest/second-nearest ratios clustering
+// tightly between 0.86 and 0.96, consistently just above 0.85, on
+// effectively every remaining sample). Each loosening is the same real
+// accuracy/coverage trade-off, not a bug fix: more borderline cases now
+// get suggested, some of which will be wrong and need correcting by hand
+// via Tidy Up.
+const CONFIDENCE_RATIO = 0.95
 
 function standardize(vector: number[], stats: GlobalStats): number[] {
   return vector.map((v, d) => {

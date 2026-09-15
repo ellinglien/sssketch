@@ -29,14 +29,16 @@ const MIN_CATEGORIES_FOR_SUGGESTION = 2
 // similarity's own [-1, 1] range doesn't have a natural ratio
 // interpretation the way a Euclidean distance ratio does).
 //
-// NOT YET VALIDATED against real YAMNet embeddings (2026-09-14 code quality
-// review) -- this module's own tests use clean, orthogonal synthetic
-// vectors (0.0 vs ~0.99 similarity), but real embeddings of genuinely
-// different sounds may cluster far more tightly than that. Likely needs
-// the same live-data tuning pass CONFIDENCE_RATIO got (see
-// categoryCentroids.ts's own 0.7->0.85 fix, 2026-09-14) once real confirmed
-// embeddings exist to test against -- don't treat 0.05 as validated.
-const SIMILARITY_MARGIN = 0.05
+// Loosened from the original 0.05 (2026-09-15, direct request after real-
+// library testing against a real ~45,000-stem backlog showed the original
+// value declining on effectively EVERY remaining sample -- diagnostic
+// logging against Elling's own live, trained data showed real observed
+// margins clustered well under 0.05, several in the 0.02-0.034 range that
+// a slightly looser bar would confidently accept). Same accuracy/coverage
+// trade-off as categoryCentroids.ts's own 0.7->0.85 fix, not a bug fix:
+// more of the remaining backlog now gets auto-categorized, some of which
+// will be wrong and need correcting by hand via Tidy Up.
+const SIMILARITY_MARGIN = 0.02
 
 function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0
