@@ -1228,7 +1228,27 @@ function DiscoverSlotRow({
               envelope uses), with a thin line marking the exact cutoff. */}
           {(() => {
             const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
-            const stemBarLength = resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
+            const rawStemBarLength = resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
+            // Real crash, found live: tileOffsetsPx's own tile count is
+            // Math.ceil(loopBars / stemBarLength) with NO upper bound.
+            // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
+            // tiles a rifff against ITS OWN stem's barLength -- both numbers
+            // come from the same already-authored, already-coherent riff,
+            // so their ratio is naturally bounded in practice. Discover's
+            // own loopBars is a DIFFERENT slot's barLength entirely (the
+            // longest one currently resolved anywhere in the loop) -- an
+            // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
+            // an unrelated 32-bar backing loop can drive that ratio into
+            // the hundreds or thousands, each tile mounting a real
+            // <Waveform> (itself dozens of SVG rects) -- enough of those at
+            // once genuinely hung/crashed the renderer. Clamping the
+            // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
+            // count outright; past that point the tiling is an
+            // approximation (fewer, slightly wider tiles than the stem's
+            // true native loop length), which is a fully acceptable
+            // trade-off for "doesn't crash."
+            const MAX_TILES = 24
+            const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
             const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
             const tileWidthPct = 100 * (stemBarLength / loopBars)
             const gainClipPct = (1 - slot.gain) * 100
