@@ -143,6 +143,7 @@ function getRiffLibraryDb(): Database.Database | null {
 function closeRiffLibraryDb(): void {
   cachedDb?.close()
   cachedDb = null
+  cachedJamsWithDb = null
 }
 
 export function riffLibraryAvailable(): boolean {
@@ -221,18 +222,44 @@ export function listJams(filterText: string): RiffLibraryJam[] {
   return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }
 
+// TTL cache for listJamsWithDb, below -- direct live report: even after
+// discoverCandidates.ts's own perf fixes (a same-day series of real,
+// measured bottlenecks), rolling still took several real seconds every
+// time, and the remaining cost traced back to THIS function -- a real
+// JOIN+GROUP BY+ORDER BY over the whole Jams/Riffs tables (listJams's
+// own queryJamsFromDb), re-run from scratch on EVERY single roll (each
+// of get-discover-candidates/get-random-discover-candidate/
+// get-discover-library-scan-targets calls this fresh, uncached, every
+// time -- see main/index.ts's own call sites, the ONLY callers of this
+// function in the whole codebase, all Discover-related). Confirmed live:
+// 53ms-1.4s per call on a real 5,057-jam library, non-trivial and fully
+// avoidable, since the real jam list doesn't change on human timescales
+// (LORE sync isn't running every second). Invalidated by
+// closeRiffLibraryDb (above) -- switching riff archive roots must never
+// serve a stale jam list from the PREVIOUS archive.
+const JAMS_WITH_DB_CACHE_TTL_MS = 60_000
+let cachedJamsWithDb: {
+  jams: { jamCID: string; db: Database.Database }[]
+  computedAt: number
+} | null = null
+
 /** Resolves every currently-synced jam to the db its own Riffs/Stems rows
  * actually live in -- Discover's own library-wide candidate query
  * (discoverCandidates.ts) needs exactly this {jamCID, db} pairing, and
  * `dbForJam` above is this module's own established per-jam resolution
  * logic, just not previously exposed outside this file. */
 export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
-  return listJams('')
+  if (cachedJamsWithDb && Date.now() - cachedJamsWithDb.computedAt < JAMS_WITH_DB_CACHE_TTL_MS) {
+    return cachedJamsWithDb.jams
+  }
+  const jams = listJams('')
     .map((jam) => {
       const db = dbForJam(jam.jamCID)
       return db ? { jamCID: jam.jamCID, db } : null
     })
     .filter((pair): pair is { jamCID: string; db: Database.Database } => pair !== null)
+  cachedJamsWithDb = { jams, computedAt: Date.now() }
+  return jams
 }
 
 interface RiffRow {

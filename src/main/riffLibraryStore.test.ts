@@ -887,6 +887,44 @@ describe('listJamsWithDb', () => {
     expect(listJamsWithDb()).toEqual([])
   })
 
+  // Real perf bug, found live: even after discoverCandidates.ts's own
+  // series of same-day perf fixes, rolling still took several real
+  // seconds, tracing back to THIS function -- a real JOIN+GROUP BY+
+  // ORDER BY over the whole Jams/Riffs tables, re-run fresh on EVERY
+  // single roll (confirmed live: 53ms-1.4s per call on a real 5,057-jam
+  // library). Proves the fix: a second call within the TTL reuses the
+  // cached result, even when new data lands in between.
+  it('reuses a cached result on a second call within the TTL, even if new data would otherwise change it', async () => {
+    // A second listJamsWithDb() call (without the fix) also checks
+    // ownRiffLibraryRoot() (riffLibrarySchema.ts, via listJams's own
+    // "is the configured root the own db?" check) -- needs userDataDir
+    // set for this test specifically, same as the "shared-feed jam"
+    // tests below.
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-listjamswithdb-cache-test-'))
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+
+    const first = listJamsWithDb()
+    expect(first.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+
+    // A new jam lands directly in the warehouse file after the first call.
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-new', 'Brand New')`).run()
+    db.close()
+
+    const second = listJamsWithDb()
+    // Still the cached (stale) result -- the newly-added jam does not
+    // appear because it landed within the TTL window.
+    expect(second.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+
+    closeOwnRiffLibraryDb()
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
   describe('with a shared-feed jam involved', () => {
     let externalRoot: string
 
