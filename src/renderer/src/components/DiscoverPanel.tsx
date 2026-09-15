@@ -302,9 +302,7 @@ export function DiscoverPanel({
   // function needs the stem's real native tempo (durationSec/barLength) to
   // compute a fresh stretch ratio against the new bpm, which
   // resolvedStemsRef's already-stretched values can't provide.
-  const rawResolvedStemsRef = useRef<
-    Map<string, { path: string; durationSec: number; barLength: number }>
-  >(new Map())
+  const rawResolvedStemsRef = useRef<Map<string, ResolvedCandidateStem>>(new Map())
   // Every slot CURRENTLY in the playing mix, keyed by slot id -- one
   // {source, gainNode, stem} triple per slot, the same shape
   // startPreviewLoopWithGain itself returns. Direct request, 2026-09-15:
@@ -589,10 +587,7 @@ export function DiscoverPanel({
   // already built for exactly this class of bug -- updateSlotGain's own
   // debounced restart already uses it -- this just applies the SAME fix
   // here, the other place a real staleness window exists.
-  function reportSlotResolution(
-    id: string,
-    stem: { path: string; durationSec: number; barLength: number } | null
-  ): void {
+  function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
     if (stem) {
       rawResolvedStemsRef.current.set(id, stem)
       setResolvedBarLengths((prev) => {
@@ -658,10 +653,7 @@ export function DiscoverPanel({
    * values (Stem.durationSec/barLength) -- resolveStretchedForPlayback's
    * own result is what actually goes into resolvedStemsRef and the
    * preview mix, never the raw ones, once a real stretch was needed. */
-  async function resolvePreviewAudio(
-    id: string,
-    stem: { path: string; durationSec: number; barLength: number }
-  ): Promise<void> {
+  async function resolvePreviewAudio(id: string, stem: ResolvedCandidateStem): Promise<void> {
     const myGeneration = (stretchGenerationRef.current.get(id) ?? 0) + 1
     stretchGenerationRef.current.set(id, myGeneration)
 
@@ -1720,7 +1712,7 @@ function DiscoverSlotRow({
    * resolvedStemsRef and any currently-playing mix this slot is part of
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
-  onResolvedChange: (stem: { path: string; durationSec: number; barLength: number } | null) => void
+  onResolvedChange: (stem: ResolvedCandidateStem | null) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
