@@ -6,7 +6,7 @@ import { suggestCategory } from '@shared/categoryCentroids'
 import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
-import { getAllAutoCategorizedStemCIDs, upsertStemAutoCategory } from './stemAutoCategoryStore'
+import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 
 // How many stems ONE call classifies, per data source, before returning --
 // bounds a single call's own cost so the scheduler driving this (see
@@ -18,38 +18,91 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-// Real bug, found live (root cause of a "stuck" report -- progress frozen
-// at a small fraction of a real ~45,000-stem backlog, never advancing
-// across repeated checks): the original version of this function always
-// took `pendingIds.slice(0, BATCH_SIZE)` -- the SAME leading N ids, in
-// stable table order, every single call. Once that leading batch
-// contained BATCH_SIZE or more stems that never gets removed from
-// "pending" (e.g. a real contiguous run this large is common on the
-// embedding axis before it has ANY trained categories -- see the
-// `confirmedEmbeddings.length === 0` branch below, which spends zero
-// classify attempts on the WHOLE pending set), the slice window can never
-// advance past it -- the scheduler ticks every ~1s forever
-// (BUSY_DELAY_MS, stemAutoClassifyScheduler.ts, since `remaining` stays
-// > 0), but permanently starves every stem past that point in the table,
-// no matter how many of them WOULD classify successfully. A random
-// sample instead guarantees the whole pending pool gets explored over
-// many calls, so a batch of persistently-unclassifiable stems can never
-// permanently block classifiable ones elsewhere in the table. Shuffles
-// only as many elements as needed (partial Fisher-Yates via swap-to-end),
-// not the whole (potentially tens-of-thousands-long) pending array --
-// `items` here is only ever a list of bare StemCID strings, never the
-// heavy JSON payload, so this stays cheap even at real library scale. */
-function pickRandomBatch<T>(items: T[], size: number): T[] {
-  if (items.length <= size) return items
-  const pool = [...items]
-  const picked: T[] = []
-  for (let i = 0; i < size; i++) {
-    const idx = Math.floor(Math.random() * pool.length)
-    picked.push(pool[idx])
-    pool[idx] = pool[pool.length - 1]
-    pool.pop()
-  }
-  return picked
+interface EmbeddingCandidateRow {
+  StemCID: string
+  EmbeddingJSON: string
+}
+
+interface FeatureCandidateRow {
+  StemCID: string
+  FeaturesJSON: string
+}
+
+// Shared by both the count and fetch queries below -- a stem is eligible
+// for the EMBEDDING pass when it isn't already human-confirmed (ANY role)
+// and isn't already in StemAutoCategory. `e`/`f` is the outer table's own
+// alias (StemEmbeddingCache or StemFeatureCache).
+const EMBEDDING_ELIGIBILITY_WHERE = (alias: string): string => `
+  NOT EXISTS (SELECT 1 FROM StemCategories c WHERE c.StemCID = ${alias}.StemCID AND c.ArrangeRole IS NOT NULL)
+  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID)
+`
+
+// Same as above, PLUS excludes any stem that has an embedding at all --
+// real bug, found live (root cause of a sustained, WORSENING beachball at
+// real library scale, ~45,000 stems): the original version of this
+// function pulled the FULL id list from StemEmbeddingCache/
+// StemFeatureCache/StemAutoCategory into JS on EVERY SINGLE CALL (roughly
+// once a second, for as long as a real backlog remained) just to compute
+// which stems were eligible and to enforce "prefer embedding over
+// centroid, never re-attempt the same stem via both." Reading and
+// Set-building tens of thousands of rows a second, forever, is real,
+// sustained CPU/syscall cost -- confirmed live (10M+ Unix syscalls within
+// minutes of a fresh app launch, multiple recorded app hangs). Rewritten
+// so SQLite does the eligibility filtering, random sampling, AND
+// bounding directly (NOT EXISTS + ORDER BY RANDOM() + LIMIT) -- JS never
+// sees more than BATCH_SIZE StemCIDs, let alone the full pending
+// universe, on any single call. Excluding "has any embedding at all"
+// (not just "was in this call's own embedding batch") is a clean,
+// slightly SIMPLER restatement of the same "embedding preferred, never
+// re-attempted by centroid" invariant this function has always had --
+// a stem with an embedding waits for the embedding classifier
+// exclusively, whether or not THIS call's own embedding pass gets to it.
+const FEATURE_ELIGIBILITY_WHERE = (alias: string): string => `
+  ${EMBEDDING_ELIGIBILITY_WHERE(alias)}
+  AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)
+`
+
+function countPendingEmbeddings(ownDb: Database.Database): number {
+  return (
+    ownDb
+      .prepare(
+        `SELECT COUNT(*) AS n FROM StemEmbeddingCache e WHERE ${EMBEDDING_ELIGIBILITY_WHERE('e')}`
+      )
+      .get() as { n: number }
+  ).n
+}
+
+function fetchPendingEmbeddingBatch(
+  ownDb: Database.Database,
+  limit: number
+): EmbeddingCandidateRow[] {
+  return ownDb
+    .prepare(
+      `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache e
+       WHERE ${EMBEDDING_ELIGIBILITY_WHERE('e')}
+       ORDER BY RANDOM() LIMIT ?`
+    )
+    .all(limit) as EmbeddingCandidateRow[]
+}
+
+function countPendingFeatures(ownDb: Database.Database): number {
+  return (
+    ownDb
+      .prepare(
+        `SELECT COUNT(*) AS n FROM StemFeatureCache f WHERE ${FEATURE_ELIGIBILITY_WHERE('f')}`
+      )
+      .get() as { n: number }
+  ).n
+}
+
+function fetchPendingFeatureBatch(ownDb: Database.Database, limit: number): FeatureCandidateRow[] {
+  return ownDb
+    .prepare(
+      `SELECT StemCID, FeaturesJSON FROM StemFeatureCache f
+       WHERE ${FEATURE_ELIGIBILITY_WHERE('f')}
+       ORDER BY RANDOM() LIMIT ?`
+    )
+    .all(limit) as FeatureCandidateRow[]
 }
 
 export interface ClassifyBatchResult {
@@ -75,9 +128,11 @@ export interface ClassifyBatchResult {
  *
  * Prefers the EMBEDDING classifier over the DSP/centroid one when a stem
  * has both (described elsewhere this session as noticeably more
- * accurate) -- classified once, a stem is never re-attempted by the
- * OTHER source too. Skips anything already confirmed (StemCategories) for
- * ANY role -- a real human confirmation needs no auto-guess, same
+ * accurate) -- a stem with ANY cached embedding is excluded from the
+ * feature/centroid pass entirely (FEATURE_ELIGIBILITY_WHERE, above),
+ * whether or not the embedding pass actually gets to classify it THIS
+ * call. Skips anything already confirmed (StemCategories) for ANY role --
+ * a real human confirmation needs no auto-guess, same
  * cross-role-leakage-avoidance convention discoverCandidates.ts's own
  * (now-retired at query time, but still real) widening sources used.
  *
@@ -87,15 +142,23 @@ export interface ClassifyBatchResult {
  * (more Tidy Up confirmations over time can make a previously-unplaceable
  * stem classifiable later) at the cost of some repeated work on stems
  * that stay unclassifiable indefinitely. Each call's own batch is a
- * RANDOM sample of the pending pool (pickRandomBatch, below), not always
- * the same leading N in table order -- a real live bug found this way:
- * a deterministic "first N" batch can get permanently stuck retrying the
- * exact same unclassifiable stems forever once they out-number
- * BATCH_SIZE, starving every classifiable stem elsewhere in a real
- * multi-thousand-stem table. Random sampling means the WHOLE pool gets
- * explored across enough calls, so no fixed subset can block the rest
- * indefinitely -- an accepted "eventually consistent, not perfectly
- * efficient" tradeoff, same as elsewhere in this session's own work.
+ * RANDOM sample of the pending pool (`ORDER BY RANDOM() LIMIT`, done by
+ * SQLite directly), not a deterministic "first N" -- a real live bug
+ * found this way: a deterministic batch can get permanently stuck
+ * retrying the exact same unclassifiable stems forever once they
+ * out-number BATCH_SIZE, starving every classifiable stem elsewhere in a
+ * real multi-thousand-stem table.
+ *
+ * Every eligibility/random/bound decision happens IN SQL (NOT EXISTS +
+ * ORDER BY RANDOM() + LIMIT) -- JS never materializes the full pending id
+ * universe, only ever the >= BATCH_SIZE rows actually selected for this
+ * call. A real, live perf bug this specifically fixes: the original
+ * version of this function read every row of StemEmbeddingCache/
+ * StemFeatureCache/StemAutoCategory into a JS array and built Sets from
+ * them on EVERY call, once a second, for as long as a real backlog
+ * remained -- tens of thousands of row reads a second, confirmed live via
+ * 10M+ Unix syscalls within minutes of a fresh launch and multiple
+ * recorded app hangs.
  *
  * `.all()`, never `.iterate()` -- same "never leave a SQLite statement
  * open across an await" discipline as every other bulk read added this
@@ -113,58 +176,30 @@ export interface ClassifyBatchResult {
  * pass (one commit for up to 200 writes, not 200) is the same pattern
  * this codebase already uses elsewhere for bulk writes (riffLibrarySync.ts).
  * A transaction callback must stay fully synchronous -- better-sqlite3
- * throws if it ever returns a promise -- so this function now yields
- * ONCE per pass (after its own transaction commits) rather than per row;
- * a single up-to-200-row synchronous stretch of classify math plus one
- * batched write is the same "acceptable cost in one stretch" assumption
- * the old per-row yield threshold already relied on. */
+ * throws if it ever returns a promise -- so this function yields ONCE per
+ * pass (after its own transaction commits) rather than per row; a single
+ * up-to-200-row synchronous stretch of classify math plus one batched
+ * write is an acceptable cost in one stretch, the same assumption the
+ * old per-row yield threshold always relied on. */
 export async function classifyAutoCategoryBatch(
   ownDb: Database.Database
 ): Promise<ClassifyBatchResult> {
-  const confirmedAnyRole = new Set(
-    (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
-  )
-
   let processed = 0
   let remaining = 0
 
   // --- Embedding pass (preferred) ---
-  const alreadyDone = getAllAutoCategorizedStemCIDs(ownDb)
-  // StemCID only, not the heavy EmbeddingJSON payload (a 1024-dim float
-  // array per row, per embeddingMatch.ts's own doc comment) -- this needs
-  // to know the FULL pending id set every call (for pickRandomBatch above
-  // and the cross-pass exclusion below), but has no reason to pull and
-  // JSON-parse every pending stem's own embedding on every single call,
-  // only the ones actually selected for this call's batch (fetched
-  // separately, below, bounded to at most BATCH_SIZE).
-  const embeddingIdRows = ownDb.prepare(`SELECT StemCID FROM StemEmbeddingCache`).all() as {
-    StemCID: string
-  }[]
-  const pendingEmbeddingIds = embeddingIdRows
-    .map((r) => r.StemCID)
-    .filter((id) => !confirmedAnyRole.has(id) && !alreadyDone.has(id))
-
-  if (pendingEmbeddingIds.length > 0) {
+  const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
+  if (pendingEmbeddingCount > 0) {
     const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
     // Nothing trained yet on this axis -- every call would return null;
     // count these as "remaining" (there's real work waiting, just not
     // doable yet) without spending a single classify call on them.
     if (confirmedEmbeddings.length === 0) {
-      remaining += pendingEmbeddingIds.length
+      remaining += pendingEmbeddingCount
     } else {
-      const batchIds = pickRandomBatch(pendingEmbeddingIds, BATCH_SIZE)
-      remaining += pendingEmbeddingIds.length - batchIds.length
+      const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
+      remaining += Math.max(0, pendingEmbeddingCount - batchRows.length)
       const now = Date.now()
-      const placeholders = batchIds.map(() => '?').join(', ')
-      const batchRows = ownDb
-        .prepare(
-          `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID IN (${placeholders})`
-        )
-        .all(...batchIds) as { StemCID: string; EmbeddingJSON: string }[]
       processed += ownDb.transaction((rows: typeof batchRows) => {
         let count = 0
         for (const row of rows) {
@@ -187,50 +222,12 @@ export async function classifyAutoCategoryBatch(
   }
 
   // --- Feature/centroid pass (fallback) ---
-  // Re-read "already done" -- the embedding pass above may just have
-  // classified some of these; the feature pass must not re-attempt (or
-  // downgrade via the less-accurate centroid classifier) a stem the
-  // embedding pass already confidently placed.
-  const alreadyDoneAfterEmbedding =
-    processed > 0 ? getAllAutoCategorizedStemCIDs(ownDb) : alreadyDone
-  // Real bug caught in review before this shipped: excluding only
-  // alreadyDoneAfterEmbedding (what got WRITTEN this call) isn't enough --
-  // a stem past index BATCH_SIZE in pendingEmbedding is deferred, not
-  // written, so without this it would fall through to the centroid pass
-  // in this SAME call and get permanently locked in under the
-  // less-accurate classifier the moment it's written. This is the normal
-  // case, not an edge case, the first time this runs against a real
-  // multi-thousand-stem backlog. Every stem with a pending embedding is
-  // reserved for the embedding pass exclusively (this call or a later
-  // one) -- never falls through to centroid -- matching this function's
-  // own "preferred over centroid when a stem has both, never re-attempted
-  // by the other source" invariant, above.
-  const deferredEmbeddingStemCIDs = new Set(pendingEmbeddingIds)
-  // Same "id-only first, heavy payload only for the selected batch" shape
-  // as the embedding pass above, for the same reason.
-  const featureIdRows = ownDb.prepare(`SELECT StemCID FROM StemFeatureCache`).all() as {
-    StemCID: string
-  }[]
-  const pendingFeatureIds = featureIdRows
-    .map((r) => r.StemCID)
-    .filter(
-      (id) =>
-        !confirmedAnyRole.has(id) &&
-        !alreadyDoneAfterEmbedding.has(id) &&
-        !deferredEmbeddingStemCIDs.has(id)
-    )
-
-  if (pendingFeatureIds.length > 0) {
+  const pendingFeatureCount = countPendingFeatures(ownDb)
+  if (pendingFeatureCount > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    const batchIds = pickRandomBatch(pendingFeatureIds, BATCH_SIZE)
-    remaining += pendingFeatureIds.length - batchIds.length
+    const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE)
+    remaining += Math.max(0, pendingFeatureCount - batchRows.length)
     const now = Date.now()
-    const placeholders = batchIds.map(() => '?').join(', ')
-    const batchRows = ownDb
-      .prepare(
-        `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
-      )
-      .all(...batchIds) as { StemCID: string; FeaturesJSON: string }[]
     processed += ownDb.transaction((rows: typeof batchRows) => {
       let count = 0
       for (const row of rows) {

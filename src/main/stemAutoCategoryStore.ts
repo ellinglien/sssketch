@@ -22,17 +22,6 @@ export function getAutoCategorizedStemCIDs(
   return new Set(rows.map((r) => r.StemCID))
 }
 
-/** Every StemCID already present in StemAutoCategory, REGARDLESS of role --
- * used by the classify scan to skip stems it's already classified, and by
- * discoverCandidates.ts nowhere (that reads the role-scoped set above
- * instead) -- kept separate from getAutoCategorizedStemCIDs since the scan's
- * own "already done" check and a caller's own "give me role X" query are
- * genuinely different questions, even though both read the same table. */
-export function getAllAutoCategorizedStemCIDs(ownDb: Database.Database): Set<string> {
-  const rows = ownDb.prepare(`SELECT StemCID FROM StemAutoCategory`).all() as { StemCID: string }[]
-  return new Set(rows.map((r) => r.StemCID))
-}
-
 export interface StemAutoClassifyProgress {
   /** Rows in StemAutoCategory -- stems the background scan has already
    * classified. */

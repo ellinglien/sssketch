@@ -2,7 +2,6 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import {
-  getAllAutoCategorizedStemCIDs,
   getAutoCategorizedStemCIDs,
   getStemAutoClassifyProgress,
   upsertStemAutoCategory
@@ -71,20 +70,6 @@ describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
       ComputedAt: number
     }
     expect(row).toEqual({ Source: 'centroid', ComputedAt: 2000 })
-  })
-})
-
-describe('getAllAutoCategorizedStemCIDs', () => {
-  it('returns every StemCID regardless of role', () => {
-    const db = freshDb()
-    upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
-    upsertStemAutoCategory(db, 's2', 'bass', 'centroid', 1000)
-    expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set(['s1', 's2']))
-  })
-
-  it('returns an empty set when the table is empty', () => {
-    const db = freshDb()
-    expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set())
   })
 })
 

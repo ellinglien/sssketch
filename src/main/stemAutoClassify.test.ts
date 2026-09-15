@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { classifyAutoCategoryBatch } from './stemAutoClassify'
-import { getAllAutoCategorizedStemCIDs, getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
+import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 import * as categoryCentroidStore from './categoryCentroidStore'
 import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -88,6 +88,15 @@ function seedTrainedEmbeddings(db: Database.Database): void {
   }
 }
 
+/** Every StemCID in StemAutoCategory, regardless of role -- a direct
+ * query rather than a production helper, since classifyAutoCategoryBatch
+ * itself no longer materializes this set (see its own doc comment on why:
+ * a real live perf bug from reading it in full on every call). */
+function allClassifiedStemCIDs(db: Database.Database): Set<string> {
+  const rows = db.prepare(`SELECT StemCID FROM StemAutoCategory`).all() as { StemCID: string }[]
+  return new Set(rows.map((r) => r.StemCID))
+}
+
 describe('classifyAutoCategoryBatch', () => {
   it('returns processed=0, remaining=0 when there is nothing to classify', async () => {
     const db = freshDb()
@@ -120,7 +129,7 @@ describe('classifyAutoCategoryBatch', () => {
     // Only the un-confirmed stems in seedTrainedEmbeddings itself get
     // classified -- none, since every seeded stem there is confirmed.
     expect(result.processed).toBe(0)
-    expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set())
+    expect(allClassifiedStemCIDs(db)).toEqual(new Set())
   })
 
   it('skips a stem already present in StemAutoCategory', async () => {
@@ -146,7 +155,7 @@ describe('classifyAutoCategoryBatch', () => {
     const result = await classifyAutoCategoryBatch(db)
     expect(result.processed).toBe(0)
     expect(result.remaining).toBe(1)
-    expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set())
+    expect(allClassifiedStemCIDs(db)).toEqual(new Set())
   })
 
   it('falls back to the centroid/feature classifier when no embedding exists for the stem', async () => {
@@ -208,7 +217,7 @@ describe('classifyAutoCategoryBatch', () => {
 
     const result = await classifyAutoCategoryBatch(db)
     expect(result.processed).toBe(0)
-    expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set())
+    expect(allClassifiedStemCIDs(db)).toEqual(new Set())
   })
 
   it('bounds one call to BATCH_SIZE (200), leaving the rest as remaining', async () => {
@@ -221,7 +230,7 @@ describe('classifyAutoCategoryBatch', () => {
     const result = await classifyAutoCategoryBatch(db)
     expect(result.processed).toBe(200)
     expect(result.remaining).toBe(1)
-    expect(getAllAutoCategorizedStemCIDs(db).size).toBe(200)
+    expect(allClassifiedStemCIDs(db).size).toBe(200)
   })
 
   // Real bug, caught in review before this shipped: a stem past index
@@ -259,7 +268,7 @@ describe('classifyAutoCategoryBatch', () => {
     // Exactly 200 processed via the embedding pass; the 201st stays
     // untouched by either pass this call.
     expect(result.processed).toBe(200)
-    expect(getAllAutoCategorizedStemCIDs(db).size).toBe(200)
+    expect(allClassifiedStemCIDs(db).size).toBe(200)
     for (const row of db.prepare(`SELECT Source FROM StemAutoCategory`).all() as {
       Source: string
     }[]) {
