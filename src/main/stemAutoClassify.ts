@@ -29,44 +29,43 @@ interface FeatureCandidateRow {
 }
 
 // Shared by both the count and fetch queries below -- a stem is eligible
-// for the EMBEDDING pass when it isn't already human-confirmed (ANY role)
-// and isn't already in StemAutoCategory. `e`/`f` is the outer table's own
+// for either pass when it isn't already human-confirmed (ANY role) and
+// isn't already in StemAutoCategory. `e`/`f` is the outer table's own
 // alias (StemEmbeddingCache or StemFeatureCache).
-const EMBEDDING_ELIGIBILITY_WHERE = (alias: string): string => `
+const BASE_ELIGIBILITY_WHERE = (alias: string): string => `
   NOT EXISTS (SELECT 1 FROM StemCategories c WHERE c.StemCID = ${alias}.StemCID AND c.ArrangeRole IS NOT NULL)
   AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID)
 `
 
 // Same as above, PLUS excludes any stem that has an embedding at all --
-// real bug, found live (root cause of a sustained, WORSENING beachball at
-// real library scale, ~45,000 stems): the original version of this
-// function pulled the FULL id list from StemEmbeddingCache/
-// StemFeatureCache/StemAutoCategory into JS on EVERY SINGLE CALL (roughly
-// once a second, for as long as a real backlog remained) just to compute
-// which stems were eligible and to enforce "prefer embedding over
-// centroid, never re-attempt the same stem via both." Reading and
-// Set-building tens of thousands of rows a second, forever, is real,
-// sustained CPU/syscall cost -- confirmed live (10M+ Unix syscalls within
-// minutes of a fresh app launch, multiple recorded app hangs). Rewritten
-// so SQLite does the eligibility filtering, random sampling, AND
-// bounding directly (NOT EXISTS + ORDER BY RANDOM() + LIMIT) -- JS never
-// sees more than BATCH_SIZE StemCIDs, let alone the full pending
-// universe, on any single call. Excluding "has any embedding at all"
-// (not just "was in this call's own embedding batch") is a clean,
-// slightly SIMPLER restatement of the same "embedding preferred, never
-// re-attempted by centroid" invariant this function has always had --
-// a stem with an embedding waits for the embedding classifier
-// exclusively, whether or not THIS call's own embedding pass gets to it.
-const FEATURE_ELIGIBILITY_WHERE = (alias: string): string => `
-  ${EMBEDDING_ELIGIBILITY_WHERE(alias)}
-  AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)
-`
+// ONLY when `embeddingAxisTrained` is true. Real bug, found live: a stem
+// with ANY cached embedding used to be excluded from the centroid pass
+// UNCONDITIONALLY, even while the embedding axis had never been trained
+// (fewer than 3 confirmed+embedded samples in 2+ roles -- see
+// `confirmedEmbeddings.length === 0` below). DiscoverLibraryScan.tsx's
+// own renderer-side extraction embeds AND extracts features for nearly
+// every stem, so almost the WHOLE backlog has an embedding -- with no
+// centroid fallback while untrained, this meant classification could
+// climb for a while (centroid catching feature-only stems while
+// extraction was still catching up) and then hit a hard, permanent wall
+// the moment extraction caught up and nearly everything had an embedding
+// too: confirmed live (progress frozen at "21766/45057" across multiple
+// full app restarts and a consent toggle, with zero errors logged --
+// the code was working exactly as written, just permanently reserving
+// almost the entire backlog for a classifier that may never train).
+// `embeddingAxisTrained` is passed in (not re-derived here) so both the
+// count and fetch queries for one call agree on the same answer.
+const featureEligibilityWhere = (alias: string, embeddingAxisTrained: boolean): string =>
+  embeddingAxisTrained
+    ? `${BASE_ELIGIBILITY_WHERE(alias)}
+       AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)`
+    : BASE_ELIGIBILITY_WHERE(alias)
 
 function countPendingEmbeddings(ownDb: Database.Database): number {
   return (
     ownDb
       .prepare(
-        `SELECT COUNT(*) AS n FROM StemEmbeddingCache e WHERE ${EMBEDDING_ELIGIBILITY_WHERE('e')}`
+        `SELECT COUNT(*) AS n FROM StemEmbeddingCache e WHERE ${BASE_ELIGIBILITY_WHERE('e')}`
       )
       .get() as { n: number }
   ).n
@@ -79,27 +78,31 @@ function fetchPendingEmbeddingBatch(
   return ownDb
     .prepare(
       `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache e
-       WHERE ${EMBEDDING_ELIGIBILITY_WHERE('e')}
+       WHERE ${BASE_ELIGIBILITY_WHERE('e')}
        ORDER BY RANDOM() LIMIT ?`
     )
     .all(limit) as EmbeddingCandidateRow[]
 }
 
-function countPendingFeatures(ownDb: Database.Database): number {
+function countPendingFeatures(ownDb: Database.Database, embeddingAxisTrained: boolean): number {
   return (
     ownDb
       .prepare(
-        `SELECT COUNT(*) AS n FROM StemFeatureCache f WHERE ${FEATURE_ELIGIBILITY_WHERE('f')}`
+        `SELECT COUNT(*) AS n FROM StemFeatureCache f WHERE ${featureEligibilityWhere('f', embeddingAxisTrained)}`
       )
       .get() as { n: number }
   ).n
 }
 
-function fetchPendingFeatureBatch(ownDb: Database.Database, limit: number): FeatureCandidateRow[] {
+function fetchPendingFeatureBatch(
+  ownDb: Database.Database,
+  limit: number,
+  embeddingAxisTrained: boolean
+): FeatureCandidateRow[] {
   return ownDb
     .prepare(
       `SELECT StemCID, FeaturesJSON FROM StemFeatureCache f
-       WHERE ${FEATURE_ELIGIBILITY_WHERE('f')}
+       WHERE ${featureEligibilityWhere('f', embeddingAxisTrained)}
        ORDER BY RANDOM() LIMIT ?`
     )
     .all(limit) as FeatureCandidateRow[]
@@ -127,14 +130,24 @@ export interface ClassifyBatchResult {
  * which is what made rolling itself slow earlier the same day.
  *
  * Prefers the EMBEDDING classifier over the DSP/centroid one when a stem
- * has both (described elsewhere this session as noticeably more
- * accurate) -- a stem with ANY cached embedding is excluded from the
- * feature/centroid pass entirely (FEATURE_ELIGIBILITY_WHERE, above),
- * whether or not the embedding pass actually gets to classify it THIS
- * call. Skips anything already confirmed (StemCategories) for ANY role --
- * a real human confirmation needs no auto-guess, same
- * cross-role-leakage-avoidance convention discoverCandidates.ts's own
- * (now-retired at query time, but still real) widening sources used.
+ * has both AND the embedding axis is actually trained (described
+ * elsewhere this session as noticeably more accurate) -- a stem with ANY
+ * cached embedding is excluded from the feature/centroid pass
+ * (featureEligibilityWhere, above), whether or not the embedding pass
+ * actually gets to classify it THIS call. Real bug, found live: that
+ * exclusion used to apply UNCONDITIONALLY, even while the embedding axis
+ * had never been trained -- since extraction embeds nearly every stem,
+ * that meant almost the entire backlog got permanently reserved for a
+ * classifier that might never train, with no fallback (confirmed live:
+ * progress frozen at "21766/45057" across multiple app restarts, zero
+ * errors -- the code was working exactly as written). The exclusion is
+ * now conditional on `embeddingAxisTrained`: an untrained axis means the
+ * embedding classifier could never help those stems ANYWAY, so they fall
+ * through to the centroid pass instead of waiting forever. Skips
+ * anything already confirmed (StemCategories) for ANY role -- a real
+ * human confirmation needs no auto-guess, same cross-role-leakage-
+ * avoidance convention discoverCandidates.ts's own (now-retired at query
+ * time, but still real) widening sources used.
  *
  * A stem neither classifier can confidently place (both return null) is
  * simply left out of StemAutoCategory rather than marked "tried and
@@ -187,14 +200,20 @@ export async function classifyAutoCategoryBatch(
   let processed = 0
   let remaining = 0
 
+  // Computed ONCE per call, shared by both passes below -- the feature
+  // pass's own eligibility depends on whether the embedding axis is
+  // trained (see featureEligibilityWhere's own doc comment), so both
+  // passes must agree on the same answer within one call.
+  const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
+  const embeddingAxisTrained = confirmedEmbeddings.length > 0
+
   // --- Embedding pass (preferred) ---
   const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
   if (pendingEmbeddingCount > 0) {
-    const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
     // Nothing trained yet on this axis -- every call would return null;
     // count these as "remaining" (there's real work waiting, just not
     // doable yet) without spending a single classify call on them.
-    if (confirmedEmbeddings.length === 0) {
+    if (!embeddingAxisTrained) {
       remaining += pendingEmbeddingCount
     } else {
       const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
@@ -222,10 +241,10 @@ export async function classifyAutoCategoryBatch(
   }
 
   // --- Feature/centroid pass (fallback) ---
-  const pendingFeatureCount = countPendingFeatures(ownDb)
+  const pendingFeatureCount = countPendingFeatures(ownDb, embeddingAxisTrained)
   if (pendingFeatureCount > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE)
+    const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE, embeddingAxisTrained)
     remaining += Math.max(0, pendingFeatureCount - batchRows.length)
     const now = Date.now()
     processed += ownDb.transaction((rows: typeof batchRows) => {

@@ -181,6 +181,43 @@ describe('classifyAutoCategoryBatch', () => {
     expect(row.Source).toBe('centroid')
   })
 
+  // Real live bug (root cause of a confirmed, reproducible-across-restarts
+  // stall): a stem with an embedding used to be excluded from the
+  // centroid pass UNCONDITIONALLY, even when the embedding axis was
+  // completely untrained (no confirmed+embedded samples at all) -- since
+  // extraction embeds nearly every stem, this meant almost the entire
+  // backlog got permanently reserved for a classifier that would never
+  // fire, with no fallback and no error. This test is the untrained-axis
+  // mirror of "falls back to the centroid/feature classifier when no
+  // embedding exists" above: same scenario, but the stem DOES have an
+  // embedding too -- it must still fall through to centroid, since the
+  // embedding classifier can never help it while untrained.
+  it('falls back to the centroid classifier for a stem that HAS an embedding, when the embedding axis is untrained', async () => {
+    const db = freshDb()
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+
+    // No seedTrainedEmbeddings here -- the embedding axis is completely
+    // untrained (zero confirmed+embedded samples).
+    seedEmbedding(db, 'both-1', [1, 0, 0])
+    seedFeatures(db, 'both-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+
+    const result = await classifyAutoCategoryBatch(db)
+    expect(result.processed).toBe(1)
+    expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['both-1']))
+    const row = db
+      .prepare(`SELECT Source FROM StemAutoCategory WHERE StemCID = ?`)
+      .get('both-1') as {
+      Source: string
+    }
+    expect(row.Source).toBe('centroid')
+  })
+
   it('prefers the embedding classifier over the centroid one when a stem has both, and never re-attempts it in the feature pass', async () => {
     const db = freshDb()
     seedTrainedEmbeddings(db)
