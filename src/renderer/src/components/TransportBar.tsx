@@ -191,6 +191,21 @@ export function TransportBar({
     username?: string
   } | null>(null)
 
+  // Discover's background classify scan (stemAutoClassifyScheduler.ts) has
+  // no progress UI of its own -- direct request, 2026-09-15 ("any way to
+  // show the progress of the discovery scan? maybe in the gear menu where
+  // the option is"), after the existing bottom-right extraction-scan bar
+  // (DiscoverLibraryScan.tsx) turned out to be nearly invisible in
+  // practice. Same fetch-on-open convention as endlesssStatus above, not a
+  // live poll -- classification only advances a little between one menu
+  // open and the next anyway (BUSY_DELAY_MS=1000/IDLE_DELAY_MS=30000, see
+  // that scheduler's own doc comment), so a snapshot fetched right as the
+  // menu opens is accurate enough for a number glanced at occasionally.
+  const [classifyProgress, setClassifyProgress] = useState<{
+    classified: number
+    eligible: number
+  } | null>(null)
+
   // Output device: component-local (unlike selectedInputDevice, nothing
   // outside this settings menu needs to read it) -- see
   // OUTPUT_DEVICE_STORAGE_KEY's own doc comment.
@@ -349,6 +364,13 @@ export function TransportBar({
       .catch((err) => {
         console.error('TransportBar: endlesssAuthStatus() failed:', err)
         setEndlesssStatus(null)
+      })
+    void window.rifffApi
+      .getDiscoverClassifyProgress()
+      .then((progress) => setClassifyProgress(progress))
+      .catch((err) => {
+        console.error('TransportBar: getDiscoverClassifyProgress() failed:', err)
+        setClassifyProgress(null)
       })
   }
 
@@ -734,6 +756,26 @@ export function TransportBar({
                 : 'turn on discover library scan',
               onClick: () => void toggleDiscoverConsent()
             },
+            // Disabled info row, visible only while the scan is actually
+            // on -- direct request, 2026-09-15. `eligible` can very rarely
+            // read slightly lower than `classified` (a stem gets
+            // human-confirmed via Tidy Up AFTER the background scan
+            // already classified it -- see getStemAutoClassifyProgress's
+            // own doc comment), which would show a >100% fraction; not
+            // worth clamping for an edge case this cosmetic.
+            ...(discoverConsented
+              ? [
+                  {
+                    label: classifyProgress
+                      ? `categorized ${classifyProgress.classified} / ${classifyProgress.eligible} stems`
+                      : 'categorized …',
+                    onClick: () => {},
+                    disabled: true,
+                    title:
+                      'how many stems the background scan has assigned a role to so far -- extraction (embeddings/features) has to reach a stem before it can be categorized'
+                  }
+                ]
+              : []),
             {
               label: 'audio…',
               onClick: () => {

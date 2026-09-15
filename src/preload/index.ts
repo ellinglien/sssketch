@@ -10,6 +10,7 @@ import type {
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
+import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
@@ -199,6 +200,8 @@ const api = {
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),
+  getDiscoverClassifyProgress: (): Promise<StemAutoClassifyProgress> =>
+    ipcRenderer.invoke('get-discover-classify-progress'),
   getDiscoverLibraryScanTargets: (): Promise<LibraryScanTarget[]> =>
     ipcRenderer.invoke('get-discover-library-scan-targets'),
   upsertStemCategoryBus: (

@@ -68,6 +68,7 @@ import {
 } from './discoverCandidates'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
+import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import type { LibraryScanTarget } from './discoverLibraryStems'
 import type { ArrangeRole } from '@shared/stemRole'
@@ -777,6 +778,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
     saveDiscoverSettings(settings)
+  )
+
+  ipcMain.handle('get-discover-classify-progress', (): StemAutoClassifyProgress =>
+    getStemAutoClassifyProgress(openOwnRiffLibraryDb())
   )
 
   ipcMain.handle('get-discover-library-scan-targets', (): Promise<LibraryScanTarget[]> =>

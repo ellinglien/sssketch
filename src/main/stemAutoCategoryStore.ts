@@ -33,6 +33,53 @@ export function getAllAutoCategorizedStemCIDs(ownDb: Database.Database): Set<str
   return new Set(rows.map((r) => r.StemCID))
 }
 
+export interface StemAutoClassifyProgress {
+  /** Rows in StemAutoCategory -- stems the background scan has already
+   * classified. */
+  classified: number
+  /** Distinct stems with a cached embedding or feature vector (whichever
+   * of the two the background scan can classify from, see
+   * stemAutoClassify.ts's own two-pass logic) that aren't already
+   * human-confirmed for any role -- the scan's own real target set, same
+   * "confirmed for ANY role" exclusion classifyAutoCategoryBatch itself
+   * uses. NOT the same as the full library size: a stem with neither an
+   * embedding nor a feature vector yet (still waiting on
+   * DiscoverLibraryScan.tsx's own renderer-side extraction pass) isn't
+   * counted here at all -- see that component's own progress readout for
+   * extraction progress, a genuinely separate number. */
+  eligible: number
+}
+
+/** A cheap, on-demand snapshot of the background classify scan's own
+ * progress (stemAutoClassify.ts) -- for the settings menu's "turn on/off
+ * discover library scan" entry to show alongside itself
+ * (TransportBar.tsx). Deliberately a live query, not a running counter
+ * kept in memory by the scheduler: fetched fresh only when the settings
+ * menu opens (same "fetch when relevant, not streamed" convention
+ * TransportBar.tsx's own endlesssStatus/linkStatus already use), so there's
+ * no persistent poll/subscription just for a number glanced at a few times
+ * a session. */
+export function getStemAutoClassifyProgress(ownDb: Database.Database): StemAutoClassifyProgress {
+  const classified = (
+    ownDb.prepare(`SELECT COUNT(*) AS n FROM StemAutoCategory`).get() as { n: number }
+  ).n
+  const eligible = (
+    ownDb
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT StemCID FROM StemEmbeddingCache
+           UNION
+           SELECT StemCID FROM StemFeatureCache
+         ) candidates
+         WHERE candidates.StemCID NOT IN (
+           SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL
+         )`
+      )
+      .get() as { n: number }
+  ).n
+  return { classified, eligible }
+}
+
 /** Persists one stem's precomputed classification. Upsert (not insert-only)
  * so a stem reclassified by a later scan pass (shouldn't normally happen --
  * the scan itself skips anything already in this table -- but a hand-edited

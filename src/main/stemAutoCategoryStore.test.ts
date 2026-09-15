@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import {
   getAllAutoCategorizedStemCIDs,
   getAutoCategorizedStemCIDs,
+  getStemAutoClassifyProgress,
   upsertStemAutoCategory
 } from './stemAutoCategoryStore'
 
@@ -14,8 +15,37 @@ function freshDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
       ComputedAt INTEGER NOT NULL
     );
+    CREATE TABLE StemEmbeddingCache (
+      StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
+    );
+    CREATE TABLE StemFeatureCache (
+      StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
+    );
+    CREATE TABLE StemCategories (
+      StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
+      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+    );
   `)
   return db
+}
+
+function seedEmbedding(db: Database.Database, stemCID: string): void {
+  db.prepare(
+    `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt) VALUES (?, '[]', 1000)`
+  ).run(stemCID)
+}
+
+function seedFeatures(db: Database.Database, stemCID: string): void {
+  db.prepare(
+    `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, '{}', 1000)`
+  ).run(stemCID)
+}
+
+function seedConfirmed(db: Database.Database, stemCID: string, arrangeRole: string): void {
+  db.prepare(
+    `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, BusId, Source, SourceProject, UpdatedAt)
+     VALUES (?, ?, NULL, NULL, 'tidyup', NULL, 1000)`
+  ).run(stemCID, arrangeRole)
 }
 
 describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
@@ -55,5 +85,32 @@ describe('getAllAutoCategorizedStemCIDs', () => {
   it('returns an empty set when the table is empty', () => {
     const db = freshDb()
     expect(getAllAutoCategorizedStemCIDs(db)).toEqual(new Set())
+  })
+})
+
+describe('getStemAutoClassifyProgress', () => {
+  it('returns zero/zero when nothing has been extracted or classified', () => {
+    const db = freshDb()
+    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 0, eligible: 0 })
+  })
+
+  it('counts embedded and featured stems (deduped) toward eligible, and StemAutoCategory rows toward classified', () => {
+    const db = freshDb()
+    seedEmbedding(db, 's1')
+    seedFeatures(db, 's2')
+    seedEmbedding(db, 's3')
+    seedFeatures(db, 's3') // both -- counted once, not twice
+    upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
+
+    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 1, eligible: 3 })
+  })
+
+  it('excludes a stem confirmed for any role from eligible, even if it has an embedding', () => {
+    const db = freshDb()
+    seedEmbedding(db, 's1')
+    seedConfirmed(db, 's1', 'bass')
+    seedEmbedding(db, 's2') // unconfirmed -- still eligible
+
+    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 0, eligible: 1 })
   })
 })
