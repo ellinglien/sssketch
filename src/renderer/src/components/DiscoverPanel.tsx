@@ -478,11 +478,6 @@ export function DiscoverPanel({
             x !== null
         )
 
-      // TEMPORARY diagnostic log (2026-09-15) -- see reportSlotResolution's
-      // own matching log above. Remove once confirmed.
-      console.log(
-        `DiscoverPanel: restartMix -- ids=${[...ids].join(',')} toStart=${toStart.length} hadNoSources=${hadNoSources}`
-      )
       if (toStart.length === 0) {
         if (currentPairs.size === 0) setMixStartTime(null)
         return
@@ -518,11 +513,6 @@ export function DiscoverPanel({
           unmountedRef.current ||
           [...myGenerations].every(([id, gen]) => mixJoinGenerationRef.current.get(id) !== gen)
       ).then((pairs) => {
-        // TEMPORARY diagnostic log (2026-09-15) -- see reportSlotResolution's
-        // own matching log above. Remove once confirmed.
-        console.log(
-          `DiscoverPanel: restartMix -- startPreviewLoopWithGain resolved with ${pairs.length}/${stemsToStart.length} pairs`
-        )
         if (unmountedRef.current) {
           stopPreviewSources(pairs.map((p) => p.source))
           return
@@ -604,12 +594,6 @@ export function DiscoverPanel({
     stem: { path: string; durationSec: number; barLength: number } | null
   ): void {
     if (stem) {
-      // TEMPORARY diagnostic log (2026-09-15) -- live report: "it loads
-      // them into the discover section fine but they are not playing at
-      // all," with zero console errors anywhere in the chain. Traces the
-      // resolve-audio pipeline this function kicks off, since nothing in
-      // it currently logs at all. Remove once confirmed.
-      console.log(`DiscoverPanel: reportSlotResolution(${id}) -- stem resolved, path=${stem.path}`)
       rawResolvedStemsRef.current.set(id, stem)
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
@@ -711,11 +695,6 @@ export function DiscoverPanel({
 
     const gain = slots.find((s) => s.id === id)?.gain ?? 1
     resolvedStemsRef.current.set(id, { path: previewPath, durationSec: previewDurationSec, gain })
-    // TEMPORARY diagnostic log (2026-09-15) -- see reportSlotResolution's
-    // own matching log above. Remove once confirmed.
-    console.log(
-      `DiscoverPanel: resolvePreviewAudio(${id}) -- landed, previewPath=${previewPath}, calling restartMix`
-    )
     const currentlyPreviewing = previewingSlotIdsRef.current
     if (!currentlyPreviewing.has(id)) {
       const next = new Set(currentlyPreviewing).add(id)
