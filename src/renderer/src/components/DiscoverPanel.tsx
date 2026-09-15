@@ -1202,6 +1202,18 @@ export function DiscoverPanel({
           from { background-position: 0 0; }
           to { background-position: -28px 0; }
         }
+        /* DiceIcon/ShuffleIcon's own spin while a roll/reroll is actually
+           in flight -- a full rotation plus a little overshoot-and-settle
+           at the end reads more like a tossed die (or a shuffled deck)
+           coming to rest than a plain linear spin would. */
+        @keyframes discover-icon-spin {
+          0% { transform: rotate(0deg); }
+          70% { transform: rotate(432deg); }
+          100% { transform: rotate(360deg); }
+        }
+        .discover-icon-spin {
+          animation: discover-icon-spin 600ms ease-in-out infinite;
+        }
       `}</style>
       {showConsentPrompt && (
         <div
@@ -1338,6 +1350,9 @@ export function DiscoverPanel({
           disabled={rerollingSlotIds.size > 0}
           style={{
             marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
             fontFamily: 'inherit',
             fontSize: 9,
             padding: '4px 10px',
@@ -1348,6 +1363,7 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
+          <ShuffleIcon rolling={rerollingSlotIds.size > 0} />
           {rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
         </button>
         <button
@@ -1451,6 +1467,82 @@ function LockGlyph({ locked }: { locked: boolean }): React.JSX.Element {
           read as Phosphor's own LockOpen. */}
       <path d={locked ? 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7' : 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0'} />
       <circle cx="8" cy="10.2" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+// Hand-drawn die-face glyph, styled after Phosphor's DiceFive icon -- same
+// "drawn directly as inline SVG, no icon package" convention as LockGlyph
+// just above. Direct request, 2026-09-15: an icon-only button (no text
+// label) for "random" -- skips role-matching entirely and picks a genuinely
+// random stem, so a literal die reads correctly for exactly that one
+// action (see ShuffleIcon just below for "reroll," which is a DIFFERENT,
+// ranked-pool action and got its own distinct glyph after direct feedback
+// that dice-for-both was ambiguous once the text labels came off).
+// `rolling` drives a CSS class (discover-icon-spin, keyframes injected once
+// in the panel's own shared <style> tag below) that spins the die for as
+// long as the real IPC round trip is still resolving -- a genuine "still
+// working" indicator, not just decoration, same spirit as the waveform
+// area's own discover-slot-reel animation for the same state.
+function DiceIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={rolling ? 'discover-icon-spin' : undefined}
+      style={{ transformOrigin: '50% 50%', flexShrink: 0 }}
+    >
+      <rect x="2" y="2" width="12" height="12" rx="2.5" />
+      {/* Five pips (a DiceFive face) -- doesn't need to represent any real
+          rolled value, it's decorative either way, and five reads clearly
+          at this size where six pips would blur together. */}
+      <circle cx="5" cy="5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="11" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="11" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+// Hand-drawn shuffle glyph (two crossing arrows), styled after Phosphor's
+// own Shuffle icon -- same "no icon package" convention as every other
+// glyph in this file. Direct request, 2026-09-15: "instead of a dice for
+// the reroll... let's use shuffle arrows" -- reroll picks from a real,
+// ranked candidate pool (see rankCandidates/pickReroll), a meaningfully
+// different action from "random"'s own literal dice-roll, so it earns a
+// visually distinct icon now that the text labels are gone. Spins via the
+// same discover-icon-spin class/keyframes DiceIcon uses -- the animation
+// itself just means "still working," independent of which glyph it's
+// applied to.
+function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={rolling ? 'discover-icon-spin' : undefined}
+      style={{ transformOrigin: '50% 50%', flexShrink: 0 }}
+    >
+      {/* Two crossing lanes, each with its own arrowhead at the far end --
+          the classic "shuffle" read (two streams swapping places), not a
+          single loop/refresh arrow. */}
+      <path d="M1.5 4.5 H5 a3 3 0 0 1 2.2 1 l3.6 4 a3 3 0 0 0 2.2 1 h1.5" />
+      <path d="M13 8.5 l2 2 l-2 2" />
+      <path d="M1.5 11.5 H5 a3 3 0 0 0 2.2 -1 l1 -1.1" />
+      <path d="M13 3.5 l2 2 l-2 2" />
+      <path d="M9.6 6.6 l0.8 -0.9 a3 3 0 0 1 2.2 -1 h1.5" />
     </svg>
   )
 }
@@ -1947,72 +2039,102 @@ function DiscoverSlotRow({
           title={previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'}
           style={{
             marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            padding: 0,
             fontFamily: 'inherit',
-            fontSize: 9,
-            padding: '3px 8px',
+            fontSize: 10,
+            fontWeight: 700,
             background: previewing ? 'transparent' : 'var(--ra-mute-on)',
             border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
             color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
             cursor: 'pointer'
           }}
         >
-          {previewing ? 'mute' : 'muted'}
+          {/* Direct request, 2026-09-15: "a simple M for mute" -- icon-only,
+              same as every other row button now; the on/off states still
+              read via background/border/color exactly as before. */}
+          M
         </button>
       )}
       <button
         onClick={onReroll}
         disabled={rerolling}
+        // "roll" for a slot's first pick, "reroll" once it already has a
+        // candidate -- an empty slot has never been rolled, so "rerolling"
+        // was never the correct verb for it. Icon-only (direct request,
+        // 2026-09-15) -- the spinning ShuffleIcon itself is the "still
+        // working" indicator, the state that used to be spelled out in
+        // text now lives in the title tooltip instead.
+        title={
+          rerolling
+            ? slot.candidate
+              ? 'rerolling…'
+              : 'rolling…'
+            : slot.candidate
+              ? 'reroll'
+              : 'roll'
+        }
         style={{
           marginLeft: resolvedStem ? 0 : 'auto',
-          fontFamily: 'inherit',
-          fontSize: 9,
-          padding: '3px 8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 22,
+          height: 22,
+          padding: 0,
           background: 'transparent',
           border: '1px solid var(--ra-border)',
           color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        {/* "roll" for a slot's first pick, "reroll" once it already has a
-            candidate -- an empty slot has never been rolled, so
-            "rerolling" was never the correct verb for it. */}
-        {rerolling
-          ? slot.candidate
-            ? 'rerolling…'
-            : 'rolling…'
-          : slot.candidate
-            ? 'reroll'
-            : 'roll'}
+        <ShuffleIcon rolling={rerolling} />
       </button>
       <button
         onClick={onRerollRandom}
         disabled={rerolling}
-        title="skip role matching -- pick any random stem from your own library"
+        title="random -- skip role matching, pick any random stem from your own library"
         style={{
-          fontFamily: 'inherit',
-          fontSize: 9,
-          padding: '3px 8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 22,
+          height: 22,
+          padding: 0,
           background: 'transparent',
           border: '1px solid var(--ra-border)',
           color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        random
+        <DiceIcon rolling={rerolling} />
       </button>
       <button
         onClick={onRemove}
+        title="remove"
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 22,
+          height: 22,
+          padding: 0,
           fontFamily: 'inherit',
-          fontSize: 9,
-          padding: '3px 8px',
+          fontSize: 10,
+          fontWeight: 700,
           background: 'transparent',
           border: '1px solid var(--ra-border)',
           color: 'var(--ra-text-2)',
           cursor: 'pointer'
         }}
       >
-        remove
+        {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
+            as every other row button now. */}
+        X
       </button>
     </div>
   )
