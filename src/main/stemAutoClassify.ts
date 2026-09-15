@@ -207,6 +207,21 @@ export async function classifyAutoCategoryBatch(
   const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
   const embeddingAxisTrained = confirmedEmbeddings.length > 0
 
+  // TEMPORARY diagnostic log (2026-09-15) -- a live report of `remaining`
+  // staying EXACTLY constant across many ticks (each sampling a different
+  // random batch) pointed at "nothing left confidently matches a trained
+  // category" rather than a code bug, but that's an inference, not
+  // confirmed -- this makes the actual trained-category counts on both
+  // axes visible directly, so it can be checked rather than assumed.
+  // Remove once that's confirmed.
+  const embeddingCategoryCounts: Record<string, number> = {}
+  for (const e of confirmedEmbeddings) {
+    embeddingCategoryCounts[e.category] = (embeddingCategoryCounts[e.category] ?? 0) + 1
+  }
+  console.log(
+    `classifyAutoCategoryBatch: embedding axis trained=${embeddingAxisTrained} categories=${JSON.stringify(embeddingCategoryCounts)}`
+  )
+
   // --- Embedding pass (preferred) ---
   const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
   if (pendingEmbeddingCount > 0) {
@@ -244,6 +259,17 @@ export async function classifyAutoCategoryBatch(
   const pendingFeatureCount = countPendingFeatures(ownDb, embeddingAxisTrained)
   if (pendingFeatureCount > 0) {
     const centroidStore = loadCategoryCentroidStore()
+    // TEMPORARY diagnostic log (2026-09-15) -- see the matching one above
+    // for the embedding axis. Remove once confirmed.
+    const centroidCategoryCounts = Object.fromEntries(
+      Object.entries(centroidStore.arrangeRoles).map(([role, centroid]) => [
+        role,
+        centroid?.count ?? 0
+      ])
+    )
+    console.log(
+      `classifyAutoCategoryBatch: centroid axis categories=${JSON.stringify(centroidCategoryCounts)}`
+    )
     const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE, embeddingAxisTrained)
     remaining += Math.max(0, pendingFeatureCount - batchRows.length)
     const now = Date.now()
