@@ -314,6 +314,48 @@ describe('getDiscoverCandidates', () => {
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2'])
   })
 
+  // Real perf bug, found live (root cause of a SECOND "stuck rolling"
+  // report, once the background classify scan had produced thousands of
+  // StemAutoCategory rows for one role): the candidate-resolution loop
+  // used to query Riffs ONCE PER JAM (`WHERE OwnerJamCID = ?`), even
+  // though jams typically share ONE db connection -- a real multi-hundred-
+  // jam library paid for hundreds of redundant round trips of the same
+  // query. Fixed by grouping jams by db connection and querying `WHERE
+  // OwnerJamCID IN (...)` once per (db, chunk) instead. This test seeds
+  // THREE jams sharing one db and asserts exactly one Riffs query runs
+  // (not three), while still correctly attributing each result's own
+  // jamCID (now read from the row itself, not the loop variable).
+  it('resolves candidates across multiple jams sharing one db with a single query per chunk, not one per jam', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    seedRiff(own, 'r2', 'jam2', 130, ['s2'])
+    seedStem(own, 's2', 'jam2')
+    seedCategory(own, 's2', { arrangeRole: 'drums', busId: 'drums' })
+    seedRiff(own, 'r3', 'jam3', 140, ['s3'])
+    seedStem(own, 's3', 'jam3')
+    seedCategory(own, 's3', { arrangeRole: 'drums', busId: 'drums' })
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [
+        { jamCID: 'jam1', dbForJam: own },
+        { jamCID: 'jam2', dbForJam: own },
+        { jamCID: 'jam3', dbForJam: own }
+      ],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2', 's3'])
+    expect(candidates.map((c) => c.jamCID).sort()).toEqual(['jam1', 'jam2', 'jam3'])
+
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    expect(riffsQueries.length).toBe(1)
+    expect(riffsQueries[0][0]).toMatch(/WHERE OwnerJamCID IN/)
+  })
+
   // Widening (2026-09-15, direct request): a role with a too-small
   // confirmed pool should still surface stems the background classify scan
   // (stemAutoClassify.ts) has already precomputed. The scan's own
