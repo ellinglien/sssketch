@@ -8,10 +8,6 @@ import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { getAllAutoCategorizedStemCIDs, upsertStemAutoCategory } from './stemAutoCategoryStore'
 
-// Same yield discipline as every classify loop added earlier the same day
-// (discoverCandidates.ts's own CLASSIFY_YIELD_EVERY) -- real per-row
-// classification work (cosine similarity / centroid distance), not free.
-const YIELD_EVERY = 200
 // How many stems ONE call classifies, per data source, before returning --
 // bounds a single call's own cost so the scheduler driving this (see
 // stemAutoClassifyScheduler.ts) can check in between calls rather than
@@ -103,7 +99,25 @@ export interface ClassifyBatchResult {
  *
  * `.all()`, never `.iterate()` -- same "never leave a SQLite statement
  * open across an await" discipline as every other bulk read added this
- * session, after the real "database connection is busy" crash it fixed. */
+ * session, after the real "database connection is busy" crash it fixed.
+ *
+ * Each pass's own writes run inside ONE `ownDb.transaction(...)` call --
+ * real bug, found live (root cause of a sustained, WORSENING beachball
+ * once there was a real multi-thousand-stem backlog to work through):
+ * writing each classified stem via its own separate
+ * `upsertStemAutoCategory` call, with no explicit transaction, means
+ * better-sqlite3/SQLite auto-commits (and fsyncs) EVERY SINGLE INSERT
+ * individually -- up to BATCH_SIZE (200) of those, once per call, roughly
+ * once a second for as long as a real backlog remains, is hundreds of
+ * individual disk syncs a second. Batching them into one transaction per
+ * pass (one commit for up to 200 writes, not 200) is the same pattern
+ * this codebase already uses elsewhere for bulk writes (riffLibrarySync.ts).
+ * A transaction callback must stay fully synchronous -- better-sqlite3
+ * throws if it ever returns a promise -- so this function now yields
+ * ONCE per pass (after its own transaction commits) rather than per row;
+ * a single up-to-200-row synchronous stretch of classify math plus one
+ * batched write is the same "acceptable cost in one stretch" assumption
+ * the old per-row yield threshold already relied on. */
 export async function classifyAutoCategoryBatch(
   ownDb: Database.Database
 ): Promise<ClassifyBatchResult> {
@@ -117,7 +131,6 @@ export async function classifyAutoCategoryBatch(
 
   let processed = 0
   let remaining = 0
-  let sinceYield = 0
 
   // --- Embedding pass (preferred) ---
   const alreadyDone = getAllAutoCategorizedStemCIDs(ownDb)
@@ -152,24 +165,24 @@ export async function classifyAutoCategoryBatch(
           `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID IN (${placeholders})`
         )
         .all(...batchIds) as { StemCID: string; EmbeddingJSON: string }[]
-      for (const row of batchRows) {
-        try {
-          const embedding = JSON.parse(row.EmbeddingJSON) as number[]
-          const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
-          if (guessed) {
-            upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
-            processed += 1
+      processed += ownDb.transaction((rows: typeof batchRows) => {
+        let count = 0
+        for (const row of rows) {
+          try {
+            const embedding = JSON.parse(row.EmbeddingJSON) as number[]
+            const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
+            if (guessed) {
+              upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
+              count += 1
+            }
+          } catch {
+            // Corrupted row -- skip, same defensive handling this
+            // table's own readers elsewhere already use.
           }
-        } catch {
-          // Corrupted row -- skip, same defensive handling this
-          // table's own readers elsewhere already use.
         }
-        sinceYield += 1
-        if (sinceYield >= YIELD_EVERY) {
-          sinceYield = 0
-          await yieldToEventLoop()
-        }
-      }
+        return count
+      })(batchRows)
+      await yieldToEventLoop()
     }
   }
 
@@ -218,23 +231,23 @@ export async function classifyAutoCategoryBatch(
         `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
       )
       .all(...batchIds) as { StemCID: string; FeaturesJSON: string }[]
-    for (const row of batchRows) {
-      try {
-        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-        const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))
-        if (guessed) {
-          upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'centroid', now)
-          processed += 1
+    processed += ownDb.transaction((rows: typeof batchRows) => {
+      let count = 0
+      for (const row of rows) {
+        try {
+          const features = JSON.parse(row.FeaturesJSON) as StemFeatures
+          const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))
+          if (guessed) {
+            upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'centroid', now)
+            count += 1
+          }
+        } catch {
+          // Corrupted row -- skip.
         }
-      } catch {
-        // Corrupted row -- skip.
       }
-      sinceYield += 1
-      if (sinceYield >= YIELD_EVERY) {
-        sinceYield = 0
-        await yieldToEventLoop()
-      }
-    }
+      return count
+    })(batchRows)
+    await yieldToEventLoop()
   }
 
   return { processed, remaining }

@@ -301,4 +301,37 @@ describe('classifyAutoCategoryBatch', () => {
       expect(stemCID).toMatch(/^classifiable-/)
     }
   })
+
+  // Real perf bug, found live (root cause of a sustained, WORSENING
+  // beachball once there was a real multi-thousand-stem backlog to work
+  // through): each classified stem used to be written via its own
+  // separate upsertStemAutoCategory call, with no explicit transaction --
+  // better-sqlite3/SQLite auto-commits (and fsyncs) EVERY SINGLE INSERT
+  // individually that way. Fixed by wrapping each pass's own batch of
+  // writes in one ownDb.transaction(...) call. This test seeds enough
+  // stems for BOTH passes to have real work and asserts exactly one
+  // transaction() call happens per pass (two total), not one per row.
+  it('writes each pass batch inside a single transaction, not one commit per row', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    for (let i = 0; i < 5; i++) {
+      seedEmbedding(db, `guessed-embedding-${i}`, [0.9, 0.1, 0])
+    }
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+    for (let i = 0; i < 5; i++) {
+      seedFeatures(db, `guessed-feature-${i}`, { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    }
+
+    const transactionSpy = vi.spyOn(db, 'transaction')
+
+    const result = await classifyAutoCategoryBatch(db)
+    expect(result.processed).toBe(10)
+    expect(transactionSpy).toHaveBeenCalledTimes(2)
+  })
 })
