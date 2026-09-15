@@ -1050,9 +1050,14 @@ function DiscoverSlotRow({
   /** Toggles whether THIS slot is included in DiscoverPanel's own shared
    * playing mix -- the row itself doesn't own any audio state, it only
    * asks the parent to flip its own membership (see DiscoverPanel's own
-   * toggleSlotPreview). The button that triggers this is entirely absent
-   * (not merely disabled) until resolvedStem exists -- nothing to add to
-   * the mix before then. */
+   * toggleSlotPreview). Triggered two ways: clicking the row's own
+   * waveform (the original gesture, doubling as volume-drag via
+   * onMouseDown), and a dedicated "mute"/"unmute" button (direct request,
+   * 2026-09-15 -- the waveform click alone wasn't discoverable as mute,
+   * only a hover tooltip explained it). Both call the exact same handler,
+   * so muting via either one keeps the other in sync. Neither renders
+   * (not merely disabled) until resolvedStem exists -- nothing to
+   * add to/remove from the mix before then. */
   onTogglePreview: () => void
   /** Reports this row's own effective resolved stem (or null) up to
    * DiscoverPanel every time it changes -- resolved on arrival, invalidated
@@ -1440,11 +1445,36 @@ function DiscoverSlotRow({
                 ? 'no match for this role yet'
                 : 'no candidate yet'}
       </span>
+      {resolvedStem && (
+        // Direct request, 2026-09-15: "can we add a mute for each
+        // channel" -- toggleSlotPreview already existed (the waveform
+        // itself was already clickable to the same effect), but wasn't
+        // discoverable as a mute control -- only a hover tooltip
+        // explained it. Same handler as the waveform click, so either one
+        // keeps the other in sync; only shown once there's a real stem to
+        // mute (matching the waveform toggle's own guard).
+        <button
+          onClick={onTogglePreview}
+          title={previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'}
+          style={{
+            marginLeft: 'auto',
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '3px 8px',
+            background: previewing ? 'transparent' : 'var(--ra-mute-on)',
+            border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+            color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+            cursor: 'pointer'
+          }}
+        >
+          {previewing ? 'mute' : 'muted'}
+        </button>
+      )}
       <button
         onClick={onReroll}
         disabled={rerolling}
         style={{
-          marginLeft: 'auto',
+          marginLeft: resolvedStem ? 0 : 'auto',
           fontFamily: 'inherit',
           fontSize: 9,
           padding: '3px 8px',
