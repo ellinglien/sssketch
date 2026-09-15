@@ -4,10 +4,12 @@ import { Waveform } from './Waveform'
 import { stemColorVar } from '../theme/typeColor'
 import { getAudioContext } from '../audio/peakCache'
 import {
-  startPreviewLoop,
+  startPreviewLoopWithGain,
   stopPreviewSources,
   registerActivePreview,
-  unregisterActivePreview
+  unregisterActivePreview,
+  type PreviewSourceWithGain,
+  type PreviewStemInput
 } from '../audio/previewLoop'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
@@ -259,7 +261,15 @@ export function DiscoverPanel({
   const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number; gain: number }>>(
     new Map()
   )
-  const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const previewSourcesRef = useRef<PreviewSourceWithGain[]>([])
+  // Direct request, 2026-09-15: "dragging envelope/volume shouldn't
+  // retrigger start of samples... should not affect playhead." Maps each
+  // CURRENTLY-mixed slot's own id to its real, live GainNode -- rebuilt
+  // every restartMix, below -- so updateSlotGain can set `.gain.value`
+  // directly instead of tearing down and re-starting the whole mix just
+  // to change one slot's own level (previously audible as every OTHER
+  // slot's own loop position visibly jumping back to its start).
+  const gainNodesBySlotIdRef = useRef<Map<string, GainNode>>(new Map())
   const previewGenerationRef = useRef(0)
   const previewTokenRef = useRef(0)
   // Reactive (unlike resolvedStemsRef) so the row waveforms' own tiled
@@ -275,11 +285,6 @@ export function DiscoverPanel({
   // tileOffsetsPx) rather than showing every stem as if it's the same
   // length.
   const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
-  // updateSlotGain's own debounce timer, below -- cleared on unmount so a
-  // drag-in-progress can't fire a straggling restartMix after this panel is
-  // gone (same "generation bump on unmount" spirit as the effect below,
-  // just for a plain setTimeout rather than an async decode).
-  const gainRestartTimeoutRef = useRef<number | null>(null)
   // AudioContext.currentTime the CURRENT mix generation's sources actually
   // started at -- null while nothing is playing. Every source in a mix is
   // started together in one synchronous pass (startPreviewLoop's own doc
@@ -293,8 +298,9 @@ export function DiscoverPanel({
   const [mixStartTime, setMixStartTime] = useState<number | null>(null)
 
   const stopSlotPreview = useCallback(() => {
-    stopPreviewSources(previewSourcesRef.current)
+    stopPreviewSources(previewSourcesRef.current.map((p) => p.source))
     previewSourcesRef.current = []
+    gainNodesBySlotIdRef.current = new Map()
     unregisterActivePreview(previewTokenRef.current)
   }, [])
 
@@ -311,10 +317,6 @@ export function DiscoverPanel({
       // independent review, not observed directly.
       previewGenerationRef.current += 1
       stopSlotPreview()
-      if (gainRestartTimeoutRef.current !== null) {
-        window.clearTimeout(gainRestartTimeoutRef.current)
-        gainRestartTimeoutRef.current = null
-      }
     }
   }, [stopSlotPreview])
 
@@ -323,13 +325,27 @@ export function DiscoverPanel({
       previewGenerationRef.current += 1
       const generation = previewGenerationRef.current
       stopSlotPreview()
-      const stems = [...ids]
-        .map((id) => resolvedStemsRef.current.get(id))
-        .filter((s): s is { path: string; durationSec: number; gain: number } => s !== undefined)
-      if (stems.length === 0) {
+      const stemsWithIds = [...ids]
+        .map((id) => {
+          const stem = resolvedStemsRef.current.get(id)
+          return stem ? { id, stem } : null
+        })
+        .filter(
+          (x): x is { id: string; stem: { path: string; durationSec: number; gain: number } } =>
+            x !== null
+        )
+      if (stemsWithIds.length === 0) {
         setMixStartTime(null)
         return
       }
+      // Object IDENTITY, not path/id string matching -- each stem object
+      // below is constructed exactly once, right here, so comparing by
+      // reference is safe and avoids assuming stem.path is unique (two
+      // slots could in principle resolve the same candidate).
+      const stemToId = new Map<PreviewStemInput, string>(
+        stemsWithIds.map(({ id, stem }) => [stem, id])
+      )
+      const stems = stemsWithIds.map(({ stem }) => stem)
       // Same "don't let a preview and the real arranger transport play at
       // once" courtesy Shelf.tsx's own tile-click preview already gives --
       // auditioning a Discover loop while the project is mid-playback would
@@ -340,22 +356,29 @@ export function DiscoverPanel({
       // to explain a sudden transport pause; gating this to the explicit
       // toggle path keeps that background swap silent on the transport.
       if (pauseTransportIfPlaying && playing) dispatch({ type: 'PAUSE' })
-      void startPreviewLoop(
+      void startPreviewLoopWithGain(
         getAudioContext(),
         stems,
         () => previewGenerationRef.current !== generation
-      ).then((sources) => {
+      ).then((pairs) => {
         if (previewGenerationRef.current !== generation) {
-          stopPreviewSources(sources)
+          stopPreviewSources(pairs.map((p) => p.source))
           return
         }
-        previewSourcesRef.current.push(...sources)
-        if (sources.length > 0) {
+        previewSourcesRef.current.push(...pairs)
+        const newGainNodes = new Map<string, GainNode>()
+        for (const pair of pairs) {
+          const id = stemToId.get(pair.stem)
+          if (id) newGainNodes.set(id, pair.gainNode)
+        }
+        gainNodesBySlotIdRef.current = newGainNodes
+        if (pairs.length > 0) {
           previewTokenRef.current = registerActivePreview(stopSlotPreview)
           // Approximate, not sample-accurate -- good enough for a visual
           // lap indicator, off by at most the time this .then() callback
           // took to run after the sources' own .start(0) calls inside
-          // startPreviewLoop (same microtask tick, no await between).
+          // startPreviewLoopWithGain (same microtask tick, no await
+          // between).
           setMixStartTime(getAudioContext().currentTime)
         }
       })
@@ -522,29 +545,21 @@ export function DiscoverPanel({
   // current value) and, if this slot already has a resolved stem tracked,
   // in `resolvedStemsRef` too.
   //
-  // The audible mix restart below is DEBOUNCED, not immediate: restartMix
-  // fully stops and re-decodes/re-starts every source in the mix, and a
-  // plain <input type="range"> fires onChange continuously while dragging
-  // (dozens of times a second) -- calling restartMix on every tick would
-  // restart the whole mix that often, an audible glitch/stutter rather than
-  // a smooth fade. previewLoop.ts doesn't expose the per-source GainNode a
-  // true live (zero-latency) adjustment would need -- debouncing to
-  // "shortly after the user stops moving the slider" gets a real, audible
-  // update without that plumbing, at the cost of not hearing it move in
-  // real time while actively dragging.
+  // Direct request, 2026-09-15: "dragging envelope/volume shouldn't
+  // retrigger start of samples... should not affect playhead" -- this used
+  // to debounce into a full restartMix (stop + re-decode + re-start every
+  // source in the mix), audible as every OTHER currently-playing slot's own
+  // loop position jumping back to 0, not just the one being dragged. Now
+  // that startPreviewLoopWithGain exposes each source's own GainNode
+  // (gainNodesBySlotIdRef, populated by restartMix), a drag just writes
+  // `.gain.value` directly on this one slot's node -- genuinely live,
+  // zero-latency, and touches nothing else's playback position.
   function updateSlotGain(id: string, gain: number): void {
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, gain } : s)))
     const existing = resolvedStemsRef.current.get(id)
-    if (!existing) return
-    resolvedStemsRef.current.set(id, { ...existing, gain })
-    if (!previewingSlotIds.has(id)) return
-    if (gainRestartTimeoutRef.current !== null) window.clearTimeout(gainRestartTimeoutRef.current)
-    gainRestartTimeoutRef.current = window.setTimeout(() => {
-      gainRestartTimeoutRef.current = null
-      // previewingSlotIdsRef, not the closed-over `previewingSlotIds` --
-      // see that ref's own doc comment for the real bug this avoids.
-      restartMix(previewingSlotIdsRef.current, false)
-    }, 150)
+    if (existing) resolvedStemsRef.current.set(id, { ...existing, gain })
+    const gainNode = gainNodesBySlotIdRef.current.get(id)
+    if (gainNode) gainNode.gain.value = gain
   }
 
   // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins

@@ -24,26 +24,26 @@ export interface PreviewStemInput {
   durationSec?: number
 }
 
-/**
- * Decodes every stem's audio in parallel, then starts them all looping
- * together in one synchronous pass. Starting each source right after its
- * own decode finishes (rather than after ALL decodes finish) staggers the
- * .start(0) calls by however long each stem's own fetch+decode took,
- * producing an audible desync on multi-stem previews — this is the exact
- * bug found in LoreLibraryBrowser's own preview and the reason this is a
- * shared utility rather than a third inline copy of the same logic.
- *
- * Returns only the sources that actually started (decode failures are
- * logged and skipped, matching the per-stem tolerance PolarGlyph's own
- * Promise.allSettled-based decode already uses) — the caller registers
- * them with its own stop mechanism (calling .stop() on each), since
- * ownership of "when to stop" varies by caller (unmount, reselect, toggle).
- */
-export async function startPreviewLoop(
+/** One started preview source, paired with its own GainNode and the
+ * INPUT stem it came from (by reference -- callers that need to find
+ * "which pair is THIS stem" again later can compare by identity or by
+ * `stem.path`, whichever fits). Exposing the gain node lets a caller
+ * adjust volume LIVE (direct-node adjustment, no stop/restart) instead
+ * of tearing down and re-starting playback just to change a level --
+ * see startPreviewLoopWithGain's own doc comment for why this is a
+ * separate function rather than changing startPreviewLoop's own return
+ * type. */
+export interface PreviewSourceWithGain {
+  source: AudioBufferSourceNode
+  gainNode: GainNode
+  stem: PreviewStemInput
+}
+
+async function buildPreviewSources(
   ctx: AudioContext,
   stems: PreviewStemInput[],
   isCancelled: () => boolean
-): Promise<AudioBufferSourceNode[]> {
+): Promise<PreviewSourceWithGain[]> {
   const decodeResults = await Promise.allSettled(
     stems.map(async (stem) => {
       const bytes = await window.rifffApi.readAudioFile(stem.path)
@@ -54,7 +54,7 @@ export async function startPreviewLoop(
   )
   if (isCancelled()) return []
 
-  const sources: AudioBufferSourceNode[] = []
+  const pairs: PreviewSourceWithGain[] = []
   for (const result of decodeResults) {
     if (result.status === 'rejected') {
       console.error('previewLoop: failed to decode preview audio:', result.reason)
@@ -78,9 +78,57 @@ export async function startPreviewLoop(
     source.connect(gainNode)
     gainNode.connect(ctx.destination)
     source.start(0)
-    sources.push(source)
+    pairs.push({ source, gainNode, stem })
   }
-  return sources
+  return pairs
+}
+
+/**
+ * Decodes every stem's audio in parallel, then starts them all looping
+ * together in one synchronous pass. Starting each source right after its
+ * own decode finishes (rather than after ALL decodes finish) staggers the
+ * .start(0) calls by however long each stem's own fetch+decode took,
+ * producing an audible desync on multi-stem previews — this is the exact
+ * bug found in LoreLibraryBrowser's own preview and the reason this is a
+ * shared utility rather than a third inline copy of the same logic.
+ *
+ * Returns only the sources that actually started (decode failures are
+ * logged and skipped, matching the per-stem tolerance PolarGlyph's own
+ * Promise.allSettled-based decode already uses) — the caller registers
+ * them with its own stop mechanism (calling .stop() on each), since
+ * ownership of "when to stop" varies by caller (unmount, reselect, toggle).
+ */
+export async function startPreviewLoop(
+  ctx: AudioContext,
+  stems: PreviewStemInput[],
+  isCancelled: () => boolean
+): Promise<AudioBufferSourceNode[]> {
+  const pairs = await buildPreviewSources(ctx, stems, isCancelled)
+  return pairs.map((p) => p.source)
+}
+
+/** Same as startPreviewLoop, but also returns each source's own GainNode
+ * (and the stem it came from) -- direct request, 2026-09-15: "dragging
+ * envelope/volume shouldn't retrigger start of samples... should not
+ * affect playhead." DiscoverPanel's own multi-slot mix previously had no
+ * way to change one slot's volume without a FULL restartMix (stop every
+ * source, re-decode, re-start every source from position 0) -- audible
+ * as every OTHER currently-playing slot's own loop position visibly
+ * jumping back to its start, not just the one being adjusted. Exposing
+ * the gain node lets a caller set `.gain.value` directly instead --
+ * genuinely live, zero-latency, and touches only the one node being
+ * adjusted, leaving every other source's own playback position (and the
+ * preview's own playhead) completely undisturbed. A separate function
+ * rather than changing startPreviewLoop's own return type, since three
+ * OTHER callers (LibraryBrowser/Shelf/ProjectLibraryBrowser, none of
+ * which need live per-stem gain access) already depend on its existing
+ * `AudioBufferSourceNode[]` shape. */
+export async function startPreviewLoopWithGain(
+  ctx: AudioContext,
+  stems: PreviewStemInput[],
+  isCancelled: () => boolean
+): Promise<PreviewSourceWithGain[]> {
+  return buildPreviewSources(ctx, stems, isCancelled)
 }
 
 /** Stops every source in the list — safe to call on sources already
