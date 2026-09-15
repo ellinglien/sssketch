@@ -203,6 +203,15 @@ export function LibraryBrowser({
   // §8.1 ("survives closing and reopening the Discover tab").
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
   const [discoverChaos, setDiscoverChaos] = useState(35)
+  // Undo/redo history for Discover's own slot-content actions (add/remove
+  // slot, reroll one, random-reroll one, reroll all) -- lifted up here for
+  // the exact same reason discoverSlots itself is: DiscoverPanel unmounts
+  // on every 'browse' <-> 'discover' switch, so history kept there would
+  // silently vanish the moment you glanced at another tab. Direct request,
+  // 2026-09-15 (Upcycle-inspired). Each entry is a full snapshot of
+  // discoverSlots at the moment just before an undoable action ran.
+  const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
+  const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -2065,6 +2074,10 @@ export function LibraryBrowser({
             setSlots={setDiscoverSlots}
             chaos={discoverChaos}
             setChaos={setDiscoverChaos}
+            undoStack={discoverUndoStack}
+            setUndoStack={setDiscoverUndoStack}
+            redoStack={discoverRedoStack}
+            setRedoStack={setDiscoverRedoStack}
             currentUsername={riffLibraryUsername}
             discoverConsented={discoverConsented}
             setDiscoverConsented={setDiscoverConsented}

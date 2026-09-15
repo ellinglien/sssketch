@@ -148,6 +148,10 @@ export function DiscoverPanel({
   setSlots,
   chaos,
   setChaos,
+  undoStack,
+  setUndoStack,
+  redoStack,
+  setRedoStack,
   currentUsername,
   discoverConsented,
   setDiscoverConsented
@@ -166,6 +170,21 @@ export function DiscoverPanel({
   setSlots: React.Dispatch<React.SetStateAction<DiscoverSlot[]>>
   chaos: number
   setChaos: React.Dispatch<React.SetStateAction<number>>
+  /** Undo/redo history for slot-content actions (add/remove slot, reroll
+   * one, random-reroll one, reroll all) -- lifted up into LibraryBrowser.tsx
+   * for the same reason `slots` itself is (see its own doc comment just
+   * above): DiscoverPanel unmounts on every tab switch, so history kept
+   * locally here would vanish on every 'browse' <-> 'discover' round trip.
+   * Each entry is a full `slots` snapshot taken just before the action that
+   * pushed it ran -- restoring one is a plain `setSlots(snapshot)`.
+   * Deliberately does NOT cover lock/mute/solo toggles or gain drags (a
+   * drag alone would spam the stack with one entry per pixel of movement;
+   * toggling lock/mute/solo isn't "content" the way swapping/adding/
+   * removing a candidate is). */
+  undoStack: DiscoverSlot[][]
+  setUndoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
+  redoStack: DiscoverSlot[][]
+  setRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   /** The real, live "who am I" for this codebase -- LibraryBrowser.tsx's
    * own `riffLibraryUsername` state (seeded from localStorage via
    * loadStoredRiffLibraryUsername, editable through its own "your
@@ -512,6 +531,27 @@ export function DiscoverPanel({
     void syncPreviewToEngine(next)
   }
 
+  // Direct request, 2026-09-15 (Upcycle-inspired): solo THIS slot -- drop
+  // every other slot out of the mix, leaving just this one audible.
+  // Deliberately NOT a separate persisted "soloed slot id": mirrors
+  // store.ts's own SOLO_GROUP/SOLO_CHANNEL convention exactly (computed
+  // fresh from current state, toggle-back-to-full-mix on a second click of
+  // the SAME already-sole slot, rather than trying to snapshot/restore
+  // whatever the mix looked like before soloing -- "solo is normally a
+  // temporary A/B listen, not a state worth preserving precisely," same
+  // reasoning documented on SOLO_GROUP in store.ts). "Full mix" here means
+  // every currently-RESOLVED slot (resolvedStemsRef's own keys), matching
+  // this panel's own existing autoplay convention (a freshly resolved slot
+  // joins the mix automatically) rather than trying to recall which
+  // slots happened to be included right before the solo.
+  function toggleSlotSolo(id: string): void {
+    const alreadySoleSoloed = previewingSlotIds.size === 1 && previewingSlotIds.has(id)
+    const next = alreadySoleSoloed ? new Set(resolvedStemsRef.current.keys()) : new Set([id])
+    previewingSlotIdsRef.current = next
+    setPreviewingSlotIds(next)
+    void syncPreviewToEngine(next)
+  }
+
   // Called by each DiscoverSlotRow whenever its OWN resolved stem changes
   // (a fresh resolution lands, a reroll invalidates the old one, or the
   // slot unmounts/gets removed) -- keeps `resolvedStemsRef` accurate and,
@@ -708,7 +748,72 @@ export function DiscoverPanel({
   // placed (including the first thing plunked in from an empty project),
   // later addSlot calls go back through the normal ranked pipeline, since
   // by then there IS a real arrangement worth matching against.
+  // Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
+  // reroll one, random-reroll one, reroll all) -- deliberately excludes
+  // lock/mute/solo toggles and gain drags, see undoStack's own doc comment
+  // on this component's props above. Capped so a very long Discover
+  // session doesn't grow an unbounded history in memory.
+  const DISCOVER_UNDO_LIMIT = 20
+
+  // Call at the START of any undoable action, BEFORE mutating `slots` --
+  // captures the pre-action snapshot to restore to, and clears the redo
+  // stack (standard undo/redo semantics: a fresh action invalidates
+  // whatever redo history existed, same as this app's own real undo
+  // system). `slots` here is this render's own closure, same convention
+  // every other slots-reading function in this file already relies on
+  // (see rollForSlot's own doc comment on this).
+  function pushUndoSnapshot(): void {
+    setUndoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
+    setRedoStack([])
+  }
+
+  // Restores a snapshot from an undo/redo pop -- besides setSlots itself,
+  // reconciles `previewingSlotIds`/`resolvedStemsRef` against whatever ids
+  // the snapshot actually contains, so a slot that the snapshot doesn't
+  // have (e.g. undoing an addSlot) doesn't linger in either as a stale,
+  // pointless entry for a slot that no longer exists -- same cleanup
+  // removeSlot itself already does, just generalized to "whatever changed"
+  // rather than one specific known id. A slot the snapshot brings BACK
+  // (e.g. undoing a removeSlot) needs no special-casing here: its row
+  // simply remounts and resolves/rejoins the mix on its own, the same
+  // autoplay path every fresh slot already goes through.
+  function applySlotsSnapshot(next: DiscoverSlot[]): void {
+    setSlots(next)
+    const validIds = new Set(next.map((s) => s.id))
+    for (const id of resolvedStemsRef.current.keys()) {
+      if (!validIds.has(id)) resolvedStemsRef.current.delete(id)
+    }
+    // Reads/writes previewingSlotIdsRef synchronously (not a functional
+    // setState updater) for the same reason reportSlotResolution above
+    // does -- side effects (syncPreviewToEngine) don't belong inside a
+    // setState updater, which React may invoke more than once.
+    const current = previewingSlotIdsRef.current
+    const pruned = new Set([...current].filter((id) => validIds.has(id)))
+    if (pruned.size !== current.size) {
+      previewingSlotIdsRef.current = pruned
+      setPreviewingSlotIds(pruned)
+      void syncPreviewToEngine(pruned)
+    }
+  }
+
+  function undoDiscoverAction(): void {
+    if (undoStack.length === 0) return
+    const snapshot = undoStack[undoStack.length - 1]
+    setRedoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
+    setUndoStack((prev) => prev.slice(0, -1))
+    applySlotsSnapshot(snapshot)
+  }
+
+  function redoDiscoverAction(): void {
+    if (redoStack.length === 0) return
+    const snapshot = redoStack[redoStack.length - 1]
+    setUndoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
+    setRedoStack((prev) => prev.slice(0, -1))
+    applySlotsSnapshot(snapshot)
+  }
+
   function addSlot(role: ArrangeRole): void {
+    pushUndoSnapshot()
     const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
@@ -723,6 +828,7 @@ export function DiscoverPanel({
   }
 
   function removeSlot(id: string): void {
+    pushUndoSnapshot()
     setSlots((prev) => prev.filter((s) => s.id !== id))
     // The removed row's own unmount effect already reports its resolution
     // as null (clearing resolvedStemsRef and restarting the mix without
@@ -843,6 +949,7 @@ export function DiscoverPanel({
   async function rerollSlot(id: string): Promise<void> {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
+    pushUndoSnapshot()
     await rollForSlot(id, slot.role)
   }
 
@@ -887,20 +994,27 @@ export function DiscoverPanel({
   async function rerollRandomSlot(id: string): Promise<void> {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
+    pushUndoSnapshot()
     await rollRandomForSlot(id, slot.role)
   }
 
   async function rerollAll(): Promise<void> {
+    // One undo snapshot for the WHOLE batch, taken up front -- calls
+    // rollForSlot directly below (not the public rerollSlot wrapper, which
+    // pushes its OWN snapshot per slot) so "undo" after a "reroll all"
+    // restores every slot at once, in a single step, rather than only
+    // walking back the last slot rerolled.
+    pushUndoSnapshot()
     // Sequential, not Promise.all -- each slot's own reroll is a real IPC
     // round trip; running them one at a time keeps this simple and avoids
     // hammering the main process with N simultaneous full-library scans at
     // once for a loop with many slots. Locked slots are skipped entirely.
     //
-    // No try/catch of its own -- rerollSlot itself never throws (it catches
-    // and logs internally, above), so one slot failing can't abort this
-    // loop and silently leave every LATER unlocked slot untouched.
+    // No try/catch of its own -- rollForSlot itself never throws (it
+    // catches and logs internally, above), so one slot failing can't abort
+    // this loop and silently leave every LATER unlocked slot untouched.
     for (const slot of slots) {
-      if (!slot.locked) await rerollSlot(slot.id)
+      if (!slot.locked) await rollForSlot(slot.id, slot.role)
     }
   }
 
@@ -1177,11 +1291,57 @@ export function DiscoverPanel({
           />
           only my stems
         </label>
+        {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
+            random-reroll one, reroll all) -- direct request, 2026-09-15,
+            inspired by Upcycle's own toolbar undo/redo arrows. Button-only
+            (no keyboard shortcut): this app already binds Cmd+Z globally to
+            the REAL arrangement's own undo system, and Discover's slots
+            aren't part of that reducer's state at all -- a second Cmd+Z
+            meaning here would either silently do nothing useful most of the
+            time or, worse, race/compete with the real one. */}
+        <button
+          onClick={undoDiscoverAction}
+          disabled={undoStack.length === 0}
+          title="undo"
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            padding: 0,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: undoStack.length === 0 ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+            cursor: undoStack.length === 0 ? 'default' : 'pointer'
+          }}
+        >
+          <UndoIcon />
+        </button>
+        <button
+          onClick={redoDiscoverAction}
+          disabled={redoStack.length === 0}
+          title="redo"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            padding: 0,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: redoStack.length === 0 ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+            cursor: redoStack.length === 0 ? 'default' : 'pointer'
+          }}
+        >
+          <RedoIcon />
+        </button>
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
           style={{
-            marginLeft: 'auto',
             display: 'flex',
             alignItems: 'center',
             gap: 5,
@@ -1247,6 +1407,7 @@ export function DiscoverPanel({
             slot={slot}
             rerolling={rerollingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
+            soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
             maxBarLength={maxBarLength}
             playheadPct={playheadPct}
             onToggleLock={() => toggleLock(slot.id)}
@@ -1254,6 +1415,7 @@ export function DiscoverPanel({
             onReroll={() => void rerollSlot(slot.id)}
             onRerollRandom={() => void rerollRandomSlot(slot.id)}
             onTogglePreview={() => toggleSlotPreview(slot.id)}
+            onToggleSolo={() => toggleSlotSolo(slot.id)}
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
           />
@@ -1388,6 +1550,51 @@ function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
   )
 }
 
+// Hand-drawn undo/redo glyphs (a curved "back" arrow, redo is the exact
+// same shape mirrored horizontally rather than a second hand-derived
+// coordinate set) -- same "no icon package" convention as every other
+// glyph in this file. Direct request, 2026-09-15 (Upcycle-inspired):
+// undo/redo for Discover's own reroll/add/remove actions.
+function UndoIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
+      <path d="M5.5 8 l-2.5 2 l2.5 2" />
+    </svg>
+  )
+}
+
+function RedoIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <g transform="scale(-1,1) translate(-16,0)">
+        <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
+        <path d="M5.5 8 l-2.5 2 l2.5 2" />
+      </g>
+    </svg>
+  )
+}
+
 // This row's own waveform button's real pixel height -- the vertical-drag
 // gain gesture below divides its own deltaY by this, same
 // "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
@@ -1468,6 +1675,7 @@ function DiscoverSlotRow({
   slot,
   rerolling,
   previewing,
+  soloed,
   maxBarLength,
   playheadPct,
   onToggleLock,
@@ -1475,6 +1683,7 @@ function DiscoverSlotRow({
   onReroll,
   onRerollRandom,
   onTogglePreview,
+  onToggleSolo,
   onResolvedChange,
   onGainChange
 }: {
@@ -1489,6 +1698,13 @@ function DiscoverSlotRow({
    * TOGETHER, looped, like the Upcycle reference this screen is modeled on
    * -- not a one-at-a-time solo. */
   previewing: boolean
+  /** True while THIS slot is the ONLY one currently in the playing mix
+   * (DiscoverPanel's own `previewingSlotIds.size === 1 && ...has(slot.id)`)
+   * -- drives the "S" button's active state, matching ChannelRow.tsx's own
+   * `soloed` computed-fresh-from-mute-state convention (not a separately
+   * persisted "which slot is soloed" flag). Direct request, 2026-09-15
+   * (Upcycle-inspired). */
+  soloed: boolean
   /** The longest currently-resolved slot's own barLength, library-wide
    * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
    * waveform tiles/scales its own resolvedStem.barLength against this SAME
@@ -1531,6 +1747,12 @@ function DiscoverSlotRow({
    * (not merely disabled) until resolvedStem exists -- nothing to
    * add to/remove from the mix before then. */
   onTogglePreview: () => void
+  /** Solos THIS slot -- see DiscoverPanel's own toggleSlotSolo for the
+   * exact semantics (drop every other slot out of the mix; a second click
+   * while already the sole soloed slot restores every resolved slot).
+   * Only shown once there's a real stem to solo (matching the mute
+   * button's own guard, just below). */
+  onToggleSolo: () => void
   /** Reports this row's own effective resolved stem (or null) up to
    * DiscoverPanel every time it changes -- resolved on arrival, invalidated
    * on reroll, cleared on unmount/removal -- so the parent's
@@ -1912,44 +2134,75 @@ function DiscoverSlotRow({
                 : 'no candidate yet'}
       </span>
       {resolvedStem && (
-        // Direct request, 2026-09-15: "can we add a mute for each
-        // channel" -- toggleSlotPreview already existed (the waveform
-        // itself was already clickable to the same effect), but wasn't
-        // discoverable as a mute control -- only a hover tooltip
-        // explained it. Same handler as the waveform click, so either one
-        // keeps the other in sync; only shown once there's a real stem to
-        // mute (matching the waveform toggle's own guard).
-        <button
-          onClick={onTogglePreview}
-          title={previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'}
-          style={{
-            marginLeft: 'auto',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 22,
-            height: 22,
-            padding: 0,
-            fontFamily: 'inherit',
-            fontSize: 10,
-            fontWeight: 700,
-            // Direct request, 2026-09-15: "mute should look exactly like
-            // mute on the arrangement view" -- matches ChannelRow.tsx's own
-            // muteButtonStyle exactly (background/border/color-by-state),
-            // rather than this row's own earlier ad hoc treatment
-            // (transparent-when-off instead of the real `--ra-bg-row-active`
-            // fill every other unmuted mute button in this app uses).
-            background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-            border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-            color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
-            cursor: 'pointer'
-          }}
-        >
-          {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button glyph
-              exactly (its solo/record siblings are also lowercase single
-              letters), rather than this row's own earlier uppercase "M". */}
-          m
-        </button>
+        <>
+          {/* Direct request, 2026-09-15: "can we add a mute for each
+              channel" -- toggleSlotPreview already existed (the waveform
+              itself was already clickable to the same effect), but wasn't
+              discoverable as a mute control -- only a hover tooltip
+              explained it. Same handler as the waveform click, so either one
+              keeps the other in sync; only shown once there's a real stem to
+              mute (matching the waveform toggle's own guard). */}
+          <button
+            onClick={onTogglePreview}
+            title={previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'}
+            style={{
+              marginLeft: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 10,
+              fontWeight: 700,
+              // Direct request, 2026-09-15: "mute should look exactly like
+              // mute on the arrangement view" -- matches ChannelRow.tsx's
+              // own muteButtonStyle exactly (background/border/color-by-
+              // state), rather than this row's own earlier ad hoc treatment
+              // (transparent-when-off instead of the real
+              // `--ra-bg-row-active` fill every other unmuted mute button in
+              // this app uses).
+              background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
+              border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+              color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+              cursor: 'pointer'
+            }}
+          >
+            {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
+                glyph exactly (its solo/record siblings are also lowercase
+                single letters), rather than this row's own earlier
+                uppercase "M". */}
+            m
+          </button>
+          {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
+              next to mute, same M/S pairing Upcycle's own cards use and
+              ChannelRow.tsx already has on the real arrangement. Matches
+              ChannelRow.tsx's own soloButtonStyle exactly (a soft tinted
+              background with the accent color on border/text, not a hard
+              fill like mute's). */}
+          <button
+            onClick={onToggleSolo}
+            title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 10,
+              fontWeight: 700,
+              background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+              border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+              color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            s
+          </button>
+        </>
       )}
       <button
         onClick={onReroll}
