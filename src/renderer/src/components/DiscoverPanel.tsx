@@ -12,6 +12,7 @@ import {
   type PreviewStemInput
 } from '../audio/previewLoop'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
+import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -19,7 +20,7 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 import { tileOffsetsPx } from '../state/selectors'
 import { startPointerDrag } from './dragUtils'
-import { stemKey, type ProjectRef, type Rifff, type SoundType, type Stem } from '@shared/types'
+import { type ProjectRef, type SoundType, type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
 interface ResolvedCandidateStem {
@@ -1052,14 +1053,6 @@ export function DiscoverPanel({
     }
   }
 
-  // Real-Rifff.stems can only ever address 8 slots (StemCID_1..8 is the
-  // schema every OTHER rifff in this app -- LORE-imported or hand-built --
-  // is already bound by, see riffLibrarySchema.ts), so a plunk with more
-  // placeable Discover slots than that caps at the first 8 (in their
-  // current on-screen order) rather than silently producing a Rifff no
-  // other part of this codebase's own wire format could represent.
-  const MAX_STEMS_PER_RIFFF = 8
-
   // Commits whatever loop is currently built in Discover onto the real
   // timeline, as ONE UNITED rifff, one undo step -- direct request,
   // 2026-09-15: "when i say plunk into arranger.. it places them there,
@@ -1096,9 +1089,9 @@ export function DiscoverPanel({
   async function plunkInArranger(): Promise<void> {
     setPlacing(true)
     try {
-      const placeable = slots
-        .filter((s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null)
-        .slice(0, MAX_STEMS_PER_RIFFF)
+      const placeable = slots.filter(
+        (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
+      )
       if (placeable.length === 0) return
 
       const resolved = await Promise.all(
@@ -1122,29 +1115,14 @@ export function DiscoverPanel({
       )
       if (placed.length === 0) return
 
-      // crypto.randomUUID(), matching buildRifff.ts's own established
-      // convention for minting a brand-new rifff's groupId -- NOT
-      // deterministic from candidate content. A second "plunk in arranger"
-      // click with the same slots still showing (nothing clears `slots`
-      // after a successful plunk, so re-plunking the same loop further
-      // along the timeline is normal usage) must mint a fresh groupId,
-      // since PLACE_LOOP_ON_TIMELINE's reducer case writes
-      // `rifffs[rifff.groupId] = {...}` -- a deterministic id recomputed
-      // from the same candidates would silently overwrite (relocate) the
-      // first placement instead of adding a second copy alongside it,
-      // contradicting this feature's own "adds alongside, never replaces"
-      // guarantee (design spec §8.4).
-      const groupId = crypto.randomUUID()
-      const barLength = Math.max(...placed.map((p) => p.stem.barLength))
       const roles = [...new Set(placeable.map((s) => s.role))]
-      const rifff: Rifff = {
-        groupId,
-        name: `discover: ${roles.join('+')}`,
-        bpm,
-        barLength,
-        folderPath: '',
-        stems: placed.map(({ stem }, i) => ({ slot: i + 1, ...stem }))
-      }
+      const assembly = assembleDiscoverRifff(
+        `discover: ${roles.join('+')}`,
+        placed.map(({ stem, gain }) => ({ stem, gain })),
+        bpm
+      )
+      if (!assembly) return // placed.length === 0 already returned earlier; unreachable in practice
+      const { rifff, vol } = assembly
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
@@ -1153,16 +1131,6 @@ export function DiscoverPanel({
         .filter((r) => r.startBar !== undefined)
         .map((r) => (r.startBar ?? 0) + r.barLength)
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
-
-      // Direct request: each slot's own volume slider "will determine the
-      // envelope once it's placed in the arrangement" -- carries the
-      // Discover-time gain straight into state.vol, keyed the same way
-      // every other placed stem's own gain already is (stemKey(groupId,
-      // slot)).
-      const vol: Record<string, number> = {}
-      placed.forEach(({ gain }, i) => {
-        vol[stemKey(groupId, i + 1)] = gain
-      })
 
       dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
     } finally {
