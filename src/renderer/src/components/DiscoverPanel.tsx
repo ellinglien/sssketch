@@ -722,15 +722,23 @@ export function DiscoverPanel({
           (DiscoverSlotRow, below) -- injected once here rather than per-row,
           same "one <style> tag for the whole list" convention
           ClusterStemsBrowser.tsx's own row-assignment pulse animation
-          already uses. A rotating dashed RING made sense while this
-          placeholder matched PolarGlyph's own circular footprint; now that
-          it matches the linear Waveform's rectangular one (this session's
-          own radial-to-linear swap), an opacity pulse reads as "in
-          progress" without the visual oddity of a rotating rectangle. */}
+          already uses. discover-slot-pulse (opacity-only) is still used for
+          the FAILED state -- a static "this stopped" cue. Direct request
+          ("like a slot machine loading animation until a new waveform
+          appears"): the RESOLVING state instead gets discover-slot-reel, a
+          striped bar pattern sliding horizontally -- no real waveform data
+          exists yet to show, so this fakes the shape of one spinning past,
+          same spirit as Upcycle's own reel animation, drawn with this
+          app's existing dim/bright tokens rather than a literal fruit-reel
+          graphic. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
+        }
+        @keyframes discover-slot-reel {
+          from { background-position: 0 0; }
+          to { background-position: -28px 0; }
         }
       `}</style>
       {showConsentPrompt && (
@@ -1316,7 +1324,18 @@ function DiscoverSlotRow({
                   ? 'var(--ra-mute-on)'
                   : 'var(--ra-border)'
             }`,
-            animation: resolving ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
+            // Slot-machine reel while genuinely resolving -- a striped bar
+            // pattern sliding horizontally, since there's no real waveform
+            // to show yet. Static (no background/animation) once settled
+            // either way (failed or truly empty).
+            backgroundImage: resolving
+              ? 'repeating-linear-gradient(90deg, var(--ra-text-4) 0px, var(--ra-text-4) 2px, transparent 2px, transparent 7px, var(--ra-stretch-on) 7px, var(--ra-stretch-on) 9px, transparent 9px, transparent 14px, var(--ra-text-4) 14px, var(--ra-text-4) 17px, transparent 17px, transparent 28px)'
+              : undefined,
+            animation: resolving
+              ? 'discover-slot-reel 700ms linear infinite'
+              : resolveFailed
+                ? 'discover-slot-pulse 900ms ease-in-out infinite'
+                : undefined
           }}
         />
       )}
