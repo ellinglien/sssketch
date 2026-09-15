@@ -1,7 +1,32 @@
 // src/main/discoverCandidates.test.ts
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { getDiscoverCandidates } from './discoverCandidates'
+import { getDiscoverCandidates, getRandomLibraryCandidate } from './discoverCandidates'
+import * as categoryCentroidStore from './categoryCentroidStore'
+import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
+import type { StemFeatures } from '@shared/stemFeatures'
+
+// getCentroidGuessedStemCIDs's own dedicated test below spies on
+// loadCategoryCentroidStore to supply a real trained store (the real one
+// reads app.getPath('userData'), mocked to empty above) -- restored after
+// every test so the spy never leaks into a LATER test that expects the
+// real "nothing trained yet" behavior.
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+// getCentroidGuessedStemCIDs (via loadCategoryCentroidStore) reads
+// app.getPath('userData') on every call -- mock just that narrow surface,
+// same established convention as discoverLibraryStems.test.ts (this
+// codebase avoids mocking the `electron` module wholesale, see CLAUDE.md's
+// Testing conventions section). Pointed at a path that won't exist, so
+// loadCategoryCentroidStore falls back to its own documented "empty store"
+// behavior rather than reading a real file from a real user's machine.
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => '/tmp/discoverCandidates-test-userdata'
+  }
+}))
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -26,6 +51,9 @@ function freshDb(): Database.Database {
     CREATE TABLE StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
+    CREATE TABLE StemFeatureCache (
+      StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
+    );
   `)
   return db
 }
@@ -34,6 +62,26 @@ function seedEmbedding(db: Database.Database, stemCID: string, embedding: number
   db.prepare(
     `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt) VALUES (?, ?, 1000)`
   ).run(stemCID, JSON.stringify(embedding))
+}
+
+function seedFeatures(
+  db: Database.Database,
+  stemCID: string,
+  overrides: Partial<StemFeatures> = {}
+): void {
+  const features: StemFeatures = {
+    transientDensity: 0,
+    bassEnergyRatio: 0,
+    spectralCentroidHz: 0,
+    zcrBrightness: 0,
+    voicedFraction: 0,
+    pitchVarianceCents: 0,
+    mfcc: new Array(13).fill(0),
+    ...overrides
+  }
+  db.prepare(
+    `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 1000)`
+  ).run(stemCID, JSON.stringify(features))
 }
 
 function seedRiff(
@@ -629,5 +677,122 @@ describe('getDiscoverCandidates', () => {
     })
     // Still the cached (stale) result.
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
+  })
+
+  // Direct point, 2026-09-15: "you have lots of data from saved tidied up
+  // stems, right? it should be straightforward to run a generic DSP/
+  // audio-feature classifier similar to that" -- the classifier already
+  // existed (categoryCentroids.ts, trained by every real StemCategories
+  // write); this proves getCentroidGuessedStemCIDs actually wires it into
+  // Discover's own pool. Spies on loadCategoryCentroidStore to supply a
+  // real trained store (the real one reads app.getPath, mocked to an
+  // empty/nonexistent path at the top of this file) -- restored by the
+  // top-level afterEach.
+  it('includes an UNCONFIRMED stem whose own DSP feature vector (StemFeatureCache) confidently classifies via the centroid classifier', async () => {
+    const own = freshDb()
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    // 3 confirmed 'drums' samples (high transientDensity), 3 confirmed
+    // 'bass' samples (high bassEnergyRatio) -- the minimum
+    // suggestCategory needs per category, with 2 categories trained.
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+
+    seedRiff(own, 'r1', 'jam1', 128, ['unconfirmed-1'])
+    seedStem(own, 'unconfirmed-1', 'jam1', { presetName: 'maybe a kick' })
+    // Close to the drums cluster (high transientDensity, low
+    // bassEnergyRatio), no StemCategories row at all.
+    seedFeatures(own, 'unconfirmed-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['unconfirmed-1'])
+    expect(candidates[0]).toMatchObject({ arrangeRole: 'drums', drumSubRole: null })
+  })
+})
+
+describe('getRandomLibraryCandidate', () => {
+  it('returns a real, unclassified stem, labeled with the CALLER-supplied role', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 140, ['s1'])
+    seedStem(own, 's1', 'jam1', { presetName: 'anything', creatorUserName: 'elling' })
+    // Deliberately no StemCategories/embedding/instrument data at all --
+    // this path needs none of it.
+
+    const candidate = await getRandomLibraryCandidate({
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidate).toMatchObject({
+      stemCID: 's1',
+      riffCID: 'r1',
+      jamCID: 'jam1',
+      riffBpm: 140,
+      presetName: 'anything',
+      creatorUserName: 'elling',
+      arrangeRole: 'drums',
+      drumSubRole: null
+    })
+  })
+
+  it('returns null when no jam has any stem at all', async () => {
+    const own = freshDb()
+    const candidate = await getRandomLibraryCandidate({
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidate).toBeNull()
+  })
+
+  it('filters by ownership when onlyOwnStems is true', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1', { creatorUserName: 'someone-else' })
+
+    const candidate = await getRandomLibraryCandidate({
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums',
+      onlyOwnStems: true,
+      targetUser: 'elling'
+    })
+    // The only stem in the library belongs to someone else -- no match.
+    expect(candidate).toBeNull()
+  })
+
+  it('finds an owned stem when onlyOwnStems is true and one exists', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1', { creatorUserName: 'someone-else' })
+    seedStem(own, 's2', 'jam1', { creatorUserName: 'elling' })
+
+    const candidate = await getRandomLibraryCandidate({
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'bass',
+      onlyOwnStems: true,
+      targetUser: 'elling'
+    })
+    expect(candidate?.stemCID).toBe('s2')
+  })
+
+  it('does not throw and tries another jam when one jam has no Stems table at all', async () => {
+    const broken = new Database(':memory:')
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+
+    const candidate = await getRandomLibraryCandidate({
+      jams: [
+        { jamCID: 'jamBroken', dbForJam: broken },
+        { jamCID: 'jam1', dbForJam: own }
+      ],
+      arrangeRole: 'drums'
+    })
+    expect(candidate?.stemCID).toBe('s1')
   })
 })

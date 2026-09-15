@@ -190,6 +190,12 @@ const api = {
     targetUser?: string
   ): Promise<DiscoverCandidate[]> =>
     ipcRenderer.invoke('get-discover-candidates', arrangeRole, onlyOwnStems, targetUser),
+  getRandomDiscoverCandidate: (
+    arrangeRole: ArrangeRole,
+    onlyOwnStems: boolean,
+    targetUser?: string
+  ): Promise<DiscoverCandidate | null> =>
+    ipcRenderer.invoke('get-random-discover-candidate', arrangeRole, onlyOwnStems, targetUser),
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),

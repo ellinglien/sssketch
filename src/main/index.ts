@@ -61,7 +61,11 @@ import {
   candidateDbsForRiff,
   listJamsWithDb
 } from './riffLibraryStore'
-import { getDiscoverCandidates, type DiscoverCandidate } from './discoverCandidates'
+import {
+  getDiscoverCandidates,
+  getRandomLibraryCandidate,
+  type DiscoverCandidate
+} from './discoverCandidates'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { listLibraryScanTargets } from './discoverLibraryStems'
@@ -738,6 +742,22 @@ app.whenReady().then(async () => {
     ): Promise<DiscoverCandidate[]> =>
       getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
+        jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+        arrangeRole,
+        onlyOwnStems,
+        targetUser
+      })
+  )
+
+  ipcMain.handle(
+    'get-random-discover-candidate',
+    (
+      _event,
+      arrangeRole: ArrangeRole,
+      onlyOwnStems: boolean,
+      targetUser?: string
+    ): Promise<DiscoverCandidate | null> =>
+      getRandomLibraryCandidate({
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         arrangeRole,
         onlyOwnStems,

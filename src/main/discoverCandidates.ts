@@ -2,8 +2,11 @@
 import type Database from 'better-sqlite3'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
 import { suggestCategoryFromEmbedding } from '@shared/embeddingMatch'
+import { suggestCategory } from '@shared/categoryCentroids'
+import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { getConfirmedEmbeddings } from './embeddingMatch'
+import { loadCategoryCentroidStore } from './categoryCentroidStore'
 
 /** One library-wide candidate for a Discover slot -- a stem that's EITHER
  * human-confirmed (StemCategories) for the requested ArrangeRole, or whose
@@ -232,6 +235,96 @@ async function getEmbeddingGuessedStemCIDs(
   return guessed
 }
 
+// Same shape/TTL as guessedStemCIDsCache above, for
+// getCentroidGuessedStemCIDs below -- a separate cache since it's a
+// separate data source (StemFeatureCache + categoryCentroidStore, not
+// StemEmbeddingCache + getConfirmedEmbeddings).
+const centroidGuessedStemCIDsCache = new WeakMap<
+  Database.Database,
+  Map<ArrangeRole, { guessed: Set<string>; computedAt: number }>
+>()
+
+/** Every StemCID, library-wide, that ISN'T confirmed for ANY ArrangeRole
+ * (same cross-role-leakage guard as getEmbeddingGuessedStemCIDs) but whose
+ * own persisted DSP feature vector (StemFeatureCache -- transient
+ * density, spectral centroid, MFCCs, etc.; see @shared/stemFeatures'
+ * StemFeatures/toFeatureArray) classifies confidently as `arrangeRole` via
+ * the SAME nearest-centroid classifier (suggestCategory,
+ * @shared/categoryCentroids) Tidy Up's own per-stem suggestions already
+ * use. Direct point, 2026-09-15: "you have lots of data from saved tidied
+ * up stems, right? it should be straightforward to run a generic DSP/
+ * audio-feature classifier" -- exactly right, and a real gap: this
+ * classifier already exists, is already trained by EVERY StemCategories
+ * write (trainCentroidsFromRoleEntries, categoryCentroidTraining.ts,
+ * called from the upsert-stem-category-bus/-role IPC handlers -- so
+ * Elling's own 20 just-confirmed stems already trained it, live, before
+ * this function even existed), and was simply never wired into Discover's
+ * own widening alongside the YAMNet-embedding path.
+ *
+ * Likely MORE immediately useful than the embedding path in practice:
+ * StemFeatureCache (plain signal-processing features) is far cheaper to
+ * extract than a YAMNet embedding, so the whole-library scan populates it
+ * faster -- more stems may already be classifiable this way before the
+ * embedding table catches up.
+ *
+ * Same crash-safety discipline as every other widening source in this
+ * file (this exact file crashed the app three times earlier the same
+ * day): `.all()`, never `.iterate()`, so no statement is ever left open
+ * across an await; yields periodically since classifying many stems is
+ * real synchronous CPU work; cached per (db instance, role) so repeated
+ * rolls don't re-pay it. */
+async function getCentroidGuessedStemCIDs(
+  ownDb: Database.Database,
+  arrangeRole: ArrangeRole
+): Promise<Set<string>> {
+  const dbCache = centroidGuessedStemCIDsCache.get(ownDb) ?? new Map()
+  centroidGuessedStemCIDsCache.set(ownDb, dbCache)
+
+  const cached = dbCache.get(arrangeRole)
+  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.guessed
+
+  const store = loadCategoryCentroidStore()
+  const guessed = new Set<string>()
+
+  const confirmedAnyRole = new Set(
+    (
+      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
+        StemCID: string
+      }[]
+    ).map((r) => r.StemCID)
+  )
+
+  // Fully executed and closed before the classify loop below ever awaits
+  // -- same "never leave a statement open across an await" discipline as
+  // every other bulk read in this file.
+  const rows = ownDb.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all() as {
+    StemCID: string
+    FeaturesJSON: string
+  }[]
+
+  let sinceYield = 0
+  for (const row of rows) {
+    if (!confirmedAnyRole.has(row.StemCID)) {
+      try {
+        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
+        if (suggestCategory(store, 'arrangeRole', toFeatureArray(features)) === arrangeRole) {
+          guessed.add(row.StemCID)
+        }
+      } catch {
+        // Corrupted row -- skip, same defensive handling this file's
+        // other classify loops already use for their own cache tables.
+      }
+    }
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
+  return guessed
+}
+
 /** Every StemCID, across the given jams, that isn't confirmed
  * (StemCategories) for ANY ArrangeRole -- not just the one being queried,
  * same cross-role-leakage guard getEmbeddingGuessedStemCIDs's own doc
@@ -409,6 +502,18 @@ export async function getDiscoverCandidates({
     })
   }
 
+  const centroidGuessedStemCIDs = await getCentroidGuessedStemCIDs(ownDb, arrangeRole)
+  for (const stemCID of centroidGuessedStemCIDs) {
+    // Same "never overwrite a real confirmed row, harmless to re-set one
+    // another widening source already added" reasoning as the embedding
+    // merge above.
+    categoryByStemCID.set(stemCID, {
+      StemCID: stemCID,
+      ArrangeRole: arrangeRole,
+      DrumSubRole: null
+    })
+  }
+
   const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
   for (const stemCID of instrumentMatchedStemCIDs) {
     // getInstrumentMatchedStemCIDs already excludes anything confirmed for
@@ -528,4 +633,103 @@ export async function getDiscoverCandidates({
   }
 
   return out
+}
+
+// How many jams to try, at most, before giving up and returning null --
+// bounds the cost regardless of library size (see getRandomLibraryCandidate
+// below's own doc comment for why trying jams one at a time, rather than
+// one query over the whole library, is the deliberate design here).
+const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
+
+/** Direct request, 2026-09-15: "an option to just start with a completely
+ * random stem of the user's from their library, then go from there" --
+ * bypasses confirmed/embedding/instrument matching ENTIRELY, so it works
+ * regardless of whether anything has been confirmed or scanned yet (the
+ * exact "stuck at zero" case that prompted it). Labeled with the CALLER's
+ * `arrangeRole` (the slot's own role) rather than anything inferred --
+ * this is a real, unclassified stem the user picks to start from and can
+ * later confirm/replace via Tidy Up, not a claim that it IS that role.
+ *
+ * Picks a RANDOM JAM first (not `ORDER BY RANDOM() LIMIT 1` over every
+ * jam's Stems table unioned together), then a random stem WITHIN that one
+ * jam -- scanning every jam's own table to pick one random row across the
+ * whole library would cost as much as the exact full-library scan this
+ * feature exists to avoid waiting on. Tries up to
+ * RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS different jams (shuffled) before
+ * giving up, since a single jam might have no stems at all (rare) or none
+ * matching `onlyOwnStems` -- bounded, so a library with many "empty" jams
+ * still returns quickly instead of trying every single one. Returns null
+ * (never throws) if nothing turns up within that budget; the caller
+ * treats this the same as "no match" from the other candidate sources. */
+export async function getRandomLibraryCandidate({
+  jams,
+  arrangeRole,
+  onlyOwnStems = false,
+  targetUser
+}: {
+  jams: JamDbPair[]
+  arrangeRole: ArrangeRole
+  onlyOwnStems?: boolean
+  targetUser?: string
+}): Promise<DiscoverCandidate | null> {
+  const shuffled = [...jams]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS)
+
+  for (const { jamCID, dbForJam } of shuffled) {
+    let stemRow:
+      { StemCID: string; PresetName: string | null; CreatorUserName: string | null } | undefined
+    try {
+      stemRow =
+        onlyOwnStems && targetUser
+          ? (dbForJam
+              .prepare(
+                `SELECT StemCID, PresetName, CreatorUserName FROM Stems
+                 WHERE OwnerJamCID = ? AND CreatorUserName = ? ORDER BY RANDOM() LIMIT 1`
+              )
+              .get(jamCID, targetUser) as typeof stemRow)
+          : (dbForJam
+              .prepare(
+                `SELECT StemCID, PresetName, CreatorUserName FROM Stems
+                 WHERE OwnerJamCID = ? ORDER BY RANDOM() LIMIT 1`
+              )
+              .get(jamCID) as typeof stemRow)
+    } catch {
+      // Same defensive handling as every other per-jam query in this file
+      // -- an external jam db missing even a core table shouldn't abort
+      // the whole attempt, just this one jam.
+      continue
+    }
+    if (!stemRow) continue
+
+    let riffRow: { RiffCID: string; BPMrnd: number } | undefined
+    try {
+      riffRow = dbForJam
+        .prepare(
+          `SELECT RiffCID, BPMrnd FROM Riffs WHERE OwnerJamCID = ? AND (
+             StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
+             StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
+           ) LIMIT 1`
+        )
+        .get(jamCID, ...Array<string>(8).fill(stemRow.StemCID)) as typeof riffRow
+    } catch {
+      continue
+    }
+    // A Stems row with no owning Riffs row is stale/orphaned data (same
+    // real-world case the main candidate query already tolerates) -- try
+    // another jam rather than returning a candidate with no riff to place.
+    if (!riffRow) continue
+
+    return {
+      stemCID: stemRow.StemCID,
+      jamCID,
+      riffCID: riffRow.RiffCID,
+      presetName: stemRow.PresetName ?? '',
+      creatorUserName: stemRow.CreatorUserName ?? '',
+      arrangeRole,
+      drumSubRole: null,
+      riffBpm: riffRow.BPMrnd
+    }
+  }
+  return null
 }

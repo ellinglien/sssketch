@@ -623,6 +623,50 @@ export function DiscoverPanel({
     await rollForSlot(id, slot.role)
   }
 
+  // Direct request, 2026-09-15: "an option to just start with a completely
+  // random stem of the user's from their library, then go from there" --
+  // bypasses confirmed/embedding/instrument matching entirely (unlike
+  // rollForSlot above), for the exact case that prompted it: stuck at
+  // "no match" regardless of how loose/confirmed the role-based pool is.
+  // Shares rerollGenerationRef/rerollingSlotIds with rollForSlot -- both
+  // ultimately just set `candidate` on the same slot, so they need the
+  // SAME stale-response guard against each other (a random roll landing
+  // after a NEWER normal reroll for the same slot, or vice versa, must
+  // not overwrite it).
+  async function rollRandomForSlot(id: string, role: ArrangeRole): Promise<void> {
+    const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
+    rerollGenerationRef.current.set(id, myGeneration)
+    setRerollingSlotIds((prev) => new Set(prev).add(id))
+    try {
+      const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
+      const candidate = await window.rifffApi.getRandomDiscoverCandidate(
+        role,
+        effectiveOnlyOwnStems,
+        currentUsername
+      )
+      if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      setSlots((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, candidate, hasRerolled: true } : s))
+      )
+    } catch (err) {
+      console.error(`DiscoverPanel: rollRandomForSlot(${role}) failed:`, err)
+    } finally {
+      if (rerollGenerationRef.current.get(id) === myGeneration) {
+        setRerollingSlotIds((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }
+    }
+  }
+
+  async function rerollRandomSlot(id: string): Promise<void> {
+    const slot = slots.find((s) => s.id === id)
+    if (!slot) return
+    await rollRandomForSlot(id, slot.role)
+  }
+
   async function rerollAll(): Promise<void> {
     // Sequential, not Promise.all -- each slot's own reroll is a real IPC
     // round trip; running them one at a time keeps this simple and avoids
@@ -868,6 +912,7 @@ export function DiscoverPanel({
             onToggleLock={() => toggleLock(slot.id)}
             onRemove={() => removeSlot(slot.id)}
             onReroll={() => void rerollSlot(slot.id)}
+            onRerollRandom={() => void rerollRandomSlot(slot.id)}
             onTogglePreview={() => toggleSlotPreview(slot.id)}
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
@@ -942,6 +987,7 @@ function DiscoverSlotRow({
   onToggleLock,
   onRemove,
   onReroll,
+  onRerollRandom,
   onTogglePreview,
   onResolvedChange,
   onGainChange
@@ -974,6 +1020,11 @@ function DiscoverSlotRow({
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
+  /** DiscoverPanel's own rerollRandomSlot -- bypasses confirmed/embedding/
+   * instrument matching entirely, picking any stem from the user's own
+   * library at random. Direct request: an escape hatch for exactly the
+   * "stuck at no match regardless of chaos/confirmation" case. */
+  onRerollRandom: () => void
   /** DiscoverPanel's own updateSlotGain -- fires on every tick of a drag
    * directly on this row's own waveform (handleGainDragStart, below),
    * mirroring StemWaveformRow.tsx's own "envelope" volume-drag gesture
@@ -1396,6 +1447,22 @@ function DiscoverSlotRow({
           : slot.candidate
             ? 'reroll'
             : 'roll'}
+      </button>
+      <button
+        onClick={onRerollRandom}
+        disabled={rerolling}
+        title="skip role matching -- pick any random stem from your own library"
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 9,
+          padding: '3px 8px',
+          background: 'transparent',
+          border: '1px solid var(--ra-border)',
+          color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+          cursor: rerolling ? 'default' : 'pointer'
+        }}
+      >
+        random
       </button>
       <button
         onClick={onRemove}
