@@ -680,6 +680,26 @@ export function DiscoverPanel({
     const currentlyPreviewing = previewingSlotIdsRef.current
     if (!currentlyPreviewing.has(id)) {
       const next = new Set(currentlyPreviewing).add(id)
+      // Real regression, found live right after the discoverCandidates.ts
+      // perf fixes landed: "loading stems is much faster now! but when
+      // they are loaded they are not playing automatically." Root cause:
+      // previewingSlotIdsRef only used to update via the mirroring
+      // useEffect below (`previewingSlotIdsRef.current = previewingSlotIds`),
+      // which runs AFTER React commits the render following
+      // setPreviewingSlotIds -- fine when candidate resolution was slow
+      // enough that two slots' own resolvePreviewAudio calls essentially
+      // never landed in the same render batch, but now that resolution is
+      // fast, multiple slots routinely finish within the same tick. The
+      // SECOND slot's own call read this same stale (pre-effect) ref,
+      // computed `next` as just ITS OWN id (missing the first slot's,
+      // which hadn't reached the ref yet), and restartMix's own diff (see
+      // its doc comment above) then STOPPED the first slot's just-started
+      // source since it wasn't in this narrower `next` -- only the last
+      // slot to resolve in a batch ever ended up actually playing. Writing
+      // the ref synchronously here (not waiting for the mirroring effect)
+      // means the next concurrent call always unions onto the truth, not a
+      // stale snapshot.
+      previewingSlotIdsRef.current = next
       setPreviewingSlotIds(next)
       restartMix(next, false)
       return
