@@ -562,10 +562,22 @@ export function DiscoverPanel({
       // check then excludes essentially every real stem -- zero candidates,
       // forever, with no error and no hint why.
       const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
+      // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
+      // staying stuck with no console errors made it impossible to tell,
+      // from the outside, whether the IPC call itself was the slow part
+      // or something after it. Remove once confirmed. No timing captured
+      // here (react-compiler's purity rule rejects performance.now()/
+      // Date.now() inside a component-defined function) -- the main
+      // process's own matching log (index.ts's get-discover-candidates
+      // handler) already reports its own internal timing.
+      console.log(`DiscoverPanel: rollForSlot(${role}) -- calling getDiscoverCandidates`)
       const candidates = await window.rifffApi.getDiscoverCandidates(
         role,
         effectiveOnlyOwnStems,
         currentUsername
+      )
+      console.log(
+        `DiscoverPanel: rollForSlot(${role}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       // Direct report: adding two or three slots of the same role (e.g.
@@ -588,6 +600,11 @@ export function DiscoverPanel({
       const pool = deduped.length > 0 ? deduped : candidates
       const ranked = rankCandidates(pool, { targetBpm: bpm })
       const picked = pickReroll(ranked, chaos)
+      // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
+      // above. Remove once confirmed.
+      console.log(
+        `DiscoverPanel: rollForSlot(${role}) -- ranked/picked, calling setSlots (picked=${picked?.stemCID ?? 'null'})`
+      )
       // hasRerolled set true in this same setSlots call, alongside
       // candidate -- see DiscoverSlot's own doc comment above for why this
       // only happens on the generation-guarded path (never for a stale,

@@ -744,19 +744,34 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'get-discover-candidates',
-    (
+    async (
       _event,
       arrangeRole: ArrangeRole,
       onlyOwnStems: boolean,
       targetUser?: string
-    ): Promise<DiscoverCandidate[]> =>
-      getDiscoverCandidates({
+    ): Promise<DiscoverCandidate[]> => {
+      // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
+      // staying stuck with no console errors made it impossible to tell,
+      // from the outside, which part of this handler was slow. Remove
+      // once confirmed.
+      const t0 = Date.now()
+      const jams = listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
+      const t1 = Date.now()
+      console.log(
+        `get-discover-candidates(${arrangeRole}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
+      )
+      const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
-        jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+        jams,
         arrangeRole,
         onlyOwnStems,
         targetUser
       })
+      console.log(
+        `get-discover-candidates(${arrangeRole}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
+      )
+      return result
+    }
   )
 
   ipcMain.handle(
