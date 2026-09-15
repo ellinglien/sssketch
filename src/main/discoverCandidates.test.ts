@@ -389,6 +389,49 @@ describe('getDiscoverCandidates', () => {
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
 
+  // Real perf bug, found live AGAIN at real scale, even after the
+  // db-grouping and redundant-jam-filter fixes above: query COUNT wasn't
+  // the dominant cost, evaluating an unindexed 8-column `IN (...)` clause
+  // against every row of a genuinely huge table was -- confirmed live via
+  // a real ~80 SECOND getDiscoverCandidates call that stayed ~80 seconds
+  // even after those two earlier fixes cut the query count by ~26x, on
+  // Elling's own real library (5,057 jams, one read-only external
+  // archive -- no index possible). Fixed by reading the whole Riffs
+  // table ONCE per db connection (no WHERE clause at all) and caching an
+  // in-memory index for several minutes. This test proves the fix: TWO
+  // getDiscoverCandidates calls for the SAME db (even for different
+  // roles) must only query `FROM Riffs` ONCE total, not once per call.
+  it('caches the Riffs table scan across multiple calls for the same db, querying it only once', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
+    seedStem(own, 's2', 'jam1')
+    seedCategory(own, 's2', { arrangeRole: 'bass', busId: 'bass' })
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+
+    const drumsCandidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    const bassCandidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'bass'
+    })
+    expect(drumsCandidates.map((c) => c.stemCID)).toEqual(['s1'])
+    expect(bassCandidates.map((c) => c.stemCID)).toEqual(['s2'])
+
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    expect(riffsQueries.length).toBe(1)
+    // The one query that DOES run has no WHERE clause at all -- a plain
+    // sequential scan, the cheapest possible shape for a full read.
+    expect(riffsQueries[0][0]).not.toMatch(/WHERE/)
+  })
+
   // Widening (2026-09-15, direct request): a role with a too-small
   // confirmed pool should still surface stems the background classify scan
   // (stemAutoClassify.ts) has already precomputed. The scan's own
