@@ -487,7 +487,26 @@ export async function getDiscoverCandidates({
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
 
-  const guessedStemCIDs = await getEmbeddingGuessedStemCIDs(ownDb, arrangeRole)
+  // Real report, 2026-09-15: even with each source's own TTL cache (added
+  // earlier the same day), the FIRST roll of a session pays for all three
+  // widening sources COLD, and running them one at a time (await, await,
+  // await) meant paying their sum -- adding the centroid path as a THIRD
+  // sequential scan made this worse, not better, right after it shipped.
+  // Promise.all runs them concurrently instead, so a cold-cache roll costs
+  // roughly the SLOWEST of the three, not their sum. Safe to run
+  // concurrently on the SAME `ownDb` connection: every one of these three
+  // functions uses `.all()`, never `.iterate()` (each one's own doc
+  // comment explains why, after the real "database connection is busy"
+  // crash earlier today) -- none of them ever leaves a SQLite statement
+  // open across an `await`, so their own internal yields can interleave
+  // freely without any of the three ever seeing a statement left mid-flight
+  // by another.
+  const [guessedStemCIDs, centroidGuessedStemCIDs, instrumentMatchedStemCIDs] = await Promise.all([
+    getEmbeddingGuessedStemCIDs(ownDb, arrangeRole),
+    getCentroidGuessedStemCIDs(ownDb, arrangeRole),
+    getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
+  ])
+
   for (const stemCID of guessedStemCIDs) {
     // A guessed (not human-confirmed) row -- DrumSubRole stays null since
     // the embedding classifier here only ever runs on the arrangeRole axis
@@ -502,7 +521,6 @@ export async function getDiscoverCandidates({
     })
   }
 
-  const centroidGuessedStemCIDs = await getCentroidGuessedStemCIDs(ownDb, arrangeRole)
   for (const stemCID of centroidGuessedStemCIDs) {
     // Same "never overwrite a real confirmed row, harmless to re-set one
     // another widening source already added" reasoning as the embedding
@@ -514,7 +532,6 @@ export async function getDiscoverCandidates({
     })
   }
 
-  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
   for (const stemCID of instrumentMatchedStemCIDs) {
     // getInstrumentMatchedStemCIDs already excludes anything confirmed for
     // ANY role (its own doc comment), so this can never overwrite a real
