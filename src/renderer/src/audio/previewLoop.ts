@@ -22,29 +22,9 @@ export interface PreviewStemInput {
    * perfectly in sync. Optional so a caller without this metadata handy
    * still gets the old (buffer-length) behavior rather than a type error. */
   durationSec?: number
-  /** Buffer offset (seconds) to START playback from, instead of the loop's
-   * own beginning -- direct request, 2026-09-15: "any button press...
-   * triggers the samples to start from the beginning." DiscoverPanel's own
-   * restartMix uses this so a source joining an ALREADY-PLAYING mix (an
-   * unmute, a reroll landing new audio) starts phase-aligned to wherever
-   * the rest of the tempo-synced mix already is in its own loop, rather
-   * than audibly retriggering at position 0 out of sync with everyone
-   * else. Must be < durationSec (or < the decoded buffer's own duration
-   * when durationSec is unset) to land within one loop's own length;
-   * defaults to 0 (start of buffer), the previous, only behavior. */
-  startOffsetSec?: number
 }
 
-/** One started preview source, paired with its own GainNode and the
- * INPUT stem it came from (by reference -- callers that need to find
- * "which pair is THIS stem" again later can compare by identity or by
- * `stem.path`, whichever fits). Exposing the gain node lets a caller
- * adjust volume LIVE (direct-node adjustment, no stop/restart) instead
- * of tearing down and re-starting playback just to change a level --
- * see startPreviewLoopWithGain's own doc comment for why this is a
- * separate function rather than changing startPreviewLoop's own return
- * type. */
-export interface PreviewSourceWithGain {
+interface PreviewSource {
   source: AudioBufferSourceNode
   gainNode: GainNode
   stem: PreviewStemInput
@@ -54,7 +34,7 @@ async function buildPreviewSources(
   ctx: AudioContext,
   stems: PreviewStemInput[],
   isCancelled: () => boolean
-): Promise<PreviewSourceWithGain[]> {
+): Promise<PreviewSource[]> {
   const decodeResults = await Promise.allSettled(
     stems.map(async (stem) => {
       const bytes = await window.rifffApi.readAudioFile(stem.path)
@@ -65,7 +45,7 @@ async function buildPreviewSources(
   )
   if (isCancelled()) return []
 
-  const pairs: PreviewSourceWithGain[] = []
+  const pairs: PreviewSource[] = []
   for (const result of decodeResults) {
     if (result.status === 'rejected') {
       console.error('previewLoop: failed to decode preview audio:', result.reason)
@@ -89,25 +69,7 @@ async function buildPreviewSources(
       gainNode.gain.value = stem.gain ?? 1
       source.connect(gainNode)
       gainNode.connect(ctx.destination)
-      // Real bug, found live 2026-09-15 ("discover stems are loading but
-      // not playing"): AudioBufferSourceNode.start(when, offset) THROWS
-      // synchronously if offset isn't a finite, non-negative number --
-      // DiscoverPanel's own restartMix computes startOffsetSec via a
-      // modulo against the stem's own durationSec, which is NaN if that
-      // duration is ever 0 (or otherwise non-finite). Uncaught here (this
-      // whole per-stem body used to run with no try/catch at all), that
-      // throw aborted buildPreviewSources entirely -- since neither this
-      // function nor any caller ever attaches a .catch() (matching every
-      // OTHER "fire the preview, handle it in .then()" callsite in this
-      // codebase), it silently became an unhandled promise rejection: NO
-      // stem in the batch ended up playing, with no visible error
-      // anywhere. Clamping/validating here, isolated per-stem inside this
-      // try, means one bad stem's offset can't sink every other stem in
-      // the same restartMix call -- same "one bad one doesn't block the
-      // rest" resilience decode failures already get, just one step later.
-      const rawOffset = stem.startOffsetSec ?? 0
-      const safeOffset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0
-      source.start(0, safeOffset)
+      source.start(0)
       pairs.push({ source, gainNode, stem })
     } catch (err) {
       console.error('previewLoop: failed to start preview source:', err)
@@ -138,30 +100,6 @@ export async function startPreviewLoop(
 ): Promise<AudioBufferSourceNode[]> {
   const pairs = await buildPreviewSources(ctx, stems, isCancelled)
   return pairs.map((p) => p.source)
-}
-
-/** Same as startPreviewLoop, but also returns each source's own GainNode
- * (and the stem it came from) -- direct request, 2026-09-15: "dragging
- * envelope/volume shouldn't retrigger start of samples... should not
- * affect playhead." DiscoverPanel's own multi-slot mix previously had no
- * way to change one slot's volume without a FULL restartMix (stop every
- * source, re-decode, re-start every source from position 0) -- audible
- * as every OTHER currently-playing slot's own loop position visibly
- * jumping back to its start, not just the one being adjusted. Exposing
- * the gain node lets a caller set `.gain.value` directly instead --
- * genuinely live, zero-latency, and touches only the one node being
- * adjusted, leaving every other source's own playback position (and the
- * preview's own playhead) completely undisturbed. A separate function
- * rather than changing startPreviewLoop's own return type, since three
- * OTHER callers (LibraryBrowser/Shelf/ProjectLibraryBrowser, none of
- * which need live per-stem gain access) already depend on its existing
- * `AudioBufferSourceNode[]` shape. */
-export async function startPreviewLoopWithGain(
-  ctx: AudioContext,
-  stems: PreviewStemInput[],
-  isCancelled: () => boolean
-): Promise<PreviewSourceWithGain[]> {
-  return buildPreviewSources(ctx, stems, isCancelled)
 }
 
 /** Stops every source in the list — safe to call on sources already
