@@ -1,6 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { PolarGlyph } from './PolarGlyph'
+import { Waveform } from './Waveform'
 import { stemColorVar } from '../theme/typeColor'
 import { getAudioContext } from '../audio/peakCache'
 import {
@@ -21,7 +21,7 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
  * `Stem` -- reused verbatim by both this component's own slot-preview
  * rendering (Step 1 below) and Task 11's "plunk in arranger" placement,
  * since both need exactly the same download-then-resolve step, just for
- * different reasons (a radial-waveform preview vs. a real placed clip).
+ * different reasons (a waveform preview vs. a real placed clip).
  * Downloads the candidate's own riff's missing stems on demand (same
  * `riffLibraryDownloadMissingStems` call `LibraryBrowser.tsx`'s own
  * `ensureStemsDownloaded` already makes) -- a candidate isn't guaranteed
@@ -206,10 +206,10 @@ export function DiscoverPanel({
   // started at -- null while nothing is playing. Every source in a mix is
   // started together in one synchronous pass (startPreviewLoop's own doc
   // comment), so one shared timestamp is enough for every row's own
-  // orbiting position dot (DiscoverSlotRow, below) to compute its own
-  // elapsed-time-mod-its-own-durationSec lap, the same "position dot orbits
-  // a PolarGlyph" convention SketchStrip.tsx already established for the
-  // real arranger transport -- just driven off wall-clock/AudioContext time
+  // playhead sweep (DiscoverSlotRow, below) to compute its own
+  // elapsed-time-mod-its-own-durationSec lap, the same "sweep across a
+  // waveform" convention ClusterStemsBrowser.tsx's own thumbnail playhead
+  // already established -- just driven off wall-clock/AudioContext time
   // here instead of the project's own playhead, since this preview mix
   // isn't going through the native engine at all.
   const [mixStartTime, setMixStartTime] = useState<number | null>(null)
@@ -463,7 +463,7 @@ export function DiscoverPanel({
   // Commits whatever loop is currently built in Discover onto the real
   // timeline, as one undo step -- every slot that currently has a
   // candidate (locked or not: "plunk" commits whatever's visible right
-  // now, the same loop the slot rows' own PolarGlyph previews are already
+  // now, the same loop the slot rows' own Waveform previews are already
   // showing, not a filtered subset). Each slot becomes its own fresh
   // single-stem Rifff; resolveCandidateStem (above, also used by the slot
   // rows themselves) does the real download/resolve work, since a
@@ -525,14 +525,19 @@ export function DiscoverPanel({
 
   return (
     <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
-      {/* One-time keyframes for a resolving slot's own spinning placeholder
-          ring (DiscoverSlotRow, below) -- injected once here rather than
-          per-row, same "one <style> tag for the whole list" convention
+      {/* One-time keyframes for a resolving slot's own placeholder box
+          (DiscoverSlotRow, below) -- injected once here rather than per-row,
+          same "one <style> tag for the whole list" convention
           ClusterStemsBrowser.tsx's own row-assignment pulse animation
-          already uses. */}
+          already uses. A rotating dashed RING made sense while this
+          placeholder matched PolarGlyph's own circular footprint; now that
+          it matches the linear Waveform's rectangular one (this session's
+          own radial-to-linear swap), an opacity pulse reads as "in
+          progress" without the visual oddity of a rotating rectangle. */}
       <style>{`
-        @keyframes discover-slot-spin {
-          to { transform: rotate(360deg); }
+        @keyframes discover-slot-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.35; }
         }
       `}</style>
       {showConsentPrompt && (
@@ -726,17 +731,17 @@ function DiscoverSlotRow({
   onResolvedChange: (stem: { path: string; durationSec: number } | null) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
-  // Stem (resolveCandidateStem, defined above) -- PolarGlyph needs a real
-  // on-disk path to decode (getBandEnergy/getPitchContour both read the
-  // file directly), and a DiscoverCandidate carries no local path of its
-  // own until resolved. Re-resolves whenever `slot.candidate` itself
-  // changes identity (a fresh reroll) -- `cancelled` guards against a
-  // stale, slower-resolving previous candidate's download completing
-  // AFTER a newer reroll has already replaced it, same stale-response
-  // guard convention as this session's own useStemFeatureScan.ts. An
-  // empty slot, or one whose candidate hasn't resolved yet (still
-  // downloading, or resolution failed), renders a plain placeholder ring
-  // instead of calling PolarGlyph with nothing to analyze.
+  // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
+  // on-disk path to decode (getPeaks/getBrightness both read the file
+  // directly), and a DiscoverCandidate carries no local path of its own
+  // until resolved. Re-resolves whenever `slot.candidate` itself changes
+  // identity (a fresh reroll) -- `cancelled` guards against a stale,
+  // slower-resolving previous candidate's download completing AFTER a
+  // newer reroll has already replaced it, same stale-response guard
+  // convention as this session's own useStemFeatureScan.ts. An empty slot,
+  // or one whose candidate hasn't resolved yet (still downloading, or
+  // resolution failed), renders a plain placeholder box instead of calling
+  // Waveform with nothing to decode.
   //
   // `resolved` is paired with the candidate it was resolved FOR (rather
   // than reset to null synchronously at the top of the effect below,
@@ -795,26 +800,20 @@ function DiscoverSlotRow({
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
 
-  // Orbiting position dot around this row's own PolarGlyph, mirroring
-  // SketchStrip.tsx's real-transport playhead dot and BeatPicker.tsx's own
-  // AudioContext-time-driven sweep -- but read-only (no drag/scrub; this is
-  // a passive preview, not a transport) and keyed off `mixStartTime`
-  // (AudioContext.currentTime the shared mix last (re)started at) rather
-  // than the project's own playhead, since this preview never touches the
-  // native engine. Direct report: multi-slot looping preview shipped with
-  // no visual indication of playback position, leaving no way to tell the
-  // loop was actually running versus stalled.
+  // Playhead sweep across this row's own linear Waveform, mirroring
+  // ClusterStemsBrowser.tsx's own thumbnail playhead line (same absolutely-
+  // positioned 1px `var(--ra-playhead)` bar at `left: fraction*100%`) and
+  // BeatPicker.tsx's own AudioContext-time-driven sweep -- but read-only (no
+  // drag/scrub; this is a passive preview, not a transport) and keyed off
+  // `mixStartTime` (AudioContext.currentTime the shared mix last (re)started
+  // at) rather than the project's own playhead, since this preview never
+  // touches the native engine. Direct report: multi-slot looping preview
+  // shipped with no visual indication of playback position, leaving no way
+  // to tell the loop was actually running versus stalled.
   //
-  // Each row orbits at its OWN lap speed (its own resolvedStem.durationSec)
-  // -- same "duration communicated through lap speed, not tile size"
-  // convention SketchStrip's own doc comment establishes, since two stems
-  // in the same mix can have different loop lengths.
-  //
-  // Coordinates are in PolarGlyph's own 100x100 viewBox space (SketchStrip's
-  // exact convention, including its OUTER_MARGIN=42-vs-orbitRadius=46
-  // numbers) rather than this row's actual 40px pixel size, so the overlay
-  // SVG below can reuse the same viewBox and scale down with it.
-  const [dot, setDot] = useState<{ x: number; y: number } | null>(null)
+  // Each row sweeps at its OWN lap speed (its own resolvedStem.durationSec),
+  // since two stems in the same mix can have different loop lengths.
+  const [sweepFraction, setSweepFraction] = useState<number | null>(null)
   useEffect(() => {
     // No setState here on the "nothing to animate" path -- same
     // early-return-with-no-setState shape BeatPicker.tsx's own sweep effect
@@ -829,16 +828,13 @@ function DiscoverSlotRow({
     let raf: number
     const tick = (): void => {
       const elapsed = getAudioContext().currentTime - mixStartTime
-      const fraction = (((elapsed % durationSec) + durationSec) % durationSec) / durationSec
-      const angleRad = fraction * 2 * Math.PI - Math.PI / 2 // start at 12 o'clock
-      const orbitRadius = 46 // just outside PolarGlyph's own outermost ring (OUTER_MARGIN=42)
-      setDot({ x: 50 + orbitRadius * Math.cos(angleRad), y: 50 + orbitRadius * Math.sin(angleRad) })
+      setSweepFraction((((elapsed % durationSec) + durationSec) % durationSec) / durationSec)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => {
       cancelAnimationFrame(raf)
-      setDot(null)
+      setSweepFraction(null)
     }
   }, [previewing, mixStartTime, resolvedStem])
 
@@ -900,35 +896,30 @@ function DiscoverSlotRow({
           }
           style={{
             position: 'relative',
-            width: 40,
-            height: 40,
+            width: 56,
+            height: 28,
             flexShrink: 0,
             padding: 0,
             background: 'transparent',
             border: 'none',
-            borderRadius: '50%',
             outline: previewing ? '1px solid var(--ra-stretch-on)' : 'none',
-            outlineOffset: 1,
+            outlineOffset: -1,
             cursor: 'pointer'
           }}
         >
-          <PolarGlyph stems={[resolvedStem]} identityColor={stemColorVar(resolvedStem)} size={40} />
-          {dot && (
-            <svg
-              width={40}
-              height={40}
-              viewBox="0 0 100 100"
-              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-            >
-              <circle
-                cx={dot.x}
-                cy={dot.y}
-                r={5}
-                fill="var(--ra-text)"
-                stroke="#000"
-                strokeWidth={1.5}
-              />
-            </svg>
+          <Waveform path={resolvedStem.path} color={stemColorVar(resolvedStem)} opacity={1} />
+          {sweepFraction !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${sweepFraction * 100}%`,
+                width: 1,
+                background: 'var(--ra-playhead)',
+                pointerEvents: 'none'
+              }}
+            />
           )}
         </button>
       ) : (
@@ -941,8 +932,8 @@ function DiscoverSlotRow({
                 : undefined
           }
           style={{
-            width: 40,
-            height: 40,
+            width: 56,
+            height: 28,
             flexShrink: 0,
             border: `1px dashed ${
               resolving
@@ -951,8 +942,7 @@ function DiscoverSlotRow({
                   ? 'var(--ra-mute-on)'
                   : 'var(--ra-border)'
             }`,
-            borderRadius: '50%',
-            animation: resolving ? 'discover-slot-spin 900ms linear infinite' : undefined
+            animation: resolving ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
           }}
         />
       )}
