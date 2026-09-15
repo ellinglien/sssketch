@@ -238,6 +238,66 @@ describe('buildEngineProject', () => {
     expect(stem.durationSec).toBe(rifff.stems[0].durationSec)
   })
 
+  // Real perf bug, found live 2026-09-15 via a direct report on a real
+  // 409-placed-stem project ("it's all very sluggish, the interface
+  // takes a while for buttons to register"): every stem needing a stretch
+  // used to be resolved SEQUENTIALLY, one `await resolveStretched(...)`
+  // at a time -- this function's own wall-clock cost scaled linearly with
+  // placed-stem count, on every single tracked state change, not just a
+  // real tempo change. Proves multiple stems' own resolutions now run
+  // CONCURRENTLY (not queued) by tracking how many of the mock resolver's
+  // own calls are simultaneously in flight -- more than one in flight at
+  // once is only possible if buildEngineProject isn't awaiting each call
+  // before starting the next.
+  it('resolves multiple stems needing a stretch CONCURRENTLY, not one at a time', async () => {
+    const NUM_RIFFFS = 5
+    const rifffs: Record<string, Rifff> = {}
+    for (let i = 0; i < NUM_RIFFFS; i++) {
+      rifffs[`r${i}`] = {
+        groupId: `r${i}`,
+        name: `test${i}`,
+        bpm: 150,
+        barLength: 8,
+        folderPath: '/x',
+        startBar: i * 8,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: `/${i}.wav`,
+            durationSec: 12.8,
+            barLength: 8
+          }
+        ]
+      }
+    }
+    let inFlight = 0
+    let maxInFlight = 0
+    const resolveStretched = vi.fn(async (path: string) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      inFlight -= 1
+      return { path: `${path}.stretched`, durationSec: 12.8 }
+    })
+    // bpm 100 != every rifff's own 150 -- every stem needs a real stretch.
+    const state = stateWith({ bpm: 100, rifffs })
+    const project = await buildEngineProject(state, resolveStretched, emptyCatalog)
+
+    expect(resolveStretched).toHaveBeenCalledTimes(NUM_RIFFFS)
+    expect(maxInFlight).toBeGreaterThan(1)
+    // Concurrency must never corrupt WHICH result lands on which stem --
+    // every rifff's own stem still resolves to its own real stretched path,
+    // not a different rifff's.
+    expect(project.rifffs).toHaveLength(NUM_RIFFFS)
+    for (const engineRifff of project.rifffs) {
+      const i = engineRifff.groupId.replace('r', '')
+      expect(engineRifff.stems[0].resolvedPath).toBe(`/${i}.wav.stretched`)
+    }
+  })
+
   it('resolves playedBars via resolvePlayedBars, defaulting to rifff.barLength when unset', async () => {
     const state = stateWith({ bpm: 150 }) // ratio 1, no stretch call needed
     const project = await buildEngineProject(state, vi.fn(), emptyCatalog)

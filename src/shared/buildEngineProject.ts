@@ -99,6 +99,51 @@ export interface StretchedStem {
 
 export type StretchResolver = (path: string, ratio: number) => Promise<StretchedStem>
 
+// Real perf bug, found live 2026-09-15 via a direct report ("it's all very
+// sluggish, the interface takes a while for buttons to register") traced
+// to a real 409-placed-stem project: buildEngineProject used to resolve
+// every stem's own stretch SEQUENTIALLY, one `await resolveStretched(...)`
+// at a time -- meaning this whole function's wall-clock cost scaled
+// linearly with placed-stem count, and re-ran on EVERY tracked state field
+// change (StoreContext.tsx's own engine-sync effect -- bpm, vol, mute,
+// fadeIn/Out, playedBars, leftCrop, ...), not just an actual tempo change.
+// Even a cache HIT still round-trips through IPC and re-reads the whole
+// resolved file from disk just to measure its duration (rubberband.ts's
+// own renderStretched) -- 409 sequential round trips for that alone is a
+// real, measured multi-second cost on every single edit. A bounded worker
+// pool lets many stems' own resolveStretched calls run concurrently
+// instead of queued one after another -- capped (not unbounded
+// Promise.all) so a genuinely large project doesn't spawn hundreds of
+// rubberband subprocesses at once and thrash CPU/disk contention instead
+// of actually finishing faster.
+const STRETCH_RESOLUTION_CONCURRENCY = 8
+
+/** Runs `fn` over every item in `items`, at most `limit` calls in flight at
+ * once, preserving each result at its own input index regardless of which
+ * worker actually processed it (a fixed-size pool of `limit` workers, each
+ * pulling the next unclaimed index until none remain) -- see
+ * STRETCH_RESOLUTION_CONCURRENCY's own doc comment for why buildEngineProject
+ * needs this rather than a plain sequential loop or an unbounded
+ * Promise.all. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let nextIndex = 0
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex
+      nextIndex += 1
+      if (i >= items.length) return
+      results[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  return results
+}
+
 /**
  * Projects AppState down to exactly what the native engine needs to schedule
  * and mix playback — resolving stretch (via the caller-supplied resolver, the
@@ -120,54 +165,99 @@ export async function buildEngineProject(
   pluginStates: PluginStatesMap = {}
 ): Promise<EngineProject> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-  const rifffs: EngineRifff[] = []
 
-  for (const rifff of placed) {
+  // Per-stem stretch ratio, computed once and reused by BOTH the gathering
+  // pass below and the assembly pass further down -- pure/cheap (no I/O),
+  // so recomputing would be harmless, but sharing it keeps the two passes
+  // from ever silently disagreeing on what ratio a given stem resolved
+  // against.
+  function stretchRatioFor(
+    rifff: (typeof placed)[number],
+    stem: (typeof rifff.stems)[number]
+  ): number {
+    // Per-stem, not state.bpm / rifff.bpm once for the whole rifff — a
+    // rifff's own declared bpm is what MOST of its stems were recorded
+    // at, but not always: LORE riffs can (and, in the wild, do) mix in a
+    // stem that was originally captured at a different native tempo,
+    // still perfectly loop-locked to the riff (same bar count, sample-
+    // accurate), just at a different real-world seconds-per-bar. Deriving
+    // the ratio from THIS stem's own measured durationSec/barLength
+    // (rather than trusting rifff.bpm to apply uniformly) is exactly
+    // "measured, not assumed" — same principle as durationSec itself
+    // elsewhere in this file — and produces the identical ratio as the
+    // old formula whenever a stem DOES share the riff's own tempo, so
+    // this is a strict correctness fix, not a behavior change for the
+    // common case. Real bug this fixes: specific stems in a riff audibly
+    // playing at the wrong speed relative to the others, because they'd
+    // been recorded at a different native tempo than the riff's own
+    // declared bpm and were being stretched by the wrong ratio.
     const stretchOn = state.stretch[rifff.groupId] ?? true
+    const secPerBarAtProjectTempo = (60 / state.bpm) * 4
+    const stemNativeSecPerBar = stem.durationSec / stem.barLength
+    // A one-shot's own durationSec/barLength are cosmetic (see Stem's own
+    // doc comment) -- computing a ratio from them here would be
+    // meaningless and would wrongly trigger a real tempo-stretch resolve
+    // call for every one-shot. Always ratio 1 (native path, no resolve)
+    // regardless of stretchOn/project bpm.
+    return stem.oneShot ? 1 : stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
+  }
 
+  // Pass 1 (synchronous, no I/O): gather every stem that actually needs a
+  // stretch resolved, across the WHOLE project -- not per-rifff -- so the
+  // concurrency-limited resolution below (mapWithConcurrency) can keep
+  // STRETCH_RESOLUTION_CONCURRENCY calls in flight across DIFFERENT
+  // rifffs at once, not just within one.
+  const tasks: { key: string; path: string; ratio: number }[] = []
+  for (const rifff of placed) {
+    for (const stem of rifff.stems) {
+      const ratio = stretchRatioFor(rifff, stem)
+      if (Math.abs(ratio - 1) >= 0.001) {
+        tasks.push({ key: stemKey(rifff.groupId, stem.slot), path: stem.path, ratio })
+      }
+    }
+  }
+
+  // Pass 2: resolve every gathered task concurrently (bounded, see
+  // STRETCH_RESOLUTION_CONCURRENCY's own doc comment), catching each
+  // failure independently so one bad render still only falls back to
+  // native-tempo playback for that ONE stem, exactly as the old sequential
+  // version did -- never fails the whole build.
+  const resolvedResults = await mapWithConcurrency(
+    tasks,
+    STRETCH_RESOLUTION_CONCURRENCY,
+    async (task) => {
+      try {
+        return await resolveStretched(task.path, task.ratio)
+      } catch (err) {
+        // Missing rubberband or a bad render shouldn't fail the whole export
+        // or playback session — fall back to native-tempo playback for just
+        // this stem.
+        console.error(
+          `buildEngineProject: rubberband render failed for "${task.path}" at ratio ${task.ratio}, falling back to native tempo`,
+          err
+        )
+        return null
+      }
+    }
+  )
+  const resolvedByKey = new Map<string, StretchedStem>()
+  tasks.forEach((task, i) => {
+    const result = resolvedResults[i]
+    if (result) resolvedByKey.set(task.key, result)
+  })
+
+  // Pass 3 (synchronous, no I/O): assemble the final rifffs/stems in the
+  // SAME order as the original single-pass loop, now just looking up each
+  // stem's already-resolved stretch result instead of awaiting it inline.
+  const rifffs: EngineRifff[] = []
+  for (const rifff of placed) {
     const stems: EngineStem[] = []
     for (const stem of rifff.stems) {
-      // Per-stem, not state.bpm / rifff.bpm once for the whole rifff — a
-      // rifff's own declared bpm is what MOST of its stems were recorded
-      // at, but not always: LORE riffs can (and, in the wild, do) mix in a
-      // stem that was originally captured at a different native tempo,
-      // still perfectly loop-locked to the riff (same bar count, sample-
-      // accurate), just at a different real-world seconds-per-bar. Deriving
-      // the ratio from THIS stem's own measured durationSec/barLength
-      // (rather than trusting rifff.bpm to apply uniformly) is exactly
-      // "measured, not assumed" — same principle as durationSec itself
-      // elsewhere in this file — and produces the identical ratio as the
-      // old formula whenever a stem DOES share the riff's own tempo, so
-      // this is a strict correctness fix, not a behavior change for the
-      // common case. Real bug this fixes: specific stems in a riff audibly
-      // playing at the wrong speed relative to the others, because they'd
-      // been recorded at a different native tempo than the riff's own
-      // declared bpm and were being stretched by the wrong ratio.
-      const secPerBarAtProjectTempo = (60 / state.bpm) * 4
-      const stemNativeSecPerBar = stem.durationSec / stem.barLength
-      // A one-shot's own durationSec/barLength are cosmetic (see Stem's own
-      // doc comment) -- computing a ratio from them here would be
-      // meaningless and would wrongly trigger a real tempo-stretch resolve
-      // call for every one-shot. Always ratio 1 (native path, no resolve)
-      // regardless of stretchOn/project bpm.
-      const ratio = stem.oneShot ? 1 : stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
-
-      let resolved: StretchedStem = { path: stem.path, durationSec: stem.durationSec }
-      if (Math.abs(ratio - 1) >= 0.001) {
-        try {
-          resolved = await resolveStretched(stem.path, ratio)
-        } catch (err) {
-          // Missing rubberband or a bad render shouldn't fail the whole export
-          // or playback session — fall back to native-tempo playback for just
-          // this stem.
-          console.error(
-            `buildEngineProject: rubberband render failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
-            err
-          )
-        }
-      }
-
       const key = stemKey(rifff.groupId, stem.slot)
+      const resolved: StretchedStem = resolvedByKey.get(key) ?? {
+        path: stem.path,
+        durationSec: stem.durationSec
+      }
       const offsetSteps = state.off[rifff.groupId] ?? 0
 
       stems.push({
