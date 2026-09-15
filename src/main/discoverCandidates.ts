@@ -83,6 +83,42 @@ const CANDIDATE_QUERY_CHUNK_SIZE = 200
 // stay non-blocking.
 const RIFF_QUERY_YIELD_EVERY = 20
 
+// Real perf bug, found live: once the background classify scan
+// (stemAutoClassify.ts) started actually succeeding at real scale
+// (confidence thresholds loosened 2026-09-15 after diagnostic tuning),
+// a popular role's own confirmed pool could grow into the TENS OF
+// THOUSANDS -- e.g. 'drums', which had by far the most training samples.
+// Resolving EVERY one of them into a full DiscoverCandidate, even with
+// the per-db-batched, chunked query below (fixed earlier the same day),
+// meant dozens to well over a hundred sequential round trips against
+// Riffs/Stems -- confirmed live as a genuine multi-minute beachball
+// (the whole app unresponsive, not just Discover). The caller
+// (DiscoverPanel.tsx's own rankCandidates + pickReroll) only ever needs
+// a reasonably-sized POOL to rank and pick ONE candidate from, never
+// literally every possible match, so the pool is capped to a bounded
+// RANDOM sample (pickRandomSample, below) BEFORE the expensive
+// resolution work runs, rather than resolving everything and only then
+// discarding most of it in the renderer.
+const MAX_CANDIDATE_RESOLUTION_POOL = 1000
+
+/** Partial Fisher-Yates (swap-to-end) -- shuffles only as many elements
+ * as needed, not the whole (potentially tens-of-thousands-long) pool.
+ * Same pattern as stemAutoClassify.ts's own pickRandomBatch, duplicated
+ * locally rather than shared across main/ modules for one avoided
+ * dependency between two otherwise-unrelated files. */
+function pickRandomSample<T>(items: T[], size: number): T[] {
+  if (items.length <= size) return items
+  const pool = [...items]
+  const picked: T[] = []
+  for (let i = 0; i < size; i++) {
+    const idx = Math.floor(Math.random() * pool.length)
+    picked.push(pool[idx])
+    pool[idx] = pool[pool.length - 1]
+    pool.pop()
+  }
+  return picked
+}
+
 // TTL cache for getInstrumentMatchedStemCIDs, below -- a real library's
 // worth of jams x stems walked fresh on EVERY roll click with no cache at
 // all took minutes (confirmed live). Keyed by db INSTANCE (WeakMap, not a
@@ -325,7 +361,10 @@ export async function getDiscoverCandidates({
 
   if (categoryByStemCID.size === 0) return []
 
-  const confirmedStemCIDs = [...categoryByStemCID.keys()]
+  const confirmedStemCIDs = pickRandomSample(
+    [...categoryByStemCID.keys()],
+    MAX_CANDIDATE_RESOLUTION_POOL
+  )
   const out: DiscoverCandidate[] = []
 
   // Real crash, found live via a full macOS crash report (EXC_BREAKPOINT in

@@ -513,6 +513,35 @@ describe('getDiscoverCandidates', () => {
     expect(candidates.map((c) => c.stemCID).sort()).toEqual([...stemCIDs].sort())
   })
 
+  // Real perf bug, found live: once the background classify scan started
+  // actually succeeding at real scale, a popular role's own confirmed
+  // pool grew into the tens of thousands -- resolving every one of them,
+  // even with the chunked query above, meant well over a hundred
+  // sequential round trips and a genuine multi-minute app-wide beachball.
+  // This seeds a pool well past MAX_CANDIDATE_RESOLUTION_POOL (1000) and
+  // asserts the resolved result stays bounded, never growing to match the
+  // full pool size.
+  it('caps the resolved candidate pool at MAX_CANDIDATE_RESOLUTION_POOL, even when far more stems are confirmed', async () => {
+    const own = freshDb()
+    const stemCIDs = Array.from({ length: 2500 }, (_, i) => `many-${i}`)
+    for (const cid of stemCIDs) {
+      seedRiff(own, `r-${cid}`, 'jam1', 128, [cid])
+      seedStem(own, cid, 'jam1', { instrument: 2 })
+    }
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.length).toBe(1000)
+    // Every returned candidate is still a REAL, valid match -- capping
+    // samples the pool, it doesn't corrupt which stems come back.
+    for (const c of candidates) {
+      expect(stemCIDs).toContain(c.stemCID)
+    }
+  })
+
   // Speed fix, real user report: rolling took ~2 minutes with no
   // improvement, because getInstrumentMatchedStemCIDs (unlike the
   // embedding-guessed path) had no cache at all -- every roll re-walked
