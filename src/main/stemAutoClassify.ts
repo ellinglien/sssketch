@@ -22,6 +22,40 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
+// Real bug, found live (root cause of a "stuck" report -- progress frozen
+// at a small fraction of a real ~45,000-stem backlog, never advancing
+// across repeated checks): the original version of this function always
+// took `pendingIds.slice(0, BATCH_SIZE)` -- the SAME leading N ids, in
+// stable table order, every single call. Once that leading batch
+// contained BATCH_SIZE or more stems that never gets removed from
+// "pending" (e.g. a real contiguous run this large is common on the
+// embedding axis before it has ANY trained categories -- see the
+// `confirmedEmbeddings.length === 0` branch below, which spends zero
+// classify attempts on the WHOLE pending set), the slice window can never
+// advance past it -- the scheduler ticks every ~1s forever
+// (BUSY_DELAY_MS, stemAutoClassifyScheduler.ts, since `remaining` stays
+// > 0), but permanently starves every stem past that point in the table,
+// no matter how many of them WOULD classify successfully. A random
+// sample instead guarantees the whole pending pool gets explored over
+// many calls, so a batch of persistently-unclassifiable stems can never
+// permanently block classifiable ones elsewhere in the table. Shuffles
+// only as many elements as needed (partial Fisher-Yates via swap-to-end),
+// not the whole (potentially tens-of-thousands-long) pending array --
+// `items` here is only ever a list of bare StemCID strings, never the
+// heavy JSON payload, so this stays cheap even at real library scale. */
+function pickRandomBatch<T>(items: T[], size: number): T[] {
+  if (items.length <= size) return items
+  const pool = [...items]
+  const picked: T[] = []
+  for (let i = 0; i < size; i++) {
+    const idx = Math.floor(Math.random() * pool.length)
+    picked.push(pool[idx])
+    pool[idx] = pool[pool.length - 1]
+    pool.pop()
+  }
+  return picked
+}
+
 export interface ClassifyBatchResult {
   /** How many stems this call actually classified and persisted. */
   processed: number
@@ -56,9 +90,16 @@ export interface ClassifyBatchResult {
  * failed" -- it'll be re-attempted on a LATER call, which is deliberate
  * (more Tidy Up confirmations over time can make a previously-unplaceable
  * stem classifiable later) at the cost of some repeated work on stems
- * that stay unclassifiable indefinitely. Accepted the same way this
- * session already accepted comparable "eventually consistent, not
- * perfectly efficient" tradeoffs elsewhere.
+ * that stay unclassifiable indefinitely. Each call's own batch is a
+ * RANDOM sample of the pending pool (pickRandomBatch, below), not always
+ * the same leading N in table order -- a real live bug found this way:
+ * a deterministic "first N" batch can get permanently stuck retrying the
+ * exact same unclassifiable stems forever once they out-number
+ * BATCH_SIZE, starving every classifiable stem elsewhere in a real
+ * multi-thousand-stem table. Random sampling means the WHOLE pool gets
+ * explored across enough calls, so no fixed subset can block the rest
+ * indefinitely -- an accepted "eventually consistent, not perfectly
+ * efficient" tradeoff, same as elsewhere in this session's own work.
  *
  * `.all()`, never `.iterate()` -- same "never leave a SQLite statement
  * open across an await" discipline as every other bulk read added this
@@ -80,25 +121,38 @@ export async function classifyAutoCategoryBatch(
 
   // --- Embedding pass (preferred) ---
   const alreadyDone = getAllAutoCategorizedStemCIDs(ownDb)
-  const embeddingRows = ownDb
-    .prepare(`SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache`)
-    .all() as { StemCID: string; EmbeddingJSON: string }[]
-  const pendingEmbedding = embeddingRows.filter(
-    (r) => !confirmedAnyRole.has(r.StemCID) && !alreadyDone.has(r.StemCID)
-  )
+  // StemCID only, not the heavy EmbeddingJSON payload (a 1024-dim float
+  // array per row, per embeddingMatch.ts's own doc comment) -- this needs
+  // to know the FULL pending id set every call (for pickRandomBatch above
+  // and the cross-pass exclusion below), but has no reason to pull and
+  // JSON-parse every pending stem's own embedding on every single call,
+  // only the ones actually selected for this call's batch (fetched
+  // separately, below, bounded to at most BATCH_SIZE).
+  const embeddingIdRows = ownDb.prepare(`SELECT StemCID FROM StemEmbeddingCache`).all() as {
+    StemCID: string
+  }[]
+  const pendingEmbeddingIds = embeddingIdRows
+    .map((r) => r.StemCID)
+    .filter((id) => !confirmedAnyRole.has(id) && !alreadyDone.has(id))
 
-  if (pendingEmbedding.length > 0) {
+  if (pendingEmbeddingIds.length > 0) {
     const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
     // Nothing trained yet on this axis -- every call would return null;
     // count these as "remaining" (there's real work waiting, just not
     // doable yet) without spending a single classify call on them.
     if (confirmedEmbeddings.length === 0) {
-      remaining += pendingEmbedding.length
+      remaining += pendingEmbeddingIds.length
     } else {
-      const batch = pendingEmbedding.slice(0, BATCH_SIZE)
-      remaining += pendingEmbedding.length - batch.length
+      const batchIds = pickRandomBatch(pendingEmbeddingIds, BATCH_SIZE)
+      remaining += pendingEmbeddingIds.length - batchIds.length
       const now = Date.now()
-      for (const row of batch) {
+      const placeholders = batchIds.map(() => '?').join(', ')
+      const batchRows = ownDb
+        .prepare(
+          `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID IN (${placeholders})`
+        )
+        .all(...batchIds) as { StemCID: string; EmbeddingJSON: string }[]
+      for (const row of batchRows) {
         try {
           const embedding = JSON.parse(row.EmbeddingJSON) as number[]
           const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
@@ -138,24 +192,33 @@ export async function classifyAutoCategoryBatch(
   // one) -- never falls through to centroid -- matching this function's
   // own "preferred over centroid when a stem has both, never re-attempted
   // by the other source" invariant, above.
-  const deferredEmbeddingStemCIDs = new Set(pendingEmbedding.map((r) => r.StemCID))
-  const featureRows = ownDb.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all() as {
+  const deferredEmbeddingStemCIDs = new Set(pendingEmbeddingIds)
+  // Same "id-only first, heavy payload only for the selected batch" shape
+  // as the embedding pass above, for the same reason.
+  const featureIdRows = ownDb.prepare(`SELECT StemCID FROM StemFeatureCache`).all() as {
     StemCID: string
-    FeaturesJSON: string
   }[]
-  const pendingFeatures = featureRows.filter(
-    (r) =>
-      !confirmedAnyRole.has(r.StemCID) &&
-      !alreadyDoneAfterEmbedding.has(r.StemCID) &&
-      !deferredEmbeddingStemCIDs.has(r.StemCID)
-  )
+  const pendingFeatureIds = featureIdRows
+    .map((r) => r.StemCID)
+    .filter(
+      (id) =>
+        !confirmedAnyRole.has(id) &&
+        !alreadyDoneAfterEmbedding.has(id) &&
+        !deferredEmbeddingStemCIDs.has(id)
+    )
 
-  if (pendingFeatures.length > 0) {
+  if (pendingFeatureIds.length > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    const batch = pendingFeatures.slice(0, BATCH_SIZE)
-    remaining += pendingFeatures.length - batch.length
+    const batchIds = pickRandomBatch(pendingFeatureIds, BATCH_SIZE)
+    remaining += pendingFeatureIds.length - batchIds.length
     const now = Date.now()
-    for (const row of batch) {
+    const placeholders = batchIds.map(() => '?').join(', ')
+    const batchRows = ownDb
+      .prepare(
+        `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
+      )
+      .all(...batchIds) as { StemCID: string; FeaturesJSON: string }[]
+    for (const row of batchRows) {
       try {
         const features = JSON.parse(row.FeaturesJSON) as StemFeatures
         const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))

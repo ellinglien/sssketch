@@ -266,4 +266,39 @@ describe('classifyAutoCategoryBatch', () => {
       expect(row.Source).toBe('embedding')
     }
   })
+
+  // Real live bug, root-caused from a user report ("stuck" at a small
+  // fraction of a real ~45,000-stem backlog, never advancing across
+  // repeated checks): the original code always took the SAME leading
+  // BATCH_SIZE ids, in stable table order, every call. A run of
+  // permanently-unclassifiable stems at the head of the table (larger
+  // than BATCH_SIZE) could therefore starve every classifiable stem
+  // located anywhere AFTER it, forever -- this test reproduces exactly
+  // that shape: 250 stems whose own features sit ambiguously between the
+  // two trained centroids (never classify), inserted BEFORE 10 genuinely
+  // classifiable ones. Under the old deterministic slice, this call would
+  // process exactly 0 of the 10 classifiable stems, every single time.
+  it('does not let an unclassifiable run larger than BATCH_SIZE permanently starve classifiable stems later in the table (starvation regression)', async () => {
+    const db = freshDb()
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+
+    for (let i = 0; i < 250; i++) {
+      seedFeatures(db, `ambiguous-${i}`, { transientDensity: 0.5, bassEnergyRatio: 0.5 })
+    }
+    for (let i = 0; i < 10; i++) {
+      seedFeatures(db, `classifiable-${i}`, { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    }
+
+    const result = await classifyAutoCategoryBatch(db)
+    expect(result.processed).toBeGreaterThan(0)
+    for (const stemCID of getAutoCategorizedStemCIDs(db, 'drums')) {
+      expect(stemCID).toMatch(/^classifiable-/)
+    }
+  })
 })
