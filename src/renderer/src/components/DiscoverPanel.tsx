@@ -1019,60 +1019,99 @@ export function DiscoverPanel({
     }
   }
 
+  // Real-Rifff.stems can only ever address 8 slots (StemCID_1..8 is the
+  // schema every OTHER rifff in this app -- LORE-imported or hand-built --
+  // is already bound by, see riffLibrarySchema.ts), so a plunk with more
+  // placeable Discover slots than that caps at the first 8 (in their
+  // current on-screen order) rather than silently producing a Rifff no
+  // other part of this codebase's own wire format could represent.
+  const MAX_STEMS_PER_RIFFF = 8
+
   // Commits whatever loop is currently built in Discover onto the real
-  // timeline, as one undo step -- every slot that currently has a
-  // candidate (locked or not: "plunk" commits whatever's visible right
-  // now, the same loop the slot rows' own Waveform previews are already
-  // showing, not a filtered subset). Each slot becomes its own fresh
-  // single-stem Rifff; resolveCandidateStem (above, also used by the slot
-  // rows themselves) does the real download/resolve work, since a
-  // Discover candidate isn't necessarily cached locally yet. It never
-  // throws/rejects -- only ever resolves to null on failure -- so a plain
-  // Promise.all here already gives the same "one bad stem doesn't block
-  // the others" resilience useStemFeatureScan.ts gets from
-  // Promise.allSettled, without needing that API.
+  // timeline, as ONE UNITED rifff, one undo step -- direct request,
+  // 2026-09-15: "when i say plunk into arranger.. it places them there,
+  // but i'd like them to be united like a rifff, and to have all of the
+  // shorter bits looped so they create a full group." Every slot that
+  // currently has a candidate (locked or not: "plunk" commits whatever's
+  // visible right now, the same loop the slot rows' own Waveform previews
+  // are already showing, not a filtered subset) becomes ONE stem (its own
+  // slot number, 1-indexed in on-screen order) inside a SINGLE new Rifff,
+  // not its own separate single-stem Rifff -- this used to place N
+  // separate rifffs, each on its own timeline row, which is what actually
+  // caused BOTH halves of the report above: no shared grouping (so
+  // nothing tiled/looped together as a group the way a real multi-stem
+  // rifff does), and a confusing row-per-slot layout that read as gaps/
+  // silence even where the timeline itself had none.
+  //
+  // "shorter bits looped to fill the group" needs no new tiling logic of
+  // its own: the rifff's own barLength is set to the LONGEST included
+  // stem's barLength (same as this panel's own maxBarLength reference,
+  // above), while each STEM keeps its own real, unstretched barLength --
+  // exactly the shape a normal multi-bar-length rifff already has, so the
+  // SAME tiling machinery every other placed rifff already uses
+  // (StemWaveformRow.tsx/CollapsedRifffRow.tsx's tileOffsetsPx on the
+  // display side, LoopSewing.cpp on the native engine side) tiles the
+  // shorter stems to fill the group for free.
+  //
+  // resolveCandidateStem (above, also used by the slot rows themselves)
+  // does the real download/resolve work, since a Discover candidate isn't
+  // necessarily cached locally yet. It never throws/rejects -- only ever
+  // resolves to null on failure -- so a plain Promise.all here already
+  // gives the same "one bad stem doesn't block the others" resilience
+  // useStemFeatureScan.ts gets from Promise.allSettled, without needing
+  // that API.
   async function plunkInArranger(): Promise<void> {
     setPlacing(true)
     try {
-      const placeable = slots.filter(
-        (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
-      )
+      const placeable = slots
+        .filter((s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null)
+        .slice(0, MAX_STEMS_PER_RIFFF)
       if (placeable.length === 0) return
 
-      const resolvedStems = await Promise.all(
+      const resolved = await Promise.all(
         placeable.map(
-          async ({ candidate, role, gain }): Promise<{ rifff: Rifff; gain: number } | null> => {
+          async ({
+            candidate,
+            gain
+          }): Promise<{
+            stem: ResolvedCandidateStem
+            candidate: DiscoverCandidate
+            gain: number
+          } | null> => {
             const stem = await resolveCandidateStem(candidate)
-            if (!stem) return null
-            return {
-              rifff: {
-                // crypto.randomUUID(), matching buildRifff.ts's own established
-                // convention for minting a brand-new rifff's groupId -- NOT
-                // deterministic from candidate content. A second "plunk in
-                // arranger" click with the same slots still showing (nothing
-                // clears `slots` after a successful plunk, so re-plunking the
-                // same loop further along the timeline is normal usage) must
-                // mint fresh groupIds, since PLACE_LOOP_ON_TIMELINE's reducer
-                // case writes `rifffs[rifff.groupId] = {...}` -- a deterministic
-                // id recomputed from the same candidates would silently
-                // overwrite (relocate) the first placement instead of adding a
-                // second copy alongside it, contradicting this feature's own
-                // "adds alongside, never replaces" guarantee (design spec §8.4).
-                groupId: crypto.randomUUID(),
-                name: `discover: ${role}`,
-                bpm: candidate.riffBpm,
-                barLength: stem.barLength,
-                folderPath: '',
-                stems: [{ slot: 1, ...stem }]
-              },
-              gain
-            }
+            return stem ? { stem, candidate, gain } : null
           }
         )
       )
-      const placed = resolvedStems.filter((r): r is { rifff: Rifff; gain: number } => r !== null)
+      const placed = resolved.filter(
+        (r): r is { stem: ResolvedCandidateStem; candidate: DiscoverCandidate; gain: number } =>
+          r !== null
+      )
       if (placed.length === 0) return
-      const rifffs = placed.map((p) => p.rifff)
+
+      // crypto.randomUUID(), matching buildRifff.ts's own established
+      // convention for minting a brand-new rifff's groupId -- NOT
+      // deterministic from candidate content. A second "plunk in arranger"
+      // click with the same slots still showing (nothing clears `slots`
+      // after a successful plunk, so re-plunking the same loop further
+      // along the timeline is normal usage) must mint a fresh groupId,
+      // since PLACE_LOOP_ON_TIMELINE's reducer case writes
+      // `rifffs[rifff.groupId] = {...}` -- a deterministic id recomputed
+      // from the same candidates would silently overwrite (relocate) the
+      // first placement instead of adding a second copy alongside it,
+      // contradicting this feature's own "adds alongside, never replaces"
+      // guarantee (design spec §8.4).
+      const groupId = crypto.randomUUID()
+      const barLength = Math.max(...placed.map((p) => p.stem.barLength))
+      const roles = [...new Set(placeable.map((s) => s.role))]
+      const rifff: Rifff = {
+        groupId,
+        name: `discover: ${roles.join('+')}`,
+        bpm,
+        barLength,
+        folderPath: '',
+        stems: placed.map(({ stem }, i) => ({ slot: i + 1, ...stem }))
+      }
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
@@ -1086,13 +1125,13 @@ export function DiscoverPanel({
       // envelope once it's placed in the arrangement" -- carries the
       // Discover-time gain straight into state.vol, keyed the same way
       // every other placed stem's own gain already is (stemKey(groupId,
-      // slot)). Each Discover rifff has exactly one stem, always slot 1.
+      // slot)).
       const vol: Record<string, number> = {}
-      for (const { rifff, gain } of placed) {
-        vol[stemKey(rifff.groupId, 1)] = gain
-      }
+      placed.forEach(({ gain }, i) => {
+        vol[stemKey(groupId, i + 1)] = gain
+      })
 
-      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar, vol })
+      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
     } finally {
       setPlacing(false)
     }
