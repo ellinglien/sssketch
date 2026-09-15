@@ -85,20 +85,37 @@ function yieldToEventLoop(): Promise<void> {
  * non-null) -- no point walking the whole embedding table for a
  * classifier that can't classify anything yet.
  *
- * Uses `.iterate()`, not `.all()` -- better-sqlite3's lazy, one-row-at-a-
- * time read, so a large StemEmbeddingCache table is never eagerly
- * materialized into one big JS array before classification (and this
- * function's own yielding) even starts; independent review flagged
- * `.all()` here as the same "block the main process on a big synchronous
- * read" risk class as the bug already fixed this session, just moved one
- * step earlier.
+ * Uses `.all()`, NOT `.iterate()` -- real, LIVE crash found 2026-09-15
+ * (not theoretical): better-sqlite3 throws "TypeError: This database
+ * connection is busy executing a query" when ANYTHING else tries to run a
+ * statement -- specifically a db.transaction() -- against the SAME
+ * connection while a `.iterate()` generator from a prior statement hasn't
+ * been fully drained. `ownDb` is a single cached connection shared by the
+ * WHOLE main process (openOwnRiffLibraryDb), including the riff-library
+ * background sync (syncSharedFeed -> upsertRiffSkeletons, its own
+ * db.transaction()), which runs independently on its own schedule. An
+ * earlier version of this function used `.iterate()` specifically so
+ * `await yieldToEventLoop()` between rows wouldn't require eagerly
+ * materializing the whole table first -- but every `await` inside that
+ * loop left the iterate()'s own statement handle OPEN AND UNFINISHED
+ * across the yield, and the background sync firing during exactly that
+ * window threw the error above, observed live in this app's own stderr.
+ * `.all()` fully executes and CLOSES its statement synchronously before
+ * this function ever awaits anything -- by the time the classify loop
+ * below yields, the connection is completely idle, so a concurrent
+ * db.transaction() elsewhere can run without conflict. This does mean the
+ * whole StemEmbeddingCache table is read into one JS array up front
+ * (independent review's own original concern) -- a real, but strictly
+ * smaller and less severe risk than a confirmed crash: at CURRENT
+ * real-world scan progress (a fraction of a 50k+-stem library, described
+ * elsewhere as taking HOURS to fully complete) this read alone is fast:
+ * only the CLASSIFY loop after it does real per-row work, and that part
+ * still yields.
  *
- * No cross-call cache: at CURRENT real-world scan progress (a fraction of
- * a 50k+-stem library, this same scan is described elsewhere as taking
- * HOURS to fully complete) this is fast. If a much larger StemEmbeddingCache
- * later makes this noticeably slow per reroll click, revisit caching by
- * role -- deliberately not built preemptively for a cost that isn't
- * confirmed to be real yet. */
+ * No cross-call cache: at CURRENT real-world scan progress this is fast.
+ * If a much larger StemEmbeddingCache later makes this noticeably slow per
+ * reroll click, revisit caching by role -- deliberately not built
+ * preemptively for a cost that isn't confirmed to be real yet. */
 async function getEmbeddingGuessedStemCIDs(
   ownDb: Database.Database,
   arrangeRole: ArrangeRole
@@ -115,12 +132,17 @@ async function getEmbeddingGuessedStemCIDs(
     ).map((r) => r.StemCID)
   )
 
-  let sinceYield = 0
-  const stmt = ownDb.prepare(`SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache`)
-  for (const row of stmt.iterate() as IterableIterator<{
+  // Fully executed and closed by the time this line returns -- no
+  // statement remains open on `ownDb` past this point, so the classify
+  // loop below can safely await/yield without risking the "connection is
+  // busy" error a live .iterate() generator would.
+  const rows = ownDb.prepare(`SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache`).all() as {
     StemCID: string
     EmbeddingJSON: string
-  }>) {
+  }[]
+
+  let sinceYield = 0
+  for (const row of rows) {
     if (!confirmedAnyRole.has(row.StemCID)) {
       try {
         const embedding = JSON.parse(row.EmbeddingJSON) as number[]
