@@ -369,6 +369,16 @@ export function DiscoverPanel({
     // guard silently no-opped EVERY real call for the rest of this
     // component's life.
     unmountedRef.current = false
+    // Same StrictMode double-invoke gotcha as unmountedRef immediately
+    // above, applied to the bpm-retune effect's own "skip the very first
+    // run" ref below: without resetting it back to true HERE, the fake
+    // setup -> cleanup -> setup cycle would flip it to false on the first
+    // (fake) run and never flip it back, so the second (real) run wrongly
+    // treats itself as "not the first mount anymore" and fires a real
+    // syncPreviewToEngine call. Harmless today (nothing's previewing yet at
+    // mount), but the same bug class as unmountedRef's -- fixed for
+    // consistency/defense-in-depth.
+    skipFirstBpmRetuneRef.current = true
     return () => {
       unmountedRef.current = true
       void restorePreviewIfLoaded()
@@ -439,30 +449,42 @@ export function DiscoverPanel({
       stretch: { [rifff.groupId]: true }
     }
 
-    const project = await buildEngineProject(
-      previewState,
-      resolveStretchedForPlayback,
-      pluginCatalog
-    )
-    if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+    // Real IPC/async round trip to the native engine -- wrapped in its own
+    // try/catch, matching this file's own established convention elsewhere
+    // (resolveCandidateStem, rollForSlot) of never letting a real async
+    // call fail as a silent unhandled rejection. On a genuine failure,
+    // nothing was actually loaded into the engine, so previewLoadedRef/
+    // currentPreviewMappingRef are deliberately left untouched here rather
+    // than updated -- they should keep describing whatever preview (or
+    // lack of one) was really last loaded successfully.
+    try {
+      const project = await buildEngineProject(
+        previewState,
+        resolveStretchedForPlayback,
+        pluginCatalog
+      )
+      if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
 
-    await window.rifffApi.engineLoadProject(project)
-    if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+      await window.rifffApi.engineLoadProject(project)
+      if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
 
-    currentPreviewMappingRef.current = {
-      groupId: rifff.groupId,
-      slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
-    }
+      currentPreviewMappingRef.current = {
+        groupId: rifff.groupId,
+        slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
+      }
 
-    // Only on the empty-to-non-empty transition -- a later rebuild of an
-    // already-loaded preview just keeps playing through it, matching every
-    // other "audition something else" flow in this app (no auto-resume once
-    // a preview stops).
-    if (!previewLoadedRef.current) {
-      previewLoadedRef.current = true
-      if (playing) dispatch({ type: 'PAUSE' })
-      void window.rifffApi.engineSetPosition(0)
-      dispatch({ type: 'PLAY' })
+      // Only on the empty-to-non-empty transition -- a later rebuild of an
+      // already-loaded preview just keeps playing through it, matching every
+      // other "audition something else" flow in this app (no auto-resume once
+      // a preview stops).
+      if (!previewLoadedRef.current) {
+        previewLoadedRef.current = true
+        if (playing) dispatch({ type: 'PAUSE' })
+        void window.rifffApi.engineSetPosition(0)
+        dispatch({ type: 'PLAY' })
+      }
+    } catch (err) {
+      console.error('DiscoverPanel: syncPreviewToEngine failed:', err)
     }
   }
 
@@ -554,6 +576,13 @@ export function DiscoverPanel({
   const skipFirstBpmRetuneRef = useRef(true)
   useEffect(() => {
     if (skipFirstBpmRetuneRef.current) {
+      // this ref is also reset (back to true) by the mount effect above,
+      // for the exact same StrictMode double-invoke reasoning as
+      // unmountedRef there. The linter reads that as "used previously in
+      // an effect function," but the two effects deliberately coordinate
+      // on this ref by design -- it's not an accidental cross-effect
+      // mutation.
+      // eslint-disable-next-line react-hooks/immutability
       skipFirstBpmRetuneRef.current = false
       return
     }
@@ -950,6 +979,20 @@ export function DiscoverPanel({
       // overwrote.
       previewLoadedRef.current = false
       currentPreviewMappingRef.current = null
+      // Real bug, found by review: an already-in-flight syncPreviewToEngine
+      // call (e.g. kicked off moments ago by a bpm change or a reroll
+      // landing) is still awaiting buildEngineProject/engineLoadProject
+      // right now, and its own generation was still valid as of the top of
+      // THIS function -- resetting the tracking refs above does nothing to
+      // stop it from landing right after PLACE_LOOP_ON_TIMELINE and
+      // clobbering the real project we just placed with its now-stale
+      // throwaway preview one (plus possibly re-triggering the empty-to-
+      // non-empty pause/seek/play sequence and leaving
+      // currentPreviewMappingRef pointing at stale data). Bumping the SAME
+      // generation ref syncPreviewToEngine itself checks after each of its
+      // own awaits makes that straggling call's post-await check fail, so
+      // it bails out harmlessly instead.
+      previewSyncGenerationRef.current += 1
     } finally {
       setPlacing(false)
     }
