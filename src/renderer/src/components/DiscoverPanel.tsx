@@ -12,6 +12,7 @@ import {
   useAppSelector,
   useDispatch,
   usePlaying,
+  usePos,
   useFlushEngineSyncNow,
   usePluginCatalog
 } from '../state/StoreContext'
@@ -203,6 +204,19 @@ export function DiscoverPanel({
 
   const dispatch = useDispatch()
   const playing = usePlaying()
+  // Real, live engine playback position (bars) -- while a Discover preview
+  // is loaded, this IS the preview loop's own position (Transport.cpp wraps
+  // it against the loaded project's own loopLengthBars, which equals the
+  // preview rifff's own barLength, see syncPreviewToEngine below), not the
+  // real arrangement's. Used below to draw a real moving playhead line on
+  // each row's own waveform -- direct report, 2026-09-15: "i don't see the
+  // playhead line" after the Web Audio -> native engine preview rewrite
+  // removed the old sweepFraction-based one along with the rest of that
+  // state machine (its own replacement was explicitly deferred as
+  // follow-up work in the design spec's Non-Goals, but a plain "where is
+  // the loop right now" line is simple enough to restore immediately using
+  // the real position the engine now already reports).
+  const pos = usePos()
   const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
   const masterChain = useAppSelector((s) => s.masterChain)
@@ -1219,6 +1233,15 @@ export function DiscoverPanel({
       {(() => {
         const maxBarLength =
           resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
+        // `pos` only means something as a loop position while a preview is
+        // actually loaded (previewingSlotIds.size > 0 <=> previewLoadedRef
+        // is true, see syncPreviewToEngine/restorePreviewIfLoaded above) --
+        // otherwise it's just wherever the REAL arrangement's own playhead
+        // happens to sit, which has nothing to do with this loop.
+        const playheadPct =
+          previewingSlotIds.size > 0 && maxBarLength > 0
+            ? Math.max(0, Math.min(100, (pos / maxBarLength) * 100))
+            : null
         return slots.map((slot) => (
           <DiscoverSlotRow
             key={slot.id}
@@ -1226,6 +1249,7 @@ export function DiscoverPanel({
             rerolling={rerollingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
             maxBarLength={maxBarLength}
+            playheadPct={playheadPct}
             onToggleLock={() => toggleLock(slot.id)}
             onRemove={() => removeSlot(slot.id)}
             onReroll={() => void rerollSlot(slot.id)}
@@ -1365,59 +1389,47 @@ function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
   )
 }
 
-// Four simple, geometrically-safe glyphs cycled through the reel columns
-// below -- unlike a real slot machine's fruit/number symbols there's no
-// "winning combination," these just need to read as visually distinct
-// shapes scrolling past. Drawn as plain geometric primitives (rects/
-// circles/lines) rather than anything more illustrative (a musical note,
-// say) specifically because those render reliably correct without a
-// browser to visually proof them against, matching this file's own
-// established preference for simple, safe SVG geometry (LockGlyph/
-// DiceIcon/ShuffleIcon above).
+// Four fixed bar-height patterns, one per reel "symbol" -- unlike a real
+// slot machine's fruit/number symbols there's no "winning combination,"
+// these just need to read as visually distinct glyphs scrolling past. Each
+// one is drawn as a small cluster of vertical bars (SlotReelSymbol, below),
+// i.e. a tiny waveform snippet, rather than an unrelated shape. Direct
+// report, 2026-09-15: "it should look like full waves.. like the waves
+// that would be on there are printed on the wheel" -- the previous four
+// symbols were a bar cluster PLUS a circle/diamond/spark, which read as
+// generic slot-machine iconography instead of audio; every symbol here is
+// now the same kind of glyph (bars), just a different silhouette, so the
+// whole reel reads as "little waveforms" the way a real slot machine's
+// wheel prints its own fixed symbol set.
+const REEL_WAVE_PATTERNS: readonly (readonly number[])[] = [
+  [0.3, 0.7, 0.45, 1, 0.55, 0.3],
+  [0.85, 0.5, 0.7, 0.35, 0.8, 0.45],
+  [0.25, 0.4, 0.65, 0.9, 0.65, 0.4],
+  [0.55, 0.9, 0.3, 0.55, 0.9, 0.3]
+]
+
 function SlotReelSymbol({ kind }: { kind: 0 | 1 | 2 | 3 }): React.JSX.Element {
-  switch (kind) {
-    case 0: // a tiny bar cluster -- echoes a waveform blip
-      return (
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
-          <rect x="1" y="6" width="2.6" height="7" />
-          <rect x="5.7" y="1.5" width="2.6" height="11.5" />
-          <rect x="10.4" y="8.5" width="2.6" height="4.5" />
-        </svg>
-      )
-    case 1:
-      return (
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 14 14"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-        >
-          <circle cx="7" cy="7" r="5" />
-        </svg>
-      )
-    case 2:
-      return (
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
-          <rect x="3" y="3" width="8" height="8" transform="rotate(45 7 7)" />
-        </svg>
-      )
-    default: // spark -- four short lines radiating from center
-      return (
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 14 14"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-        >
-          <path d="M7 1 V4.2 M7 9.8 V13 M1 7 H4.2 M9.8 7 H13 M2.6 2.6 L4.7 4.7 M9.3 9.3 L11.4 11.4 M11.4 2.6 L9.3 4.7 M4.7 9.3 L2.6 11.4" />
-        </svg>
-      )
-  }
+  const heights = REEL_WAVE_PATTERNS[kind]
+  const barWidth = 1.5
+  const gap = 0.6
+  const totalWidth = heights.length * barWidth + (heights.length - 1) * gap
+  const startX = (14 - totalWidth) / 2
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
+      {heights.map((h, i) => {
+        const barHeight = h * 12
+        return (
+          <rect
+            key={i}
+            x={startX + i * (barWidth + gap)}
+            y={(14 - barHeight) / 2}
+            width={barWidth}
+            height={barHeight}
+          />
+        )
+      })}
+    </svg>
+  )
 }
 
 // One column of DiscoverSlotRow's own resolving-placeholder reel (below) --
@@ -1474,6 +1486,7 @@ function DiscoverSlotRow({
   rerolling,
   previewing,
   maxBarLength,
+  playheadPct,
   onToggleLock,
   onRemove,
   onReroll,
@@ -1489,10 +1502,9 @@ function DiscoverSlotRow({
    * convention. */
   rerolling: boolean
   /** True while THIS slot is currently included in the playing mix
-   * (DiscoverPanel's own `previewingSlotIds`) -- drives the glyph's own
-   * "now playing" outline. Toggled-on slots play TOGETHER, looped, like
-   * the Upcycle reference this screen is modeled on -- not a one-at-a-time
-   * solo. */
+   * (DiscoverPanel's own `previewingSlotIds`). Toggled-on slots play
+   * TOGETHER, looped, like the Upcycle reference this screen is modeled on
+   * -- not a one-at-a-time solo. */
   previewing: boolean
   /** The longest currently-resolved slot's own barLength, library-wide
    * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
@@ -1502,6 +1514,15 @@ function DiscoverSlotRow({
    * every stem stretching to fill the same fixed box regardless of its real
    * length. 0 before anything in the loop has resolved yet. */
   maxBarLength: number
+  /** This row's own waveform-relative playhead position, 0-100 (percent of
+   * `maxBarLength`), or null while nothing in the loop is currently
+   * previewing (DiscoverPanel's own `previewingSlotIds` is empty, so the
+   * real engine position doesn't refer to this loop at all -- see
+   * DiscoverPanel's own `playheadPct` computation). Direct report,
+   * 2026-09-15: the playhead line was lost when the preview backend moved
+   * from Web Audio to the real engine; this reuses the engine's own live
+   * position instead of reintroducing a separate elapsed-time sweep. */
+  playheadPct: number | null
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
@@ -1677,8 +1698,11 @@ function DiscoverSlotRow({
         // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
         // rows already use elsewhere in this app, adapted so multiple
         // slots play TOGETHER (Upcycle-style) rather than one at a time.
-        // The bright outline while `previewing` mirrors ClusterRow's own
-        // `rowIsPreviewing` treatment.
+        // Direct report, 2026-09-15: the previewing-outline (a near-white
+        // `--ra-stretch-on` box around the whole waveform) read as an
+        // unwanted white halo -- removed; the dedicated mute button below
+        // already carries this row's own on/off state, and the playhead
+        // line (also below) now shows real playback directly.
         <button
           onClick={onTogglePreview}
           onMouseDown={handleGainDragStart}
@@ -1696,8 +1720,6 @@ function DiscoverSlotRow({
             padding: 0,
             background: 'transparent',
             border: 'none',
-            outline: previewing ? '1px solid var(--ra-stretch-on)' : 'none',
-            outlineOffset: -1,
             overflow: 'hidden',
             cursor: 'ns-resize'
           }}
@@ -1802,6 +1824,26 @@ function DiscoverSlotRow({
                     pointerEvents: 'none'
                   }}
                 />
+                {/* Real playhead, driven by the actual engine position while
+                    this loop is previewing -- same `--ra-playhead` accent
+                    Playhead.tsx uses on the real timeline. Only this row's
+                    own resolved-and-tiled width is relevant (loopBars ===
+                    maxBarLength, the shared reference every row ties its
+                    tiling to), so `playheadPct` is already directly usable
+                    as a left offset with no further per-row math. */}
+                {playheadPct !== null && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: `${playheadPct}%`,
+                      width: 1,
+                      background: 'var(--ra-playhead)',
+                      pointerEvents: 'none'
+                    }}
+                  />
+                )}
               </>
             )
           })()}
@@ -1908,16 +1950,22 @@ function DiscoverSlotRow({
             fontFamily: 'inherit',
             fontSize: 10,
             fontWeight: 700,
-            background: previewing ? 'transparent' : 'var(--ra-mute-on)',
+            // Direct request, 2026-09-15: "mute should look exactly like
+            // mute on the arrangement view" -- matches ChannelRow.tsx's own
+            // muteButtonStyle exactly (background/border/color-by-state),
+            // rather than this row's own earlier ad hoc treatment
+            // (transparent-when-off instead of the real `--ra-bg-row-active`
+            // fill every other unmuted mute button in this app uses).
+            background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
             border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
             color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
             cursor: 'pointer'
           }}
         >
-          {/* Direct request, 2026-09-15: "a simple M for mute" -- icon-only,
-              same as every other row button now; the on/off states still
-              read via background/border/color exactly as before. */}
-          M
+          {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button glyph
+              exactly (its solo/record siblings are also lowercase single
+              letters), rather than this row's own earlier uppercase "M". */}
+          m
         </button>
       )}
       <button
