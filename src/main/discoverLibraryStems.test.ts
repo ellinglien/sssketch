@@ -45,31 +45,31 @@ function seedRiff(
 }
 
 describe('listLibraryScanTargets', () => {
-  it('only includes stems whose resolved path exists locally', () => {
+  it('only includes stems whose resolved path exists locally', async () => {
     const db = freshDb()
     seedRiff(db, 'r1', 'jam1', ['s1', 's2'])
 
-    const targets = listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], (path) =>
+    const targets = await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], (path) =>
       path.endsWith('s1')
     )
     expect(targets.map((t) => t.key)).toEqual(['s1'])
   })
 
-  it('dedupes a StemCID that appears in more than one riff', () => {
+  it('dedupes a StemCID that appears in more than one riff', async () => {
     const db = freshDb()
     seedRiff(db, 'r1', 'jam1', ['s1'])
     seedRiff(db, 'r2', 'jam1', ['s1'])
 
-    const targets = listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
+    const targets = await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
     expect(targets).toHaveLength(1)
   })
 
-  it('aggregates across multiple jams', () => {
+  it('aggregates across multiple jams', async () => {
     const db = freshDb()
     seedRiff(db, 'r1', 'jam1', ['s1'])
     seedRiff(db, 'r2', 'jam2', ['s2'])
 
-    const targets = listLibraryScanTargets(
+    const targets = await listLibraryScanTargets(
       [
         { jamCID: 'jam1', dbForJam: db },
         { jamCID: 'jam2', dbForJam: db }
@@ -79,11 +79,29 @@ describe('listLibraryScanTargets', () => {
     expect(targets.map((t) => t.key).sort()).toEqual(['s1', 's2'])
   })
 
-  it("does not throw when a jam's own db lacks Riffs entirely", () => {
+  it("does not throw when a jam's own db lacks Riffs entirely", async () => {
     const empty = new Database(':memory:')
-    expect(() =>
+    await expect(
       listLibraryScanTargets([{ jamCID: 'jamExt', dbForJam: empty }], () => true)
-    ).not.toThrow()
-    expect(listLibraryScanTargets([{ jamCID: 'jamExt', dbForJam: empty }], () => true)).toEqual([])
+    ).resolves.toEqual([])
+  })
+
+  it('yields back to the event loop periodically on a large scan instead of blocking it end to end', async () => {
+    // Real bug this guards against: the main process is single-threaded --
+    // ipcMain.handle callbacks that never yield block every OTHER IPC call
+    // (menus, "new project", everything) for the whole scan's duration.
+    // Seeding enough distinct stems to force multiple yield batches and
+    // asserting a real setImmediate-driven macrotask can interleave proves
+    // this doesn't regress back into one unbroken synchronous loop.
+    const db = freshDb()
+    for (let i = 0; i < 450; i++) {
+      seedRiff(db, `r${i}`, 'jam1', [`s${i}`])
+    }
+    let interleaved = false
+    setImmediate(() => {
+      interleaved = true
+    })
+    await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
+    expect(interleaved).toBe(true)
   })
 })

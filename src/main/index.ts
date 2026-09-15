@@ -750,7 +750,7 @@ app.whenReady().then(async () => {
     saveDiscoverSettings(settings)
   )
 
-  ipcMain.handle('get-discover-library-scan-targets', (): LibraryScanTarget[] =>
+  ipcMain.handle('get-discover-library-scan-targets', (): Promise<LibraryScanTarget[]> =>
     listLibraryScanTargets(listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })))
   )
 
