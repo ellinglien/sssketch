@@ -193,6 +193,17 @@ export async function prewarmDiscoverCandidateCaches(jams: JamDbPair[]): Promise
     } catch (err) {
       console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
     }
+    // Real perf bug, found live 2026-09-15 (see getInstrumentRowsForDb's
+    // own doc comment): this only ever warmed the riff index, never the
+    // instrument-matched scan's own cache (a SEPARATE, similarly-expensive
+    // full Stems table scan against the same external archive) -- meaning
+    // even with a fully warm riff index, the FIRST roll of the FIRST role
+    // any given session still paid that second cold scan itself, on the
+    // user's own critical path. Warmed here too now, same fire-and-forget/
+    // never-block-startup discipline as the riff index above -- no
+    // try/catch needed, getInstrumentRowsForDb already swallows its own
+    // errors internally (an empty cached result, never a throw).
+    await getInstrumentRowsForDb(db)
   }
 }
 
@@ -232,17 +243,63 @@ function pickRandomSample<T>(items: T[], size: number): T[] {
   return picked
 }
 
-// TTL cache for getInstrumentMatchedStemCIDs, below -- a real library's
-// worth of jams x stems walked fresh on EVERY roll click with no cache at
-// all took minutes (confirmed live). Keyed by db INSTANCE (WeakMap, not a
-// flat cache) specifically so tests using fresh in-memory dbs don't
-// pollute each other -- same pattern this file used for the now-retired
-// embedding/centroid caches before they moved to the background scan.
-const GUESSED_CACHE_TTL_MS = 60_000
-const instrumentMatchedStemCIDsCache = new WeakMap<
+// TTL cache for getInstrumentRowsForDb, below -- a real library's worth of
+// jams x stems walked fresh on EVERY roll click with no cache at all took
+// minutes (confirmed live). Keyed by db INSTANCE (WeakMap, not a flat
+// cache) specifically so tests using fresh in-memory dbs don't pollute
+// each other -- same pattern this file used for the now-retired embedding/
+// centroid caches before they moved to the background scan. Shares
+// RIFF_INDEX_CACHE_TTL_MS's own 5-minute window (not the original 60s this
+// used to carry) now that the cached unit is the raw table scan rather
+// than one role's already-filtered result -- see this cache's own real
+// perf bug, fixed 2026-09-15 below.
+const instrumentRowsCache = new WeakMap<
   Database.Database,
-  Map<ArrangeRole, { matched: Set<string>; computedAt: number }>
+  {
+    rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+    computedAt: number
+  }
 >()
+
+/** The whole `Stems` table's own StemCID/Instrument/OwnerJamCID columns for
+ * `db`, cached in memory -- the expensive, disk-bound part of
+ * getInstrumentMatchedStemCIDs (below), split out on its own so it can be
+ * cached ONCE PER DB rather than once per (db, ArrangeRole).
+ *
+ * Real perf bug, found live 2026-09-15 via Elling's own question ("if
+ * 15,054 drum stems have been analyzed, why does it take 38 seconds on
+ * first load?") -- confirmed with real timing against his actual archive
+ * (372,297-riff/367,019-stem external LORE db): this SAME unfiltered
+ * `SELECT StemCID, Instrument, OwnerJamCID FROM Stems` (no per-role WHERE
+ * clause -- the role filter only ever happens in JS, after the fetch) used
+ * to be re-run from scratch for EVERY ArrangeRole not yet cached, even
+ * though every role reads the exact same rows -- only the JS-side bitmask
+ * check differs. Rolling 'drums' then 'bass' then 'lead' in the same
+ * session each independently paid a real ~6.5s cold scan against the
+ * external archive for identical data. Caching the raw rows here (fast
+ * per-role JS filtering happens fresh every call in
+ * getInstrumentMatchedStemCIDs, measured at ~50ms even for 367k rows) means
+ * only the FIRST role rolled in a session pays this cost; every other role
+ * after it becomes a plain in-memory filter. */
+async function getInstrumentRowsForDb(
+  db: Database.Database
+): Promise<{ StemCID: string; Instrument: number | null; OwnerJamCID: string }[]> {
+  const cached = instrumentRowsCache.get(db)
+  if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.rows
+
+  let rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+  try {
+    rows = db.prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems`).all() as typeof rows
+  } catch {
+    // Same defensive handling as every other per-db query in this file --
+    // an external db missing even a core table shouldn't abort the whole
+    // multi-db scan. Cache the empty result so a broken db doesn't retry
+    // this same expensive-to-fail scan on every call within the TTL.
+    rows = []
+  }
+  instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+  return rows
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = []
@@ -283,26 +340,27 @@ function yieldToEventLoop(): Promise<void> {
  * transaction). Yields periodically since many-rows-is-real-synchronous-
  * work regardless of how cheap each individual check is.
  *
- * Cached per (db instance, role) for GUESSED_CACHE_TTL_MS -- missed on the
- * first pass (this function shipped without one, on the assumption a
- * bitmask check is cheap enough not to need it), then confirmed live: a
- * real library's worth of jams x stems, walked fresh on EVERY roll click
- * with no cache at all, took minutes. Keyed by `ownDb` only (not the full
- * `jams` array, which isn't a stable cache key) -- `jams` is, in practice,
- * stable for a given db/session.
+ * The raw per-db table scan is cached (getInstrumentRowsForDb, above) --
+ * this function itself does NO SQL of its own beyond that and the small
+ * ownDb StemCategories exclusion query, just an in-memory filter, so it's
+ * cheap enough to run fresh on every call regardless of role or TTL. Real
+ * perf bug, fixed 2026-09-15 (see getInstrumentRowsForDb's own doc comment
+ * for the full story, found live via Elling's own question: "if 15,054
+ * drum stems have been analyzed, why does it take 38 seconds on first
+ * load?"): this used to cache its OWN already-filtered per-role result,
+ * which meant the expensive raw scan above was re-run in full for every
+ * role not yet individually cached -- rolling 'drums' then 'bass' paid the
+ * same multi-second external-archive scan twice for identical rows.
  *
- * Real perf bug, found live a SECOND time (root cause of "still slow,
- * 10-12 seconds" on every role change or TTL expiry, confirmed live on
- * Elling's own 5,057-jam library, well AFTER the Riffs-side fixes earlier
- * the same day): this function's own `WHERE OwnerJamCID = ?` fix (below,
- * still true in spirit) stopped the earlier "read the whole Stems table
- * per jam" blowup, but LEFT the per-JAM loop structure itself in place --
- * one query PER JAM, 5,057 separate round trips, every time this role's
- * own cache is cold. Even at a couple ms each, that many round trips adds
- * up to real, measured seconds. Fixed the SAME way the main candidate-
- * resolution loop already was: group jams by db CONNECTION (most share
- * one, riffLibraryStore.ts's own dbForJam) and read each db's Stems table
- * ONCE, filtering "is this jam one we're allowed to include" in JS
+ * Also fixed the same day as a second, earlier perf bug (root cause of
+ * "still slow, 10-12 seconds" on every role change or TTL expiry,
+ * confirmed live on Elling's own 5,057-jam library): this function used to
+ * query each jam's own Stems table separately (`WHERE OwnerJamCID = ?`),
+ * one query PER JAM -- 5,057 separate round trips. Fixed the SAME way the
+ * main candidate-resolution loop already was: group jams by db CONNECTION
+ * (most share one, riffLibraryStore.ts's own dbForJam) and read each db's
+ * Stems table ONCE (now via the shared getInstrumentRowsForDb cache),
+ * filtering "is this jam one we're allowed to include" in JS
  * (allowedJamCIDs, below) instead of in SQL -- collapses O(jams) round
  * trips to O(uniqueDbs). */
 async function getInstrumentMatchedStemCIDs(
@@ -310,12 +368,6 @@ async function getInstrumentMatchedStemCIDs(
   jams: JamDbPair[],
   arrangeRole: ArrangeRole
 ): Promise<Set<string>> {
-  const dbCache = instrumentMatchedStemCIDsCache.get(ownDb) ?? new Map()
-  instrumentMatchedStemCIDsCache.set(ownDb, dbCache)
-
-  const cached = dbCache.get(arrangeRole)
-  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.matched
-
   const confirmedAnyRole = new Set(
     (
       ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
@@ -334,15 +386,7 @@ async function getInstrumentMatchedStemCIDs(
   const matched = new Set<string>()
   let sinceYield = 0
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
-    let rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
-    try {
-      rows = db.prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems`).all() as typeof rows
-    } catch {
-      // Same defensive handling as the main resolution loop below -- an
-      // external db missing even a core table shouldn't abort the whole
-      // multi-db scan.
-      continue
-    }
+    const rows = await getInstrumentRowsForDb(db)
     for (const row of rows) {
       if (
         allowedJamCIDs.has(row.OwnerJamCID) &&
@@ -362,7 +406,6 @@ async function getInstrumentMatchedStemCIDs(
       }
     }
   }
-  dbCache.set(arrangeRole, { matched, computedAt: Date.now() })
   return matched
 }
 

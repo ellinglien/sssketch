@@ -699,6 +699,47 @@ describe('getDiscoverCandidates', () => {
     expect(stemsInstrumentQueries.length).toBe(1)
     expect(stemsInstrumentQueries[0][0]).not.toMatch(/WHERE/)
   })
+
+  // Real perf bug, found live 2026-09-15 via a direct question ("if 15,054
+  // drum stems have been analyzed, why does it take 38 seconds on first
+  // load?"): the instrument-matched scan used to cache its own ALREADY-
+  // FILTERED result per (db, role) -- so this same raw, unfiltered
+  // `SELECT ... FROM Stems` (the expensive, disk-bound part on a real
+  // external archive) was re-run in FULL for every role not yet
+  // individually cached, even though every role reads the exact same rows
+  // and only the JS-side bitmask check differs. Rolling 'drums' then
+  // 'bass' in the same session, well within the TTL, used to pay that
+  // scan twice for identical data. This test seeds one stem matching each
+  // role and asserts the raw scan query runs exactly ONCE total across
+  // both role calls, not once per role.
+  it('reuses the raw instrument-matched Stems scan across DIFFERENT roles for the same db', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 2 }) // bit 1: drum
+    seedRiff(own, 'r2', 'jam1', 128, ['b1'])
+    seedStem(own, 'b1', 'jam1', { instrument: 8 }) // bit 3: bass
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+
+    const drumsResult = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(drumsResult.map((c) => c.stemCID)).toEqual(['d1'])
+
+    const bassResult = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'bass'
+    })
+    expect(bassResult.map((c) => c.stemCID)).toEqual(['b1'])
+
+    const stemsInstrumentQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Stems') && sql.includes('Instrument')
+    )
+    expect(stemsInstrumentQueries.length).toBe(1)
+  })
 })
 
 describe('prewarmDiscoverCandidateCaches', () => {
