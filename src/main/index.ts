@@ -735,7 +735,7 @@ app.whenReady().then(async () => {
       arrangeRole: ArrangeRole,
       onlyOwnStems: boolean,
       targetUser?: string
-    ): DiscoverCandidate[] =>
+    ): Promise<DiscoverCandidate[]> =>
       getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
