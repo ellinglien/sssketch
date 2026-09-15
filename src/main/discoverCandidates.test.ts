@@ -872,4 +872,43 @@ describe('getRandomLibraryCandidate', () => {
     })
     expect(candidate?.stemCID).toBe('s1')
   })
+
+  // Real bug, found live 2026-09-15 (root cause of "no match for this
+  // role" on EVERY role, for a brand-new empty project): onlyOwnStems used
+  // to pick a random JAM first (up to RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS =
+  // 15 tries) and only THEN check whether that jam happened to contain a
+  // stem belonging to targetUser -- on a real library where the user's own
+  // content lives in a small fraction of all jams (Elling's own: 11 "own"
+  // jams out of 5,057 synced, ~0.2% per random pick), 15 attempts
+  // essentially never landed on one. This test seeds 1,000 jams sharing
+  // ONE db connection (the real-world shape -- listJamsWithDb pairs most
+  // jams with the same shared db), only ONE of which has a stem belonging
+  // to targetUser -- a 15-random-jam draw out of 1,000 has under a 1.5%
+  // chance of ever landing on it, so this reliably demonstrates the fix
+  // (a deterministic, targeted query) rather than occasionally passing by
+  // luck under the old code too.
+  it('reliably finds an owned stem even when it sits in just one jam among many sharing a db -- not a random-jam lottery', async () => {
+    const own = freshDb()
+    const NUM_JAMS = 1000
+    for (let i = 0; i < NUM_JAMS; i++) {
+      seedRiff(own, `r${i}`, `jam${i}`, 128, [`s${i}`])
+      seedStem(own, `s${i}`, `jam${i}`, { creatorUserName: 'someone-else' })
+    }
+    // Only jam500's own stem actually belongs to the target user.
+    seedRiff(own, 'rOwned', 'jam500', 128, ['sOwned'])
+    seedStem(own, 'sOwned', 'jam500', { creatorUserName: 'elling' })
+
+    const jams = Array.from({ length: NUM_JAMS }, (_, i) => ({
+      jamCID: `jam${i}`,
+      dbForJam: own
+    }))
+
+    const candidate = await getRandomLibraryCandidate({
+      jams,
+      arrangeRole: 'drums',
+      onlyOwnStems: true,
+      targetUser: 'elling'
+    })
+    expect(candidate?.stemCID).toBe('sOwned')
+  })
 })

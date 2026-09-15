@@ -667,11 +667,22 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * whole library would cost as much as the exact full-library scan this
  * feature exists to avoid waiting on. Tries up to
  * RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS different jams (shuffled) before
- * giving up, since a single jam might have no stems at all (rare) or none
- * matching `onlyOwnStems` -- bounded, so a library with many "empty" jams
- * still returns quickly instead of trying every single one. Returns null
- * (never throws) if nothing turns up within that budget; the caller
- * treats this the same as "no match" from the other candidate sources. */
+ * giving up, since a single jam might have no stems at all (rare) -- an
+ * acceptable, bounded gamble for the UNFILTERED case, where nearly every
+ * jam has SOME stem to offer.
+ *
+ * Real bug, found live 2026-09-15 (root cause of "no match for this
+ * role" on EVERY role, for a brand-new empty project, right after
+ * DiscoverPanel.tsx started routing an empty project's first roll through
+ * this function): with `onlyOwnStems` on, that same "try up to 15 random
+ * JAMS" gamble becomes a near-guaranteed miss on a real library where the
+ * user's own content lives in only a small fraction of all jams (Elling's
+ * own library: 11 "own" jams out of 5,057 total synced -- a ~0.2% chance
+ * per random jam pick, so 15 attempts essentially never hit one). Delegates
+ * to getRandomOwnStemCandidate (below) instead when onlyOwnStems is on --
+ * a targeted, still-fast search rather than an unbounded-odds lottery.
+ * Returns null (never throws) if nothing turns up; the caller treats this
+ * the same as "no match" from the other candidate sources. */
 export async function getRandomLibraryCandidate({
   jams,
   arrangeRole,
@@ -683,6 +694,10 @@ export async function getRandomLibraryCandidate({
   onlyOwnStems?: boolean
   targetUser?: string
 }): Promise<DiscoverCandidate | null> {
+  if (onlyOwnStems && targetUser) {
+    return getRandomOwnStemCandidate(jams, arrangeRole, targetUser)
+  }
+
   const shuffled = [...jams]
     .sort(() => Math.random() - 0.5)
     .slice(0, RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS)
@@ -691,20 +706,12 @@ export async function getRandomLibraryCandidate({
     let stemRow:
       { StemCID: string; PresetName: string | null; CreatorUserName: string | null } | undefined
     try {
-      stemRow =
-        onlyOwnStems && targetUser
-          ? (dbForJam
-              .prepare(
-                `SELECT StemCID, PresetName, CreatorUserName FROM Stems
-                 WHERE OwnerJamCID = ? AND CreatorUserName = ? ORDER BY RANDOM() LIMIT 1`
-              )
-              .get(jamCID, targetUser) as typeof stemRow)
-          : (dbForJam
-              .prepare(
-                `SELECT StemCID, PresetName, CreatorUserName FROM Stems
-                 WHERE OwnerJamCID = ? ORDER BY RANDOM() LIMIT 1`
-              )
-              .get(jamCID) as typeof stemRow)
+      stemRow = dbForJam
+        .prepare(
+          `SELECT StemCID, PresetName, CreatorUserName FROM Stems
+           WHERE OwnerJamCID = ? ORDER BY RANDOM() LIMIT 1`
+        )
+        .get(jamCID) as typeof stemRow
     } catch {
       // Same defensive handling as every other per-jam query in this file
       // -- an external jam db missing even a core table shouldn't abort
@@ -734,6 +741,95 @@ export async function getRandomLibraryCandidate({
     return {
       stemCID: stemRow.StemCID,
       jamCID,
+      riffCID: riffRow.RiffCID,
+      presetName: stemRow.PresetName ?? '',
+      creatorUserName: stemRow.CreatorUserName ?? '',
+      arrangeRole,
+      drumSubRole: null,
+      riffBpm: riffRow.BPMrnd
+    }
+  }
+  return null
+}
+
+/** getRandomLibraryCandidate's own onlyOwnStems path -- see that function's
+ * doc comment for the real bug this fixes (random-JAM-then-hope essentially
+ * never lands on one of the user's own jams when they're a small fraction
+ * of the whole library). Groups jams by db CONNECTION (same
+ * "listJamsWithDb pairs most jams with ONE shared db" pattern this file
+ * already uses elsewhere -- riffLibraryStore.ts's own dbForJam), shuffles
+ * the UNIQUE DBs (typically just one or two: the own-synced library plus,
+ * optionally, one external LORE archive), and for each tries ONE targeted
+ * query -- `WHERE CreatorUserName = ? ORDER BY RANDOM() LIMIT 1` -- rather
+ * than gambling on random jam picks. Stops at the first db that actually
+ * has a matching stem, so the common case (the user's own content lives in
+ * their own small self-synced db) resolves in one fast query; only a setup
+ * where NONE of the user's own stems live in whichever db is tried first
+ * pays a second db's own query cost. */
+async function getRandomOwnStemCandidate(
+  jams: JamDbPair[],
+  arrangeRole: ArrangeRole,
+  targetUser: string
+): Promise<DiscoverCandidate | null> {
+  const jamCIDsByDb = new Map<Database.Database, Set<string>>()
+  for (const { jamCID, dbForJam } of jams) {
+    const existing = jamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
+  }
+  const shuffledDbs = [...jamCIDsByDb].sort(() => Math.random() - 0.5)
+
+  for (const [db, allowedJamCIDs] of shuffledDbs) {
+    let stemRow:
+      | {
+          StemCID: string
+          OwnerJamCID: string
+          PresetName: string | null
+          CreatorUserName: string | null
+        }
+      | undefined
+    try {
+      // Real ids can, in principle, be shared across many rows for a given
+      // CreatorUserName -- ORDER BY RANDOM() LIMIT 1 here means a genuinely
+      // random pick among ALL of this user's own stems in this db, not
+      // just whichever happens to sort first.
+      stemRow = db
+        .prepare(
+          `SELECT StemCID, OwnerJamCID, PresetName, CreatorUserName FROM Stems
+           WHERE CreatorUserName = ? ORDER BY RANDOM() LIMIT 1`
+        )
+        .get(targetUser) as typeof stemRow
+    } catch {
+      // Same defensive handling as every other per-db query in this file --
+      // an external db missing even a core table shouldn't abort the whole
+      // attempt, just this one db.
+      continue
+    }
+    // The matched row's own jam might not be in THIS caller's allowed set
+    // (jams is caller-supplied, see this file's own module doc comment) --
+    // skip rather than return a candidate the caller never asked to see.
+    if (!stemRow || !allowedJamCIDs.has(stemRow.OwnerJamCID)) continue
+
+    let riffRow: { RiffCID: string; BPMrnd: number } | undefined
+    try {
+      riffRow = db
+        .prepare(
+          `SELECT RiffCID, BPMrnd FROM Riffs WHERE OwnerJamCID = ? AND (
+             StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
+             StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
+           ) LIMIT 1`
+        )
+        .get(stemRow.OwnerJamCID, ...Array<string>(8).fill(stemRow.StemCID)) as typeof riffRow
+    } catch {
+      continue
+    }
+    // Same "stale/orphaned Stems row" tolerance as getRandomLibraryCandidate
+    // itself -- try the next db rather than returning an unplaceable candidate.
+    if (!riffRow) continue
+
+    return {
+      stemCID: stemRow.StemCID,
+      jamCID: stemRow.OwnerJamCID,
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
