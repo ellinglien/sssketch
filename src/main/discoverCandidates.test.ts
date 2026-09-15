@@ -1,5 +1,5 @@
 // src/main/discoverCandidates.test.ts
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { getDiscoverCandidates, getRandomLibraryCandidate } from './discoverCandidates'
 
@@ -499,6 +499,44 @@ describe('getDiscoverCandidates', () => {
     })
     // Still the cached (stale) result.
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
+  })
+
+  // Real perf bug, found live (root cause of a "stuck rolling" report that
+  // survived the TTL cache above -- the cache only helps a SECOND call
+  // within 60s, not the cold first one): listJamsWithDb() (main/
+  // riffLibraryStore.ts) pairs every non-"shared:" jam with the SAME
+  // shared archive db connection, not a separate db per jam -- so without
+  // a WHERE OwnerJamCID filter, the instrument-matched Stems query
+  // re-scanned the library's ENTIRE Stems table once per jam in the loop
+  // (O(jamCount x totalStemCount) instead of O(totalStemCount)). This test
+  // seeds two jams SHARING one db (the real-world shape) and asserts the
+  // query is actually scoped per jam.
+  it('scopes the instrument-matched Stems query to each jam via WHERE OwnerJamCID, not a full-table scan repeated per jam', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 2 }) // bit 1: drum
+    seedRiff(own, 'r2', 'jam2', 128, ['d2'])
+    seedStem(own, 'd2', 'jam2', { instrument: 2 })
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [
+        { jamCID: 'jam1', dbForJam: own },
+        { jamCID: 'jam2', dbForJam: own }
+      ],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2'])
+
+    const stemsInstrumentQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Stems') && sql.includes('Instrument')
+    )
+    expect(stemsInstrumentQueries.length).toBeGreaterThan(0)
+    for (const [sql] of stemsInstrumentQueries) {
+      expect(sql).toMatch(/WHERE\s+OwnerJamCID\s*=\s*\?/)
+    }
   })
 })
 

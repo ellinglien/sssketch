@@ -161,10 +161,26 @@ async function getInstrumentMatchedStemCIDs(
 
   const matched = new Set<string>()
   let sinceYield = 0
-  for (const { dbForJam } of jams) {
+  for (const { jamCID, dbForJam } of jams) {
     let rows: { StemCID: string; Instrument: number | null }[]
     try {
-      rows = dbForJam.prepare(`SELECT StemCID, Instrument FROM Stems`).all() as typeof rows
+      // Real perf bug, found live (root cause of a "stuck rolling" report
+      // that survived the TTL cache above -- the cache only helps a SECOND
+      // call within 60s, not the first, cold one): every non-"shared:" jam
+      // in `jams` shares the SAME db connection (dbForJam, resolved via
+      // riffLibraryStore.ts's own dbForJam -- one archive db holds every
+      // synced jam's Stems rows together, NOT one db per jam). Without
+      // `WHERE OwnerJamCID = ?`, this previously re-read the library's
+      // ENTIRE Stems table on EVERY iteration of the jams loop --
+      // O(jamCount x totalStemCount) row reads for what should be
+      // O(totalStemCount) total, since every jam past the first was
+      // redundantly re-scanning stems it doesn't even own. On a real
+      // multi-hundred-jam, 50k+-stem library (this feature's own stated
+      // target scale) that's tens of millions of wasted row reads on the
+      // very first, uncached roll of any role.
+      rows = dbForJam
+        .prepare(`SELECT StemCID, Instrument FROM Stems WHERE OwnerJamCID = ?`)
+        .all(jamCID) as typeof rows
     } catch {
       // Same defensive handling as the main per-jam loop below -- an
       // external db missing even a core table shouldn't abort the whole
