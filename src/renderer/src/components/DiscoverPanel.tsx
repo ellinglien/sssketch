@@ -271,15 +271,15 @@ export function DiscoverPanel({
   // anymore -- buildEngineProject resolves each stem's own stretch ratio
   // fresh, every call.
   const [previewingSlotIds, setPreviewingSlotIds] = useState<Set<string>>(new Set())
-  // Mirrors `previewingSlotIds` for updateSlotGain's own debounced restart
-  // below to read -- real bug caught by independent review: that debounce
-  // closes over `previewingSlotIds` at the moment a gain drag STARTS, and
-  // without this ref it would still use that now-stale value when the
-  // timer actually fires ~150ms later. If the user drags slot A's gain
-  // then, within that window, clicks to remove slot A from the mix, the
-  // stale-closure restart would silently resurrect it (or the symmetric
-  // case: drop a just-added slot back out) once the timer fired. Reading
-  // this ref instead of the closed-over state value at fire time fixes it.
+  // Mirrors `previewingSlotIds` for reportSlotResolution (below) to read --
+  // that callback is invoked from each DiscoverSlotRow's own resolve effect,
+  // which deliberately doesn't depend on this closure, so it can be invoked
+  // with a stale `previewingSlotIds` snapshot from an earlier render. With
+  // candidate resolution fast enough that two slots can resolve within the
+  // same tick, reading AND writing this ref synchronously there means each
+  // call unions onto the true current set rather than a stale one missing
+  // another slot's just-landed membership. See reportSlotResolution's own
+  // comment for the full race this fixes.
   const previewingSlotIdsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     previewingSlotIdsRef.current = previewingSlotIds
