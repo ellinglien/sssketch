@@ -64,6 +64,7 @@ import {
 import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
+  prewarmDiscoverCandidateCaches,
   type DiscoverCandidate
 } from './discoverCandidates'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
@@ -321,6 +322,24 @@ app.whenReady().then(async () => {
   // covers the consent gating and self-rescheduling; starting it here,
   // once, at app startup is all this call site needs to do.
   startStemAutoClassifyScheduler()
+
+  // Pre-warms the riff-index cache (discoverCandidates.ts's own
+  // getRiffIndexForDb) in the BACKGROUND, well before anyone actually
+  // rolls -- direct live report: even after that cache made every roll
+  // AFTER the first one fast, the very FIRST roll of a fresh app session
+  // still paid a real, one-time table-scan cost (confirmed live: 57+
+  // seconds on a real 5,057-jam library) on the user's own critical path,
+  // right as they opened Discover for the first time. Fire-and-forget --
+  // never awaited here, and its own errors are caught and logged
+  // internally, never allowed to affect startup. Deliberately NOT gated
+  // on discover consent (loadDiscoverSettings) the way
+  // startStemAutoClassifyScheduler is -- this only warms the SAME
+  // Riffs/Stems reads getDiscoverCandidates always needed regardless of
+  // consent (consent gates the separate whole-library feature/embedding
+  // extraction scan, not basic candidate resolution).
+  void prewarmDiscoverCandidateCaches(
+    listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
+  )
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build

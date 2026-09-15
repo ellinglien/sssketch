@@ -1,7 +1,11 @@
 // src/main/discoverCandidates.test.ts
 import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { getDiscoverCandidates, getRandomLibraryCandidate } from './discoverCandidates'
+import {
+  getDiscoverCandidates,
+  getRandomLibraryCandidate,
+  prewarmDiscoverCandidateCaches
+} from './discoverCandidates'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -684,6 +688,58 @@ describe('getDiscoverCandidates', () => {
     for (const [sql] of stemsInstrumentQueries) {
       expect(sql).toMatch(/WHERE\s+OwnerJamCID\s*=\s*\?/)
     }
+  })
+})
+
+describe('prewarmDiscoverCandidateCaches', () => {
+  // Direct live report: even after the riff-index cache made every roll
+  // AFTER the first one fast, the very FIRST roll of a fresh app session
+  // still paid the real, one-time table-scan cost (57+ seconds on a real
+  // library) on the user's own critical path. This proves pre-warming
+  // actually avoids that: a getDiscoverCandidates call AFTER pre-warming
+  // must not query Riffs again.
+  it('warms the riff index so a later getDiscoverCandidates call does not query Riffs again', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }])
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    expect(riffsQueries.length).toBe(0)
+  })
+
+  it('warms each unique db connection exactly once, even with many jams sharing it', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedRiff(own, 'r2', 'jam2', 128, ['s2'])
+    seedStem(own, 's2', 'jam2')
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    await prewarmDiscoverCandidateCaches([
+      { jamCID: 'jam1', dbForJam: own },
+      { jamCID: 'jam2', dbForJam: own }
+    ])
+
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    expect(riffsQueries.length).toBe(1)
+  })
+
+  it('does not throw when a db lacks a Riffs table', async () => {
+    const broken = new Database(':memory:')
+    await expect(
+      prewarmDiscoverCandidateCaches([{ jamCID: 'jamBroken', dbForJam: broken }])
+    ).resolves.toBeUndefined()
   })
 })
 

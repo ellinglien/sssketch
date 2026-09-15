@@ -172,6 +172,30 @@ async function getRiffIndexForDb(db: Database.Database): Promise<Map<string, Rif
   return index
 }
 
+/** Kicks off getRiffIndexForDb (above) for every unique db connection in
+ * `jams`, in the BACKGROUND, well before anyone actually rolls -- direct
+ * live report: even after caching made every roll AFTER the first one
+ * fast, the very FIRST roll of a fresh app session still had to pay the
+ * real, one-time table-scan cost (confirmed live: 57+ seconds on a
+ * 5,057-jam real library) on the user's own critical path, right as they
+ * opened Discover for the first time. Call this once, at app startup
+ * (main/index.ts's own app.whenReady()) -- by the time a real user
+ * actually opens Discover and clicks roll, the cache is very likely
+ * already warm, so that first click pays nothing extra. Errors are
+ * logged, never thrown -- a failed pre-warm just means the FIRST real
+ * roll pays the cost itself instead, same as if this were never called;
+ * it must never be allowed to affect app startup's own success. */
+export async function prewarmDiscoverCandidateCaches(jams: JamDbPair[]): Promise<void> {
+  const uniqueDbs = new Set(jams.map((j) => j.dbForJam))
+  for (const db of uniqueDbs) {
+    try {
+      await getRiffIndexForDb(db)
+    } catch (err) {
+      console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
+    }
+  }
+}
+
 // Real perf bug, found live: once the background classify scan
 // (stemAutoClassify.ts) started actually succeeding at real scale
 // (confidence thresholds loosened 2026-09-15 after diagnostic tuning),
