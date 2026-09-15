@@ -207,21 +207,6 @@ export async function classifyAutoCategoryBatch(
   const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
   const embeddingAxisTrained = confirmedEmbeddings.length > 0
 
-  // TEMPORARY diagnostic log (2026-09-15) -- a live report of `remaining`
-  // staying EXACTLY constant across many ticks (each sampling a different
-  // random batch) pointed at "nothing left confidently matches a trained
-  // category" rather than a code bug, but that's an inference, not
-  // confirmed -- this makes the actual trained-category counts on both
-  // axes visible directly, so it can be checked rather than assumed.
-  // Remove once that's confirmed.
-  const embeddingCategoryCounts: Record<string, number> = {}
-  for (const e of confirmedEmbeddings) {
-    embeddingCategoryCounts[e.category] = (embeddingCategoryCounts[e.category] ?? 0) + 1
-  }
-  console.log(
-    `classifyAutoCategoryBatch: embedding axis trained=${embeddingAxisTrained} categories=${JSON.stringify(embeddingCategoryCounts)}`
-  )
-
   // --- Embedding pass (preferred) ---
   const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
   if (pendingEmbeddingCount > 0) {
@@ -234,44 +219,6 @@ export async function classifyAutoCategoryBatch(
       const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
       remaining += Math.max(0, pendingEmbeddingCount - batchRows.length)
       const now = Date.now()
-      // TEMPORARY diagnostic log (2026-09-15) -- zero successes across
-      // ~1400+ real attempts with real, substantial training data present
-      // (18 confirmed 'drums' samples alone) points at the confidence
-      // threshold itself, not a code bug -- this logs the ACTUAL nearest/
-      // second-nearest similarity numbers for one representative row per
-      // call, duplicating (read-only, diagnostic-only) the same cosine
-      // math suggestCategoryFromEmbedding itself uses (@shared/
-      // embeddingMatch.ts), so the real margin can be seen directly rather
-      // than inferred. Never used for the actual classify decision.
-      // Remove once confirmed.
-      if (batchRows[0]) {
-        try {
-          const sample = JSON.parse(batchRows[0].EmbeddingJSON) as number[]
-          const scored = confirmedEmbeddings
-            .filter((c) => c.embedding.length === sample.length)
-            .map((c) => {
-              let dot = 0,
-                normA = 0,
-                normB = 0
-              for (let i = 0; i < sample.length; i++) {
-                dot += sample[i] * c.embedding[i]
-                normA += sample[i] * sample[i]
-                normB += c.embedding[i] * c.embedding[i]
-              }
-              const similarity =
-                normA < 1e-10 || normB < 1e-10 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB))
-              return { category: c.category, similarity }
-            })
-            .sort((a, b) => b.similarity - a.similarity)
-          const nearest = scored[0]
-          const nearestOther = scored.find((s) => s.category !== nearest?.category)
-          console.log(
-            `classifyAutoCategoryBatch: embedding sample -- nearest=${nearest?.category}@${nearest?.similarity.toFixed(4)} nearestOther=${nearestOther?.category}@${nearestOther?.similarity.toFixed(4)} margin=${nearest && nearestOther ? (nearest.similarity - nearestOther.similarity).toFixed(4) : 'n/a'} (needs >= 0.05)`
-          )
-        } catch {
-          // Diagnostic only -- never let a bad sample row affect anything.
-        }
-      }
       processed += ownDb.transaction((rows: typeof batchRows) => {
         let count = 0
         for (const row of rows) {
@@ -297,53 +244,9 @@ export async function classifyAutoCategoryBatch(
   const pendingFeatureCount = countPendingFeatures(ownDb, embeddingAxisTrained)
   if (pendingFeatureCount > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    // TEMPORARY diagnostic log (2026-09-15) -- see the matching one above
-    // for the embedding axis. Remove once confirmed.
-    const centroidCategoryCounts = Object.fromEntries(
-      Object.entries(centroidStore.arrangeRoles).map(([role, centroid]) => [
-        role,
-        centroid?.count ?? 0
-      ])
-    )
-    console.log(
-      `classifyAutoCategoryBatch: centroid axis categories=${JSON.stringify(centroidCategoryCounts)}`
-    )
     const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE, embeddingAxisTrained)
     remaining += Math.max(0, pendingFeatureCount - batchRows.length)
     const now = Date.now()
-    // TEMPORARY diagnostic log (2026-09-15) -- same purpose as the
-    // embedding-pass one above, duplicating (read-only, diagnostic-only)
-    // categoryCentroids.ts's own standardize/euclideanDistance math so the
-    // real nearest/second-nearest distance ratio can be seen directly.
-    // Never used for the actual classify decision. Remove once confirmed.
-    if (batchRows[0]) {
-      try {
-        const raw = toFeatureArray(JSON.parse(batchRows[0].FeaturesJSON) as StemFeatures)
-        const { mean, m2, count } = centroidStore.global
-        const standardize = (vector: number[]): number[] =>
-          vector.map((v, d) => {
-            const variance = count > 0 ? m2[d] / count : 0
-            const stddev = Math.sqrt(variance)
-            return stddev > 1e-10 ? (v - mean[d]) / stddev : 0
-          })
-        const query = standardize(raw)
-        const distances = Object.entries(centroidStore.arrangeRoles)
-          .filter(([, c]) => (c?.count ?? 0) >= 3)
-          .map(([category, c]) => {
-            const centroidStd = standardize(c!.mean)
-            let sum = 0
-            for (let i = 0; i < query.length; i++) sum += (query[i] - centroidStd[i]) ** 2
-            return { category, distance: Math.sqrt(sum) }
-          })
-          .sort((a, b) => a.distance - b.distance)
-        const [nearest, secondNearest] = distances
-        console.log(
-          `classifyAutoCategoryBatch: centroid sample -- nearest=${nearest?.category}@${nearest?.distance.toFixed(4)} secondNearest=${secondNearest?.category}@${secondNearest?.distance.toFixed(4)} ratio=${nearest && secondNearest ? (nearest.distance / secondNearest.distance).toFixed(4) : 'n/a'} (needs <= 0.85)`
-        )
-      } catch {
-        // Diagnostic only -- never let a bad sample row affect anything.
-      }
-    }
     processed += ownDb.transaction((rows: typeof batchRows) => {
       let count = 0
       for (const row of rows) {

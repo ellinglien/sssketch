@@ -28,20 +28,11 @@ async function runOnce(): Promise<void> {
   // DiscoverLibraryScan.tsx's own top-level-mount fix already established
   // earlier this session for the sibling renderer-side scan.
   if (!loadDiscoverSettings().consentedToLibraryScan) {
-    // TEMPORARY diagnostic log (2026-09-15) -- a live report of classify
-    // progress staying frozen with zero errors logged made it impossible
-    // to tell, from the outside, whether this scheduler was ticking at
-    // all. Remove once that's confirmed resolved.
-    console.log('stemAutoClassifyScheduler: tick -- consent off, idling')
     scheduleNext(IDLE_DELAY_MS)
     return
   }
   try {
-    const startedAt = Date.now()
-    const { processed, remaining } = await classifyAutoCategoryBatch(openOwnRiffLibraryDb())
-    console.log(
-      `stemAutoClassifyScheduler: tick -- processed=${processed} remaining=${remaining} took=${Date.now() - startedAt}ms`
-    )
+    const { remaining } = await classifyAutoCategoryBatch(openOwnRiffLibraryDb())
     scheduleNext(remaining > 0 ? BUSY_DELAY_MS : IDLE_DELAY_MS)
   } catch (err) {
     console.error('stemAutoClassifyScheduler: batch failed:', err)
