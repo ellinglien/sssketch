@@ -1,32 +1,7 @@
 // src/main/discoverCandidates.test.ts
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { getDiscoverCandidates, getRandomLibraryCandidate } from './discoverCandidates'
-import * as categoryCentroidStore from './categoryCentroidStore'
-import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
-import type { StemFeatures } from '@shared/stemFeatures'
-
-// getCentroidGuessedStemCIDs's own dedicated test below spies on
-// loadCategoryCentroidStore to supply a real trained store (the real one
-// reads app.getPath('userData'), mocked to empty above) -- restored after
-// every test so the spy never leaks into a LATER test that expects the
-// real "nothing trained yet" behavior.
-afterEach(() => {
-  vi.restoreAllMocks()
-})
-
-// getCentroidGuessedStemCIDs (via loadCategoryCentroidStore) reads
-// app.getPath('userData') on every call -- mock just that narrow surface,
-// same established convention as discoverLibraryStems.test.ts (this
-// codebase avoids mocking the `electron` module wholesale, see CLAUDE.md's
-// Testing conventions section). Pointed at a path that won't exist, so
-// loadCategoryCentroidStore falls back to its own documented "empty store"
-// behavior rather than reading a real file from a real user's machine.
-vi.mock('electron', () => ({
-  app: {
-    getPath: () => '/tmp/discoverCandidates-test-userdata'
-  }
-}))
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -54,34 +29,30 @@ function freshDb(): Database.Database {
     CREATE TABLE StemFeatureCache (
       StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
+    CREATE TABLE StemAutoCategory (
+      StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
+      ComputedAt INTEGER NOT NULL
+    );
   `)
   return db
 }
 
-function seedEmbedding(db: Database.Database, stemCID: string, embedding: number[]): void {
-  db.prepare(
-    `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt) VALUES (?, ?, 1000)`
-  ).run(stemCID, JSON.stringify(embedding))
-}
-
-function seedFeatures(
+/** Writes directly to StemAutoCategory -- the background classify scan's
+ * (stemAutoClassify.ts) own precomputed-results table -- rather than
+ * seeding embeddings/features and letting a live classifier run. The
+ * classification logic itself (embedding vs. centroid, confidence
+ * thresholds) is stemAutoClassify's own concern and is tested there;
+ * this file only needs to prove getDiscoverCandidates reads this table's
+ * rows correctly. */
+function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
-  overrides: Partial<StemFeatures> = {}
+  arrangeRole: string,
+  source: 'embedding' | 'centroid' = 'embedding'
 ): void {
-  const features: StemFeatures = {
-    transientDensity: 0,
-    bassEnergyRatio: 0,
-    spectralCentroidHz: 0,
-    zcrBrightness: 0,
-    voicedFraction: 0,
-    pitchVarianceCents: 0,
-    mfcc: new Array(13).fill(0),
-    ...overrides
-  }
   db.prepare(
-    `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 1000)`
-  ).run(stemCID, JSON.stringify(features))
+    `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES (?, ?, ?, 1000)`
+  ).run(stemCID, arrangeRole, source)
 }
 
 function seedRiff(
@@ -344,102 +315,19 @@ describe('getDiscoverCandidates', () => {
   })
 
   // Widening (2026-09-15, direct request): a role with a too-small
-  // confirmed pool should still surface stems the embedding classifier is
-  // confident about, even without human confirmation.
-  it('includes an UNCONFIRMED stem whose own embedding confidently classifies as the requested role', async () => {
-    const own = freshDb()
-    // Real training data: 3 confirmed 'drums' embeddings clustered near
-    // (1,0,0), 3 confirmed 'bass' near (0,1,0) -- the minimum
-    // suggestCategoryFromEmbedding needs per category (MIN_SAMPLES_PER_CATEGORY=3)
-    // with 2 categories trained (MIN_CATEGORIES_FOR_SUGGESTION=2).
-    seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
-    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
-    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
-    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
-    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
-    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
-    for (const cid of ['d1', 'd2', 'd3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
-      seedEmbedding(own, cid, [1, 0, 0])
-    }
-    for (const cid of ['b1', 'b2', 'b3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
-      seedEmbedding(own, cid, [0, 1, 0])
-    }
-    // The real subject: an UNCONFIRMED stem (no StemCategories row at all)
-    // whose own embedding sits right next to the confirmed 'drums' cluster.
-    seedRiff(own, 'rg', 'jam1', 128, ['guessed-1'])
-    seedStem(own, 'guessed-1', 'jam1', { presetName: 'maybe a kick' })
-    seedEmbedding(own, 'guessed-1', [0.9, 0.1, 0])
-
-    const candidates = await getDiscoverCandidates({
-      ownDb: own,
-      jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
-    })
-
-    const stemCIDs = candidates.map((c) => c.stemCID).sort()
-    expect(stemCIDs).toEqual(['d1', 'd2', 'd3', 'guessed-1'])
-    const guessed = candidates.find((c) => c.stemCID === 'guessed-1')
-    expect(guessed).toMatchObject({
-      arrangeRole: 'drums',
-      drumSubRole: null,
-      presetName: 'maybe a kick'
-    })
-  })
-
-  it('never adds a guessed stem that is ALSO confirmed for a different role (confirmed always wins)', async () => {
-    const own = freshDb()
-    // Same training setup as above, but the "guessed-1" stem here is
-    // actually confirmed as 'bass' despite embedding near the drums
-    // cluster -- getEmbeddingGuessedStemCIDs excludes anything already in
-    // categoryByStemCID (built from StemCategories first), so a real human
-    // confirmation is never second-guessed by the classifier.
-    seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
-    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
-    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
-    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
-    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
-    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
-    for (const cid of ['d1', 'd2', 'd3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
-      seedEmbedding(own, cid, [1, 0, 0])
-    }
-    for (const cid of ['b1', 'b2', 'b3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
-      seedEmbedding(own, cid, [0, 1, 0])
-    }
-    seedRiff(own, 'rconfirmed', 'jam1', 128, ['confirmed-bass'])
-    seedStem(own, 'confirmed-bass', 'jam1')
-    seedCategory(own, 'confirmed-bass', { arrangeRole: 'bass', busId: 'bass' })
-    seedEmbedding(own, 'confirmed-bass', [0.9, 0.1, 0]) // embeds near drums, but confirmed bass
-
-    const candidates = await getDiscoverCandidates({
-      ownDb: own,
-      jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
-    })
-
-    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
-  })
-
-  it('does not throw and returns only confirmed candidates when nothing is trained on the embedding axis yet', async () => {
+  // confirmed pool should still surface stems the background classify scan
+  // (stemAutoClassify.ts) has already precomputed. The scan's own
+  // embedding-vs-centroid classification logic is tested in
+  // stemAutoClassify.test.ts; this file only needs to prove
+  // getDiscoverCandidates reads StemAutoCategory's rows correctly, so
+  // these tests write directly to that table via seedAutoCategory.
+  it('includes an UNCONFIRMED stem precomputed as the requested role via StemAutoCategory (background scan)', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
-    seedStem(own, 's1', 'jam1')
-    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
-    // A cached embedding exists for some OTHER, unconfirmed stem, but
-    // fewer than 2 categories are trained (drums has samples, nothing else
-    // does) -- suggestCategoryFromEmbedding always returns null here, so
-    // this stem is never guessed.
-    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
-    seedStem(own, 's2', 'jam1')
-    seedEmbedding(own, 's1', [1, 0, 0])
-    seedEmbedding(own, 's2', [1, 0, 0])
+    seedStem(own, 's1', 'jam1', { presetName: 'maybe a kick' })
+    // No StemCategories row at all -- this stem was never human-confirmed,
+    // only auto-classified by the background scan.
+    seedAutoCategory(own, 's1', 'drums')
 
     const candidates = await getDiscoverCandidates({
       ownDb: own,
@@ -447,91 +335,45 @@ describe('getDiscoverCandidates', () => {
       arrangeRole: 'drums'
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+    expect(candidates[0]).toMatchObject({
+      arrangeRole: 'drums',
+      drumSubRole: null,
+      presetName: 'maybe a kick'
+    })
   })
 
-  // Speed fix (2026-09-15, real user report): a full StemEmbeddingCache
-  // classify pass took ~20 real seconds against a real library. Cached per
-  // (db instance, role) for GUESSED_CACHE_TTL_MS so repeated rolls within
-  // that window don't re-pay it.
-  it('reuses the embedding-guessed pool on a second call for the same db+role within the TTL, even if new data would otherwise change the result', async () => {
+  it('excludes a StemAutoCategory row for a stem confirmed to a DIFFERENT role (cross-role leakage guard)', async () => {
     const own = freshDb()
-    seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
-    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
-    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
-    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
-    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
-    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
-    for (const cid of ['d1', 'd2', 'd3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
-      seedEmbedding(own, cid, [1, 0, 0])
-    }
-    for (const cid of ['b1', 'b2', 'b3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
-      seedEmbedding(own, cid, [0, 1, 0])
-    }
+    // Real scenario this guards against: the background scan classified
+    // this stem as 'drums' (StemAutoCategory) BEFORE it was later
+    // human-confirmed as 'bass' (StemCategories) -- the scan never revisits
+    // an already-written row, so the 'drums' guess goes stale. A confirmed
+    // role always wins, on ANY role, not just the one being queried.
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'bass', busId: 'bass' })
+    seedAutoCategory(own, 's1', 'drums')
 
-    const first = await getDiscoverCandidates({
+    const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
       arrangeRole: 'drums'
     })
-    expect(first.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
-
-    // A new stem that WOULD classify as 'drums' lands after the first call.
-    seedRiff(own, 'rg', 'jam1', 128, ['guessed-late'])
-    seedStem(own, 'guessed-late', 'jam1')
-    seedEmbedding(own, 'guessed-late', [0.9, 0.1, 0])
-
-    const second = await getDiscoverCandidates({
-      ownDb: own,
-      jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
-    })
-    // Still the cached (stale) result -- the newly-added stem does not
-    // appear because it landed within the TTL window.
-    expect(second.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
+    expect(candidates).toEqual([])
   })
 
-  it('does not share the embedding-guessed cache across DIFFERENT db instances', async () => {
-    const dbA = freshDb()
-    const dbB = freshDb()
-    for (const db of [dbA, dbB]) {
-      seedRiff(db, 'rd1', 'jam1', 128, ['d1'])
-      seedRiff(db, 'rd2', 'jam1', 128, ['d2'])
-      seedRiff(db, 'rd3', 'jam1', 128, ['d3'])
-      seedRiff(db, 'rb1', 'jam1', 128, ['b1'])
-      seedRiff(db, 'rb2', 'jam1', 128, ['b2'])
-      seedRiff(db, 'rb3', 'jam1', 128, ['b3'])
-      for (const cid of ['d1', 'd2', 'd3']) {
-        seedStem(db, cid, 'jam1')
-        seedCategory(db, cid, { arrangeRole: 'drums', busId: 'drums' })
-        seedEmbedding(db, cid, [1, 0, 0])
-      }
-      for (const cid of ['b1', 'b2', 'b3']) {
-        seedStem(db, cid, 'jam1')
-        seedCategory(db, cid, { arrangeRole: 'bass', busId: 'bass' })
-        seedEmbedding(db, cid, [0, 1, 0])
-      }
-    }
-    // Only dbB gets the extra guessed stem.
-    seedRiff(dbB, 'rg', 'jam1', 128, ['guessed-only-in-b'])
-    seedStem(dbB, 'guessed-only-in-b', 'jam1')
-    seedEmbedding(dbB, 'guessed-only-in-b', [0.9, 0.1, 0])
+  it('never includes a StemAutoCategory row for a DIFFERENT role than the one requested', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedAutoCategory(own, 's1', 'bass')
 
-    const fromA = await getDiscoverCandidates({
-      ownDb: dbA,
-      jams: [{ jamCID: 'jam1', dbForJam: dbA }],
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
       arrangeRole: 'drums'
     })
-    const fromB = await getDiscoverCandidates({
-      ownDb: dbB,
-      jams: [{ jamCID: 'jam1', dbForJam: dbB }],
-      arrangeRole: 'drums'
-    })
-    expect(fromA.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
-    expect(fromB.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3', 'guessed-only-in-b'])
+    expect(candidates).toEqual([])
   })
 
   // Widened again, same day, real user report: "can't we train it with
@@ -582,31 +424,17 @@ describe('getDiscoverCandidates', () => {
     expect(candidates).toEqual([])
   })
 
-  it('combines all three sources (confirmed, embedding-guessed, instrument-matched) in one pool', async () => {
+  it('combines all three sources (confirmed, StemAutoCategory-precomputed, instrument-matched) in one pool', async () => {
     const own = freshDb()
-    // Confirmed 'drums', with a real embedding (also doubles as classifier
-    // training data).
+    // Confirmed 'drums'.
     seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
-    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
-    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
-    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
-    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
-    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
-    for (const cid of ['d1', 'd2', 'd3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
-      seedEmbedding(own, cid, [1, 0, 0])
-    }
-    for (const cid of ['b1', 'b2', 'b3']) {
-      seedStem(own, cid, 'jam1')
-      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
-      seedEmbedding(own, cid, [0, 1, 0])
-    }
-    // Embedding-guessed: unconfirmed, embeds near the drums cluster.
+    seedStem(own, 'd1', 'jam1')
+    seedCategory(own, 'd1', { arrangeRole: 'drums', busId: 'drums' })
+    // Precomputed via the background scan: unconfirmed, in StemAutoCategory.
     seedRiff(own, 'rg', 'jam1', 128, ['guessed-1'])
     seedStem(own, 'guessed-1', 'jam1')
-    seedEmbedding(own, 'guessed-1', [0.9, 0.1, 0])
-    // Instrument-matched: unconfirmed, no embedding at all, just the bit.
+    seedAutoCategory(own, 'guessed-1', 'drums')
+    // Instrument-matched: unconfirmed, no auto-category at all, just the bit.
     seedRiff(own, 'ri', 'jam1', 128, ['instrument-1'])
     seedStem(own, 'instrument-1', 'jam1', { instrument: 2 })
 
@@ -615,13 +443,7 @@ describe('getDiscoverCandidates', () => {
       jams: [{ jamCID: 'jam1', dbForJam: own }],
       arrangeRole: 'drums'
     })
-    expect(candidates.map((c) => c.stemCID).sort()).toEqual([
-      'd1',
-      'd2',
-      'd3',
-      'guessed-1',
-      'instrument-1'
-    ])
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'guessed-1', 'instrument-1'])
   })
 
   // Real crash, found live via a full macOS crash report: SQLite trapped
@@ -677,43 +499,6 @@ describe('getDiscoverCandidates', () => {
     })
     // Still the cached (stale) result.
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
-  })
-
-  // Direct point, 2026-09-15: "you have lots of data from saved tidied up
-  // stems, right? it should be straightforward to run a generic DSP/
-  // audio-feature classifier similar to that" -- the classifier already
-  // existed (categoryCentroids.ts, trained by every real StemCategories
-  // write); this proves getCentroidGuessedStemCIDs actually wires it into
-  // Discover's own pool. Spies on loadCategoryCentroidStore to supply a
-  // real trained store (the real one reads app.getPath, mocked to an
-  // empty/nonexistent path at the top of this file) -- restored by the
-  // top-level afterEach.
-  it('includes an UNCONFIRMED stem whose own DSP feature vector (StemFeatureCache) confidently classifies via the centroid classifier', async () => {
-    const own = freshDb()
-    let store = emptyCategoryCentroidStore()
-    const zeros = new Array(13).fill(0)
-    // 3 confirmed 'drums' samples (high transientDensity), 3 confirmed
-    // 'bass' samples (high bassEnergyRatio) -- the minimum
-    // suggestCategory needs per category, with 2 categories trained.
-    for (let i = 0; i < 3; i++) {
-      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
-      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
-    }
-    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
-
-    seedRiff(own, 'r1', 'jam1', 128, ['unconfirmed-1'])
-    seedStem(own, 'unconfirmed-1', 'jam1', { presetName: 'maybe a kick' })
-    // Close to the drums cluster (high transientDensity, low
-    // bassEnergyRatio), no StemCategories row at all.
-    seedFeatures(own, 'unconfirmed-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
-
-    const candidates = await getDiscoverCandidates({
-      ownDb: own,
-      jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
-    })
-    expect(candidates.map((c) => c.stemCID)).toEqual(['unconfirmed-1'])
-    expect(candidates[0]).toMatchObject({ arrangeRole: 'drums', drumSubRole: null })
   })
 })
 

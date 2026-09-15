@@ -39,6 +39,7 @@ describe('riffLibrarySchema', () => {
     expect(tables.map((t) => t.name)).toEqual([
       'Jams',
       'Riffs',
+      'StemAutoCategory',
       'StemCategories',
       'StemEmbeddingCache',
       'StemFeatureCache',

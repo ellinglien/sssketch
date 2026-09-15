@@ -1,21 +1,26 @@
 // src/main/discoverCandidates.ts
 import type Database from 'better-sqlite3'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
-import { suggestCategoryFromEmbedding } from '@shared/embeddingMatch'
-import { suggestCategory } from '@shared/categoryCentroids'
-import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { getConfirmedEmbeddings } from './embeddingMatch'
-import { loadCategoryCentroidStore } from './categoryCentroidStore'
+import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 
 /** One library-wide candidate for a Discover slot -- a stem that's EITHER
- * human-confirmed (StemCategories) for the requested ArrangeRole, or whose
- * own embedding confidently CLASSIFIES as that role even without
- * confirmation (getEmbeddingGuessedStemCIDs, added 2026-09-15 to widen a
- * too-small confirmed-only pool), or whose own Endlesss instrument
- * category maps to that role (getInstrumentMatchedStemCIDs, added the same
- * day -- real ground truth requiring no prior confirmation OR background
- * scan at all, unlike the embedding path). */
+ * human-confirmed (StemCategories) for the requested ArrangeRole, or
+ * PRE-classified as that role by the background "categorize the whole
+ * library overnight" scan (StemAutoCategory -- stemAutoClassify.ts,
+ * stemAutoClassifyScheduler.ts; direct request 2026-09-15, "why not just
+ * do a prelim scan that pre-categorizes the stems"), or whose own Endlesss
+ * instrument category maps to that role (getInstrumentMatchedStemCIDs,
+ * below -- real ground truth requiring no prior confirmation OR
+ * background scan at all).
+ *
+ * The embedding/centroid CLASSIFIERS themselves used to run HERE, at query
+ * time, on every single roll -- moved out to the background scan (same
+ * day, after repeated real reports that even cached/parallelized/
+ * short-circuited runtime classification still made a cold roll slow).
+ * This file now only ever reads their ALREADY-COMPUTED results via a
+ * plain, fast SELECT (getAutoCategorizedStemCIDs) -- no classifier math at
+ * query time at all. */
 export interface DiscoverCandidate {
   stemCID: string
   jamCID: string
@@ -77,6 +82,18 @@ const CANDIDATE_QUERY_CHUNK_SIZE = 200
 // stay non-blocking.
 const RIFF_QUERY_YIELD_EVERY = 20
 
+// TTL cache for getInstrumentMatchedStemCIDs, below -- a real library's
+// worth of jams x stems walked fresh on EVERY roll click with no cache at
+// all took minutes (confirmed live). Keyed by db INSTANCE (WeakMap, not a
+// flat cache) specifically so tests using fresh in-memory dbs don't
+// pollute each other -- same pattern this file used for the now-retired
+// embedding/centroid caches before they moved to the background scan.
+const GUESSED_CACHE_TTL_MS = 60_000
+const instrumentMatchedStemCIDsCache = new WeakMap<
+  Database.Database,
+  Map<ArrangeRole, { matched: Set<string>; computedAt: number }>
+>()
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
@@ -87,279 +104,42 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** Every StemCID, library-wide, that ISN'T confirmed (StemCategories) for
- * ANY ArrangeRole -- not just the one being queried -- but whose own
- * cached embedding (StemEmbeddingCache, populated by the whole-library
- * scan -- DiscoverLibraryScan.tsx) classifies confidently as `arrangeRole`
- * anyway -- suggestCategoryFromEmbedding (@shared/embeddingMatch), the
- * SAME k-NN-over-confirmed-embeddings classifier Tidy Up's own per-stem
- * suggestions already use, trained here on getConfirmedEmbeddings(ownDb,
- * 'arrangeRole') (exactly the axis Discover's own candidates care about).
- *
- * The any-role exclusion (not just "not already confirmed for THIS role")
- * is an explicit, self-contained guard -- independent review found that a
- * stem confirmed for a DIFFERENT role is ALSO implicitly protected today,
- * since its own embedding sits in the classifier's own training set with
- * a trivial 1.0 self-similarity nothing else can beat, so it can only ever
- * classify back to its own real confirmed category. That protection is an
- * emergent property of suggestCategoryFromEmbedding's own math, though,
- * not a documented contract -- if that function ever changed to exclude
- * self-matches from its own training data, cross-role leakage would
- * become real with nothing here to catch it. Querying this explicitly
- * keeps correctness independent of that classifier's internals.
- *
- * Returns an empty set immediately when nothing is trained yet on this
- * axis (getConfirmedEmbeddings returns nothing, or too few
- * categories/samples for suggestCategoryFromEmbedding to ever return
- * non-null) -- no point walking the whole embedding table for a
- * classifier that can't classify anything yet.
- *
- * Uses `.all()`, NOT `.iterate()` -- real, LIVE crash found 2026-09-15
- * (not theoretical): better-sqlite3 throws "TypeError: This database
- * connection is busy executing a query" when ANYTHING else tries to run a
- * statement -- specifically a db.transaction() -- against the SAME
- * connection while a `.iterate()` generator from a prior statement hasn't
- * been fully drained. `ownDb` is a single cached connection shared by the
- * WHOLE main process (openOwnRiffLibraryDb), including the riff-library
- * background sync (syncSharedFeed -> upsertRiffSkeletons, its own
- * db.transaction()), which runs independently on its own schedule. An
- * earlier version of this function used `.iterate()` specifically so
- * `await yieldToEventLoop()` between rows wouldn't require eagerly
- * materializing the whole table first -- but every `await` inside that
- * loop left the iterate()'s own statement handle OPEN AND UNFINISHED
- * across the yield, and the background sync firing during exactly that
- * window threw the error above, observed live in this app's own stderr.
- * `.all()` fully executes and CLOSES its statement synchronously before
- * this function ever awaits anything -- by the time the classify loop
- * below yields, the connection is completely idle, so a concurrent
- * db.transaction() elsewhere can run without conflict. This does mean the
- * whole StemEmbeddingCache table is read into one JS array up front
- * (independent review's own original concern) -- a real, but strictly
- * smaller and less severe risk than a confirmed crash: at CURRENT
- * real-world scan progress (a fraction of a 50k+-stem library, described
- * elsewhere as taking HOURS to fully complete) this read alone is fast:
- * only the CLASSIFY loop after it does real per-row work, and that part
- * still yields.
- *
- * Cached per role for GUESSED_CACHE_TTL_MS: confirmed live 2026-09-15 (real
- * user report, not the earlier "deliberately not built preemptively"
- * guess this comment used to make) that a real library's worth of
- * StemEmbeddingCache rows makes one uncached call take on the order of
- * 20 real seconds -- yielding keeps the app responsive DURING that time
- * (no beachball), but paying it again on every single roll/reroll click is
- * still a bad wait. A short TTL, not an invalidate-on-write scheme: the
- * writers that would invalidate this (Tidy Up confirmations, the
- * whole-library scan's own embedding writes) are spread across several
- * other modules, and wiring an explicit invalidation callback into all of
- * them is real cross-module coupling for a cache that's fine to just be
- * up to a minute stale -- a fresh confirmation or newly-scanned stem
- * shows up in Discover's own pool within GUESSED_CACHE_TTL_MS regardless,
- * without needing to track every writer.
- *
- * Keyed by `ownDb` INSTANCE first (a WeakMap, not a flat module-level
- * cache) -- production only ever has one real ownDb (openOwnRiffLibraryDb's
- * own cached singleton), so this is behaviorally identical to a flat cache
- * there, but it keeps this file's own tests (each constructing a fresh
- * in-memory db per test) from reading a stale result cached against a
- * DIFFERENT db instance from an earlier test -- a flat `Map<ArrangeRole,
- * ...>` would otherwise leak cached state across every test in this file
- * that happens to query the same role. */
-const GUESSED_CACHE_TTL_MS = 60_000
-const guessedStemCIDsCache = new WeakMap<
-  Database.Database,
-  Map<ArrangeRole, { guessed: Set<string>; computedAt: number }>
->()
-// Same shape/TTL, for getInstrumentMatchedStemCIDs below -- a separate
-// cache (not reused/merged with the one above) since the two functions
-// key their own Map values differently (`guessed` vs `matched`) and there
-// is no benefit to entangling two otherwise-independent data sources.
-const instrumentMatchedStemCIDsCache = new WeakMap<
-  Database.Database,
-  Map<ArrangeRole, { matched: Set<string>; computedAt: number }>
->()
-
-async function getEmbeddingGuessedStemCIDs(
-  ownDb: Database.Database,
-  arrangeRole: ArrangeRole
-): Promise<Set<string>> {
-  const dbCache = guessedStemCIDsCache.get(ownDb) ?? new Map()
-  guessedStemCIDsCache.set(ownDb, dbCache)
-
-  const cached = dbCache.get(arrangeRole)
-  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.guessed
-
-  const confirmed = getConfirmedEmbeddings(ownDb, 'arrangeRole')
-  const guessed = new Set<string>()
-  if (confirmed.length === 0) {
-    dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
-    return guessed
-  }
-
-  const confirmedAnyRole = new Set(
-    (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
-  )
-
-  // Fully executed and closed by the time this line returns -- no
-  // statement remains open on `ownDb` past this point, so the classify
-  // loop below can safely await/yield without risking the "connection is
-  // busy" error a live .iterate() generator would.
-  const rows = ownDb.prepare(`SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache`).all() as {
-    StemCID: string
-    EmbeddingJSON: string
-  }[]
-
-  let sinceYield = 0
-  for (const row of rows) {
-    if (!confirmedAnyRole.has(row.StemCID)) {
-      try {
-        const embedding = JSON.parse(row.EmbeddingJSON) as number[]
-        if (suggestCategoryFromEmbedding(confirmed, embedding) === arrangeRole) {
-          guessed.add(row.StemCID)
-        }
-      } catch {
-        // Corrupted row -- skip, same defensive handling
-        // getConfirmedEmbeddings itself already uses for the same table.
-      }
-    }
-    sinceYield += 1
-    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-      sinceYield = 0
-      await yieldToEventLoop()
-    }
-  }
-  dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
-  return guessed
-}
-
-// Same shape/TTL as guessedStemCIDsCache above, for
-// getCentroidGuessedStemCIDs below -- a separate cache since it's a
-// separate data source (StemFeatureCache + categoryCentroidStore, not
-// StemEmbeddingCache + getConfirmedEmbeddings).
-const centroidGuessedStemCIDsCache = new WeakMap<
-  Database.Database,
-  Map<ArrangeRole, { guessed: Set<string>; computedAt: number }>
->()
-
-/** Every StemCID, library-wide, that ISN'T confirmed for ANY ArrangeRole
- * (same cross-role-leakage guard as getEmbeddingGuessedStemCIDs) but whose
- * own persisted DSP feature vector (StemFeatureCache -- transient
- * density, spectral centroid, MFCCs, etc.; see @shared/stemFeatures'
- * StemFeatures/toFeatureArray) classifies confidently as `arrangeRole` via
- * the SAME nearest-centroid classifier (suggestCategory,
- * @shared/categoryCentroids) Tidy Up's own per-stem suggestions already
- * use. Direct point, 2026-09-15: "you have lots of data from saved tidied
- * up stems, right? it should be straightforward to run a generic DSP/
- * audio-feature classifier" -- exactly right, and a real gap: this
- * classifier already exists, is already trained by EVERY StemCategories
- * write (trainCentroidsFromRoleEntries, categoryCentroidTraining.ts,
- * called from the upsert-stem-category-bus/-role IPC handlers -- so
- * Elling's own 20 just-confirmed stems already trained it, live, before
- * this function even existed), and was simply never wired into Discover's
- * own widening alongside the YAMNet-embedding path.
- *
- * Likely MORE immediately useful than the embedding path in practice:
- * StemFeatureCache (plain signal-processing features) is far cheaper to
- * extract than a YAMNet embedding, so the whole-library scan populates it
- * faster -- more stems may already be classifiable this way before the
- * embedding table catches up.
- *
- * Same crash-safety discipline as every other widening source in this
- * file (this exact file crashed the app three times earlier the same
- * day): `.all()`, never `.iterate()`, so no statement is ever left open
- * across an await; yields periodically since classifying many stems is
- * real synchronous CPU work; cached per (db instance, role) so repeated
- * rolls don't re-pay it. */
-async function getCentroidGuessedStemCIDs(
-  ownDb: Database.Database,
-  arrangeRole: ArrangeRole
-): Promise<Set<string>> {
-  const dbCache = centroidGuessedStemCIDsCache.get(ownDb) ?? new Map()
-  centroidGuessedStemCIDsCache.set(ownDb, dbCache)
-
-  const cached = dbCache.get(arrangeRole)
-  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.guessed
-
-  const store = loadCategoryCentroidStore()
-  const guessed = new Set<string>()
-
-  const confirmedAnyRole = new Set(
-    (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
-  )
-
-  // Fully executed and closed before the classify loop below ever awaits
-  // -- same "never leave a statement open across an await" discipline as
-  // every other bulk read in this file.
-  const rows = ownDb.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all() as {
-    StemCID: string
-    FeaturesJSON: string
-  }[]
-
-  let sinceYield = 0
-  for (const row of rows) {
-    if (!confirmedAnyRole.has(row.StemCID)) {
-      try {
-        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-        if (suggestCategory(store, 'arrangeRole', toFeatureArray(features)) === arrangeRole) {
-          guessed.add(row.StemCID)
-        }
-      } catch {
-        // Corrupted row -- skip, same defensive handling this file's
-        // other classify loops already use for their own cache tables.
-      }
-    }
-    sinceYield += 1
-    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-      sinceYield = 0
-      await yieldToEventLoop()
-    }
-  }
-  dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
-  return guessed
-}
-
 /** Every StemCID, across the given jams, that isn't confirmed
  * (StemCategories) for ANY ArrangeRole -- not just the one being queried,
- * same cross-role-leakage guard getEmbeddingGuessedStemCIDs's own doc
- * comment explains in detail -- but whose own Endlesss instrument category
- * (Stems.Instrument, a bitmask -- instrumentMaskToSoundType) maps to
- * `arrangeRole` via SOUND_TYPE_TO_ARRANGE_ROLE. Direct request, 2026-09-15:
- * "can't we train it with some basic data before handing it to someone?"
- * -- unlike the embedding classifier (getEmbeddingGuessedStemCIDs), this
- * needs NO prior confirmation and no background scan at all: instrument
- * category is real ground truth Endlesss itself recorded at jam time (see
+ * so a real human confirmation always wins over a raw instrument-bit
+ * match -- but whose own Endlesss instrument category (Stems.Instrument,
+ * a bitmask -- instrumentMaskToSoundType) maps to `arrangeRole` via
+ * SOUND_TYPE_TO_ARRANGE_ROLE. Direct request, 2026-09-15: "can't we train
+ * it with some basic data before handing it to someone?" -- this needs NO
+ * prior confirmation and no background scan at all: instrument category
+ * is real ground truth Endlesss itself recorded at jam time (see
  * instrumentMaskToSoundType's own doc comment -- "traced directly from
  * OUROVEON's own source, not guessed"), present on every synced stem the
  * moment it syncs. This is the SAME mapping resolveStemRole (stemRole.ts)
  * already uses as its own default/fallback arrangeRole for any stem
  * without a confirmed busId -- reusing it here for Discover's candidate
- * pool is consistent with that established precedent, not new risk.
+ * pool is consistent with that established precedent, not new risk. Stays
+ * a LIVE query (unlike the embedding/centroid classifiers, moved out to a
+ * background scan the same day) since it's already cheap: a bitmask
+ * check, no classifier math, no external store to load.
  *
  * Reads each jam's own `Stems` table directly (not ownDb) for the
  * Instrument values themselves -- a stem's Instrument lives wherever its
  * Riffs/Stems rows do, same as the main per-jam loop below. `.all()`, not
- * `.iterate()`, for the exact same "never leave a statement open across an
- * await" reason getEmbeddingGuessedStemCIDs's own doc comment explains in
- * detail (a real live crash, not theoretical). Yields periodically for the
- * same many-rows-is-real-synchronous-work reason as that function too,
- * though a bitmask check is far cheaper per row than a cosine similarity.
+ * `.iterate()`, for the "never leave a statement open across an await"
+ * discipline this whole file follows after a real live crash (a
+ * `.iterate()`-across-an-await once threw "This database connection is
+ * busy executing a query" against a concurrent background-sync
+ * transaction). Yields periodically since many-rows-is-real-synchronous-
+ * work regardless of how cheap each individual check is.
  *
- * Cached per (db instance, role) for GUESSED_CACHE_TTL_MS, same reasoning
- * and same cache SHAPE as getEmbeddingGuessedStemCIDs's own cache --
- * missed on the first pass (this function shipped without one, on the
- * assumption a bitmask check is cheap enough not to need it), then
- * confirmed live: a real library's worth of jams x stems, walked fresh on
- * EVERY roll click with no cache at all, took minutes. Keyed by `ownDb`
- * only (not the full `jams` array, which isn't a stable cache key) --
- * `jams` is, in practice, stable for a given db/session, same assumption
- * the embedding cache's own doc comment already makes implicitly. */
+ * Cached per (db instance, role) for GUESSED_CACHE_TTL_MS -- missed on the
+ * first pass (this function shipped without one, on the assumption a
+ * bitmask check is cheap enough not to need it), then confirmed live: a
+ * real library's worth of jams x stems, walked fresh on EVERY roll click
+ * with no cache at all, took minutes. Keyed by `ownDb` only (not the full
+ * `jams` array, which isn't a stable cache key) -- `jams` is, in practice,
+ * stable for a given db/session. */
 async function getInstrumentMatchedStemCIDs(
   ownDb: Database.Database,
   jams: JamDbPair[],
@@ -445,23 +225,19 @@ async function getInstrumentMatchedStemCIDs(
  * only pools for a role Elling hasn't tagged much yet (e.g. only 1-2
  * confirmed "drums" stems) meant reroll kept landing the exact same stem
  * regardless of the chaos/safe slider -- there was nothing else to pick.
- * getEmbeddingGuessedStemCIDs below adds every stem whose OWN embedding
- * confidently classifies as this role (suggestCategoryFromEmbedding, the
- * same k-NN-over-confirmed-embeddings classifier Tidy Up's own per-stem
- * suggestions already use), even though nobody has manually confirmed it
- * yet -- real variety instead of only what's already been hand-tagged.
- *
- * WIDENED AGAIN, same day: the embedding path above still needs at least 3
- * confirmed samples in 2+ categories before it can suggest ANYTHING
- * (suggestCategoryFromEmbedding's own MIN_SAMPLES_PER_CATEGORY) -- for a
- * role with 0-2 confirmed stems, it contributes nothing at all, which is
- * exactly the case a real user hit. getInstrumentMatchedStemCIDs adds a
- * THIRD source needing no confirmation and no background scan whatsoever:
- * Endlesss's own recorded instrument category for each stem (a real bit
- * traced from OUROVEON's own source, not a guess -- instrumentMaskToSoundType's
- * own doc comment), mapped onto ArrangeRole via the exact same
+ * Two more sources now widen the pool: getAutoCategorizedStemCIDs reads
+ * the background classify scan's own PRECOMPUTED results
+ * (StemAutoCategory -- embedding or centroid classification, run once per
+ * stem in the background, never at query time -- see
+ * stemAutoClassify.ts), and getInstrumentMatchedStemCIDs reads Endlesss's
+ * own recorded instrument category for each stem (a real bit traced from
+ * OUROVEON's own source, not a guess -- instrumentMaskToSoundType's own
+ * doc comment), mapped onto ArrangeRole via the exact same
  * SOUND_TYPE_TO_ARRANGE_ROLE table resolveStemRole (stemRole.ts) already
- * uses as its own default guess elsewhere in this app. */
+ * uses as its own default guess elsewhere in this app. Both need zero
+ * classifier math at query time -- the whole reroll-was-slow saga earlier
+ * the same day was BECAUSE the embedding/centroid classifiers used to run
+ * live, right here, on every single roll. */
 export async function getDiscoverCandidates({
   ownDb,
   jams,
@@ -487,18 +263,37 @@ export async function getDiscoverCandidates({
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
 
-  // Real report, 2026-09-15, THIRD round: even running the two ML-based
-  // sources concurrently (previous fix, same day) still left a cold-cache
-  // roll slow, because it paid for BOTH of them regardless of whether
-  // they were even needed. getInstrumentMatchedStemCIDs costs a bitmask
-  // check per row -- no classifier math, no external store to load --
-  // genuinely cheap next to embedding cosine-similarity or centroid
-  // distance, both of which compare every unconfirmed stem against every
-  // confirmed one. Running the cheap source FIRST and only reaching for
-  // the two expensive ones when confirmed+instrument-matched still leaves
-  // a thin pool means a role with decent instrument coverage (drums/bass
-  // are exactly this -- Endlesss records real instrument category on
-  // every stem) can skip the expensive sources ENTIRELY.
+  // Plain, fast SELECT against the background scan's own precomputed
+  // results (stemAutoClassify.ts) -- no classifier math at query time at
+  // all. Guarded against confirmedAnyRole, NOT just `!categoryByStemCID.has`
+  // (a bug caught in review before this shipped): StemAutoCategory can go
+  // stale relative to a LATER human confirmation of the same stem for a
+  // DIFFERENT role (the classify scan only checks "confirmed for any role"
+  // at WRITE time, not on every future read) -- if this only checked
+  // categoryByStemCID (built from StemCategories WHERE ArrangeRole = THIS
+  // role), a stem confirmed 'bass' with a stale StemAutoCategory row still
+  // saying 'drums' would leak into the 'drums' pool. Same cross-role-
+  // leakage guard getInstrumentMatchedStemCIDs already uses, below.
+  const confirmedAnyRole = new Set(
+    (
+      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
+        StemCID: string
+      }[]
+    ).map((r) => r.StemCID)
+  )
+  for (const stemCID of getAutoCategorizedStemCIDs(ownDb, arrangeRole)) {
+    if (!confirmedAnyRole.has(stemCID)) {
+      categoryByStemCID.set(stemCID, {
+        StemCID: stemCID,
+        ArrangeRole: arrangeRole,
+        DrumSubRole: null
+      })
+    }
+  }
+
+  // Also live (not precomputed): cheap enough (a bitmask check, no
+  // classifier) that persisting it wouldn't save anything worth the extra
+  // moving part.
   const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
   for (const stemCID of instrumentMatchedStemCIDs) {
     // getInstrumentMatchedStemCIDs already excludes anything confirmed for
@@ -509,53 +304,6 @@ export async function getDiscoverCandidates({
       ArrangeRole: arrangeRole,
       DrumSubRole: null
     })
-  }
-
-  // How many real candidates is "enough" to skip the expensive sources --
-  // deliberately not "any candidate at all": pickReroll's own pool-sizing
-  // (discoverRanking.ts) needs real room to vary with the chaos/safe
-  // slider, and a pool of 1-2 would defeat the whole reason this file got
-  // widened in the first place (the ORIGINAL "no match" report). 8 gives
-  // the reroll mechanism a real working set while still being cheap to
-  // reach for common, well-instrument-tagged roles.
-  const MIN_POOL_BEFORE_EXPENSIVE_SOURCES = 8
-  if (categoryByStemCID.size < MIN_POOL_BEFORE_EXPENSIVE_SOURCES) {
-    // Safe to run concurrently on the SAME `ownDb` connection: both
-    // functions use `.all()`, never `.iterate()` (each one's own doc
-    // comment explains why, after the real "database connection is busy"
-    // crash earlier today) -- neither ever leaves a SQLite statement open
-    // across an `await`, so their own internal yields can interleave
-    // freely without either seeing a statement left mid-flight by the
-    // other.
-    const [guessedStemCIDs, centroidGuessedStemCIDs] = await Promise.all([
-      getEmbeddingGuessedStemCIDs(ownDb, arrangeRole),
-      getCentroidGuessedStemCIDs(ownDb, arrangeRole)
-    ])
-
-    for (const stemCID of guessedStemCIDs) {
-      // A guessed (not human-confirmed) row -- DrumSubRole stays null
-      // since the embedding classifier here only ever runs on the
-      // arrangeRole axis (getConfirmedEmbeddings(ownDb, 'arrangeRole')),
-      // never drumSubRole. getEmbeddingGuessedStemCIDs already excludes
-      // anything confirmed for ANY role, so this never overwrites a real
-      // confirmed row.
-      categoryByStemCID.set(stemCID, {
-        StemCID: stemCID,
-        ArrangeRole: arrangeRole,
-        DrumSubRole: null
-      })
-    }
-
-    for (const stemCID of centroidGuessedStemCIDs) {
-      // Same "never overwrite a real confirmed row, harmless to re-set
-      // one another widening source already added" reasoning as the
-      // embedding merge above.
-      categoryByStemCID.set(stemCID, {
-        StemCID: stemCID,
-        ArrangeRole: arrangeRole,
-        DrumSubRole: null
-      })
-    }
   }
 
   if (categoryByStemCID.size === 0) return []

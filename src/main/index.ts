@@ -106,6 +106,7 @@ import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
+import { startStemAutoClassifyScheduler } from './stemAutoClassifyScheduler'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
 import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
@@ -311,6 +312,14 @@ app.whenReady().then(async () => {
   // project library folder -- see stemCategoriesBackfill.ts's own doc
   // comment.
   backfillStemCategoriesFromProjectLibrary(openOwnRiffLibraryDb())
+
+  // Background "pre-categorize the whole library" scheduler -- direct
+  // request, 2026-09-15 ("why not just do a prelim scan that
+  // pre-categorizes the stems... something people can leave running
+  // overnight"). Its own doc comment (stemAutoClassifyScheduler.ts)
+  // covers the consent gating and self-rescheduling; starting it here,
+  // once, at app startup is all this call site needs to do.
+  startStemAutoClassifyScheduler()
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build

@@ -107,6 +107,20 @@ CREATE TABLE IF NOT EXISTS StemEmbeddingCache (
   EmbeddingJSON TEXT NOT NULL,
   ExtractedAt INTEGER NOT NULL
 );
+
+-- Precomputed ArrangeRole guesses -- direct request 2026-09-15 ("why not
+-- just do a prelim scan that pre-categorizes the stems... leave it
+-- running overnight"): a background pass (stemAutoClassify.ts) classifies
+-- each stem ONCE (via its own cached embedding or feature vector, once
+-- either exists) and persists the result here, so Discover's own
+-- candidate query (discoverCandidates.ts) becomes a plain fast SELECT
+-- against this table instead of re-running the classifier on every roll.
+CREATE TABLE IF NOT EXISTS StemAutoCategory (
+  StemCID TEXT PRIMARY KEY,
+  ArrangeRole TEXT NOT NULL,
+  Source TEXT NOT NULL,
+  ComputedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null
