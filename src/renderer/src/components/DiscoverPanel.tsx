@@ -1,6 +1,7 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
+import { linearWaveBars } from '@shared/visuals'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
@@ -1020,12 +1021,10 @@ export function DiscoverPanel({
           ClusterStemsBrowser.tsx's own row-assignment pulse animation
           already uses. discover-slot-pulse (opacity-only) is still used for
           the FAILED state -- a static "this stopped" cue.
-          discover-slot-reel-scroll drives SlotReelColumn's own vertical
-          symbol strips (see that component's own doc comment) -- a real
-          multi-column reel (direct reference, 2026-09-15: johakr/
-          html5-slot-machine and atlanteh/react-native-slot-machine),
-          replacing an earlier single striped-bar-pattern version that read
-          as a generic loading texture rather than an actual slot machine. */}
+          discover-slot-reel-scroll drives DiscoverResolvingReel's own
+          vertically-scrolling stack of full-size synthetic waveforms (see
+          that component's own doc comment) -- the whole waveform rolls up
+          to reveal the next one, direct report, 2026-09-15 (v2). */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
@@ -1389,97 +1388,81 @@ function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
   )
 }
 
-// Four fixed bar-height patterns, one per reel "symbol" -- unlike a real
-// slot machine's fruit/number symbols there's no "winning combination,"
-// these just need to read as visually distinct glyphs scrolling past. Each
-// one is drawn as a small cluster of vertical bars (SlotReelSymbol, below),
-// i.e. a tiny waveform snippet, rather than an unrelated shape. Direct
-// report, 2026-09-15: "it should look like full waves.. like the waves
-// that would be on there are printed on the wheel" -- the previous four
-// symbols were a bar cluster PLUS a circle/diamond/spark, which read as
-// generic slot-machine iconography instead of audio; every symbol here is
-// now the same kind of glyph (bars), just a different silhouette, so the
-// whole reel reads as "little waveforms" the way a real slot machine's
-// wheel prints its own fixed symbol set.
-const REEL_WAVE_PATTERNS: readonly (readonly number[])[] = [
-  [0.3, 0.7, 0.45, 1, 0.55, 0.3],
-  [0.85, 0.5, 0.7, 0.35, 0.8, 0.45],
-  [0.25, 0.4, 0.65, 0.9, 0.65, 0.4],
-  [0.55, 0.9, 0.3, 0.55, 0.9, 0.3]
-]
+// This row's own waveform button's real pixel height -- the vertical-drag
+// gain gesture below divides its own deltaY by this, same
+// "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
+// uses for its analogous drag on the real timeline. Also the resolving
+// placeholder's own reel-frame height, below -- each frame needs to be
+// exactly this tall for the reel to read as "the waveform itself scrolls
+// up," not a mismatched strip.
+const DISCOVER_WAVEFORM_HEIGHT = 40
 
-function SlotReelSymbol({ kind }: { kind: 0 | 1 | 2 | 3 }): React.JSX.Element {
-  const heights = REEL_WAVE_PATTERNS[kind]
-  const barWidth = 1.5
-  const gap = 0.6
-  const totalWidth = heights.length * barWidth + (heights.length - 1) * gap
-  const startX = (14 - totalWidth) / 2
-  return (
-    <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
-      {heights.map((h, i) => {
-        const barHeight = h * 12
-        return (
-          <rect
-            key={i}
-            x={startX + i * (barWidth + gap)}
-            y={(14 - barHeight) / 2}
-            width={barWidth}
-            height={barHeight}
-          />
-        )
-      })}
-    </svg>
-  )
+// Synthetic wave-shaped peaks standing in for a real one -- there's no
+// resolved stem yet while a slot is still genuinely resolving, so these
+// are generic envelope shapes (not real audio data), deterministic per
+// seed (plain trig, no Math.random) so the reel's own content never
+// changes between renders. Fed through linearWaveBars -- the EXACT same
+// geometry helper the real, resolved Waveform.tsx uses -- so a resolving
+// slot's placeholder renders as a genuine-looking full waveform rather
+// than an abstract icon.
+function syntheticResolvingPeaks(seed: number): number[] {
+  const n = 40
+  const peaks: number[] = []
+  for (let i = 0; i < n; i++) {
+    const t = i / n
+    const envelope = 0.35 + 0.65 * Math.abs(Math.sin((t + seed * 0.29) * Math.PI * (2.5 + seed)))
+    const jitter = 0.18 * Math.sin(i * (2.7 + seed * 0.6) + seed * 4)
+    peaks.push(Math.max(0.06, Math.min(1, envelope + jitter)))
+  }
+  return peaks
 }
 
-// One column of DiscoverSlotRow's own resolving-placeholder reel (below) --
-// a vertically-scrolling strip of SlotReelSymbol glyphs, alternating the
-// same dim/bright two-tone treatment the old single-stripe version used.
-// The strip renders its own symbol sequence TWICE back to back and
-// animates translateY from 0 to -50% -- a seamless loop regardless of the
-// strip's real rendered height, rather than hand-tuning a fixed pixel
-// distance per column. `durationMs` varies per column (see its own
-// callers) so the columns visibly desync from each other, reading as
-// independent spinning reels rather than one uniform block moving in
-// lockstep -- the real behavior actual slot machines (and both of
-// Elling's own reference links) have.
-function SlotReelColumn({
-  symbols,
-  durationMs
-}: {
-  symbols: (0 | 1 | 2 | 3)[]
-  durationMs: number
-}): React.JSX.Element {
-  const doubled = [...symbols, ...symbols]
+// Four distinct synthetic "waveforms" the resolving reel cycles through.
+const RESOLVING_REEL_FRAMES: readonly number[][] = [0, 1, 2, 3].map(syntheticResolvingPeaks)
+
+// DiscoverSlotRow's own resolving-placeholder reel -- direct report,
+// 2026-09-15 (v2): "instead of little waves, it should look like the
+// entire wave is rolling up to display another waveform," replacing the
+// previous version's multi-column strip of small symbol glyphs entirely.
+// A single reel, one full-width/full-height synthetic waveform per frame
+// (RESOLVING_REEL_FRAMES, above), doubled back to back and animated
+// translateY 0 -> -50% (the shared discover-slot-reel-scroll keyframes,
+// injected once above) for a seamless loop regardless of the strip's real
+// rendered height -- same technique the old multi-column version already
+// used, just one full-size reel instead of several tiny ones.
+function DiscoverResolvingReel(): React.JSX.Element {
+  const doubled = [...RESOLVING_REEL_FRAMES, ...RESOLVING_REEL_FRAMES]
   return (
-    <div style={{ width: 13, height: '100%', overflow: 'hidden', flexShrink: 0 }}>
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
-          gap: 8,
-          animation: `discover-slot-reel-scroll ${durationMs}ms linear infinite`
+          animation: `discover-slot-reel-scroll ${RESOLVING_REEL_FRAMES.length * 700}ms linear infinite`
         }}
       >
-        {doubled.map((kind, i) => (
-          <span
-            key={i}
-            style={{ color: i % 2 === 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)' }}
-          >
-            <SlotReelSymbol kind={kind} />
-          </span>
+        {doubled.map((peaks, i) => (
+          <div key={i} style={{ width: '100%', height: DISCOVER_WAVEFORM_HEIGHT, flexShrink: 0 }}>
+            <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
+              {linearWaveBars(peaks).map((bar, j) => (
+                <rect
+                  key={j}
+                  x={bar.x}
+                  y={bar.y}
+                  width={bar.width}
+                  height={bar.height}
+                  fill="var(--ra-stretch-on)"
+                  opacity={0.35 + 0.45 * ((j % 7) / 7)}
+                  shapeRendering="crispEdges"
+                />
+              ))}
+            </svg>
+          </div>
         ))}
       </div>
     </div>
   )
 }
-
-// This row's own waveform button's real pixel height -- the vertical-drag
-// gain gesture below divides its own deltaY by this, same
-// "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
-// uses for its analogous drag on the real timeline.
-const DISCOVER_WAVEFORM_HEIGHT = 40
 
 function DiscoverSlotRow({
   slot,
@@ -1787,43 +1770,56 @@ function DiscoverSlotRow({
                     <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
                   </div>
                 ))}
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    clipPath: `inset(${gainClipPct}% 0 0 0)`
-                  }}
-                >
-                  {tileOffsets.map((leftPct) => (
-                    <div
-                      key={leftPct}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: `${leftPct}%`,
-                        width: `${tileWidthPct}%`
-                      }}
-                    >
-                      <Waveform
-                        path={resolvedStem.path}
-                        color={stemColorVar(resolvedStem)}
-                        opacity={1}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    top: `${gainClipPct}%`,
-                    height: 1,
-                    background: 'var(--ra-text)',
-                    pointerEvents: 'none'
-                  }}
-                />
+                {/* Full-color layer on top -- suppressed entirely while
+                    muted (not currently in the preview mix), same "mute
+                    always wins" convention StemWaveformRow.tsx's own
+                    real-arrangement waveform uses (its own `{!muted && ...}`
+                    guard just above). Direct report, 2026-09-15: "when
+                    muted, a waveform should be grey" -- muted rows here
+                    used to still show the full-color layer (just clipped by
+                    gain), reading as "playing, just quiet" rather than
+                    "off," unlike every other muted waveform in this app. */}
+                {previewing && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      clipPath: `inset(${gainClipPct}% 0 0 0)`
+                    }}
+                  >
+                    {tileOffsets.map((leftPct) => (
+                      <div
+                        key={leftPct}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          left: `${leftPct}%`,
+                          width: `${tileWidthPct}%`
+                        }}
+                      >
+                        <Waveform
+                          path={resolvedStem.path}
+                          color={stemColorVar(resolvedStem)}
+                          opacity={1}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {previewing && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      top: `${gainClipPct}%`,
+                      height: 1,
+                      background: 'var(--ra-text)',
+                      pointerEvents: 'none'
+                    }}
+                  />
+                )}
                 {/* Real playhead, driven by the actual engine position while
                     this loop is previewing -- same `--ra-playhead` accent
                     Playhead.tsx uses on the real timeline. Only this row's
@@ -1858,13 +1854,10 @@ function DiscoverSlotRow({
                 : undefined
           }
           style={{
+            position: 'relative',
             flex: '1 1 auto',
             minWidth: 140,
             height: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
             overflow: 'hidden',
             border: `1px dashed ${
               resolving
@@ -1873,23 +1866,13 @@ function DiscoverSlotRow({
                   ? 'var(--ra-mute-on)'
                   : 'var(--ra-border)'
             }`,
-            // Real multi-column slot-machine reel while genuinely
-            // resolving (direct reference, 2026-09-15: johakr/
-            // html5-slot-machine, atlanteh/react-native-slot-machine) --
-            // see SlotReelColumn's own doc comment. Static (no animation)
-            // once settled either way (failed or truly empty).
+            // Static (no animation) once settled either way (failed or
+            // truly empty) -- discover-slot-pulse is still used for the
+            // FAILED state, a static "this stopped" cue.
             animation: resolveFailed ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
           }}
         >
-          {resolving && (
-            <>
-              <SlotReelColumn symbols={[0, 1, 2, 3]} durationMs={550} />
-              <SlotReelColumn symbols={[2, 3, 0, 1]} durationMs={680} />
-              <SlotReelColumn symbols={[1, 0, 3, 2]} durationMs={480} />
-              <SlotReelColumn symbols={[3, 2, 1, 0]} durationMs={620} />
-              <SlotReelColumn symbols={[0, 3, 1, 2]} durationMs={590} />
-            </>
-          )}
+          {resolving && <DiscoverResolvingReel />}
         </div>
       )}
       {/* Direct request, 2026-09-15: "waveforms should have a fixed area
