@@ -2,26 +2,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { stemColorVar } from '../theme/typeColor'
-import { getAudioContext } from '../audio/peakCache'
-import {
-  startPreviewLoopWithGain,
-  stopPreviewSources,
-  registerActivePreview,
-  unregisterActivePreview,
-  type PreviewSourceWithGain,
-  type PreviewStemInput
-} from '../audio/previewLoop'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
+import {
+  useAppSelector,
+  useDispatch,
+  usePlaying,
+  useFlushEngineSyncNow,
+  usePluginCatalog
+} from '../state/StoreContext'
 import { tileOffsetsPx } from '../state/selectors'
 import { startPointerDrag } from './dragUtils'
-import { type ProjectRef, type SoundType, type Stem } from '@shared/types'
+import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import { buildEngineProject } from '@shared/buildEngineProject'
+import { initialState, type AppState } from '../state/store'
+import { scheduleLiveParamSync } from './liveParamSync'
 
 interface ResolvedCandidateStem {
   author: string
@@ -122,9 +122,9 @@ export interface DiscoverSlot {
   hasRerolled: boolean
   /** This slot's own committed gain (0-1), set by dragging vertically on
    * its own waveform in DiscoverSlotRow below (handleGainDragStart) --
-   * carried into the shared preview mix
-   * (resolvedStemsRef's own `gain` field, restartMix) AND, on "plunk in
-   * arranger", written into the real placed rifff's state.vol so the same
+   * carried into the shared preview mix (read fresh by syncPreviewToEngine
+   * every sync) AND, on "plunk in arranger", written into the real placed
+   * rifff's state.vol so the same
    * balance the user set while building the loop survives onto the
    * timeline (PLACE_LOOP_ON_TIMELINE's own `vol` field, store.ts). Direct
    * request: a volume control per stem "which will determine the envelope
@@ -205,6 +205,10 @@ export function DiscoverPanel({
   const playing = usePlaying()
   const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
+  const masterChain = useAppSelector((s) => s.masterChain)
+  const channelPlugins = useAppSelector((s) => s.channelPlugins)
+  const pluginCatalog = usePluginCatalog()
+  const flushEngineSyncNow = useFlushEngineSyncNow()
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
 
@@ -215,11 +219,9 @@ export function DiscoverPanel({
   // the assumption the project's own tempo would always be set elsewhere
   // first). Dispatches the exact same SET_TEMPO action TransportBar.tsx's
   // own tempo field already uses (its reducer case clamps to [40, 200]),
-  // not a second tempo mechanism -- every currently-previewing slot picks
-  // this up automatically the next time its own resolvePreviewAudio effect
-  // reruns (it already re-stretches against `bpm` on every change, see
-  // that function's own doc comment), so nudging tempo here re-syncs the
-  // whole preview mix to the new value, not just future rolls.
+  // not a second tempo mechanism -- the bpm-retune effect below re-syncs the
+  // whole preview to the new value on every change, so nudging tempo here
+  // re-syncs the whole preview mix to the new value, not just future rolls.
   //
   // Decoupled from state.bpm while focused, same reasoning as
   // TransportBar's own tempoText: SET_TEMPO clamps to [40, 200], and a
@@ -241,42 +243,33 @@ export function DiscoverPanel({
   }
 
   // Click-to-preview a slot's own resolved stem, before it's ever placed on
-  // the timeline -- reuses previewLoop.ts's own plain-Web-Audio mechanism
-  // (Shelf.tsx/LibraryBrowser.tsx's established convention for auditioning
-  // audio that isn't part of the current project yet), NOT
-  // useStemPreviewPlayback.ts (that hook drives the native engine for stems
-  // ALREADY placed in this project's own timeline -- a Discover candidate
-  // is neither). Direct report: Discover shipped with no way to hear a
-  // candidate before plunking it in, which this closes.
+  // the timeline -- NOT useStemPreviewPlayback.ts (that hook drives the
+  // native engine for stems ALREADY placed in this project's own timeline --
+  // a Discover candidate is neither, until this section's own throwaway
+  // project sends it there). Direct report: Discover shipped with no way to
+  // hear a candidate before plunking it in, which this closes.
   //
-  // Direct follow-up: toggled-on slots play TOGETHER, looped, like the
-  // Upcycle reference this whole screen is modeled on -- not Shelf.tsx's
-  // own one-at-a-time "starting a new preview stops the old one" model.
-  // `previewingSlotIds` is the set of slots currently included in the
-  // mix; `resolvedStemsRef` (a ref, not state -- restarting the mix
-  // doesn't need to trigger a DiscoverPanel re-render on its own) tracks
-  // whichever real, locally-resolved stem each row last reported for
-  // itself (reportSlotResolution below, called from each row's own
-  // resolve effect) -- DiscoverPanel doesn't resolve candidates itself,
-  // Task 7's resolveCandidateStem lives in each row. `restartMix` is the
-  // one place that actually starts/stops audio: called on every toggle
-  // AND whenever a toggled-on slot's own resolution changes (a reroll
-  // landing while that slot is playing swaps its contribution in, rather
-  // than freezing on whatever was playing at toggle-on time).
+  // Toggled-on slots play TOGETHER, looped, like the Upcycle reference this
+  // whole screen is modeled on -- not one-at-a-time. `previewingSlotIds` is
+  // the set of slots currently included in the mix; `resolvedStemsRef` (a
+  // ref, not state -- syncing the mix doesn't need to trigger a
+  // DiscoverPanel re-render on its own) tracks whichever real, locally-
+  // resolved, NATIVE-TEMPO stem each row last reported for itself
+  // (reportSlotResolution below, called from each row's own resolve effect)
+  // -- DiscoverPanel doesn't resolve candidates itself, resolveCandidateStem
+  // lives in each row.
   //
-  // The underlying registerActivePreview/unregisterActivePreview registry
-  // (previewLoop.ts) is a single-active-preview-anywhere mechanism --
-  // still exactly right for "something previewed elsewhere in the app
-  // (Shelf, LibraryBrowser's own browse tab, BeatPicker) stops this whole
-  // mix," just not used per-slot anymore. `restartMix` registers/
-  // unregisters the CURRENT mix as one unit; re-registering the same
-  // `stopSlotPreview` reference on every restart is safe -- `stopSlotPreview`
-  // itself already ran synchronously a few lines above THIS SAME restartMix
-  // call, which unregisters it (nulling previewLoop.ts's own `activeStop`)
-  // before the later re-registration -- so `registerActivePreview`'s own
-  // `activeStop?.()` never fires against this call's freshly-started
-  // sources, only ever against whatever a genuinely different, earlier
-  // preview left behind.
+  // As of docs/superpowers/specs/2026-09-15-discover-native-engine-preview-
+  // design.md, the preview is no longer plain Web Audio -- it's a throwaway,
+  // single-rifff EngineProject (assembleDiscoverRifff + buildEngineProject)
+  // sent to the REAL native engine, the exact same pipeline the real
+  // arrangement/Tidy Up's own preview already use. `syncPreviewToEngine`
+  // (below) is the one place that actually builds/sends that project:
+  // called on every toggle AND whenever a toggled-on slot's own resolution
+  // changes (a reroll landing while that slot is playing swaps its
+  // contribution in). There's no separate "stretch ahead of time" step
+  // anymore -- buildEngineProject resolves each stem's own stretch ratio
+  // fresh, every call.
   const [previewingSlotIds, setPreviewingSlotIds] = useState<Set<string>>(new Set())
   // Mirrors `previewingSlotIds` for updateSlotGain's own debounced restart
   // below to read -- real bug caught by independent review: that debounce
@@ -291,58 +284,14 @@ export function DiscoverPanel({
   useEffect(() => {
     previewingSlotIdsRef.current = previewingSlotIds
   }, [previewingSlotIds])
-  const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number; gain: number }>>(
-    new Map()
-  )
-  // Every slot's own RAW, native-tempo resolved stem (path/durationSec/
-  // barLength, exactly what each DiscoverSlotRow reports via
-  // reportSlotResolution) -- distinct from resolvedStemsRef above, which
-  // holds the already-STRETCHED preview audio actually in the mix. Kept so
-  // the tempo control (below) can re-run resolvePreviewAudio for every
-  // currently-resolved slot when the project's own bpm changes: that
-  // function needs the stem's real native tempo (durationSec/barLength) to
-  // compute a fresh stretch ratio against the new bpm, which
-  // resolvedStemsRef's already-stretched values can't provide.
-  const rawResolvedStemsRef = useRef<Map<string, ResolvedCandidateStem>>(new Map())
-  // Every slot CURRENTLY in the playing mix, keyed by slot id -- one
-  // {source, gainNode, stem} triple per slot, the same shape
-  // startPreviewLoopWithGain itself returns. Direct request, 2026-09-15:
-  // "dragging envelope/volume shouldn't retrigger start of samples...
-  // should not affect playhead" and, a second real bug found live right
-  // after: "any button press on there triggers the samples to start from
-  // the beginning... it's not just the envelope adjust." Root cause of
-  // BOTH: restartMix (below) used to unconditionally stop EVERY currently-
-  // playing source and rebuild the whole mix from scratch on every single
-  // call -- muting one slot, a reroll landing for one slot, anything --
-  // audible as every OTHER already-playing slot's own loop position
-  // jumping back to 0, not just the one that actually changed. Keyed by id
-  // (not a flat array) so restartMix can diff "what's already correctly
-  // playing" against "what should be playing" and touch only the slots
-  // that actually changed -- see restartMix's own doc comment below for
-  // the full incremental-sync design. updateSlotGain also reads this
-  // directly (`.get(id)?.gainNode`) to set `.gain.value` live without
-  // going through restartMix at all.
-  const mixPairsRef = useRef<Map<string, PreviewSourceWithGain>>(new Map())
-  // Per-slot generation counter for restartMix's own async joins, mirroring
-  // stretchGenerationRef's already-established pattern -- since restartMix
-  // no longer rebuilds the WHOLE mix on every call (see mixPairsRef's own
-  // doc comment), a single shared "generation" would wrongly cancel an
-  // unrelated slot's still-in-flight join the moment any OTHER slot's own
-  // restartMix call came in. Scoped per id instead: only a NEWER join for
-  // THE SAME slot supersedes an older one.
-  const mixJoinGenerationRef = useRef<Map<string, number>>(new Map())
-  // Set true by the unmount effect below, checked at the top of restartMix
-  // -- load-bearing, not defensive fluff: reportSlotResolution can itself
-  // trigger a fresh restartMix from a CHILD row's own cleanup effect firing
-  // during this SAME unmount pass (e.g. a reroll landing right as the panel
-  // closes). Without this guard that straggling call would still kick off
-  // a real async decode/start with no live component left to ever stop it
-  // again once it lands -- the exact leak previewGenerationRef used to
-  // guard against under the old single-shared-generation design, before
-  // restartMix became incremental/per-id (mixJoinGenerationRef, above) and
-  // a single generation stopped being the right tool for that job.
-  const unmountedRef = useRef(false)
-  const previewTokenRef = useRef(0)
+  // Every slot's own real, NATIVE-TEMPO resolved stem (path/durationSec/
+  // barLength/author/name/type, exactly what each DiscoverSlotRow reports
+  // via reportSlotResolution) -- the ONE source of truth `syncPreviewToEngine`
+  // reads from to build a fresh throwaway rifff on every sync.
+  // buildEngineProject resolves stretch itself (per call), so unlike the old
+  // Web-Audio-backed version there's no separate already-stretched map to
+  // keep in sync with this one.
+  const resolvedStemsRef = useRef<Map<string, ResolvedCandidateStem>>(new Map())
   // Reactive (unlike resolvedStemsRef) so the row waveforms' own tiled
   // width -- see DiscoverSlotRow's own `loopBars`/tileOffsetsPx usage below
   // -- re-renders when a slot resolves/re-resolves/clears. Direct report:
@@ -356,220 +305,187 @@ export function DiscoverPanel({
   // tileOffsetsPx) rather than showing every stem as if it's the same
   // length.
   const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
-  // AudioContext.currentTime the CURRENT mix generation's sources actually
-  // started at -- null while nothing is playing. Every source in a mix is
-  // started together in one synchronous pass (startPreviewLoop's own doc
-  // comment), so one shared timestamp is enough for every row's own
-  // playhead sweep (DiscoverSlotRow, below) to compute its own
-  // elapsed-time-mod-its-own-durationSec lap, the same "sweep across a
-  // waveform" convention ClusterStemsBrowser.tsx's own thumbnail playhead
-  // already established -- just driven off wall-clock/AudioContext time
-  // here instead of the project's own playhead, since this preview mix
-  // isn't going through the native engine at all.
-  const [mixStartTime, setMixStartTime] = useState<number | null>(null)
 
-  const stopSlotPreview = useCallback(() => {
-    stopPreviewSources([...mixPairsRef.current.values()].map((p) => p.source))
-    mixPairsRef.current = new Map()
-    setMixStartTime(null)
-    unregisterActivePreview(previewTokenRef.current)
-  }, [])
+  // True once a Discover preview project is actually loaded+playing in the
+  // real engine -- the empty-to-non-empty transition (see
+  // syncPreviewToEngine below) is the ONLY time the real transport gets
+  // paused/seeked/played on this preview's behalf; every later rebuild of
+  // an already-loaded preview just keeps playing through it.
+  const previewLoadedRef = useRef(false)
+  // The CURRENTLY live preview project's own groupId, and which 1-indexed
+  // slot number each Discover slot id currently occupies within it -- a
+  // fresh groupId is minted on every syncPreviewToEngine call (assembleDiscoverRifff),
+  // so this is what lets a live gain-drag update (updateSlotGain, below)
+  // address the right `stemKey(groupId, slot)` without waiting for a full
+  // rebuild. Null while no preview is loaded.
+  const currentPreviewMappingRef = useRef<{
+    groupId: string
+    slotIndexById: Map<string, number>
+  } | null>(null)
+  // Per-call generation counter guarding syncPreviewToEngine's own async
+  // build-and-send chain (candidate resolve already happened by the time
+  // this runs; this guards buildEngineProject's own stretch-resolution
+  // await and the engineLoadProject send after it) -- same
+  // stale-response-discarded pattern this file already uses for
+  // rerollGenerationRef, just for the preview sync itself now that it's a
+  // real async round trip to the native engine instead of a synchronous Web
+  // Audio call.
+  const previewSyncGenerationRef = useRef(0)
+  // Set true by the unmount effect below, checked at the top of
+  // syncPreviewToEngine -- load-bearing, not defensive fluff:
+  // reportSlotResolution can itself trigger a fresh syncPreviewToEngine from
+  // a CHILD row's own cleanup effect firing during this SAME unmount pass
+  // (e.g. a reroll landing right as the panel closes). Without this guard
+  // that straggling call would still kick off a real async build+send with
+  // no live component left to ever stop it again once it lands.
+  const unmountedRef = useRef(false)
+
+  // "Hands control back" to the real arrangement -- stops treating a
+  // Discover preview as loaded and pushes the real, unmodified project back
+  // to the engine via the existing, already-exported flushEngineSyncNow()
+  // (no snapshot/undo machinery needed: the engine has no persistent memory
+  // of its own, so "restoring" is just "send the real project again," see
+  // design doc). useCallback (not a plain function) specifically so it can
+  // be safely listed in the unmount effect's own dependency array below
+  // without an eslint-disable.
+  const restorePreviewIfLoaded = useCallback(async (): Promise<void> => {
+    if (!previewLoadedRef.current) return
+    previewLoadedRef.current = false
+    currentPreviewMappingRef.current = null
+    void flushEngineSyncNow()
+  }, [flushEngineSyncNow])
 
   useEffect(() => {
     // Real bug, found live 2026-09-15 ("it loads them into the discover
-    // section fine but they are not playing at all," confirmed via the
-    // temporary diagnostic logging above/in restartMix -- resolvePreviewAudio
-    // always reached and called restartMix, but restartMix's own log never
-    // printed, meaning it bailed at its very first line every time). This
-    // app runs under <StrictMode> (main.tsx), which in development mounts
-    // every component with an extra synchronous setup -> cleanup -> setup
-    // cycle -- the exact same gotcha useStemPreviewPlayback.ts's own
-    // cancelledRef already has to guard against (see that file's own doc
-    // comment). Without resetting the ref back to false HERE, in the setup
-    // body, the first fake "cleanup" flips unmountedRef.current to true and
-    // NOTHING ever flipped it back -- the following fake "setup" re-run
-    // re-registers this same cleanup closure but never touches the ref, so
-    // restartMix's own `if (unmountedRef.current) return` guard silently
-    // no-opped EVERY real call for the rest of this component's life: a
-    // slot's own candidate resolved, its waveform rendered fine, but the
-    // mix never actually joined/played anything.
+    // section fine but they are not playing at all"). This app runs under
+    // <StrictMode> (main.tsx), which in development mounts every component
+    // with an extra synchronous setup -> cleanup -> setup cycle -- the exact
+    // same gotcha useStemPreviewPlayback.ts's own cancelledRef already has
+    // to guard against. Without resetting the ref back to false HERE, in the
+    // setup body, the first fake "cleanup" flips unmountedRef.current to
+    // true and NOTHING ever flipped it back -- the following fake "setup"
+    // re-run re-registers this same cleanup closure but never touches the
+    // ref, so syncPreviewToEngine's own `if (unmountedRef.current) return`
+    // guard silently no-opped EVERY real call for the rest of this
+    // component's life.
     unmountedRef.current = false
     return () => {
       unmountedRef.current = true
-      stopSlotPreview()
+      void restorePreviewIfLoaded()
     }
-  }, [stopSlotPreview])
+  }, [restorePreviewIfLoaded])
 
-  /** Syncs the playing mix to exactly `ids` -- INCREMENTALLY, not a full
-   * stop-everyone/restart-everyone rebuild. Direct request, 2026-09-15,
-   * found live right after the gain-drag fix above: "any button press on
-   * there triggers the samples to start from the beginning... it's not
-   * just the envelope adjust." The old version unconditionally called
-   * stopSlotPreview() (stopping EVERY currently-playing source) before
-   * rebuilding the whole mix from `ids` -- so muting one slot, a reroll
-   * landing for one slot, or a slot being removed all reset every OTHER
-   * already-playing slot's own loop position back to 0, the exact same
-   * class of bug the gain fix addressed for volume drags specifically.
+  /** Syncs the playing preview to exactly `ids` -- builds a throwaway,
+   * single-rifff EngineProject from every id in `ids` that has a resolved
+   * stem, and sends it to the real native engine, replacing whatever
+   * preview (or nothing) was loaded before. Called on every toggle AND
+   * whenever a toggled-on slot's own resolution changes (a reroll landing,
+   * a bpm retune). See docs/superpowers/specs/2026-09-15-discover-native-
+   * engine-preview-design.md.
    *
-   * Now: diff `ids` (what SHOULD be playing) against `mixPairsRef.current`
-   * (what IS playing) and only touch what actually changed --
-   *   - a currently-playing id no longer in `ids`, or whose own resolved
-   *     stem's path changed underneath it (a reroll landed different
-   *     audio for that slot) -> stop THAT ONE source only.
-   *   - an id in `ids` with no currently-playing source (newly muted-in,
-   *     or a reroll that changed its path) -> start a NEW source for JUST
-   *     that slot.
-   *   - an id in `ids` whose currently-playing source's own stem path is
-   *     unchanged -> left completely untouched, source/gainNode/playhead
-   *     all exactly as they were.
-   * Matched by `stem.path`, not object identity -- resolvedStemsRef gets a
-   * FRESH object on every land (including a gain-only update, via
-   * updateSlotGain), so identity would falsely treat every call as "this
-   * slot's audio changed."
-   *
-   * A newly-joining source is phase-aligned to the REST of the mix, not
-   * started at its own buffer position 0 -- every Discover stem is already
-   * tempo-synced to the same project tempo (see resolvePreviewAudio's own
-   * doc comment), so unmuting/rerolling one slot should sound like it's
-   * joining an in-progress, in-the-pocket loop, not retriggering from
-   * scratch out of phase with everyone else. `mixStartTime` is the shared
-   * anchor every row's own playhead sweep already reads (DiscoverSlotRow,
-   * below) -- reused here as "how far into its own loop should a NEW
-   * source start" (elapsed-time-mod-its-own-durationSec, same formula the
-   * sweep itself uses). */
-  const restartMix = useCallback(
-    (ids: Set<string>, pauseTransportIfPlaying: boolean) => {
-      if (unmountedRef.current) return
-      if (pauseTransportIfPlaying && playing) dispatch({ type: 'PAUSE' })
+   * The real arrangement's own state (`state.rifffs`/`vol`/etc.) is never
+   * touched -- the thrown-together AppState here only copies bpm/
+   * masterChain/channelPlugins from the real one, so master/channel FX are
+   * audibly applied while auditioning too (a natural consequence of going
+   * through the engine's own mixer, not a separate feature). */
+  async function syncPreviewToEngine(ids: Set<string>): Promise<void> {
+    if (unmountedRef.current) return
+    const myGeneration = previewSyncGenerationRef.current + 1
+    previewSyncGenerationRef.current = myGeneration
 
-      const currentPairs = mixPairsRef.current
-      for (const [id, pair] of [...currentPairs]) {
-        const stem = ids.has(id) ? resolvedStemsRef.current.get(id) : undefined
-        if (!stem || stem.path !== pair.stem.path) {
-          stopPreviewSources([pair.source])
-          currentPairs.delete(id)
-        }
-      }
-      // Captured BEFORE the async join below lands -- whether this call's
-      // new source(s) will be the ONLY thing playing once they land, i.e.
-      // whether this component needs to (re-)register itself as the
-      // active preview. registerActivePreview() unconditionally stops
-      // whatever was PREVIOUSLY registered before installing the new stop
-      // function -- fine under the old full-rebuild design (its own
-      // explicit stopSlotPreview() at the top had already cleared the
-      // registry every time), but real bug found while writing this
-      // incremental version: re-registering on every subsequent
-      // incremental join (this component's OWN stopSlotPreview already
-      // being the registered one from an earlier join) would immediately
-      // invoke that same stopSlotPreview and stop the sources this exact
-      // call just added. Only register once, when the mix is transitioning
-      // from empty to non-empty.
-      const hadNoSources = currentPairs.size === 0
-
-      const toStart = [...ids]
-        .map((id) => {
-          if (currentPairs.has(id)) return null // already playing this exact audio, untouched
-          const stem = resolvedStemsRef.current.get(id)
-          return stem ? { id, stem } : null
-        })
-        .filter(
-          (x): x is { id: string; stem: { path: string; durationSec: number; gain: number } } =>
-            x !== null
-        )
-
-      if (toStart.length === 0) {
-        if (currentPairs.size === 0) setMixStartTime(null)
-        return
-      }
-
-      const ctx = getAudioContext()
-      const anchor = mixStartTime
-      const myGenerations = new Map(
-        toStart.map(({ id }) => [id, (mixJoinGenerationRef.current.get(id) ?? 0) + 1])
-      )
-      for (const [id, gen] of myGenerations) mixJoinGenerationRef.current.set(id, gen)
-
-      const stemsToStart = toStart.map(({ stem }) => ({
-        ...stem,
-        startOffsetSec:
-          anchor !== null && stem.durationSec > 0
-            ? (((ctx.currentTime - anchor) % stem.durationSec) + stem.durationSec) %
-              stem.durationSec
-            : 0
-      }))
-      // Object IDENTITY, not path/id string matching -- each stem object
-      // above is constructed exactly once, right here, so comparing by
-      // reference is safe and avoids assuming stem.path is unique (two
-      // slots could in principle resolve the same candidate).
-      const stemToId = new Map<PreviewStemInput, string>(
-        toStart.map(({ id }, i) => [stemsToStart[i], id])
-      )
-
-      void startPreviewLoopWithGain(
-        ctx,
-        stemsToStart,
-        () =>
-          unmountedRef.current ||
-          [...myGenerations].every(([id, gen]) => mixJoinGenerationRef.current.get(id) !== gen)
-      ).then((pairs) => {
-        if (unmountedRef.current) {
-          stopPreviewSources(pairs.map((p) => p.source))
-          return
-        }
-        let joined = false
-        for (const pair of pairs) {
-          const id = stemToId.get(pair.stem)
-          if (!id || mixJoinGenerationRef.current.get(id) !== myGenerations.get(id)) {
-            // Superseded (a newer restartMix call already replaced this
-            // specific slot) -- stop just this one stale source.
-            stopPreviewSources([pair.source])
-            continue
-          }
-          mixPairsRef.current.set(id, pair)
-          joined = true
-        }
-        if (joined) {
-          // See hadNoSources's own doc comment above -- only register (and
-          // thus only stop whatever ELSE was previously active) the first
-          // time this mix goes from empty to non-empty, never on a later
-          // incremental join into an already-registered, already-playing
-          // mix.
-          if (hadNoSources) previewTokenRef.current = registerActivePreview(stopSlotPreview)
-          // First-ever source in the mix sets the shared phase anchor --
-          // `prev ?? ctx.currentTime` (not an unconditional set) so a
-          // later join can never stomp the anchor everyone else is already
-          // playing against.
-          setMixStartTime((prev) => prev ?? ctx.currentTime)
-        } else if (mixPairsRef.current.size === 0) {
-          setMixStartTime(null)
-        }
+    const members = [...ids]
+      .map((id) => {
+        const stem = resolvedStemsRef.current.get(id)
+        if (!stem) return null
+        const gain = slots.find((s) => s.id === id)?.gain ?? 1
+        return { id, stem, gain }
       })
-    },
-    [stopSlotPreview, playing, dispatch, mixStartTime]
-  )
+      .filter((x): x is { id: string; stem: ResolvedCandidateStem; gain: number } => x !== null)
+
+    if (members.length === 0) {
+      await restorePreviewIfLoaded()
+      return
+    }
+
+    const assembly = assembleDiscoverRifff(
+      'discover preview',
+      members.map(({ stem, gain }) => ({ stem, gain })),
+      bpm
+    )
+    if (!assembly) {
+      // Unreachable in practice (members.length > 0 already checked above,
+      // and assembleDiscoverRifff only returns null for an empty list), but
+      // handled rather than asserted since the function's own return type
+      // is nullable.
+      await restorePreviewIfLoaded()
+      return
+    }
+    const { rifff, vol } = assembly
+
+    // A throwaway single-rifff AppState -- only bpm/masterChain/
+    // channelPlugins are copied from the real project; state.rifffs is
+    // ENTIRELY replaced by this one preview rifff, never merged with the
+    // real state.rifffs. `startBar: 0` (buildEngineProject's own `placed`
+    // filter requires a defined startBar to include a rifff at all) is what
+    // makes this preview's own loopLengthBars equal exactly the rifff's own
+    // barLength, so the transport loops just this one loop.
+    const previewState: AppState = {
+      ...initialState,
+      bpm,
+      masterChain,
+      channelPlugins,
+      rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
+      vol,
+      stretch: { [rifff.groupId]: true }
+    }
+
+    const project = await buildEngineProject(
+      previewState,
+      resolveStretchedForPlayback,
+      pluginCatalog
+    )
+    if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+
+    await window.rifffApi.engineLoadProject(project)
+    if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+
+    currentPreviewMappingRef.current = {
+      groupId: rifff.groupId,
+      slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
+    }
+
+    // Only on the empty-to-non-empty transition -- a later rebuild of an
+    // already-loaded preview just keeps playing through it, matching every
+    // other "audition something else" flow in this app (no auto-resume once
+    // a preview stops).
+    if (!previewLoadedRef.current) {
+      previewLoadedRef.current = true
+      if (playing) dispatch({ type: 'PAUSE' })
+      void window.rifffApi.engineSetPosition(0)
+      dispatch({ type: 'PLAY' })
+    }
+  }
 
   function toggleSlotPreview(id: string): void {
     const next = new Set(previewingSlotIds)
     if (next.has(id)) next.delete(id)
     else next.add(id)
+    previewingSlotIdsRef.current = next
     setPreviewingSlotIds(next)
-    restartMix(next, true)
+    void syncPreviewToEngine(next)
   }
 
   // Called by each DiscoverSlotRow whenever its OWN resolved stem changes
   // (a fresh resolution lands, a reroll invalidates the old one, or the
   // slot unmounts/gets removed) -- keeps `resolvedStemsRef` accurate and,
-  // if this particular slot is currently part of the playing mix, restarts
-  // it so the audible loop actually reflects what's now showing on screen.
+  // if this particular slot is currently part of the playing preview,
+  // re-syncs it so the audible loop actually reflects what's now showing on
+  // screen.
   //
   // Direct request: "it all should autoplay" -- a slot that just landed a
   // real, playable stem (its first-ever roll on addSlot, or a later reroll)
-  // joins the shared mix automatically here rather than requiring an
-  // explicit click on its own waveform first. `slots.find` reads this
-  // render's own current gain for the slot (the volume slider's value at
-  // the moment resolution lands) -- `resolvedStemsRef` doesn't otherwise
-  // track gain on its own, updateSlotGain below is what keeps it in sync
-  // with LATER slider drags on an already-resolved slot.
+  // joins the shared preview automatically here rather than requiring an
+  // explicit click on its own waveform first.
   //
   // Real bug, found live (root cause of "stems aren't playing together
   // anymore, just the new one" and "muting one slot affects a different
@@ -585,46 +501,31 @@ export function DiscoverPanel({
   // (missing whatever joined since), then wrote its own smaller/wrong
   // set back over the real one via setPreviewingSlotIds, silently
   // dropping other slots from the mix. previewingSlotIdsRef (below) was
-  // already built for exactly this class of bug -- updateSlotGain's own
-  // debounced restart already uses it -- this just applies the SAME fix
-  // here, the other place a real staleness window exists.
+  // already built for exactly this class of bug -- this reads/writes it
+  // synchronously for exactly that reason.
+  //
+  // There's no separate async stretch step anymore -- buildEngineProject
+  // (via syncPreviewToEngine) resolves that internally, every call.
   function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
     if (stem) {
-      rawResolvedStemsRef.current.set(id, stem)
+      resolvedStemsRef.current.set(id, stem)
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
         next.set(id, stem.barLength)
         return next
       })
-      // Direct request, 2026-09-15: "we will need to sync these stems to
-      // the same tempo... i don't think we need to reinvent the wheel...
-      // imported loops sync very well in the main arranger" -- reuses the
-      // EXACT SAME stretch resolver buildEngineProject.ts already uses
-      // for real arranger playback (resolveStretchedForPlayback ->
-      // window.rifffApi.renderStretched, cached by (path, ratio) on the
-      // main-process side -- see rubberband.ts's own doc comment -- so
-      // repeated preview restarts at the same tempo never re-render), not
-      // a second stretch mechanism invented just for this preview. Same
-      // ratio formula too: measured native tempo (durationSec/barLength),
-      // never a declared bpm field, against the CURRENT project tempo.
-      // Async, so joining the mix/updating resolvedStemsRef can't happen
-      // synchronously here -- resolvePreviewAudio (below) does both once
-      // the stretch resolves (or immediately, for the common case where
-      // no stretch is needed at all).
-      void resolvePreviewAudio(id, stem)
+      const currentlyPreviewing = previewingSlotIdsRef.current
+      if (!currentlyPreviewing.has(id)) {
+        const next = new Set(currentlyPreviewing).add(id)
+        previewingSlotIdsRef.current = next
+        setPreviewingSlotIds(next)
+        void syncPreviewToEngine(next)
+        return
+      }
+      void syncPreviewToEngine(currentlyPreviewing)
       return
     }
-    // Invalidates any in-flight resolvePreviewAudio call for this id --
-    // real bug this guards against: a slot removed WHILE its own stretch
-    // resolution is still awaiting the main process would otherwise have
-    // that stretch land AFTER this cleanup runs and write the removed
-    // slot's audio right back into resolvedStemsRef/the mix, undoing the
-    // removal. `stretchGenerationRef` is declared below (still safe to
-    // reference here -- by the time this function is actually CALLED,
-    // render has already run and the ref exists).
-    stretchGenerationRef.current.set(id, (stretchGenerationRef.current.get(id) ?? 0) + 1)
     resolvedStemsRef.current.delete(id)
-    rawResolvedStemsRef.current.delete(id)
     setResolvedBarLengths((prev) => {
       if (!prev.has(id)) return prev
       const next = new Map(prev)
@@ -632,123 +533,32 @@ export function DiscoverPanel({
       return next
     })
     const currentlyPreviewing = previewingSlotIdsRef.current
-    if (currentlyPreviewing.has(id)) restartMix(currentlyPreviewing, false)
-  }
-
-  // Real bug, found live: this file's own stretchGenerationRef, mirroring
-  // rerollGenerationRef's already-established pattern -- resolvePreviewAudio
-  // is async (a real IPC round trip to render/read a stretched file), so a
-  // SLOWER stretch for an OLDER candidate landing AFTER a newer reroll for
-  // the SAME slot already resolved must not overwrite it. Bumped
-  // synchronously before the first await, checked again after.
-  const stretchGenerationRef = useRef<Map<string, number>>(new Map())
-
-  /** Resolves a just-landed candidate's own PREVIEW audio -- stretched to
-   * the current project tempo when its native tempo differs meaningfully,
-   * via the exact same resolver (resolveStretchedForPlayback) and ratio
-   * formula buildEngineProject.ts already uses for real arranger playback
-   * (see reportSlotResolution's own doc comment for why this reuses that
-   * mechanism rather than inventing a second one). Completes the "join
-   * the mix" work reportSlotResolution itself can't do synchronously.
-   * `stem.path`/`durationSec` here are the UNSTRETCHED, native-tempo
-   * values (Stem.durationSec/barLength) -- resolveStretchedForPlayback's
-   * own result is what actually goes into resolvedStemsRef and the
-   * preview mix, never the raw ones, once a real stretch was needed. */
-  async function resolvePreviewAudio(id: string, stem: ResolvedCandidateStem): Promise<void> {
-    const myGeneration = (stretchGenerationRef.current.get(id) ?? 0) + 1
-    stretchGenerationRef.current.set(id, myGeneration)
-
-    let previewPath = stem.path
-    let previewDurationSec = stem.durationSec
-    // stem.oneShot equivalent: DiscoverPanel's own resolved stems have no
-    // such flag (Discover only ever deals in loop-length candidates, not
-    // one-shots), so no ratio===1-for-one-shots special case is needed
-    // here the way buildEngineProject.ts's own per-stem loop has one.
-    const secPerBarAtProjectTempo = (60 / bpm) * 4
-    const stemNativeSecPerBar = stem.durationSec / stem.barLength
-    const ratio = stemNativeSecPerBar / secPerBarAtProjectTempo
-    if (Math.abs(ratio - 1) >= 0.001) {
-      try {
-        const resolved = await resolveStretchedForPlayback(stem.path, ratio)
-        if (stretchGenerationRef.current.get(id) !== myGeneration) return // superseded
-        previewPath = resolved.path
-        previewDurationSec = resolved.durationSec
-      } catch (err) {
-        // Missing rubberband or a bad render shouldn't block the preview
-        // entirely -- same fallback buildEngineProject.ts's own stretch
-        // step already uses -- just fall back to native-tempo preview
-        // audio for this one slot.
-        console.error(
-          `DiscoverPanel: resolvePreviewAudio: stretch failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
-          err
-        )
-      }
-    }
-    if (stretchGenerationRef.current.get(id) !== myGeneration) return // superseded
-
-    const gain = slots.find((s) => s.id === id)?.gain ?? 1
-    resolvedStemsRef.current.set(id, { path: previewPath, durationSec: previewDurationSec, gain })
-    const currentlyPreviewing = previewingSlotIdsRef.current
-    if (!currentlyPreviewing.has(id)) {
-      const next = new Set(currentlyPreviewing).add(id)
-      // Real regression, found live right after the discoverCandidates.ts
-      // perf fixes landed: "loading stems is much faster now! but when
-      // they are loaded they are not playing automatically." Root cause:
-      // previewingSlotIdsRef only used to update via the mirroring
-      // useEffect below (`previewingSlotIdsRef.current = previewingSlotIds`),
-      // which runs AFTER React commits the render following
-      // setPreviewingSlotIds -- fine when candidate resolution was slow
-      // enough that two slots' own resolvePreviewAudio calls essentially
-      // never landed in the same render batch, but now that resolution is
-      // fast, multiple slots routinely finish within the same tick. The
-      // SECOND slot's own call read this same stale (pre-effect) ref,
-      // computed `next` as just ITS OWN id (missing the first slot's,
-      // which hadn't reached the ref yet), and restartMix's own diff (see
-      // its doc comment above) then STOPPED the first slot's just-started
-      // source since it wasn't in this narrower `next` -- only the last
-      // slot to resolve in a batch ever ended up actually playing. Writing
-      // the ref synchronously here (not waiting for the mirroring effect)
-      // means the next concurrent call always unions onto the truth, not a
-      // stale snapshot.
-      previewingSlotIdsRef.current = next
-      setPreviewingSlotIds(next)
-      restartMix(next, false)
-      return
-    }
-    restartMix(currentlyPreviewing, false)
+    if (currentlyPreviewing.has(id)) void syncPreviewToEngine(currentlyPreviewing)
   }
 
   // Re-tunes every currently-resolved slot when the project's own bpm
   // changes (TransportBar's +/- buttons, its own tempo field, loading a
-  // different project, OR the new tempo control this panel itself adds
-  // below) -- direct request, 2026-09-15: "it'd be nice to be able to
-  // adjust the track tempo from the discover section." Without this, a
-  // slot already playing/resolved would keep its OLD stretch ratio baked
-  // in (computed once, back when reportSlotResolution first landed it)
-  // until its next reroll -- silently drifting out of sync with a bpm
-  // change made right here on the same panel. Re-runs the exact same
-  // resolvePreviewAudio pipeline reportSlotResolution itself calls,
-  // against each slot's own cached RAW (native-tempo) stem
-  // (rawResolvedStemsRef, above) -- correctly recomputes the ratio, re-
-  // renders a stretch only if the new ratio actually needs one (cached by
-  // (path, ratio), same as every other stretch call), and rejoins the
-  // live mix via restartMix's own incremental diff (path-based, so an
-  // unchanged ratio for one slot -- e.g. it was already exactly on tempo
-  // -- leaves that slot's own source completely untouched even while
-  // siblings retune). Skips the very first run (component mount/tab open)
-  // -- reportSlotResolution already resolves each slot once at its own
-  // native pace; re-resolving everything again immediately on mount would
-  // just be redundant work.
+  // different project, OR the tempo control this panel itself adds below)
+  // -- direct request, 2026-09-15: "it'd be nice to be able to adjust the
+  // track tempo from the discover section." Without this, a slot already
+  // playing/resolved would keep its OLD stretch ratio baked into the
+  // currently-loaded preview project until its next reroll -- silently
+  // drifting out of sync with a bpm change made right here on the same
+  // panel. A single syncPreviewToEngine call re-resolves EVERY currently-
+  // included stem's own stretch ratio against the new bpm at once (since
+  // buildEngineProject recomputes each stem's ratio fresh every call) --
+  // no per-id loop needed. Skips the very first run (component mount/tab
+  // open) -- reportSlotResolution already resolves each slot once at its
+  // own native pace; re-resolving everything again immediately on mount
+  // would just be redundant work.
   const skipFirstBpmRetuneRef = useRef(true)
   useEffect(() => {
     if (skipFirstBpmRetuneRef.current) {
       skipFirstBpmRetuneRef.current = false
       return
     }
-    for (const [id, stem] of rawResolvedStemsRef.current) {
-      void resolvePreviewAudio(id, stem)
-    }
-    // resolvePreviewAudio is a plain function re-created every render (not
+    void syncPreviewToEngine(previewingSlotIdsRef.current)
+    // syncPreviewToEngine is a plain function re-created every render (not
     // memoized), not a real reactive dependency; only an actual bpm change
     // should retune.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -756,24 +566,21 @@ export function DiscoverPanel({
 
   // Live-updates a slot's own committed gain -- both in `slots` state (so
   // the volume slider itself, and "plunk in arranger" later, read the
-  // current value) and, if this slot already has a resolved stem tracked,
-  // in `resolvedStemsRef` too.
+  // current value) and, if this slot is part of the currently-loaded
+  // preview, pushed straight to the real engine via scheduleLiveParamSync
+  // -- the same rAF-coalesced, full-reload-bypassing path the real
+  // arranger's own volume sliders already use -- instead of a full project
+  // rebuild per drag tick.
   //
   // Direct request, 2026-09-15: "dragging envelope/volume shouldn't
-  // retrigger start of samples... should not affect playhead" -- this used
-  // to debounce into a full restartMix (stop + re-decode + re-start every
-  // source in the mix), audible as every OTHER currently-playing slot's own
-  // loop position jumping back to 0, not just the one being dragged. Now
-  // that startPreviewLoopWithGain exposes each source's own GainNode
-  // (mixPairsRef, populated by restartMix), a drag just writes
-  // `.gain.value` directly on this one slot's node -- genuinely live,
-  // zero-latency, and touches nothing else's playback position.
+  // retrigger start of samples... should not affect playhead."
   function updateSlotGain(id: string, gain: number): void {
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, gain } : s)))
-    const existing = resolvedStemsRef.current.get(id)
-    if (existing) resolvedStemsRef.current.set(id, { ...existing, gain })
-    const gainNode = mixPairsRef.current.get(id)?.gainNode
-    if (gainNode) gainNode.gain.value = gain
+    const mapping = currentPreviewMappingRef.current
+    const slotIndex = mapping?.slotIndexById.get(id)
+    if (mapping && slotIndex !== undefined) {
+      scheduleLiveParamSync('volume', stemKey(mapping.groupId, slotIndex), gain)
+    }
   }
 
   // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins
@@ -1133,6 +940,16 @@ export function DiscoverPanel({
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
       dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
+      // Deliberately NOT restorePreviewIfLoaded()/flushEngineSyncNow() here
+      // -- the dispatch above already changes state.rifffs, which the
+      // existing, separate coalesced engine-sync effect in StoreContext.tsx
+      // picks up and re-sends on its own. Just resetting these two refs
+      // means the NEXT slot change (if the user keeps building right after
+      // plunking) correctly starts a fresh preview rather than assuming a
+      // still-loaded one that the real sync effect already silently
+      // overwrote.
+      previewLoadedRef.current = false
+      currentPreviewMappingRef.current = null
     } finally {
       setPlacing(false)
     }
@@ -1365,7 +1182,6 @@ export function DiscoverPanel({
             slot={slot}
             rerolling={rerollingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
-            mixStartTime={mixStartTime}
             maxBarLength={maxBarLength}
             onToggleLock={() => toggleLock(slot.id)}
             onRemove={() => removeSlot(slot.id)}
@@ -1614,7 +1430,6 @@ function DiscoverSlotRow({
   slot,
   rerolling,
   previewing,
-  mixStartTime,
   maxBarLength,
   onToggleLock,
   onRemove,
@@ -1636,11 +1451,6 @@ function DiscoverSlotRow({
    * the Upcycle reference this screen is modeled on -- not a one-at-a-time
    * solo. */
   previewing: boolean
-  /** AudioContext.currentTime the shared preview mix's CURRENT generation
-   * started at (DiscoverPanel's own `mixStartTime`), or null while nothing
-   * is playing -- this row's own orbiting position dot below is derived
-   * from it. */
-  mixStartTime: number | null
   /** The longest currently-resolved slot's own barLength, library-wide
    * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
    * waveform tiles/scales its own resolvedStem.barLength against this SAME
@@ -1771,44 +1581,6 @@ function DiscoverSlotRow({
     })
   }
 
-  // Playhead sweep across this row's own linear Waveform, mirroring
-  // ClusterStemsBrowser.tsx's own thumbnail playhead line (same absolutely-
-  // positioned 1px `var(--ra-playhead)` bar at `left: fraction*100%`) and
-  // BeatPicker.tsx's own AudioContext-time-driven sweep -- but read-only (no
-  // drag/scrub; this is a passive preview, not a transport) and keyed off
-  // `mixStartTime` (AudioContext.currentTime the shared mix last (re)started
-  // at) rather than the project's own playhead, since this preview never
-  // touches the native engine. Direct report: multi-slot looping preview
-  // shipped with no visual indication of playback position, leaving no way
-  // to tell the loop was actually running versus stalled.
-  //
-  // Each row sweeps at its OWN lap speed (its own resolvedStem.durationSec),
-  // since two stems in the same mix can have different loop lengths.
-  const [sweepFraction, setSweepFraction] = useState<number | null>(null)
-  useEffect(() => {
-    // No setState here on the "nothing to animate" path -- same
-    // early-return-with-no-setState shape BeatPicker.tsx's own sweep effect
-    // uses, since setState synchronously in an effect body (even guarded)
-    // trips this codebase's react-hooks/set-state-in-effect rule. The reset
-    // instead lives in the cleanup below, which only ever runs once a raf
-    // loop was actually started.
-    if (!previewing || mixStartTime === null || !resolvedStem || resolvedStem.durationSec <= 0) {
-      return
-    }
-    const durationSec = resolvedStem.durationSec
-    let raf: number
-    const tick = (): void => {
-      const elapsed = getAudioContext().currentTime - mixStartTime
-      setSweepFraction((((elapsed % durationSec) + durationSec) % durationSec) / durationSec)
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => {
-      cancelAnimationFrame(raf)
-      setSweepFraction(null)
-    }
-  }, [previewing, mixStartTime, resolvedStem])
-
   // Reports the effective resolved stem up to DiscoverPanel every time it
   // changes -- on the way in (a fresh resolution lands), on the way out (a
   // reroll invalidates the old one, this row unmounts/gets removed). Does
@@ -1900,12 +1672,6 @@ function DiscoverSlotRow({
               -- tileOffsetsPx's math is linear/proportional, so feeding it
               100 and rendering each offset/width as a `%` keeps this row's
               own flex-fluid width working without a real DOM measurement.
-              The playhead sweep reuses the SAME tileOffsets/tileWidthPct --
-              the underlying audio only ever loops once every
-              resolvedStem.durationSec (previewLoop.ts's own source.loop),
-              so `sweepFraction` (0-1 through ONE repetition) is drawn once
-              PER TILE rather than swept across the whole box, showing every
-              repetition moving in sync -- matching what's actually playing.
               Direct request: gain is shown/adjusted directly on the
               waveform (StemWaveformRow.tsx's own "envelope" volume
               treatment), not a separate slider -- a dim gray layer always
@@ -1993,21 +1759,6 @@ function DiscoverSlotRow({
                     pointerEvents: 'none'
                   }}
                 />
-                {sweepFraction !== null &&
-                  tileOffsets.map((leftPct) => (
-                    <div
-                      key={`sweep-${leftPct}`}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: `${leftPct + sweepFraction * tileWidthPct}%`,
-                        width: 1,
-                        background: 'var(--ra-playhead)',
-                        pointerEvents: 'none'
-                      }}
-                    />
-                  ))}
               </>
             )
           })()}
