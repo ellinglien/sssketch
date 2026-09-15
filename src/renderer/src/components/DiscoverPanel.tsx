@@ -377,6 +377,24 @@ export function DiscoverPanel({
   }, [])
 
   useEffect(() => {
+    // Real bug, found live 2026-09-15 ("it loads them into the discover
+    // section fine but they are not playing at all," confirmed via the
+    // temporary diagnostic logging above/in restartMix -- resolvePreviewAudio
+    // always reached and called restartMix, but restartMix's own log never
+    // printed, meaning it bailed at its very first line every time). This
+    // app runs under <StrictMode> (main.tsx), which in development mounts
+    // every component with an extra synchronous setup -> cleanup -> setup
+    // cycle -- the exact same gotcha useStemPreviewPlayback.ts's own
+    // cancelledRef already has to guard against (see that file's own doc
+    // comment). Without resetting the ref back to false HERE, in the setup
+    // body, the first fake "cleanup" flips unmountedRef.current to true and
+    // NOTHING ever flipped it back -- the following fake "setup" re-run
+    // re-registers this same cleanup closure but never touches the ref, so
+    // restartMix's own `if (unmountedRef.current) return` guard silently
+    // no-opped EVERY real call for the rest of this component's life: a
+    // slot's own candidate resolved, its waveform rendered fine, but the
+    // mix never actually joined/played anything.
+    unmountedRef.current = false
     return () => {
       unmountedRef.current = true
       stopSlotPreview()
