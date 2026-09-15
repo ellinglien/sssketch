@@ -487,63 +487,75 @@ export async function getDiscoverCandidates({
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
 
-  // Real report, 2026-09-15: even with each source's own TTL cache (added
-  // earlier the same day), the FIRST roll of a session pays for all three
-  // widening sources COLD, and running them one at a time (await, await,
-  // await) meant paying their sum -- adding the centroid path as a THIRD
-  // sequential scan made this worse, not better, right after it shipped.
-  // Promise.all runs them concurrently instead, so a cold-cache roll costs
-  // roughly the SLOWEST of the three, not their sum. Safe to run
-  // concurrently on the SAME `ownDb` connection: every one of these three
-  // functions uses `.all()`, never `.iterate()` (each one's own doc
-  // comment explains why, after the real "database connection is busy"
-  // crash earlier today) -- none of them ever leaves a SQLite statement
-  // open across an `await`, so their own internal yields can interleave
-  // freely without any of the three ever seeing a statement left mid-flight
-  // by another.
-  const [guessedStemCIDs, centroidGuessedStemCIDs, instrumentMatchedStemCIDs] = await Promise.all([
-    getEmbeddingGuessedStemCIDs(ownDb, arrangeRole),
-    getCentroidGuessedStemCIDs(ownDb, arrangeRole),
-    getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
-  ])
-
-  for (const stemCID of guessedStemCIDs) {
-    // A guessed (not human-confirmed) row -- DrumSubRole stays null since
-    // the embedding classifier here only ever runs on the arrangeRole axis
-    // (getConfirmedEmbeddings(ownDb, 'arrangeRole') below), never
-    // drumSubRole. getEmbeddingGuessedStemCIDs already excludes anything
-    // confirmed for ANY role, so this never overwrites a real confirmed
-    // row.
-    categoryByStemCID.set(stemCID, {
-      StemCID: stemCID,
-      ArrangeRole: arrangeRole,
-      DrumSubRole: null
-    })
-  }
-
-  for (const stemCID of centroidGuessedStemCIDs) {
-    // Same "never overwrite a real confirmed row, harmless to re-set one
-    // another widening source already added" reasoning as the embedding
-    // merge above.
-    categoryByStemCID.set(stemCID, {
-      StemCID: stemCID,
-      ArrangeRole: arrangeRole,
-      DrumSubRole: null
-    })
-  }
-
+  // Real report, 2026-09-15, THIRD round: even running the two ML-based
+  // sources concurrently (previous fix, same day) still left a cold-cache
+  // roll slow, because it paid for BOTH of them regardless of whether
+  // they were even needed. getInstrumentMatchedStemCIDs costs a bitmask
+  // check per row -- no classifier math, no external store to load --
+  // genuinely cheap next to embedding cosine-similarity or centroid
+  // distance, both of which compare every unconfirmed stem against every
+  // confirmed one. Running the cheap source FIRST and only reaching for
+  // the two expensive ones when confirmed+instrument-matched still leaves
+  // a thin pool means a role with decent instrument coverage (drums/bass
+  // are exactly this -- Endlesss records real instrument category on
+  // every stem) can skip the expensive sources ENTIRELY.
+  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
   for (const stemCID of instrumentMatchedStemCIDs) {
     // getInstrumentMatchedStemCIDs already excludes anything confirmed for
     // ANY role (its own doc comment), so this can never overwrite a real
-    // human confirmation. It CAN legitimately re-set a stemCID the
-    // embedding path above already added for this SAME role -- harmless,
-    // since both write the identical synthesized shape (same StemCID,
-    // same arrangeRole, DrumSubRole always null for a non-confirmed row).
+    // human confirmation.
     categoryByStemCID.set(stemCID, {
       StemCID: stemCID,
       ArrangeRole: arrangeRole,
       DrumSubRole: null
     })
+  }
+
+  // How many real candidates is "enough" to skip the expensive sources --
+  // deliberately not "any candidate at all": pickReroll's own pool-sizing
+  // (discoverRanking.ts) needs real room to vary with the chaos/safe
+  // slider, and a pool of 1-2 would defeat the whole reason this file got
+  // widened in the first place (the ORIGINAL "no match" report). 8 gives
+  // the reroll mechanism a real working set while still being cheap to
+  // reach for common, well-instrument-tagged roles.
+  const MIN_POOL_BEFORE_EXPENSIVE_SOURCES = 8
+  if (categoryByStemCID.size < MIN_POOL_BEFORE_EXPENSIVE_SOURCES) {
+    // Safe to run concurrently on the SAME `ownDb` connection: both
+    // functions use `.all()`, never `.iterate()` (each one's own doc
+    // comment explains why, after the real "database connection is busy"
+    // crash earlier today) -- neither ever leaves a SQLite statement open
+    // across an `await`, so their own internal yields can interleave
+    // freely without either seeing a statement left mid-flight by the
+    // other.
+    const [guessedStemCIDs, centroidGuessedStemCIDs] = await Promise.all([
+      getEmbeddingGuessedStemCIDs(ownDb, arrangeRole),
+      getCentroidGuessedStemCIDs(ownDb, arrangeRole)
+    ])
+
+    for (const stemCID of guessedStemCIDs) {
+      // A guessed (not human-confirmed) row -- DrumSubRole stays null
+      // since the embedding classifier here only ever runs on the
+      // arrangeRole axis (getConfirmedEmbeddings(ownDb, 'arrangeRole')),
+      // never drumSubRole. getEmbeddingGuessedStemCIDs already excludes
+      // anything confirmed for ANY role, so this never overwrites a real
+      // confirmed row.
+      categoryByStemCID.set(stemCID, {
+        StemCID: stemCID,
+        ArrangeRole: arrangeRole,
+        DrumSubRole: null
+      })
+    }
+
+    for (const stemCID of centroidGuessedStemCIDs) {
+      // Same "never overwrite a real confirmed row, harmless to re-set
+      // one another widening source already added" reasoning as the
+      // embedding merge above.
+      categoryByStemCID.set(stemCID, {
+        StemCID: stemCID,
+        ArrangeRole: arrangeRole,
+        DrumSubRole: null
+      })
+    }
   }
 
   if (categoryByStemCID.size === 0) return []
