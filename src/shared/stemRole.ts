@@ -102,7 +102,16 @@ export const ARRANGE_ROLE_TO_BUS: Record<ArrangeRole, BusId> = {
   vocal: 'aux'
 }
 
-const SOUND_TYPE_TO_ARRANGE_ROLE: Record<SoundType, ArrangeRole> = {
+// Exported (not just used internally by resolveStemRole below) so
+// discoverCandidates.ts (main process) can reuse this SAME mapping to widen
+// its own candidate pool with stems Endlesss itself already categorized by
+// instrument (instrumentMaskToSoundType, riffLibraryTypes.ts) -- direct
+// request, 2026-09-15: "can't we train it with some basic data before
+// handing it to someone?" This mapping IS that basic data -- it needs no
+// scan, no embeddings, no prior confirmation, since it's real ground truth
+// traced from OUROVEON's own instrument-bit source (see
+// instrumentMaskToSoundType's own doc comment), not a guess.
+export const SOUND_TYPE_TO_ARRANGE_ROLE: Record<SoundType, ArrangeRole> = {
   drums: 'drums',
   bass: 'bass',
   notes: 'lead',

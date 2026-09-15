@@ -63,17 +63,26 @@ function seedStem(
   db: Database.Database,
   stemCID: string,
   jamCID: string,
-  fields: { presetName?: string; creatorUserName?: string; bpm?: number } = {}
+  fields: {
+    presetName?: string
+    creatorUserName?: string
+    bpm?: number
+    /** OUROVEON's own instrument bitmask -- bit 1 = drum, bit 2 = note,
+     * bit 3 = bass, bit 4 = mic (instrumentMaskToSoundType,
+     * riffLibraryTypes.ts). */
+    instrument?: number
+  } = {}
 ): void {
   db.prepare(
-    `INSERT INTO Stems (StemCID, OwnerJamCID, PresetName, CreatorUserName, BPMrnd)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO Stems (StemCID, OwnerJamCID, PresetName, CreatorUserName, BPMrnd, Instrument)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     stemCID,
     jamCID,
     fields.presetName ?? 'test stem',
     fields.creatorUserName ?? 'elling',
-    fields.bpm ?? null
+    fields.bpm ?? null,
+    fields.instrument ?? null
   )
 }
 
@@ -475,5 +484,95 @@ describe('getDiscoverCandidates', () => {
     })
     expect(fromA.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
     expect(fromB.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3', 'guessed-only-in-b'])
+  })
+
+  // Widened again, same day, real user report: "can't we train it with
+  // some basic data before handing it to someone?" -- Endlesss's own
+  // recorded instrument category (Stems.Instrument, a bitmask) needs no
+  // prior confirmation or background scan at all. Bit 1 = drum (mask 2),
+  // bit 3 = bass (mask 8) -- instrumentMaskToSoundType's own doc comment.
+  it('includes a stem with NEITHER a confirmation NOR an embedding, whose own Instrument bitmask marks it a drum', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1', { presetName: 'untitled loop', instrument: 2 }) // bit 1: drum
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+    expect(candidates[0]).toMatchObject({ arrangeRole: 'drums', drumSubRole: null })
+  })
+
+  it('does NOT include a stem confirmed for a DIFFERENT role even when its own Instrument bitmask would otherwise match', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    // Instrument bit says drum, but a human explicitly confirmed this one
+    // as bass -- the real confirmation must always win.
+    seedStem(own, 's1', 'jam1', { instrument: 2 })
+    seedCategory(own, 's1', { arrangeRole: 'bass', busId: 'bass' })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('ignores a stem with no Instrument value at all (NULL)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1') // instrument left unset -> NULL
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('combines all three sources (confirmed, embedding-guessed, instrument-matched) in one pool', async () => {
+    const own = freshDb()
+    // Confirmed 'drums', with a real embedding (also doubles as classifier
+    // training data).
+    seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
+    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
+    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
+    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
+    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
+    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
+    for (const cid of ['d1', 'd2', 'd3']) {
+      seedStem(own, cid, 'jam1')
+      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
+      seedEmbedding(own, cid, [1, 0, 0])
+    }
+    for (const cid of ['b1', 'b2', 'b3']) {
+      seedStem(own, cid, 'jam1')
+      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
+      seedEmbedding(own, cid, [0, 1, 0])
+    }
+    // Embedding-guessed: unconfirmed, embeds near the drums cluster.
+    seedRiff(own, 'rg', 'jam1', 128, ['guessed-1'])
+    seedStem(own, 'guessed-1', 'jam1')
+    seedEmbedding(own, 'guessed-1', [0.9, 0.1, 0])
+    // Instrument-matched: unconfirmed, no embedding at all, just the bit.
+    seedRiff(own, 'ri', 'jam1', 128, ['instrument-1'])
+    seedStem(own, 'instrument-1', 'jam1', { instrument: 2 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual([
+      'd1',
+      'd2',
+      'd3',
+      'guessed-1',
+      'instrument-1'
+    ])
   })
 })

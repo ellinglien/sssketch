@@ -1,14 +1,18 @@
 // src/main/discoverCandidates.ts
 import type Database from 'better-sqlite3'
-import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
+import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
 import { suggestCategoryFromEmbedding } from '@shared/embeddingMatch'
+import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 
-/** One library-wide candidate for a Discover slot -- a stem either
+/** One library-wide candidate for a Discover slot -- a stem that's EITHER
  * human-confirmed (StemCategories) for the requested ArrangeRole, or whose
  * own embedding confidently CLASSIFIES as that role even without
- * confirmation (getEmbeddingGuessedStemCIDs below, added 2026-09-15 to
- * widen a too-small confirmed-only pool). */
+ * confirmation (getEmbeddingGuessedStemCIDs, added 2026-09-15 to widen a
+ * too-small confirmed-only pool), or whose own Endlesss instrument
+ * category maps to that role (getInstrumentMatchedStemCIDs, added the same
+ * day -- real ground truth requiring no prior confirmation OR background
+ * scan at all, unlike the embedding path). */
 export interface DiscoverCandidate {
   stemCID: string
   jamCID: string
@@ -198,6 +202,77 @@ async function getEmbeddingGuessedStemCIDs(
   return guessed
 }
 
+/** Every StemCID, across the given jams, that isn't confirmed
+ * (StemCategories) for ANY ArrangeRole -- not just the one being queried,
+ * same cross-role-leakage guard getEmbeddingGuessedStemCIDs's own doc
+ * comment explains in detail -- but whose own Endlesss instrument category
+ * (Stems.Instrument, a bitmask -- instrumentMaskToSoundType) maps to
+ * `arrangeRole` via SOUND_TYPE_TO_ARRANGE_ROLE. Direct request, 2026-09-15:
+ * "can't we train it with some basic data before handing it to someone?"
+ * -- unlike the embedding classifier (getEmbeddingGuessedStemCIDs), this
+ * needs NO prior confirmation and no background scan at all: instrument
+ * category is real ground truth Endlesss itself recorded at jam time (see
+ * instrumentMaskToSoundType's own doc comment -- "traced directly from
+ * OUROVEON's own source, not guessed"), present on every synced stem the
+ * moment it syncs. This is the SAME mapping resolveStemRole (stemRole.ts)
+ * already uses as its own default/fallback arrangeRole for any stem
+ * without a confirmed busId -- reusing it here for Discover's candidate
+ * pool is consistent with that established precedent, not new risk.
+ *
+ * Reads each jam's own `Stems` table directly (not ownDb) for the
+ * Instrument values themselves -- a stem's Instrument lives wherever its
+ * Riffs/Stems rows do, same as the main per-jam loop below. `.all()`, not
+ * `.iterate()`, for the exact same "never leave a statement open across an
+ * await" reason getEmbeddingGuessedStemCIDs's own doc comment explains in
+ * detail (a real live crash, not theoretical). Yields periodically for the
+ * same many-rows-is-real-synchronous-work reason as that function too,
+ * though a bitmask check is far cheaper per row than a cosine similarity. */
+async function getInstrumentMatchedStemCIDs(
+  ownDb: Database.Database,
+  jams: JamDbPair[],
+  arrangeRole: ArrangeRole
+): Promise<Set<string>> {
+  const confirmedAnyRole = new Set(
+    (
+      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
+        StemCID: string
+      }[]
+    ).map((r) => r.StemCID)
+  )
+
+  const matched = new Set<string>()
+  let sinceYield = 0
+  for (const { dbForJam } of jams) {
+    let rows: { StemCID: string; Instrument: number | null }[]
+    try {
+      rows = dbForJam.prepare(`SELECT StemCID, Instrument FROM Stems`).all() as typeof rows
+    } catch {
+      // Same defensive handling as the main per-jam loop below -- an
+      // external db missing even a core table shouldn't abort the whole
+      // multi-jam scan.
+      continue
+    }
+    for (const row of rows) {
+      if (
+        row.Instrument !== null &&
+        !confirmedAnyRole.has(row.StemCID) &&
+        !matched.has(row.StemCID)
+      ) {
+        const soundType = instrumentMaskToSoundType(row.Instrument)
+        if (soundType && SOUND_TYPE_TO_ARRANGE_ROLE[soundType] === arrangeRole) {
+          matched.add(row.StemCID)
+        }
+      }
+      sinceYield += 1
+      if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+        sinceYield = 0
+        await yieldToEventLoop()
+      }
+    }
+  }
+  return matched
+}
+
 /** Every stem, library-wide, already confirmed to the given ArrangeRole --
  * the data source Discover's own reroll (Task 3) samples from.
  *
@@ -234,7 +309,19 @@ async function getEmbeddingGuessedStemCIDs(
  * confidently classifies as this role (suggestCategoryFromEmbedding, the
  * same k-NN-over-confirmed-embeddings classifier Tidy Up's own per-stem
  * suggestions already use), even though nobody has manually confirmed it
- * yet -- real variety instead of only what's already been hand-tagged. */
+ * yet -- real variety instead of only what's already been hand-tagged.
+ *
+ * WIDENED AGAIN, same day: the embedding path above still needs at least 3
+ * confirmed samples in 2+ categories before it can suggest ANYTHING
+ * (suggestCategoryFromEmbedding's own MIN_SAMPLES_PER_CATEGORY) -- for a
+ * role with 0-2 confirmed stems, it contributes nothing at all, which is
+ * exactly the case a real user hit. getInstrumentMatchedStemCIDs adds a
+ * THIRD source needing no confirmation and no background scan whatsoever:
+ * Endlesss's own recorded instrument category for each stem (a real bit
+ * traced from OUROVEON's own source, not a guess -- instrumentMaskToSoundType's
+ * own doc comment), mapped onto ArrangeRole via the exact same
+ * SOUND_TYPE_TO_ARRANGE_ROLE table resolveStemRole (stemRole.ts) already
+ * uses as its own default guess elsewhere in this app. */
 export async function getDiscoverCandidates({
   ownDb,
   jams,
@@ -268,6 +355,21 @@ export async function getDiscoverCandidates({
     // drumSubRole. getEmbeddingGuessedStemCIDs already excludes anything
     // confirmed for ANY role, so this never overwrites a real confirmed
     // row.
+    categoryByStemCID.set(stemCID, {
+      StemCID: stemCID,
+      ArrangeRole: arrangeRole,
+      DrumSubRole: null
+    })
+  }
+
+  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
+  for (const stemCID of instrumentMatchedStemCIDs) {
+    // getInstrumentMatchedStemCIDs already excludes anything confirmed for
+    // ANY role (its own doc comment), so this can never overwrite a real
+    // human confirmation. It CAN legitimately re-set a stemCID the
+    // embedding path above already added for this SAME role -- harmless,
+    // since both write the identical synthesized shape (same StemCID,
+    // same arrangeRole, DrumSubRole always null for a non-confirmed row).
     categoryByStemCID.set(stemCID, {
       StemCID: stemCID,
       ArrangeRole: arrangeRole,
