@@ -289,7 +289,22 @@ function yieldToEventLoop(): Promise<void> {
  * real library's worth of jams x stems, walked fresh on EVERY roll click
  * with no cache at all, took minutes. Keyed by `ownDb` only (not the full
  * `jams` array, which isn't a stable cache key) -- `jams` is, in practice,
- * stable for a given db/session. */
+ * stable for a given db/session.
+ *
+ * Real perf bug, found live a SECOND time (root cause of "still slow,
+ * 10-12 seconds" on every role change or TTL expiry, confirmed live on
+ * Elling's own 5,057-jam library, well AFTER the Riffs-side fixes earlier
+ * the same day): this function's own `WHERE OwnerJamCID = ?` fix (below,
+ * still true in spirit) stopped the earlier "read the whole Stems table
+ * per jam" blowup, but LEFT the per-JAM loop structure itself in place --
+ * one query PER JAM, 5,057 separate round trips, every time this role's
+ * own cache is cold. Even at a couple ms each, that many round trips adds
+ * up to real, measured seconds. Fixed the SAME way the main candidate-
+ * resolution loop already was: group jams by db CONNECTION (most share
+ * one, riffLibraryStore.ts's own dbForJam) and read each db's Stems table
+ * ONCE, filtering "is this jam one we're allowed to include" in JS
+ * (allowedJamCIDs, below) instead of in SQL -- collapses O(jams) round
+ * trips to O(uniqueDbs). */
 async function getInstrumentMatchedStemCIDs(
   ownDb: Database.Database,
   jams: JamDbPair[],
@@ -309,36 +324,28 @@ async function getInstrumentMatchedStemCIDs(
     ).map((r) => r.StemCID)
   )
 
+  const jamCIDsByDb = new Map<Database.Database, Set<string>>()
+  for (const { jamCID, dbForJam } of jams) {
+    const existing = jamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
+  }
+
   const matched = new Set<string>()
   let sinceYield = 0
-  for (const { jamCID, dbForJam } of jams) {
-    let rows: { StemCID: string; Instrument: number | null }[]
+  for (const [db, allowedJamCIDs] of jamCIDsByDb) {
+    let rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
     try {
-      // Real perf bug, found live (root cause of a "stuck rolling" report
-      // that survived the TTL cache above -- the cache only helps a SECOND
-      // call within 60s, not the first, cold one): every non-"shared:" jam
-      // in `jams` shares the SAME db connection (dbForJam, resolved via
-      // riffLibraryStore.ts's own dbForJam -- one archive db holds every
-      // synced jam's Stems rows together, NOT one db per jam). Without
-      // `WHERE OwnerJamCID = ?`, this previously re-read the library's
-      // ENTIRE Stems table on EVERY iteration of the jams loop --
-      // O(jamCount x totalStemCount) row reads for what should be
-      // O(totalStemCount) total, since every jam past the first was
-      // redundantly re-scanning stems it doesn't even own. On a real
-      // multi-hundred-jam, 50k+-stem library (this feature's own stated
-      // target scale) that's tens of millions of wasted row reads on the
-      // very first, uncached roll of any role.
-      rows = dbForJam
-        .prepare(`SELECT StemCID, Instrument FROM Stems WHERE OwnerJamCID = ?`)
-        .all(jamCID) as typeof rows
+      rows = db.prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems`).all() as typeof rows
     } catch {
-      // Same defensive handling as the main per-jam loop below -- an
+      // Same defensive handling as the main resolution loop below -- an
       // external db missing even a core table shouldn't abort the whole
-      // multi-jam scan.
+      // multi-db scan.
       continue
     }
     for (const row of rows) {
       if (
+        allowedJamCIDs.has(row.OwnerJamCID) &&
         row.Instrument !== null &&
         !confirmedAnyRole.has(row.StemCID) &&
         !matched.has(row.StemCID)

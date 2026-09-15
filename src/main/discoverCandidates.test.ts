@@ -652,22 +652,34 @@ describe('getDiscoverCandidates', () => {
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
   })
 
-  // Real perf bug, found live (root cause of a "stuck rolling" report that
-  // survived the TTL cache above -- the cache only helps a SECOND call
-  // within 60s, not the cold first one): listJamsWithDb() (main/
-  // riffLibraryStore.ts) pairs every non-"shared:" jam with the SAME
-  // shared archive db connection, not a separate db per jam -- so without
-  // a WHERE OwnerJamCID filter, the instrument-matched Stems query
-  // re-scanned the library's ENTIRE Stems table once per jam in the loop
-  // (O(jamCount x totalStemCount) instead of O(totalStemCount)). This test
-  // seeds two jams SHARING one db (the real-world shape) and asserts the
-  // query is actually scoped per jam.
-  it('scopes the instrument-matched Stems query to each jam via WHERE OwnerJamCID, not a full-table scan repeated per jam', async () => {
+  // Real perf bug, found live TWICE: first (root cause of an earlier
+  // "stuck rolling" report) as a missing WHERE OwnerJamCID filter --
+  // listJamsWithDb() (main/riffLibraryStore.ts) pairs every non-"shared:"
+  // jam with the SAME shared archive db connection, not a separate db per
+  // jam, so without that filter this query re-scanned the library's
+  // ENTIRE Stems table once per jam. Adding `WHERE OwnerJamCID = ?` fixed
+  // THAT, but left the per-JAM LOOP itself in place -- confirmed live a
+  // second time (root cause of a "still slow, 10-12 seconds every role"
+  // report on a real 5,057-jam library): one query PER JAM is 5,057
+  // separate round trips every time this role's own cache is cold, even
+  // though each individual query was itself fast. Fixed the same way the
+  // main candidate-resolution loop already was: group jams by db
+  // CONNECTION and read each db's Stems table ONCE, filtering "is this
+  // jam allowed" in JS instead of in SQL. This test seeds two jams
+  // SHARING one db (the real-world shape) and asserts exactly one query
+  // runs (not two), while still correctly excluding a jam outside the
+  // caller's own `jams` list.
+  it('reads the instrument-matched Stems table once per db, not once per jam, while still excluding jams outside the caller-supplied list', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['d1'])
     seedStem(own, 'd1', 'jam1', { instrument: 2 }) // bit 1: drum
     seedRiff(own, 'r2', 'jam2', 128, ['d2'])
     seedStem(own, 'd2', 'jam2', { instrument: 2 })
+    // Same db, but deliberately NOT in the `jams` list passed below --
+    // must still be excluded even though the query no longer filters by
+    // jam in SQL.
+    seedRiff(own, 'r3', 'jam-not-included', 128, ['d3'])
+    seedStem(own, 'd3', 'jam-not-included', { instrument: 2 })
 
     const prepareSpy = vi.spyOn(own, 'prepare')
 
@@ -684,10 +696,8 @@ describe('getDiscoverCandidates', () => {
     const stemsInstrumentQueries = prepareSpy.mock.calls.filter(
       ([sql]) => sql.includes('FROM Stems') && sql.includes('Instrument')
     )
-    expect(stemsInstrumentQueries.length).toBeGreaterThan(0)
-    for (const [sql] of stemsInstrumentQueries) {
-      expect(sql).toMatch(/WHERE\s+OwnerJamCID\s*=\s*\?/)
-    }
+    expect(stemsInstrumentQueries.length).toBe(1)
+    expect(stemsInstrumentQueries[0][0]).not.toMatch(/WHERE/)
   })
 })
 
