@@ -320,11 +320,11 @@ describe('getDiscoverCandidates', () => {
   // used to query Riffs ONCE PER JAM (`WHERE OwnerJamCID = ?`), even
   // though jams typically share ONE db connection -- a real multi-hundred-
   // jam library paid for hundreds of redundant round trips of the same
-  // query. Fixed by grouping jams by db connection and querying `WHERE
-  // OwnerJamCID IN (...)` once per (db, chunk) instead. This test seeds
-  // THREE jams sharing one db and asserts exactly one Riffs query runs
-  // (not three), while still correctly attributing each result's own
-  // jamCID (now read from the row itself, not the loop variable).
+  // query. Fixed by grouping jams by db connection and querying once per
+  // (db, chunk) instead of once per (jam, chunk). This test seeds THREE
+  // jams sharing one db and asserts exactly one Riffs query runs (not
+  // three), while still correctly attributing each result's own jamCID
+  // (read from the row itself, not the loop variable).
   it('resolves candidates across multiple jams sharing one db with a single query per chunk, not one per jam', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
@@ -353,7 +353,40 @@ describe('getDiscoverCandidates', () => {
 
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
     expect(riffsQueries.length).toBe(1)
-    expect(riffsQueries[0][0]).toMatch(/WHERE OwnerJamCID IN/)
+  })
+
+  // Real perf bug, found live AGAIN at real scale (5,057 jams sharing one
+  // read-only external archive connection -- no index possible there,
+  // see riffLibraryStore.ts's own getRiffLibraryDb): even the db-grouped
+  // query above still filtered `WHERE OwnerJamCID IN (...)`, chunked into
+  // jam-chunks too -- since `jams` is ALWAYS the full listJamsWithDb()
+  // result at every real call site (never a genuine subset), this filter
+  // was pure overhead, multiplying an already-expensive unindexed query
+  // by 26x (5,057 / 200) for zero real filtering benefit. Confirmed live:
+  // getDiscoverCandidates alone took 80+ seconds. Fixed by dropping the
+  // SQL-side jam filter (one query per (db, stem-chunk), not per (db,
+  // jam-chunk, stem-chunk)) and moving the "is this jam allowed" check to
+  // an in-memory Set per returned row instead. This test proves that
+  // filter still works correctly even without SQL's help: a jam whose
+  // Riffs happen to share the SAME db connection but ISN'T in the
+  // caller's own `jams` list must still be excluded.
+  it('excludes a riff whose jam is not in the caller-supplied jams list, even though it shares the same db connection', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    // Same db, same StemCategories confirmation reach -- but this jam is
+    // deliberately NOT included in the `jams` list passed below.
+    seedRiff(own, 'r2', 'jam-not-included', 130, ['s2'])
+    seedStem(own, 's2', 'jam-not-included')
+    seedCategory(own, 's2', { arrangeRole: 'drums', busId: 'drums' })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
 
   // Widening (2026-09-15, direct request): a role with a too-small

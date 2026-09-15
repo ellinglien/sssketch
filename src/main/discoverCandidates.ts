@@ -392,107 +392,118 @@ export async function getDiscoverCandidates({
   // connection (riffLibraryStore.ts's own dbForJam -- one archive db holds
   // every synced jam's Riffs rows together, same fact that motivated the
   // instrument-matched query's own OwnerJamCID fix earlier the same day).
-  // A candidate pool of a few thousand stems (25 chunks) times a few
-  // hundred jams sharing one db meant tens of thousands of redundant
-  // prepare+execute round trips for what should be a few dozen. Fixed by
-  // grouping jams by their underlying db CONNECTION (not by jamCID) and
-  // querying `WHERE OwnerJamCID IN (<jamCIDs sharing this db>)` once per
-  // (db, jam-chunk, stem-chunk) -- collapses to O(uniqueDbs x chunks)
-  // instead of O(jams x chunks), typically a 1-2 order of magnitude
-  // reduction for a real single-archive library. OwnerJamCID is now
-  // SELECTed directly (added to RiffCandidateRow) since a single query can
-  // span multiple jams, so the loop variable can no longer supply it.
-  const jamCIDsByDb = new Map<Database.Database, string[]>()
+  // Grouping by db connection and adding `WHERE OwnerJamCID IN (...)`
+  // (chunked into jam-chunks too) was a real improvement over that, but
+  // still left a THIRD "stuck rolling" bug at real scale: confirmed live
+  // against Elling's own real library (5,057 jams sharing one external,
+  // READ-ONLY archive connection -- see riffLibraryStore.ts's own
+  // getRiffLibraryDb, opened `readonly: true` by deliberate design, so no
+  // index can be added there either) that getDiscoverCandidates alone took
+  // 80+ SECONDS. Root cause: `jams` is ALWAYS the full result of
+  // listJamsWithDb() (see every real call site, main/index.ts) -- never a
+  // genuine subset -- so filtering `WHERE OwnerJamCID IN (...)` against a
+  // jam list that already represents "every jam in this connection" was
+  // pure overhead: it added 26 extra jam-chunks (5,057 / 200) MULTIPLYING
+  // the number of already-expensive, unindexed 8-column-OR'd-IN queries by
+  // 26x, for zero actual filtering benefit. Fixed by dropping the SQL-side
+  // jam filter entirely -- one query per (db, stem-chunk) now scans the
+  // WHOLE Riffs table for that connection ONCE per stem-chunk instead of
+  // once per (jam-chunk, stem-chunk) -- and moving the "is this jam one
+  // we're allowed to include" check to a cheap in-memory Set.has() per
+  // returned ROW instead (allowedJamCIDsByDb, below) -- same filtering
+  // semantics (a jam outside the caller's own `jams` list is still
+  // excluded, for the rare case a future caller ever passes a genuine
+  // subset), at a small fraction of the query cost. Collapses total query
+  // count from O(uniqueDbs x jamChunks x stemChunks) to O(uniqueDbs x
+  // stemChunks) -- roughly the observed 26x reduction for this exact real
+  // case.
+  const allowedJamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
-    const existing = jamCIDsByDb.get(dbForJam)
-    if (existing) existing.push(jamCID)
-    else jamCIDsByDb.set(dbForJam, [jamCID])
+    const existing = allowedJamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else allowedJamCIDsByDb.set(dbForJam, new Set([jamCID]))
   }
 
   let sinceYield = 0
-  for (const [db, jamCIDsForDb] of jamCIDsByDb) {
-    for (const jamCIDChunk of chunk(jamCIDsForDb, CANDIDATE_QUERY_CHUNK_SIZE)) {
-      const jamPlaceholders = jamCIDChunk.map(() => '?').join(', ')
-      for (const stemCIDChunk of chunk(confirmedStemCIDs, CANDIDATE_QUERY_CHUNK_SIZE)) {
-        const stemPlaceholders = stemCIDChunk.map(() => '?').join(', ')
-        const eightColumnWhere = [1, 2, 3, 4, 5, 6, 7, 8]
-          .map((slot) => `StemCID_${slot} IN (${stemPlaceholders})`)
-          .join(' OR ')
+  for (const [db, allowedJamCIDs] of allowedJamCIDsByDb) {
+    for (const stemCIDChunk of chunk(confirmedStemCIDs, CANDIDATE_QUERY_CHUNK_SIZE)) {
+      const stemPlaceholders = stemCIDChunk.map(() => '?').join(', ')
+      const eightColumnWhere = [1, 2, 3, 4, 5, 6, 7, 8]
+        .map((slot) => `StemCID_${slot} IN (${stemPlaceholders})`)
+        .join(' OR ')
 
-        let riffRows: RiffCandidateRow[]
-        try {
-          riffRows = db
-            .prepare(
-              `SELECT RiffCID, OwnerJamCID, BPMrnd,
-                      StemCID_1, StemCID_2, StemCID_3, StemCID_4,
-                      StemCID_5, StemCID_6, StemCID_7, StemCID_8
-               FROM Riffs WHERE OwnerJamCID IN (${jamPlaceholders}) AND (${eightColumnWhere})`
-            )
-            .all(
-              ...jamCIDChunk,
-              ...Array<string[]>(8).fill(stemCIDChunk).flat()
-            ) as RiffCandidateRow[]
-        } catch {
-          // Kept defensive, unlike StemCategories-on-ownDb above: `db` may
-          // be an EXTERNAL file (a real synced LORE archive, or a
-          // partial/corrupted one) whose lifecycle this app doesn't fully
-          // control -- ownDb's migration guarantee doesn't extend to it. A
-          // db missing even a core table like Riffs shouldn't abort the
-          // whole multi-db scan; see the "does not crash the whole scan on
-          // a jam with no Riffs table" test below for the case this
-          // actually guards. Skips just this one chunk, not the whole db --
-          // a later chunk for the same db still gets a fair try.
-          continue
-        }
+      let riffRows: RiffCandidateRow[]
+      try {
+        riffRows = db
+          .prepare(
+            `SELECT RiffCID, OwnerJamCID, BPMrnd,
+                    StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+                    StemCID_5, StemCID_6, StemCID_7, StemCID_8
+             FROM Riffs WHERE ${eightColumnWhere}`
+          )
+          .all(...Array<string[]>(8).fill(stemCIDChunk).flat()) as RiffCandidateRow[]
+      } catch {
+        // Kept defensive, unlike StemCategories-on-ownDb above: `db` may
+        // be an EXTERNAL file (a real synced LORE archive, or a
+        // partial/corrupted one) whose lifecycle this app doesn't fully
+        // control -- ownDb's migration guarantee doesn't extend to it. A
+        // db missing even a core table like Riffs shouldn't abort the
+        // whole multi-db scan; see the "does not crash the whole scan on
+        // a jam with no Riffs table" test below for the case this
+        // actually guards. Skips just this one chunk, not the whole db --
+        // a later chunk for the same db still gets a fair try.
+        continue
+      }
 
-        if (riffRows.length > 0) {
-          const stemRows = db
-            .prepare(
-              `SELECT StemCID, PresetName, CreatorUserName FROM Stems WHERE StemCID IN (${stemPlaceholders})`
-            )
-            .all(...stemCIDChunk) as {
-            StemCID: string
-            PresetName: string | null
-            CreatorUserName: string | null
-          }[]
-          const stemByCID = new Map(stemRows.map((row) => [row.StemCID, row]))
+      if (riffRows.length > 0) {
+        const stemRows = db
+          .prepare(
+            `SELECT StemCID, PresetName, CreatorUserName FROM Stems WHERE StemCID IN (${stemPlaceholders})`
+          )
+          .all(...stemCIDChunk) as {
+          StemCID: string
+          PresetName: string | null
+          CreatorUserName: string | null
+        }[]
+        const stemByCID = new Map(stemRows.map((row) => [row.StemCID, row]))
 
-          for (const riff of riffRows) {
-            for (let slot = 1; slot <= 8; slot++) {
-              const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
-              if (!stemCID) continue
+        for (const riff of riffRows) {
+          if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue // JS-side jam filter, replacing the SQL-side one removed above
 
-              const category = categoryByStemCID.get(stemCID)
-              if (!category) continue // this slot's stem isn't confirmed for the requested role
+          for (let slot = 1; slot <= 8; slot++) {
+            const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
+            if (!stemCID) continue
 
-              const stemRow = stemByCID.get(stemCID)
-              if (!stemRow) continue // confirmed, but no resolvable Stems row (e.g. stale/orphaned data)
+            const category = categoryByStemCID.get(stemCID)
+            if (!category) continue // this slot's stem isn't confirmed for the requested role
 
-              if (onlyOwnStems && stemRow.CreatorUserName !== targetUser) continue
+            const stemRow = stemByCID.get(stemCID)
+            if (!stemRow) continue // confirmed, but no resolvable Stems row (e.g. stale/orphaned data)
 
-              out.push({
-                stemCID,
-                jamCID: riff.OwnerJamCID,
-                riffCID: riff.RiffCID,
-                presetName: stemRow.PresetName ?? '',
-                creatorUserName: stemRow.CreatorUserName ?? '',
-                arrangeRole: category.ArrangeRole as ArrangeRole,
-                drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
-                riffBpm: riff.BPMrnd
-              })
-            }
+            if (onlyOwnStems && stemRow.CreatorUserName !== targetUser) continue
+
+            out.push({
+              stemCID,
+              jamCID: riff.OwnerJamCID,
+              riffCID: riff.RiffCID,
+              presetName: stemRow.PresetName ?? '',
+              creatorUserName: stemRow.CreatorUserName ?? '',
+              arrangeRole: category.ArrangeRole as ArrangeRole,
+              drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
+              riffBpm: riff.BPMrnd
+            })
           }
         }
+      }
 
-        // Real per-chunk SQL round trips, not cheap JS-only work like
-        // CLASSIFY_YIELD_EVERY's own loop above -- a much smaller
-        // threshold, so a library with many dbs/jam-chunks/stem-chunks
-        // still yields often enough to stay non-blocking.
-        sinceYield += 1
-        if (sinceYield >= RIFF_QUERY_YIELD_EVERY) {
-          sinceYield = 0
-          await yieldToEventLoop()
-        }
+      // Real per-chunk SQL round trips, not cheap JS-only work like
+      // CLASSIFY_YIELD_EVERY's own loop above -- a much smaller
+      // threshold, so a library with many dbs/stem-chunks still yields
+      // often enough to stay non-blocking.
+      sinceYield += 1
+      if (sinceYield >= RIFF_QUERY_YIELD_EVERY) {
+        sinceYield = 0
+        await yieldToEventLoop()
       }
     }
   }
