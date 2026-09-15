@@ -568,7 +568,25 @@ export function DiscoverPanel({
         currentUsername
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
-      const ranked = rankCandidates(candidates, { targetBpm: bpm })
+      // Direct report: adding two or three slots of the same role (e.g.
+      // several "lead" slots) often landed the exact SAME stem in every
+      // one -- each slot's own roll is otherwise unaware of what every
+      // OTHER slot in this same loop already picked. Prefer a candidate not
+      // already used by another slot right now, when one exists; fall back
+      // to the full pool otherwise (a small confirmed-candidate pool
+      // duplicating across slots is still better than wrongly reporting "no
+      // match" for a role that really does have candidates, just not
+      // enough distinct ones for every slot). `slots` here is this
+      // function's own closure from whenever it was called (addSlot or
+      // rerollSlot) -- a slightly stale read if another slot changed mid-
+      // request is an acceptable imprecision for what's fundamentally a
+      // variety heuristic, not a correctness guarantee.
+      const usedElsewhere = new Set(
+        slots.filter((s) => s.id !== id && s.candidate).map((s) => s.candidate?.stemCID)
+      )
+      const deduped = candidates.filter((c) => !usedElsewhere.has(c.stemCID))
+      const pool = deduped.length > 0 ? deduped : candidates
+      const ranked = rankCandidates(pool, { targetBpm: bpm })
       const picked = pickReroll(ranked, chaos)
       // hasRerolled set true in this same setSlots call, alongside
       // candidate -- see DiscoverSlot's own doc comment above for why this
