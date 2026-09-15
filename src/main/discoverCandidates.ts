@@ -112,17 +112,51 @@ function yieldToEventLoop(): Promise<void> {
  * only the CLASSIFY loop after it does real per-row work, and that part
  * still yields.
  *
- * No cross-call cache: at CURRENT real-world scan progress this is fast.
- * If a much larger StemEmbeddingCache later makes this noticeably slow per
- * reroll click, revisit caching by role -- deliberately not built
- * preemptively for a cost that isn't confirmed to be real yet. */
+ * Cached per role for GUESSED_CACHE_TTL_MS: confirmed live 2026-09-15 (real
+ * user report, not the earlier "deliberately not built preemptively"
+ * guess this comment used to make) that a real library's worth of
+ * StemEmbeddingCache rows makes one uncached call take on the order of
+ * 20 real seconds -- yielding keeps the app responsive DURING that time
+ * (no beachball), but paying it again on every single roll/reroll click is
+ * still a bad wait. A short TTL, not an invalidate-on-write scheme: the
+ * writers that would invalidate this (Tidy Up confirmations, the
+ * whole-library scan's own embedding writes) are spread across several
+ * other modules, and wiring an explicit invalidation callback into all of
+ * them is real cross-module coupling for a cache that's fine to just be
+ * up to a minute stale -- a fresh confirmation or newly-scanned stem
+ * shows up in Discover's own pool within GUESSED_CACHE_TTL_MS regardless,
+ * without needing to track every writer.
+ *
+ * Keyed by `ownDb` INSTANCE first (a WeakMap, not a flat module-level
+ * cache) -- production only ever has one real ownDb (openOwnRiffLibraryDb's
+ * own cached singleton), so this is behaviorally identical to a flat cache
+ * there, but it keeps this file's own tests (each constructing a fresh
+ * in-memory db per test) from reading a stale result cached against a
+ * DIFFERENT db instance from an earlier test -- a flat `Map<ArrangeRole,
+ * ...>` would otherwise leak cached state across every test in this file
+ * that happens to query the same role. */
+const GUESSED_CACHE_TTL_MS = 60_000
+const guessedStemCIDsCache = new WeakMap<
+  Database.Database,
+  Map<ArrangeRole, { guessed: Set<string>; computedAt: number }>
+>()
+
 async function getEmbeddingGuessedStemCIDs(
   ownDb: Database.Database,
   arrangeRole: ArrangeRole
 ): Promise<Set<string>> {
+  const dbCache = guessedStemCIDsCache.get(ownDb) ?? new Map()
+  guessedStemCIDsCache.set(ownDb, dbCache)
+
+  const cached = dbCache.get(arrangeRole)
+  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.guessed
+
   const confirmed = getConfirmedEmbeddings(ownDb, 'arrangeRole')
   const guessed = new Set<string>()
-  if (confirmed.length === 0) return guessed
+  if (confirmed.length === 0) {
+    dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
+    return guessed
+  }
 
   const confirmedAnyRole = new Set(
     (
@@ -160,6 +194,7 @@ async function getEmbeddingGuessedStemCIDs(
       await yieldToEventLoop()
     }
   }
+  dbCache.set(arrangeRole, { guessed, computedAt: Date.now() })
   return guessed
 }
 

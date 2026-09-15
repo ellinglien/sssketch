@@ -391,4 +391,89 @@ describe('getDiscoverCandidates', () => {
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
+
+  // Speed fix (2026-09-15, real user report): a full StemEmbeddingCache
+  // classify pass took ~20 real seconds against a real library. Cached per
+  // (db instance, role) for GUESSED_CACHE_TTL_MS so repeated rolls within
+  // that window don't re-pay it.
+  it('reuses the embedding-guessed pool on a second call for the same db+role within the TTL, even if new data would otherwise change the result', async () => {
+    const own = freshDb()
+    seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
+    seedRiff(own, 'rd2', 'jam1', 128, ['d2'])
+    seedRiff(own, 'rd3', 'jam1', 128, ['d3'])
+    seedRiff(own, 'rb1', 'jam1', 128, ['b1'])
+    seedRiff(own, 'rb2', 'jam1', 128, ['b2'])
+    seedRiff(own, 'rb3', 'jam1', 128, ['b3'])
+    for (const cid of ['d1', 'd2', 'd3']) {
+      seedStem(own, cid, 'jam1')
+      seedCategory(own, cid, { arrangeRole: 'drums', busId: 'drums' })
+      seedEmbedding(own, cid, [1, 0, 0])
+    }
+    for (const cid of ['b1', 'b2', 'b3']) {
+      seedStem(own, cid, 'jam1')
+      seedCategory(own, cid, { arrangeRole: 'bass', busId: 'bass' })
+      seedEmbedding(own, cid, [0, 1, 0])
+    }
+
+    const first = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(first.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
+
+    // A new stem that WOULD classify as 'drums' lands after the first call.
+    seedRiff(own, 'rg', 'jam1', 128, ['guessed-late'])
+    seedStem(own, 'guessed-late', 'jam1')
+    seedEmbedding(own, 'guessed-late', [0.9, 0.1, 0])
+
+    const second = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    // Still the cached (stale) result -- the newly-added stem does not
+    // appear because it landed within the TTL window.
+    expect(second.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
+  })
+
+  it('does not share the embedding-guessed cache across DIFFERENT db instances', async () => {
+    const dbA = freshDb()
+    const dbB = freshDb()
+    for (const db of [dbA, dbB]) {
+      seedRiff(db, 'rd1', 'jam1', 128, ['d1'])
+      seedRiff(db, 'rd2', 'jam1', 128, ['d2'])
+      seedRiff(db, 'rd3', 'jam1', 128, ['d3'])
+      seedRiff(db, 'rb1', 'jam1', 128, ['b1'])
+      seedRiff(db, 'rb2', 'jam1', 128, ['b2'])
+      seedRiff(db, 'rb3', 'jam1', 128, ['b3'])
+      for (const cid of ['d1', 'd2', 'd3']) {
+        seedStem(db, cid, 'jam1')
+        seedCategory(db, cid, { arrangeRole: 'drums', busId: 'drums' })
+        seedEmbedding(db, cid, [1, 0, 0])
+      }
+      for (const cid of ['b1', 'b2', 'b3']) {
+        seedStem(db, cid, 'jam1')
+        seedCategory(db, cid, { arrangeRole: 'bass', busId: 'bass' })
+        seedEmbedding(db, cid, [0, 1, 0])
+      }
+    }
+    // Only dbB gets the extra guessed stem.
+    seedRiff(dbB, 'rg', 'jam1', 128, ['guessed-only-in-b'])
+    seedStem(dbB, 'guessed-only-in-b', 'jam1')
+    seedEmbedding(dbB, 'guessed-only-in-b', [0.9, 0.1, 0])
+
+    const fromA = await getDiscoverCandidates({
+      ownDb: dbA,
+      jams: [{ jamCID: 'jam1', dbForJam: dbA }],
+      arrangeRole: 'drums'
+    })
+    const fromB = await getDiscoverCandidates({
+      ownDb: dbB,
+      jams: [{ jamCID: 'jam1', dbForJam: dbB }],
+      arrangeRole: 'drums'
+    })
+    expect(fromA.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3'])
+    expect(fromB.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2', 'd3', 'guessed-only-in-b'])
+  })
 })
