@@ -600,4 +600,34 @@ describe('getDiscoverCandidates', () => {
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual([...stemCIDs].sort())
   })
+
+  // Speed fix, real user report: rolling took ~2 minutes with no
+  // improvement, because getInstrumentMatchedStemCIDs (unlike the
+  // embedding-guessed path) had no cache at all -- every roll re-walked
+  // every jam's own Stems table from scratch. Same TTL-cache pattern as
+  // the embedding path's own equivalent test above.
+  it('reuses the instrument-matched pool on a second call for the same db+role within the TTL, even if new data would otherwise change the result', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 2 }) // bit 1: drum
+
+    const first = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(first.map((c) => c.stemCID)).toEqual(['d1'])
+
+    // A new instrument-matched stem lands after the first call.
+    seedRiff(own, 'r2', 'jam1', 128, ['d2'])
+    seedStem(own, 'd2', 'jam1', { instrument: 2 })
+
+    const second = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    // Still the cached (stale) result.
+    expect(second.map((c) => c.stemCID)).toEqual(['d1'])
+  })
 })

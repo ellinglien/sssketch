@@ -166,6 +166,14 @@ const guessedStemCIDsCache = new WeakMap<
   Database.Database,
   Map<ArrangeRole, { guessed: Set<string>; computedAt: number }>
 >()
+// Same shape/TTL, for getInstrumentMatchedStemCIDs below -- a separate
+// cache (not reused/merged with the one above) since the two functions
+// key their own Map values differently (`guessed` vs `matched`) and there
+// is no benefit to entangling two otherwise-independent data sources.
+const instrumentMatchedStemCIDsCache = new WeakMap<
+  Database.Database,
+  Map<ArrangeRole, { matched: Set<string>; computedAt: number }>
+>()
 
 async function getEmbeddingGuessedStemCIDs(
   ownDb: Database.Database,
@@ -248,12 +256,28 @@ async function getEmbeddingGuessedStemCIDs(
  * await" reason getEmbeddingGuessedStemCIDs's own doc comment explains in
  * detail (a real live crash, not theoretical). Yields periodically for the
  * same many-rows-is-real-synchronous-work reason as that function too,
- * though a bitmask check is far cheaper per row than a cosine similarity. */
+ * though a bitmask check is far cheaper per row than a cosine similarity.
+ *
+ * Cached per (db instance, role) for GUESSED_CACHE_TTL_MS, same reasoning
+ * and same cache SHAPE as getEmbeddingGuessedStemCIDs's own cache --
+ * missed on the first pass (this function shipped without one, on the
+ * assumption a bitmask check is cheap enough not to need it), then
+ * confirmed live: a real library's worth of jams x stems, walked fresh on
+ * EVERY roll click with no cache at all, took minutes. Keyed by `ownDb`
+ * only (not the full `jams` array, which isn't a stable cache key) --
+ * `jams` is, in practice, stable for a given db/session, same assumption
+ * the embedding cache's own doc comment already makes implicitly. */
 async function getInstrumentMatchedStemCIDs(
   ownDb: Database.Database,
   jams: JamDbPair[],
   arrangeRole: ArrangeRole
 ): Promise<Set<string>> {
+  const dbCache = instrumentMatchedStemCIDsCache.get(ownDb) ?? new Map()
+  instrumentMatchedStemCIDsCache.set(ownDb, dbCache)
+
+  const cached = dbCache.get(arrangeRole)
+  if (cached && Date.now() - cached.computedAt < GUESSED_CACHE_TTL_MS) return cached.matched
+
   const confirmedAnyRole = new Set(
     (
       ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
@@ -292,6 +316,7 @@ async function getInstrumentMatchedStemCIDs(
       }
     }
   }
+  dbCache.set(arrangeRole, { matched, computedAt: Date.now() })
   return matched
 }
 
