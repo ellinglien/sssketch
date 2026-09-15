@@ -356,6 +356,13 @@ export type Action =
        * stem, never a multi-stem group of its own). */
       stems: Rifff[]
       startBar: number
+      /** Each placed rifff's own committed gain (DiscoverPanel's own
+       * per-slot volume slider), keyed by stemKey(groupId, 1) -- optional
+       * and merged into state.vol same as PASTE_RIFFF's own `vol` field,
+       * so every existing call site (including this action's own pre-
+       * volume-slider tests) that omits it keeps reading the universal
+       * `state.vol[key] ?? 1` default unchanged. */
+      vol?: Record<string, number>
     }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
@@ -1046,7 +1053,14 @@ export function reducer(state: AppState, action: Action): AppState {
         // stretch off.
         stretch[rifff.groupId] = true
       }
-      return { ...state, rifffs, channelOf, channelOrder, stretch }
+      return {
+        ...state,
+        rifffs,
+        channelOf,
+        channelOrder,
+        stretch,
+        vol: { ...state.vol, ...action.vol }
+      }
     }
 
     case 'SET_VOLUME':

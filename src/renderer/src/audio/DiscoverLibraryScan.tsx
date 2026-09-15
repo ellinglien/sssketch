@@ -124,64 +124,47 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
     // Fixed position -- this component now mounts once at the app's own
     // top level (App.tsx's Frame()), independent of whether the Discover
     // tab happens to be open, so it can no longer rely on some ancestor
-    // screen's own layout/scroll container to place it sensibly. Small,
-    // low-contrast, bottom corner -- same "quiet, doesn't compete with
-    // real interaction" spirit as the scan's own throttling, and clear of
-    // the transport bar / titlebar chrome and every modal's own z-index
-    // (every modal/menu in this app sits at 20-1000; this stays well
-    // under that).
+    // screen's own layout/scroll container to place it sensibly.
+    //
+    // Direct feedback: the original readout (a small boxed text+bar, bottom
+    // LEFT) was easy to miss entirely -- Elling could see the scan working
+    // in Activity Monitor with no visible confirmation in the app itself.
+    // Asked for "somewhere subtle, maybe a line on the bottom right." This
+    // is now just the line -- no box, no background, no persistent text --
+    // bottom RIGHT, with the "X / Y this session" detail on hover (title)
+    // rather than always on screen, still clear of the transport bar/
+    // titlebar chrome and every modal's own z-index (every modal/menu in
+    // this app sits at 20-1000; this stays well under that).
     <div
+      title={`analyzing library: ${completed} / ${total} this session`}
+      role="progressbar"
+      aria-valuenow={Math.round(fraction * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
       style={{
         position: 'fixed',
-        left: 8,
+        right: 8,
         bottom: 8,
         zIndex: 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-        width: 180,
-        padding: '4px 6px',
-        background: 'var(--ra-bg-row-active)',
-        border: '1px solid var(--ra-border)',
-        pointerEvents: 'none'
+        width: 120,
+        height: 3,
+        background: 'var(--ra-border)',
+        overflow: 'hidden'
       }}
     >
-      <p
-        style={{
-          margin: 0,
-          fontSize: 9,
-          color: 'var(--ra-text-3)',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis'
-        }}
-      >
-        analyzing library: {completed} / {total} this session
-      </p>
       {/* Sharp corners, no border-radius, matching this app's own design
           system throughout -- bright fill on a dim track is the same
           "brightness = live/active" convention buttonStyle's own 'confirmed'
           state already uses elsewhere (ClusterStemsBrowser.tsx), reused here
           since a moving fill is itself a live-activity signal. */}
       <div
-        role="progressbar"
-        aria-valuenow={Math.round(fraction * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
         style={{
-          height: 3,
-          background: 'var(--ra-border)',
-          overflow: 'hidden'
+          height: '100%',
+          width: `${fraction * 100}%`,
+          background: 'var(--ra-stretch-on)',
+          pointerEvents: 'none'
         }}
-      >
-        <div
-          style={{
-            height: '100%',
-            width: `${fraction * 100}%`,
-            background: 'var(--ra-stretch-on)'
-          }}
-        />
-      </div>
+      />
     </div>
   )
 }

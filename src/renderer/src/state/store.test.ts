@@ -2218,6 +2218,67 @@ describe('reducer', () => {
       expect(toggled.stretch['discover-drums']).toBe(false)
     })
 
+    // Discover's own per-slot volume slider -- each placed rifff's committed
+    // gain travels with it onto the real timeline, same PASTE_RIFFF-style
+    // `vol` merge, so a loop built quiet/loud in Discover stays that way
+    // once plunked in.
+    it('merges the optional vol map into state.vol, keyed by stemKey', () => {
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 0,
+        vol: { 'discover-drums:1': 0.4 },
+        stems: [
+          {
+            groupId: 'discover-drums',
+            name: 'discover: drums',
+            bpm: 128,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'kick.wav',
+                path: '/tmp/kick.wav',
+                type: 'drums',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(next.vol['discover-drums:1']).toBe(0.4)
+    })
+
+    it('leaves state.vol untouched when vol is omitted', () => {
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 0,
+        stems: [
+          {
+            groupId: 'discover-drums',
+            name: 'discover: drums',
+            bpm: 128,
+            barLength: 4,
+            folderPath: '',
+            stems: [
+              {
+                slot: 1,
+                author: 'elling',
+                name: 'kick.wav',
+                path: '/tmp/kick.wav',
+                type: 'drums',
+                durationSec: 2,
+                barLength: 4
+              }
+            ]
+          }
+        ]
+      })
+      expect(next.vol).toEqual(initialState.vol)
+    })
+
     // Bug fix: channelOrder has a codebase-wide invariant (see its own doc
     // comment and channelsInOrder's dedup fallback in selectors.ts, documented
     // as a safety net only) that reducers never write a duplicate entry. The

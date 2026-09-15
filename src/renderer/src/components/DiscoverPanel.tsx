@@ -14,8 +14,35 @@ import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
-import type { ProjectRef, Rifff, SoundType, Stem } from '@shared/types'
+import { tileOffsetsPx } from '../state/selectors'
+import { startPointerDrag } from './dragUtils'
+import { stemKey, type ProjectRef, type Rifff, type SoundType, type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+
+interface ResolvedCandidateStem {
+  author: string
+  name: string
+  type: SoundType
+  path: string
+  durationSec: number
+  barLength: number
+}
+
+// Speed: DiscoverSlotRow's own preview resolve effect and plunkInArranger
+// both call resolveCandidateStem for the SAME candidate -- a row resolves
+// it once already just to show its waveform, then plunk re-resolves the
+// identical riffCID/stemCID from scratch (a real IPC round trip PLUS,
+// often, the exact download riffLibraryDownloadMissingStems just did
+// moments earlier). Cached by promise (not just by settled result), same
+// "cache the in-flight promise itself" convention peakCache.ts already
+// established -- this also dedupes two callers that happen to ask for the
+// same candidate concurrently (row preview + a fast plunk click) into one
+// real request instead of two. Evicted on a null (failed) result, same
+// "don't let a transient failure permanently poison the cache" reasoning
+// peakCache.ts's own eviction-on-rejection uses -- resolveCandidateStem
+// itself never throws (see its own doc comment), so eviction keys off a
+// null return here instead of a caught rejection.
+const resolvedCandidateCache = new Map<string, Promise<ResolvedCandidateStem | null>>()
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
  * `Stem` -- reused verbatim by both this component's own slot-preview
@@ -31,37 +58,42 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
  * (network hiccup, since-deleted riff) -- callers treat that the same as
  * "no candidate yet" rather than surfacing an error for what's ultimately
  * a soft, retryable failure (reroll picks something else regardless). */
-async function resolveCandidateStem(candidate: DiscoverCandidate): Promise<{
-  author: string
-  name: string
-  type: SoundType
-  path: string
-  durationSec: number
-  barLength: number
-} | null> {
-  try {
-    const resolved = await window.rifffApi.riffLibraryResolveRiff(candidate.riffCID)
-    if (!resolved) return null
-    const withStems = resolved.stems.some((s) => s.path === null)
-      ? ((await window.rifffApi.riffLibraryDownloadMissingStems(candidate.riffCID)) ?? resolved)
-      : resolved
-    const stem = withStems.stems.find((s) => s.stemCID === candidate.stemCID)
-    if (!stem || stem.path === null) return null
-    return {
-      author: stem.creatorUserName,
-      name: stem.presetName,
-      type:
-        instrumentMaskToSoundType(stem.instrumentMask) ??
-        guessSoundTypeFromPresetName(stem.presetName) ??
-        'fx',
-      path: stem.path,
-      durationSec: stem.durationSec,
-      barLength: stem.barLength
+function resolveCandidateStem(candidate: DiscoverCandidate): Promise<ResolvedCandidateStem | null> {
+  const key = `${candidate.riffCID}:${candidate.stemCID}`
+  const cached = resolvedCandidateCache.get(key)
+  if (cached) return cached
+
+  const promise = (async (): Promise<ResolvedCandidateStem | null> => {
+    try {
+      const resolved = await window.rifffApi.riffLibraryResolveRiff(candidate.riffCID)
+      if (!resolved) return null
+      const withStems = resolved.stems.some((s) => s.path === null)
+        ? ((await window.rifffApi.riffLibraryDownloadMissingStems(candidate.riffCID)) ?? resolved)
+        : resolved
+      const stem = withStems.stems.find((s) => s.stemCID === candidate.stemCID)
+      if (!stem || stem.path === null) return null
+      return {
+        author: stem.creatorUserName,
+        name: stem.presetName,
+        type:
+          instrumentMaskToSoundType(stem.instrumentMask) ??
+          guessSoundTypeFromPresetName(stem.presetName) ??
+          'fx',
+        path: stem.path,
+        durationSec: stem.durationSec,
+        barLength: stem.barLength
+      }
+    } catch (err) {
+      console.error('resolveCandidateStem: failed to resolve candidate', candidate.riffCID, err)
+      return null
     }
-  } catch (err) {
-    console.error('resolveCandidateStem: failed to resolve candidate', candidate.riffCID, err)
-    return null
-  }
+  })()
+
+  resolvedCandidateCache.set(key, promise)
+  void promise.then((result) => {
+    if (result === null) resolvedCandidateCache.delete(key)
+  })
+  return promise
 }
 
 export interface DiscoverSlot {
@@ -84,6 +116,18 @@ export interface DiscoverSlot {
    * reading as retriable ("no candidate yet") instead of falsely
    * conclusive. */
   hasRerolled: boolean
+  /** This slot's own committed gain (0-1), set by dragging vertically on
+   * its own waveform in DiscoverSlotRow below (handleGainDragStart) --
+   * carried into the shared preview mix
+   * (resolvedStemsRef's own `gain` field, restartMix) AND, on "plunk in
+   * arranger", written into the real placed rifff's state.vol so the same
+   * balance the user set while building the loop survives onto the
+   * timeline (PLACE_LOOP_ON_TIMELINE's own `vol` field, store.ts). Direct
+   * request: a volume control per stem "which will determine the envelope
+   * once it's placed in the arrangement." Defaults to 1 (full), matching
+   * the universal `state.vol[key] ?? 1` read convention used everywhere
+   * else in this codebase. */
+  gain: number
 }
 
 let nextSlotId = 0
@@ -198,10 +242,43 @@ export function DiscoverPanel({
   // sources, only ever against whatever a genuinely different, earlier
   // preview left behind.
   const [previewingSlotIds, setPreviewingSlotIds] = useState<Set<string>>(new Set())
-  const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number }>>(new Map())
+  // Mirrors `previewingSlotIds` for updateSlotGain's own debounced restart
+  // below to read -- real bug caught by independent review: that debounce
+  // closes over `previewingSlotIds` at the moment a gain drag STARTS, and
+  // without this ref it would still use that now-stale value when the
+  // timer actually fires ~150ms later. If the user drags slot A's gain
+  // then, within that window, clicks to remove slot A from the mix, the
+  // stale-closure restart would silently resurrect it (or the symmetric
+  // case: drop a just-added slot back out) once the timer fired. Reading
+  // this ref instead of the closed-over state value at fire time fixes it.
+  const previewingSlotIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    previewingSlotIdsRef.current = previewingSlotIds
+  }, [previewingSlotIds])
+  const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number; gain: number }>>(
+    new Map()
+  )
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   const previewGenerationRef = useRef(0)
   const previewTokenRef = useRef(0)
+  // Reactive (unlike resolvedStemsRef) so the row waveforms' own tiled
+  // width -- see DiscoverSlotRow's own `loopBars`/tileOffsetsPx usage below
+  // -- re-renders when a slot resolves/re-resolves/clears. Direct report:
+  // every slot's waveform used to stretch to fill the same fixed box
+  // regardless of the stem's real bar length, making a 1-bar drum hit and
+  // an 8-bar bassline look the same length; this tracks each resolved
+  // slot's own real barLength so DiscoverPanel can compute the shared
+  // "longest slot" reference (maxBarLength below) every row's own tiling
+  // scales against, matching how the real arranger sizes/tiles clips
+  // proportionally (StemWaveformRow.tsx/CollapsedRifffRow.tsx's own
+  // tileOffsetsPx) rather than showing every stem as if it's the same
+  // length.
+  const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
+  // updateSlotGain's own debounce timer, below -- cleared on unmount so a
+  // drag-in-progress can't fire a straggling restartMix after this panel is
+  // gone (same "generation bump on unmount" spirit as the effect below,
+  // just for a plain setTimeout rather than an async decode).
+  const gainRestartTimeoutRef = useRef<number | null>(null)
   // AudioContext.currentTime the CURRENT mix generation's sources actually
   // started at -- null while nothing is playing. Every source in a mix is
   // started together in one synchronous pass (startPreviewLoop's own doc
@@ -233,6 +310,10 @@ export function DiscoverPanel({
       // independent review, not observed directly.
       previewGenerationRef.current += 1
       stopSlotPreview()
+      if (gainRestartTimeoutRef.current !== null) {
+        window.clearTimeout(gainRestartTimeoutRef.current)
+        gainRestartTimeoutRef.current = null
+      }
     }
   }, [stopSlotPreview])
 
@@ -243,7 +324,7 @@ export function DiscoverPanel({
       stopSlotPreview()
       const stems = [...ids]
         .map((id) => resolvedStemsRef.current.get(id))
-        .filter((s): s is { path: string; durationSec: number } => s !== undefined)
+        .filter((s): s is { path: string; durationSec: number; gain: number } => s !== undefined)
       if (stems.length === 0) {
         setMixStartTime(null)
         return
@@ -294,13 +375,73 @@ export function DiscoverPanel({
   // slot unmounts/gets removed) -- keeps `resolvedStemsRef` accurate and,
   // if this particular slot is currently part of the playing mix, restarts
   // it so the audible loop actually reflects what's now showing on screen.
+  //
+  // Direct request: "it all should autoplay" -- a slot that just landed a
+  // real, playable stem (its first-ever roll on addSlot, or a later reroll)
+  // joins the shared mix automatically here rather than requiring an
+  // explicit click on its own waveform first. `slots.find` reads this
+  // render's own current gain for the slot (the volume slider's value at
+  // the moment resolution lands) -- `resolvedStemsRef` doesn't otherwise
+  // track gain on its own, updateSlotGain below is what keeps it in sync
+  // with LATER slider drags on an already-resolved slot.
   function reportSlotResolution(
     id: string,
-    stem: { path: string; durationSec: number } | null
+    stem: { path: string; durationSec: number; barLength: number } | null
   ): void {
-    if (stem) resolvedStemsRef.current.set(id, stem)
-    else resolvedStemsRef.current.delete(id)
+    if (stem) {
+      const gain = slots.find((s) => s.id === id)?.gain ?? 1
+      resolvedStemsRef.current.set(id, { path: stem.path, durationSec: stem.durationSec, gain })
+      setResolvedBarLengths((prev) => {
+        const next = new Map(prev)
+        next.set(id, stem.barLength)
+        return next
+      })
+    } else {
+      resolvedStemsRef.current.delete(id)
+      setResolvedBarLengths((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Map(prev)
+        next.delete(id)
+        return next
+      })
+    }
+    if (stem && !previewingSlotIds.has(id)) {
+      const next = new Set(previewingSlotIds).add(id)
+      setPreviewingSlotIds(next)
+      restartMix(next, false)
+      return
+    }
     if (previewingSlotIds.has(id)) restartMix(previewingSlotIds, false)
+  }
+
+  // Live-updates a slot's own committed gain -- both in `slots` state (so
+  // the volume slider itself, and "plunk in arranger" later, read the
+  // current value) and, if this slot already has a resolved stem tracked,
+  // in `resolvedStemsRef` too.
+  //
+  // The audible mix restart below is DEBOUNCED, not immediate: restartMix
+  // fully stops and re-decodes/re-starts every source in the mix, and a
+  // plain <input type="range"> fires onChange continuously while dragging
+  // (dozens of times a second) -- calling restartMix on every tick would
+  // restart the whole mix that often, an audible glitch/stutter rather than
+  // a smooth fade. previewLoop.ts doesn't expose the per-source GainNode a
+  // true live (zero-latency) adjustment would need -- debouncing to
+  // "shortly after the user stops moving the slider" gets a real, audible
+  // update without that plumbing, at the cost of not hearing it move in
+  // real time while actively dragging.
+  function updateSlotGain(id: string, gain: number): void {
+    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, gain } : s)))
+    const existing = resolvedStemsRef.current.get(id)
+    if (!existing) return
+    resolvedStemsRef.current.set(id, { ...existing, gain })
+    if (!previewingSlotIds.has(id)) return
+    if (gainRestartTimeoutRef.current !== null) window.clearTimeout(gainRestartTimeoutRef.current)
+    gainRestartTimeoutRef.current = window.setTimeout(() => {
+      gainRestartTimeoutRef.current = null
+      // previewingSlotIdsRef, not the closed-over `previewingSlotIds` --
+      // see that ref's own doc comment for the real bug this avoids.
+      restartMix(previewingSlotIdsRef.current, false)
+    }, 150)
   }
 
   // Per-slot in-flight tracking for rerollSlot -- same stale-response-wins
@@ -360,11 +501,19 @@ export function DiscoverPanel({
     // rather than silently remember a decline forever."
   }
 
+  // Direct request: adding a slot used to require a second, separate click
+  // on its own "roll" button before it showed anything -- this rolls it
+  // immediately, same generation-guarded IPC round trip rerollSlot already
+  // uses, just parameterized by `role` directly instead of looked up from
+  // `slots` state (a slot minted THIS SAME tick isn't in that state's own
+  // closure yet -- see rollForSlot's own doc comment below).
   function addSlot(role: ArrangeRole): void {
+    const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
-      { id: freshSlotId(), role, locked: false, candidate: null, hasRerolled: false }
+      { id, role, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
+    void rollForSlot(id, role)
   }
 
   function removeSlot(id: string): void {
@@ -388,9 +537,13 @@ export function DiscoverPanel({
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, locked: !s.locked } : s)))
   }
 
-  async function rerollSlot(id: string): Promise<void> {
-    const slot = slots.find((s) => s.id === id)
-    if (!slot) return
+  // Core roll logic, shared by addSlot (a brand-new slot's own first roll)
+  // and rerollSlot (an existing slot's later rerolls) -- takes `role`
+  // directly rather than looking it up via `slots.find(...)`, since addSlot
+  // needs to roll a slot in the SAME tick it mints it, before that slot has
+  // made it into `slots` state (a plain function defined in this render
+  // still closes over THIS render's `slots`, which doesn't include it yet).
+  async function rollForSlot(id: string, role: ArrangeRole): Promise<void> {
     // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
     // comment above. Any earlier call for this SAME slot id that's still
     // awaiting getDiscoverCandidates when THIS call resolves is now stale
@@ -410,7 +563,7 @@ export function DiscoverPanel({
       // forever, with no error and no hint why.
       const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
       const candidates = await window.rifffApi.getDiscoverCandidates(
-        slot.role,
+        role,
         effectiveOnlyOwnStems,
         currentUsername
       )
@@ -434,7 +587,7 @@ export function DiscoverPanel({
       // silently producing an empty pool, so a genuine failure here is a
       // real one worth surfacing to the console -- just not by crashing the
       // renderer or nulling out a slot's existing candidate.
-      console.error(`DiscoverPanel: rerollSlot(${slot.role}) failed:`, err)
+      console.error(`DiscoverPanel: rollForSlot(${role}) failed:`, err)
     } finally {
       if (rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
@@ -444,6 +597,12 @@ export function DiscoverPanel({
         })
       }
     }
+  }
+
+  async function rerollSlot(id: string): Promise<void> {
+    const slot = slots.find((s) => s.id === id)
+    if (!slot) return
+    await rollForSlot(id, slot.role)
   }
 
   async function rerollAll(): Promise<void> {
@@ -481,33 +640,39 @@ export function DiscoverPanel({
       if (placeable.length === 0) return
 
       const resolvedStems = await Promise.all(
-        placeable.map(async ({ candidate, role }): Promise<Rifff | null> => {
-          const stem = await resolveCandidateStem(candidate)
-          if (!stem) return null
-          return {
-            // crypto.randomUUID(), matching buildRifff.ts's own established
-            // convention for minting a brand-new rifff's groupId -- NOT
-            // deterministic from candidate content. A second "plunk in
-            // arranger" click with the same slots still showing (nothing
-            // clears `slots` after a successful plunk, so re-plunking the
-            // same loop further along the timeline is normal usage) must
-            // mint fresh groupIds, since PLACE_LOOP_ON_TIMELINE's reducer
-            // case writes `rifffs[rifff.groupId] = {...}` -- a deterministic
-            // id recomputed from the same candidates would silently
-            // overwrite (relocate) the first placement instead of adding a
-            // second copy alongside it, contradicting this feature's own
-            // "adds alongside, never replaces" guarantee (design spec §8.4).
-            groupId: crypto.randomUUID(),
-            name: `discover: ${role}`,
-            bpm: candidate.riffBpm,
-            barLength: stem.barLength,
-            folderPath: '',
-            stems: [{ slot: 1, ...stem }]
+        placeable.map(
+          async ({ candidate, role, gain }): Promise<{ rifff: Rifff; gain: number } | null> => {
+            const stem = await resolveCandidateStem(candidate)
+            if (!stem) return null
+            return {
+              rifff: {
+                // crypto.randomUUID(), matching buildRifff.ts's own established
+                // convention for minting a brand-new rifff's groupId -- NOT
+                // deterministic from candidate content. A second "plunk in
+                // arranger" click with the same slots still showing (nothing
+                // clears `slots` after a successful plunk, so re-plunking the
+                // same loop further along the timeline is normal usage) must
+                // mint fresh groupIds, since PLACE_LOOP_ON_TIMELINE's reducer
+                // case writes `rifffs[rifff.groupId] = {...}` -- a deterministic
+                // id recomputed from the same candidates would silently
+                // overwrite (relocate) the first placement instead of adding a
+                // second copy alongside it, contradicting this feature's own
+                // "adds alongside, never replaces" guarantee (design spec §8.4).
+                groupId: crypto.randomUUID(),
+                name: `discover: ${role}`,
+                bpm: candidate.riffBpm,
+                barLength: stem.barLength,
+                folderPath: '',
+                stems: [{ slot: 1, ...stem }]
+              },
+              gain
+            }
           }
-        })
+        )
       )
-      const rifffs = resolvedStems.filter((r): r is Rifff => r !== null)
-      if (rifffs.length === 0) return
+      const placed = resolvedStems.filter((r): r is { rifff: Rifff; gain: number } => r !== null)
+      if (placed.length === 0) return
+      const rifffs = placed.map((p) => p.rifff)
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
@@ -517,7 +682,17 @@ export function DiscoverPanel({
         .map((r) => (r.startBar ?? 0) + r.barLength)
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
-      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar })
+      // Direct request: each slot's own volume slider "will determine the
+      // envelope once it's placed in the arrangement" -- carries the
+      // Discover-time gain straight into state.vol, keyed the same way
+      // every other placed stem's own gain already is (stemKey(groupId,
+      // slot)). Each Discover rifff has exactly one stem, always slot 1.
+      const vol: Record<string, number> = {}
+      for (const { rifff, gain } of placed) {
+        vol[stemKey(rifff.groupId, 1)] = gain
+      }
+
+      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: rifffs, startBar, vol })
     } finally {
       setPlacing(false)
     }
@@ -646,20 +821,33 @@ export function DiscoverPanel({
         </div>
       )}
 
-      {slots.map((slot) => (
-        <DiscoverSlotRow
-          key={slot.id}
-          slot={slot}
-          rerolling={rerollingSlotIds.has(slot.id)}
-          previewing={previewingSlotIds.has(slot.id)}
-          mixStartTime={mixStartTime}
-          onToggleLock={() => toggleLock(slot.id)}
-          onRemove={() => removeSlot(slot.id)}
-          onReroll={() => void rerollSlot(slot.id)}
-          onTogglePreview={() => toggleSlotPreview(slot.id)}
-          onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
-        />
-      ))}
+      {/* The longest currently-resolved slot's own barLength -- every row's
+          own waveform tiles/scales against this SAME shared reference (see
+          DiscoverSlotRow below), so the whole row of thumbnails reads as
+          one proportional "loop," the shortest stems visibly repeating to
+          fill it, exactly like the real arranger would show them once
+          placed. 0 while nothing has resolved yet (no rows render tiled
+          content in that state anyway). */}
+      {(() => {
+        const maxBarLength =
+          resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
+        return slots.map((slot) => (
+          <DiscoverSlotRow
+            key={slot.id}
+            slot={slot}
+            rerolling={rerollingSlotIds.has(slot.id)}
+            previewing={previewingSlotIds.has(slot.id)}
+            mixStartTime={mixStartTime}
+            maxBarLength={maxBarLength}
+            onToggleLock={() => toggleLock(slot.id)}
+            onRemove={() => removeSlot(slot.id)}
+            onReroll={() => void rerollSlot(slot.id)}
+            onTogglePreview={() => toggleSlotPreview(slot.id)}
+            onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
+            onGainChange={(gain) => updateSlotGain(slot.id, gain)}
+          />
+        ))
+      })()}
 
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 10 }}>
         {ARRANGE_ROLE_OPTIONS.map((role) => (
@@ -684,16 +872,53 @@ export function DiscoverPanel({
   )
 }
 
+// Hand-drawn padlock glyph (open/closed shackle), styled after Phosphor's
+// Lock/LockOpen icons -- but drawn directly as inline SVG geometry rather
+// than pulling in an icon library, matching TransportBar.tsx's own
+// MetronomeIcon/SettingsGearIcon convention and its "no emoji in chrome"
+// design-system rule (CLAUDE.md): this codebase deliberately avoids an icon
+// package. Monochrome via currentColor so it inherits the lock button's own
+// state color (same as every other hand-drawn glyph in this app).
+function LockGlyph({ locked }: { locked: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="7" width="10" height="7" rx="1.2" />
+      {/* Shackle arc -- closed drops all the way to the body's top edge on
+          both sides; open stops short on the right, same "lifted latch"
+          read as Phosphor's own LockOpen. */}
+      <path d={locked ? 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7' : 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0'} />
+      <circle cx="8" cy="10.2" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+// This row's own waveform button's real pixel height -- the vertical-drag
+// gain gesture below divides its own deltaY by this, same
+// "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
+// uses for its analogous drag on the real timeline.
+const DISCOVER_WAVEFORM_HEIGHT = 40
+
 function DiscoverSlotRow({
   slot,
   rerolling,
   previewing,
   mixStartTime,
+  maxBarLength,
   onToggleLock,
   onRemove,
   onReroll,
   onTogglePreview,
-  onResolvedChange
+  onResolvedChange,
+  onGainChange
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -712,9 +937,22 @@ function DiscoverSlotRow({
    * is playing -- this row's own orbiting position dot below is derived
    * from it. */
   mixStartTime: number | null
+  /** The longest currently-resolved slot's own barLength, library-wide
+   * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
+   * waveform tiles/scales its own resolvedStem.barLength against this SAME
+   * shared reference, so the whole loop's rows read as proportional to each
+   * other (a 1-bar stem visibly repeats 8x next to an 8-bar one) instead of
+   * every stem stretching to fill the same fixed box regardless of its real
+   * length. 0 before anything in the loop has resolved yet. */
+  maxBarLength: number
   onToggleLock: () => void
   onRemove: () => void
   onReroll: () => void
+  /** DiscoverPanel's own updateSlotGain -- fires on every tick of a drag
+   * directly on this row's own waveform (handleGainDragStart, below),
+   * mirroring StemWaveformRow.tsx's own "envelope" volume-drag gesture
+   * rather than a separate slider widget. */
+  onGainChange: (gain: number) => void
   /** Toggles whether THIS slot is included in DiscoverPanel's own shared
    * playing mix -- the row itself doesn't own any audio state, it only
    * asks the parent to flip its own membership (see DiscoverPanel's own
@@ -728,7 +966,7 @@ function DiscoverSlotRow({
    * resolvedStemsRef and any currently-playing mix this slot is part of
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
-  onResolvedChange: (stem: { path: string; durationSec: number } | null) => void
+  onResolvedChange: (stem: { path: string; durationSec: number; barLength: number } | null) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -800,6 +1038,25 @@ function DiscoverSlotRow({
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
 
+  // Direct request: adjust gain by dragging vertically on the waveform
+  // itself -- StemWaveformRow.tsx's own "envelope" volume-drag gesture,
+  // reused here (startPointerDrag, same deltaY/ROW_HEIGHT scale) instead of
+  // a separate slider widget. Deliberately does NOT call onEnd/check
+  // `moved`: unlike the real timeline's SET_VOLUME (an undo-tracked
+  // dispatch, only committed once on release), onGainChange writes directly
+  // into this component's own pre-placement `slots` state on every tick --
+  // there's nothing to "commit" separately, and no undo history to spare
+  // from a flood of intermediate values. A plain click (no movement) still
+  // toggles preview normally afterward: startPointerDrag's own
+  // suppressNextSyntheticClick only fires when a real drag happened, so the
+  // button's existing onClick is untouched by a mousedown that never moved.
+  function handleGainDragStart(e: React.MouseEvent): void {
+    const startGain = slot.gain
+    startPointerDrag(e, (_dx, deltaY) => {
+      onGainChange(Math.max(0, Math.min(1, startGain - deltaY / DISCOVER_WAVEFORM_HEIGHT)))
+    })
+  }
+
   // Playhead sweep across this row's own linear Waveform, mirroring
   // ClusterStemsBrowser.tsx's own thumbnail playhead line (same absolutely-
   // positioned 1px `var(--ra-playhead)` bar at `left: fraction*100%`) and
@@ -867,18 +1124,24 @@ function DiscoverSlotRow({
         onClick={onToggleLock}
         title={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
         style={{
-          fontFamily: 'inherit',
-          fontSize: 9,
-          padding: '3px 6px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          width: 22,
+          height: 22,
+          padding: 0,
           background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
           border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
           color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
           cursor: 'pointer'
         }}
       >
-        {slot.locked ? 'locked' : 'unlocked'}
+        <LockGlyph locked={slot.locked} />
       </button>
-      <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>{slot.role}</span>
+      <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64, flexShrink: 0 }}>
+        {slot.role}
+      </span>
       {resolvedStem ? (
         // Clicking the glyph toggles this slot in/out of the shared,
         // looping mix -- same click-the-thumbnail-to-hear-it convention
@@ -889,38 +1152,131 @@ function DiscoverSlotRow({
         // `rowIsPreviewing` treatment.
         <button
           onClick={onTogglePreview}
+          onMouseDown={handleGainDragStart}
           title={
-            previewing
+            (previewing
               ? 'playing in the loop -- click to remove'
-              : 'click to add to the loop preview'
+              : 'click to add to the loop preview') +
+            ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
           }
           style={{
             position: 'relative',
-            width: 56,
-            height: 28,
-            flexShrink: 0,
+            flex: '1 1 auto',
+            minWidth: 140,
+            height: DISCOVER_WAVEFORM_HEIGHT,
             padding: 0,
             background: 'transparent',
             border: 'none',
             outline: previewing ? '1px solid var(--ra-stretch-on)' : 'none',
             outlineOffset: -1,
-            cursor: 'pointer'
+            overflow: 'hidden',
+            cursor: 'ns-resize'
           }}
         >
-          <Waveform path={resolvedStem.path} color={stemColorVar(resolvedStem)} opacity={1} />
-          {sweepFraction !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: `${sweepFraction * 100}%`,
-                width: 1,
-                background: 'var(--ra-playhead)',
-                pointerEvents: 'none'
-              }}
-            />
-          )}
+          {/* Tiled, not a single stretched-to-fit Waveform -- direct
+              report: every slot used to render at the same width regardless
+              of its real bar length, making a 1-bar drum hit look the same
+              size as an 8-bar bassline. `loopBars` is every row's own SAME
+              shared reference (DiscoverPanel's own maxBarLength, the
+              longest currently-resolved slot) -- a stem shorter than that
+              repeats to fill this box, exactly how it will actually sound
+              once looped in the real arranger (tileOffsetsPx, the same
+              helper StemWaveformRow.tsx/CollapsedRifffRow.tsx already use
+              for this). `100` here is a PERCENT reference, not real pixels
+              -- tileOffsetsPx's math is linear/proportional, so feeding it
+              100 and rendering each offset/width as a `%` keeps this row's
+              own flex-fluid width working without a real DOM measurement.
+              The playhead sweep reuses the SAME tileOffsets/tileWidthPct --
+              the underlying audio only ever loops once every
+              resolvedStem.durationSec (previewLoop.ts's own source.loop),
+              so `sweepFraction` (0-1 through ONE repetition) is drawn once
+              PER TILE rather than swept across the whole box, showing every
+              repetition moving in sync -- matching what's actually playing.
+              Direct request: gain is shown/adjusted directly on the
+              waveform (StemWaveformRow.tsx's own "envelope" volume
+              treatment), not a separate slider -- a dim gray layer always
+              renders full-height underneath; the real-color layer on top is
+              clipped from the top down by `gainClipPct`, so a lower gain
+              visibly cuts more of the bright waveform away, revealing gray
+              underneath (same "gray means quieter" language the real
+              envelope uses), with a thin line marking the exact cutoff. */}
+          {(() => {
+            const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
+            const stemBarLength = resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
+            const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
+            const tileWidthPct = 100 * (stemBarLength / loopBars)
+            const gainClipPct = (1 - slot.gain) * 100
+            return (
+              <>
+                {tileOffsets.map((leftPct) => (
+                  <div
+                    key={`dim-${leftPct}`}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: `${leftPct}%`,
+                      width: `${tileWidthPct}%`
+                    }}
+                  >
+                    <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
+                  </div>
+                ))}
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    clipPath: `inset(${gainClipPct}% 0 0 0)`
+                  }}
+                >
+                  {tileOffsets.map((leftPct) => (
+                    <div
+                      key={leftPct}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${leftPct}%`,
+                        width: `${tileWidthPct}%`
+                      }}
+                    >
+                      <Waveform
+                        path={resolvedStem.path}
+                        color={stemColorVar(resolvedStem)}
+                        opacity={1}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    top: `${gainClipPct}%`,
+                    height: 1,
+                    background: 'var(--ra-text)',
+                    pointerEvents: 'none'
+                  }}
+                />
+                {sweepFraction !== null &&
+                  tileOffsets.map((leftPct) => (
+                    <div
+                      key={`sweep-${leftPct}`}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${leftPct + sweepFraction * tileWidthPct}%`,
+                        width: 1,
+                        background: 'var(--ra-playhead)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  ))}
+              </>
+            )
+          })()}
         </button>
       ) : (
         <div
@@ -932,9 +1288,9 @@ function DiscoverSlotRow({
                 : undefined
           }
           style={{
-            width: 56,
-            height: 28,
-            flexShrink: 0,
+            flex: '1 1 auto',
+            minWidth: 140,
+            height: 40,
             border: `1px dashed ${
               resolving
                 ? 'var(--ra-stretch-on)'
