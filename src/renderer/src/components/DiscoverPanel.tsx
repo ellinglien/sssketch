@@ -9,6 +9,7 @@ import {
   registerActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
+import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -407,30 +408,113 @@ export function DiscoverPanel({
     stem: { path: string; durationSec: number; barLength: number } | null
   ): void {
     if (stem) {
-      const gain = slots.find((s) => s.id === id)?.gain ?? 1
-      resolvedStemsRef.current.set(id, { path: stem.path, durationSec: stem.durationSec, gain })
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
         next.set(id, stem.barLength)
         return next
       })
-    } else {
-      resolvedStemsRef.current.delete(id)
-      setResolvedBarLengths((prev) => {
-        if (!prev.has(id)) return prev
-        const next = new Map(prev)
-        next.delete(id)
-        return next
-      })
+      // Direct request, 2026-09-15: "we will need to sync these stems to
+      // the same tempo... i don't think we need to reinvent the wheel...
+      // imported loops sync very well in the main arranger" -- reuses the
+      // EXACT SAME stretch resolver buildEngineProject.ts already uses
+      // for real arranger playback (resolveStretchedForPlayback ->
+      // window.rifffApi.renderStretched, cached by (path, ratio) on the
+      // main-process side -- see rubberband.ts's own doc comment -- so
+      // repeated preview restarts at the same tempo never re-render), not
+      // a second stretch mechanism invented just for this preview. Same
+      // ratio formula too: measured native tempo (durationSec/barLength),
+      // never a declared bpm field, against the CURRENT project tempo.
+      // Async, so joining the mix/updating resolvedStemsRef can't happen
+      // synchronously here -- resolvePreviewAudio (below) does both once
+      // the stretch resolves (or immediately, for the common case where
+      // no stretch is needed at all).
+      void resolvePreviewAudio(id, stem)
+      return
     }
+    // Invalidates any in-flight resolvePreviewAudio call for this id --
+    // real bug this guards against: a slot removed WHILE its own stretch
+    // resolution is still awaiting the main process would otherwise have
+    // that stretch land AFTER this cleanup runs and write the removed
+    // slot's audio right back into resolvedStemsRef/the mix, undoing the
+    // removal. `stretchGenerationRef` is declared below (still safe to
+    // reference here -- by the time this function is actually CALLED,
+    // render has already run and the ref exists).
+    stretchGenerationRef.current.set(id, (stretchGenerationRef.current.get(id) ?? 0) + 1)
+    resolvedStemsRef.current.delete(id)
+    setResolvedBarLengths((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Map(prev)
+      next.delete(id)
+      return next
+    })
     const currentlyPreviewing = previewingSlotIdsRef.current
-    if (stem && !currentlyPreviewing.has(id)) {
+    if (currentlyPreviewing.has(id)) restartMix(currentlyPreviewing, false)
+  }
+
+  // Real bug, found live: this file's own stretchGenerationRef, mirroring
+  // rerollGenerationRef's already-established pattern -- resolvePreviewAudio
+  // is async (a real IPC round trip to render/read a stretched file), so a
+  // SLOWER stretch for an OLDER candidate landing AFTER a newer reroll for
+  // the SAME slot already resolved must not overwrite it. Bumped
+  // synchronously before the first await, checked again after.
+  const stretchGenerationRef = useRef<Map<string, number>>(new Map())
+
+  /** Resolves a just-landed candidate's own PREVIEW audio -- stretched to
+   * the current project tempo when its native tempo differs meaningfully,
+   * via the exact same resolver (resolveStretchedForPlayback) and ratio
+   * formula buildEngineProject.ts already uses for real arranger playback
+   * (see reportSlotResolution's own doc comment for why this reuses that
+   * mechanism rather than inventing a second one). Completes the "join
+   * the mix" work reportSlotResolution itself can't do synchronously.
+   * `stem.path`/`durationSec` here are the UNSTRETCHED, native-tempo
+   * values (Stem.durationSec/barLength) -- resolveStretchedForPlayback's
+   * own result is what actually goes into resolvedStemsRef and the
+   * preview mix, never the raw ones, once a real stretch was needed. */
+  async function resolvePreviewAudio(
+    id: string,
+    stem: { path: string; durationSec: number; barLength: number }
+  ): Promise<void> {
+    const myGeneration = (stretchGenerationRef.current.get(id) ?? 0) + 1
+    stretchGenerationRef.current.set(id, myGeneration)
+
+    let previewPath = stem.path
+    let previewDurationSec = stem.durationSec
+    // stem.oneShot equivalent: DiscoverPanel's own resolved stems have no
+    // such flag (Discover only ever deals in loop-length candidates, not
+    // one-shots), so no ratio===1-for-one-shots special case is needed
+    // here the way buildEngineProject.ts's own per-stem loop has one.
+    const secPerBarAtProjectTempo = (60 / bpm) * 4
+    const stemNativeSecPerBar = stem.durationSec / stem.barLength
+    const ratio = stemNativeSecPerBar / secPerBarAtProjectTempo
+    if (Math.abs(ratio - 1) >= 0.001) {
+      try {
+        const resolved = await resolveStretchedForPlayback(stem.path, ratio)
+        if (stretchGenerationRef.current.get(id) !== myGeneration) return // superseded
+        previewPath = resolved.path
+        previewDurationSec = resolved.durationSec
+      } catch (err) {
+        // Missing rubberband or a bad render shouldn't block the preview
+        // entirely -- same fallback buildEngineProject.ts's own stretch
+        // step already uses -- just fall back to native-tempo preview
+        // audio for this one slot.
+        console.error(
+          `DiscoverPanel: resolvePreviewAudio: stretch failed for "${stem.path}" at ratio ${ratio}, falling back to native tempo`,
+          err
+        )
+      }
+    }
+    if (stretchGenerationRef.current.get(id) !== myGeneration) return // superseded
+
+    const gain = slots.find((s) => s.id === id)?.gain ?? 1
+    resolvedStemsRef.current.set(id, { path: previewPath, durationSec: previewDurationSec, gain })
+    const currentlyPreviewing = previewingSlotIdsRef.current
+    if (!currentlyPreviewing.has(id)) {
       const next = new Set(currentlyPreviewing).add(id)
       setPreviewingSlotIds(next)
       restartMix(next, false)
       return
     }
-    if (currentlyPreviewing.has(id)) restartMix(currentlyPreviewing, false)
+    restartMix(currentlyPreviewing, false)
   }
 
   // Live-updates a slot's own committed gain -- both in `slots` state (so
