@@ -575,4 +575,29 @@ describe('getDiscoverCandidates', () => {
       'instrument-1'
     ])
   })
+
+  // Real crash, found live via a full macOS crash report: SQLite trapped
+  // (EXC_BREAKPOINT, compiling the query, not even running it) once a
+  // widened pool pushed the `IN (...)` clause's bound parameter count too
+  // high for one statement. This seeds enough distinct candidates to span
+  // several query chunks (CANDIDATE_QUERY_CHUNK_SIZE=200) and asserts
+  // every one of them still comes back -- not just that nothing throws,
+  // but that chunking doesn't silently drop results from any chunk.
+  it('returns every candidate correctly even when the pool spans multiple query chunks', async () => {
+    const own = freshDb()
+    const stemCIDs = Array.from({ length: 450 }, (_, i) => `d${i}`)
+    for (const cid of stemCIDs) {
+      seedRiff(own, `r-${cid}`, 'jam1', 128, [cid])
+      // Instrument-matched (bit 1 = drum) -- no StemCategories/embedding
+      // seeding needed per stem, keeping this test fast to construct.
+      seedStem(own, cid, 'jam1', { instrument: 2 })
+    }
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      arrangeRole: 'drums'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual([...stemCIDs].sort())
+  })
 })
