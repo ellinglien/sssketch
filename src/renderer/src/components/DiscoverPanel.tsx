@@ -207,6 +207,38 @@ export function DiscoverPanel({
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
 
+  // Direct request, 2026-09-15: "it'd be nice to be able to adjust the
+  // track tempo from the discover section" -- a real scope reversal of
+  // this feature's own original design spec (§8.7 explicitly listed "no
+  // independent BPM/Key controls on the Discover tab" as a non-goal, on
+  // the assumption the project's own tempo would always be set elsewhere
+  // first). Dispatches the exact same SET_TEMPO action TransportBar.tsx's
+  // own tempo field already uses (its reducer case clamps to [40, 200]),
+  // not a second tempo mechanism -- every currently-previewing slot picks
+  // this up automatically the next time its own resolvePreviewAudio effect
+  // reruns (it already re-stretches against `bpm` on every change, see
+  // that function's own doc comment), so nudging tempo here re-syncs the
+  // whole preview mix to the new value, not just future rolls.
+  //
+  // Decoupled from state.bpm while focused, same reasoning as
+  // TransportBar's own tempoText: SET_TEMPO clamps to [40, 200], and a
+  // controlled input that snaps back to the clamped value on every
+  // keystroke makes multi-digit typing impossible. Free-type locally, only
+  // committing (and clamping, via the reducer) on blur/Enter.
+  const [tempoText, setTempoText] = useState(String(bpm))
+  const [tempoFocused, setTempoFocused] = useState(false)
+  if (!tempoFocused && tempoText !== String(bpm)) setTempoText(String(bpm))
+
+  function commitTempo(): void {
+    setTempoFocused(false)
+    const nextBpm = Number(tempoText)
+    if (!Number.isNaN(nextBpm) && tempoText.trim() !== '') {
+      dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
+    } else {
+      setTempoText(String(bpm))
+    }
+  }
+
   // Click-to-preview a slot's own resolved stem, before it's ever placed on
   // the timeline -- reuses previewLoop.ts's own plain-Web-Audio mechanism
   // (Shelf.tsx/LibraryBrowser.tsx's established convention for auditioning
@@ -261,6 +293,18 @@ export function DiscoverPanel({
   const resolvedStemsRef = useRef<Map<string, { path: string; durationSec: number; gain: number }>>(
     new Map()
   )
+  // Every slot's own RAW, native-tempo resolved stem (path/durationSec/
+  // barLength, exactly what each DiscoverSlotRow reports via
+  // reportSlotResolution) -- distinct from resolvedStemsRef above, which
+  // holds the already-STRETCHED preview audio actually in the mix. Kept so
+  // the tempo control (below) can re-run resolvePreviewAudio for every
+  // currently-resolved slot when the project's own bpm changes: that
+  // function needs the stem's real native tempo (durationSec/barLength) to
+  // compute a fresh stretch ratio against the new bpm, which
+  // resolvedStemsRef's already-stretched values can't provide.
+  const rawResolvedStemsRef = useRef<
+    Map<string, { path: string; durationSec: number; barLength: number }>
+  >(new Map())
   // Every slot CURRENTLY in the playing mix, keyed by slot id -- one
   // {source, gainNode, stem} triple per slot, the same shape
   // startPreviewLoopWithGain itself returns. Direct request, 2026-09-15:
@@ -532,6 +576,7 @@ export function DiscoverPanel({
     stem: { path: string; durationSec: number; barLength: number } | null
   ): void {
     if (stem) {
+      rawResolvedStemsRef.current.set(id, stem)
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
         next.set(id, stem.barLength)
@@ -565,6 +610,7 @@ export function DiscoverPanel({
     // render has already run and the ref exists).
     stretchGenerationRef.current.set(id, (stretchGenerationRef.current.get(id) ?? 0) + 1)
     resolvedStemsRef.current.delete(id)
+    rawResolvedStemsRef.current.delete(id)
     setResolvedBarLengths((prev) => {
       if (!prev.has(id)) return prev
       const next = new Map(prev)
@@ -640,6 +686,42 @@ export function DiscoverPanel({
     }
     restartMix(currentlyPreviewing, false)
   }
+
+  // Re-tunes every currently-resolved slot when the project's own bpm
+  // changes (TransportBar's +/- buttons, its own tempo field, loading a
+  // different project, OR the new tempo control this panel itself adds
+  // below) -- direct request, 2026-09-15: "it'd be nice to be able to
+  // adjust the track tempo from the discover section." Without this, a
+  // slot already playing/resolved would keep its OLD stretch ratio baked
+  // in (computed once, back when reportSlotResolution first landed it)
+  // until its next reroll -- silently drifting out of sync with a bpm
+  // change made right here on the same panel. Re-runs the exact same
+  // resolvePreviewAudio pipeline reportSlotResolution itself calls,
+  // against each slot's own cached RAW (native-tempo) stem
+  // (rawResolvedStemsRef, above) -- correctly recomputes the ratio, re-
+  // renders a stretch only if the new ratio actually needs one (cached by
+  // (path, ratio), same as every other stretch call), and rejoins the
+  // live mix via restartMix's own incremental diff (path-based, so an
+  // unchanged ratio for one slot -- e.g. it was already exactly on tempo
+  // -- leaves that slot's own source completely untouched even while
+  // siblings retune). Skips the very first run (component mount/tab open)
+  // -- reportSlotResolution already resolves each slot once at its own
+  // native pace; re-resolving everything again immediately on mount would
+  // just be redundant work.
+  const skipFirstBpmRetuneRef = useRef(true)
+  useEffect(() => {
+    if (skipFirstBpmRetuneRef.current) {
+      skipFirstBpmRetuneRef.current = false
+      return
+    }
+    for (const [id, stem] of rawResolvedStemsRef.current) {
+      void resolvePreviewAudio(id, stem)
+    }
+    // resolvePreviewAudio is a plain function re-created every render (not
+    // memoized), not a real reactive dependency; only an actual bpm change
+    // should retune.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bpm])
 
   // Live-updates a slot's own committed gain -- both in `slots` state (so
   // the volume slider itself, and "plunk in arranger" later, read the
@@ -1063,6 +1145,71 @@ export function DiscoverPanel({
           onChange={(e) => setChaos(Number(e.target.value))}
         />
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>loose</span>
+        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
+        {/* Direct request, 2026-09-15: "it'd be nice to be able to adjust
+            the track tempo from the discover section" -- same SET_TEMPO
+            dispatch, same free-type-until-blur pattern, and the same
+            [40, 200] clamp (enforced by the reducer, not re-checked here)
+            as TransportBar.tsx's own tempo field, just placed here so
+            retuning the loop doesn't require leaving the tab. */}
+        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
+        <button
+          onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm - 1 })}
+          aria-label="Decrease tempo"
+          style={{
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontSize: 10,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)',
+            cursor: 'pointer'
+          }}
+        >
+          −
+        </button>
+        <input
+          type="number"
+          value={tempoText}
+          onFocus={() => setTempoFocused(true)}
+          onChange={(e) => setTempoText(e.target.value)}
+          onBlur={commitTempo}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          aria-label="Tempo (BPM)"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            width: 36,
+            textAlign: 'center',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)',
+            border: '1px solid var(--ra-border)',
+            height: 18,
+            padding: 0,
+            WebkitAppearance: 'none',
+            MozAppearance: 'textfield'
+          }}
+        />
+        <button
+          onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm + 1 })}
+          aria-label="Increase tempo"
+          style={{
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontSize: 10,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)',
+            cursor: 'pointer'
+          }}
+        >
+          +
+        </button>
+        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         <label
           style={{
