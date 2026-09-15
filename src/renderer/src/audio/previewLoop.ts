@@ -72,24 +72,46 @@ async function buildPreviewSources(
       continue
     }
     const { stem, buffer } = result.value
-    // Loop content isn't guaranteed to zero-cross exactly at the seam —
-    // native buffer looping wraps sample-accurately with no per-iteration
-    // hook to schedule a fade against, so a short one gets baked directly
-    // into a copy of the decoded samples instead (see microFade.ts).
-    const loopEndSec = stem.durationSec !== undefined ? stem.durationSec : buffer.duration
-    const source = ctx.createBufferSource()
-    source.buffer = applyLoopMicroFade(ctx, buffer, Math.min(loopEndSec, buffer.duration))
-    source.loop = true
-    if (stem.durationSec !== undefined) {
-      source.loopStart = 0
-      source.loopEnd = Math.min(stem.durationSec, buffer.duration)
+    try {
+      // Loop content isn't guaranteed to zero-cross exactly at the seam —
+      // native buffer looping wraps sample-accurately with no per-iteration
+      // hook to schedule a fade against, so a short one gets baked directly
+      // into a copy of the decoded samples instead (see microFade.ts).
+      const loopEndSec = stem.durationSec !== undefined ? stem.durationSec : buffer.duration
+      const source = ctx.createBufferSource()
+      source.buffer = applyLoopMicroFade(ctx, buffer, Math.min(loopEndSec, buffer.duration))
+      source.loop = true
+      if (stem.durationSec !== undefined) {
+        source.loopStart = 0
+        source.loopEnd = Math.min(stem.durationSec, buffer.duration)
+      }
+      const gainNode = ctx.createGain()
+      gainNode.gain.value = stem.gain ?? 1
+      source.connect(gainNode)
+      gainNode.connect(ctx.destination)
+      // Real bug, found live 2026-09-15 ("discover stems are loading but
+      // not playing"): AudioBufferSourceNode.start(when, offset) THROWS
+      // synchronously if offset isn't a finite, non-negative number --
+      // DiscoverPanel's own restartMix computes startOffsetSec via a
+      // modulo against the stem's own durationSec, which is NaN if that
+      // duration is ever 0 (or otherwise non-finite). Uncaught here (this
+      // whole per-stem body used to run with no try/catch at all), that
+      // throw aborted buildPreviewSources entirely -- since neither this
+      // function nor any caller ever attaches a .catch() (matching every
+      // OTHER "fire the preview, handle it in .then()" callsite in this
+      // codebase), it silently became an unhandled promise rejection: NO
+      // stem in the batch ended up playing, with no visible error
+      // anywhere. Clamping/validating here, isolated per-stem inside this
+      // try, means one bad stem's offset can't sink every other stem in
+      // the same restartMix call -- same "one bad one doesn't block the
+      // rest" resilience decode failures already get, just one step later.
+      const rawOffset = stem.startOffsetSec ?? 0
+      const safeOffset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0
+      source.start(0, safeOffset)
+      pairs.push({ source, gainNode, stem })
+    } catch (err) {
+      console.error('previewLoop: failed to start preview source:', err)
     }
-    const gainNode = ctx.createGain()
-    gainNode.gain.value = stem.gain ?? 1
-    source.connect(gainNode)
-    gainNode.connect(ctx.destination)
-    source.start(0, Math.max(0, stem.startOffsetSec ?? 0))
-    pairs.push({ source, gainNode, stem })
   }
   return pairs
 }
