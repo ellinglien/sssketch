@@ -104,6 +104,12 @@
   --ra-r-6: 0px;
   --ra-r-7: 0px;
 
+  /* --ra-s-0 is a sub-scale value, not a full step -- it formalizes a
+   * "compact chip/select vertical padding" value that was already
+   * copy-pasted identically (as a raw '3px') across 7 different files
+   * before this token existed. See docs/superpowers/specs/
+   * 2026-09-16-unified-ui-consistency-design.md. */
+  --ra-s-0: 3px;
   --ra-s-1: 4px;
   --ra-s-2: 7px;
   --ra-s-3: 9px;
@@ -130,10 +136,25 @@
 
   /* ——— elevation & motion ——— */
   --ra-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.4);
+  --ra-backdrop: rgba(0, 0, 0, 0.4);
   --ra-dur-fast: 120ms;   /* hovers */
   --ra-dur-med: 220ms;    /* state changes */
   --ra-dur-slow: 380ms;   /* panel slides */
   --ra-ease: cubic-bezier(0.22, 0.8, 0.32, 1);
+
+  /* ——— z-index scale ——— */
+  /* Four tiers, replacing 7 previously undocumented ad hoc values (20, 30,
+   * 100, 110, 500, 1000, 1200) scattered across modals/panels/popovers with
+   * no ordering rule. See docs/superpowers/specs/
+   * 2026-09-16-unified-ui-consistency-design.md. */
+  --ra-z-anchored: 100;            /* context menus, plugin chain panels,
+                                       popovers pinned to a trigger element */
+  --ra-z-modal: 110;               /* every app-level modal/dialog */
+  --ra-z-fullscreen: 1000;         /* full-screen views: Library Browser,
+                                       BeatPicker, BusyOverlay */
+  --ra-z-fullscreen-popover: 1200; /* a popover that must float above a
+                                       full-screen view's own content (e.g.
+                                       Discover's nearby popover) */
 }
 
 /* no gradients on chrome, no glow, no blur, no scale-on-hover:
