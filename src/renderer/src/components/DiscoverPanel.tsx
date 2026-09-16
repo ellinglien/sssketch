@@ -431,6 +431,29 @@ export function DiscoverPanel({
   // no live component left to ever stop it again once it lands.
   const unmountedRef = useRef(false)
 
+  // Coalesces syncPreviewToEngine calls that land in the same animation
+  // frame. reportSlotResolution (below) calls this every time a slot
+  // resolves -- for a Shelf-sourced seed, EVERY seeded slot's own
+  // seedStem resolves ~synchronously on its own first render, so a whole
+  // batch of up to 8 slots can each trigger a call within the same tick.
+  // Without coalescing, each call's own async build+send (buildEngineProject
+  // + engineLoadProject) can get superseded by the VERY NEXT call's bumped
+  // previewSyncGenerationRef before it ever finishes -- meaning NONE of
+  // them reliably survive to the point that actually loads/plays anything.
+  // Real bug, live-reported 2026-09-16: "right clicking brings up the
+  // discovery panel, but it doesn't play the stems." Only the LAST call
+  // scheduled within a burst actually runs, using whatever `ids` it was
+  // most recently given -- by the time one animation frame has passed, a
+  // synchronous resolution burst has always finished landing.
+  const pendingSyncRafRef = useRef<number | null>(null)
+  function scheduleSyncPreviewToEngine(ids: Set<string>): void {
+    if (pendingSyncRafRef.current !== null) cancelAnimationFrame(pendingSyncRafRef.current)
+    pendingSyncRafRef.current = requestAnimationFrame(() => {
+      pendingSyncRafRef.current = null
+      void syncPreviewToEngine(ids)
+    })
+  }
+
   // "Hands control back" to the real arrangement -- stops treating a
   // Discover preview as loaded and pushes the real, unmodified project back
   // to the engine via the existing, already-exported flushEngineSyncNow()
@@ -486,6 +509,15 @@ export function DiscoverPanel({
     skipFirstBpmRetuneRef.current = true
     return () => {
       unmountedRef.current = true
+      // A scheduled-but-not-yet-fired coalesced sync (pendingSyncRafRef)
+      // would otherwise still fire its rAF callback after unmount --
+      // harmless in practice (syncPreviewToEngine's own unmountedRef
+      // check no-ops it), but cancelling outright avoids the wasted
+      // build+send entirely.
+      if (pendingSyncRafRef.current !== null) {
+        cancelAnimationFrame(pendingSyncRafRef.current)
+        pendingSyncRafRef.current = null
+      }
       void restorePreviewIfLoaded()
     }
   }, [restorePreviewIfLoaded])
@@ -727,10 +759,10 @@ export function DiscoverPanel({
         const next = new Set(currentlyPreviewing).add(id)
         previewingSlotIdsRef.current = next
         setPreviewingSlotIds(next)
-        void syncPreviewToEngine(next)
+        scheduleSyncPreviewToEngine(next)
         return
       }
-      void syncPreviewToEngine(currentlyPreviewing)
+      scheduleSyncPreviewToEngine(currentlyPreviewing)
       return
     }
     resolvedStemsRef.current.delete(id)
@@ -741,7 +773,7 @@ export function DiscoverPanel({
       return next
     })
     const currentlyPreviewing = previewingSlotIdsRef.current
-    if (currentlyPreviewing.has(id)) void syncPreviewToEngine(currentlyPreviewing)
+    if (currentlyPreviewing.has(id)) scheduleSyncPreviewToEngine(currentlyPreviewing)
   }
 
   // Re-tunes every currently-resolved slot when the project's own bpm

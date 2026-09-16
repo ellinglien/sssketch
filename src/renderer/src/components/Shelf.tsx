@@ -323,6 +323,18 @@ export function Shelf({
               onClick={(e) => handleTileClick(e, rifff)}
               onContextMenu={(e) => {
                 e.preventDefault()
+                // Real root cause of a live report, 2026-09-16: "right
+                // clicking brings up the discovery panel... the preview
+                // continues to play" -- this tile's own preview
+                // (startPreviewLoop, plain Web Audio, entirely separate
+                // from the native engine Discover uses) was never stopped
+                // when seeding Discover, unlike LibraryBrowser.tsx's own
+                // Browse-tab preview (fixed the same day for the same
+                // reason) -- it just kept looping forever alongside
+                // whatever Discover started, making it hard to even tell
+                // whether Discover's own preview was working.
+                stopTilePreview()
+                setPreviewingGroupId(null)
                 onSeedDiscover(rifff)
               }}
               title={`${rifff.name} — click to preview, drag to arrange, right-click to seed Discover with these stems, shift/cmd-click to multi-select, delete to remove from library`}
