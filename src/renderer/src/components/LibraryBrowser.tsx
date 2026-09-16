@@ -438,6 +438,24 @@ export function LibraryBrowser({
     unregisterActivePreview(previewTokenRef.current)
   }, [])
 
+  // Shelf-triggered seeding's own tempo-follow, mirroring
+  // seedDiscoverFromBrowseRiff's inline check below -- can't live in the
+  // lazy useState initializer above (discoverSlots/discoverUndoStack) since
+  // dispatching a real store action during render isn't safe; this fires
+  // once, right after this component's own single mount, exactly matching
+  // "consumed exactly once" semantics (LibraryBrowser fully unmounts/
+  // remounts every time it opens, so an empty dep array can't double-fire
+  // across two different Shelf-triggered seeds). Direct request,
+  // 2026-09-16: "the tempo should adjust to the rifff tempo (especially
+  // for empty arrangers)" -- gated the same way, only when the real
+  // arranger timeline has nothing placed on it yet.
+  useEffect(() => {
+    if (initialDiscoverSeed && appState.channelOrder.length === 0) {
+      dispatch({ type: 'SET_TEMPO', bpm: initialDiscoverSeed.bpm })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ---------------------------------------------------------------------
   // Jam list unification
   // ---------------------------------------------------------------------
@@ -1330,6 +1348,15 @@ export function LibraryBrowser({
     setDiscoverRedoStack([])
     setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
     setLibraryMode('discover')
+    // Direct request, 2026-09-16: "the tempo should adjust to the rifff
+    // tempo (especially for empty arrangers)" -- only when the real
+    // arranger timeline has nothing placed on it yet (channelOrder is
+    // exactly that list, see PLACE_LOOP_ON_TIMELINE's own reducer case) --
+    // seeding into an already-populated project must never silently
+    // retune existing work.
+    if (appState.channelOrder.length === 0) {
+      dispatch({ type: 'SET_TEMPO', bpm: resolvedRiff.bpm })
+    }
   }
 
   async function handleImport(): Promise<void> {
