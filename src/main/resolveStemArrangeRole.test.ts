@@ -70,6 +70,42 @@ describe('resolveStemArrangeRole', () => {
     const db = freshDb()
     expect(resolveStemArrangeRole(db, 'stem-unknown', () => null)).toBeNull()
   })
+
+  // Direct request, 2026-09-16 ("can we take a good look at the things we
+  // just added... and see if we can improve the speed"): discoverAdjacency.ts's
+  // own matchRole calls this once per stem while walking outward from a
+  // center riff -- up to 8 stems x up to 32 riffs per direction in the
+  // worst case. Proves the two lookup statements are prepared ONCE per db
+  // connection, not re-parsed from scratch on every call.
+  it('prepares its two lookup statements only once across many calls for the same db', () => {
+    const db = freshDb()
+    seedConfirmed(db, 'stem-1', 'drums')
+    seedAuto(db, 'stem-2', 'bass')
+    const prepareSpy = vi.spyOn(db, 'prepare')
+
+    resolveStemArrangeRole(db, 'stem-1', () => null)
+    resolveStemArrangeRole(db, 'stem-2', () => null)
+    resolveStemArrangeRole(db, 'stem-3', () => 'vocal')
+
+    const categoryQueries = prepareSpy.mock.calls.filter(([sql]) =>
+      sql.includes('FROM StemCategories')
+    )
+    const autoQueries = prepareSpy.mock.calls.filter(([sql]) =>
+      sql.includes('FROM StemAutoCategory')
+    )
+    expect(categoryQueries.length).toBe(1)
+    expect(autoQueries.length).toBe(1)
+  })
+
+  it('prepares fresh statements for a DIFFERENT db, never reusing a stale one from another connection', () => {
+    const dbA = freshDb()
+    const dbB = freshDb()
+    seedConfirmed(dbA, 'stem-1', 'drums')
+    seedConfirmed(dbB, 'stem-1', 'bass')
+
+    expect(resolveStemArrangeRole(dbA, 'stem-1', () => null)).toBe('drums')
+    expect(resolveStemArrangeRole(dbB, 'stem-1', () => null)).toBe('bass')
+  })
 })
 
 describe('resolveStemArrangeRoles', () => {

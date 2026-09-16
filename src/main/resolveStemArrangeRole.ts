@@ -2,6 +2,44 @@
 import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
 
+// Prepared statements, cached per `db` connection (WeakMap, so a closed/
+// GC'd connection's own statements are never kept alive artificially).
+// Direct request, 2026-09-16 ("can we take a good look at the things we
+// just added... and see if we can improve the speed"): discoverAdjacency.ts's
+// own matchRole calls resolveStemArrangeRole once per stem while walking
+// outward from a center riff -- up to 8 stems x up to 32 riffs per
+// direction in the worst case (a rare role in a large jam). Re-preparing
+// the SAME two statements from scratch on every single call (better-
+// sqlite3 does not cache repeated .prepare() calls itself) re-parses the
+// same SQL text hundreds of times for no reason -- keyed by `db` (not a
+// bare module-level singleton) specifically because this codebase's own
+// tests each create a fresh `:memory:` db per test; a singleton cache
+// would silently serve a PREVIOUS test's now-closed statement to a later
+// one using a different db instance.
+const statementCache = new WeakMap<
+  Database.Database,
+  {
+    confirmed: Database.Statement
+    auto: Database.Statement
+  }
+>()
+
+function statementsFor(ownDb: Database.Database): {
+  confirmed: Database.Statement
+  auto: Database.Statement
+} {
+  const cached = statementCache.get(ownDb)
+  if (cached) return cached
+  const prepared = {
+    confirmed: ownDb.prepare(
+      `SELECT ArrangeRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL`
+    ),
+    auto: ownDb.prepare(`SELECT ArrangeRole FROM StemAutoCategory WHERE StemCID = ?`)
+  }
+  statementCache.set(ownDb, prepared)
+  return prepared
+}
+
 /** The single most-trusted ArrangeRole known for one specific stem, checked
  * in order: a real human confirmation (StemCategories, written by Tidy Up/
  * Auto Arrange's own role-confirmation step), then the background
@@ -30,14 +68,12 @@ export function resolveStemArrangeRole(
   stemCID: string,
   fallback: () => ArrangeRole | null
 ): ArrangeRole | null {
-  const confirmed = ownDb
-    .prepare(`SELECT ArrangeRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL`)
-    .get(stemCID) as { ArrangeRole: ArrangeRole } | undefined
+  const stmts = statementsFor(ownDb)
+
+  const confirmed = stmts.confirmed.get(stemCID) as { ArrangeRole: ArrangeRole } | undefined
   if (confirmed) return confirmed.ArrangeRole
 
-  const auto = ownDb
-    .prepare(`SELECT ArrangeRole FROM StemAutoCategory WHERE StemCID = ?`)
-    .get(stemCID) as { ArrangeRole: ArrangeRole } | undefined
+  const auto = stmts.auto.get(stemCID) as { ArrangeRole: ArrangeRole } | undefined
   if (auto) return auto.ArrangeRole
 
   return fallback()
