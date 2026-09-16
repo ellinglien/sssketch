@@ -206,6 +206,12 @@ const api = {
     entries: { stemCID: string; instrumentMask: number; presetName: string }[]
   ): Promise<Record<string, ArrangeRole | null>> =>
     ipcRenderer.invoke('resolve-stem-arrange-roles', entries),
+  getLibraryWarmupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-library-warmup-status'),
+  onLibraryWarmupComplete: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('library-warmup-complete', listener)
+    return () => ipcRenderer.removeListener('library-warmup-complete', listener)
+  },
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),

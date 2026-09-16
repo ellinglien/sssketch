@@ -185,6 +185,15 @@ let currentUpdateState: UpdateState = { state: 'idle' }
 // re-entering itself when it calls app.quit() a second time.
 let isQuitting = false
 
+// True once prewarmDiscoverCandidateCaches's own real table scan has
+// finished (see its own call site below) -- the renderer's source of truth
+// for whether the app is still doing real startup work that can make it
+// feel sluggish. Queried once on mount (get-library-warmup-status) rather
+// than relying on the push event alone, since a slow-to-mount renderer
+// could otherwise miss it entirely if warmup finishes first (a real
+// possibility on a small/already-cached library).
+let libraryWarmupDone = false
+
 // Kept in sync with the renderer's own hasUnsavedChanges value via the
 // 'set-dirty-state' IPC call below, fired on each of its transitions (not
 // every keystroke) -- read from the before-quit handler to decide whether
@@ -341,9 +350,29 @@ app.whenReady().then(async () => {
   // Riffs/Stems reads getDiscoverCandidates always needed regardless of
   // consent (consent gates the separate whole-library feature/embedding
   // extraction scan, not basic candidate resolution).
+  // Direct report, 2026-09-16: "the app takes a long time to be
+  // responsive, buttons to be able to be pressed... is there a lot going
+  // on? maybe a loader until it's ready?" -- root-caused: Electron's main
+  // process is single-threaded, and prewarmDiscoverCandidateCaches's own
+  // real table scan (the whole reason this function exists -- see its own
+  // doc comment) genuinely blocks it for real wall-clock time on a large
+  // library, even though the promise itself is fire-and-forget and never
+  // blocks createWindow() above. libraryWarmupDone (module scope, below)
+  // is the renderer's own source of truth for "is the app still doing
+  // that startup work" -- queried once on mount (get-library-warmup-
+  // status) and pushed once here, when it actually finishes, covering
+  // both "the renderer mounted before this resolved" and "after."
+  // Deliberately NOT blocking the window from showing or interaction
+  // entirely (a full block could mean tens of seconds of a frozen-looking
+  // app on a cold, large library) -- just gives the renderer a real
+  // signal to show a small, honest "still indexing" status instead of
+  // silent, unexplained sluggishness.
   void prewarmDiscoverCandidateCaches(
     listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
-  )
+  ).finally(() => {
+    libraryWarmupDone = true
+    mainWindow?.webContents.send('library-warmup-complete')
+  })
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
@@ -852,6 +881,8 @@ app.whenReady().then(async () => {
       )
     }
   )
+
+  ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
