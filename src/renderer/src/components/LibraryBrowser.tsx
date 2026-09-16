@@ -240,6 +240,18 @@ export function LibraryBrowser({
     initialDiscoverSeed ? [[]] : []
   )
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
+  // The most recently seeded riff's own bpm -- lifted up for the same
+  // reason discoverSlots itself is (survives a 'browse' <-> 'discover'
+  // switch). Null until a seed action happens this session. Drives
+  // DiscoverPanel's own "match seed tempo" button, direct request,
+  // 2026-09-16: "maybe a button next to the tempo adjust to set it to the
+  // original rifff tempo?" -- a manual, always-available alternative to
+  // the automatic empty-arranger tempo-follow below, since that's a
+  // one-shot snap at seed time and a stem within Discover can drift away
+  // from it via individual rerolls afterward.
+  const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(() =>
+    initialDiscoverSeed ? initialDiscoverSeed.bpm : null
+  )
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -1347,6 +1359,7 @@ export function LibraryBrowser({
     setDiscoverUndoStack((prev) => [...prev, discoverSlots].slice(-DISCOVER_UNDO_LIMIT))
     setDiscoverRedoStack([])
     setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
+    setDiscoverSeedBpm(resolvedRiff.bpm)
     setLibraryMode('discover')
     // Direct request, 2026-09-16: "the tempo should adjust to the rifff
     // tempo (especially for empty arrangers)" -- only when the real
@@ -2203,6 +2216,7 @@ export function LibraryBrowser({
             currentUsername={riffLibraryUsername}
             discoverConsented={discoverConsented}
             setDiscoverConsented={setDiscoverConsented}
+            seedBpm={discoverSeedBpm}
           />
         )}
       </div>

@@ -183,7 +183,8 @@ export function DiscoverPanel({
   setRedoStack,
   currentUsername,
   discoverConsented,
-  setDiscoverConsented
+  setDiscoverConsented,
+  seedBpm
 }: {
   currentSketch: ProjectRef
   /** Lifted up into LibraryBrowser.tsx (the parent, which does NOT unmount
@@ -241,6 +242,13 @@ export function DiscoverPanel({
    * settings menu while Discover was already open didn't affect the
    * already-mounted scan until this panel next remounted. */
   setDiscoverConsented: (value: boolean) => Promise<void>
+  /** The most recently seeded riff's own bpm (LibraryBrowser.tsx's
+   * discoverSeedBpm, lifted up for the same reason slots/undoStack are --
+   * this component unmounts on every tab switch) -- null until a seed
+   * action has happened this LibraryBrowser session. Drives the "match
+   * seed tempo" button below, direct request 2026-09-16: "maybe a button
+   * next to the tempo adjust to set it to the original rifff tempo?" */
+  seedBpm: number | null
 }): React.JSX.Element {
   // Unused -- accepted here because this component's real consumer
   // (LibraryBrowser.tsx) already passes it. Task 11 ("plunk in arranger")
@@ -1361,6 +1369,24 @@ export function DiscoverPanel({
           +
         </button>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
+        {seedBpm !== null && seedBpm !== bpm && (
+          <button
+            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedBpm })}
+            title={`Match seeded riff's own tempo (${seedBpm} bpm)`}
+            aria-label="Match seeded riff's own tempo"
+            style={{
+              height: 18,
+              padding: '0 6px',
+              fontSize: 9,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text)',
+              cursor: 'pointer'
+            }}
+          >
+            match seed ({seedBpm})
+          </button>
+        )}
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         <label
           style={{
