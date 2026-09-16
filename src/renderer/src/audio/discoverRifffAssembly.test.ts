@@ -88,15 +88,17 @@ describe('assembleDiscoverRifff', () => {
     expect(assembly!.rifff.stems[8]).toMatchObject({ slot: 9, path: '/8.wav' })
   })
 
-  it("builds a vol map keyed by stemKey(the rifff's own groupId, slot), each member's own gain scaled by sqrtGain(memberCount)", () => {
-    // Real bug, live-reported 2026-09-16: "the discover audio is quite a
-    // bit louder than the preview in the library explorer" -- Browse's own
-    // preview (LibraryBrowser.tsx's tryStartPreview) already applies
-    // sqrtGain(stem count) so combined loudness stays roughly constant as
-    // more stems join a mix (same reasoning normal multi-stem import
-    // already bakes into state.vol, store.ts). assembleDiscoverRifff had
-    // no equivalent, so Discover's own preview mix got audibly louder
-    // than everywhere else in the app as slots were added, unbounded.
+  it("builds a vol map keyed by stemKey(the rifff's own groupId, slot) for each member's own gain, unscaled", () => {
+    // Direct request, 2026-09-16: "the volumes of the loaded stems as
+    // they are played should be adjusted using that volume adjust
+    // instead of a secret hidden one" -- a same-day loudness-compensation
+    // revision (scaling by sqrtGain(memberCount), matching Browse's own
+    // preview) was reverted specifically because it meant the SAME
+    // displayed gain (DiscoverSlotRow's own drag-on-waveform control)
+    // produced different real loudness depending on how many other slots
+    // happened to be toggled on -- an invisible second multiplier
+    // underneath the one real, visible control. What you see is what you
+    // hear now, full stop.
     const assembly = assembleDiscoverRifff(
       'discover preview',
       [
@@ -106,19 +108,10 @@ describe('assembleDiscoverRifff', () => {
       120
     )
     const groupId = assembly!.rifff.groupId
-    const expectedScale = 1 / Math.sqrt(2)
-    expect(assembly!.vol[stemKey(groupId, 1)]).toBeCloseTo(0.7 * expectedScale)
-    expect(assembly!.vol[stemKey(groupId, 2)]).toBeCloseTo(0.3 * expectedScale)
-  })
-
-  it('does not scale down a single member (sqrtGain is a no-op for count 1)', () => {
-    const assembly = assembleDiscoverRifff(
-      'discover preview',
-      [{ stem: fixtureStem(), gain: 0.8 }],
-      120
-    )
-    const groupId = assembly!.rifff.groupId
-    expect(assembly!.vol[stemKey(groupId, 1)]).toBe(0.8)
+    expect(assembly!.vol).toEqual({
+      [stemKey(groupId, 1)]: 0.7,
+      [stemKey(groupId, 2)]: 0.3
+    })
   })
 
   it('passes name and bpm through verbatim', () => {

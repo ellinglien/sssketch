@@ -1,6 +1,5 @@
 // src/renderer/src/audio/discoverRifffAssembly.ts
 import { stemKey, type Rifff, type Stem } from '@shared/types'
-import { sqrtGain } from '@shared/mixGain'
 
 /** One stem to include in an assembled Discover rifff, paired with its own
  * committed gain (0-1) -- gain lives OUTSIDE the Stem/Rifff shape itself
@@ -93,18 +92,24 @@ export function assembleDiscoverRifff(
     stems: capped.map(({ stem }, i) => ({ ...stem, slot: i + 1 }))
   }
 
-  // sqrtGain(capped.length) keeps combined perceived loudness roughly
-  // constant as more members join this mix -- same compensation a normal
-  // multi-stem import already bakes into state.vol (store.ts) and Browse's
-  // own auto-preview already applies (LibraryBrowser.tsx's tryStartPreview,
-  // sqrtGain(cachedStems.length)). Without it here, Discover's own preview
-  // mix got audibly louder than everywhere else in the app as more slots
-  // were toggled on, unbounded -- live-reported 2026-09-16: "the discover
-  // audio is quite a bit louder than the preview in the library explorer."
-  const loudnessScale = sqrtGain(capped.length)
+  // Each member's own gain, passed straight through -- NOT scaled by
+  // sqrtGain(capped.length) or anything else. A brief 2026-09-16 revision
+  // added that scaling (matching Browse's own auto-preview, which
+  // compensates for combined loudness as more stems join a mix) to fix a
+  // real "discover audio is louder than the browse preview" report --
+  // but it meant the visible per-slot gain control (drag-on-waveform in
+  // DiscoverSlotRow) no longer directly determined what you actually
+  // heard: the SAME displayed gain produced different real loudness
+  // depending on how many other slots happened to be toggled on, an
+  // invisible second multiplier layered underneath the one real control.
+  // Reverted same day, direct follow-up: "the volumes of the loaded
+  // stems as they are played should be adjusted using that volume adjust
+  // instead of a secret hidden one." What you see on the waveform is
+  // what you hear, full stop -- the earlier loudness-matching goal was
+  // real but secondary to that.
   const vol: Record<string, number> = {}
   capped.forEach(({ gain }, i) => {
-    vol[stemKey(groupId, i + 1)] = gain * loudnessScale
+    vol[stemKey(groupId, i + 1)] = gain
   })
 
   return { rifff, vol }
