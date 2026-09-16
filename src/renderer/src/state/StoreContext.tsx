@@ -147,6 +147,15 @@ const RiffFavouritesActionsCtx = createContext<{
   toggleRiffFavourite: (riffCID: string) => void
 }>({ toggleRiffFavourite: () => {} })
 
+// Per-STEM favourites (distinct from RiffFavouritesCtx above, which
+// favourites a whole riff) -- direct request, 2026-09-16, for Discover's
+// own "star a stem" feature. Same shape/pattern as the riff-favourites
+// pair just above, just keyed by stemCID instead of riffCID.
+const StemFavouritesCtx = createContext<Set<string>>(new Set())
+const StemFavouritesActionsCtx = createContext<{
+  toggleStemFavourite: (stemCID: string) => void
+}>({ toggleStemFavourite: () => {} })
+
 // The 5 plugins the old hardcoded allowlist (src/shared/masterChainAllowlist.ts,
 // deleted once the scan-based catalog replaced it) used to reference by these
 // exact slugs. A pre-existing project save's masterChain array may still
@@ -255,6 +264,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     void window.rifffApi.listRiffFavourites().then((ids) => setRiffFavourites(new Set(ids)))
   }, [])
 
+  const [stemFavourites, setStemFavourites] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    void window.rifffApi.listStemFavourites().then((ids) => setStemFavourites(new Set(ids)))
+  }, [])
+
   useEffect(() => {
     return window.rifffApi.onScanProgress((progress) => setScanProgress(progress))
   }, [])
@@ -283,6 +298,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [])
 
   const riffFavouritesActions = useMemo(() => ({ toggleRiffFavourite }), [toggleRiffFavourite])
+
+  const toggleStemFavourite = useCallback((stemCID: string) => {
+    void window.rifffApi.toggleStemFavourite(stemCID).then((ids) => setStemFavourites(new Set(ids)))
+  }, [])
+
+  const stemFavouritesActions = useMemo(() => ({ toggleStemFavourite }), [toggleStemFavourite])
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -941,7 +962,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
                                       <RiffFavouritesActionsCtx.Provider
                                         value={riffFavouritesActions}
                                       >
-                                        {children}
+                                        <StemFavouritesCtx.Provider value={stemFavourites}>
+                                          <StemFavouritesActionsCtx.Provider
+                                            value={stemFavouritesActions}
+                                          >
+                                            {children}
+                                          </StemFavouritesActionsCtx.Provider>
+                                        </StemFavouritesCtx.Provider>
                                       </RiffFavouritesActionsCtx.Provider>
                                     </RiffFavouritesCtx.Provider>
                                   </PluginCatalogActionsCtx.Provider>
@@ -1118,4 +1145,14 @@ export function useRiffFavourites(): Set<string> {
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useRiffFavouritesActions(): { toggleRiffFavourite: (riffCID: string) => void } {
   return useContext(RiffFavouritesActionsCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useStemFavourites(): Set<string> {
+  return useContext(StemFavouritesCtx)
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useStemFavouritesActions(): { toggleStemFavourite: (stemCID: string) => void } {
+  return useContext(StemFavouritesActionsCtx)
 }

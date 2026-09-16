@@ -42,6 +42,7 @@ describe('riffLibrarySchema', () => {
       'StemAutoCategory',
       'StemCategories',
       'StemEmbeddingCache',
+      'StemFavourite',
       'StemFeatureCache',
       'StemLedger',
       'Stems',

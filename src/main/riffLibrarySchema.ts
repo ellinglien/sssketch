@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS StemAutoCategory (
   Source TEXT NOT NULL,
   ComputedAt INTEGER NOT NULL
 );
+
+-- Per-stem favourites (distinct from Tags.Favour, which favourites a whole
+-- RIFF and is part of the LORE-compatible warehouse schema) -- direct
+-- request, 2026-09-16: star an individual stem in Discover, then optionally
+-- bias rolls/rerolls toward starred stems. sssketch-exclusive, like
+-- StemAutoCategory/StemEmbeddingCache/StemFeatureCache above -- only ever
+-- lives on the user's own writable db, never an external read-only LORE
+-- archive (see discoverCandidates.ts's own repeated notes on why).
+CREATE TABLE IF NOT EXISTS StemFavourite (
+  StemCID TEXT PRIMARY KEY,
+  FavouritedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null

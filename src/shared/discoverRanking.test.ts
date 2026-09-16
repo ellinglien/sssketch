@@ -37,6 +37,27 @@ describe('rankCandidates', () => {
     const ranked = rankCandidates([a, b], { targetBpm: 128 })
     expect(ranked[0].score).toBeCloseTo(ranked[1].score, 5)
   })
+
+  it('ranks a favourited stem above a closer-BPM non-favourite -- a soft boost, not a hard filter', () => {
+    const favourited = candidate({ stemCID: 'fav', riffBpm: 90 }) // far from target
+    const nonFavourite = candidate({ stemCID: 'plain', riffBpm: 128 }) // exact target
+    const ranked = rankCandidates([nonFavourite, favourited], {
+      targetBpm: 128,
+      favouriteStemCIDs: new Set(['fav'])
+    })
+    expect(ranked[0].candidate.stemCID).toBe('fav')
+    // The non-favourite still scores above zero -- never fully excluded,
+    // matching this feature's own soft-boost design (see FAVOURITE_BOOST's
+    // own doc comment).
+    expect(ranked[1].score).toBeGreaterThan(0)
+  })
+
+  it('favouriteStemCIDs is optional -- omitting it ranks purely by BPM, unchanged', () => {
+    const close = candidate({ stemCID: 'close', riffBpm: 128 })
+    const far = candidate({ stemCID: 'far', riffBpm: 90 })
+    const ranked = rankCandidates([far, close], { targetBpm: 128 })
+    expect(ranked[0].candidate.stemCID).toBe('close')
+  })
 })
 
 describe('pickReroll', () => {

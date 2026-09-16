@@ -290,6 +290,9 @@ const api = {
   listRiffFavourites: (): Promise<string[]> => ipcRenderer.invoke('list-riff-favourites'),
   toggleRiffFavourite: (riffCID: string): Promise<string[]> =>
     ipcRenderer.invoke('toggle-riff-favourite', riffCID),
+  listStemFavourites: (): Promise<string[]> => ipcRenderer.invoke('list-stem-favourites'),
+  toggleStemFavourite: (stemCID: string): Promise<string[]> =>
+    ipcRenderer.invoke('toggle-stem-favourite', stemCID),
   onScanProgress: (callback: (progress: { done: number; total: number }) => void): (() => void) => {
     const listener = (_event: unknown, progress: { done: number; total: number }): void =>
       callback(progress)

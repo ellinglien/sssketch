@@ -93,6 +93,7 @@ import {
   listWarehouseFavourites,
   toggleWarehouseFavourite
 } from './riffLibraryWriter'
+import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
 import {
   upsertStemCategoryBus,
   upsertStemCategoryRole,
@@ -1128,6 +1129,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('toggle-riff-favourite', (_event, riffCID: string) =>
     toggleWarehouseFavourite(openOwnRiffLibraryDb(), riffCID)
+  )
+
+  // Per-STEM favourites (distinct from the riff-level pair just above) --
+  // direct request, 2026-09-16, for Discover's own "star a stem" feature.
+  ipcMain.handle('list-stem-favourites', () => listStemFavourites(openOwnRiffLibraryDb()))
+
+  ipcMain.handle('toggle-stem-favourite', (_event, stemCID: string) =>
+    toggleStemFavourite(openOwnRiffLibraryDb(), stemCID)
   )
 
   createWindow()

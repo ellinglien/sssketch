@@ -16,7 +16,9 @@ import {
   usePlaying,
   usePos,
   useFlushEngineSyncNow,
-  usePluginCatalog
+  usePluginCatalog,
+  useStemFavourites,
+  useStemFavouritesActions
 } from '../state/StoreContext'
 import { tileOffsetsPx } from '../state/selectors'
 import { startPointerDrag } from './dragUtils'
@@ -251,6 +253,17 @@ export function DiscoverPanel({
   } = useEngineOwnership()
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
+  // Direct request, 2026-09-16: "a setting to prefer favourite stems when
+  // randomizing" -- defaults OFF (unlike onlyOwnStems, an existing
+  // preference) since this is a brand-new feature nobody has favourited
+  // anything for yet; opt-in rather than silently changing existing roll
+  // behavior the moment this ships. A SOFT boost when on (see
+  // discoverRanking.ts's own FAVOURITE_BOOST), not a hard filter -- same
+  // reasoning as "only my stems" own near-impossible-odds bug fixed
+  // earlier this session, deliberately not repeated here.
+  const [preferFavourites, setPreferFavourites] = useState(false)
+  const stemFavourites = useStemFavourites()
+  const { toggleStemFavourite } = useStemFavouritesActions()
 
   // Direct request, 2026-09-15: "it'd be nice to be able to adjust the
   // track tempo from the discover section" -- a real scope reversal of
@@ -955,7 +968,10 @@ export function DiscoverPanel({
       )
       const deduped = candidates.filter((c) => !usedElsewhere.has(c.stemCID))
       const pool = deduped.length > 0 ? deduped : candidates
-      const ranked = rankCandidates(pool, { targetBpm: bpm })
+      const ranked = rankCandidates(pool, {
+        targetBpm: bpm,
+        favouriteStemCIDs: preferFavourites ? stemFavourites : undefined
+      })
       const picked = pickReroll(ranked, chaos)
       // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
       // above. Remove once confirmed.
@@ -1199,16 +1215,26 @@ export function DiscoverPanel({
           the FAILED state -- a static "this stopped" cue.
           Direct report, 2026-09-15 (v3): the previous versions of this
           screen's own "still working" animations (a spinning dice/shuffle
-          icon, a scrolling multi-waveform reel) read as too busy -- both
-          are now replaced with the shared LoadingLoader component (the
-          same four-bar bounce BeatPicker.tsx/ClusterStemsBrowser.tsx/
-          LibraryBrowser.tsx already use for "still working"), at a small
-          size, for a minimal, subtle, brand-consistent indicator instead
-          of a custom animation. */}
+          icon, a scrolling multi-waveform reel) read as too busy. The
+          resolving placeholder now uses the shared LoadingLoader component
+          (the same four-bar bounce BeatPicker.tsx/ClusterStemsBrowser.tsx/
+          LibraryBrowser.tsx already use for "still working"). The per-slot
+          reroll/random buttons are only 22x22, too small to fit
+          LoadingLoader legibly (direct follow-up report), so those instead
+          get discover-icon-jump: a small, quick, looping vertical bounce
+          on the button itself, keeping the real ShuffleIcon/DiceIcon glyph
+          always visible rather than swapping it out. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
+        }
+        @keyframes discover-icon-jump {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-2px); }
+        }
+        .discover-icon-jump {
+          animation: discover-icon-jump 350ms ease-in-out infinite;
         }
       `}</style>
       {showConsentPrompt && (
@@ -1341,6 +1367,23 @@ export function DiscoverPanel({
           />
           only my stems
         </label>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={preferFavourites}
+            title="favourited stems (star icon on a resolved slot) are weighted more likely to come up on roll/reroll -- never the only ones that can, just more often"
+            onChange={(e) => setPreferFavourites(e.target.checked)}
+          />
+          prefer favourites
+        </label>
         {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
             random-reroll one, reroll all) -- direct request, 2026-09-15,
             inspired by Upcycle's own toolbar undo/redo arrows. Button-only
@@ -1458,6 +1501,7 @@ export function DiscoverPanel({
             rerolling={rerollingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
             soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
+            favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
             maxBarLength={maxBarLength}
             playheadPct={playheadPct}
             onToggleLock={() => toggleLock(slot.id)}
@@ -1466,6 +1510,9 @@ export function DiscoverPanel({
             onRerollRandom={() => void rerollRandomSlot(slot.id)}
             onTogglePreview={() => toggleSlotPreview(slot.id)}
             onToggleSolo={() => toggleSlotSolo(slot.id)}
+            onToggleFavourite={() => {
+              if (slot.candidate) toggleStemFavourite(slot.candidate.stemCID)
+            }}
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
           />
@@ -1643,6 +1690,29 @@ function RedoIcon(): React.JSX.Element {
   )
 }
 
+// Hand-drawn five-point star, styled after Phosphor's own Star icon -- same
+// "no icon package" convention as every other glyph in this file. Direct
+// request, 2026-09-16: star a stem to favourite it. Filled when favourited
+// (currentColor fill), outline-only otherwise -- same filled-means-active
+// convention every other on/off glyph in this app already uses (e.g.
+// CollapsedRifffRow.tsx's own mute dot doc comment).
+function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill={favourited ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M8 1.5 L9.53 5.9 L14.18 5.99 L10.47 8.8 L11.82 13.26 L8 10.6 L4.18 13.26 L5.53 8.8 L1.82 5.99 L6.47 5.9 Z" />
+    </svg>
+  )
+}
+
 // This row's own waveform button's real pixel height -- the vertical-drag
 // gain gesture below divides its own deltaY by this, same
 // "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
@@ -1654,6 +1724,7 @@ function DiscoverSlotRow({
   rerolling,
   previewing,
   soloed,
+  favourited,
   maxBarLength,
   playheadPct,
   onToggleLock,
@@ -1662,6 +1733,7 @@ function DiscoverSlotRow({
   onRerollRandom,
   onTogglePreview,
   onToggleSolo,
+  onToggleFavourite,
   onResolvedChange,
   onGainChange
 }: {
@@ -1683,6 +1755,12 @@ function DiscoverSlotRow({
    * persisted "which slot is soloed" flag). Direct request, 2026-09-15
    * (Upcycle-inspired). */
   soloed: boolean
+  /** True when this slot's own resolved candidate's stemCID is in
+   * DiscoverPanel's own `stemFavourites` set -- direct request,
+   * 2026-09-16, star a stem so "prefer favourites" (the panel's own
+   * toolbar checkbox) can bias future rolls toward it. Persisted (see
+   * StoreContext.tsx's useStemFavourites), not per-session. */
+  favourited: boolean
   /** The longest currently-resolved slot's own barLength, library-wide
    * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
    * waveform tiles/scales its own resolvedStem.barLength against this SAME
@@ -1731,6 +1809,11 @@ function DiscoverSlotRow({
    * Only shown once there's a real stem to solo (matching the mute
    * button's own guard, just below). */
   onToggleSolo: () => void
+  /** Toggles this slot's own resolved candidate's favourite status
+   * (DiscoverPanel's own toggleStemFavourite -> the shared, persisted
+   * stemFavourites set). Only shown once there's a real stem to favourite,
+   * same guard as mute/solo. */
+  onToggleFavourite: () => void
   /** Reports this row's own effective resolved stem (or null) up to
    * DiscoverPanel every time it changes -- resolved on arrival, invalidated
    * on reroll, cleared on unmount/removal -- so the parent's
@@ -2188,6 +2271,31 @@ function DiscoverSlotRow({
           >
             s
           </button>
+          {/* Direct request, 2026-09-16: star a stem to favourite it, then
+              optionally bias future rolls toward favourites (the panel's
+              own "prefer favourites" toolbar checkbox). Reuses
+              `--ra-recording-live` for the filled/active state -- the same
+              token RiffCircle.tsx already uses for its own "favourited"
+              semantic, just applied to a literal star glyph here instead
+              of a circle fill. */}
+          <button
+            onClick={onToggleFavourite}
+            title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              background: 'var(--ra-bg-row-active)',
+              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+              color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            <StarIcon favourited={favourited} />
+          </button>
         </>
       )}
       <button
@@ -2196,9 +2304,11 @@ function DiscoverSlotRow({
         // "roll" for a slot's first pick, "reroll" once it already has a
         // candidate -- an empty slot has never been rolled, so "rerolling"
         // was never the correct verb for it. Icon-only (direct request,
-        // 2026-09-15) -- the spinning ShuffleIcon itself is the "still
-        // working" indicator, the state that used to be spelled out in
-        // text now lives in the title tooltip instead.
+        // 2026-09-15) -- the jumping ShuffleIcon itself is the "still
+        // working" indicator (see discover-icon-jump's own doc comment
+        // above -- too small a button for LoadingLoader to read legibly),
+        // the state that used to be spelled out in text now lives in the
+        // title tooltip instead.
         title={
           rerolling
             ? slot.candidate
@@ -2208,6 +2318,7 @@ function DiscoverSlotRow({
               ? 'reroll'
               : 'roll'
         }
+        className={rerolling ? 'discover-icon-jump' : undefined}
         style={{
           marginLeft: resolvedStem ? 0 : 'auto',
           display: 'flex',
@@ -2222,12 +2333,13 @@ function DiscoverSlotRow({
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        {rerolling ? <LoadingLoader size={11} /> : <ShuffleIcon />}
+        <ShuffleIcon />
       </button>
       <button
         onClick={onRerollRandom}
         disabled={rerolling}
         title="random -- skip role matching, pick any random stem from your own library"
+        className={rerolling ? 'discover-icon-jump' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -2241,7 +2353,7 @@ function DiscoverSlotRow({
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        {rerolling ? <LoadingLoader size={11} /> : <DiceIcon />}
+        <DiceIcon />
       </button>
       <button
         onClick={onRemove}

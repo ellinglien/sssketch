@@ -20,19 +20,33 @@ export interface RankedCandidate {
 // or final.
 const BPM_FALLOFF = 40
 
-/** Scores every candidate by BPM closeness to the target -- see this plan's
- * own header for why key/root-scale matching isn't included (no existing
- * normalized "project's own target key" value to compare against). Returns
- * candidates in descending score order. Never throws; an empty input
- * returns an empty ranking. */
+// Added to a favourited candidate's own BPM-closeness score (max 1) before
+// weighting -- direct request, 2026-09-16: "prefer favourite stems when
+// randomizing." A SOFT boost, not a hard filter -- deliberately chosen
+// over "only show favourites" after the exact lottery-odds bug this
+// session already hit once for "only my stems" (near-impossible odds once
+// the eligible pool shrinks to a handful of stems for a given role). 1.5
+// is bigger than the max possible BPM score (1), so a favourite reliably
+// outweighs a non-favourite regardless of tempo closeness, without ever
+// making a non-favourite's weight hit exactly zero (pickReroll's own
+// score-proportional draw still gives it real, if smaller, odds).
+const FAVOURITE_BOOST = 1.5
+
+/** Scores every candidate by BPM closeness to the target, optionally
+ * boosted for favourited stems -- see this plan's own header for why key/
+ * root-scale matching isn't included (no existing normalized "project's
+ * own target key" value to compare against). Returns candidates in
+ * descending score order. Never throws; an empty input returns an empty
+ * ranking. */
 export function rankCandidates(
   candidates: DiscoverCandidate[],
-  { targetBpm }: { targetBpm: number }
+  { targetBpm, favouriteStemCIDs }: { targetBpm: number; favouriteStemCIDs?: Set<string> }
 ): RankedCandidate[] {
   return candidates
     .map((candidate) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
-      const score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
+      let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
+      if (favouriteStemCIDs?.has(candidate.stemCID)) score += FAVOURITE_BOOST
       return { candidate, score }
     })
     .sort((a, b) => b.score - a.score)
