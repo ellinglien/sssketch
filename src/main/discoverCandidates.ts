@@ -111,6 +111,20 @@ const riffIndexCache = new WeakMap<
   { index: Map<string, RiffIndexEntry>; computedAt: number }
 >()
 
+// In-flight de-duplication -- direct request, 2026-09-16 ("can we take a
+// good look at the things we just added... and see if we can improve the
+// speed"): findRiffForStemPath (discoverAdjacency.ts) calls
+// getRiffIndexForDb once per seedStem-only Discover slot, and a
+// Shelf-sourced seed can easily have 8 of those mounting at once. Without
+// this, 8 concurrent calls landing before the FIRST one's scan finishes
+// (and thus before riffIndexCache has anything to serve) would each
+// independently kick off the SAME expensive full table scan -- up to 8x
+// the real work, right at the exact moment (just after seeding) the app
+// most needs to stay responsive. Cleared once the scan settles (success
+// or failure) so a later call, after the TTL has expired, starts a fresh
+// scan rather than reusing a long-finished promise forever.
+const riffIndexInFlight = new WeakMap<Database.Database, Promise<Map<string, RiffIndexEntry>>>()
+
 /** Every StemCID in `db`'s own Riffs table, mapped to its owning riff's
  * {RiffCID, OwnerJamCID, BPMrnd} -- built via ONE unfiltered `SELECT *`
  * (no per-row WHERE-clause evaluation at all, the cheapest possible shape
@@ -119,19 +133,35 @@ const riffIndexCache = new WeakMap<
  * (riffLibraryStore.ts's own getRiffLibraryDb, opened `readonly: true` by
  * deliberate design) -- no index can be added there, so this in-memory
  * cache is the only lever available to avoid re-paying a real, large
- * table scan's cost on every single roll. A stem that appears in more
- * than one riff (shouldn't normally happen, but a hand-edited or
- * corrupted archive could) keeps whichever riff this scan saw FIRST --
- * an arbitrary but stable, good-enough tiebreak for what's fundamentally
- * an edge case. Yields periodically while building, same "real
- * synchronous CPU work, don't block the main process" discipline as
- * every other bulk loop in this file. */
+ * table scan's cost on every single roll. Concurrent callers for the same
+ * `db` share one in-flight scan (riffIndexInFlight, above) rather than
+ * each starting their own. */
 export async function getRiffIndexForDb(
   db: Database.Database
 ): Promise<Map<string, RiffIndexEntry>> {
   const cached = riffIndexCache.get(db)
   if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.index
 
+  const inFlight = riffIndexInFlight.get(db)
+  if (inFlight) return inFlight
+
+  const promise = buildRiffIndex(db).finally(() => {
+    riffIndexInFlight.delete(db)
+  })
+  riffIndexInFlight.set(db, promise)
+  return promise
+}
+
+/** The actual scan, split out from getRiffIndexForDb itself so that
+ * function's own cache/in-flight checks stay simple early-returns rather
+ * than wrapping this whole body in an extra layer of indirection. A stem
+ * that appears in more than one riff (shouldn't normally happen, but a
+ * hand-edited or corrupted archive could) keeps whichever riff this scan
+ * saw FIRST -- an arbitrary but stable, good-enough tiebreak for what's
+ * fundamentally an edge case. Yields periodically while building, same
+ * "real synchronous CPU work, don't block the main process" discipline as
+ * every other bulk loop in this file. */
+async function buildRiffIndex(db: Database.Database): Promise<Map<string, RiffIndexEntry>> {
   const index = new Map<string, RiffIndexEntry>()
   let rows: RiffCandidateRow[]
   try {

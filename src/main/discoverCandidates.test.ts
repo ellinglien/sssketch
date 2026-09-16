@@ -4,7 +4,8 @@ import Database from 'better-sqlite3'
 import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
-  prewarmDiscoverCandidateCaches
+  prewarmDiscoverCandidateCaches,
+  getRiffIndexForDb
 } from './discoverCandidates'
 
 function freshDb(): Database.Database {
@@ -434,6 +435,31 @@ describe('getDiscoverCandidates', () => {
     // The one query that DOES run has no WHERE clause at all -- a plain
     // sequential scan, the cheapest possible shape for a full read.
     expect(riffsQueries[0][0]).not.toMatch(/WHERE/)
+  })
+
+  // Direct request, 2026-09-16 ("can we take a good look at the things we
+  // just added... and see if we can improve the speed"): the TTL cache
+  // above only helps once the FIRST scan has already finished -- multiple
+  // CONCURRENT callers (findRiffForStemPath, discoverAdjacency.ts, calls
+  // getRiffIndexForDb once per seedStem-only Discover slot, and a
+  // Shelf-sourced seed can easily have 8 of those mounting at once) landing
+  // BEFORE that first scan settles would otherwise each independently
+  // trigger their own full table scan. Proves getRiffIndexForDb itself
+  // (exported for exactly this reuse) shares one in-flight scan across
+  // concurrent callers.
+  it('getRiffIndexForDb shares one in-flight scan across concurrent callers for the same db', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+
+    const [indexA, indexB] = await Promise.all([getRiffIndexForDb(own), getRiffIndexForDb(own)])
+
+    expect(indexA).toBe(indexB)
+    expect(indexA.get('s1')?.riffCID).toBe('r1')
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    expect(riffsQueries.length).toBe(1)
   })
 
   // Widening (2026-09-15, direct request): a role with a too-small
