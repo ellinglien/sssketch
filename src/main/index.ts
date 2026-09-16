@@ -48,7 +48,7 @@ import {
   trainCentroidsFromRoleEntries
 } from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
-import type { RiffFilters } from '@shared/riffLibraryTypes'
+import { instrumentMaskToSoundType, type RiffFilters } from '@shared/riffLibraryTypes'
 import {
   riffLibraryAvailable,
   riffLibraryRootPath,
@@ -68,12 +68,14 @@ import {
   type DiscoverCandidate
 } from './discoverCandidates'
 import { getAdjacentDiscoverCandidates } from './discoverAdjacency'
+import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
+import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import type { LibraryScanTarget } from './discoverLibraryStems'
-import type { ArrangeRole } from '@shared/stemRole'
+import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
@@ -815,6 +817,40 @@ app.whenReady().then(async () => {
     'get-adjacent-discover-candidates',
     (_event, centerRiffCID: string, role: ArrangeRole) =>
       getAdjacentDiscoverCandidates(centerRiffCID, role)
+  )
+
+  // Direct request, 2026-09-16: "the audio analysis should be able to
+  // detect and differentiate drums from leads etc etc." Batched (one round
+  // trip for a whole riff's stems, not one per stem) -- checks the real
+  // trained classifier (StemCategories human confirmations, else
+  // StemAutoCategory's own audio-analysis result) before falling back to
+  // the SAME blunt instrument-mask/preset-name chain the renderer used to
+  // compute entirely on its own (LibraryBrowser.tsx's own
+  // seedDiscoverFromBrowseRiff) -- `?? 'fx'` as the very last resort so
+  // this always returns a real ArrangeRole for every entry, matching that
+  // original chain's own contract (a seeded slot must always get SOME
+  // role, never null).
+  ipcMain.handle(
+    'resolve-stem-arrange-roles',
+    (
+      _event,
+      entries: { stemCID: string; instrumentMask: number; presetName: string }[]
+    ): Record<string, ArrangeRole | null> => {
+      const entryByStemCID = new Map(entries.map((e) => [e.stemCID, e]))
+      return resolveStemArrangeRoles(
+        openOwnRiffLibraryDb(),
+        entries.map((e) => e.stemCID),
+        (stemCID) => {
+          const entry = entryByStemCID.get(stemCID)
+          if (!entry) return null
+          const soundType =
+            instrumentMaskToSoundType(entry.instrumentMask) ??
+            guessSoundTypeFromPresetName(entry.presetName) ??
+            'fx'
+          return SOUND_TYPE_TO_ARRANGE_ROLE[soundType]
+        }
+      )
+    }
   )
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())

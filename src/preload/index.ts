@@ -202,6 +202,10 @@ const api = {
     role: ArrangeRole
   ): Promise<{ newer: DiscoverCandidate[]; older: DiscoverCandidate[] }> =>
     ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, role),
+  resolveStemArrangeRoles: (
+    entries: { stemCID: string; instrumentMask: number; presetName: string }[]
+  ): Promise<Record<string, ArrangeRole | null>> =>
+    ipcRenderer.invoke('resolve-stem-arrange-roles', entries),
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),
