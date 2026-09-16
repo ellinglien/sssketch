@@ -1003,7 +1003,9 @@ export function DiscoverPanel({
       // discarded result) and why the catch block below deliberately
       // leaves it untouched on a real error.
       setSlots((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, candidate: picked, hasRerolled: true } : s))
+        prev.map((s) =>
+          s.id === id ? { ...s, candidate: picked, hasRerolled: true, seedStem: undefined } : s
+        )
       )
     } catch (err) {
       // Degrade gracefully, log, don't throw -- same convention as this
@@ -1056,7 +1058,9 @@ export function DiscoverPanel({
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       setSlots((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, candidate, hasRerolled: true } : s))
+        prev.map((s) =>
+          s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+        )
       )
     } catch (err) {
       console.error(`DiscoverPanel: rollRandomForSlot(${role}) failed:`, err)
@@ -1892,7 +1896,27 @@ function DiscoverSlotRow({
     }
   }, [slot.candidate])
 
-  const resolvedForCurrent = resolved?.candidate === slot.candidate ? resolved : null
+  // A seeded slot (see DiscoverSlot's own seedStem doc comment) is already
+  // resolved -- there is nothing to fetch, so this is derived at render time
+  // rather than pushed into `resolved` via setState in the effect above
+  // (same react-hooks/set-state-in-effect reasoning as the comment above the
+  // effect: avoid a synchronous setState in an effect body when the value
+  // can just be computed directly instead). `candidate: slot.candidate` here
+  // is always `null` for a seeded slot (seedStem and candidate are mutually
+  // exclusive -- see rollForSlot/rollRandomForSlot's own seedStem-clearing
+  // below), which is also why the effect above never needs its own
+  // seedStem branch: `!slot.candidate` already short-circuits it whenever
+  // this row is seeded.
+  const seedResolved = slot.seedStem
+    ? {
+        candidate: slot.candidate,
+        status: 'ready' as const,
+        stem: { slot: 1, ...slot.seedStem }
+      }
+    : null
+
+  const resolvedForCurrent =
+    seedResolved ?? (resolved?.candidate === slot.candidate ? resolved : null)
   const resolvedStem = resolvedForCurrent?.status === 'ready' ? resolvedForCurrent.stem : null
   const resolveFailed = resolvedForCurrent?.status === 'failed'
   // A candidate exists but hasn't SETTLED yet either way (no ready stem,
@@ -2211,9 +2235,11 @@ function DiscoverSlotRow({
             ? "couldn't load -- try again"
             : slot.candidate
               ? slot.candidate.presetName
-              : slot.hasRerolled
-                ? 'no match for this role yet'
-                : 'no candidate yet'}
+              : resolvedStem
+                ? resolvedStem.name
+                : slot.hasRerolled
+                  ? 'no match for this role yet'
+                  : 'no candidate yet'}
       </span>
       {resolvedStem && (
         <>
