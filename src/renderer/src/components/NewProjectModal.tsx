@@ -31,28 +31,26 @@ export function NewProjectModal({
 
   return (
     <div
-      onClick={onCancel}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 30
+        zIndex: 'var(--ra-z-modal)'
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(360px, 90vw)',
           background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
+          border: '1px solid var(--ra-border)',
           borderRadius: 0,
           padding: 16
         }}
       >
-        <span className="ra-eyebrow">name this project</span>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--ra-text)' }}>name this project</p>
         <input
           ref={inputRef}
           type="text"
