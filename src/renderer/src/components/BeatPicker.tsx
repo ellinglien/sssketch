@@ -919,11 +919,11 @@ export function BeatPicker({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        // Higher than LibraryBrowser's own overlay (zIndex 1000): after a
+        // Above LibraryBrowser's own overlay (--ra-z-fullscreen): after a
         // LORE import, BeatPicker opens while that panel is still open
         // behind it (the panel deliberately stays open across imports so
         // browsing isn't interrupted) — needs to render on top to actually
@@ -931,8 +931,11 @@ export function BeatPicker({
         // this fixed: LibraryBrowser's own zIndex grew from 10 to 1000 at
         // some point (see its own root style) without this getting bumped
         // to match, so the picker silently opened UNDER the library panel
-        // -- clicking import looked like nothing happened at all.
-        zIndex: 1010
+        // -- clicking import looked like nothing happened at all. Uses the
+        // same tier as a full-screen popover (--ra-z-fullscreen-popover)
+        // rather than a new one-off value, since the real requirement is
+        // just "above the fullscreen tier."
+        zIndex: 'var(--ra-z-fullscreen-popover)'
       }}
     >
       <div
@@ -1307,7 +1310,7 @@ export function BeatPicker({
                 border: '2px solid var(--ra-border-strong)',
                 background: 'var(--ra-bg-row-active)',
                 color: 'var(--ra-text-2)',
-                opacity: applying ? 0.5 : 1,
+                opacity: applying ? 0.3 : 1,
                 cursor: applying ? 'not-allowed' : 'pointer'
               }}
             >
@@ -1333,7 +1336,7 @@ export function BeatPicker({
                   border: '2px solid var(--ra-border-strong)',
                   background: 'var(--ra-bg-row-active)',
                   color: 'var(--ra-text-2)',
-                  opacity: applying ? 0.5 : 1,
+                  opacity: applying ? 0.3 : 1,
                   cursor: applying ? 'not-allowed' : 'pointer'
                 }}
               >
@@ -1352,7 +1355,7 @@ export function BeatPicker({
                   border: '2px solid var(--ra-play-on)',
                   background: 'var(--ra-play-on)',
                   color: 'var(--ra-play-on-ink)',
-                  opacity: applying ? 0.5 : 1,
+                  opacity: applying ? 0.3 : 1,
                   cursor: applying ? 'not-allowed' : 'pointer'
                 }}
               >
