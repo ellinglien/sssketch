@@ -1251,29 +1251,33 @@ export function DiscoverPanel({
   async function plunkInArranger(): Promise<void> {
     setPlacing(true)
     try {
-      const placeable = slots.filter(
-        (s): s is DiscoverSlot & { candidate: DiscoverCandidate } => s.candidate !== null
-      )
+      // Direct report, 2026-09-16: "when user plunks to the timeline, the
+      // volume levels should be copied over pls" -- root cause traced to
+      // something bigger than just gain: this filter used to require a
+      // real `candidate`, silently excluding every seedStem-only slot
+      // (Shelf-sourced, or anything seeded and never since rerolled) from
+      // "plunk in arranger" entirely -- not placed at all, so naturally
+      // its own gain (along with everything else about it) never made it
+      // onto the timeline either. A seedStem is already a real, fully
+      // resolved `ResolvedCandidateStem` -- no resolveCandidateStem await
+      // needed for it, unlike a candidate-based slot.
+      const placeable = slots.filter((s) => s.candidate !== null || s.seedStem !== undefined)
       if (placeable.length === 0) return
 
       const resolved = await Promise.all(
         placeable.map(
           async ({
             candidate,
+            seedStem,
             gain
-          }): Promise<{
-            stem: ResolvedCandidateStem
-            candidate: DiscoverCandidate
-            gain: number
-          } | null> => {
-            const stem = await resolveCandidateStem(candidate)
-            return stem ? { stem, candidate, gain } : null
+          }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
+            const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
+            return stem ? { stem, gain } : null
           }
         )
       )
       const placed = resolved.filter(
-        (r): r is { stem: ResolvedCandidateStem; candidate: DiscoverCandidate; gain: number } =>
-          r !== null
+        (r): r is { stem: ResolvedCandidateStem; gain: number } => r !== null
       )
       if (placed.length === 0) return
 
