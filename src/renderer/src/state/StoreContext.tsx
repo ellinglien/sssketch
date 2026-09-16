@@ -12,6 +12,7 @@ import {
 } from 'react'
 import { initialState, type AppState } from './store'
 import { createEngineOwnershipTracker, type EngineOwner } from '@shared/engineOwnership'
+import { createSequentialRunner } from '@shared/sequentialAsync'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
 import { createHistoryState, historyReducer, type HistoryAction } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
@@ -87,18 +88,18 @@ const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStat
   () => {}
 )
 // See useFlushEngineSyncNow's own doc comment below for what this is for.
-const FlushEngineSyncNowCtx = createContext<(overrides?: Partial<AppState>) => Promise<void>>(() =>
-  Promise.resolve()
-)
+const FlushEngineSyncNowCtx = createContext<
+  (overrides?: Partial<AppState>, shouldAbort?: () => boolean) => Promise<void>
+>(() => Promise.resolve())
 // See useEngineOwnership's own doc comment below for what this is for.
 const EngineOwnershipCtx = createContext<{
   claim: (owner: EngineOwner) => number
   stillOwn: (token: number) => boolean
-  release: () => void
+  release: () => number
 }>({
   claim: () => 0,
   stillOwn: () => true,
-  release: () => {}
+  release: () => 0
 })
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
@@ -426,15 +427,50 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // re-rendered and this component's own `stateRef.current = state`
   // effect has run (not guaranteed by the time a caller in the same
   // synchronous event handler wants to flush).
+  // Serializes overlapping calls to flushEngineSyncNow via the general-
+  // purpose src/shared/sequentialAsync.ts primitive -- a second call's own
+  // work only STARTS once the first call's own send has fully completed,
+  // so two callers' engineLoadProject sends can never physically race each
+  // other on the wire. Real bug, found by final review: before this, two
+  // different callers (DiscoverPanel.tsx's restorePreviewIfLoaded and
+  // useStemPreviewPlayback.ts's startPreview) could each independently
+  // build+send their own project through this SAME function at once, and
+  // whichever's own engineLoadProject IPC round trip happened to finish
+  // LAST silently won -- exactly the race this whole ownership feature
+  // was built to prevent, just one layer below where the ownership
+  // tracker's own claim/stillOwn checks could see it (those only gate
+  // whether a CALLER trusts its own result, not whether the send itself
+  // goes out). Originally inlined here as a raw promise chain; extracted
+  // into its own tested primitive per review, since this exact ordering
+  // guarantee is subtle enough that it deserves real unit coverage, not
+  // just hand-tracing.
+  //
+  // Deliberately a different concurrency idiom than the automatic sync
+  // effect's own pendingEngineSyncRef/dirtyEngineSyncRef pair just below --
+  // that effect COALESCES (nobody is awaiting a specific outcome, so
+  // several changes in a row collapse into one eventual send of whatever
+  // state is current by the time it runs), while this queue SERIALIZES
+  // (each caller's own distinct `overrides` -- e.g. a specific solo mute/
+  // vol snapshot -- must be individually applied or individually skipped,
+  // never silently merged with a different caller's).
+  const flushQueueRef = useRef(createSequentialRunner())
   const flushEngineSyncNow = useCallback(
-    async (overrides?: Partial<AppState>): Promise<void> => {
-      const project = await buildEngineProject(
-        { ...stateRef.current, ...overrides },
-        resolveStretchedForPlayback,
-        pluginCatalog
-      )
-      await window.rifffApi.engineLoadProject(project)
-    },
+    (overrides?: Partial<AppState>, shouldAbort?: () => boolean): Promise<void> =>
+      flushQueueRef.current.run(async () => {
+        if (shouldAbort?.()) return
+        const project = await buildEngineProject(
+          { ...stateRef.current, ...overrides },
+          resolveStretchedForPlayback,
+          pluginCatalog
+        )
+        // Re-checked after the build too -- ownership (or whatever
+        // condition shouldAbort tests) could have changed WHILE the build
+        // was in flight, same double-check pattern already used
+        // elsewhere in this codebase (scheduleEngineSync's own two
+        // ownership checks, syncPreviewToEngine's own two checks).
+        if (shouldAbort?.()) return
+        await window.rifffApi.engineLoadProject(project)
+      }),
     [pluginCatalog]
   )
 
@@ -968,9 +1004,17 @@ export function useRestoreState(): (state: AppState, pluginStates: PluginStatesM
 /** See flushEngineSyncNow's own doc comment (in StoreProvider, above) for
  * what this is for and why it exists -- await this before issuing a
  * play/seek command right after a mute/solo-changing dispatch, so the
- * engine is guaranteed to have the corrected state first. */
+ * engine is guaranteed to have the corrected state first. `shouldAbort`
+ * is an optional predicate, checked twice (once before building the
+ * project, once again right before the actual send) -- if it returns
+ * true, the send is skipped entirely, for a caller whose own intent (e.g.
+ * still holding engine ownership) may have been invalidated while this
+ * call was queued behind an earlier one. */
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
-export function useFlushEngineSyncNow(): (overrides?: Partial<AppState>) => Promise<void> {
+export function useFlushEngineSyncNow(): (
+  overrides?: Partial<AppState>,
+  shouldAbort?: () => boolean
+) => Promise<void> {
   return useContext(FlushEngineSyncNowCtx)
 }
 
@@ -987,7 +1031,7 @@ export function useFlushEngineSyncNow(): (overrides?: Partial<AppState>) => Prom
 export function useEngineOwnership(): {
   claim: (owner: EngineOwner) => number
   stillOwn: (token: number) => boolean
-  release: () => void
+  release: () => number
 } {
   return useContext(EngineOwnershipCtx)
 }

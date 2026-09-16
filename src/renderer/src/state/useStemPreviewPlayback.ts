@@ -206,7 +206,10 @@ export function useStemPreviewPlayback(): {
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
     try {
-      await flushEngineSyncNow({ mute: soloedMute, vol: soloedVol })
+      await flushEngineSyncNow(
+        { mute: soloedMute, vol: soloedVol },
+        () => !stillOwnEngine(engineToken)
+      )
     } catch (err) {
       // A failed send must not leave this claim dangling forever -- unlike
       // cancelledRef/callGenerationRef (purely local, self-healing on the

@@ -402,12 +402,12 @@ export function DiscoverPanel({
     // the automatic real-project sync forever. release() is a harmless
     // no-op when nothing is currently held, so calling it unconditionally
     // here covers every caller of this function uniformly.
-    releaseEngine()
+    const releaseToken = releaseEngine()
     if (!previewLoadedRef.current) return
     previewLoadedRef.current = false
     currentPreviewMappingRef.current = null
-    void flushEngineSyncNow()
-  }, [flushEngineSyncNow, releaseEngine])
+    void flushEngineSyncNow(undefined, () => !stillOwnEngine(releaseToken))
+  }, [flushEngineSyncNow, releaseEngine, stillOwnEngine])
 
   useEffect(() => {
     // Real bug, found live 2026-09-15 ("it loads them into the discover

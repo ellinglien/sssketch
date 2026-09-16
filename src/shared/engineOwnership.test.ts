@@ -48,6 +48,15 @@ describe('createEngineOwnershipTracker', () => {
     expect(tracker.stillOwn(token)).toBe(false)
   })
 
+  it('release returns a token that stays valid until something claims again', () => {
+    const tracker = createEngineOwnershipTracker()
+    tracker.claim('discover-preview')
+    const releaseToken = tracker.release()
+    expect(tracker.stillOwn(releaseToken)).toBe(true)
+    tracker.claim('stem-solo-preview')
+    expect(tracker.stillOwn(releaseToken)).toBe(false)
+  })
+
   it('claim after release still invalidates the pre-release token', () => {
     const tracker = createEngineOwnershipTracker()
     const firstToken = tracker.claim('discover-preview')

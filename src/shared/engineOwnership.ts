@@ -20,8 +20,13 @@ export interface EngineOwnershipTracker {
   stillOwn(token: number): boolean
   /** Releases ownership back to nobody (the real project's own automatic
    * sync is free to run again). Also bumps the generation, so any of the
-   * outgoing owner's own still-in-flight sends are invalidated too. */
-  release(): void
+   * outgoing owner's own still-in-flight sends are invalidated too.
+   * Returns the new generation as a token -- pass it to `stillOwn` to
+   * check whether anyone has claimed ownership again SINCE this release
+   * (e.g. DiscoverPanel.tsx's restorePreviewIfLoaded uses this to abort
+   * its own real-project restore send if something else claims ownership
+   * before that send actually reaches the engine). */
+  release(): number
   /** The current owner, or null when nobody has claimed -- read by
    * StoreContext.tsx's own automatic sync effect to decide whether to
    * skip a send. */
@@ -51,9 +56,10 @@ export function createEngineOwnershipTracker(): EngineOwnershipTracker {
     stillOwn(token: number): boolean {
       return generation === token
     },
-    release(): void {
+    release(): number {
       owner = null
       generation += 1
+      return generation
     },
     get current(): EngineOwner | null {
       return owner
