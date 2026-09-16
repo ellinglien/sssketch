@@ -51,12 +51,11 @@ export function EditableText({
       }}
       style={{
         background: focused ? 'var(--ra-bg-row-active)' : 'transparent',
-        border: `1px solid ${focused ? 'var(--ra-border-strong)' : 'transparent'}`,
+        border: '1px solid transparent',
         color: 'inherit',
         font: 'inherit',
         padding: '1px 3px',
         margin: '-1px -3px',
-        outline: 'none',
         minWidth: 0,
         ...style
       }}
