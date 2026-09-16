@@ -28,7 +28,7 @@ import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
 import { scheduleLiveParamSync } from './liveParamSync'
 
-interface ResolvedCandidateStem {
+export interface ResolvedCandidateStem {
   author: string
   name: string
   type: SoundType
@@ -110,6 +110,20 @@ export interface DiscoverSlot {
   role: ArrangeRole
   locked: boolean
   candidate: DiscoverCandidate | null
+  /** An already-resolved stem this slot should start showing immediately,
+   * bypassing `candidate`-based resolution entirely -- set only by seeding
+   * Discover from an existing riff's stems that are ALREADY local/resolved
+   * (a Shelf-sourced riff's own real Stem data has no riffCID/stemCID to
+   * build a DiscoverCandidate from at all; see
+   * docs/superpowers/specs/2026-09-16-discover-seed-stems-design.md).
+   * Browse-sourced seeding does NOT use this field -- it sets `candidate`
+   * instead, going through the normal (lazy, per-row) resolution path, so
+   * a Browse-seeded slot shows the same "downloading + analyzing…" state a
+   * fresh roll already does. Always `undefined` for a normally-rolled
+   * slot. Cleared back to `undefined` the moment this slot is rerolled (see
+   * `rollForSlot`/`rollRandomForSlot` below) -- a reroll always fully
+   * supersedes whatever this slot started as. */
+  seedStem?: ResolvedCandidateStem
   /** True once this slot's own rerollSlot has actually resolved at least
    * once (regardless of outcome -- a genuinely empty result sets this same
    * as a found one does), so DiscoverSlotRow below can distinguish "nobody
@@ -140,10 +154,22 @@ export interface DiscoverSlot {
 }
 
 let nextSlotId = 0
-function freshSlotId(): string {
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
+export function freshSlotId(): string {
   nextSlotId += 1
   return `slot-${nextSlotId}`
 }
+
+// Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
+// reroll one, random-reroll one, reroll all, and seeding -- see
+// docs/superpowers/plans/2026-09-16-discover-seed-stems.md) -- deliberately
+// excludes lock/mute/solo toggles and gain drags, see undoStack's own doc
+// comment on this component's props below. Capped so a very long Discover
+// session doesn't grow an unbounded history in memory. Exported so
+// LibraryBrowser.tsx's own seed-triggering handlers (which own the lifted
+// undoStack/setUndoStack state directly) can push a snapshot using the
+// exact same cap, rather than duplicating this number in a second file.
+export const DISCOVER_UNDO_LIMIT = 20
 
 export function DiscoverPanel({
   currentSketch,
@@ -806,13 +832,6 @@ export function DiscoverPanel({
   // placed (including the first thing plunked in from an empty project),
   // later addSlot calls go back through the normal ranked pipeline, since
   // by then there IS a real arrangement worth matching against.
-  // Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
-  // reroll one, random-reroll one, reroll all) -- deliberately excludes
-  // lock/mute/solo toggles and gain drags, see undoStack's own doc comment
-  // on this component's props above. Capped so a very long Discover
-  // session doesn't grow an unbounded history in memory.
-  const DISCOVER_UNDO_LIMIT = 20
-
   // Call at the START of any undoable action, BEFORE mutating `slots` --
   // captures the pre-action snapshot to restore to, and clears the redo
   // stack (standard undo/redo semantics: a fresh action invalidates
