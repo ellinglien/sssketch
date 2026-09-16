@@ -276,6 +276,9 @@ export function DiscoverPanel({
   const pos = usePos()
   const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
+  // Read only for the seed-tempo-follow below (syncPreviewToEngine) --
+  // whether the real arranger timeline has anything placed on it yet.
+  const channelOrder = useAppSelector((s) => s.channelOrder)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
   const pluginCatalog = usePluginCatalog()
@@ -583,6 +586,32 @@ export function DiscoverPanel({
       // a preview stops).
       if (!previewLoadedRef.current) {
         previewLoadedRef.current = true
+        // Direct request, 2026-09-16: "i'd like the tempo to be set to
+        // the original imported rifff in discovery." An earlier attempt
+        // dispatched this at SEED time, in LibraryBrowser.tsx -- but
+        // state.bpm is one of StoreContext.tsx's scheduleEngineSync's own
+        // listed dependencies, and ownership wasn't claimed yet at that
+        // point, so it raced the automatic real-project sync into loading
+        // (and, since state.playing could already be true, audibly
+        // playing) the real project right as Discover's own preview was
+        // also loading -- the real cause of a live "multiple versions of
+        // the rifff playing" report (root-caused and reverted same day,
+        // see LibraryBrowser.tsx's own seedDiscoverFromBrowseRiff). Doing
+        // it HERE instead is race-free: this line only runs once
+        // `claimEngine`/`stillOwnEngine` above have already confirmed
+        // Discover holds engine ownership, so scheduleEngineSync's own
+        // ownership gate correctly skips the real-project sync when this
+        // bpm change lands. Only when the real arranger has nothing
+        // placed on it yet (channelOrder), same as before -- never
+        // retunes an already-populated project. This block already only
+        // ever runs once per seed (DiscoverPanel is freshly mounted for
+        // every seed action, and this is gated on the same
+        // empty-to-non-empty previewLoadedRef transition as the PLAY
+        // dispatch below), so no extra "already applied" tracking is
+        // needed.
+        if (seedBpm !== null && channelOrder.length === 0) {
+          dispatch({ type: 'SET_TEMPO', bpm: seedBpm })
+        }
         if (playing) dispatch({ type: 'PAUSE' })
         void window.rifffApi.engineSetPosition(0)
         dispatch({ type: 'PLAY' })
