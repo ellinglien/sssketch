@@ -1219,22 +1219,16 @@ export function DiscoverPanel({
           resolving placeholder now uses the shared LoadingLoader component
           (the same four-bar bounce BeatPicker.tsx/ClusterStemsBrowser.tsx/
           LibraryBrowser.tsx already use for "still working"). The per-slot
-          reroll/random buttons are only 22x22, too small to fit
-          LoadingLoader legibly (direct follow-up report), so those instead
-          get discover-icon-jump: a small, quick, looping vertical bounce
-          on the button itself, keeping the real ShuffleIcon/DiceIcon glyph
-          always visible rather than swapping it out. */}
+          reroll/random buttons tried LoadingLoader (too small to read
+          legibly at 22x22) then a small icon-jump bounce -- direct
+          follow-up report, 2026-09-16: remove the button animation
+          entirely. The disabled/rolling state now reads purely through the
+          existing dimmed color + default cursor + title tooltip, no
+          motion. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
-        }
-        @keyframes discover-icon-jump {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-2px); }
-        }
-        .discover-icon-jump {
-          animation: discover-icon-jump 350ms ease-in-out infinite;
         }
       `}</style>
       {showConsentPrompt && (
@@ -2304,11 +2298,11 @@ function DiscoverSlotRow({
         // "roll" for a slot's first pick, "reroll" once it already has a
         // candidate -- an empty slot has never been rolled, so "rerolling"
         // was never the correct verb for it. Icon-only (direct request,
-        // 2026-09-15) -- the jumping ShuffleIcon itself is the "still
-        // working" indicator (see discover-icon-jump's own doc comment
-        // above -- too small a button for LoadingLoader to read legibly),
-        // the state that used to be spelled out in text now lives in the
-        // title tooltip instead.
+        // 2026-09-15). No "still working" animation on this button
+        // (direct follow-up report, 2026-09-16, after trying both
+        // LoadingLoader and an icon-jump bounce first) -- the dimmed
+        // color/default cursor plus the title tooltip below are the only
+        // in-flight cues now.
         title={
           rerolling
             ? slot.candidate
@@ -2318,7 +2312,6 @@ function DiscoverSlotRow({
               ? 'reroll'
               : 'roll'
         }
-        className={rerolling ? 'discover-icon-jump' : undefined}
         style={{
           marginLeft: resolvedStem ? 0 : 'auto',
           display: 'flex',
@@ -2339,7 +2332,6 @@ function DiscoverSlotRow({
         onClick={onRerollRandom}
         disabled={rerolling}
         title="random -- skip role matching, pick any random stem from your own library"
-        className={rerolling ? 'discover-icon-jump' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
