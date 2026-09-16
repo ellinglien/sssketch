@@ -1577,6 +1577,46 @@ export function DiscoverPanel({
         >
           <RedoIcon />
         </button>
+        {/* Direct request, 2026-09-16: "we should add a play/stop button
+            for the discover playing, so user can stop it if they wish" --
+            same merged play/stop toggle + glyphs as TransportBar.tsx's own
+            (`■`/`▶`), dispatching the exact same shared PLAY/PAUSE this
+            panel's own syncPreviewToEngine already uses internally. Doesn't
+            touch previewingSlotIds (which slots are toggled into the mix)
+            -- just starts/stops the transport itself, same as muting
+            everything would achieve for audibility but without losing
+            track of what was toggled on. */}
+        <button
+          onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+          disabled={previewingSlotIds.size === 0}
+          title={playing ? 'stop the discover preview' : 'play the discover preview'}
+          aria-label={playing ? 'Stop' : 'Play'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            padding: 0,
+            fontSize: 11,
+            border: '1px solid var(--ra-border-strong)',
+            background:
+              previewingSlotIds.size === 0
+                ? 'var(--ra-bg-row-active)'
+                : playing
+                  ? 'var(--ra-play-on)'
+                  : 'var(--ra-bg-row-active)',
+            color:
+              previewingSlotIds.size === 0
+                ? 'var(--ra-text-4)'
+                : playing
+                  ? 'var(--ra-play-on-ink)'
+                  : 'var(--ra-text)',
+            cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
+          }}
+        >
+          {playing ? '■' : '▶'}
+        </button>
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
