@@ -1313,6 +1313,18 @@ export function LibraryBrowser({
   // so this is only ever wired to fire when exactly one riff is selected.
   function seedDiscoverFromBrowseRiff(): void {
     if (!selectedRiffCID || !selectedJamCID || !resolvedRiff) return
+    // Real root cause of a live report, 2026-09-16: "multiple versions of
+    // the rifff playing... it's as though the preview from the import
+    // modal is still playing" -- Browse's own auto-preview (startPreviewLoop,
+    // plain Web Audio, entirely separate from the native engine Discover
+    // and the real project both use) only ever stops when selectedRiffCID
+    // changes or this whole component unmounts (see the effects just
+    // above). Switching to 'discover' mode does neither -- LibraryBrowser
+    // itself stays mounted across a 'browse' <-> 'discover' switch, only
+    // DiscoverPanel does -- so a playing Browse preview would otherwise
+    // keep looping forever, invisible to and unaffected by anything in
+    // Discover (including muting every slot there).
+    stopPreview()
     // Replaces discoverSlots wholesale -- confirm before destroying real
     // existing content, same window.confirm convention this file already
     // uses elsewhere (e.g. its own jam-sync-removal confirmation above).
