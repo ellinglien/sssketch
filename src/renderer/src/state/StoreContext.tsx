@@ -11,6 +11,7 @@ import {
   type ReactNode
 } from 'react'
 import { initialState, type AppState } from './store'
+import { createEngineOwnershipTracker, type EngineOwner } from '@shared/engineOwnership'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
 import { createHistoryState, historyReducer, type HistoryAction } from './history'
 import { buildEngineProject } from '@shared/buildEngineProject'
@@ -89,6 +90,16 @@ const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStat
 const FlushEngineSyncNowCtx = createContext<(overrides?: Partial<AppState>) => Promise<void>>(() =>
   Promise.resolve()
 )
+// See useEngineOwnership's own doc comment below for what this is for.
+const EngineOwnershipCtx = createContext<{
+  claim: (owner: EngineOwner) => number
+  stillOwn: (token: number) => boolean
+  release: () => void
+}>({
+  claim: () => 0,
+  stillOwn: () => true,
+  release: () => {}
+})
 const PosCtx = createContext<number>(0)
 const PlayingCtx = createContext<boolean>(false)
 // Effective pixels-per-bar (base PPB * the current zoom multiplier) --
@@ -427,6 +438,38 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     [pluginCatalog]
   )
 
+  // Created once -- `createEngineOwnershipTracker()` has no side effects,
+  // so re-evaluating it on every render (before useRef discards all but
+  // the very first result) is harmless; same "call the constructor
+  // directly as the useRef argument" convention LibraryBrowser.tsx's own
+  // riffNodeRefs already uses. See src/shared/engineOwnership.ts's own
+  // doc comment for what this coordinates and why.
+  // `engineOwnershipRef.current` (the tracker instance itself, not a
+  // token) is read directly by the automatic sync effect just below, in
+  // the SAME closure -- no context indirection needed for that internal
+  // read. claim/stillOwn/release are wrapped in stable useCallback
+  // identities below so components elsewhere in the app
+  // (DiscoverPanel.tsx, useStemPreviewPlayback.ts) can safely list them in
+  // their own effect dependency arrays.
+  const engineOwnershipRef = useRef(createEngineOwnershipTracker())
+  const claimEngineOwnership = useCallback(
+    (owner: EngineOwner) => engineOwnershipRef.current.claim(owner),
+    []
+  )
+  const stillOwnEngine = useCallback(
+    (token: number) => engineOwnershipRef.current.stillOwn(token),
+    []
+  )
+  const releaseEngineOwnership = useCallback(() => engineOwnershipRef.current.release(), [])
+  const engineOwnershipValue = useMemo(
+    () => ({
+      claim: claimEngineOwnership,
+      stillOwn: stillOwnEngine,
+      release: releaseEngineOwnership
+    }),
+    [claimEngineOwnership, stillOwnEngine, releaseEngineOwnership]
+  )
+
   const pendingEngineSyncRef = useRef(false)
   // Set whenever a dependency changes while a flush is already pending/
   // in-flight (see scheduleEngineSync below) -- catches the case a plain
@@ -463,11 +506,30 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       requestAnimationFrame(() => {
         void (async () => {
           try {
+            // Someone else (Discover's own preview, or a Tidy Up/Auto
+            // Arrange stem solo) currently owns what's loaded in the
+            // engine -- pushing the real project now would silently stomp
+            // whatever they're previewing. Skip this send, but stay dirty
+            // so the NEXT animation frame retries -- cheap (a couple of
+            // ref reads, no buildEngineProject call) and self-healing even
+            // if a future owner type doesn't explicitly restore on its own
+            // release. See docs/superpowers/specs/2026-09-16-engine-
+            // preview-ownership-design.md.
+            if (engineOwnershipRef.current.current !== null) {
+              dirtyEngineSyncRef.current = true
+              return
+            }
             const project = await buildEngineProject(
               stateRef.current,
               resolveStretchedForPlayback,
               pluginCatalog
             )
+            // Ownership could have been claimed WHILE the build above was
+            // in flight -- re-check right before the actual send.
+            if (engineOwnershipRef.current.current !== null) {
+              dirtyEngineSyncRef.current = true
+              return
+            }
             await window.rifffApi.engineLoadProject(project)
           } finally {
             // Cleared only once the send actually completes (success or
@@ -825,37 +887,39 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       <DispatchCtx.Provider value={dispatch}>
         <RestoreStateCtx.Provider value={restoreState}>
           <FlushEngineSyncNowCtx.Provider value={flushEngineSyncNow}>
-            <PosCtx.Provider value={pos}>
-              <PlayingCtx.Provider value={playing}>
-                <ZoomCtx.Provider value={24 * zoomMultiplier}>
-                  <HistoryCtx.Provider value={historyControls}>
-                    <MasterChainStatusCtx.Provider value={masterChainStatus}>
-                      <MasterChainErrorCtx.Provider value={masterChainError}>
-                        <ChannelChainStatusCtx.Provider value={channelChainStatus}>
-                          <ChannelChainErrorCtx.Provider value={channelChainError}>
-                            <PluginCatalogCtx.Provider value={pluginCatalog}>
-                              <PluginScanStateCtx.Provider
-                                value={{ scanning, progress: scanProgress }}
-                              >
-                                <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
-                                  <RiffFavouritesCtx.Provider value={riffFavourites}>
-                                    <RiffFavouritesActionsCtx.Provider
-                                      value={riffFavouritesActions}
-                                    >
-                                      {children}
-                                    </RiffFavouritesActionsCtx.Provider>
-                                  </RiffFavouritesCtx.Provider>
-                                </PluginCatalogActionsCtx.Provider>
-                              </PluginScanStateCtx.Provider>
-                            </PluginCatalogCtx.Provider>
-                          </ChannelChainErrorCtx.Provider>
-                        </ChannelChainStatusCtx.Provider>
-                      </MasterChainErrorCtx.Provider>
-                    </MasterChainStatusCtx.Provider>
-                  </HistoryCtx.Provider>
-                </ZoomCtx.Provider>
-              </PlayingCtx.Provider>
-            </PosCtx.Provider>
+            <EngineOwnershipCtx.Provider value={engineOwnershipValue}>
+              <PosCtx.Provider value={pos}>
+                <PlayingCtx.Provider value={playing}>
+                  <ZoomCtx.Provider value={24 * zoomMultiplier}>
+                    <HistoryCtx.Provider value={historyControls}>
+                      <MasterChainStatusCtx.Provider value={masterChainStatus}>
+                        <MasterChainErrorCtx.Provider value={masterChainError}>
+                          <ChannelChainStatusCtx.Provider value={channelChainStatus}>
+                            <ChannelChainErrorCtx.Provider value={channelChainError}>
+                              <PluginCatalogCtx.Provider value={pluginCatalog}>
+                                <PluginScanStateCtx.Provider
+                                  value={{ scanning, progress: scanProgress }}
+                                >
+                                  <PluginCatalogActionsCtx.Provider value={pluginCatalogActions}>
+                                    <RiffFavouritesCtx.Provider value={riffFavourites}>
+                                      <RiffFavouritesActionsCtx.Provider
+                                        value={riffFavouritesActions}
+                                      >
+                                        {children}
+                                      </RiffFavouritesActionsCtx.Provider>
+                                    </RiffFavouritesCtx.Provider>
+                                  </PluginCatalogActionsCtx.Provider>
+                                </PluginScanStateCtx.Provider>
+                              </PluginCatalogCtx.Provider>
+                            </ChannelChainErrorCtx.Provider>
+                          </ChannelChainStatusCtx.Provider>
+                        </MasterChainErrorCtx.Provider>
+                      </MasterChainStatusCtx.Provider>
+                    </HistoryCtx.Provider>
+                  </ZoomCtx.Provider>
+                </PlayingCtx.Provider>
+              </PosCtx.Provider>
+            </EngineOwnershipCtx.Provider>
           </FlushEngineSyncNowCtx.Provider>
         </RestoreStateCtx.Provider>
       </DispatchCtx.Provider>
@@ -908,6 +972,24 @@ export function useRestoreState(): (state: AppState, pluginStates: PluginStatesM
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useFlushEngineSyncNow(): (overrides?: Partial<AppState>) => Promise<void> {
   return useContext(FlushEngineSyncNowCtx)
+}
+
+/** Coordinates who currently owns what's loaded in the engine -- claim
+ * before sending a throwaway/soloed project so the automatic real-project
+ * sync above knows to stay quiet, stillOwn to check a claim hasn't been
+ * superseded before actually applying an async send's result, release to
+ * hand control back once done (do this BEFORE, or alongside, your own
+ * final real-project flush -- see DiscoverPanel.tsx's restorePreviewIfLoaded
+ * and useStemPreviewPlayback.ts's unmount cleanup for the two existing
+ * callers). See src/shared/engineOwnership.ts and docs/superpowers/specs/
+ * 2026-09-16-engine-preview-ownership-design.md. */
+// eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
+export function useEngineOwnership(): {
+  claim: (owner: EngineOwner) => number
+  stillOwn: (token: number) => boolean
+  release: () => void
+} {
+  return useContext(EngineOwnershipCtx)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
