@@ -62,11 +62,16 @@ Discover already seeded, no drag or simultaneous visibility required.
 - **Seeded slots start unlocked** — immediately behave like any other
   Discover slot (individually rerollable, and reroll-all-able as a whole
   if the user chooses that). No special protection.
-- **Tempo is NOT overridden.** Seeded stems are treated exactly like any
-  other resolved candidate — stretched to Discover's own *current* target
-  BPM (its existing, independent tempo control), not snapped to the seed
-  riff's own BPM. Keeps this a plain extension of the existing preview
-  pipeline rather than a special case.
+- **Tempo follows the seed only when the arranger is empty.** Seeded
+  stems otherwise stretch to Discover's own *current* target BPM, same as
+  any other resolved candidate. But when the real arranger timeline has
+  nothing placed on it yet (`channelOrder.length === 0` — there's no
+  existing tempo commitment to protect), seeding also sets the project
+  tempo to the seed riff's own BPM. Revised 2026-09-16, direct request:
+  "the tempo should adjust to the rifff tempo (especially for empty
+  arrangers)" — the original "never override" decision above was too
+  strict for the common case (starting a project fresh from a riff);
+  seeding into an already-populated arranger still never touches tempo.
 
 ## Component changes
 
