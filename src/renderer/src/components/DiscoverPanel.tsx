@@ -509,6 +509,32 @@ export function DiscoverPanel({
     previewSyncGenerationRef.current = myGeneration
     const engineToken = claimEngine('discover-preview')
 
+    // Direct request, 2026-09-16: "i'd like the tempo to be set to the
+    // original imported rifff in discovery." Checked HERE, right after the
+    // synchronous claimEngine() above (not after this function's own two
+    // awaits below) -- ownership is already correctly held at this exact
+    // point, so StoreContext.tsx's scheduleEngineSync own ownership gate
+    // already correctly skips the real-project sync when this bpm change
+    // lands, same race-free reasoning as before. Moved here specifically
+    // because gating it on this function's OWN later success (past
+    // buildEngineProject/engineLoadProject) turned out to still be
+    // unreliable for a Browse-sourced seed: several slots resolve at
+    // staggered real download speeds, each calling this function again
+    // with a newer previewSyncGenerationRef -- an early call can keep
+    // getting superseded before it ever reaches its own later code,
+    // live-reported 2026-09-16 ("via the browse" specifically) as the
+    // tempo simply never updating. This check only depends on
+    // syncPreviewToEngine having been CALLED at all (which happens
+    // reliably, synchronously, from reportSlotResolution on the very
+    // first slot to resolve), not on any one specific call surviving to
+    // the end -- `!previewLoadedRef.current` naturally stops this from
+    // re-firing once some call eventually does win and sets it true;
+    // re-dispatching the same bpm on an earlier, ultimately-superseded
+    // call is a harmless no-op difference, not a bug.
+    if (!previewLoadedRef.current && seedBpm !== null && channelOrder.length === 0) {
+      dispatch({ type: 'SET_TEMPO', bpm: seedBpm })
+    }
+
     const members = [...ids]
       .map((id) => {
         const stem = resolvedStemsRef.current.get(id)
@@ -596,32 +622,6 @@ export function DiscoverPanel({
       // a preview stops).
       if (!previewLoadedRef.current) {
         previewLoadedRef.current = true
-        // Direct request, 2026-09-16: "i'd like the tempo to be set to
-        // the original imported rifff in discovery." An earlier attempt
-        // dispatched this at SEED time, in LibraryBrowser.tsx -- but
-        // state.bpm is one of StoreContext.tsx's scheduleEngineSync's own
-        // listed dependencies, and ownership wasn't claimed yet at that
-        // point, so it raced the automatic real-project sync into loading
-        // (and, since state.playing could already be true, audibly
-        // playing) the real project right as Discover's own preview was
-        // also loading -- the real cause of a live "multiple versions of
-        // the rifff playing" report (root-caused and reverted same day,
-        // see LibraryBrowser.tsx's own seedDiscoverFromBrowseRiff). Doing
-        // it HERE instead is race-free: this line only runs once
-        // `claimEngine`/`stillOwnEngine` above have already confirmed
-        // Discover holds engine ownership, so scheduleEngineSync's own
-        // ownership gate correctly skips the real-project sync when this
-        // bpm change lands. Only when the real arranger has nothing
-        // placed on it yet (channelOrder), same as before -- never
-        // retunes an already-populated project. This block already only
-        // ever runs once per seed (DiscoverPanel is freshly mounted for
-        // every seed action, and this is gated on the same
-        // empty-to-non-empty previewLoadedRef transition as the PLAY
-        // dispatch below), so no extra "already applied" tracking is
-        // needed.
-        if (seedBpm !== null && channelOrder.length === 0) {
-          dispatch({ type: 'SET_TEMPO', bpm: seedBpm })
-        }
         if (playing) dispatch({ type: 'PAUSE' })
         void window.rifffApi.engineSetPosition(0)
         dispatch({ type: 'PLAY' })
