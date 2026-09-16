@@ -523,10 +523,19 @@ export function DiscoverPanel({
       return
     }
 
+    // maxMembers explicitly uncapped (members.length -- i.e. never
+    // truncates) -- unlike plunkInArranger's own call below, THIS rifff is
+    // a throwaway preview project, never persisted, with no
+    // Riffs.StemCID_1..8 schema to fit into. Real bug, live-reported
+    // 2026-09-16: sharing assembleDiscoverRifff's own default 8-stem cap
+    // here silently dropped any 9th+ toggled-on slot from the actual
+    // engine preview mix (while it still showed as resolved/toggled-on in
+    // the UI) -- see assembleDiscoverRifff's own doc comment.
     const assembly = assembleDiscoverRifff(
       'discover preview',
       members.map(({ stem, gain }) => ({ stem, gain })),
-      bpm
+      bpm,
+      members.length
     )
     if (!assembly) {
       // Unreachable in practice (members.length > 0 already checked above,

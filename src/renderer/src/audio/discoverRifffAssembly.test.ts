@@ -70,6 +70,24 @@ describe('assembleDiscoverRifff', () => {
     ])
   })
 
+  it('does not cap below 8 when a higher maxMembers is explicitly passed', () => {
+    // Real bug, live-reported 2026-09-16: this function is shared by
+    // plunkInArranger (a REAL, persisted Rifff, genuinely bound to
+    // Riffs.StemCID_1..8's own schema) AND syncPreviewToEngine (a
+    // throwaway, never-persisted preview project with no such
+    // constraint) -- capping the PREVIEW path at 8 too silently dropped
+    // any 9th+ Discover slot from the actual audio mix while still
+    // showing it as resolved/toggled-on in the UI. A 9-member preview
+    // should keep all 9 when maxMembers is raised past 8.
+    const members = Array.from({ length: 9 }, (_, i) => ({
+      stem: fixtureStem({ path: `/${i}.wav` }),
+      gain: 1
+    }))
+    const assembly = assembleDiscoverRifff('discover preview', members, 120, 32)
+    expect(assembly!.rifff.stems).toHaveLength(9)
+    expect(assembly!.rifff.stems[8]).toMatchObject({ slot: 9, path: '/8.wav' })
+  })
+
   it("builds a vol map keyed by stemKey(the rifff's own groupId, slot) for every member's own gain", () => {
     const assembly = assembleDiscoverRifff(
       'discover preview',

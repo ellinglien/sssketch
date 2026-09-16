@@ -58,15 +58,28 @@ const MAX_STEMS_PER_RIFFF = 8
  * Returns null for an empty `members` list (nothing to assemble) --
  * callers are expected to have already filtered down to placeable/
  * resolved members before calling this; this null case exists so a caller
- * doesn't need to duplicate that same empty-check itself. */
+ * doesn't need to duplicate that same empty-check itself.
+ *
+ * `maxMembers` defaults to MAX_STEMS_PER_RIFFF (8) -- the right default for
+ * plunkInArranger's own call, whose output becomes a REAL, persisted
+ * `Rifff` genuinely bound to Riffs.StemCID_1..8's own schema. Real bug,
+ * live-reported 2026-09-16: the engine-preview sync call (syncPreviewToEngine,
+ * DiscoverPanel.tsx) used to share that SAME default, even though its own
+ * output is a throwaway, never-persisted preview project with no such
+ * schema constraint -- a 9th+ Discover slot toggled into the preview mix
+ * was silently dropped from the actual audio sent to the engine while
+ * still showing as resolved/toggled-on in the UI ("i can only hear the
+ * last stem if i solo it"). That call site now passes an explicit, much
+ * higher `maxMembers` -- see its own call site for the reasoning. */
 export function assembleDiscoverRifff(
   name: string,
   members: DiscoverRifffMember[],
-  bpm: number
+  bpm: number,
+  maxMembers: number = MAX_STEMS_PER_RIFFF
 ): DiscoverRifffAssembly | null {
   if (members.length === 0) return null
 
-  const capped = members.slice(0, MAX_STEMS_PER_RIFFF)
+  const capped = members.slice(0, maxMembers)
   const groupId = crypto.randomUUID()
   const barLength = Math.max(...capped.map((m) => m.stem.barLength))
 
