@@ -12,6 +12,7 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import {
   useAppSelector,
   useDispatch,
+  useEngineOwnership,
   usePlaying,
   usePos,
   useFlushEngineSyncNow,
@@ -243,6 +244,11 @@ export function DiscoverPanel({
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
+  const {
+    claim: claimEngine,
+    stillOwn: stillOwnEngine,
+    release: releaseEngine
+  } = useEngineOwnership()
   const [onlyOwnStems, setOnlyOwnStems] = useState(true)
   const hasUsername = currentUsername.trim() !== ''
 
@@ -383,11 +389,25 @@ export function DiscoverPanel({
   // be safely listed in the unmount effect's own dependency array below
   // without an eslint-disable.
   const restorePreviewIfLoaded = useCallback(async (): Promise<void> => {
+    // Hands ownership back to the real project's own automatic sync
+    // (StoreContext.tsx), UNCONDITIONALLY, before the previewLoadedRef
+    // guard below -- real bug, found by review: syncPreviewToEngine
+    // claims ownership ('discover-preview') unconditionally, before it
+    // even knows whether it has anything to actually preview (its own two
+    // early-return paths -- an empty member set, or assembleDiscoverRifff
+    // returning null -- both route through this function). If release()
+    // only ran behind the `!previewLoadedRef.current` guard below, a
+    // claim taken on one of those early-return paths (nothing was ever
+    // successfully loaded) would never be released, silently gating off
+    // the automatic real-project sync forever. release() is a harmless
+    // no-op when nothing is currently held, so calling it unconditionally
+    // here covers every caller of this function uniformly.
+    releaseEngine()
     if (!previewLoadedRef.current) return
     previewLoadedRef.current = false
     currentPreviewMappingRef.current = null
     void flushEngineSyncNow()
-  }, [flushEngineSyncNow])
+  }, [flushEngineSyncNow, releaseEngine])
 
   useEffect(() => {
     // Real bug, found live 2026-09-15 ("it loads them into the discover
@@ -436,6 +456,7 @@ export function DiscoverPanel({
     if (unmountedRef.current) return
     const myGeneration = previewSyncGenerationRef.current + 1
     previewSyncGenerationRef.current = myGeneration
+    const engineToken = claimEngine('discover-preview')
 
     const members = [...ids]
       .map((id) => {
@@ -498,9 +519,11 @@ export function DiscoverPanel({
         pluginCatalog
       )
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+      if (!stillOwnEngine(engineToken)) return
 
       await window.rifffApi.engineLoadProject(project)
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+      if (!stillOwnEngine(engineToken)) return
 
       currentPreviewMappingRef.current = {
         groupId: rifff.groupId,
@@ -519,6 +542,28 @@ export function DiscoverPanel({
       }
     } catch (err) {
       console.error('DiscoverPanel: syncPreviewToEngine failed:', err)
+      // A failed build/send must not leave this claim dangling forever --
+      // but UNLIKE useStemPreviewPlayback.ts's own equivalent fix, whether
+      // it's safe to release here depends on `previewLoadedRef.current`:
+      //
+      // - If nothing was EVER successfully loaded under this claim yet
+      //   (previewLoadedRef.current is still false -- this was the FIRST
+      //   attempt, or every attempt so far has failed), the engine still
+      //   has whatever was loaded before this claim started (most likely
+      //   the real project). Releasing is correct and necessary here --
+      //   otherwise StoreContext's automatic real-project sync stays
+      //   gated off forever even though nothing Discover-related ever
+      //   actually reached the engine.
+      // - If a PREVIOUS call already got a discover-preview project into
+      //   the engine and it's currently loaded/playing
+      //   (previewLoadedRef.current is true), the engine STILL has that
+      //   last-successfully-sent project loaded -- THIS failed resync
+      //   attempt (e.g. a reroll landing) didn't change what's actually
+      //   audible. Releasing in that case would be WRONG: it would hand
+      //   control to the automatic real-project sync, which would then
+      //   silently overwrite/kill the still-playing preview the user
+      //   never asked to stop. Keep the claim in that case.
+      if (!previewLoadedRef.current && stillOwnEngine(engineToken)) releaseEngine()
     }
   }
 
@@ -1106,6 +1151,23 @@ export function DiscoverPanel({
       // plunking) correctly starts a fresh preview rather than assuming a
       // still-loaded one that the real sync effect already silently
       // overwrote.
+      //
+      // releaseEngine() IS still required here, though (added after code
+      // review): that automatic coalesced sync effect now SKIPS its own
+      // send entirely while something holds engine ownership (see
+      // StoreContext.tsx's own scheduleEngineSync gating, added earlier in
+      // this same plan) -- without releasing here, this function's own
+      // 'discover-preview' claim (from whatever syncPreviewToEngine call
+      // last ran) stays held, and the automatic sync's state.rifffs-change
+      // pickup described above would silently no-op instead of actually
+      // reaching the engine. This also closes the SAME straggling-call
+      // race the previewSyncGenerationRef bump just below already guards
+      // against, belt-and-suspenders: an in-flight syncPreviewToEngine
+      // call that claimed ownership before this function ran will find its
+      // own token stale (stillOwnEngine returns false) the moment it
+      // resumes after its own await, since release() here bumps the same
+      // shared generation.
+      releaseEngine()
       previewLoadedRef.current = false
       currentPreviewMappingRef.current = null
       // Real bug, found by review: an already-in-flight syncPreviewToEngine
