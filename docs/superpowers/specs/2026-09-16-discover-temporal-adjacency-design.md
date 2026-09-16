@@ -52,13 +52,30 @@ not part of this pass.
   stem in either direction, the popover says so plainly instead of
   showing nothing.
 - **Direction**: nearby riffs are split into two sections, "earlier" and
-  "later," relative to the anchor riff — never one flat list — matching
-  Elling's own "iteration along a timeline" mental model. Each section
-  shows a fixed default of 4 riffs.
-- **Picking one**: clicking a candidate swaps it into the slot
-  immediately — same instant, undoable behavior as a normal reroll (an
-  undo snapshot is pushed the same way `rollForSlot` already does). The
-  popover stays open afterward so the user can keep comparing/swapping.
+  "later," relative to the current center riff — never one flat list —
+  matching Elling's own "iteration along a timeline" mental model. Each
+  section shows a fixed default of 4 riffs.
+- **Picking one recenters the chain**: clicking any candidate swaps it
+  into the slot immediately — same instant, undoable behavior as a
+  normal reroll (an undo snapshot is pushed the same way `rollForSlot`
+  already does) — and both sections immediately recompute around it as
+  the new center. There's no separate "browsing position" distinct from
+  the slot's own current candidate: the popover always shows what's
+  earlier/later than whatever the slot holds right now. This is
+  deliberately the whole feature's richness — clicking outward
+  repeatedly chains you further along the jam's own timeline, each step
+  a real, reversible action, with no fixed limit besides the jam's own
+  data. Direct request, 2026-09-16: "i think i'd like a re-centering
+  approach... ideally making for a richer / endlesss clickable feature."
+- **Step shortcuts**: a small `<`/`>` button on each section is a
+  shortcut equivalent to clicking that section's own nearest candidate —
+  swap-and-recenter without having to visually pick a row, for quickly
+  stepping through several in a row.
+- **Back to start**: the riff the slot held when the popover was first
+  opened is remembered for the popover's own lifetime. A small "back to
+  start" control jumps straight back to it (itself just another
+  swap-and-recenter, onto the remembered riffCID) — without it, a few
+  clicks of chaining outward would leave no way back to where you began.
 - **Dismissal**: click-outside or Escape closes the popover. It stays
   positioned within the viewport (Discover already runs full-screen, so
   this is a plain anchored-positioning detail, not a new architectural
@@ -67,25 +84,32 @@ not part of this pass.
 ## Backend
 
 No new query surface. The whole lookup is existing `riffLibraryStore.ts`
-functions plumbed together:
+functions plumbed together, and — since picking a candidate recenters
+the chain — it re-runs from scratch against a new `centerRiffCID` every
+time the slot's own candidate changes, not just once when the popover
+opens:
 
-1. **Locate the anchor's position**: `resolveRiffWithContext(anchorRiffCID)`
+1. **Locate the center's position**: `resolveRiffWithContext(centerRiffCID)`
    already resolves a riff's own `jamCID` and its rank (offset) in that
    jam's `CreationTime DESC` ordering — built for the existing "jump to a
    pasted riff ID" feature, and exactly the "where does this riff sit in
    its own iteration sequence" fact adjacency needs. If it returns `null`
    (unknown riff, warehouse unavailable), the popover shows its empty
-   state.
+   state. `centerRiffCID` starts as the slot's own candidate when the
+   popover opens, and becomes whatever riff was last swapped in after
+   that (see Behavior's "picking one recenters the chain," above); "back
+   to start" just re-runs this same lookup against the riffCID captured
+   at the moment the popover first opened.
 2. **Fetch a window around it**: `listRiffs(jamCID, { offset, limit })`
    — already paginates a jam's riffs in iteration order off the existing
    `idx_riffs_owner_created` index. A window sized to comfortably cover 4
-   riffs in each direction, centered on the anchor's own rank (clamped to
+   riffs in each direction, centered on the center's own rank (clamped to
    0 the same way `resolveRiffWithContext`'s existing caller already
-   does), splits into "newer than anchor" (earlier list, since the
-   ordering is `DESC`) and "older than anchor" (later list) by comparing
-   each row's own `CreationTime`/`RiffCID` against the anchor's.
+   does), splits into "newer than center" (earlier list, since the
+   ordering is `DESC`) and "older than center" (later list) by comparing
+   each row's own `CreationTime`/`RiffCID` against the center's.
 3. **Resolve and role-match each nearby riff**: for each candidate riff
-   (working outward from the anchor, stopping once 4 matches are found
+   (working outward from the center, stopping once 4 matches are found
    per direction or the window is exhausted), `resolveRiff(riffCID)` —
    the same function Browse's own riff-detail view already calls —
    returns real stems with `presetName`/`instrumentMask`. Each stem is
@@ -104,10 +128,14 @@ functions plumbed together:
    per-riff `Promise.all` scope, one riff's ≤8 stems at a time) and queue
    the rest, each popping in as it finishes.
 
-This is exposed as one new IPC handler (mirroring the existing
-`resolve-riff`/similar shape already in `index.ts`) — exact name and
-shared-type surface is a plan-level decision, grounded in the real
-current `ipcMain.handle` list at plan time.
+This is exposed as one new IPC handler taking `{ centerRiffCID, role }`
+(mirroring the existing `resolve-riff`/similar shape already in
+`index.ts`) — exact name and shared-type surface is a plan-level
+decision, grounded in the real current `ipcMain.handle` list at plan
+time. Because every swap-and-recenter click re-invokes it with a new
+`centerRiffCID`, the renderer side should treat it exactly like a normal
+per-slot resolve (already-established loading-state handling), not
+introduce a second one.
 
 ## UI
 
@@ -118,12 +146,19 @@ this addition — from 22×22 to **18×18**, an established smaller size
 already used elsewhere in this same file (the tempo stepper buttons),
 rather than letting the row keep growing.
 
-**Popover**: anchored to the triggering slot's row. Two sections
-("earlier" / "later"), each listing up to 4 candidates. Each candidate
-row shows: a fixed-size waveform thumbnail, the stem's own preset name,
-and (while resolving) the same `LoadingLoader` placeholder used
-everywhere else in Discover for a per-item resolving state. **Every
-candidate row's preview box is a fixed CSS size** — this is a deliberate
+**Popover**: anchored to the triggering slot's row. A small header shows
+the current center riff (enough to orient — creator/preset context, same
+fields already surfaced elsewhere for a riff) plus the "back to start"
+control (disabled/hidden once the center IS the start riff again). Below
+that, two sections ("earlier" / "later"), each listing up to 4
+candidates with a `<`/`>` step button of its own. Each candidate row
+shows: a fixed-size waveform thumbnail, the stem's own preset name, and
+(while resolving) the same `LoadingLoader` placeholder used everywhere
+else in Discover for a per-item resolving state. Clicking a candidate
+row, or its section's step button for the nearest one, swaps it into
+the slot and re-renders both sections around it (see Behavior above) —
+the whole popover stays open and mounted through this, only its content
+refreshes. **Every candidate row's preview box is a fixed CSS size** — this is a deliberate
 departure from `DiscoverSlotRow`'s own main waveform, which was
 intentionally reworked earlier this session to tile *proportionally* to
 each stem's real bar length (so a comparison of "how long is this loop"
@@ -147,7 +182,7 @@ waveform will — no resize on the load transition.
 ## Testing
 
 - The role-matching/windowing logic (splitting a `listRiffs` window into
-  earlier/later relative to an anchor rank, walking outward until 4
+  earlier/later relative to a center rank, walking outward until 4
   matches or the window is exhausted) is pure enough to unit test given a
   fake window of rows — real tests, not description.
 - The new IPC handler itself (touches `riffLibraryStore.ts`'s real
@@ -163,5 +198,10 @@ waveform will — no resize on the load transition.
   whose riff is at the very start/end of a jam (one side's section shows
   its own empty state, not an error); a slot with no nearby role match at
   all (both sections show the empty state); picking a candidate (swaps
-  in immediately, undo reverts it); a seeded slot with no `candidate`
-  (the button doesn't render at all).
+  in immediately, both sections recompute around it, undo reverts it);
+  chaining several clicks in the same direction (each one recenters
+  correctly, keeps finding new matches further out); using a step button
+  as a shortcut (identical result to clicking that section's nearest
+  candidate); "back to start" after chaining a few steps away (returns
+  exactly to the riff the slot held when the popover opened); a seeded
+  slot with no `candidate` (the button doesn't render at all).
