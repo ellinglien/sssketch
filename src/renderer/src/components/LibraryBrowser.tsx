@@ -1339,52 +1339,68 @@ export function LibraryBrowser({
     ) {
       return
     }
-    // Direct request, 2026-09-16: "the audio analysis should be able to
-    // detect and differentiate drums from leads etc etc. there must be a
-    // better way [than hand-tuning Tidy Up]." Checks the real trained
-    // classifier (StemCategories human confirmations, else
-    // StemAutoCategory's own audio-analysis result) for every stem in ONE
-    // batched round trip, before ever falling back to the blunt
-    // instrument-mask/preset-name guess this used to rely on alone --
-    // resolve-stem-arrange-roles' own main-process handler computes that
-    // SAME blunt chain internally as its own last resort, so `?? 'fx'`
-    // here is unreachable in practice but kept as a real type-level
-    // fallback (the IPC's own return type is nullable) rather than an
-    // unsafe assertion.
-    const roles = await window.rifffApi.resolveStemArrangeRoles(
-      resolvedRiff.stems.map((stem) => ({
+    // Direct request, 2026-09-16 ("can we take a good look at the things
+    // we just added... and see if we can improve the speed... or
+    // incorporating some pauses for the user to wait for things to
+    // load"): this whole function only became async the same day
+    // (resolveStemArrangeRoles below is a real IPC round trip), but the
+    // button itself never showed anything different while it ran --
+    // reads as frozen/unresponsive for however long that round trip
+    // takes, the exact "not snappy" complaint this was raised alongside.
+    // Same setBusy(...)/setBusy(null) convention this file already uses
+    // for handleImport/handleImportSelected/download-missing-stems, just
+    // applied here too.
+    setBusy('seeding discover…')
+    try {
+      // Direct request, 2026-09-16: "the audio analysis should be able to
+      // detect and differentiate drums from leads etc etc. there must be a
+      // better way [than hand-tuning Tidy Up]." Checks the real trained
+      // classifier (StemCategories human confirmations, else
+      // StemAutoCategory's own audio-analysis result) for every stem in ONE
+      // batched round trip, before ever falling back to the blunt
+      // instrument-mask/preset-name guess this used to rely on alone --
+      // resolve-stem-arrange-roles' own main-process handler computes that
+      // SAME blunt chain internally as its own last resort, so `?? 'fx'`
+      // here is unreachable in practice but kept as a real type-level
+      // fallback (the IPC's own return type is nullable) rather than an
+      // unsafe assertion.
+      const roles = await window.rifffApi.resolveStemArrangeRoles(
+        resolvedRiff.stems.map((stem) => ({
+          stemCID: stem.stemCID,
+          instrumentMask: stem.instrumentMask,
+          presetName: stem.presetName
+        }))
+      )
+      const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
         stemCID: stem.stemCID,
-        instrumentMask: stem.instrumentMask,
-        presetName: stem.presetName
+        jamCID: selectedJamCID,
+        riffCID: selectedRiffCID,
+        presetName: stem.presetName,
+        creatorUserName: stem.creatorUserName,
+        arrangeRole:
+          roles[stem.stemCID] ??
+          SOUND_TYPE_TO_ARRANGE_ROLE[
+            instrumentMaskToSoundType(stem.instrumentMask) ??
+              guessSoundTypeFromPresetName(stem.presetName) ??
+              'fx'
+          ],
+        drumSubRole: null,
+        riffBpm: resolvedRiff.bpm
       }))
-    )
-    const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
-      stemCID: stem.stemCID,
-      jamCID: selectedJamCID,
-      riffCID: selectedRiffCID,
-      presetName: stem.presetName,
-      creatorUserName: stem.creatorUserName,
-      arrangeRole:
-        roles[stem.stemCID] ??
-        SOUND_TYPE_TO_ARRANGE_ROLE[
-          instrumentMaskToSoundType(stem.instrumentMask) ??
-            guessSoundTypeFromPresetName(stem.presetName) ??
-            'fx'
-        ],
-      drumSubRole: null,
-      riffBpm: resolvedRiff.bpm
-    }))
-    // Same "push a snapshot before mutating" convention every other
-    // Discover slot-content action already uses (DiscoverPanel.tsx's own
-    // pushUndoSnapshot) -- inlined here rather than calling into
-    // DiscoverPanel directly, since discoverUndoStack/setDiscoverUndoStack
-    // (like discoverSlots itself) are owned HERE, lifted up specifically so
-    // they survive a 'browse' <-> 'discover' switch.
-    setDiscoverUndoStack((prev) => [...prev, discoverSlots].slice(-DISCOVER_UNDO_LIMIT))
-    setDiscoverRedoStack([])
-    setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
-    setDiscoverSeedBpm(resolvedRiff.bpm)
-    setLibraryMode('discover')
+      // Same "push a snapshot before mutating" convention every other
+      // Discover slot-content action already uses (DiscoverPanel.tsx's own
+      // pushUndoSnapshot) -- inlined here rather than calling into
+      // DiscoverPanel directly, since discoverUndoStack/setDiscoverUndoStack
+      // (like discoverSlots itself) are owned HERE, lifted up specifically so
+      // they survive a 'browse' <-> 'discover' switch.
+      setDiscoverUndoStack((prev) => [...prev, discoverSlots].slice(-DISCOVER_UNDO_LIMIT))
+      setDiscoverRedoStack([])
+      setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
+      setDiscoverSeedBpm(resolvedRiff.bpm)
+      setLibraryMode('discover')
+    } finally {
+      setBusy(null)
+    }
     // NOT auto-dispatched: an earlier version of this fired SET_TEMPO
     // synchronously right here, at seed time -- but state.bpm is one of
     // scheduleEngineSync's own listed dependencies (StoreContext.tsx), and
