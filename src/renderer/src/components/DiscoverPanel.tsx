@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
+import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
@@ -972,6 +973,22 @@ export function DiscoverPanel({
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, locked: !s.locked } : s)))
   }
 
+  // Commits a candidate picked from a slot's own "explore nearby" popover
+  // -- same instant, undoable swap as a normal reroll landing (rollForSlot's
+  // own final setSlots call, mirrored exactly here), just skipping the
+  // fetch/rank/pick machinery since the popover already handed us a real,
+  // specific candidate to use. Direct request, 2026-09-16 (temporal
+  // adjacency exploration) -- see docs/superpowers/specs/2026-09-16-
+  // discover-temporal-adjacency-design.md.
+  function swapSlotFromNearby(id: string, candidate: DiscoverCandidate): void {
+    pushUndoSnapshot()
+    setSlots((prev) =>
+      prev.map((s) =>
+        s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+      )
+    )
+  }
+
   // Core roll logic, shared by addSlot (a brand-new slot's own first roll)
   // and rerollSlot (an existing slot's later rerolls) -- takes `role`
   // directly rather than looking it up via `slots.find(...)`, since addSlot
@@ -1604,6 +1621,7 @@ export function DiscoverPanel({
             }}
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
+            onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
           />
         ))
       })()}
@@ -1802,6 +1820,31 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
   )
 }
 
+// Three connected waypoints -- "browse nearby points along this jam's own
+// timeline." Same hand-drawn, monochrome-via-currentColor convention as
+// LockGlyph/ShuffleIcon/DiceIcon/StarIcon just above -- no icon library.
+function NearbyIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    >
+      <circle cx="3" cy="8" r="1.6" />
+      <circle cx="8" cy="3" r="1.6" />
+      <circle cx="8" cy="13" r="1.6" />
+      <circle cx="13" cy="8" r="1.6" />
+      <line x1="4.3" y1="7.3" x2="6.7" y2="4.3" />
+      <line x1="4.3" y1="8.7" x2="6.7" y2="11.7" />
+      <line x1="9.3" y1="4.3" x2="11.7" y2="7.3" />
+      <line x1="9.3" y1="11.7" x2="11.7" y2="8.7" />
+    </svg>
+  )
+}
+
 // This row's own waveform button's real pixel height -- the vertical-drag
 // gain gesture below divides its own deltaY by this, same
 // "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
@@ -1824,7 +1867,8 @@ function DiscoverSlotRow({
   onToggleSolo,
   onToggleFavourite,
   onResolvedChange,
-  onGainChange
+  onGainChange,
+  onSwapFromNearby
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -1910,6 +1954,11 @@ function DiscoverSlotRow({
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
   onResolvedChange: (stem: ResolvedCandidateStem | null) => void
+  /** DiscoverPanel's own swapSlotFromNearby -- called when the user picks a
+   * candidate from this slot's own "explore nearby" popover. Same instant,
+   * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
+   * doc comment in DiscoverPanel. */
+  onSwapFromNearby: (candidate: DiscoverCandidate) => void
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -2001,6 +2050,12 @@ function DiscoverSlotRow({
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
 
+  // "Explore nearby" popover state -- position (screen coords, set from the
+  // trigger button's own getBoundingClientRect on open) or null when closed.
+  // See DiscoverNearbyPopover.tsx.
+  const [nearbyMenu, setNearbyMenu] = useState<{ x: number; y: number } | null>(null)
+  const nearbyButtonRef = useRef<HTMLButtonElement>(null)
+
   // Direct request: adjust gain by dragging vertically on the waveform
   // itself -- StemWaveformRow.tsx's own "envelope" volume-drag gesture,
   // reused here (startPointerDrag, same deltaY/ROW_HEIGHT scale) instead of
@@ -2036,70 +2091,71 @@ function DiscoverSlotRow({
   }, [resolvedStem])
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 0',
-        borderBottom: '1px solid var(--ra-border-soft)'
-      }}
-    >
-      <button
-        onClick={onToggleLock}
-        title={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
+    <>
+      <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          width: 22,
-          height: 22,
-          padding: 0,
-          background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
-          border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-          cursor: 'pointer'
+          gap: 10,
+          padding: '8px 0',
+          borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >
-        <LockGlyph locked={slot.locked} />
-      </button>
-      <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64, flexShrink: 0 }}>
-        {slot.role}
-      </span>
-      {resolvedStem ? (
-        // Clicking the glyph toggles this slot in/out of the shared,
-        // looping mix -- same click-the-thumbnail-to-hear-it convention
-        // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
-        // rows already use elsewhere in this app, adapted so multiple
-        // slots play TOGETHER (Upcycle-style) rather than one at a time.
-        // Direct report, 2026-09-15: the previewing-outline (a near-white
-        // `--ra-stretch-on` box around the whole waveform) read as an
-        // unwanted white halo -- removed; the dedicated mute button below
-        // already carries this row's own on/off state, and the playhead
-        // line (also below) now shows real playback directly.
         <button
-          onClick={onTogglePreview}
-          onMouseDown={handleGainDragStart}
-          title={
-            (previewing
-              ? 'playing in the loop -- click to remove'
-              : 'click to add to the loop preview') +
-            ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
-          }
+          onClick={onToggleLock}
+          title={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
           style={{
-            position: 'relative',
-            flex: '1 1 auto',
-            minWidth: 140,
-            height: DISCOVER_WAVEFORM_HEIGHT,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            width: 18,
+            height: 18,
             padding: 0,
-            background: 'transparent',
-            border: 'none',
-            overflow: 'hidden',
-            cursor: 'ns-resize'
+            background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
+            border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+            color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+            cursor: 'pointer'
           }}
         >
-          {/* Tiled, not a single stretched-to-fit Waveform -- direct
+          <LockGlyph locked={slot.locked} />
+        </button>
+        <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64, flexShrink: 0 }}>
+          {slot.role}
+        </span>
+        {resolvedStem ? (
+          // Clicking the glyph toggles this slot in/out of the shared,
+          // looping mix -- same click-the-thumbnail-to-hear-it convention
+          // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
+          // rows already use elsewhere in this app, adapted so multiple
+          // slots play TOGETHER (Upcycle-style) rather than one at a time.
+          // Direct report, 2026-09-15: the previewing-outline (a near-white
+          // `--ra-stretch-on` box around the whole waveform) read as an
+          // unwanted white halo -- removed; the dedicated mute button below
+          // already carries this row's own on/off state, and the playhead
+          // line (also below) now shows real playback directly.
+          <button
+            onClick={onTogglePreview}
+            onMouseDown={handleGainDragStart}
+            title={
+              (previewing
+                ? 'playing in the loop -- click to remove'
+                : 'click to add to the loop preview') +
+              ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
+            }
+            style={{
+              position: 'relative',
+              flex: '1 1 auto',
+              minWidth: 140,
+              height: DISCOVER_WAVEFORM_HEIGHT,
+              padding: 0,
+              background: 'transparent',
+              border: 'none',
+              overflow: 'hidden',
+              cursor: 'ns-resize'
+            }}
+          >
+            {/* Tiled, not a single stretched-to-fit Waveform -- direct
               report: every slot used to render at the same width regardless
               of its real bar length, making a 1-bar drum hit look the same
               size as an 8-bar bassline. `loopBars` is every row's own SAME
@@ -2120,49 +2176,50 @@ function DiscoverSlotRow({
               visibly cuts more of the bright waveform away, revealing gray
               underneath (same "gray means quieter" language the real
               envelope uses), with a thin line marking the exact cutoff. */}
-          {(() => {
-            const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
-            const rawStemBarLength = resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
-            // Real crash, found live: tileOffsetsPx's own tile count is
-            // Math.ceil(loopBars / stemBarLength) with NO upper bound.
-            // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
-            // tiles a rifff against ITS OWN stem's barLength -- both numbers
-            // come from the same already-authored, already-coherent riff,
-            // so their ratio is naturally bounded in practice. Discover's
-            // own loopBars is a DIFFERENT slot's barLength entirely (the
-            // longest one currently resolved anywhere in the loop) -- an
-            // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
-            // an unrelated 32-bar backing loop can drive that ratio into
-            // the hundreds or thousands, each tile mounting a real
-            // <Waveform> (itself dozens of SVG rects) -- enough of those at
-            // once genuinely hung/crashed the renderer. Clamping the
-            // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
-            // count outright; past that point the tiling is an
-            // approximation (fewer, slightly wider tiles than the stem's
-            // true native loop length), which is a fully acceptable
-            // trade-off for "doesn't crash."
-            const MAX_TILES = 24
-            const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
-            const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
-            const tileWidthPct = 100 * (stemBarLength / loopBars)
-            const gainClipPct = (1 - slot.gain) * 100
-            return (
-              <>
-                {tileOffsets.map((leftPct) => (
-                  <div
-                    key={`dim-${leftPct}`}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      bottom: 0,
-                      left: `${leftPct}%`,
-                      width: `${tileWidthPct}%`
-                    }}
-                  >
-                    <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
-                  </div>
-                ))}
-                {/* Full-color layer on top -- suppressed entirely while
+            {(() => {
+              const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
+              const rawStemBarLength =
+                resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
+              // Real crash, found live: tileOffsetsPx's own tile count is
+              // Math.ceil(loopBars / stemBarLength) with NO upper bound.
+              // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
+              // tiles a rifff against ITS OWN stem's barLength -- both numbers
+              // come from the same already-authored, already-coherent riff,
+              // so their ratio is naturally bounded in practice. Discover's
+              // own loopBars is a DIFFERENT slot's barLength entirely (the
+              // longest one currently resolved anywhere in the loop) -- an
+              // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
+              // an unrelated 32-bar backing loop can drive that ratio into
+              // the hundreds or thousands, each tile mounting a real
+              // <Waveform> (itself dozens of SVG rects) -- enough of those at
+              // once genuinely hung/crashed the renderer. Clamping the
+              // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
+              // count outright; past that point the tiling is an
+              // approximation (fewer, slightly wider tiles than the stem's
+              // true native loop length), which is a fully acceptable
+              // trade-off for "doesn't crash."
+              const MAX_TILES = 24
+              const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
+              const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
+              const tileWidthPct = 100 * (stemBarLength / loopBars)
+              const gainClipPct = (1 - slot.gain) * 100
+              return (
+                <>
+                  {tileOffsets.map((leftPct) => (
+                    <div
+                      key={`dim-${leftPct}`}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${leftPct}%`,
+                        width: `${tileWidthPct}%`
+                      }}
+                    >
+                      <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
+                    </div>
+                  ))}
+                  {/* Full-color layer on top -- suppressed entirely while
                     muted (not currently in the preview mix), same "mute
                     always wins" convention StemWaveformRow.tsx's own
                     real-arrangement waveform uses (its own `{!muted && ...}`
@@ -2171,111 +2228,113 @@ function DiscoverSlotRow({
                     used to still show the full-color layer (just clipped by
                     gain), reading as "playing, just quiet" rather than
                     "off," unlike every other muted waveform in this app. */}
-                {previewing && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      clipPath: `inset(${gainClipPct}% 0 0 0)`
-                    }}
-                  >
-                    {tileOffsets.map((leftPct) => (
-                      <div
-                        key={leftPct}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          bottom: 0,
-                          left: `${leftPct}%`,
-                          width: `${tileWidthPct}%`
-                        }}
-                      >
-                        <Waveform
-                          path={resolvedStem.path}
-                          color={stemColorVar(resolvedStem)}
-                          opacity={1}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {previewing && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: `${gainClipPct}%`,
-                      height: 1,
-                      background: 'var(--ra-text)',
-                      pointerEvents: 'none'
-                    }}
-                  />
-                )}
-                {/* Real playhead, driven by the actual engine position while
+                  {previewing && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        clipPath: `inset(${gainClipPct}% 0 0 0)`
+                      }}
+                    >
+                      {tileOffsets.map((leftPct) => (
+                        <div
+                          key={leftPct}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            bottom: 0,
+                            left: `${leftPct}%`,
+                            width: `${tileWidthPct}%`
+                          }}
+                        >
+                          <Waveform
+                            path={resolvedStem.path}
+                            color={stemColorVar(resolvedStem)}
+                            opacity={1}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {previewing && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        top: `${gainClipPct}%`,
+                        height: 1,
+                        background: 'var(--ra-text)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  )}
+                  {/* Real playhead, driven by the actual engine position while
                     this loop is previewing -- same `--ra-playhead` accent
                     Playhead.tsx uses on the real timeline. Only this row's
                     own resolved-and-tiled width is relevant (loopBars ===
                     maxBarLength, the shared reference every row ties its
                     tiling to), so `playheadPct` is already directly usable
                     as a left offset with no further per-row math. */}
-                {playheadPct !== null && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      bottom: 0,
-                      left: `${playheadPct}%`,
-                      width: 1,
-                      background: 'var(--ra-playhead)',
-                      pointerEvents: 'none'
-                    }}
-                  />
-                )}
-              </>
-            )
-          })()}
-        </button>
-      ) : (
-        <div
-          title={
-            resolving
-              ? 'downloading + analyzing…'
-              : resolveFailed
-                ? "couldn't load this stem -- try reroll"
-                : undefined
-          }
-          style={{
-            flex: '1 1 auto',
-            minWidth: 140,
-            height: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            overflow: 'hidden',
-            border: `1px dashed ${
+                  {playheadPct !== null && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${playheadPct}%`,
+                        width: 1,
+                        background: 'var(--ra-playhead)',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  )}
+                </>
+              )
+            })()}
+          </button>
+        ) : (
+          <div
+            title={
               resolving
-                ? 'var(--ra-stretch-on)'
+                ? 'downloading + analyzing…'
                 : resolveFailed
-                  ? 'var(--ra-mute-on)'
-                  : 'var(--ra-border)'
-            }`,
-            // Static (no animation) once settled either way (failed or
-            // truly empty) -- discover-slot-pulse is still used for the
-            // FAILED state, a static "this stopped" cue.
-            animation: resolveFailed ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
-          }}
-        >
-          {/* Direct report, 2026-09-15 (v3): the previous scrolling-
+                  ? "couldn't load this stem -- try reroll"
+                  : undefined
+            }
+            style={{
+              flex: '1 1 auto',
+              minWidth: 140,
+              height: 40,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              border: `1px dashed ${
+                resolving
+                  ? 'var(--ra-stretch-on)'
+                  : resolveFailed
+                    ? 'var(--ra-mute-on)'
+                    : 'var(--ra-border)'
+              }`,
+              // Static (no animation) once settled either way (failed or
+              // truly empty) -- discover-slot-pulse is still used for the
+              // FAILED state, a static "this stopped" cue.
+              animation: resolveFailed
+                ? 'discover-slot-pulse 900ms ease-in-out infinite'
+                : undefined
+            }}
+          >
+            {/* Direct report, 2026-09-15 (v3): the previous scrolling-
               waveform reel read as too busy -- replaced with the shared
               LoadingLoader component (the same "still working" indicator
               BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
               and subtle, for brand consistency instead of a custom
               animation. */}
-          {resolving && <LoadingLoader size={16} />}
-        </div>
-      )}
-      {/* Direct request, 2026-09-15: "waveforms should have a fixed area
+            {resolving && <LoadingLoader size={16} />}
+          </div>
+        )}
+        {/* Direct request, 2026-09-15: "waveforms should have a fixed area
           they occupy... right now the different names change the width of
           the thing as well." Root cause: this span had no width of its own,
           so as a plain flex sibling of the waveform's `flex: 1 1 auto` box
@@ -2288,205 +2347,247 @@ function DiscoverSlotRow({
           span just above) keeps this span's own footprint constant across
           every row, so the waveform's flex-grow area -- and therefore its
           tile width -- is identical row to row regardless of name length. */}
-      <span
-        style={{
-          fontSize: 9,
-          color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)',
-          width: 110,
-          flexShrink: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap'
-        }}
-      >
-        {rerolling
-          ? slot.candidate
-            ? 'rerolling…'
-            : 'rolling…'
-          : resolveFailed
-            ? "couldn't load -- try again"
-            : slot.candidate
-              ? slot.candidate.presetName
-              : resolvedStem
-                ? resolvedStem.name
-                : slot.hasRerolled
-                  ? 'no match for this role yet'
-                  : 'no candidate yet'}
-      </span>
-      {resolvedStem && (
-        <>
-          {/* Direct request, 2026-09-15: "can we add a mute for each
+        <span
+          style={{
+            fontSize: 9,
+            color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)',
+            width: 110,
+            flexShrink: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {rerolling
+            ? slot.candidate
+              ? 'rerolling…'
+              : 'rolling…'
+            : resolveFailed
+              ? "couldn't load -- try again"
+              : slot.candidate
+                ? slot.candidate.presetName
+                : resolvedStem
+                  ? resolvedStem.name
+                  : slot.hasRerolled
+                    ? 'no match for this role yet'
+                    : 'no candidate yet'}
+        </span>
+        {resolvedStem && (
+          <>
+            {/* Direct request, 2026-09-15: "can we add a mute for each
               channel" -- toggleSlotPreview already existed (the waveform
               itself was already clickable to the same effect), but wasn't
               discoverable as a mute control -- only a hover tooltip
               explained it. Same handler as the waveform click, so either one
               keeps the other in sync; only shown once there's a real stem to
               mute (matching the waveform toggle's own guard). */}
-          <button
-            onClick={onTogglePreview}
-            title={previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'}
-            style={{
-              marginLeft: 'auto',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 10,
-              fontWeight: 700,
-              // Direct request, 2026-09-15: "mute should look exactly like
-              // mute on the arrangement view" -- matches ChannelRow.tsx's
-              // own muteButtonStyle exactly (background/border/color-by-
-              // state), rather than this row's own earlier ad hoc treatment
-              // (transparent-when-off instead of the real
-              // `--ra-bg-row-active` fill every other unmuted mute button in
-              // this app uses).
-              background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-              border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-              color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
-              cursor: 'pointer'
-            }}
-          >
-            {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
+            <button
+              onClick={onTogglePreview}
+              title={
+                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
+              }
+              style={{
+                marginLeft: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontFamily: 'inherit',
+                fontSize: 10,
+                fontWeight: 700,
+                // Direct request, 2026-09-15: "mute should look exactly like
+                // mute on the arrangement view" -- matches ChannelRow.tsx's
+                // own muteButtonStyle exactly (background/border/color-by-
+                // state), rather than this row's own earlier ad hoc treatment
+                // (transparent-when-off instead of the real
+                // `--ra-bg-row-active` fill every other unmuted mute button in
+                // this app uses).
+                background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
+                border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+                color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+                cursor: 'pointer'
+              }}
+            >
+              {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
                 glyph exactly (its solo/record siblings are also lowercase
                 single letters), rather than this row's own earlier
                 uppercase "M". */}
-            m
-          </button>
-          {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
+              m
+            </button>
+            {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
               next to mute, same M/S pairing Upcycle's own cards use and
               ChannelRow.tsx already has on the real arrangement. Matches
               ChannelRow.tsx's own soloButtonStyle exactly (a soft tinted
               background with the accent color on border/text, not a hard
               fill like mute's). */}
-          <button
-            onClick={onToggleSolo}
-            title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 10,
-              fontWeight: 700,
-              background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-              border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-              color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            s
-          </button>
-          {/* Direct request, 2026-09-16: star a stem to favourite it, then
+            <button
+              onClick={onToggleSolo}
+              title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontFamily: 'inherit',
+                fontSize: 10,
+                fontWeight: 700,
+                background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+                border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                cursor: 'pointer'
+              }}
+            >
+              s
+            </button>
+            {/* Direct request, 2026-09-16: star a stem to favourite it, then
               optionally bias future rolls toward favourites (the panel's
               own "prefer favourites" toolbar checkbox). Reuses
               `--ra-recording-live` for the filled/active state -- the same
               token RiffCircle.tsx already uses for its own "favourited"
               semantic, just applied to a literal star glyph here instead
               of a circle fill. */}
-          <button
-            onClick={onToggleFavourite}
-            title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              padding: 0,
-              background: 'var(--ra-bg-row-active)',
-              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-              color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            <StarIcon favourited={favourited} />
-          </button>
-        </>
-      )}
-      <button
-        onClick={onReroll}
-        disabled={rerolling}
-        // "roll" for a slot's first pick, "reroll" once it already has a
-        // candidate -- an empty slot has never been rolled, so "rerolling"
-        // was never the correct verb for it. Icon-only (direct request,
-        // 2026-09-15). No "still working" animation on this button
-        // (direct follow-up report, 2026-09-16, after trying both
-        // LoadingLoader and an icon-jump bounce first) -- the dimmed
-        // color/default cursor plus the title tooltip below are the only
-        // in-flight cues now.
-        title={
-          rerolling
-            ? slot.candidate
-              ? 'rerolling…'
-              : 'rolling…'
-            : slot.candidate
-              ? 'reroll'
-              : 'roll'
-        }
-        style={{
-          marginLeft: resolvedStem ? 0 : 'auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 22,
-          height: 22,
-          padding: 0,
-          background: 'transparent',
-          border: '1px solid var(--ra-border)',
-          color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-          cursor: rerolling ? 'default' : 'pointer'
-        }}
-      >
-        <ShuffleIcon />
-      </button>
-      <button
-        onClick={onRerollRandom}
-        disabled={rerolling}
-        title="random -- skip role matching, pick any random stem from your own library"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 22,
-          height: 22,
-          padding: 0,
-          background: 'transparent',
-          border: '1px solid var(--ra-border)',
-          color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-          cursor: rerolling ? 'default' : 'pointer'
-        }}
-      >
-        <DiceIcon />
-      </button>
-      <button
-        onClick={onRemove}
-        title="remove"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 22,
-          height: 22,
-          padding: 0,
-          fontFamily: 'inherit',
-          fontSize: 10,
-          fontWeight: 700,
-          background: 'transparent',
-          border: '1px solid var(--ra-border)',
-          color: 'var(--ra-text-2)',
-          cursor: 'pointer'
-        }}
-      >
-        {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
+            <button
+              onClick={onToggleFavourite}
+              title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                background: 'var(--ra-bg-row-active)',
+                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+                color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+                cursor: 'pointer'
+              }}
+            >
+              <StarIcon favourited={favourited} />
+            </button>
+            {slot.candidate !== null && (
+              <button
+                ref={nearbyButtonRef}
+                onClick={(e) => {
+                  if (nearbyMenu) {
+                    setNearbyMenu(null)
+                    return
+                  }
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
+                }}
+                title="explore riffs recorded near this one in the same jam"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+                  border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                  color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                  cursor: 'pointer'
+                }}
+              >
+                <NearbyIcon />
+              </button>
+            )}
+          </>
+        )}
+        <button
+          onClick={onReroll}
+          disabled={rerolling}
+          // "roll" for a slot's first pick, "reroll" once it already has a
+          // candidate -- an empty slot has never been rolled, so "rerolling"
+          // was never the correct verb for it. Icon-only (direct request,
+          // 2026-09-15). No "still working" animation on this button
+          // (direct follow-up report, 2026-09-16, after trying both
+          // LoadingLoader and an icon-jump bounce first) -- the dimmed
+          // color/default cursor plus the title tooltip below are the only
+          // in-flight cues now.
+          title={
+            rerolling
+              ? slot.candidate
+                ? 'rerolling…'
+                : 'rolling…'
+              : slot.candidate
+                ? 'reroll'
+                : 'roll'
+          }
+          style={{
+            marginLeft: resolvedStem ? 0 : 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+            cursor: rerolling ? 'default' : 'pointer'
+          }}
+        >
+          <ShuffleIcon />
+        </button>
+        <button
+          onClick={onRerollRandom}
+          disabled={rerolling}
+          title="random -- skip role matching, pick any random stem from your own library"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+            cursor: rerolling ? 'default' : 'pointer'
+          }}
+        >
+          <DiceIcon />
+        </button>
+        <button
+          onClick={onRemove}
+          title="remove"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 10,
+            fontWeight: 700,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
             as every other row button now. */}
-        X
-      </button>
-    </div>
+          X
+        </button>
+      </div>
+      {nearbyMenu && slot.candidate !== null && (
+        <DiscoverNearbyPopover
+          x={nearbyMenu.x}
+          y={nearbyMenu.y}
+          startCandidate={slot.candidate}
+          role={slot.role}
+          onPick={onSwapFromNearby}
+          onClose={() => setNearbyMenu(null)}
+          ignoreRef={nearbyButtonRef}
+        />
+      )}
+    </>
   )
 }
