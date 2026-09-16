@@ -1311,7 +1311,7 @@ export function LibraryBrowser({
   // handleImportSelected, which both support a multi-select batch) --
   // "seed from N different riffs at once" has no coherent meaning here,
   // so this is only ever wired to fire when exactly one riff is selected.
-  function seedDiscoverFromBrowseRiff(): void {
+  async function seedDiscoverFromBrowseRiff(): Promise<void> {
     if (!selectedRiffCID || !selectedJamCID || !resolvedRiff) return
     // Real root cause of a live report, 2026-09-16: "multiple versions of
     // the rifff playing... it's as though the preview from the import
@@ -1339,6 +1339,25 @@ export function LibraryBrowser({
     ) {
       return
     }
+    // Direct request, 2026-09-16: "the audio analysis should be able to
+    // detect and differentiate drums from leads etc etc. there must be a
+    // better way [than hand-tuning Tidy Up]." Checks the real trained
+    // classifier (StemCategories human confirmations, else
+    // StemAutoCategory's own audio-analysis result) for every stem in ONE
+    // batched round trip, before ever falling back to the blunt
+    // instrument-mask/preset-name guess this used to rely on alone --
+    // resolve-stem-arrange-roles' own main-process handler computes that
+    // SAME blunt chain internally as its own last resort, so `?? 'fx'`
+    // here is unreachable in practice but kept as a real type-level
+    // fallback (the IPC's own return type is nullable) rather than an
+    // unsafe assertion.
+    const roles = await window.rifffApi.resolveStemArrangeRoles(
+      resolvedRiff.stems.map((stem) => ({
+        stemCID: stem.stemCID,
+        instrumentMask: stem.instrumentMask,
+        presetName: stem.presetName
+      }))
+    )
     const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
       stemCID: stem.stemCID,
       jamCID: selectedJamCID,
@@ -1346,6 +1365,7 @@ export function LibraryBrowser({
       presetName: stem.presetName,
       creatorUserName: stem.creatorUserName,
       arrangeRole:
+        roles[stem.stemCID] ??
         SOUND_TYPE_TO_ARRANGE_ROLE[
           instrumentMaskToSoundType(stem.instrumentMask) ??
             guessSoundTypeFromPresetName(stem.presetName) ??
@@ -2164,7 +2184,7 @@ export function LibraryBrowser({
                           )}
                           {selectedRiffCIDs.size <= 1 && (
                             <button
-                              onClick={seedDiscoverFromBrowseRiff}
+                              onClick={() => void seedDiscoverFromBrowseRiff()}
                               title="replace Discover's current loop with this riff's own stems, then keep tinkering from there"
                               style={{
                                 height: 24,
