@@ -2148,6 +2148,73 @@ function DiscoverSlotRow({
   // real click while playback kept remounting the effect out from under it.
   const closeNearbyMenu = useCallback(() => setNearbyMenu(null), [])
 
+  // Direct request, 2026-09-16: "i imported a batch of rifffs using the
+  // import from library feature and attempting to discover the individual
+  // riffs i find that i cannot use the adjacent rifffs feature. it should
+  // know the adjacent rifffs still, right?" -- a Shelf-sourced slot
+  // (seedStem set, candidate null) has no explicit riffCID to anchor
+  // adjacency from, but findRiffForStemPath can recover one from the
+  // seeded stem's own already-downloaded local path (its basename IS its
+  // own StemCID -- see that function's own doc comment). Only attempted
+  // for a seedStem-only slot; a slot with a real `candidate` already has
+  // everything it needs and skips this entirely (see the null guard
+  // clearing seedStemAnchor below, so a later reroll landing a real
+  // candidate doesn't leave a stale anchor around).
+  // Paired with the seed stem path it was looked up FOR -- same
+  // resolved/resolvedForCurrent identity-comparison convention this file
+  // (and DiscoverNearbyPopover.tsx) already uses elsewhere, so a stale
+  // "candidate went from null back to null via a different seedStem"
+  // transition, or the null-when-nothing-to-look-up case, never needs a
+  // synchronous setState at the top of the effect body (which
+  // react-hooks/set-state-in-effect flags as a cascading-render risk) --
+  // it's derived from a key mismatch at render time instead.
+  const [seedStemLookup, setSeedStemLookup] = useState<{
+    path: string
+    anchor: DiscoverCandidate | null
+  } | null>(null)
+  const seedStemLookupPath = slot.candidate === null ? (slot.seedStem?.path ?? null) : null
+  useEffect(() => {
+    if (seedStemLookupPath === null) return
+    const seedStem = slot.seedStem
+    if (!seedStem) return
+    let cancelled = false
+    window.rifffApi
+      .findRiffForStemPath(seedStemLookupPath)
+      .then((result) => {
+        if (cancelled) return
+        setSeedStemLookup({
+          path: seedStemLookupPath,
+          anchor: result
+            ? {
+                stemCID: result.stemCID,
+                jamCID: result.jamCID,
+                riffCID: result.riffCID,
+                presetName: seedStem.name,
+                creatorUserName: seedStem.author,
+                arrangeRole: slot.role,
+                drumSubRole: null,
+                riffBpm: result.bpm
+              }
+            : null
+        })
+      })
+      .catch((err) => {
+        console.error('DiscoverSlotRow: findRiffForStemPath failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- slot.seedStem/slot.role are read inside via the closure above, not tracked as deps here; seedStemLookupPath already changes whenever slot.seedStem's own path does (it's derived from it), and slot.role changing without the path also changing would be a same-slot mid-flight role edit, which doesn't happen in this codebase (role is fixed at slot creation) -- listing them would only cause redundant re-lookups of the SAME path.
+  }, [seedStemLookupPath])
+  const seedStemAnchor = seedStemLookup?.path === seedStemLookupPath ? seedStemLookup.anchor : null
+  // The real candidate always wins when present; a seedStem-only slot
+  // falls back to whatever findRiffForStemPath managed to recover (or
+  // null, if the stem isn't part of any currently-known jam -- a real
+  // possibility for a locally-recorded take or an import unrelated to any
+  // Endlesss jam, handled the same as "no candidate" already was: the
+  // button just doesn't render).
+  const nearbyAnchor: DiscoverCandidate | null = slot.candidate ?? seedStemAnchor
+
   // Direct request: adjust gain by dragging vertically on the waveform
   // itself -- StemWaveformRow.tsx's own "envelope" volume-drag gesture,
   // reused here (startPointerDrag, same deltaY/ROW_HEIGHT scale) instead of
@@ -2582,7 +2649,7 @@ function DiscoverSlotRow({
               >
                 <StarIcon favourited={favourited} />
               </button>
-              {slot.candidate !== null && (
+              {nearbyAnchor !== null && (
                 <button
                   ref={nearbyButtonRef}
                   onClick={(e) => {
@@ -2692,11 +2759,11 @@ function DiscoverSlotRow({
           X
         </button>
       </div>
-      {nearbyMenu && slot.candidate !== null && (
+      {nearbyMenu && nearbyAnchor !== null && (
         <DiscoverNearbyPopover
           x={nearbyMenu.x}
           y={nearbyMenu.y}
-          startCandidate={slot.candidate}
+          startCandidate={nearbyAnchor}
           role={slot.role}
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
