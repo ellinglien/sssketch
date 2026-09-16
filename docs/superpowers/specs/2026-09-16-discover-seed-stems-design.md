@@ -62,16 +62,20 @@ Discover already seeded, no drag or simultaneous visibility required.
 - **Seeded slots start unlocked** — immediately behave like any other
   Discover slot (individually rerollable, and reroll-all-able as a whole
   if the user chooses that). No special protection.
-- **Tempo follows the seed only when the arranger is empty.** Seeded
-  stems otherwise stretch to Discover's own *current* target BPM, same as
-  any other resolved candidate. But when the real arranger timeline has
-  nothing placed on it yet (`channelOrder.length === 0` — there's no
-  existing tempo commitment to protect), seeding also sets the project
-  tempo to the seed riff's own BPM. Revised 2026-09-16, direct request:
-  "the tempo should adjust to the rifff tempo (especially for empty
-  arrangers)" — the original "never override" decision above was too
-  strict for the common case (starting a project fresh from a riff);
-  seeding into an already-populated arranger still never touches tempo.
+- **Tempo is NOT auto-overridden — manual match only.** Seeded stems
+  stretch to Discover's own *current* target BPM, same as any other
+  resolved candidate. A brief 2026-09-16 revision tried auto-snapping the
+  project tempo to the seed riff's own BPM when the arranger was empty,
+  but that raced `state.bpm` (one of StoreContext.tsx's
+  `scheduleEngineSync`'s own listed dependencies) against DiscoverPanel's
+  engine-ownership claim, which doesn't happen until its first slot
+  actually resolves (async, seconds away for a Browse-sourced seed) —
+  live-reported as duplicate/background playback. Reverted same day.
+  Instead, DiscoverPanel shows a "match seed" button next to its own
+  tempo control whenever the current tempo differs from the most
+  recently seeded riff's own BPM (`discoverSeedBpm`, lifted up in
+  LibraryBrowser.tsx) — a manual, always-available way to get the same
+  result without the automatic race.
 
 ## Component changes
 
