@@ -7,7 +7,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar, typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
 import { formatBpm } from '@shared/format'
-import type { Stem } from '@shared/types'
+import type { Rifff, Stem } from '@shared/types'
 
 // A short, real summary of what's actually IN this rifff -- "drums, bass"
 // -- rather than its arbitrary, often LORE-auto-generated name ("ivory
@@ -41,9 +41,21 @@ function fineNudgeDelta(bpm: number, snapDiv: number): number {
 }
 
 export function Inspector({
-  onOpenBeatPicker
+  onOpenBeatPicker,
+  onSeedDiscover
 }: {
   onOpenBeatPicker: (groupId: string) => void
+  /** App.tsx's own openRiffLibraryWithDiscoverSeed -- identical mechanism
+   * to Shelf.tsx's own right-click trigger (this component is, same as
+   * Shelf, only ever visible/interactable while LibraryBrowser's
+   * full-screen modal is closed, so no discard-guard is needed here
+   * either -- see docs/superpowers/specs/2026-09-16-discover-seed-stems-
+   * design.md's own Background section). Direct request, 2026-09-16:
+   * "another place that might be fun to add a 'discover this rifff'
+   * would be in the inspector." Works for a placed clip too, not just a
+   * Shelf-resident one -- buildSeedSlotsFromStems only ever needs the
+   * rifff's own Stem[], regardless of where it currently lives. */
+  onSeedDiscover: (rifff: Rifff) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -153,6 +165,23 @@ export function Inspector({
           >
             {rifff.folderPath}/
           </div>
+          <button
+            onClick={() => onSeedDiscover(rifff)}
+            title="replace Discover's current loop with this rifff's own stems, then keep tinkering from there"
+            style={{
+              marginTop: 8,
+              height: 20,
+              borderRadius: 0,
+              padding: '0 6px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            discover this rifff
+          </button>
         </>
       )}
 

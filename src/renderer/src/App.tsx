@@ -2212,7 +2212,10 @@ function Frame(): React.JSX.Element {
               transition: 'width 150ms ease'
             }}
           >
-            <Inspector onOpenBeatPicker={handleOpenBeatPickerForEdit} />
+            <Inspector
+              onOpenBeatPicker={handleOpenBeatPickerForEdit}
+              onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+            />
           </div>
         </div>
         {pickerGroupId && state.rifffs[pickerGroupId] && (
