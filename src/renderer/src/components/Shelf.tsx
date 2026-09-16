@@ -15,6 +15,7 @@ import {
 import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
 import { formatBpm } from '@shared/format'
+import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPrompt'
 
 const TILE_SIZE = 42
 
@@ -49,6 +50,11 @@ export function Shelf({
   const playing = usePlaying()
   const library = Object.values(state.rifffs)
   const [dragOver, setDragOver] = useState(false)
+  // Set whenever importRifff couldn't make sense of a drop (none of the
+  // paths matched Endlesss's own stem-filename convention) -- shows
+  // LoopOrOneShotPrompt so the user decides how the file(s) should play,
+  // rather than silently guessing. See importFromPaths' own comment below.
+  const [loopPromptPaths, setLoopPromptPaths] = useState<string[] | null>(null)
   // Hovering a tile previews its meta in the header line without changing
   // selection — falls back to the current selection so the line isn't just
   // blank whenever the mouse isn't over the tray at all.
@@ -203,20 +209,18 @@ export function Shelf({
       // parseStemFilename requires "<slot> - <author> - <name> -
       // <bpm>BPM - <timestamp>.wav") -- the common case for a plain
       // external sample dropped in from Finder rather than an Endlesss
-      // export. Direct report, 2026-09-16: "i'm not able to drag single
-      // loops into the shelf." Falls back to importOneShot per path --
-      // the same import App.tsx's own Timeline drop handler already uses
-      // successfully for this exact case -- so each file lands on the
-      // Shelf as its own single-stem, oneShot Rifff instead of silently
-      // doing nothing. No classifyStems call here (unlike the branch
-      // above): a one-shot's stem type is already fixed ('fx'), nothing
-      // to classify, matching the Timeline's own importOneShot call site.
-      for (const path of paths) {
-        const oneShotRifff = await window.rifffApi.importOneShot(path)
-        if (!oneShotRifff) continue
-        dispatch({ type: 'ADD_TO_SHELF', rifff: oneShotRifff })
-        onImported(oneShotRifff.groupId)
-      }
+      // export. Direct reports, 2026-09-16: "i'm not able to drag single
+      // loops into the shelf" (first), then, after a one-shot-only
+      // fallback shipped same day, "it doesn't want to loop... it is out
+      // of time although it is a perfect loop" -- a one-shot import is
+      // correct for a drum hit but silently wrong for a real loop file
+      // (oneShot stems are never stretched/tiled, by design). Whether a
+      // given external file is a one-shot or a loop can't be told apart
+      // automatically (no audio-content bpm/beat detection anywhere in
+      // this codebase) -- Elling's own explicit choice was to ask every
+      // time rather than guess. resolveLoopPrompt (below) does the actual
+      // import once the user answers.
+      setLoopPromptPaths(paths)
     } catch (err) {
       // importRifff normally swallows its own errors and resolves null; this only
       // fires for something unexpected at the IPC layer itself (e.g. the main
@@ -224,6 +228,29 @@ export function Shelf({
       // (Task 10 doesn't add one) — surface it to the console so it's at least
       // discoverable rather than a silent no-op.
       console.error('importRifff failed:', err)
+    }
+  }
+
+  // Resolves LoopOrOneShotPrompt's own choice for whatever paths are
+  // currently pending (loopPromptPaths) -- one-shot uses importOneShot
+  // (unchanged from the prior fallback), loop uses the new importLoop with
+  // the user-given bar count applied uniformly to every path (see
+  // LoopOrOneShotPrompt's own doc comment on why per-file bar counts
+  // aren't supported). No classifyStems call for either branch: neither a
+  // one-shot's nor a loop's single stem has an ambiguous type to classify
+  // (both default to 'fx'), matching App.tsx's own importOneShot call site.
+  async function resolveLoopPrompt(choice: LoopOrOneShotChoice): Promise<void> {
+    const paths = loopPromptPaths
+    setLoopPromptPaths(null)
+    if (!paths || choice.type === 'cancel') return
+    for (const path of paths) {
+      const rifff =
+        choice.type === 'oneShot'
+          ? await window.rifffApi.importOneShot(path)
+          : await window.rifffApi.importLoop(path, choice.barCount)
+      if (!rifff) continue
+      dispatch({ type: 'ADD_TO_SHELF', rifff })
+      onImported(rifff.groupId)
     }
   }
 
@@ -256,172 +283,180 @@ export function Shelf({
   const detailRifff = state.rifffs[hoverId ?? state.sel ?? ''] ?? null
 
   return (
-    <div
-      style={{
-        padding: '11px 14px',
-        background: 'var(--ra-bg-rail)',
-        borderBottom: '1px solid var(--ra-border)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 9
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, height: 14 }}>
-        <span className="ra-eyebrow">rifff library</span>
-        <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>{library.length}</span>
-        <span style={{ flex: 1 }} />
-        {detailRifff && (
-          <span style={{ fontSize: 9, color: 'var(--ra-text-2)', whiteSpace: 'nowrap' }}>
-            {detailRifff.name} — {formatBpm(detailRifff.bpm)} BPM · {detailRifff.stems.length} stems
-            · {detailRifff.barLength} bars
-          </span>
-        )}
-      </div>
+    <>
+      {loopPromptPaths && (
+        <LoopOrOneShotPrompt
+          paths={loopPromptPaths}
+          onResolve={(choice) => void resolveLoopPrompt(choice)}
+        />
+      )}
       <div
-        onMouseLeave={() => setHoverId(null)}
         style={{
+          padding: '11px 14px',
+          background: 'var(--ra-bg-rail)',
+          borderBottom: '1px solid var(--ra-border)',
           display: 'flex',
-          flexWrap: 'wrap',
-          gap: 5,
-          alignItems: 'center',
-          // Capped rather than growing unbounded with library size — App.tsx's
-          // .ra-frame is now a fixed height (see its own comment on why), so
-          // an uncapped library that wraps to many rows would squeeze the
-          // arranger below it instead of just making the whole window taller
-          // the way it used to. Roughly 2 rows of TILE_SIZE(42) tiles; scrolls
-          // internally past that.
-          maxHeight: 100,
-          overflowY: 'auto'
+          flexDirection: 'column',
+          gap: 9
         }}
       >
-        {library.map((rifff) => {
-          const selected = state.sel === rifff.groupId
-          const hovered = hoverId === rifff.groupId
-          const previewing = previewingGroupId === rifff.groupId
-          const batchSelected = multiSelected.has(rifff.groupId)
-          const placed = rifff.startBar !== undefined
-          // Already placed on the timeline dims further than the normal idle
-          // state — it's already in the arrangement, so the shelf's default
-          // (unlit) view should draw the eye toward what's still available to
-          // drag in, not what's already been used. Active interaction state
-          // (selected/hovered/previewing/batch-selected) still lights it up
-          // normally regardless of placement — greying out is only the idle
-          // default, not a suppression of interaction feedback.
-          const lit = selected || hovered || previewing || batchSelected
-          return (
-            <button
-              key={rifff.groupId}
-              draggable
-              onDragStart={(e) => {
-                suppressNextSyntheticClick()
-                e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
-                // Dragging a tile that's part of an active multi-selection
-                // carries the whole batch — SketchStrip reads this to place
-                // all of them at once. Falls back to the singular id above
-                // for anything that only understands single-tile drops
-                // (the normal Timeline), which just places the one tile
-                // under the cursor rather than the whole batch.
-                if (multiSelected.size > 1 && multiSelected.has(rifff.groupId)) {
-                  e.dataTransfer.setData(
-                    'text/rifff-shelf-source-ids',
-                    JSON.stringify([...multiSelected])
-                  )
-                }
-                // Not yet placed — there's no existing on-timeline position to
-                // preserve an offset from, and without this the module could
-                // still be holding a stale value left behind by a previous
-                // in-arranger reposition drag.
-                setGrabOffsetBars(0)
-                // Dragging into the arranger is a clear "done previewing, now
-                // placing it" signal — whatever tile was previewing (this one
-                // or a different one) should stop, not keep looping alongside
-                // wherever the drag ends up.
-                stopTilePreview()
-                setPreviewingGroupId(null)
-              }}
-              onMouseEnter={() => setHoverId(rifff.groupId)}
-              onClick={(e) => handleTileClick(e, rifff)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                // Real root cause of a live report, 2026-09-16: "right
-                // clicking brings up the discovery panel... the preview
-                // continues to play" -- this tile's own preview
-                // (startPreviewLoop, plain Web Audio, entirely separate
-                // from the native engine Discover uses) was never stopped
-                // when seeding Discover, unlike LibraryBrowser.tsx's own
-                // Browse-tab preview (fixed the same day for the same
-                // reason) -- it just kept looping forever alongside
-                // whatever Discover started, making it hard to even tell
-                // whether Discover's own preview was working.
-                stopTilePreview()
-                setPreviewingGroupId(null)
-                onSeedDiscover(rifff)
-              }}
-              title={`${rifff.name} — click to preview, drag to arrange, right-click to seed Discover with these stems, shift/cmd-click to multi-select, delete to remove from library`}
-              style={{
-                width: TILE_SIZE,
-                height: TILE_SIZE,
-                flex: 'none',
-                padding: 2,
-                border: previewing
-                  ? '1px solid var(--ra-playhead)'
-                  : batchSelected
-                    ? '1px solid var(--ra-stretch-on)'
-                    : '1px solid transparent',
-                cursor: 'grab',
-                background: 'transparent',
-                opacity: lit ? 1 : placed ? 0.4 : 0.72
-              }}
-            >
-              <PolarGlyph
-                stems={rifff.stems}
-                identityColor={stemColorVar(rifff.stems[0])}
-                size={TILE_SIZE - 4}
-              />
-            </button>
-          )
-        })}
-        <div
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => void handlePickImport()}
-          role="button"
-          title="drop rifff folders or stems straight from endlesss, or click to pick from disk"
-          style={{
-            flex: 1,
-            minWidth: 150,
-            height: TILE_SIZE,
-            border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border)'}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 15,
-            color: 'var(--ra-text-4)',
-            cursor: 'pointer'
-          }}
-        >
-          +
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, height: 14 }}>
+          <span className="ra-eyebrow">rifff library</span>
+          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>{library.length}</span>
+          <span style={{ flex: 1 }} />
+          {detailRifff && (
+            <span style={{ fontSize: 9, color: 'var(--ra-text-2)', whiteSpace: 'nowrap' }}>
+              {detailRifff.name} — {formatBpm(detailRifff.bpm)} BPM · {detailRifff.stems.length}{' '}
+              stems · {detailRifff.barLength} bars
+            </span>
+          )}
         </div>
-        <button
-          onClick={onOpenLibrary}
-          data-tour-id="tour-import"
+        <div
+          onMouseLeave={() => setHoverId(null)}
           style={{
-            height: 18,
-            borderRadius: 0,
-            padding: '0 6px',
-            fontSize: 9,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text-2)'
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 5,
+            alignItems: 'center',
+            // Capped rather than growing unbounded with library size — App.tsx's
+            // .ra-frame is now a fixed height (see its own comment on why), so
+            // an uncapped library that wraps to many rows would squeeze the
+            // arranger below it instead of just making the whole window taller
+            // the way it used to. Roughly 2 rows of TILE_SIZE(42) tiles; scrolls
+            // internally past that.
+            maxHeight: 100,
+            overflowY: 'auto'
           }}
         >
-          import
-        </button>
+          {library.map((rifff) => {
+            const selected = state.sel === rifff.groupId
+            const hovered = hoverId === rifff.groupId
+            const previewing = previewingGroupId === rifff.groupId
+            const batchSelected = multiSelected.has(rifff.groupId)
+            const placed = rifff.startBar !== undefined
+            // Already placed on the timeline dims further than the normal idle
+            // state — it's already in the arrangement, so the shelf's default
+            // (unlit) view should draw the eye toward what's still available to
+            // drag in, not what's already been used. Active interaction state
+            // (selected/hovered/previewing/batch-selected) still lights it up
+            // normally regardless of placement — greying out is only the idle
+            // default, not a suppression of interaction feedback.
+            const lit = selected || hovered || previewing || batchSelected
+            return (
+              <button
+                key={rifff.groupId}
+                draggable
+                onDragStart={(e) => {
+                  suppressNextSyntheticClick()
+                  e.dataTransfer.setData('text/rifff-shelf-source-id', rifff.groupId)
+                  // Dragging a tile that's part of an active multi-selection
+                  // carries the whole batch — SketchStrip reads this to place
+                  // all of them at once. Falls back to the singular id above
+                  // for anything that only understands single-tile drops
+                  // (the normal Timeline), which just places the one tile
+                  // under the cursor rather than the whole batch.
+                  if (multiSelected.size > 1 && multiSelected.has(rifff.groupId)) {
+                    e.dataTransfer.setData(
+                      'text/rifff-shelf-source-ids',
+                      JSON.stringify([...multiSelected])
+                    )
+                  }
+                  // Not yet placed — there's no existing on-timeline position to
+                  // preserve an offset from, and without this the module could
+                  // still be holding a stale value left behind by a previous
+                  // in-arranger reposition drag.
+                  setGrabOffsetBars(0)
+                  // Dragging into the arranger is a clear "done previewing, now
+                  // placing it" signal — whatever tile was previewing (this one
+                  // or a different one) should stop, not keep looping alongside
+                  // wherever the drag ends up.
+                  stopTilePreview()
+                  setPreviewingGroupId(null)
+                }}
+                onMouseEnter={() => setHoverId(rifff.groupId)}
+                onClick={(e) => handleTileClick(e, rifff)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  // Real root cause of a live report, 2026-09-16: "right
+                  // clicking brings up the discovery panel... the preview
+                  // continues to play" -- this tile's own preview
+                  // (startPreviewLoop, plain Web Audio, entirely separate
+                  // from the native engine Discover uses) was never stopped
+                  // when seeding Discover, unlike LibraryBrowser.tsx's own
+                  // Browse-tab preview (fixed the same day for the same
+                  // reason) -- it just kept looping forever alongside
+                  // whatever Discover started, making it hard to even tell
+                  // whether Discover's own preview was working.
+                  stopTilePreview()
+                  setPreviewingGroupId(null)
+                  onSeedDiscover(rifff)
+                }}
+                title={`${rifff.name} — click to preview, drag to arrange, right-click to seed Discover with these stems, shift/cmd-click to multi-select, delete to remove from library`}
+                style={{
+                  width: TILE_SIZE,
+                  height: TILE_SIZE,
+                  flex: 'none',
+                  padding: 2,
+                  border: previewing
+                    ? '1px solid var(--ra-playhead)'
+                    : batchSelected
+                      ? '1px solid var(--ra-stretch-on)'
+                      : '1px solid transparent',
+                  cursor: 'grab',
+                  background: 'transparent',
+                  opacity: lit ? 1 : placed ? 0.4 : 0.72
+                }}
+              >
+                <PolarGlyph
+                  stems={rifff.stems}
+                  identityColor={stemColorVar(rifff.stems[0])}
+                  size={TILE_SIZE - 4}
+                />
+              </button>
+            )
+          })}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => void handlePickImport()}
+            role="button"
+            title="drop rifff folders or stems straight from endlesss, or click to pick from disk"
+            style={{
+              flex: 1,
+              minWidth: 150,
+              height: TILE_SIZE,
+              border: `1px dashed ${dragOver ? 'var(--ra-text-2)' : 'var(--ra-border)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 15,
+              color: 'var(--ra-text-4)',
+              cursor: 'pointer'
+            }}
+          >
+            +
+          </div>
+          <button
+            onClick={onOpenLibrary}
+            data-tour-id="tour-import"
+            style={{
+              height: 18,
+              borderRadius: 0,
+              padding: '0 6px',
+              fontSize: 9,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            import
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   )
 }

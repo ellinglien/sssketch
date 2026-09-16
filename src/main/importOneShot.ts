@@ -6,6 +6,7 @@ import { readWavHeaderBytes, libraryRoot } from './importRifff'
 import { readWavDurationSeconds } from '../shared/wavDuration'
 import { randomAdjectiveNoun } from './projectFile'
 import { snapToWholeBarIfNearlyExact } from '../shared/barLengthSnap'
+import { bpmForLoopBars } from '../shared/loopBarGuess'
 import type { Rifff, Stem } from '@shared/types'
 
 interface CopiedAudioFile {
@@ -87,6 +88,56 @@ export function importOneShot(path: string): Rifff | null {
         durationSec,
         barLength: 1,
         oneShot: true
+      }
+    ]
+  }
+}
+
+/**
+ * Imports a single file dropped directly onto the Shelf as a real,
+ * tempo-stretchable, tileable loop -- the user-chosen alternative to
+ * importOneShot above, for a dropped file that IS a musical loop rather
+ * than a one-shot hit (Shelf.tsx's own import prompt asks which). Real
+ * report, 2026-09-16: "it doesn't want to loop... i can't extend it
+ * beyond its bound in the timeline, and it is out of time although it is
+ * a perfect loop" -- importOneShot's hardcoded bpm:120/barLength:1/
+ * oneShot:true is correct for a one-shot hit but wrong for a loop file:
+ * oneShot stems are never stretched or tiled, by design (see that
+ * function's own doc comment).
+ *
+ * `barCount` is supplied by the user (via the Shelf import prompt,
+ * pre-filled with loopBarGuess.ts's own best-effort suggestion) rather
+ * than detected from audio content -- this codebase has no onset/tempo
+ * detection anywhere, and asking for bar count (something a loop-pack
+ * user typically knows or can see, e.g. "this is a 2-bar break") lets
+ * loopBarGuess.ts's bpmForLoopBars back-solve a native bpm from nothing
+ * but that + the file's own real measured duration, with no new audio
+ * analysis required. oneShot is left unset -- this rifff and its one
+ * stem behave exactly like any other tileable, stretch-to-project-tempo
+ * loop from here on.
+ */
+export function importLoop(path: string, barCount: number): Rifff | null {
+  const copied = copyIntoLibrary(path, 'importLoop')
+  if (!copied) return null
+  const { groupId, destPath, durationSec } = copied
+
+  const displayName = basename(path, '.wav')
+  const bpm = bpmForLoopBars(durationSec, barCount)
+  return {
+    groupId,
+    name: displayName,
+    bpm,
+    barLength: barCount,
+    folderPath: path,
+    stems: [
+      {
+        slot: 1,
+        author: '',
+        name: displayName,
+        type: 'fx',
+        path: destPath,
+        durationSec,
+        barLength: barCount
       }
     ]
   }

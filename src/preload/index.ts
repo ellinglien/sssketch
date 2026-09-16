@@ -25,6 +25,16 @@ const api = {
   importDemoRifff: (): Promise<Rifff | null> => ipcRenderer.invoke('import-demo-rifff'),
   importOneShot: (path: string): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-one-shot', path),
+  // barCount is user-supplied (Shelf's own import prompt) -- see
+  // importLoop's own doc comment (src/main/importOneShot.ts) for why bar
+  // count rather than bpm is what's asked for.
+  importLoop: (path: string, barCount: number): Promise<Rifff | null> =>
+    ipcRenderer.invoke('import-loop', path, barCount),
+  // Used only to pre-fill the loop-import prompt's own bar-count guess
+  // (loopBarGuess.ts's guessLoopBars) -- null when the file can't be read
+  // as a WAV at all (the prompt just falls back to its default candidate).
+  getWavDurationSeconds: (path: string): Promise<number | null> =>
+    ipcRenderer.invoke('get-wav-duration-seconds', path),
   // loopBars, when passed, is a gated-recording take's own loop-region
   // length -- see importRecordedTake's own doc comment for why that makes
   // it tile/loop like any other rifff instead of playing once (the default

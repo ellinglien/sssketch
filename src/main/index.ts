@@ -3,9 +3,10 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
-import { importRifff } from './importRifff'
+import { importRifff, readWavHeaderBytes } from './importRifff'
+import { readWavDurationSeconds } from '../shared/wavDuration'
 import { importDemoRifff } from './demoRifff'
-import { importOneShot, importRecordedTake, importRecordedStem } from './importOneShot'
+import { importOneShot, importLoop, importRecordedTake, importRecordedStem } from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -402,6 +403,22 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('import-one-shot', (_event, path: string) => {
     return importOneShot(path)
+  })
+
+  ipcMain.handle('import-loop', (_event, path: string, barCount: number) => {
+    return importLoop(path, barCount)
+  })
+
+  // Read-only, for Shelf's own "one-shot or loop?" import prompt to show a
+  // pre-filled bar-count guess (loopBarGuess.ts's guessLoopBars) before the
+  // user commits to importLoop -- never throws, matching this codebase's
+  // "can't read it, return null" convention for optional file probes.
+  ipcMain.handle('get-wav-duration-seconds', (_event, path: string) => {
+    try {
+      return readWavDurationSeconds(readWavHeaderBytes(path))
+    } catch {
+      return null
+    }
   })
 
   ipcMain.handle('import-recorded-take', (_event, path: string, bpm: number, loopBars?: number) => {

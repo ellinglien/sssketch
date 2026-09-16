@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { encodeWavPCM16 } from '@shared/encodeWav'
-import { importOneShot, importRecordedTake, importRecordedStem } from './importOneShot'
+import { importOneShot, importLoop, importRecordedTake, importRecordedStem } from './importOneShot'
 
 function writeTestWav(dir: string, name: string, seconds: number, sampleRate = 44100): string {
   const numSamples = Math.round(seconds * sampleRate)
@@ -45,6 +45,55 @@ describe('importOneShot', () => {
 
   it('returns null for a path that does not exist, without throwing', () => {
     expect(importOneShot('/no/such/file.wav')).toBeNull()
+  })
+})
+
+describe('importLoop', () => {
+  it('builds a single-stem, non-oneShot Rifff whose bpm is back-solved from the given bar count and real duration', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-looptest-'))
+    try {
+      // 2 bars at exactly 120bpm (secPerBar = 2s) = 4 real seconds.
+      const path = writeTestWav(dir, 'amen.wav', 4.0)
+      const rifff = importLoop(path, 2)
+      expect(rifff).not.toBeNull()
+      expect(rifff!.bpm).toBeCloseTo(120, 1)
+      expect(rifff!.barLength).toBe(2)
+      expect(rifff!.stems).toHaveLength(1)
+      expect(rifff!.stems[0].oneShot).toBeUndefined()
+      expect(rifff!.stems[0].barLength).toBe(2)
+      expect(rifff!.stems[0].durationSec).toBeCloseTo(4.0, 1)
+      // Copied into the managed library, same as importOneShot.
+      expect(rifff!.stems[0].path).not.toBe(path)
+      expect(existsSync(rifff!.stems[0].path)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('derives a different bpm for the same file when given a different bar count', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-looptest-'))
+    try {
+      const path = writeTestWav(dir, 'break.wav', 4.0)
+      expect(importLoop(path, 1)!.bpm).toBeCloseTo(60, 1)
+      expect(importLoop(path, 4)!.bpm).toBeCloseTo(240, 1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a non-WAV file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-looptest-'))
+    try {
+      const path = join(dir, 'not-audio.txt')
+      writeFileSync(path, 'hello')
+      expect(importLoop(path, 4)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a path that does not exist, without throwing', () => {
+    expect(importLoop('/no/such/file.wav', 4)).toBeNull()
   })
 })
 
