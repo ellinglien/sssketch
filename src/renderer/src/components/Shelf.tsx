@@ -196,6 +196,26 @@ export function Shelf({
         classifyStems(rifff, dispatch).catch((err) => {
           console.error('Shelf: failed to classify stem types:', err)
         })
+        return
+      }
+      // importRifff returns null when none of the given paths match
+      // Endlesss's own stem-filename convention (buildRifff.ts's
+      // parseStemFilename requires "<slot> - <author> - <name> -
+      // <bpm>BPM - <timestamp>.wav") -- the common case for a plain
+      // external sample dropped in from Finder rather than an Endlesss
+      // export. Direct report, 2026-09-16: "i'm not able to drag single
+      // loops into the shelf." Falls back to importOneShot per path --
+      // the same import App.tsx's own Timeline drop handler already uses
+      // successfully for this exact case -- so each file lands on the
+      // Shelf as its own single-stem, oneShot Rifff instead of silently
+      // doing nothing. No classifyStems call here (unlike the branch
+      // above): a one-shot's stem type is already fixed ('fx'), nothing
+      // to classify, matching the Timeline's own importOneShot call site.
+      for (const path of paths) {
+        const oneShotRifff = await window.rifffApi.importOneShot(path)
+        if (!oneShotRifff) continue
+        dispatch({ type: 'ADD_TO_SHELF', rifff: oneShotRifff })
+        onImported(oneShotRifff.groupId)
       }
     } catch (err) {
       // importRifff normally swallows its own errors and resolves null; this only
