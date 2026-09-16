@@ -8,6 +8,8 @@ import {
   resolveRiff,
   downloadMissingStems
 } from './riffLibraryStore'
+import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { resolveStemArrangeRole } from './resolveStemArrangeRole'
 import type { DiscoverCandidate } from './discoverCandidates'
 
 /** Result of walking outward from a center index in both directions --
@@ -105,15 +107,29 @@ export async function getAdjacentDiscoverCandidates(
   // const's narrowing into a nested function closure.
   const jamCID = context.jamCID
 
+  // Direct request, 2026-09-16: "the audio analysis should be able to
+  // detect and differentiate drums from leads etc etc." Checks the real
+  // trained classifier (resolveStemArrangeRole -- human-confirmed
+  // StemCategories, else the audio-analysis-backed StemAutoCategory) for
+  // each stem BEFORE falling back to the blunt instrument-mask/preset-name
+  // chain, same precedence discoverCandidates.ts's own pool-building
+  // already uses for the opposite lookup direction (role -> matching
+  // stems). Opened once, outside the per-riff matchRole closure below, not
+  // once per stem -- openOwnRiffLibraryDb() caches its own connection, but
+  // there's no reason to re-look-it-up on every call either.
+  const ownDb = openOwnRiffLibraryDb()
+
   async function matchRole(summary: { riffCID: string }): Promise<DiscoverCandidate | null> {
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
-      const soundType =
+      const bluntSoundType =
         instrumentMaskToSoundType(stem.instrumentMask) ??
         guessSoundTypeFromPresetName(stem.presetName)
-      if (soundType === null) continue
-      if (SOUND_TYPE_TO_ARRANGE_ROLE[soundType] !== role) continue
+      const stemRole = resolveStemArrangeRole(ownDb, stem.stemCID, () =>
+        bluntSoundType === null ? null : SOUND_TYPE_TO_ARRANGE_ROLE[bluntSoundType]
+      )
+      if (stemRole !== role) continue
       return {
         stemCID: stem.stemCID,
         jamCID,
