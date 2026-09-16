@@ -37,8 +37,8 @@ export function UpdateAvailableDialog(): React.JSX.Element | null {
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 110,
-        background: 'rgba(0, 0, 0, 0.4)',
+        zIndex: 'var(--ra-z-modal)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center'
@@ -79,7 +79,7 @@ export function UpdateAvailableDialog(): React.JSX.Element | null {
             <div
               style={{
                 height: 4,
-                background: 'var(--ra-bg)',
+                background: 'var(--ra-bg-row-sub)',
                 border: '1px solid var(--ra-border)'
               }}
             >

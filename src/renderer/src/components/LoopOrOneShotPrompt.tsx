@@ -149,8 +149,8 @@ export function LoopOrOneShotPrompt({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 110,
-        background: 'rgba(0, 0, 0, 0.4)',
+        zIndex: 'var(--ra-z-modal)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center'
