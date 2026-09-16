@@ -42,10 +42,19 @@ not part of this pass.
 
 - **Trigger**: a new small icon button on each *resolved* `DiscoverSlotRow`
   (next to reroll/random), matching this session's own established
-  per-slot-action pattern. Not shown on a slot with no `candidate` — a
-  slot seeded directly from a Shelf riff (`seedStem`, no `riffCID`) has no
-  anchor to explore from, same reasoning the seed-stems feature already
-  established for gating other candidate-only affordances.
+  per-slot-action pattern. A slot with a real `candidate` always has an
+  anchor; a `seedStem`-only slot (Shelf-sourced, or anything already
+  imported into the project — no explicit `riffCID` field at all) now ALSO
+  gets one when possible, via `findRiffForStemPath`: since a stem
+  downloaded through this app's own riff-library pipeline is always saved
+  at a path whose basename is literally its own StemCID, its owning riff
+  can be recovered from nothing but that local path. Revised 2026-09-16,
+  direct request: "i imported a batch of rifffs using the import from
+  library feature and attempting to discover the individual riffs i find
+  that i cannot use the adjacent rifffs feature. it should know the
+  adjacent rifffs still, right?" The button only stays hidden when that
+  recovery genuinely fails — a stem with no known jam at all (a
+  locally-recorded take, or an import unrelated to any Endlesss jam).
 - **Scope of what's shown**: only the current slot's own `arrangeRole`.
   A nearby riff with no stem in that role is skipped entirely — never
   shown empty. If a jam has no nearby riff at all with a matching-role
