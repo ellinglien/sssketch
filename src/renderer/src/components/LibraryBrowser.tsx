@@ -40,7 +40,10 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
-import { DiscoverPanel, type DiscoverSlot } from './DiscoverPanel'
+import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
+import { buildSeedSlotsFromCandidates } from '../audio/discoverSeed'
+import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'
+import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
 // Persisted locally (not in project files or app state) since it's a
 // per-person identity setting, not something that travels with a project —
@@ -1254,6 +1257,56 @@ export function LibraryBrowser({
     return { groupId, rifff }
   }
 
+  // Direct request, 2026-09-16: seed Discover's own looper from an
+  // existing riff's stems instead of starting from scratch -- see
+  // docs/superpowers/specs/2026-09-16-discover-seed-stems-design.md. Only
+  // meaningful for a SINGLE selected riff (unlike handleImport/
+  // handleImportSelected, which both support a multi-select batch) --
+  // "seed from N different riffs at once" has no coherent meaning here,
+  // so this is only ever wired to fire when exactly one riff is selected.
+  function seedDiscoverFromBrowseRiff(): void {
+    if (!selectedRiffCID || !selectedJamCID || !resolvedRiff) return
+    // Replaces discoverSlots wholesale -- confirm before destroying real
+    // existing content, same window.confirm convention this file already
+    // uses elsewhere (e.g. its own jam-sync-removal confirmation above).
+    // An empty/never-touched Discover (every slot has no candidate at all)
+    // needs no confirmation -- there's nothing to lose.
+    const hasRealContent = discoverSlots.some((s) => s.candidate !== null)
+    if (
+      hasRealContent &&
+      !window.confirm(
+        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+      )
+    ) {
+      return
+    }
+    const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
+      stemCID: stem.stemCID,
+      jamCID: selectedJamCID,
+      riffCID: selectedRiffCID,
+      presetName: stem.presetName,
+      creatorUserName: stem.creatorUserName,
+      arrangeRole:
+        SOUND_TYPE_TO_ARRANGE_ROLE[
+          instrumentMaskToSoundType(stem.instrumentMask) ??
+            guessSoundTypeFromPresetName(stem.presetName) ??
+            'fx'
+        ],
+      drumSubRole: null,
+      riffBpm: resolvedRiff.bpm
+    }))
+    // Same "push a snapshot before mutating" convention every other
+    // Discover slot-content action already uses (DiscoverPanel.tsx's own
+    // pushUndoSnapshot) -- inlined here rather than calling into
+    // DiscoverPanel directly, since discoverUndoStack/setDiscoverUndoStack
+    // (like discoverSlots itself) are owned HERE, lifted up specifically so
+    // they survive a 'browse' <-> 'discover' switch.
+    setDiscoverUndoStack((prev) => [...prev, discoverSlots].slice(-DISCOVER_UNDO_LIMIT))
+    setDiscoverRedoStack([])
+    setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
+    setLibraryMode('discover')
+  }
+
   async function handleImport(): Promise<void> {
     if (!resolvedRiff || !selectedRiffCID) return
     setBusy('importing rifff…')
@@ -2016,6 +2069,23 @@ export function LibraryBrowser({
                               {downloadingRiffCID === selectedRiffCID
                                 ? 'downloading…'
                                 : 'download missing stems'}
+                            </button>
+                          )}
+                          {selectedRiffCIDs.size <= 1 && (
+                            <button
+                              onClick={seedDiscoverFromBrowseRiff}
+                              title="replace Discover's current loop with this riff's own stems, then keep tinkering from there"
+                              style={{
+                                height: 24,
+                                borderRadius: 0,
+                                padding: '0 10px',
+                                fontSize: 10,
+                                border: '1px solid var(--ra-border)',
+                                background: 'var(--ra-bg-row-active)',
+                                color: 'var(--ra-text-2)'
+                              }}
+                            >
+                              seed discover with this
                             </button>
                           )}
                           <button
