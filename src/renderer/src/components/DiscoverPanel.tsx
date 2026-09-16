@@ -2064,6 +2064,17 @@ function DiscoverSlotRow({
   // See DiscoverNearbyPopover.tsx.
   const [nearbyMenu, setNearbyMenu] = useState<{ x: number; y: number } | null>(null)
   const nearbyButtonRef = useRef<HTMLButtonElement>(null)
+  // Stable across renders (useCallback, empty deps) -- DiscoverNearbyPopover's
+  // own outside-click dismissal effect depends on this identity ([onClose,
+  // ignoreRef]), and this row re-renders on every playhead tick while
+  // anything is previewing (playheadPct is a prop, driven by DiscoverPanel's
+  // own usePos()). An inline `() => setNearbyMenu(null)` closure would be
+  // torn down and rebuilt on every one of those ticks, real bug found live:
+  // "clicking out of the near panel should close it instead of having to
+  // click the near button again" -- the dismiss listener's own
+  // setTimeout(0)-delayed (re-)attach never got a settled window to catch a
+  // real click while playback kept remounting the effect out from under it.
+  const closeNearbyMenu = useCallback(() => setNearbyMenu(null), [])
 
   // Direct request: adjust gain by dragging vertically on the waveform
   // itself -- StemWaveformRow.tsx's own "envelope" volume-drag gesture,
@@ -2482,7 +2493,7 @@ function DiscoverSlotRow({
                 ref={nearbyButtonRef}
                 onClick={(e) => {
                   if (nearbyMenu) {
-                    setNearbyMenu(null)
+                    closeNearbyMenu()
                     return
                   }
                   const rect = e.currentTarget.getBoundingClientRect()
@@ -2593,7 +2604,7 @@ function DiscoverSlotRow({
           startCandidate={slot.candidate}
           role={slot.role}
           onPick={onSwapFromNearby}
-          onClose={() => setNearbyMenu(null)}
+          onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
         />
       )}
