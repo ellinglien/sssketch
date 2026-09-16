@@ -2189,12 +2189,117 @@ established delete-button icon-default/text-confirm pattern."
 
 ---
 
-### Task 17: `ClusterStemsBrowser.tsx` — play/stop text drop + "split" -> fork icon
+### Task 17: `ClusterStemsBrowser.tsx` — play/stop text drop + "split" -> fork icon + focus fix
 
 **Files:**
 - Modify: `src/renderer/src/components/ClusterStemsBrowser.tsx`
 
-- [ ] **Step 1: Add a local `ForkIcon`**
+This task gained an extra step after Task 2's own code-quality review: Task 2 (global.css)
+added an app-wide `:focus-visible { outline: ... }` rule, and the reviewer found that this
+file's own `buttonStyle()` helper sets `outline: 'none'` unconditionally on every button it
+styles (the close button, ~5 bus-assign buttons, the preview/play button) — silently
+overriding the new global rule for this entire file, the same inline-property-wins-over-
+stylesheet issue Task 4 already fixes in `EditableText.tsx`. Step 1 below addresses it, since
+this task already touches this exact file.
+
+- [ ] **Step 1: Remove `buttonStyle()`'s own `outline: 'none'` override**
+
+Find the current `buttonStyle()` function and its own doc comment (near the top of the file):
+
+```tsx
+// See ProjectLibraryBrowser.tsx's own buttonStyle doc comment -- buttons in
+// this app have no default chrome, so every button needs an explicit
+// dark-theme style or it falls back to near-invisible default control chrome.
+//
+// Active state reuses ChannelRow.tsx's own solo-button visual language
+// (bright near-white border/text vs. dim gray) rather than a background
+// swap -- the modal's own panel background is itself var(--ra-bg-row-active),
+// so a background-only "active" indicator was blending straight into the
+// panel behind it and reading as not-pressed-at-all. outline:none overrides
+// the browser's own default focus ring, which was otherwise visually
+// indistinguishable from "this bus is assigned" (see 2026-08-05 screenshot
+// report: a plain keyboard-focused, UNassigned "aux" button looked "selected"
+// purely from the native focus outline).
+// state 'confirmed' matches the original boolean `active` meaning exactly
+// (this row's own busOf already agrees). 'suggested' is new -- a lighter,
+// dashed-border hint for a bus the centroid classifier proposed but the
+// user hasn't clicked yet, distinguishable from both "confirmed" and "just
+// one of the other four options."
+function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
+  const confirmed = state === 'confirmed'
+  const suggested = state === 'suggested'
+  return {
+    fontFamily: 'inherit',
+    fontSize: 9,
+    padding: '3px 8px',
+    background: confirmed ? 'var(--ra-stretch-on-bg)' : 'transparent',
+    border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+    color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',
+    fontWeight: confirmed ? 700 : 400,
+    cursor: 'pointer',
+    outline: 'none'
+  }
+}
+```
+
+Replace with (drops `outline: 'none'` and updates the comment to explain why removing it is
+now safe — the 2026-08-05 bug was the browser's own DEFAULT focus ring, typically bright/bold,
+reading as visually similar to the bright near-white "confirmed" active-state border; the new
+app-wide focus rule (global.css, Task 2) uses a deliberately muted, dim grey
+`var(--ra-border-strong)` outline instead, which stays visually distinct from the bright
+`var(--ra-stretch-on)` "confirmed" border rather than being confusable with it):
+
+```tsx
+// See ProjectLibraryBrowser.tsx's own buttonStyle doc comment -- buttons in
+// this app have no default chrome, so every button needs an explicit
+// dark-theme style or it falls back to near-invisible default control chrome.
+//
+// Active state reuses ChannelRow.tsx's own solo-button visual language
+// (bright near-white border/text vs. dim gray) rather than a background
+// swap -- the modal's own panel background is itself var(--ra-bg-row-active),
+// so a background-only "active" indicator was blending straight into the
+// panel behind it and reading as not-pressed-at-all.
+//
+// No outline:none override here (there used to be one -- see 2026-08-05
+// screenshot report: a plain keyboard-focused, UNassigned "aux" button
+// looked "selected" purely from the BROWSER'S OWN default focus ring,
+// which was bright/bold enough to be confusable with the "confirmed"
+// active state's own bright near-white border). The app-wide focus rule
+// (global.css, added for the 2026-09-16 unified UI consistency pass) uses
+// a deliberately dim, muted outline (var(--ra-border-strong)) instead of
+// the browser default -- distinct enough from the bright "confirmed"
+// border that the original confusability shouldn't reproduce, while still
+// giving every button in this file a real focus indicator (which, with
+// outline:none, none of them had at all).
+//
+// state 'confirmed' matches the original boolean `active` meaning exactly
+// (this row's own busOf already agrees). 'suggested' is new -- a lighter,
+// dashed-border hint for a bus the centroid classifier proposed but the
+// user hasn't clicked yet, distinguishable from both "confirmed" and "just
+// one of the other four options."
+function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
+  const confirmed = state === 'confirmed'
+  const suggested = state === 'suggested'
+  return {
+    fontFamily: 'inherit',
+    fontSize: 9,
+    padding: '3px 8px',
+    background: confirmed ? 'var(--ra-stretch-on-bg)' : 'transparent',
+    border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+    color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',
+    fontWeight: confirmed ? 700 : 400,
+    cursor: 'pointer'
+  }
+}
+```
+
+This is a real, deliberate judgment call (removing a documented workaround because the
+condition that motivated it no longer applies), not a mechanical token swap — flag it in the
+implementer's own report and in the task's commit message so it's easy to find and revert if
+Elling's own manual walkthrough (Task 23) finds the new focus ring IS still confusable with the
+"confirmed" state on this file specifically.
+
+- [ ] **Step 2: Add a local `ForkIcon`**
 
 Near the top of `src/renderer/src/components/ClusterStemsBrowser.tsx` (near its own
 `buttonStyle` helper), add:
@@ -2223,7 +2328,7 @@ function ForkIcon(): React.JSX.Element {
 }
 ```
 
-- [ ] **Step 2: Drop the redundant text next to the existing ▶/■ glyph**
+- [ ] **Step 3: Drop the redundant text next to the existing ▶/■ glyph**
 
 Find (currently lines 1017-1026):
 
@@ -2248,7 +2353,7 @@ fix already applied to `DiscoverPanel.tsx`'s own play button earlier this sessio
         </button>
 ```
 
-- [ ] **Step 3: Convert the "split" button**
+- [ ] **Step 4: Convert the "split" button**
 
 Find (currently lines 1039-1047):
 
@@ -2278,12 +2383,12 @@ Replace the last line only:
         )}
 ```
 
-- [ ] **Step 4: Typecheck + lint**
+- [ ] **Step 5: Typecheck + lint**
 
 Run: `npm run typecheck && npx eslint --cache src/renderer/src/components/ClusterStemsBrowser.tsx`
 Expected: both pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/renderer/src/components/ClusterStemsBrowser.tsx
@@ -2291,7 +2396,14 @@ git commit -m "ClusterStemsBrowser: drop redundant play/stop text, split -> fork
 
 The play/stop button already showed its own glyph next to the word --
 the word was redundant. 'split' becomes a diverging-arrows icon,
-keeping its existing title as the tooltip."
+keeping its existing title as the tooltip. Also removes buttonStyle()'s
+own outline:none override (found by Task 2's code-quality review): it
+was silently swallowing the new app-wide focus-visible outline rule.
+The 2026-08-05 bug that override was originally added for was about the
+BROWSER'S OWN bright default focus ring being confusable with the
+bright 'confirmed' active-state border -- the new rule's own muted,
+dim outline shouldn't reproduce that confusion, but this is a judgment
+call worth Elling's own eyes during the Task 23 walkthrough."
 ```
 
 ---
@@ -2696,7 +2808,13 @@ any of this. Elling needs to run `npm run dev` and manually check:
   brighten? Does it look right layered on top of Shelf's own existing tile-lit behavior, or does
   it look like double emphasis?
 - **Focus**: Tab through a form (e.g. `NewProjectModal`'s name field, then its buttons) — does
-  each focused control show a visible grey outline?
+  each focused control show a visible grey outline? Specifically also tab through
+  `ClusterStemsBrowser.tsx`'s own bus-assign buttons (Tidy Up flow) — Task 17 removed a
+  deliberate `outline: 'none'` there (added 2026-08-05 because the browser's own default focus
+  ring was confusable with the "confirmed" active-state border) on the theory that the new,
+  more muted focus outline won't reproduce that confusion. Confirm a keyboard-focused,
+  UNASSIGNED bus button still reads clearly as "focused, not assigned" — not as if it were
+  already confirmed.
 - **Icon buttons**: hover each of these and confirm the tooltip reads correctly and the glyph
   is recognizable at a glance: `TransportBar`'s link/envelope/fx-on-main/+rec-channel,
   `ChannelChainPanel`/`MasterChainPanel`'s edit (pencil), `PluginCatalogBrowser`'s use
