@@ -813,6 +813,15 @@ export function DiscoverPanel({
   // TWO separate, fully-valid PLACE_LOOP_ON_TIMELINE dispatches from one
   // intended click -- two full copies of the loop placed back-to-back.
   const [placing, setPlacing] = useState(false)
+  // Direct report, 2026-09-16: "plunk in arranger doesn't have much of a
+  // confirmation thing.. can we indicate it works somehow? maybe a subtle
+  // microanimation" -- a brief, one-shot ring pulse on the button itself
+  // right after a successful placement, matching this session's own
+  // established "subtle quick microanimation" preference and reusing the
+  // exact pattern ClusterStemsBrowser.tsx's own celebratingRow already
+  // uses for the same purpose (a box-shadow ring, 500ms ease-out, cleared
+  // by its own timeout rather than an animationend round-trip).
+  const [justPlunked, setJustPlunked] = useState(false)
 
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
@@ -1260,6 +1269,8 @@ export function DiscoverPanel({
       // own awaits makes that straggling call's post-await check fail, so
       // it bails out harmlessly instead.
       previewSyncGenerationRef.current += 1
+      setJustPlunked(true)
+      window.setTimeout(() => setJustPlunked(false), 500)
     } finally {
       setPlacing(false)
     }
@@ -1289,6 +1300,11 @@ export function DiscoverPanel({
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
+        }
+        @keyframes discover-plunk-pulse {
+          0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
+          35% { box-shadow: 0 0 0 3px var(--ra-stretch-on); }
+          100% { box-shadow: 0 0 0 0 transparent; }
         }
       `}</style>
       {showConsentPrompt && (
@@ -1534,7 +1550,8 @@ export function DiscoverPanel({
             border: '1px solid var(--ra-stretch-on)',
             color: placing ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
             fontWeight: 700,
-            cursor: placing ? 'default' : 'pointer'
+            cursor: placing ? 'default' : 'pointer',
+            animation: justPlunked ? 'discover-plunk-pulse 500ms ease-out' : undefined
           }}
         >
           {placing ? 'placing…' : 'plunk in arranger'}
