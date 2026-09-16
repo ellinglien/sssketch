@@ -1452,7 +1452,24 @@ export function LibraryBrowser({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.6)',
+        // Opaque, unlike the translucent rgba(0,0,0,0.6) every OTHER modal
+        // in this app uses (AudioDeviceModal.tsx, ClusterStemsBrowser.tsx,
+        // LibraryLocationModal.tsx, OnboardingModal.tsx) -- those are all
+        // lightweight dialogs where a dimmed app behind them is the point.
+        // This one is different: the whole rest of this app (Shelf, the
+        // transport bar, the arranger) is architecturally assumed
+        // unreachable while this is open -- Shelf's own "seed Discover"
+        // right-click relies on it never being visible/interactive at the
+        // same time as Discover (see docs/superpowers/specs/2026-09-16-
+        // discover-seed-stems-design.md's Background section). Direct
+        // report, 2026-09-16: on a near-black UI, a 0.6-opacity black
+        // overlay barely dims anything, so the transport bar's own
+        // position readout stayed legible (and visibly ticking, since a
+        // resolved Discover preview auto-plays through the same shared
+        // `state.playing` the transport bar itself reads) right behind
+        // this "exclusive" modal -- "i can see the arranger countdown
+        // rolling in behind the discovery modal ... which shouldn't be."
+        background: 'var(--ra-bg-page)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
