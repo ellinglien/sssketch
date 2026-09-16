@@ -92,6 +92,34 @@ button {
   color: inherit;
 }
 
+/* Real hover feedback, app-wide, with almost zero per-file touches --
+ * `filter` composes with whatever a component already does on hover
+ * (e.g. Shelf.tsx's own opacity-driven tile "lit" state) rather than
+ * fighting it. `:not(:disabled)` keeps a disabled button visually inert.
+ * See docs/superpowers/specs/2026-09-16-unified-ui-consistency-design.md
+ * -- "1.12" is a starting point, not pixel-verified from this environment. */
+button:not(:disabled):hover,
+[role='button']:hover {
+  filter: brightness(1.12);
+}
+
+/* Focus-visible feedback, app-wide. Deliberately `outline`, not `border`:
+ * almost every button/input in this codebase already sets its own
+ * `border` via inline style, and an inline style always wins over an
+ * external stylesheet rule for the SAME CSS property -- `outline` is a
+ * separate property (doesn't affect box size, can't be overridden by an
+ * inline `border`), so this one rule works everywhere with no inline
+ * style touched. Grey border, no new accent color -- direct decision,
+ * see the design spec. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+  outline: 1px solid var(--ra-border-strong);
+  outline-offset: -1px;
+}
+
 /* Browsers don't inherit font-family into form controls by default (only
    button was covered above) — without this, every input/select silently
    falls back to the system UI font instead of the app's own, which is
