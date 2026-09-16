@@ -1,7 +1,7 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
-import { linearWaveBars } from '@shared/visuals'
+import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
@@ -1197,30 +1197,18 @@ export function DiscoverPanel({
           ClusterStemsBrowser.tsx's own row-assignment pulse animation
           already uses. discover-slot-pulse (opacity-only) is still used for
           the FAILED state -- a static "this stopped" cue.
-          discover-slot-reel-scroll drives DiscoverResolvingReel's own
-          vertically-scrolling stack of full-size synthetic waveforms (see
-          that component's own doc comment) -- the whole waveform rolls up
-          to reveal the next one, direct report, 2026-09-15 (v2). */}
+          Direct report, 2026-09-15 (v3): the previous versions of this
+          screen's own "still working" animations (a spinning dice/shuffle
+          icon, a scrolling multi-waveform reel) read as too busy -- both
+          are now replaced with the shared LoadingLoader component (the
+          same four-bar bounce BeatPicker.tsx/ClusterStemsBrowser.tsx/
+          LibraryBrowser.tsx already use for "still working"), at a small
+          size, for a minimal, subtle, brand-consistent indicator instead
+          of a custom animation. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
-        }
-        @keyframes discover-slot-reel-scroll {
-          from { transform: translateY(0); }
-          to { transform: translateY(-50%); }
-        }
-        /* DiceIcon/ShuffleIcon's own spin while a roll/reroll is actually
-           in flight -- a full rotation plus a little overshoot-and-settle
-           at the end reads more like a tossed die (or a shuffled deck)
-           coming to rest than a plain linear spin would. */
-        @keyframes discover-icon-spin {
-          0% { transform: rotate(0deg); }
-          70% { transform: rotate(432deg); }
-          100% { transform: rotate(360deg); }
-        }
-        .discover-icon-spin {
-          animation: discover-icon-spin 600ms ease-in-out infinite;
         }
       `}</style>
       {showConsentPrompt && (
@@ -1417,7 +1405,7 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          <ShuffleIcon rolling={rerollingSlotIds.size > 0} />
+          {rerollingSlotIds.size > 0 ? <LoadingLoader size={11} /> : <ShuffleIcon />}
           {rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
         </button>
         <button
@@ -1544,12 +1532,13 @@ function LockGlyph({ locked }: { locked: boolean }): React.JSX.Element {
 // action (see ShuffleIcon just below for "reroll," which is a DIFFERENT,
 // ranked-pool action and got its own distinct glyph after direct feedback
 // that dice-for-both was ambiguous once the text labels came off).
-// `rolling` drives a CSS class (discover-icon-spin, keyframes injected once
-// in the panel's own shared <style> tag below) that spins the die for as
-// long as the real IPC round trip is still resolving -- a genuine "still
-// working" indicator, not just decoration, same spirit as the waveform
-// area's own discover-slot-reel animation for the same state.
-function DiceIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
+// No longer takes a `rolling` prop -- direct report, 2026-09-15 (v3): the
+// previous spin-while-rolling animation read as too busy. Callers now show
+// a small LoadingLoader in this icon's place while a roll is in flight
+// instead (see DiscoverSlotRow's own random/reroll buttons, below) --
+// same "still working" indicator, just borrowed from the app's own
+// existing brand-consistent loading animation instead of a custom one.
+function DiceIcon(): React.JSX.Element {
   return (
     <svg
       width="12"
@@ -1560,8 +1549,7 @@ function DiceIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
       strokeWidth="1.3"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={rolling ? 'discover-icon-spin' : undefined}
-      style={{ transformOrigin: '50% 50%', flexShrink: 0 }}
+      style={{ flexShrink: 0 }}
     >
       <rect x="2" y="2" width="12" height="12" rx="2.5" />
       {/* Five pips (a DiceFive face) -- doesn't need to represent any real
@@ -1582,11 +1570,10 @@ function DiceIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
 // the reroll... let's use shuffle arrows" -- reroll picks from a real,
 // ranked candidate pool (see rankCandidates/pickReroll), a meaningfully
 // different action from "random"'s own literal dice-roll, so it earns a
-// visually distinct icon now that the text labels are gone. Spins via the
-// same discover-icon-spin class/keyframes DiceIcon uses -- the animation
-// itself just means "still working," independent of which glyph it's
-// applied to.
-function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
+// visually distinct icon now that the text labels are gone. No longer
+// takes a `rolling` prop -- see DiceIcon's own doc comment just above for
+// why.
+function ShuffleIcon(): React.JSX.Element {
   return (
     <svg
       width="13"
@@ -1597,8 +1584,7 @@ function ShuffleIcon({ rolling }: { rolling: boolean }): React.JSX.Element {
       strokeWidth="1.3"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={rolling ? 'discover-icon-spin' : undefined}
-      style={{ transformOrigin: '50% 50%', flexShrink: 0 }}
+      style={{ flexShrink: 0 }}
     >
       {/* Two crossing lanes, each with its own arrowhead at the far end --
           the classic "shuffle" read (two streams swapping places), not a
@@ -1660,78 +1646,8 @@ function RedoIcon(): React.JSX.Element {
 // This row's own waveform button's real pixel height -- the vertical-drag
 // gain gesture below divides its own deltaY by this, same
 // "deltaY / ROW_HEIGHT" scale StemWaveformRow.tsx's own handleVolumeStart
-// uses for its analogous drag on the real timeline. Also the resolving
-// placeholder's own reel-frame height, below -- each frame needs to be
-// exactly this tall for the reel to read as "the waveform itself scrolls
-// up," not a mismatched strip.
+// uses for its analogous drag on the real timeline.
 const DISCOVER_WAVEFORM_HEIGHT = 40
-
-// Synthetic wave-shaped peaks standing in for a real one -- there's no
-// resolved stem yet while a slot is still genuinely resolving, so these
-// are generic envelope shapes (not real audio data), deterministic per
-// seed (plain trig, no Math.random) so the reel's own content never
-// changes between renders. Fed through linearWaveBars -- the EXACT same
-// geometry helper the real, resolved Waveform.tsx uses -- so a resolving
-// slot's placeholder renders as a genuine-looking full waveform rather
-// than an abstract icon.
-function syntheticResolvingPeaks(seed: number): number[] {
-  const n = 40
-  const peaks: number[] = []
-  for (let i = 0; i < n; i++) {
-    const t = i / n
-    const envelope = 0.35 + 0.65 * Math.abs(Math.sin((t + seed * 0.29) * Math.PI * (2.5 + seed)))
-    const jitter = 0.18 * Math.sin(i * (2.7 + seed * 0.6) + seed * 4)
-    peaks.push(Math.max(0.06, Math.min(1, envelope + jitter)))
-  }
-  return peaks
-}
-
-// Four distinct synthetic "waveforms" the resolving reel cycles through.
-const RESOLVING_REEL_FRAMES: readonly number[][] = [0, 1, 2, 3].map(syntheticResolvingPeaks)
-
-// DiscoverSlotRow's own resolving-placeholder reel -- direct report,
-// 2026-09-15 (v2): "instead of little waves, it should look like the
-// entire wave is rolling up to display another waveform," replacing the
-// previous version's multi-column strip of small symbol glyphs entirely.
-// A single reel, one full-width/full-height synthetic waveform per frame
-// (RESOLVING_REEL_FRAMES, above), doubled back to back and animated
-// translateY 0 -> -50% (the shared discover-slot-reel-scroll keyframes,
-// injected once above) for a seamless loop regardless of the strip's real
-// rendered height -- same technique the old multi-column version already
-// used, just one full-size reel instead of several tiny ones.
-function DiscoverResolvingReel(): React.JSX.Element {
-  const doubled = [...RESOLVING_REEL_FRAMES, ...RESOLVING_REEL_FRAMES]
-  return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          animation: `discover-slot-reel-scroll ${RESOLVING_REEL_FRAMES.length * 700}ms linear infinite`
-        }}
-      >
-        {doubled.map((peaks, i) => (
-          <div key={i} style={{ width: '100%', height: DISCOVER_WAVEFORM_HEIGHT, flexShrink: 0 }}>
-            <svg width="100%" height="100%" viewBox="0 0 128 100" preserveAspectRatio="none">
-              {linearWaveBars(peaks).map((bar, j) => (
-                <rect
-                  key={j}
-                  x={bar.x}
-                  y={bar.y}
-                  width={bar.width}
-                  height={bar.height}
-                  fill="var(--ra-stretch-on)"
-                  opacity={0.35 + 0.45 * ((j % 7) / 7)}
-                  shapeRendering="crispEdges"
-                />
-              ))}
-            </svg>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 function DiscoverSlotRow({
   slot,
@@ -2138,10 +2054,12 @@ function DiscoverSlotRow({
                 : undefined
           }
           style={{
-            position: 'relative',
             flex: '1 1 auto',
             minWidth: 140,
             height: 40,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             overflow: 'hidden',
             border: `1px dashed ${
               resolving
@@ -2156,7 +2074,13 @@ function DiscoverSlotRow({
             animation: resolveFailed ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
           }}
         >
-          {resolving && <DiscoverResolvingReel />}
+          {/* Direct report, 2026-09-15 (v3): the previous scrolling-
+              waveform reel read as too busy -- replaced with the shared
+              LoadingLoader component (the same "still working" indicator
+              BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
+              and subtle, for brand consistency instead of a custom
+              animation. */}
+          {resolving && <LoadingLoader size={16} />}
         </div>
       )}
       {/* Direct request, 2026-09-15: "waveforms should have a fixed area
@@ -2298,7 +2222,7 @@ function DiscoverSlotRow({
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        <ShuffleIcon rolling={rerolling} />
+        {rerolling ? <LoadingLoader size={11} /> : <ShuffleIcon />}
       </button>
       <button
         onClick={onRerollRandom}
@@ -2317,7 +2241,7 @@ function DiscoverSlotRow({
           cursor: rerolling ? 'default' : 'pointer'
         }}
       >
-        <DiceIcon rolling={rerolling} />
+        {rerolling ? <LoadingLoader size={11} /> : <DiceIcon />}
       </button>
       <button
         onClick={onRemove}
