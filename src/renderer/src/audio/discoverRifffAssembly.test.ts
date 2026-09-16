@@ -144,6 +144,43 @@ describe('assembleDiscoverRifff', () => {
     expect(assembly!.rifff.folderPath).toBe('')
   })
 
+  it('uses barLengthOverride instead of the max-member computation when given', () => {
+    // Real bug, live-reported 2026-09-16: "sometimes soloing or muting
+    // causes the discover loop to restart from the beginning." Root
+    // cause: syncPreviewToEngine's own assembleDiscoverRifff call
+    // previously derived barLength ONLY from currently-previewingSlotIds
+    // members -- muting/soloing the longest currently-included slot
+    // shrank the assembled rifff's own barLength/loop length sent to the
+    // engine on every toggle, causing a position-wrap jump. Passing a
+    // stable override (computed from ALL resolved slots, independent of
+    // mute/solo) keeps the loop length constant across toggles.
+    const assembly = assembleDiscoverRifff(
+      'discover preview',
+      [
+        { stem: fixtureStem({ barLength: 1 }), gain: 1 },
+        { stem: fixtureStem({ barLength: 4 }), gain: 1 }
+      ],
+      120,
+      undefined,
+      16
+    )
+    expect(assembly!.rifff.barLength).toBe(16)
+    // Each member's own real, unstretched barLength is still untouched.
+    expect(assembly!.rifff.stems.map((s) => s.barLength)).toEqual([1, 4])
+  })
+
+  it('falls back to the max-member computation when barLengthOverride is omitted', () => {
+    const assembly = assembleDiscoverRifff(
+      'discover preview',
+      [
+        { stem: fixtureStem({ barLength: 1 }), gain: 1 },
+        { stem: fixtureStem({ barLength: 4 }), gain: 1 }
+      ],
+      120
+    )
+    expect(assembly!.rifff.barLength).toBe(4)
+  })
+
   it('mints a fresh, non-empty groupId on every call', () => {
     const members = [{ stem: fixtureStem(), gain: 1 }]
     const a = assembleDiscoverRifff('discover preview', members, 120)

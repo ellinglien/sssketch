@@ -70,18 +70,35 @@ const MAX_STEMS_PER_RIFFF = 8
  * was silently dropped from the actual audio sent to the engine while
  * still showing as resolved/toggled-on in the UI ("i can only hear the
  * last stem if i solo it"). That call site now passes an explicit, much
- * higher `maxMembers` -- see its own call site for the reasoning. */
+ * higher `maxMembers` -- see its own call site for the reasoning.
+ *
+ * `barLengthOverride`, when given, replaces the normal max-of-included-
+ * members computation entirely. Real bug, live-reported 2026-09-16:
+ * "sometimes soloing or muting causes the discover loop to restart from
+ * the beginning." Root cause: `members` here is always just the
+ * CURRENTLY toggled-on (previewingSlotIds) slots, so the default
+ * Math.max(...) barLength shrinks or grows every time a slot is
+ * muted/soloed -- and that barLength is sent straight to the native
+ * engine's `setLoopLengthBars` on every resulting `load-project` call,
+ * which wraps/resets playback position when the loop length changes out
+ * from under it. plunkInArranger's own call (a real, persisted
+ * placement, where the clip's length SHOULD reflect exactly what's in
+ * it) intentionally leaves this unset; syncPreviewToEngine passes a
+ * stable override computed from every resolved slot regardless of
+ * mute/solo state, so the loop length the engine sees never moves just
+ * because a toggle changed which slots are currently included. */
 export function assembleDiscoverRifff(
   name: string,
   members: DiscoverRifffMember[],
   bpm: number,
-  maxMembers: number = MAX_STEMS_PER_RIFFF
+  maxMembers: number = MAX_STEMS_PER_RIFFF,
+  barLengthOverride?: number
 ): DiscoverRifffAssembly | null {
   if (members.length === 0) return null
 
   const capped = members.slice(0, maxMembers)
   const groupId = crypto.randomUUID()
-  const barLength = Math.max(...capped.map((m) => m.stem.barLength))
+  const barLength = barLengthOverride ?? Math.max(...capped.map((m) => m.stem.barLength))
 
   const rifff: Rifff = {
     groupId,

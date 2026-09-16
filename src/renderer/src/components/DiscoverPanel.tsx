@@ -598,11 +598,24 @@ export function DiscoverPanel({
     // here silently dropped any 9th+ toggled-on slot from the actual
     // engine preview mix (while it still showed as resolved/toggled-on in
     // the UI) -- see assembleDiscoverRifff's own doc comment.
+    // barLengthOverride computed from EVERY resolved slot (resolvedBarLengths),
+    // not just the currently toggled-on `members` -- real bug, live-reported
+    // 2026-09-16: "sometimes soloing or muting causes the discover loop to
+    // restart from the beginning." Without this, assembleDiscoverRifff's own
+    // default barLength (max of only the currently-included members) shrinks
+    // or grows on every mute/solo toggle, and that value is sent straight to
+    // the native engine's loop-length setting on every resulting
+    // engineLoadProject call -- see assembleDiscoverRifff's own doc comment
+    // for the full mechanism. Same computation already used for the
+    // waveform-tiling maxBarLength reference elsewhere in this file.
+    const maxBarLength =
+      resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : undefined
     const assembly = assembleDiscoverRifff(
       'discover preview',
       members.map(({ stem, gain }) => ({ stem, gain })),
       bpm,
-      members.length
+      members.length,
+      maxBarLength
     )
     if (!assembly) {
       // Unreachable in practice (members.length > 0 already checked above,
