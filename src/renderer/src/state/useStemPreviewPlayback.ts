@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { soloStemsMute } from './store'
-import { useAppSelector, useDispatch, useFlushEngineSyncNow, usePlaying } from './StoreContext'
+import {
+  useAppSelector,
+  useDispatch,
+  useEngineOwnership,
+  useFlushEngineSyncNow,
+  usePlaying
+} from './StoreContext'
 import { markManualSeek } from './manualSeek'
 import { sqrtGain } from '@shared/mixGain'
 
@@ -39,6 +45,11 @@ export function useStemPreviewPlayback(): {
   const vol = useAppSelector((s) => s.vol)
   const playing = usePlaying()
   const flushEngineSyncNow = useFlushEngineSyncNow()
+  const {
+    claim: claimEngine,
+    stillOwn: stillOwnEngine,
+    release: releaseEngine
+  } = useEngineOwnership()
 
   // Snapshot of the REAL mute/vol state as it stood the moment this hook
   // first mounted (useState's lazy initializer runs exactly once) --
@@ -122,11 +133,23 @@ export function useStemPreviewPlayback(): {
     cancelledRef.current = false
     return () => {
       cancelledRef.current = true
+      // Hands ownership back to the real project's own automatic sync
+      // (StoreContext.tsx) BEFORE dispatching the restore below -- this
+      // is the detail that matters most in this whole change. This
+      // cleanup does NOT itself flush to the engine; it dispatches into
+      // the reducer and relies on StoreContext's own automatic sync
+      // effect (which watches state.mute/state.vol, both changed by the
+      // two dispatches below) to notice and push the correction. Without
+      // this release() call, that automatic effect would believe this
+      // hook still owns the engine forever after this component
+      // unmounts, and would silently stop restoring the real project's
+      // mute/vol here on out.
+      releaseEngine()
       dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
       dispatch({ type: 'RESTORE_VOL', vol: volSnapshot })
       dispatch({ type: 'PAUSE' })
     }
-  }, [dispatch, muteSnapshot, volSnapshot])
+  }, [dispatch, muteSnapshot, volSnapshot, releaseEngine])
 
   // Centralizing the seek here -- rather than resuming from wherever the
   // transport already happened to be -- is what makes "what's playing"
@@ -154,6 +177,14 @@ export function useStemPreviewPlayback(): {
     // flushEngineSyncNow when THIS call resolves is now stale and must not
     // apply its own (older) target.
     const myGeneration = ++callGenerationRef.current
+    // 'stem-solo-preview' is a documentation/debug label only --
+    // src/shared/engineOwnership.ts's claim/release never inspect the
+    // owner string, so it's not what makes Tidy Up and Auto Arrange safely
+    // sharing this one id fine. That's entirely structural/external to
+    // this file: the two are mutually-exclusive full-screen modals
+    // (confirmed during this feature's design brainstorm). If that UI
+    // invariant ever changes, this file offers no defense on its own.
+    const engineToken = claimEngine('stem-solo-preview')
     setPreviewingKeys(keys)
     const soloedMute = soloStemsMute(rifffs, mute, [...keys])
     // Boosts every previewed stem to the same "as if it were the only/an
@@ -174,9 +205,35 @@ export function useStemPreviewPlayback(): {
     dispatch({ type: 'RESTORE_VOL', vol: soloedVol })
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
-    await flushEngineSyncNow({ mute: soloedMute, vol: soloedVol })
+    try {
+      await flushEngineSyncNow({ mute: soloedMute, vol: soloedVol })
+    } catch (err) {
+      // A failed send must not leave this claim dangling forever -- unlike
+      // cancelledRef/callGenerationRef (purely local, self-healing on the
+      // next call or unmount), a stuck claim gates OFF StoreContext's own
+      // automatic real-project sync until something else claims or this
+      // hook unmounts. Only release if we're STILL the current holder --
+      // if a newer claim (e.g. Discover's own preview, or a later call to
+      // this same hook) has already superseded us, releasing here would
+      // incorrectly clear THEIR claim instead of a stale one of our own.
+      if (stillOwnEngine(engineToken)) releaseEngine()
+      throw err
+    }
     if (cancelledRef.current) return
     if (callGenerationRef.current !== myGeneration) return
+    // Additive to the two checks above (this component unmounted /
+    // superseded by a later call to THIS SAME hook) -- also bail if some
+    // OTHER engine consumer (Discover's own preview) has claimed
+    // ownership since this call started. Note: since claimEngine is called
+    // on every startPreview invocation, a second same-hook call already
+    // invalidates the first call's token via the global tracker too -- for
+    // the same-hook-superseded case, stillOwnEngine and callGenerationRef
+    // currently catch the same thing. callGenerationRef stays as an
+    // independent, purely-local guard (useful if useEngineOwnership()'s
+    // context value were ever a no-op default, e.g. a component rendered
+    // outside StoreProvider), not because it catches something
+    // stillOwnEngine doesn't in practice today.
+    if (!stillOwnEngine(engineToken)) return
     if (playing) {
       markManualSeek()
       void window.rifffApi.engineSetPosition(targetBar)
