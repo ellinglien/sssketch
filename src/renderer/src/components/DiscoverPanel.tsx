@@ -2392,114 +2392,43 @@ function DiscoverSlotRow({
                     ? 'no match for this role yet'
                     : 'no candidate yet'}
         </span>
-        {resolvedStem && (
-          <>
-            {/* Direct request, 2026-09-15: "can we add a mute for each
+        {/* Direct report, 2026-09-16: "when wave is loading, the width of
+            the loader is wider than the width of the waveforms" (the
+            dashed resolving placeholder just above). Root cause: this
+            whole mute/solo/favourite/nearby button group used to be
+            entirely absent while resolving (gated on `resolvedStem`
+            alone), so the row's OWN flex-grow waveform/placeholder saw
+            fewer fixed-width siblings and grew wider during that window
+            than it does once resolved and this group's own ~102px
+            (4 x 18px buttons + 3 x 10px gaps) reappears and claims that
+            space back. Always reserving this exact width -- rendering an
+            empty flex container instead of nothing at all while
+            `resolvedStem` is null -- keeps the waveform/placeholder's own
+            available space constant across the whole resolve lifecycle. */}
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            width: 102,
+            flexShrink: 0
+          }}
+        >
+          {resolvedStem && (
+            <>
+              {/* Direct request, 2026-09-15: "can we add a mute for each
               channel" -- toggleSlotPreview already existed (the waveform
               itself was already clickable to the same effect), but wasn't
               discoverable as a mute control -- only a hover tooltip
               explained it. Same handler as the waveform click, so either one
               keeps the other in sync; only shown once there's a real stem to
               mute (matching the waveform toggle's own guard). */}
-            <button
-              onClick={onTogglePreview}
-              title={
-                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
-              }
-              style={{
-                marginLeft: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                fontFamily: 'inherit',
-                fontSize: 10,
-                fontWeight: 700,
-                // Direct request, 2026-09-15: "mute should look exactly like
-                // mute on the arrangement view" -- matches ChannelRow.tsx's
-                // own muteButtonStyle exactly (background/border/color-by-
-                // state), rather than this row's own earlier ad hoc treatment
-                // (transparent-when-off instead of the real
-                // `--ra-bg-row-active` fill every other unmuted mute button in
-                // this app uses).
-                background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-                border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-                color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
-                cursor: 'pointer'
-              }}
-            >
-              {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
-                glyph exactly (its solo/record siblings are also lowercase
-                single letters), rather than this row's own earlier
-                uppercase "M". */}
-              m
-            </button>
-            {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
-              next to mute, same M/S pairing Upcycle's own cards use and
-              ChannelRow.tsx already has on the real arrangement. Matches
-              ChannelRow.tsx's own soloButtonStyle exactly (a soft tinted
-              background with the accent color on border/text, not a hard
-              fill like mute's). */}
-            <button
-              onClick={onToggleSolo}
-              title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                fontFamily: 'inherit',
-                fontSize: 10,
-                fontWeight: 700,
-                background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-                border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                cursor: 'pointer'
-              }}
-            >
-              s
-            </button>
-            {/* Direct request, 2026-09-16: star a stem to favourite it, then
-              optionally bias future rolls toward favourites (the panel's
-              own "prefer favourites" toolbar checkbox). Reuses
-              `--ra-recording-live` for the filled/active state -- the same
-              token RiffCircle.tsx already uses for its own "favourited"
-              semantic, just applied to a literal star glyph here instead
-              of a circle fill. */}
-            <button
-              onClick={onToggleFavourite}
-              title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                background: 'var(--ra-bg-row-active)',
-                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-                color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
-                cursor: 'pointer'
-              }}
-            >
-              <StarIcon favourited={favourited} />
-            </button>
-            {slot.candidate !== null && (
               <button
-                ref={nearbyButtonRef}
-                onClick={(e) => {
-                  if (nearbyMenu) {
-                    closeNearbyMenu()
-                    return
-                  }
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
-                }}
-                title="explore riffs recorded near this one in the same jam"
+                onClick={onTogglePreview}
+                title={
+                  previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
+                }
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -2507,17 +2436,111 @@ function DiscoverSlotRow({
                   width: 18,
                   height: 18,
                   padding: 0,
-                  background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-                  border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                  color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  // Direct request, 2026-09-15: "mute should look exactly like
+                  // mute on the arrangement view" -- matches ChannelRow.tsx's
+                  // own muteButtonStyle exactly (background/border/color-by-
+                  // state), rather than this row's own earlier ad hoc treatment
+                  // (transparent-when-off instead of the real
+                  // `--ra-bg-row-active` fill every other unmuted mute button in
+                  // this app uses).
+                  background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
+                  border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+                  color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
                   cursor: 'pointer'
                 }}
               >
-                <NearbyIcon />
+                {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
+                glyph exactly (its solo/record siblings are also lowercase
+                single letters), rather than this row's own earlier
+                uppercase "M". */}
+                m
               </button>
-            )}
-          </>
-        )}
+              {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
+              next to mute, same M/S pairing Upcycle's own cards use and
+              ChannelRow.tsx already has on the real arrangement. Matches
+              ChannelRow.tsx's own soloButtonStyle exactly (a soft tinted
+              background with the accent color on border/text, not a hard
+              fill like mute's). */}
+              <button
+                onClick={onToggleSolo}
+                title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+                  border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                  color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                  cursor: 'pointer'
+                }}
+              >
+                s
+              </button>
+              {/* Direct request, 2026-09-16: star a stem to favourite it, then
+              optionally bias future rolls toward favourites (the panel's
+              own "prefer favourites" toolbar checkbox). Reuses
+              `--ra-recording-live` for the filled/active state -- the same
+              token RiffCircle.tsx already uses for its own "favourited"
+              semantic, just applied to a literal star glyph here instead
+              of a circle fill. */}
+              <button
+                onClick={onToggleFavourite}
+                title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  background: 'var(--ra-bg-row-active)',
+                  border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+                  color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+                  cursor: 'pointer'
+                }}
+              >
+                <StarIcon favourited={favourited} />
+              </button>
+              {slot.candidate !== null && (
+                <button
+                  ref={nearbyButtonRef}
+                  onClick={(e) => {
+                    if (nearbyMenu) {
+                      closeNearbyMenu()
+                      return
+                    }
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
+                  }}
+                  title="explore riffs recorded near this one in the same jam"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 18,
+                    height: 18,
+                    padding: 0,
+                    background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+                    border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                    color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <NearbyIcon />
+                </button>
+              )}
+            </>
+          )}
+        </div>
         <button
           onClick={onReroll}
           disabled={rerolling}
