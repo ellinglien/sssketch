@@ -16,6 +16,7 @@ import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
 import { formatBpm } from '@shared/format'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPrompt'
+import { importPathsWithChoice } from '../audio/importPathsWithChoice'
 
 const TILE_SIZE = 42
 
@@ -242,13 +243,9 @@ export function Shelf({
   async function resolveLoopPrompt(choice: LoopOrOneShotChoice): Promise<void> {
     const paths = loopPromptPaths
     setLoopPromptPaths(null)
-    if (!paths || choice.type === 'cancel') return
-    for (const path of paths) {
-      const rifff =
-        choice.type === 'oneShot'
-          ? await window.rifffApi.importOneShot(path)
-          : await window.rifffApi.importLoop(path, choice.barCount)
-      if (!rifff) continue
+    if (!paths) return
+    const rifffs = await importPathsWithChoice(paths, choice)
+    for (const rifff of rifffs) {
       dispatch({ type: 'ADD_TO_SHELF', rifff })
       onImported(rifff.groupId)
     }

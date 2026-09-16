@@ -40,6 +40,8 @@ import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
 import { DrawArrangeWizard } from './components/DrawArrangeWizard'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
+import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './components/LoopOrOneShotPrompt'
+import { importPathsWithChoice } from './audio/importPathsWithChoice'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
@@ -148,6 +150,14 @@ function Timeline({
   const playing = usePlaying()
   const [dropBar, setDropBar] = useState<number | null>(null)
   const ppb = useZoom()
+  // Set whenever a real Finder drop lands and needs LoopOrOneShotPrompt's
+  // own "one-shot or loop?" answer before resolveDrop can finish importing
+  // -- see resolveDrop's own external-file branch below. dropPromptResolveRef
+  // holds the Promise resolver resolveDrop is currently awaiting, so the
+  // rendered prompt's onResolve can hand the answer back into that async
+  // function exactly where it paused.
+  const [dropPromptPaths, setDropPromptPaths] = useState<string[] | null>(null)
+  const dropPromptResolveRef = useRef<((choice: LoopOrOneShotChoice) => void) | null>(null)
   const loopRegion = useAppSelector((s) => s.loopRegion)
   // Lets resolveDrop/handleDropOnChannel below read the LATEST state at
   // call time without closing over the reactive `state` variable itself --
@@ -254,19 +264,31 @@ function Timeline({
       const groupId = e.dataTransfer.getData('text/rifff-group-id')
       if (!groupId) {
         // A real Finder drop, not an internal rifff drag -- each dropped file
-        // becomes its own independent one-shot. Sharing targetChannelId (if
-        // any) means several files dropped together on an existing
+        // becomes its own independent placed clip. Sharing targetChannelId
+        // (if any) means several files dropped together on an existing
         // ChannelRow all land on that same channel; dropping on empty/ghost
         // space instead calls crypto.randomUUID() fresh per file, giving
         // each its own new channel -- same rule already used for a single
         // internal-drag drop above, just applied per file. See
         // docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md.
+        //
+        // Whether these files are one-shot hits or real loops can't be told
+        // apart automatically (no audio-content bpm/beat detection anywhere
+        // in this codebase) -- same LoopOrOneShotPrompt Shelf.tsx's own drop
+        // handler shows, asked here too (direct follow-up, 2026-09-16: "can
+        // you do the same thing for files dragged onto the timeline"). This
+        // async function is genuinely paused here until the rendered prompt
+        // below calls dropPromptResolveRef.current with the user's answer.
         const files = Array.from(e.dataTransfer.files)
         if (files.length === 0) return
-        for (const file of files) {
-          const path = window.rifffApi.getPathForFile(file)
-          const rifff = await window.rifffApi.importOneShot(path)
-          if (!rifff) continue
+        const paths = files.map((file) => window.rifffApi.getPathForFile(file))
+        const choice = await new Promise<LoopOrOneShotChoice>((resolve) => {
+          dropPromptResolveRef.current = resolve
+          setDropPromptPaths(paths)
+        })
+        setDropPromptPaths(null)
+        const rifffs = await importPathsWithChoice(paths, choice)
+        for (const rifff of rifffs) {
           dispatch({ type: 'ADD_TO_SHELF', rifff })
           const channelId = targetChannelId ?? crypto.randomUUID()
           dispatch({ type: 'MOVE_TO_CHANNEL', groupId: rifff.groupId, startBar, channelId })
@@ -409,6 +431,12 @@ function Timeline({
         />
       ))}
       <Playhead ppb={ppb} />
+      {dropPromptPaths && (
+        <LoopOrOneShotPrompt
+          paths={dropPromptPaths}
+          onResolve={(choice) => dropPromptResolveRef.current?.(choice)}
+        />
+      )}
       {dropBar !== null && (
         <div
           style={{
