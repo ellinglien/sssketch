@@ -1241,6 +1241,14 @@ function Frame(): React.JSX.Element {
   }, [persistedJson, currentSketch, recoverableAutosave])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
+  // Set by Shelf's own "seed Discover with this riff" right-click action,
+  // read exactly once by LibraryBrowser's own lazy useState initializer at
+  // the moment it mounts (see LibraryBrowser.tsx's own initialDiscoverSeed
+  // prop) -- direct request, 2026-09-16. Cleared back to null by
+  // openRiffLibrary() itself (below) so a LATER, ordinary open (the normal
+  // toolbar button, no seed intended) never accidentally re-seeds from a
+  // stale value left over from an earlier seed action.
+  const [pendingDiscoverSeed, setPendingDiscoverSeed] = useState<Rifff | null>(null)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -1460,6 +1468,15 @@ function Frame(): React.JSX.Element {
   }
   function openRiffLibrary(): void {
     setLibraryBrowserOpen(false)
+    setPendingDiscoverSeed(null)
+    setRiffLibraryOpen(true)
+  }
+  // Shelf's own onSeedDiscover -- see its own doc comment for why this
+  // lives here (App.tsx is the one place with access to both Shelf and
+  // LibraryBrowser).
+  function openRiffLibraryWithDiscoverSeed(rifff: Rifff): void {
+    setLibraryBrowserOpen(false)
+    setPendingDiscoverSeed(rifff)
     setRiffLibraryOpen(true)
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
@@ -2115,7 +2132,11 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
-        <Shelf onImported={handleImported} onOpenLibrary={openRiffLibrary} />
+        <Shelf
+          onImported={handleImported}
+          onOpenLibrary={openRiffLibrary}
+          onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+        />
         <TransportBar
           onEnableGatedRecording={() => void enableGatedRecording()}
           onDisableGatedRecording={() => void disableGatedRecording()}
@@ -2234,6 +2255,7 @@ function Frame(): React.JSX.Element {
             currentSketch={currentSketch}
             discoverConsented={discoverConsented}
             setDiscoverConsented={setDiscoverConsented}
+            initialDiscoverSeed={pendingDiscoverSeed}
           />
         )}
         {libraryBrowserOpen && (

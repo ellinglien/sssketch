@@ -24,7 +24,8 @@ const EMPTY_SELECTION: Set<string> = new Set()
 
 export function Shelf({
   onImported,
-  onOpenLibrary
+  onOpenLibrary,
+  onSeedDiscover
 }: {
   onImported: (groupId: string) => void
   /** Opens whichever library browser is the default entry point -- the
@@ -33,6 +34,15 @@ export function Shelf({
    * for anyone). LORE stays reachable via that browser's own "switch to
    * lore" link. */
   onOpenLibrary: () => void
+  /** Seeds Discover's own looper with this riff's stems, then opens it
+   * already showing them -- direct request, 2026-09-16 (right-click a
+   * Shelf tile). App.tsx owns the actual seeding + opening (it's the one
+   * component with access to both Shelf and LibraryBrowser), so this is
+   * just "here's the riff the user picked," nothing more. See
+   * docs/superpowers/specs/2026-09-16-discover-seed-stems-design.md --
+   * live drag onto Discover isn't possible (Discover's own full-screen
+   * modal covers Shelf entirely), so this is triggered explicitly instead. */
+  onSeedDiscover: (rifff: Rifff) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -311,7 +321,11 @@ export function Shelf({
               }}
               onMouseEnter={() => setHoverId(rifff.groupId)}
               onClick={(e) => handleTileClick(e, rifff)}
-              title={`${rifff.name} — click to preview, drag to arrange, shift/cmd-click to multi-select, delete to remove from library`}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                onSeedDiscover(rifff)
+              }}
+              title={`${rifff.name} — click to preview, drag to arrange, right-click to seed Discover with these stems, shift/cmd-click to multi-select, delete to remove from library`}
               style={{
                 width: TILE_SIZE,
                 height: TILE_SIZE,

@@ -41,7 +41,7 @@ import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
-import { buildSeedSlotsFromCandidates } from '../audio/discoverSeed'
+import { buildSeedSlotsFromCandidates, buildSeedSlotsFromStems } from '../audio/discoverSeed'
 import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
@@ -170,7 +170,8 @@ export function LibraryBrowser({
   onImported,
   currentSketch,
   discoverConsented,
-  setDiscoverConsented
+  setDiscoverConsented,
+  initialDiscoverSeed
 }: {
   onClose: () => void
   /** Called once import(s) succeed with every newly-created groupId (one for
@@ -191,10 +192,21 @@ export function LibraryBrowser({
    * itself doesn't read either, it's purely a pass-through here). */
   discoverConsented: boolean
   setDiscoverConsented: (value: boolean) => Promise<void>
+  /** Set by App.tsx when Shelf's own "seed Discover with this riff"
+   * right-click action fired -- consumed exactly once, via the lazy
+   * useState initializers just below, at the moment THIS component mounts
+   * (LibraryBrowser fully unmounts/remounts every time it opens, so a lazy
+   * initializer alone is enough; no effect, no "already consumed" flag
+   * needed). `null` for every other, ordinary way of opening this
+   * component. See docs/superpowers/specs/2026-09-16-discover-seed-stems-
+   * design.md. */
+  initialDiscoverSeed: Rifff | null
 }): React.JSX.Element {
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
-  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>('browse')
+  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(
+    initialDiscoverSeed ? 'discover' : 'browse'
+  )
   // Lifted out of DiscoverPanel (rather than owned internally there) so
   // the in-progress discover loop survives switching `libraryMode` back
   // and forth within one open LibraryBrowser session -- DiscoverPanel
@@ -204,7 +216,9 @@ export function LibraryBrowser({
   // DiscoverPanel) survives that unmount. See
   // docs/superpowers/specs/2026-09-14-library-wide-discover-design.md
   // §8.1 ("survives closing and reopening the Discover tab").
-  const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>(() =>
+    initialDiscoverSeed ? buildSeedSlotsFromStems(initialDiscoverSeed.stems) : []
+  )
   const [discoverChaos, setDiscoverChaos] = useState(35)
   // Undo/redo history for Discover's own slot-content actions (add/remove
   // slot, reroll one, random-reroll one, reroll all) -- lifted up here for
@@ -213,7 +227,18 @@ export function LibraryBrowser({
   // silently vanish the moment you glanced at another tab. Direct request,
   // 2026-09-15 (Upcycle-inspired). Each entry is a full snapshot of
   // discoverSlots at the moment just before an undoable action ran.
-  const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
+  // Lazily seeded with one entry (the empty state, `[]`) whenever this
+  // mount was seeded from Shelf -- there's no "previous discoverSlots" to
+  // push the normal way (this component didn't exist a moment ago), but
+  // hitting "undo" right after a Shelf-triggered seed should still revert
+  // back to an empty Discover, same as undoing any other slot-content
+  // action. Task 4's own Browse-triggered seed pushes onto this stack the
+  // ordinary way instead (setDiscoverUndoStack, called after this
+  // component already exists) -- this lazy seed only matters for the
+  // Shelf path.
+  const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>(() =>
+    initialDiscoverSeed ? [[]] : []
+  )
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
 
   // Auth (gates sync-triggering and live jam-membership discovery)
