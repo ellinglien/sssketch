@@ -197,6 +197,11 @@ const api = {
     targetUser?: string
   ): Promise<DiscoverCandidate | null> =>
     ipcRenderer.invoke('get-random-discover-candidate', arrangeRole, onlyOwnStems, targetUser),
+  getAdjacentDiscoverCandidates: (
+    centerRiffCID: string,
+    role: ArrangeRole
+  ): Promise<{ newer: DiscoverCandidate[]; older: DiscoverCandidate[] }> =>
+    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, role),
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),

@@ -67,6 +67,7 @@ import {
   prewarmDiscoverCandidateCaches,
   type DiscoverCandidate
 } from './discoverCandidates'
+import { getAdjacentDiscoverCandidates } from './discoverAdjacency'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
@@ -808,6 +809,12 @@ app.whenReady().then(async () => {
         onlyOwnStems,
         targetUser
       })
+  )
+
+  ipcMain.handle(
+    'get-adjacent-discover-candidates',
+    (_event, centerRiffCID: string, role: ArrangeRole) =>
+      getAdjacentDiscoverCandidates(centerRiffCID, role)
   )
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
