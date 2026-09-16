@@ -1,9 +1,9 @@
 // src/renderer/src/components/DiscoverNearbyPopover.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
-import { LoadingLoader } from './LoadingLoader'
 import type { ArrangeRole } from '@shared/stemRole'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import type { AdjacentDiscoverCandidate } from '../../../main/discoverAdjacency'
 
 // Fixed size for every candidate's own waveform thumbnail -- deliberately
 // NOT DiscoverSlotRow's own proportional bar-length tiling (that's for
@@ -18,58 +18,26 @@ const THUMB_HEIGHT = 32
 // here would be dead defensiveness against a contract this popover already
 // controls both ends of.
 
-/** One resolved-or-resolving candidate stem, shown as a fixed-size
- * thumbnail. `path` is undefined while the real stem audio hasn't
- * downloaded yet (see getAdjacentDiscoverCandidates' own downloadMissingStems
- * call -- by the time this popover has a candidate at all, its download has
- * already been kicked off on the main-process side; this local resolve step
- * just waits for the SAME real stem-resolve pipeline DiscoverSlotRow itself
- * already uses, via resolveCandidateStem). */
+/** One candidate stem, shown as a fixed-size thumbnail. `candidate.path`
+ * is already resolved and its download already ensured by the time this
+ * popover ever sees it (getAdjacentDiscoverCandidates' own doc comment,
+ * discoverAdjacency.ts) -- no second, redundant per-candidate riff
+ * resolve needed here (an earlier version of this component did its own
+ * full riffLibraryResolveRiff round trip just to learn a path the
+ * backend already knew; removed 2026-09-16, direct request: "can we take
+ * a good look at the things we just added... and see if we can improve
+ * the speed"). `Waveform` itself still decodes the audio asynchronously
+ * (peaks/brightness) and renders nothing until that finishes -- a real
+ * but now much shorter wait (a local file already on disk, not a network
+ * round trip), not worth a second loading indicator layered on top of
+ * `Waveform`'s own. */
 function CandidateRow({
   candidate,
   onClick
 }: {
-  candidate: DiscoverCandidate
+  candidate: AdjacentDiscoverCandidate
   onClick: () => void
 }): React.JSX.Element {
-  // Paired with the candidate key it was resolved FOR, same
-  // resolved/resolvedForCurrent convention DiscoverSlotRow's own
-  // resolveCandidateStem effect uses just above in DiscoverPanel.tsx --
-  // avoids a synchronous setState at the top of the effect below (which
-  // react-hooks/set-state-in-effect flags as a cascading-render risk) by
-  // deriving "not ready yet for THIS candidate" from an identity mismatch
-  // at render time instead of an explicit reset.
-  const [resolved, setResolved] = useState<
-    { key: string; status: 'ready'; path: string } | { key: string; status: 'failed' } | null
-  >(null)
-  const resolvedKey = `${candidate.riffCID}:${candidate.stemCID}`
-
-  useEffect(() => {
-    let cancelled = false
-    window.rifffApi
-      .riffLibraryResolveRiff(candidate.riffCID)
-      .then((resolvedRiff) => {
-        if (cancelled) return
-        const stem = resolvedRiff?.stems.find((s) => s.stemCID === candidate.stemCID)
-        setResolved(
-          stem?.path
-            ? { key: resolvedKey, status: 'ready', path: stem.path }
-            : { key: resolvedKey, status: 'failed' }
-        )
-      })
-      .catch((err) => {
-        console.error('DiscoverNearbyPopover: failed to resolve candidate stem:', err)
-        if (!cancelled) setResolved({ key: resolvedKey, status: 'failed' })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [candidate.riffCID, candidate.stemCID, resolvedKey])
-
-  const resolvedForCurrent = resolved?.key === resolvedKey ? resolved : null
-  const path = resolvedForCurrent?.status === 'ready' ? resolvedForCurrent.path : null
-  const failed = resolvedForCurrent?.status === 'failed'
-
   return (
     <button
       onClick={onClick}
@@ -95,20 +63,7 @@ function CandidateRow({
           background: 'var(--ra-bg-row-sub)'
         }}
       >
-        {path && <Waveform path={path} color="var(--ra-text-3)" opacity={1} />}
-        {!path && !failed && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-          >
-            <LoadingLoader size={14} />
-          </div>
-        )}
+        <Waveform path={candidate.path} color="var(--ra-text-3)" opacity={1} />
       </div>
       <span
         style={{
@@ -134,10 +89,10 @@ function Section({
   onPick
 }: {
   label: string
-  candidates: DiscoverCandidate[]
+  candidates: AdjacentDiscoverCandidate[]
   loading: boolean
   onStep: () => void
-  onPick: (candidate: DiscoverCandidate) => void
+  onPick: (candidate: AdjacentDiscoverCandidate) => void
 }): React.JSX.Element {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -213,7 +168,7 @@ export function DiscoverNearbyPopover({
   // react-hooks/set-state-in-effect flags as a cascading-render risk.
   const [result, setResult] = useState<{
     key: string
-    candidates: { newer: DiscoverCandidate[]; older: DiscoverCandidate[] }
+    candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
   const resultKey = `${centerCandidate.riffCID}:${role}`
 

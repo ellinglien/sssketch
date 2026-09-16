@@ -9,6 +9,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
+import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
@@ -200,7 +201,7 @@ const api = {
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
     role: ArrangeRole
-  ): Promise<{ newer: DiscoverCandidate[]; older: DiscoverCandidate[] }> =>
+  ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
     ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, role),
   findRiffForStemPath: (
     stemPath: string

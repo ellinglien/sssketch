@@ -8,7 +8,8 @@ import {
   listRiffs,
   resolveRiff,
   downloadMissingStems,
-  listJamsWithDb
+  listJamsWithDb,
+  resolveStemPath
 } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { resolveStemArrangeRole } from './resolveStemArrangeRole'
@@ -76,6 +77,13 @@ const ADJACENT_MATCHES_PER_DIRECTION = 4
 const ADJACENT_FETCH_MULTIPLIER = 8
 const ADJACENT_FETCH_PER_DIRECTION = ADJACENT_MATCHES_PER_DIRECTION * ADJACENT_FETCH_MULTIPLIER
 
+/** A DiscoverCandidate plus its own already-resolved local file path --
+ * see matchRole's own doc comment (below) for why this is precomputed
+ * here rather than left for the renderer to resolve a second time. */
+export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
+  path: string
+}
+
 /** Finds up to ADJACENT_MATCHES_PER_DIRECTION riffs recorded near
  * `centerRiffCID`, in the SAME jam's own iteration sequence, that have at
  * least one stem matching `role` -- see this plan's own header for the
@@ -89,7 +97,7 @@ const ADJACENT_FETCH_PER_DIRECTION = ADJACENT_MATCHES_PER_DIRECTION * ADJACENT_F
 export async function getAdjacentDiscoverCandidates(
   centerRiffCID: string,
   role: ArrangeRole
-): Promise<AdjacentWalkResult<DiscoverCandidate>> {
+): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
 
@@ -121,7 +129,9 @@ export async function getAdjacentDiscoverCandidates(
   // there's no reason to re-look-it-up on every call either.
   const ownDb = openOwnRiffLibraryDb()
 
-  async function matchRole(summary: { riffCID: string }): Promise<DiscoverCandidate | null> {
+  async function matchRole(summary: {
+    riffCID: string
+  }): Promise<AdjacentDiscoverCandidate | null> {
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
@@ -140,7 +150,18 @@ export async function getAdjacentDiscoverCandidates(
         creatorUserName: stem.creatorUserName,
         arrangeRole: role,
         drumSubRole: null,
-        riffBpm: resolved.bpm
+        riffBpm: resolved.bpm,
+        // Pure string computation (resolveStemPath's own doc comment --
+        // no filesystem/db access) -- correct regardless of whether the
+        // file is actually on disk YET, since downloadMissingStems below
+        // ensures it will be by the time this whole function returns.
+        // Direct request, 2026-09-16 ("can we take a good look at the
+        // things we just added... and see if we can improve the speed"):
+        // pre-resolving here means DiscoverNearbyPopover.tsx's own
+        // CandidateRow no longer needs a second, redundant full-riff
+        // resolve (riffLibraryResolveRiff) per candidate just to learn a
+        // path this function already knew.
+        path: resolveStemPath(jamCID, stem.stemCID)
       }
     }
     return null
