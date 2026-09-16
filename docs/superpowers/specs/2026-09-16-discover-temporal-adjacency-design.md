@@ -102,12 +102,17 @@ opens:
    at the moment the popover first opened.
 2. **Fetch a window around it**: `listRiffs(jamCID, { offset, limit })`
    — already paginates a jam's riffs in iteration order off the existing
-   `idx_riffs_owner_created` index. A window sized to comfortably cover 4
-   riffs in each direction, centered on the center's own rank (clamped to
-   0 the same way `resolveRiffWithContext`'s existing caller already
-   does), splits into "newer than center" (earlier list, since the
-   ordering is `DESC`) and "older than center" (later list) by comparing
-   each row's own `CreationTime`/`RiffCID` against the center's.
+   `idx_riffs_owner_created` index, ordered `CreationTime DESC` (rank 0 =
+   newest). A window sized to comfortably cover 4 riffs in each direction,
+   centered on the center's own rank (clamped to 0 the same way
+   `resolveRiffWithContext`'s existing caller already does), splits by
+   comparing each row's own rank against the center's: a **smaller** rank
+   than the center's has a **larger** CreationTime — recorded chronologically
+   *after* the center, i.e. the "later" section. A **larger** rank has a
+   **smaller** CreationTime — recorded *before* the center, the "earlier"
+   section. (Caught during planning: an earlier draft of this had the two
+   swapped — worth a concrete example rather than trusting intuition here,
+   since `DESC` order and chronological order run in opposite directions.)
 3. **Resolve and role-match each nearby riff**: for each candidate riff
    (working outward from the center, stopping once 4 matches are found
    per direction or the window is exhausted), `resolveRiff(riffCID)` —
