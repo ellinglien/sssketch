@@ -535,6 +535,12 @@ export interface RiffContextResult {
    * typo-tolerant fallback below kicked in, so the caller can highlight the
    * right row even if the pasted ID had a case/whitespace mismatch. */
   matchedRiffCID: string
+  /** This riff's own raw rank in its jam's CreationTime DESC ordering (0 =
+   * newest) -- the number `offset` above is derived from (rank - 10,
+   * clamped). Exposed separately for a downstream feature that needs to
+   * center a differently-sized window around the real rank rather than
+   * this function's own fixed "10 before" page. */
+  rank: number
 }
 
 const RIFF_CONTEXT_WINDOW_BEFORE = 10
@@ -580,7 +586,8 @@ export function resolveRiffWithContext(riffCID: string): RiffContextResult | nul
     return {
       jamCID: row.OwnerJamCID,
       offset: Math.max(0, rank - RIFF_CONTEXT_WINDOW_BEFORE),
-      matchedRiffCID: row.RiffCID
+      matchedRiffCID: row.RiffCID,
+      rank
     }
   }
   return null

@@ -642,6 +642,7 @@ describe('resolveRiffWithContext', () => {
     expect(result!.jamCID).toBe('jam-big')
     expect(result!.matchedRiffCID).toBe('riff-20')
     expect(result!.offset).toBe(10)
+    expect(result!.rank).toBe(20)
   })
 
   it('clamps the offset to 0 for a riff at (or near) the very start of a jam', () => {
@@ -655,6 +656,7 @@ describe('resolveRiffWithContext', () => {
     expect(result).not.toBeNull()
     expect(result!.jamCID).toBe('jam-techno')
     expect(result!.offset).toBe(0)
+    expect(result!.rank).toBe(0)
   })
 
   it('matches case-insensitively and trims whitespace, as a typo-tolerant fallback', () => {
