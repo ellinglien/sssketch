@@ -62,30 +62,37 @@ Discover already seeded, no drag or simultaneous visibility required.
 - **Seeded slots start unlocked** — immediately behave like any other
   Discover slot (individually rerollable, and reroll-all-able as a whole
   if the user chooses that). No special protection.
-- **Tempo follows the seed only when the arranger is empty — applied
-  once Discover's own preview has actually loaded, not at seed time.**
-  Seeded stems otherwise stretch to Discover's own *current* target BPM,
-  same as any other resolved candidate. A same-day 2026-09-16 revision
-  tried auto-snapping tempo at SEED time (in LibraryBrowser.tsx, right
-  when `discoverSlots` is set) — but `state.bpm` is one of
-  StoreContext.tsx's `scheduleEngineSync`'s own listed dependencies, and
-  DiscoverPanel's engine-ownership claim doesn't happen until its first
-  slot actually resolves (async, seconds away for a Browse-sourced seed).
-  Dispatching `SET_TEMPO` in that window reliably raced the automatic
-  real-project sync into loading (and playing) the real project right as
-  Discover's own preview was also loading — live-reported as duplicate/
-  background playback, and root-caused to a SEPARATE, real bug at the
-  same time (Browse's own leftover Web Audio preview never being stopped
-  on seed — see LibraryBrowser.tsx's own `stopPreview()` fix). With that
-  fixed, the tempo-follow itself was reinstated, this time race-free:
-  `DiscoverPanel.tsx`'s `syncPreviewToEngine` applies it inside its own
-  empty-to-non-empty transition, which only runs once engine ownership is
-  ALREADY confirmed held by Discover — so `scheduleEngineSync`'s own
-  ownership gate correctly skips the real-project sync when this bpm
-  change lands. `discoverSeedBpm` (lifted up in LibraryBrowser.tsx) drives
-  both this and DiscoverPanel's own "match seed" button, which stays as a
-  manual fallback whenever the current tempo has since drifted away from
-  the seed (e.g. after individually rerolling a slot).
+- **Tempo always follows the seed — applied once Discover's own preview
+  has actually loaded, not at seed time.** Seeded stems otherwise stretch
+  to Discover's own *current* target BPM, same as any other resolved
+  candidate; the seed's own bpm just becomes the new current target. A
+  same-day 2026-09-16 revision tried auto-snapping tempo at SEED time (in
+  LibraryBrowser.tsx, right when `discoverSlots` is set) — but `state.bpm`
+  is one of StoreContext.tsx's `scheduleEngineSync`'s own listed
+  dependencies, and DiscoverPanel's engine-ownership claim doesn't happen
+  until its first slot actually resolves (async, seconds away for a
+  Browse-sourced seed). Dispatching `SET_TEMPO` in that window reliably
+  raced the automatic real-project sync into loading (and playing) the
+  real project right as Discover's own preview was also loading —
+  live-reported as duplicate/background playback, and root-caused to a
+  SEPARATE, real bug at the same time (Browse's own leftover Web Audio
+  preview never being stopped on seed — see LibraryBrowser.tsx's own
+  `stopPreview()` fix). With that fixed, the tempo-follow itself was
+  reinstated, this time race-free: `DiscoverPanel.tsx`'s
+  `syncPreviewToEngine` applies it inside its own empty-to-non-empty
+  transition, which only runs once engine ownership is ALREADY confirmed
+  held by Discover — so `scheduleEngineSync`'s own ownership gate
+  correctly skips the real-project sync when this bpm change lands.
+  Originally gated on the real arranger being empty (never retune an
+  already-populated project) — dropped later the same day, direct
+  follow-up: "i have to press the match seed tempo every time" — once
+  seeding became a routine, repeated action rather than a one-time
+  "start fresh" move, that safeguard was actively getting in the way more
+  than it was protecting anything. `discoverSeedBpm` (lifted up in
+  LibraryBrowser.tsx) drives both this and DiscoverPanel's own "match
+  seed" button, which stays as a manual fallback whenever the current
+  tempo has since drifted away from the seed (e.g. after individually
+  rerolling a slot).
 
 ## Component changes
 
