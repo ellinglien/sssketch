@@ -277,9 +277,6 @@ export function DiscoverPanel({
   const pos = usePos()
   const rifffsState = useAppSelector((s) => s.rifffs)
   const bpm = useAppSelector((s) => s.bpm)
-  // Read only for the seed-tempo-follow below (syncPreviewToEngine) --
-  // whether the real arranger timeline has anything placed on it yet.
-  const channelOrder = useAppSelector((s) => s.channelOrder)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
   const pluginCatalog = usePluginCatalog()
@@ -563,7 +560,19 @@ export function DiscoverPanel({
     // re-firing once some call eventually does win and sets it true;
     // re-dispatching the same bpm on an earlier, ultimately-superseded
     // call is a harmless no-op difference, not a bug.
-    if (!previewLoadedRef.current && seedBpm !== null && channelOrder.length === 0) {
+    //
+    // No longer gated on channelOrder.length === 0 -- direct follow-up,
+    // 2026-09-16: "discover's tempo seems to not want to take the
+    // imported rifff tempo, i have to press the match seed tempo every
+    // time." The original "only when empty" restriction (Elling's own
+    // earlier call, to avoid silently retuning a project already in
+    // progress) turned out to be actively getting in the way once seeding
+    // became a routine, repeated action rather than a one-time "start a
+    // fresh project" move -- confirmed explicitly: always auto-match now,
+    // regardless of existing arranger content. The manual "match seed"
+    // button (below) stays as-is, still useful after an individual
+    // reroll drifts a slot away from the seed's own tempo.
+    if (!previewLoadedRef.current && seedBpm !== null) {
       dispatch({ type: 'SET_TEMPO', bpm: seedBpm })
     }
 
@@ -2554,7 +2563,22 @@ function DiscoverSlotRow({
             flexShrink: 0
           }}
         >
-          {resolvedStem && (
+          {/* Direct report, 2026-09-16: "the buttons shouldn't disappear
+              when they are rerolling" -- gating on resolvedStem alone
+              meant this whole group vanished the instant a reroll landed a
+              new slot.candidate, since resolvedForCurrent's own identity
+              check (see resolvedStem's own derivation above) immediately
+              stops matching the OLD resolved stem, well before the NEW
+              one's own resolve finishes. slot.candidate itself is set
+              synchronously the moment a roll/reroll lands (rollForSlot's
+              own setSlots call) and stays valid throughout the resolve
+              that follows, so treating either as "there's something real
+              here to act on" keeps the group visible continuously through
+              a reroll, only truly hiding for a slot that's never been
+              rolled at all (both null). resolvedStem alone still covers a
+              seedStem-only slot (Shelf-sourced, no candidate ever, but
+              resolvedStem resolves synchronously via seedResolved). */}
+          {(resolvedStem !== null || slot.candidate !== null) && (
             <>
               {/* Direct request, 2026-09-15: "can we add a mute for each
               channel" -- toggleSlotPreview already existed (the waveform
