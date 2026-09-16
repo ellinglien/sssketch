@@ -1,5 +1,6 @@
 // src/renderer/src/audio/discoverRifffAssembly.ts
 import { stemKey, type Rifff, type Stem } from '@shared/types'
+import { sqrtGain } from '@shared/mixGain'
 
 /** One stem to include in an assembled Discover rifff, paired with its own
  * committed gain (0-1) -- gain lives OUTSIDE the Stem/Rifff shape itself
@@ -92,9 +93,18 @@ export function assembleDiscoverRifff(
     stems: capped.map(({ stem }, i) => ({ ...stem, slot: i + 1 }))
   }
 
+  // sqrtGain(capped.length) keeps combined perceived loudness roughly
+  // constant as more members join this mix -- same compensation a normal
+  // multi-stem import already bakes into state.vol (store.ts) and Browse's
+  // own auto-preview already applies (LibraryBrowser.tsx's tryStartPreview,
+  // sqrtGain(cachedStems.length)). Without it here, Discover's own preview
+  // mix got audibly louder than everywhere else in the app as more slots
+  // were toggled on, unbounded -- live-reported 2026-09-16: "the discover
+  // audio is quite a bit louder than the preview in the library explorer."
+  const loudnessScale = sqrtGain(capped.length)
   const vol: Record<string, number> = {}
   capped.forEach(({ gain }, i) => {
-    vol[stemKey(groupId, i + 1)] = gain
+    vol[stemKey(groupId, i + 1)] = gain * loudnessScale
   })
 
   return { rifff, vol }

@@ -88,7 +88,15 @@ describe('assembleDiscoverRifff', () => {
     expect(assembly!.rifff.stems[8]).toMatchObject({ slot: 9, path: '/8.wav' })
   })
 
-  it("builds a vol map keyed by stemKey(the rifff's own groupId, slot) for every member's own gain", () => {
+  it("builds a vol map keyed by stemKey(the rifff's own groupId, slot), each member's own gain scaled by sqrtGain(memberCount)", () => {
+    // Real bug, live-reported 2026-09-16: "the discover audio is quite a
+    // bit louder than the preview in the library explorer" -- Browse's own
+    // preview (LibraryBrowser.tsx's tryStartPreview) already applies
+    // sqrtGain(stem count) so combined loudness stays roughly constant as
+    // more stems join a mix (same reasoning normal multi-stem import
+    // already bakes into state.vol, store.ts). assembleDiscoverRifff had
+    // no equivalent, so Discover's own preview mix got audibly louder
+    // than everywhere else in the app as slots were added, unbounded.
     const assembly = assembleDiscoverRifff(
       'discover preview',
       [
@@ -98,10 +106,19 @@ describe('assembleDiscoverRifff', () => {
       120
     )
     const groupId = assembly!.rifff.groupId
-    expect(assembly!.vol).toEqual({
-      [stemKey(groupId, 1)]: 0.7,
-      [stemKey(groupId, 2)]: 0.3
-    })
+    const expectedScale = 1 / Math.sqrt(2)
+    expect(assembly!.vol[stemKey(groupId, 1)]).toBeCloseTo(0.7 * expectedScale)
+    expect(assembly!.vol[stemKey(groupId, 2)]).toBeCloseTo(0.3 * expectedScale)
+  })
+
+  it('does not scale down a single member (sqrtGain is a no-op for count 1)', () => {
+    const assembly = assembleDiscoverRifff(
+      'discover preview',
+      [{ stem: fixtureStem(), gain: 0.8 }],
+      120
+    )
+    const groupId = assembly!.rifff.groupId
+    expect(assembly!.vol[stemKey(groupId, 1)]).toBe(0.8)
   })
 
   it('passes name and bpm through verbatim', () => {
