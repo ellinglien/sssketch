@@ -1,4 +1,5 @@
 // src/main/discoverAdjacency.ts
+import { basename } from 'node:path'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -6,11 +7,12 @@ import {
   resolveRiffWithContext,
   listRiffs,
   resolveRiff,
-  downloadMissingStems
+  downloadMissingStems,
+  listJamsWithDb
 } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { resolveStemArrangeRole } from './resolveStemArrangeRole'
-import type { DiscoverCandidate } from './discoverCandidates'
+import { getRiffIndexForDb, type DiscoverCandidate } from './discoverCandidates'
 
 /** Result of walking outward from a center index in both directions --
  * `newer`/`older` name the two directions unambiguously in real, wall-clock
@@ -158,4 +160,43 @@ export async function getAdjacentDiscoverCandidates(
   await Promise.all([...result.newer, ...result.older].map((c) => downloadMissingStems(c.riffCID)))
 
   return result
+}
+
+/** Recovers a stem's own riffCID/jamCID/bpm from nothing but its local file
+ * path -- for a Discover slot seeded from Shelf (or anything else already
+ * imported into the project), which carries a real, already-downloaded
+ * `seedStem.path` but no explicit riffCID/stemCID field at all (see
+ * DiscoverSlot's own `seedStem` doc comment in DiscoverPanel.tsx). Works
+ * because a stem downloaded through this app's own riff-library pipeline
+ * is always saved at a path whose BASENAME is literally its own StemCID
+ * (resolveStemPath, riffLibraryStore.ts's own doc comment) -- the
+ * information was never actually lost at import time, just not carried as
+ * an explicit field on the in-project `Stem` type.
+ *
+ * Direct request, 2026-09-16: "i imported a batch of rifffs using the
+ * import from library feature and attempting to discover the individual
+ * riffs i find that i cannot use the adjacent rifffs feature. it should
+ * know the adjacent rifffs still, right?" -- yes, via exactly this
+ * content-addressed lookup.
+ *
+ * Reuses getRiffIndexForDb's own already-warm, per-db cache (the SAME one
+ * prewarmDiscoverCandidateCaches populates at app startup, and every
+ * normal Discover roll already reads from) -- searches every currently
+ * configured jam's own db, stopping at the first match. Returns null
+ * (never throws) if the stem isn't found in any known jam -- a real
+ * possibility for a stem that came from somewhere other than this app's
+ * own riff-library sync (a locally-recorded take, a plain folder import
+ * unrelated to any Endlesss jam). */
+export async function findRiffForStemPath(
+  stemPath: string
+): Promise<{ stemCID: string; riffCID: string; jamCID: string; bpm: number } | null> {
+  const stemCID = basename(stemPath)
+  const uniqueDbs = new Set(listJamsWithDb().map(({ db }) => db))
+  for (const db of uniqueDbs) {
+    const index = await getRiffIndexForDb(db)
+    const entry = index.get(stemCID)
+    if (entry)
+      return { stemCID, riffCID: entry.riffCID, jamCID: entry.ownerJamCID, bpm: entry.bpmRnd }
+  }
+  return null
 }

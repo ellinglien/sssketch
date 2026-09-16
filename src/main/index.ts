@@ -67,7 +67,7 @@ import {
   prewarmDiscoverCandidateCaches,
   type DiscoverCandidate
 } from './discoverCandidates'
-import { getAdjacentDiscoverCandidates } from './discoverAdjacency'
+import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
@@ -846,6 +846,10 @@ app.whenReady().then(async () => {
     'get-adjacent-discover-candidates',
     (_event, centerRiffCID: string, role: ArrangeRole) =>
       getAdjacentDiscoverCandidates(centerRiffCID, role)
+  )
+
+  ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>
+    findRiffForStemPath(stemPath)
   )
 
   // Direct request, 2026-09-16: "the audio analysis should be able to

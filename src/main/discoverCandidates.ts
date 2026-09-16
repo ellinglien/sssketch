@@ -100,7 +100,7 @@ const RIFF_QUERY_YIELD_EVERY = 20
 // getRiffIndexForDb, below.
 const RIFF_INDEX_CACHE_TTL_MS = 5 * 60_000
 
-interface RiffIndexEntry {
+export interface RiffIndexEntry {
   riffCID: string
   ownerJamCID: string
   bpmRnd: number
@@ -126,7 +126,9 @@ const riffIndexCache = new WeakMap<
  * an edge case. Yields periodically while building, same "real
  * synchronous CPU work, don't block the main process" discipline as
  * every other bulk loop in this file. */
-async function getRiffIndexForDb(db: Database.Database): Promise<Map<string, RiffIndexEntry>> {
+export async function getRiffIndexForDb(
+  db: Database.Database
+): Promise<Map<string, RiffIndexEntry>> {
   const cached = riffIndexCache.get(db)
   if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.index
 
