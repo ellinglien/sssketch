@@ -7,7 +7,7 @@
 **Architecture:** Three independent, additive signals feed the existing classification pipeline without changing its read-side precedence (`resolveStemArrangeRole.ts`: StemCategories → StemAutoCategory → blunt fallback, untouched):
 1. A tiny, safe addition to the existing PresetName lookup table.
 2. A new backfill that writes Instrument-mask-derived `drums`/`bass` labels into `StemCategories` (tagged with a new `Source: 'instrumentMask'`, mirroring the existing `Source: 'backfill'` precedent) — this both directly resolves those specific stems AND feeds both existing trained classifiers (the DSP-feature centroid classifier and the YAMNet-embedding k-NN classifier) far more training data than today's 56/11 human-confirmed examples.
-3. A new read of YAMNet's already-computed-but-discarded `output_0` (521/527-class AudioSet scores) alongside the `output_1` embedding already extracted per stem, mapped through a small, real, hand-verified class→ArrangeRole table, written as a new `StemAutoCategory` `Source: 'yamnet-zeroshot'` — a genuinely training-data-independent signal, strongest exactly where Elling's own human-confirmed data is weakest (vocal: 2 examples).
+3. A new read of YAMNet's already-computed-but-discarded `output_0` (521-class AudioSet scores, confirmed against the real vendored model) alongside the `output_1` embedding already extracted per stem, mapped through a small, real, hand-verified class→ArrangeRole table, written as a new `StemAutoCategory` `Source: 'yamnet-zeroshot'` — a genuinely training-data-independent signal, strongest exactly where Elling's own human-confirmed data is weakest (vocal: 2 examples).
 
 **Tech Stack:** TypeScript (main + renderer + shared), better-sqlite3, onnxruntime-web (existing YAMNet ONNX model, already vendored).
 
@@ -533,18 +533,13 @@ EOF
 - Modify: `src/main/index.ts` (new IPC handler)
 - Modify: `src/preload/index.ts` (expose it on `rifffApi`)
 
-**Real, verified AudioSet class indices** (fetched and cross-checked this session against the canonical `class_labels_indices.csv`, the standard reference bundled with essentially every published AudioSet/YAMNet-family model): index 27 = "Singing", 28 = "Choir", 142 = "Bass guitar", 162 = "Drum kit", 163 = "Drum machine", 164 = "Drum", 165 = "Snare drum", 166 = "Rimshot", 167 = "Drum roll", 168 = "Bass drum", 171 = "Cymbal", 172 = "Hi-hat", 254 = "Vocal music", 255 = "A capella". Deliberately excludes broader/ambiguous classes that would be unsafe to force-map (e.g. index 0 "Speech" — very often spoken commentary, not a sung vocal take, matching this codebase's own existing "audioIn→vocal is a blunt, often-wrong guess" finding; "Music"/"Musical instrument"/"Synthesizer"/"Electronic music" — too broad to imply any one ArrangeRole).
+**CORRECTED 2026-09-17, after a real implementer subagent hit this exact gate and reported BLOCKED:** the indices originally listed here were fetched from the WRONG ontology (PANNs' own `qiuqiangkong/audioset_tagging_cnn` 527-class `class_labels_indices.csv`) — an easy mistake, since it's a commonly-linked "the AudioSet class list" reference, but it is NOT the ontology Google's own official YAMNet (the model this vendored ONNX file is a conversion of) actually predicts over. The implementer verified — independently, via BOTH the ONNX graph's own declared output metadata (`onnx.load(...)`, `graph.output` shapes) AND a real local inference run via `onnxruntime-node` against noise input — that `output_0` really has 521 classes, matching `scripts/vendor-yamnet.sh`'s own doc comment, not 527. The REAL, correct source is Google's own official `yamnet_class_map.csv`, fetched this session from `https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv` (522 lines: 521 classes + header — matches the real model's dimension exactly). Its class ORDER also genuinely differs from the 527-class list, not just a trimmed tail (e.g. index 1 there is "Child speech, kid speaking", not "Male speech, man speaking") — confirming an assumed offset would have been wrong, exactly the risk this gate existed to catch.
 
-**IMPORTANT — verify before trusting these indices:** the standard AudioSet ontology this list comes from has 527 classes (528 rows including the CSV header), but `scripts/vendor-yamnet.sh`'s own doc comment describes this specific vendored conversion as having "521 class scores." A 6-class discrepancy could mean this specific tf2onnx conversion trimmed or reordered the ontology. Step 1 below verifies this for real before the lookup table is trusted for anything — do not skip it.
+**Real, verified AudioSet class indices** (re-fetched and cross-checked against the CORRECT `yamnet_class_map.csv` above, matching the vendored model's real 521-class output_0 exactly): index 24 = "Singing", 25 = "Choir", 137 = "Bass guitar", 157 = "Drum kit", 158 = "Drum machine", 159 = "Drum", 160 = "Snare drum", 161 = "Rimshot", 162 = "Drum roll", 163 = "Bass drum", 166 = "Cymbal", 167 = "Hi-hat", 249 = "Vocal music", 250 = "A capella". Deliberately excludes broader/ambiguous classes that would be unsafe to force-map (e.g. index 0 "Speech" — very often spoken commentary, not a sung vocal take, matching this codebase's own existing "audioIn→vocal is a blunt, often-wrong guess" finding; "Music"/"Musical instrument"/"Synthesizer"/"Electronic music" — too broad to imply any one ArrangeRole).
 
-- [ ] **Step 1: Verify the real output_0 class count and ordering against this specific vendored model**
+- [ ] **Step 1: Verify the real output_0 class count against this specific vendored model (ALREADY DONE — confirmed 521, see above)**
 
-This can't be done from a pure unit test (needs a real model forward pass). Options, in order of preference:
-1. If any existing integration/smoke test already runs real YAMNet inference against a real audio fixture (check `src/renderer/src/audio/*.test.ts` for one — may not exist, this model is mostly untested end-to-end per its own doc comments), extend it to log `outputs.output_0.dims` once and confirm `dims[1] === 527` (matching the fetched CSV) or `521` (matching the vendor script's own comment).
-2. Otherwise, write a small one-off manual verification script (not committed) that loads `resources/yamnet/yamnet.onnx` via `onnxruntime-node` (add as a temporary devDependency if needed, or use `onnxruntime-web`'s node-compatible wasm backend) and runs one inference against a short silence or noise buffer, logging `output_0`'s shape.
-3. If neither is feasible in this environment, at minimum confirm the count via the model's own embedded ONNX graph metadata (`onnx.checker`/`onnx.helper` via a quick Python script with the `onnx` pip package, or a Node ONNX-parsing library) — this doesn't require running inference, just reading the graph's declared output shape for `output_0`.
-
-If the real count is 527 (matches the fetched canonical CSV exactly), proceed with Step 2's indices unchanged. If it's a different count (e.g. 521), **STOP and escalate** — do not assume an offset or a trimmed-from-the-end/start guess; a systematically wrong mapping here silently corrupts real training data (`StemAutoCategory` rows other code reads as ground truth), which is a worse outcome than not shipping this task at all. Report back with the real observed count and dims so the index list can be re-derived correctly (re-fetch `https://raw.githubusercontent.com/qiuqiangkong/audioset_tagging_cnn/master/metadata/class_labels_indices.csv` — or find this specific model's own published label list from its Hugging Face page, `andrelgomes/yamnet-onnx` — and cross-check row count/ordering against whatever the real model reports).
+Already verified this session, twice independently (ONNX graph metadata + a real local inference run), and confirmed again against the correct official 521-class `yamnet_class_map.csv`. Re-verify quickly if you want (`python3 -c "import onnx; m = onnx.load('resources/yamnet/yamnet.onnx'); print([[d.dim_value for d in o.type.tensor_type.shape.dim] for o in m.graph.output])"` after `pip3 install onnx`, or re-fetch `https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv` and confirm 522 lines), but do not re-litigate this from scratch — proceed straight to Step 2 with the corrected indices above.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -553,20 +548,20 @@ import { describe, expect, it } from 'vitest'
 import { arrangeRoleForAudiosetClass } from './audiosetClasses'
 
 describe('arrangeRoleForAudiosetClass', () => {
-  it('maps "Drum kit" (index 162) to drums', () => {
-    expect(arrangeRoleForAudiosetClass(162)).toBe('drums')
+  it('maps "Drum kit" (index 157) to drums', () => {
+    expect(arrangeRoleForAudiosetClass(157)).toBe('drums')
   })
 
-  it('maps "Bass guitar" (index 142) to bass', () => {
-    expect(arrangeRoleForAudiosetClass(142)).toBe('bass')
+  it('maps "Bass guitar" (index 137) to bass', () => {
+    expect(arrangeRoleForAudiosetClass(137)).toBe('bass')
   })
 
-  it('maps "Singing" (index 27) to vocal', () => {
-    expect(arrangeRoleForAudiosetClass(27)).toBe('vocal')
+  it('maps "Singing" (index 24) to vocal', () => {
+    expect(arrangeRoleForAudiosetClass(24)).toBe('vocal')
   })
 
-  it('returns null for an unmapped/ambiguous class (e.g. "Music", index 137)', () => {
-    expect(arrangeRoleForAudiosetClass(137)).toBeNull()
+  it('returns null for an unmapped/ambiguous class (an index deliberately not in the lookup table)', () => {
+    expect(arrangeRoleForAudiosetClass(500)).toBeNull()
   })
 
   it('returns null for an out-of-range index', () => {
@@ -588,14 +583,16 @@ Create `src/shared/audiosetClasses.ts`:
 // src/shared/audiosetClasses.ts
 import type { ArrangeRole } from './stemRole'
 
-/** A small, deliberately narrow subset of AudioSet's ~527-class ontology
- * (the standard ontology YAMNet-family models are trained against -- see
- * yamnetWorker.ts's own output_0 doc comment) mapped to sssketch's own
- * ArrangeRole taxonomy. Only classes confidently, unambiguously implying
- * ONE ArrangeRole are included -- "Music"/"Musical instrument"/
- * "Synthesizer"/"Electronic music" and similar broad classes are
- * deliberately left OUT rather than force-mapped to a guess, same
- * "decline rather than force a close call" discipline as
+/** A small, deliberately narrow subset of YAMNet's real 521-class AudioSet
+ * ontology (Google's own official `yamnet_class_map.csv` -- see below,
+ * NOT the more commonly-linked 527-class PANNs ontology, which has a
+ * different class order and was wrongly assumed to match here on a first
+ * pass, caught by this task's own real-model verification gate) mapped to
+ * sssketch's own ArrangeRole taxonomy. Only classes confidently,
+ * unambiguously implying ONE ArrangeRole are included -- "Music"/
+ * "Musical instrument"/"Synthesizer"/"Electronic music" and similar broad
+ * classes are deliberately left OUT rather than force-mapped to a guess,
+ * same "decline rather than force a close call" discipline as
  * categoryCentroids.ts's own CONFIDENCE_RATIO and embeddingMatch.ts's own
  * SIMILARITY_MARGIN.
  *
@@ -606,28 +603,31 @@ import type { ArrangeRole } from './stemRole'
  * sung take. "Singing"/"Choir"/"Vocal music"/"A capella" are much more
  * specific to an actual musical vocal performance.
  *
- * Indices verified against the canonical AudioSet class_labels_indices.csv
- * (the standard reference bundled with essentially every published
- * AudioSet/YAMNet-family model) AND cross-checked against this specific
- * vendored model's own real output_0 dimension count -- see this plan's
- * own Task 4 Step 1 for how that verification was done; do not add a new
- * entry here without the same real-model verification, index numbers are
- * not something to guess from memory. */
+ * Indices verified against Google's own official YAMNet class map
+ * (fetched from https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv,
+ * 522 lines: 521 classes + header) AND cross-checked against this
+ * specific vendored model's own real output_0 dimension -- confirmed 521
+ * via BOTH the ONNX graph's own declared output metadata and a real local
+ * inference run (onnxruntime-node against noise input). Do not add a new
+ * entry here without the same real-model verification against THIS exact
+ * class map -- index numbers are not something to guess from memory or
+ * copy from a different, differently-ordered AudioSet variant (a mistake
+ * this exact table already made once). */
 const AUDIOSET_CLASS_TO_ARRANGE_ROLE: Partial<Record<number, ArrangeRole>> = {
-  27: 'vocal', // Singing
-  28: 'vocal', // Choir
-  142: 'bass', // Bass guitar
-  162: 'drums', // Drum kit
-  163: 'drums', // Drum machine
-  164: 'drums', // Drum
-  165: 'drums', // Snare drum
-  166: 'drums', // Rimshot
-  167: 'drums', // Drum roll
-  168: 'drums', // Bass drum
-  171: 'drums', // Cymbal
-  172: 'drums', // Hi-hat
-  254: 'vocal', // Vocal music
-  255: 'vocal' // A capella
+  24: 'vocal', // Singing
+  25: 'vocal', // Choir
+  137: 'bass', // Bass guitar
+  157: 'drums', // Drum kit
+  158: 'drums', // Drum machine
+  159: 'drums', // Drum
+  160: 'drums', // Snare drum
+  161: 'drums', // Rimshot
+  162: 'drums', // Drum roll
+  163: 'drums', // Bass drum
+  166: 'drums', // Cymbal
+  167: 'drums', // Hi-hat
+  249: 'vocal', // Vocal music
+  250: 'vocal' // A capella
 }
 
 export function arrangeRoleForAudiosetClass(classIndex: number): ArrangeRole | null {
