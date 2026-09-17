@@ -120,21 +120,25 @@ textarea:focus-visible,
   outline-offset: -1px;
 }
 
-/* Fast custom tooltip for icon-only buttons -- direct request, 2026-09-17:
- * "can we make the tooltips much faster? for the new icons." The native
- * `title` attribute's tooltip delay is set by the OS/browser (roughly
- * 500ms-1.5s in Chromium) and isn't stylable at all -- there's no CSS
- * property that shortens it. This is a from-scratch replacement: an
- * element opts in with `data-tooltip="..."` instead of `title`, and this
- * rule renders the text itself via a `::after` pseudo-element, appearing
- * after --ra-dur-fast (120ms, already tokenized for "hovers") instead of
- * the browser's own long default. Scoped to icon-only buttons specifically
- * (the ones converted from text to icons in the 2026-09-16 unified UI
- * consistency pass) rather than swapped in for every existing `title` in
- * the app -- a broader swap is a deliberate follow-up, not done here.
- * `aria-label` (already present on every one of these buttons) still
- * carries the accessible name -- this is purely the visual hover tooltip,
- * unrelated to screen-reader behavior. */
+/* Immediate custom tooltip for icon-only buttons -- direct request,
+ * 2026-09-17, three same-day rounds: "can we make the tooltips much
+ * faster? for the new icons," then "can the tooltips be even a bit
+ * faster?", then "there's a slight fade .. let's make them immediate"
+ * -- no delay and no opacity transition at all now, appears the instant
+ * `:hover`/`:focus-visible` matches. The native `title` attribute's
+ * tooltip delay is set by the OS/browser (roughly 500ms-1.5s in
+ * Chromium) and isn't stylable at all -- there's no CSS property that
+ * shortens it, let alone removes it, which is why this is a from-
+ * scratch replacement rather than a tweak: an element opts in with
+ * `data-tooltip="..."` instead of `title`, and this rule renders the
+ * text itself via a `::after` pseudo-element. Scoped to icon-only
+ * buttons specifically (the ones converted from text to icons in the
+ * 2026-09-16 unified UI consistency pass) rather than swapped in for
+ * every existing `title` in the app -- a broader swap is a deliberate
+ * follow-up, not done here. `aria-label` (already present on every one
+ * of these buttons) still carries the accessible name -- this is
+ * purely the visual hover tooltip, unrelated to screen-reader
+ * behavior. */
 [data-tooltip] {
   position: relative;
 }
@@ -154,12 +158,10 @@ textarea:focus-visible,
   pointer-events: none;
   opacity: 0;
   z-index: var(--ra-z-fullscreen-popover);
-  transition: opacity 80ms linear;
 }
 [data-tooltip]:hover::after,
 [data-tooltip]:focus-visible::after {
   opacity: 1;
-  transition-delay: var(--ra-dur-fast);
 }
 
 /* Browsers don't inherit font-family into form controls by default (only
