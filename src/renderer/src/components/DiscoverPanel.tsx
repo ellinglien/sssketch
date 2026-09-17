@@ -1459,6 +1459,18 @@ export function DiscoverPanel({
     }
   }
 
+  // What the "match seed" button below actually promises: the seed riff's
+  // own tempo, rounded (direct report, 2026-09-17: a raw decimal like
+  // "105.01000213623047" was showing up in this button's own label), AND
+  // clamped to SET_TEMPO's own [40, 200] range (store.ts) -- without this,
+  // a seed riff outside that range would dispatch a value the reducer
+  // silently clamps to something OTHER than what this button just displayed
+  // and compared against, leaving the button permanently stuck visible
+  // (comparing against a bpm the reducer could never actually store).
+  // Computed once here and reused everywhere below instead of recomputing
+  // the same expression at each of the 4 read sites.
+  const seedTempo = seedBpm !== null ? Math.min(200, Math.max(40, Math.round(seedBpm))) : null
+
   return (
     <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
       {/* One-time keyframes for a resolving slot's own placeholder box
@@ -1644,10 +1656,10 @@ export function DiscoverPanel({
           +
         </button>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
-        {seedBpm !== null && Math.round(seedBpm) !== bpm && (
+        {seedTempo !== null && seedTempo !== bpm && (
           <button
-            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })}
-            title={`Match seeded riff's own tempo (${Math.round(seedBpm)} bpm)`}
+            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
+            title={`Match seeded riff's own tempo (${seedTempo} bpm)`}
             aria-label="Match seeded riff's own tempo"
             style={{
               height: 18,
@@ -1659,7 +1671,7 @@ export function DiscoverPanel({
               cursor: 'pointer'
             }}
           >
-            match seed ({Math.round(seedBpm)})
+            match seed ({seedTempo})
           </button>
         )}
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
@@ -1771,6 +1783,18 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
+          {/* LoadingLoader's own `size` prop is its rendered WIDTH (see its
+              doc comment) -- 90 is deliberately wider than this 30px button
+              can actually show, used only as a lever to get bar HEIGHT/
+              THICKNESS up (height = round(size*9/60) = 14px here) without a
+              dedicated height prop on that shared component. It doesn't
+              overflow only because this flex child has no explicit
+              flexShrink/flexBasis, so the browser's default flex-shrink
+              clamps its rendered width back down to the 30px content box --
+              if this button's own layout ever changes (overflow:hidden
+              removed elsewhere, flexShrink:0 added here, moved out of a
+              flex context), re-check this doesn't start clipping/
+              overflowing instead of silently shrinking. */}
           {rerollingSlotIds.size > 0 ? <LoadingLoader size={90} /> : <DiceIcon size={18} />}
         </button>
         <button
