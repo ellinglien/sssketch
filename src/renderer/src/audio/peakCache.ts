@@ -10,6 +10,22 @@ interface WaveformAnalysis {
 }
 
 const cache = new Map<string, Promise<WaveformAnalysis>>()
+// Populated once a cache entry's own promise actually SETTLES (success
+// only -- see getAnalysis below) -- lets a fresh <Waveform> mount for an
+// already-decoded path initialize its state synchronously instead of
+// rendering null for its own first frame while re-awaiting a promise
+// that's already resolved. Direct report, 2026-09-17 ("i still notice
+// some blinking when loading"): DiscoverPanel.tsx's own index-keyed-tiles
+// fix (see its own tile-mapping comment) stopped a re-tile from
+// discarding/remounting ALREADY-SHOWN tiles when the shared loop-length
+// reference grows as more slots resolve -- but a genuinely NEW tile
+// index (one more repeat of the SAME stem, now needed to fill the longer
+// loop) still mounts a brand new <Waveform> instance, and even a cache
+// HIT only resolves on the next microtask (a Promise's own .then never
+// runs synchronously) -- so that new instance's very first paint was
+// still a blank frame regardless of the underlying data being ready
+// immediately. peekPeaks/peekBrightness below close that last gap.
+const settled = new Map<string, WaveformAnalysis>()
 let sharedContext: AudioContext | null = null
 
 function getContext(): AudioContext {
@@ -31,7 +47,12 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       const audioBuffer = await getContext().decodeAudioData(arrayBuffer as ArrayBuffer)
       const channel = audioBuffer.getChannelData(0)
-      return { peaks: peaksFromChannel(channel, 128), brightness: zcrFromChannel(channel, 128) }
+      const result = {
+        peaks: peaksFromChannel(channel, 128),
+        brightness: zcrFromChannel(channel, 128)
+      }
+      settled.set(path, result)
+      return result
     } catch (err) {
       // Don't let a transient failure (mid-copy read, permission hiccup, corrupt
       // file) permanently blacklist this path — evict so a future call retries
@@ -59,4 +80,19 @@ export function getBrightness(path: string): Promise<number[]> {
 
 export function getAudioContext(): AudioContext {
   return getContext()
+}
+
+/** Synchronous peek at an already-decoded path's peaks, if any -- null if
+ * nothing has resolved for this path yet (still in flight, never
+ * requested, or failed). See `settled`'s own doc comment above for why
+ * this exists: a lazy useState initializer in Waveform.tsx that can skip
+ * the "renders null until the next microtask" gap entirely for a path
+ * some OTHER instance already decoded. */
+export function peekPeaks(path: string): number[] | null {
+  return settled.get(path)?.peaks ?? null
+}
+
+/** Brightness counterpart to peekPeaks -- see its own doc comment. */
+export function peekBrightness(path: string): number[] | null {
+  return settled.get(path)?.brightness ?? null
 }

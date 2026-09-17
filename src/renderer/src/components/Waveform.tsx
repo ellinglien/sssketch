@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { linearWaveBars, linearPitchLine } from '@shared/visuals'
-import { getPeaks, getBrightness } from '../audio/peakCache'
+import { getPeaks, getBrightness, peekPeaks, peekBrightness } from '../audio/peakCache'
 import { getPitchContour } from '../audio/pitchCache'
 
 // Same bassline/melody range PolarGlyph.tsx uses for its own pitch-line
@@ -25,8 +25,19 @@ export function Waveform({
    * on top of itself for no visual benefit. Default false. */
   showPitchLine?: boolean
 }): React.JSX.Element | null {
-  const [peaks, setPeaks] = useState<number[] | null>(null)
-  const [brightness, setBrightness] = useState<number[] | null>(null)
+  // Lazy initializers (not plain `null`) -- direct report, 2026-09-17
+  // ("i still notice some blinking when loading"): a brand new <Waveform>
+  // instance (e.g. one more tile added when Discover's shared loop-length
+  // reference grows as another slot resolves) used to always render null
+  // for its own first frame, even when this exact path had already been
+  // decoded by a sibling tile moments earlier -- getPeaks/getBrightness
+  // only ever resolve on a later microtask, cache hit or not. Seeding
+  // from peekPeaks/peekBrightness's synchronous cache peek (peakCache.ts)
+  // skips that gap whenever the data's already there; the effect below
+  // still runs and (redundantly, harmlessly) confirms/updates it either
+  // way, and still does the real async work on an actual cache miss.
+  const [peaks, setPeaks] = useState<number[] | null>(() => peekPeaks(path))
+  const [brightness, setBrightness] = useState<number[] | null>(() => peekBrightness(path))
   const [freqHz, setFreqHz] = useState<number[] | null>(null)
   const [failed, setFailed] = useState(false)
 
