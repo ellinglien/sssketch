@@ -49,6 +49,27 @@ const selectStyle: React.CSSProperties = {
   minWidth: 0
 }
 
+// Hand-drawn SVG glyph -- no icon library, same convention as
+// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// request, 2026-09-16: replace the repeated-per-slot "edit" text button.
+function PencilIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M10.5 2.5 L13.5 5.5 L5 14 L2 14 L2 11 Z" />
+      <path d="M9 4 L12 7" />
+    </svg>
+  )
+}
+
 export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -66,7 +87,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100,
+        zIndex: 'var(--ra-z-anchored)',
         background: 'rgba(0, 0, 0, 0.4)',
         display: 'flex',
         alignItems: 'center',
@@ -162,9 +183,10 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                 onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
                 disabled={editDisabled}
                 aria-label={`edit slot ${label} plugin`}
+                title={`edit slot ${label} plugin`}
                 style={buttonStyle(editDisabled)}
               >
-                edit
+                <PencilIcon />
               </button>
             </div>
           )
