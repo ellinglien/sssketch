@@ -2854,33 +2854,17 @@ function DiscoverSlotRow({
           </>
         )}
         <div style={{ gridColumn: 6 }} />
-        {/* This wrapper (not the button/placeholder inside it) carries the
-          grid placement, the min-width, AND the data-tooltip -- the
-          data-tooltip mechanism renders via a ::after pseudo-element
-          positioned OUTSIDE its host element's own box (bottom: calc(100% +
-          4px), see global.css), which an `overflow: hidden` on that SAME
-          element clips away. Both the waveform button and the placeholder
-          below need `overflow: hidden` for their own internal tiled-render/
-          spinner content, so the tooltip has to live one level up, on an
-          element with no overflow clipping of its own. Real regression,
-          found in code review: as a native `title` this worked fine (native
-          tooltips aren't subject to CSS clipping); converting to
-          data-tooltip broke it silently. */}
-        <div
-          style={{ gridColumn: 7, minWidth: 140 }}
-          data-tooltip={
-            resolvedStem
-              ? (previewing ? 'remove from mix' : 'add to mix') +
-                ` · drag for volume (${Math.round(slot.gain * 100)}%)`
-              : resolving
-                ? 'loading…'
-                : resolveFailed
-                  ? 'failed -- retry'
-                  : noMatchFound
-                    ? 'no match -- try random'
-                    : undefined
-          }
-        >
+        {/* Direct report, 2026-09-17: "tooltip over the waveforms on
+          discover prevents user from dragging the volume, so remove it" --
+          this wrapper used to carry a data-tooltip whose own text included
+          a live `drag for volume (N%)` readout, updating on every tick of
+          a gain drag -- the tooltip box re-rendering/resizing itself right
+          above the cursor mid-drag read as actively interfering with the
+          drag gesture, not just cosmetically noisy. Removed outright rather
+          than trimmed -- the inner button's own aria-label (below) still
+          carries a plain accessible name (add to mix/remove from mix),
+          just without the drag hint or the live percentage. */}
+        <div style={{ gridColumn: 7, minWidth: 140 }}>
           {resolvedStem ? (
             // Clicking the glyph toggles this slot in/out of the shared,
             // looping mix -- same click-the-thumbnail-to-hear-it convention
