@@ -74,7 +74,8 @@ import {
   channelsInOrder,
   nextArrangerMode,
   isSketchEligible,
-  groupIdAtPosition
+  groupIdAtPosition,
+  resolvePlayedBars
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
 import type { LoopRegion } from './state/store'
@@ -1624,10 +1625,19 @@ function Frame(): React.JSX.Element {
           {
             label: 'duplicate',
             onClick: () => {
+              // Same class of bug live-reported 2026-09-17 ("two sections
+              // were playing at the same time... i had extended the
+              // original loop") and fixed the same way in DiscoverPanel.tsx's
+              // own addToTimeline: rifff.barLength alone doesn't account
+              // for a resize override (SET_PLAYED_BARS) -- placing the
+              // duplicate right after the ORIGINAL's raw barLength, rather
+              // than its actual (possibly longer, resized) played range,
+              // would stack the copy on top of the original's own
+              // still-playing tail.
               const action = pasteRifffAction(
                 state,
                 groupId,
-                (rifff.startBar ?? 0) + rifff.barLength
+                (rifff.startBar ?? 0) + resolvePlayedBars(state, groupId)
               )
               if (action) dispatch(action)
             }

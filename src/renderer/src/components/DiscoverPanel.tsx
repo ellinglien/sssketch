@@ -21,7 +21,7 @@ import {
   useStemFavourites,
   useStemFavouritesActions
 } from '../state/StoreContext'
-import { tileOffsetsPx } from '../state/selectors'
+import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -295,6 +295,26 @@ export function DiscoverPanel({
   // the real position the engine now already reports).
   const pos = usePos()
   const rifffsState = useAppSelector((s) => s.rifffs)
+  // Real bug, live-reported 2026-09-17 ("two sections were playing at the
+  // same time... i had extended the original loop for the 16 one"):
+  // addToTimeline's own "append after the furthest-right clip" math (below)
+  // used to compute each clip's own end as `startBar + barLength` --
+  // ignoring a resize override (SET_PLAYED_BARS, store.ts), which is what
+  // resizing a placed clip's own right edge actually writes, and what both
+  // the arranger's own rendered clip width (clipGeometryFromFields,
+  // selectors.ts) and the real engine's own tiling bound
+  // (buildEngineProject.ts's resolvePlayedBars call) already use. Extend a
+  // clip's loop past its own barLength, then "add to timeline" again, and
+  // the new clip landed using the OLD, un-extended length -- appearing to
+  // append cleanly in the state model, but genuinely overlapping the
+  // extended clip's own real (longer) played range, on separate channels,
+  // both audible at once. resolvedPlayedBarsFromFields (selectors.ts) is
+  // the same played-bars-override-or-barLength-fallback logic
+  // resolvePlayedBars uses, factored to take the two fields directly
+  // rather than a full AppState -- this component only has the `rifffs`
+  // slice (just above) and this narrower playedBars slice, not the whole
+  // state, so the fields-based helper is the right fit here.
+  const playedBarsState = useAppSelector((s) => s.playedBars)
   const bpm = useAppSelector((s) => s.bpm)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
@@ -1484,10 +1504,20 @@ export function DiscoverPanel({
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
-      // never touches an existing rifff's own startBar.
+      // never touches an existing rifff's own startBar. Each clip's own
+      // END is resolvedPlayedBarsFromFields (a resize override, if any,
+      // else barLength) -- NOT barLength alone -- see playedBarsState's
+      // own doc comment above for why: a clip extended past its own
+      // barLength ends later than raw barLength says, and appending
+      // against the wrong (shorter) end lands the new clip inside the
+      // extended one's own still-playing range instead of after it.
       const placedEnds = Object.values(rifffsState)
         .filter((r) => r.startBar !== undefined)
-        .map((r) => (r.startBar ?? 0) + r.barLength)
+        .map(
+          (r) =>
+            (r.startBar ?? 0) +
+            resolvedPlayedBarsFromFields(playedBarsState[r.groupId], r.barLength)
+        )
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
       dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
