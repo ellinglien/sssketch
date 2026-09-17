@@ -38,8 +38,8 @@ export interface ResolvedCandidateStem {
   barLength: number
 }
 
-// Speed: DiscoverSlotRow's own preview resolve effect and plunkInArranger
-// both call resolveCandidateStem for the SAME candidate -- a row resolves
+// Speed: DiscoverSlotRow's own preview resolve effect and addToTimeline (via
+// resolveDiscoverRifff) both call resolveCandidateStem for the SAME candidate -- a row resolves
 // it once already just to show its waveform, then plunk re-resolves the
 // identical riffCID/stemCID from scratch (a real IPC round trip PLUS,
 // often, the exact download riffLibraryDownloadMissingStems just did
@@ -629,7 +629,7 @@ export function DiscoverPanel({
     }
 
     // maxMembers explicitly uncapped (members.length -- i.e. never
-    // truncates) -- unlike plunkInArranger's own call below, THIS rifff is
+    // truncates) -- unlike resolveDiscoverRifff's own call below, THIS rifff is
     // a throwaway preview project, never persisted, with no
     // Riffs.StemCID_1..8 schema to fit into. Real bug, live-reported
     // 2026-09-16: sharing assembleDiscoverRifff's own default 8-stem cap
@@ -926,18 +926,18 @@ export function DiscoverPanel({
   const rerollGenerationRef = useRef<Map<string, number>>(new Map())
   const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
+  // In-flight + just-succeeded tracking for BOTH "add to timeline" and "add
+  // to shelf" -- independent per button (clicking one doesn't disable or
+  // animate the other), same disabled/label-swap convention as
+  // rerollingSlotIds above, just two single booleans instead of a per-slot
+  // Set since there's only ever one of each button.
+  //
   // Doesn't fix a correctness bug on its own (the groupId fix above already
   // makes a genuine double-click safe from corrupting existing placements),
   // but without it a double-click before the first click's own
   // Promise.all/resolveCandidateStem round trip resolves would still fire
   // TWO separate, fully-valid PLACE_LOOP_ON_TIMELINE dispatches from one
   // intended click -- two full copies of the loop placed back-to-back.
-  //
-  // In-flight + just-succeeded tracking for BOTH "add to timeline" and "add
-  // to shelf" -- independent per button (clicking one doesn't disable or
-  // animate the other), same disabled/label-swap convention as
-  // rerollingSlotIds above, just two single booleans instead of a per-slot
-  // Set since there's only ever one of each button.
   //
   // Direct report, 2026-09-17: "right now the glow isn't enough to
   // convince someone that something has happened, it just feels like a
@@ -1292,39 +1292,6 @@ export function DiscoverPanel({
     }
   }
 
-  // Commits whatever loop is currently built in Discover onto the real
-  // timeline, as ONE UNITED rifff, one undo step -- direct request,
-  // 2026-09-15: "when i say plunk into arranger.. it places them there,
-  // but i'd like them to be united like a rifff, and to have all of the
-  // shorter bits looped so they create a full group." Every slot that
-  // currently has a candidate (locked or not: "plunk" commits whatever's
-  // visible right now, the same loop the slot rows' own Waveform previews
-  // are already showing, not a filtered subset) becomes ONE stem (its own
-  // slot number, 1-indexed in on-screen order) inside a SINGLE new Rifff,
-  // not its own separate single-stem Rifff -- this used to place N
-  // separate rifffs, each on its own timeline row, which is what actually
-  // caused BOTH halves of the report above: no shared grouping (so
-  // nothing tiled/looped together as a group the way a real multi-stem
-  // rifff does), and a confusing row-per-slot layout that read as gaps/
-  // silence even where the timeline itself had none.
-  //
-  // "shorter bits looped to fill the group" needs no new tiling logic of
-  // its own: the rifff's own barLength is set to the LONGEST included
-  // stem's barLength (same as this panel's own maxBarLength reference,
-  // above), while each STEM keeps its own real, unstretched barLength --
-  // exactly the shape a normal multi-bar-length rifff already has, so the
-  // SAME tiling machinery every other placed rifff already uses
-  // (StemWaveformRow.tsx/CollapsedRifffRow.tsx's tileOffsetsPx on the
-  // display side, LoopSewing.cpp on the native engine side) tiles the
-  // shorter stems to fill the group for free.
-  //
-  // resolveCandidateStem (above, also used by the slot rows themselves)
-  // does the real download/resolve work, since a Discover candidate isn't
-  // necessarily cached locally yet. It never throws/rejects -- only ever
-  // resolves to null on failure -- so a plain Promise.all here already
-  // gives the same "one bad stem doesn't block the others" resilience
-  // useStemFeatureScan.ts gets from Promise.allSettled, without needing
-  // that API.
   // Shared by addToTimeline and addToShelf below -- resolves every
   // placeable slot's own candidate down to a real stem and assembles them
   // into one Rifff, exactly the "which slots are ready, what's their real
@@ -1382,6 +1349,34 @@ export function DiscoverPanel({
     if (playing) dispatch({ type: 'PAUSE' })
   }
 
+  // Commits whatever loop is currently built in Discover onto the real
+  // timeline, as ONE UNITED rifff, one undo step -- direct request,
+  // 2026-09-15: "when i say plunk into arranger.. it places them there,
+  // but i'd like them to be united like a rifff, and to have all of the
+  // shorter bits looped so they create a full group." Every slot that
+  // currently has a candidate (locked or not: this commits whatever's
+  // visible right now, the same loop the slot rows' own Waveform previews
+  // are already showing, not a filtered subset) becomes ONE stem (its own
+  // slot number, 1-indexed in on-screen order) inside a SINGLE new Rifff,
+  // not its own separate single-stem Rifff -- this used to place N
+  // separate rifffs, each on its own timeline row, which is what actually
+  // caused BOTH halves of the report above: no shared grouping (so
+  // nothing tiled/looped together as a group the way a real multi-stem
+  // rifff does), and a confusing row-per-slot layout that read as gaps/
+  // silence even where the timeline itself had none.
+  //
+  // "shorter bits looped to fill the group" needs no new tiling logic of
+  // its own: the rifff's own barLength is set to the LONGEST included
+  // stem's barLength (same as this panel's own maxBarLength reference,
+  // above), while each STEM keeps its own real, unstretched barLength --
+  // exactly the shape a normal multi-bar-length rifff already has, so the
+  // SAME tiling machinery every other placed rifff already uses
+  // (StemWaveformRow.tsx/CollapsedRifffRow.tsx's tileOffsetsPx on the
+  // display side, LoopSewing.cpp on the native engine side) tiles the
+  // shorter stems to fill the group for free. The actual per-slot resolve
+  // (candidate -> real stem) and assembly into that single Rifff happens in
+  // resolveDiscoverRifff, above -- shared with addToShelf below, see its
+  // own doc comment for that mechanics.
   async function addToTimeline(): Promise<void> {
     setAddingToTimeline(true)
     try {
@@ -1403,7 +1398,7 @@ export function DiscoverPanel({
       // existing, separate coalesced engine-sync effect in StoreContext.tsx
       // picks up and re-sends on its own. Just resetting these two refs
       // means the NEXT slot change (if the user keeps building right after
-      // placing) correctly starts a fresh preview rather than assuming a
+      // plunking) correctly starts a fresh preview rather than assuming a
       // still-loaded one that the real sync effect already silently
       // overwrote.
       //
