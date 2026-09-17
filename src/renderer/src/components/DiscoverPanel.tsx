@@ -2679,6 +2679,32 @@ function DiscoverSlotRow({
   // synchronously via seedResolved).
   const hasStemToActOn = resolvedStem !== null || slot.candidate !== null
 
+  // Direct report, 2026-09-17: "when i open something in discover,
+  // sometimes some tracks are already muted." Root cause: the mute
+  // button above is gated on hasStemToActOn (candidate OR resolvedStem,
+  // widened 2026-09-16 so it doesn't flicker away mid-reroll -- see that
+  // button's own comment), but its ON/OFF look was driven by `previewing`
+  // alone (previewingSlotIds membership) -- and a slot only ever JOINS
+  // previewingSlotIds once reportSlotResolution's success branch fires,
+  // i.e. once resolvedStem actually lands. That leaves a real, visible
+  // window -- every slot's OWN first roll, or a reroll, however brief --
+  // where hasStemToActOn is already true (there's a candidate) but
+  // previewing is still false (nothing to preview yet): the mute button
+  // rendered in its hard-filled "muted" look even though nothing was ever
+  // actually muted, just not resolved yet. Several slots resolving at
+  // slightly different speeds after a fresh open/seed (some cached,
+  // some genuinely downloading) is exactly when this was most visible --
+  // "SOME tracks already muted," not all, and only "sometimes." Fixed by
+  // deriving the button's own look from resolution state, not bare
+  // previewing: still-resolving reads as its eventual default (about to
+  // autoplay, matching the "it all should autoplay" convention
+  // elsewhere in this file) rather than a false "muted," while a
+  // genuinely terminal resolveFailed keeps the muted look (correct --
+  // nothing is ever going to play there without a fresh reroll). Once
+  // resolvedStem exists, this is identical to `!previewing`, same as
+  // before.
+  const showsAsMuted = resolvedStem !== null ? !previewing : resolveFailed
+
   return (
     <>
       <div
@@ -2784,8 +2810,8 @@ function DiscoverSlotRow({
                 stem to mute (matching the waveform toggle's own guard). */}
             <button
               onClick={onTogglePreview}
-              data-tooltip={previewing ? 'mute' : 'unmute'}
-              aria-label={previewing ? 'mute' : 'unmute'}
+              data-tooltip={showsAsMuted ? 'unmute' : 'mute'}
+              aria-label={showsAsMuted ? 'unmute' : 'mute'}
               style={{
                 gridColumn: 3,
                 display: 'flex',
@@ -2806,10 +2832,12 @@ function DiscoverSlotRow({
                 // ON/playing), rather than this row's own earlier ad hoc
                 // treatment (transparent-when-off instead of the real
                 // `--ra-bg-row-active` fill every other unmuted mute
-                // button in this app uses).
-                background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-                border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-                color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+                // button in this app uses). Driven by showsAsMuted (see
+                // its own doc comment above), not bare `previewing` --
+                // still-resolving no longer renders as falsely muted.
+                background: showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
+                border: `1px solid ${showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
+                color: showsAsMuted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
                 cursor: 'pointer'
               }}
             >
