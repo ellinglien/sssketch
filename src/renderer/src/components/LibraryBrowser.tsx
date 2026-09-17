@@ -1484,13 +1484,36 @@ export function LibraryBrowser({
   // Escape-to-close
   // ---------------------------------------------------------------------
 
+  // Guards every path that closes this whole browser (backdrop click, the
+  // × button, Escape) against silently discarding in-progress Discover
+  // work -- direct report, 2026-09-17: "i accidentally clicked outside the
+  // discover modal and lost my progress." Same window.confirm convention,
+  // and the same "empty/never-touched Discover needs no confirmation"
+  // exemption, this file already uses for the DIFFERENT case of replacing
+  // Discover's own content wholesale (seedDiscoverFromBrowseRiff, above) --
+  // this just applies that identical guard to closing the whole browser
+  // too, not only to overwriting Discover from within it.
+  const attemptClose = useCallback((): void => {
+    const hasRealContent =
+      libraryMode === 'discover' && discoverSlots.some((s) => s.candidate !== null)
+    if (
+      hasRealContent &&
+      !window.confirm(
+        "Close and lose your current Discover loop? Whatever you've built so far in Discover will be lost."
+      )
+    ) {
+      return
+    }
+    onClose()
+  }, [libraryMode, discoverSlots, onClose])
+
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') attemptClose()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [attemptClose])
 
   return (
     <div
@@ -1520,7 +1543,7 @@ export function LibraryBrowser({
         justifyContent: 'center',
         zIndex: 'var(--ra-z-fullscreen)'
       }}
-      onClick={onClose}
+      onClick={attemptClose}
     >
       <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
       <div
@@ -1576,7 +1599,7 @@ export function LibraryBrowser({
             </button>
           </div>
           <button
-            onClick={onClose}
+            onClick={attemptClose}
             aria-label="close library browser"
             data-tooltip="close"
             style={{
