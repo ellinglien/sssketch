@@ -257,7 +257,18 @@ const NOTES_PRESET_NAMES = [
   'Sine Out'
 ]
 
-const AUDIO_IN_PRESET_NAMES = ['Microphone']
+// 'Audio In' added 2026-09-17: the single most common PresetName in
+// Elling's own real library (12,686 of 45,354 named stems, ~28%) --
+// verified 100% consistent with Endlesss's own Instrument bitmask bit 4
+// (audioIn) wherever it co-occurs, so this is a correct, safe addition,
+// not a guess. Mostly redundant with instrumentMaskToSoundType's own
+// audioIn-bit check (mask is checked first in every real fallback chain
+// -- see resolveStemArrangeRole.ts) -- this specifically helps the
+// smaller remainder: stems whose mask is inconsistent/unset but whose
+// PresetName is still this literal string, plus any future import path
+// that only ever has PresetName to go on (drag-and-drop imports, see
+// this file's own top doc comment).
+const AUDIO_IN_PRESET_NAMES = ['Microphone', 'Audio In']
 
 function buildLookup(names: string[], type: SoundType): [string, SoundType][] {
   return names.map((name) => [name.toLowerCase(), type])

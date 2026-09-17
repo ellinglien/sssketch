@@ -31,6 +31,14 @@ describe('guessSoundTypeFromPresetName', () => {
     // "Bitcrusher Deluxe" contains a known name but isn't one itself.
     expect(guessSoundTypeFromPresetName('Bitcrusher Deluxe')).toBeNull()
   })
+
+  it('recognizes "Audio In", the literal preset name Endlesss gives most live-recorded stems', () => {
+    expect(guessSoundTypeFromPresetName('Audio In')).toBe('audioIn')
+  })
+
+  it('is case-insensitive for "Audio In"', () => {
+    expect(guessSoundTypeFromPresetName('audio in')).toBe('audioIn')
+  })
 })
 
 describe('guessArrangeRoleFromPresetName', () => {
