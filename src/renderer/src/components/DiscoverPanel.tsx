@@ -154,11 +154,29 @@ export interface DiscoverSlot {
   gain: number
 }
 
-let nextSlotId = 0
+// Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
+// five, then tried to add another drum track, but it simultaneously
+// changed stem 1 as well as added a new track, and both stems were
+// identical" (reproduced a second time against slot 2 instead of slot
+// 1). Root cause: this used to be a bare module-level counter
+// (`let nextSlotId = 0`, incremented on every call) -- fine as long as
+// the module is only ever evaluated once, but Vite's Fast Refresh
+// doesn't preserve component state across an edit to this file (this
+// function's own eslint-disable below is itself a sign HMR treats this
+// export specially) and re-runs `let nextSlotId = 0` on every hot
+// reload -- resetting the counter to 0 while React's own `slots` array
+// state (owned by the component tree, not this module) survives the
+// same reload with slot-1/slot-2/etc. already in it. The next addSlot()
+// after any reload then mints an ALREADY-IN-USE id, giving two slot
+// objects the same React key -- which index collides just depends on
+// how many addSlot() calls happened since the last reload, explaining
+// why it hit slot-1 once and slot-2 the next time. crypto.randomUUID()
+// (already this app's own convention for every other generated id --
+// groupId, channelId, etc.) has no module-level mutable state at all,
+// so no reload of any kind can ever repeat one.
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
 export function freshSlotId(): string {
-  nextSlotId += 1
-  return `slot-${nextSlotId}`
+  return `slot-${crypto.randomUUID()}`
 }
 
 // Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
