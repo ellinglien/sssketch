@@ -856,9 +856,14 @@ export function ClusterStemsBrowser({
             </button>
           </div>
         </div>
-        <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 12px' }}>
-          group similar-sounding stems, then assign each cluster to a bus below -- exporting to
-          ableton packs everything by bus instead of one track per stem.
+        {/* Direct report, 2026-09-17: "too much text on top" -- trimmed
+            from two full sentences (originally wrapping to 2 lines at
+            this panel's own 860px width) down to one shorter line each,
+            same information, less vertical weight before any real
+            content shows. */}
+        <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 8px' }}>
+          group similar stems, assign each cluster to a bus -- exports pack by bus, not one track
+          per stem.
         </p>
 
         {loading && (
@@ -886,7 +891,7 @@ export function ClusterStemsBrowser({
         {!loading && suggestedGroups.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
-              suggested from past tidy-ups -- click a bus to confirm, or pick a different one
+              suggested from past tidy-ups -- click a bus to confirm
             </p>
             {suggestedGroups.map(({ busId, nodeId, members }) => (
               <ClusterRow
@@ -1052,6 +1057,7 @@ function ClusterRow({
             whiteSpace: 'nowrap'
           }}
           data-tooltip="solo + play this whole cluster, from its own earliest clip"
+          data-tooltip-align="start"
         >
           {rowIsPreviewing && playing ? '■' : '▶'}
         </button>
@@ -1073,6 +1079,7 @@ function ClusterRow({
             aria-label="split cluster"
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
             data-tooltip="split this cluster into its two closest sub-groups"
+            data-tooltip-align="start"
           >
             <ForkIcon />
           </button>

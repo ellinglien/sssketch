@@ -170,6 +170,22 @@ textarea:focus-visible,
   opacity: 0;
   z-index: var(--ra-z-fullscreen-popover);
 }
+/* Opt-in alignment override for a trigger close to the LEFT edge of its
+   own container (a popover/panel, not necessarily the OS window) -- the
+   default centers the tooltip under the trigger (`left: 50%` + a
+   `translateX(-50%)`), which overflows off the visible edge for anything
+   near it. Direct report, 2026-09-17 (Tidy Up's own leftmost per-cluster
+   play/split buttons, screenshotted mid-clip against the panel's own left
+   edge): left-aligns the tooltip's own left edge with the trigger's
+   instead, so it grows rightward, away from the edge, rather than
+   spilling equally both ways. Opt-in (a second data attribute, not the
+   default) since centering is still correct/preferred for the vast
+   majority of `[data-tooltip]` triggers elsewhere in this app that
+   aren't sitting flush against an edge. */
+[data-tooltip][data-tooltip-align='start']::after {
+  left: 0;
+  transform: none;
+}
 [data-tooltip]:hover::after,
 [data-tooltip]:focus-visible::after {
   opacity: 1;
