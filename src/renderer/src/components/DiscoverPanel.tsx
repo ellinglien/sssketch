@@ -1536,6 +1536,11 @@ export function DiscoverPanel({
         </div>
       )}
 
+      {/* Two rows -- filters/settings, then actions. Direct report, 2026-09-17:
+          "the top area is cluttered with buttons currently, youll need to
+          rethink it all" -- the single row (chaos slider, tempo controls, two
+          checkboxes, undo/redo, play/stop, reroll-all, plus the add-to-shelf/
+          add-to-timeline pair) packed in too much for one line. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tight</span>
         <input
