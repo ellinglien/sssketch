@@ -2070,15 +2070,28 @@ export function DiscoverPanel({
       })()}
 
       {/* Direct request, 2026-09-17: "can we move them to the middle" --
-          centered horizontally, same row/position (still the last row,
-          below the slot list) -- was left-aligned (the default). */}
+          first tried centered across the full row width; follow-up --
+          "align it middle below the waveforms, not middle of the whole
+          width" -- so this centers within the SAME horizontal span the
+          waveform track itself occupies in each per-slot row's own grid,
+          not the panel's full width. marginLeft/marginRight below mirror
+          that grid's own gridTemplateColumns ('18px 18px 18px 18px 18px
+          14px 1fr 14px 64px 14px 16px 70px 70px 70px', columnGap: 8) --
+          left = delete+lock+mute+solo+favourite+gap widths (104) + the 5
+          gaps between them (40) + the gap before the waveform track (8)
+          = 152; right = the gap after the waveform (8) + gap+role+gap+
+          dice+similar+adjacent+random widths (318) + the 6 gaps between
+          THEM (48) = 374. If that grid template's own column widths ever
+          change, these two numbers need updating to match. */}
       <div
         style={{
           display: 'flex',
           gap: 4,
           flexWrap: 'wrap',
           justifyContent: 'center',
-          marginTop: 10
+          marginTop: 10,
+          marginLeft: 152,
+          marginRight: 374
         }}
       >
         {ARRANGE_ROLE_OPTIONS.map((role) => (
