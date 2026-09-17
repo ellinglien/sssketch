@@ -38,15 +38,16 @@ export interface ResolvedCandidateStem {
   barLength: number
 }
 
-// Speed: DiscoverSlotRow's own preview resolve effect and addToTimeline (via
-// resolveDiscoverRifff) both call resolveCandidateStem for the SAME candidate -- a row resolves
-// it once already just to show its waveform, then plunk re-resolves the
-// identical riffCID/stemCID from scratch (a real IPC round trip PLUS,
-// often, the exact download riffLibraryDownloadMissingStems just did
-// moments earlier). Cached by promise (not just by settled result), same
-// "cache the in-flight promise itself" convention peakCache.ts already
-// established -- this also dedupes two callers that happen to ask for the
-// same candidate concurrently (row preview + a fast plunk click) into one
+// Speed: DiscoverSlotRow's own preview resolve effect and resolveDiscoverRifff
+// (called from both addToTimeline and addToShelf) both call resolveCandidateStem
+// for the SAME candidate -- a row resolves it once already just to show its
+// waveform, then resolveDiscoverRifff re-resolves the identical riffCID/stemCID
+// from scratch (a real IPC round trip PLUS, often, the exact download
+// riffLibraryDownloadMissingStems just did moments earlier). Cached by promise
+// (not just by settled result), same "cache the in-flight promise itself"
+// convention peakCache.ts already established -- this also dedupes two
+// callers that happen to ask for the same candidate concurrently (row
+// preview + a fast add-to-timeline/add-to-shelf click) into one
 // real request instead of two. Evicted on a null (failed) result, same
 // "don't let a transient failure permanently poison the cache" reasoning
 // peakCache.ts's own eviction-on-rejection uses -- resolveCandidateStem
@@ -1296,8 +1297,11 @@ export function DiscoverPanel({
   // placeable slot's own candidate down to a real stem and assembles them
   // into one Rifff, exactly the "which slots are ready, what's their real
   // gain" logic both actions need identically. Returns null when there's
-  // nothing placeable yet (no slots resolved, or every resolve failed) --
-  // callers early-return on null rather than dispatching an empty rifff.
+  // nothing placeable yet (no slots resolved, or every resolve failed --
+  // the pass-through null from assembleDiscoverRifff's own empty-members
+  // case is unreachable here, since placed.length === 0 already returned
+  // above) -- callers early-return on null rather than dispatching an
+  // empty rifff.
   async function resolveDiscoverRifff(): Promise<DiscoverRifffAssembly | null> {
     // Direct report, 2026-09-16: "when user plunks to the timeline, the
     // volume levels should be copied over pls" -- root cause traced to
@@ -1375,8 +1379,8 @@ export function DiscoverPanel({
   // display side, LoopSewing.cpp on the native engine side) tiles the
   // shorter stems to fill the group for free. The actual per-slot resolve
   // (candidate -> real stem) and assembly into that single Rifff happens in
-  // resolveDiscoverRifff, above -- shared with addToShelf below, see its
-  // own doc comment for that mechanics.
+  // resolveDiscoverRifff above (shared with addToShelf below) -- see that
+  // helper's own doc comment for that mechanics.
   async function addToTimeline(): Promise<void> {
     setAddingToTimeline(true)
     try {
@@ -1449,7 +1453,11 @@ export function DiscoverPanel({
   // arrangement proper." Passes the SAME real per-slot vol map
   // resolveDiscoverRifff() already computed, so ADD_TO_SHELF's own
   // sqrtGain loudness-compensation default (store.ts) never kicks in for
-  // these stems -- see that reducer case's own doc comment.
+  // these stems -- see that reducer case's own doc comment. No
+  // engine-ownership release/ref reset here, unlike addToTimeline: a
+  // shelved rifff has no startBar, so it never needs to reach the engine,
+  // and the discover preview stays legitimately loaded/owned for
+  // continued building.
   async function addToShelf(): Promise<void> {
     setAddingToShelf(true)
     try {
