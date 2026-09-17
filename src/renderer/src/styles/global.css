@@ -156,6 +156,7 @@ textarea:focus-visible,
   bottom: calc(100% + 4px);
   left: 50%;
   transform: translateX(-50%);
+  width: max-content;
   max-width: 220px;
   white-space: normal;
   text-align: center;

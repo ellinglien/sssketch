@@ -1341,18 +1341,6 @@ export function DiscoverPanel({
     )
   }
 
-  // Shared by addToTimeline and addToShelf below -- stops the Discover
-  // preview loop once an action has actually placed/shelved something, so
-  // the confirmation (button label swap, just below) is clearly seen
-  // instead of competing with ongoing playback. Direct report, 2026-09-17:
-  // "i think to make it seem like it worked, i think the loop needs to
-  // stop." Deliberately called AFTER a successful dispatch, not before --
-  // a click that resolves to nothing placeable (resolveDiscoverRifff()
-  // returned null) shouldn't interrupt playback for no reason.
-  function stopPreviewIfPlaying(): void {
-    if (playing) dispatch({ type: 'PAUSE' })
-  }
-
   // Commits whatever loop is currently built in Discover onto the real
   // timeline, as ONE UNITED rifff, one undo step -- direct request,
   // 2026-09-15: "when i say plunk into arranger.. it places them there,
@@ -1438,7 +1426,6 @@ export function DiscoverPanel({
       // own awaits makes that straggling call's post-await check fail, so
       // it bails out harmlessly instead.
       previewSyncGenerationRef.current += 1
-      stopPreviewIfPlaying()
       setJustAddedToTimeline(true)
       window.setTimeout(() => setJustAddedToTimeline(false), 500)
     } finally {
@@ -1465,7 +1452,6 @@ export function DiscoverPanel({
       if (!assembly) return
       const { rifff, vol } = assembly
       dispatch({ type: 'ADD_TO_SHELF', rifff, vol })
-      stopPreviewIfPlaying()
       setJustAddedToShelf(true)
       window.setTimeout(() => setJustAddedToShelf(false), 500)
     } finally {
@@ -1766,6 +1752,7 @@ export function DiscoverPanel({
         >
           <RedoIcon />
         </button>
+        <span style={{ marginLeft: 'auto' }} />
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
@@ -1774,20 +1761,18 @@ export function DiscoverPanel({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 5,
-            fontFamily: 'inherit',
-            fontSize: 9,
-            padding: '4px 10px',
+            justifyContent: 'center',
+            width: 30,
+            height: 30,
+            padding: 0,
             background: 'var(--ra-stretch-on-bg)',
             border: '1px solid var(--ra-stretch-on)',
             color: rerollingSlotIds.size > 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-            fontWeight: 700,
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          {rerollingSlotIds.size > 0 ? <LoadingLoader size={11} /> : <ShuffleIcon />}
+          {rerollingSlotIds.size > 0 ? <LoadingLoader size={16} /> : <DiceIcon size={18} />}
         </button>
-        <span style={{ marginLeft: 'auto' }} />
         <button
           onClick={() => void addToShelf()}
           disabled={addingToShelf}
@@ -1885,7 +1870,7 @@ export function DiscoverPanel({
               fontSize: 9,
               padding: '4px 8px',
               background: 'transparent',
-              border: '1px dashed var(--ra-border-strong)',
+              border: 'none',
               color: 'var(--ra-text-2)',
               cursor: 'pointer'
             }}
@@ -1923,41 +1908,6 @@ function LockGlyph({ locked }: { locked: boolean }): React.JSX.Element {
           read as Phosphor's own LockOpen. */}
       <path d={locked ? 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7' : 'M5.5 7 V5 a2.5 2.5 0 0 1 5 0'} />
       <circle cx="8" cy="10.2" r="0.9" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-// Hand-drawn shuffle glyph (two crossing arrows), styled after Phosphor's
-// own Shuffle icon -- same "no icon package" convention as every other
-// glyph in this file. Direct request, 2026-09-15: "instead of a dice for
-// the reroll... let's use shuffle arrows" -- reroll picks from a real,
-// ranked candidate pool (see rankCandidates/pickReroll), a meaningfully
-// different action from "random"'s own literal dice-roll, so it earns a
-// visually distinct icon now that the text labels are gone. No longer
-// takes a `rolling` prop -- still used by the toolbar's own reroll-all
-// button (per-slot rows switched to a plain text "similar" button instead,
-// see DiscoverSlotRow below).
-function ShuffleIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
-    >
-      {/* Two crossing lanes, each with its own arrowhead at the far end --
-          the classic "shuffle" read (two streams swapping places), not a
-          single loop/refresh arrow. */}
-      <path d="M1.5 4.5 H5 a3 3 0 0 1 2.2 1 l3.6 4 a3 3 0 0 0 2.2 1 h1.5" />
-      <path d="M13 8.5 l2 2 l-2 2" />
-      <path d="M1.5 11.5 H5 a3 3 0 0 0 2.2 -1 l1 -1.1" />
-      <path d="M13 3.5 l2 2 l-2 2" />
-      <path d="M9.6 6.6 l0.8 -0.9 a3 3 0 0 1 2.2 -1 h1.5" />
     </svg>
   )
 }
@@ -2034,11 +1984,11 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
 // glyph in this file. Purely decorative (see its own usage in
 // DiscoverSlotRow below): sits beside the similar/adjacent/random buttons
 // to suggest they're all randomizers. Direct request, 2026-09-17.
-function DiceIcon(): React.JSX.Element {
+function DiceIcon({ size = 12 }: { size?: number }): React.JSX.Element {
   return (
     <svg
-      width="12"
-      height="12"
+      width={size}
+      height={size}
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
@@ -2475,7 +2425,7 @@ function DiscoverSlotRow({
         {/* A single guard around a fragment is safe here (rather than one
             guard per button, as this used to be split) because each button
             below carries its own explicit gridColumn -- omitting all three
-            leaves columns 5/6/7 empty instead of shifting anything after
+            leaves columns 3/4/5 empty instead of shifting anything after
             them. See hasStemToActOn's own doc comment above for why it's
             "has a candidate OR resolvedStem," not resolvedStem alone. */}
         {hasStemToActOn && (
@@ -2802,7 +2752,7 @@ function DiscoverSlotRow({
                 BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
                 and subtle, for brand consistency instead of a custom
                 animation. */}
-              {resolving && <LoadingLoader size={16} />}
+              {resolving && <LoadingLoader size={120} />}
             </div>
           )}
         </div>

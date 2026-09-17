@@ -221,7 +221,7 @@ export function DiscoverNearbyPopover({
     const left = Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))
     const top = Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))
     setPosition({ left, top })
-  }, [x, y])
+  }, [x, y, result])
 
   useEffect(() => {
     function handleDismiss(e: MouseEvent): void {
