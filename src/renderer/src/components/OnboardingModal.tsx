@@ -141,11 +141,11 @@ export function OnboardingModal({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.6)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 500
+        zIndex: 'var(--ra-z-modal)'
       }}
     >
       <div
