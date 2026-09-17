@@ -1646,6 +1646,8 @@ export function DiscoverPanel({
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
+          aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
+          title={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1661,7 +1663,6 @@ export function DiscoverPanel({
           }}
         >
           {rerollingSlotIds.size > 0 ? <LoadingLoader size={11} /> : <ShuffleIcon />}
-          {rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
         </button>
         <button
           onClick={() => void plunkInArranger()}
