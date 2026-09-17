@@ -130,6 +130,18 @@ function Section({
   )
 }
 
+// Hand-drawn SVG glyph -- no icon library, same convention as
+// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// request, 2026-09-16: replace the "back to start" text button.
+function RewindIcon(): React.JSX.Element {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" stroke="none">
+      <rect x="2" y="3" width="1.6" height="10" />
+      <path d="M13.5 3 L13.5 13 L5.5 8 Z" />
+    </svg>
+  )
+}
+
 export function DiscoverNearbyPopover({
   x,
   y,
@@ -272,18 +284,21 @@ export function DiscoverNearbyPopover({
         <button
           onClick={() => handlePick(startCandidate)}
           disabled={atStart}
+          aria-label="back to start"
           title="back to the riff this slot started with"
           style={{
             marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
             fontSize: 9,
-            padding: '2px 6px',
+            padding: '3px 6px',
             border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: atStart ? 'var(--ra-text-4)' : 'var(--ra-text)',
             cursor: atStart ? 'default' : 'pointer'
           }}
         >
-          back to start
+          <RewindIcon />
         </button>
       </div>
       {/* older = recorded chronologically BEFORE the center -- the
