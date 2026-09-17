@@ -29,34 +29,48 @@ export function ExportFormatPicker({
 
   return (
     <div
-      onClick={onCancel}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 30
+        zIndex: 'var(--ra-z-modal)'
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(260px, 90vw)',
           background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
+          border: '1px solid var(--ra-border)',
           borderRadius: 0,
           padding: 16
         }}
       >
-        <span className="ra-eyebrow">export as</span>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--ra-text)' }}>export as</p>
         <div style={{ marginTop: 10 }}>
           <button style={buttonStyle} onClick={() => onChoose('ableton')}>
             ableton project
           </button>
           <button style={{ ...buttonStyle, marginBottom: 0 }} onClick={() => onChoose('reaper')}>
             reaper project
+          </button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              height: 22,
+              borderRadius: 0,
+              padding: '0 10px',
+              fontSize: 10,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            cancel
           </button>
         </div>
       </div>
