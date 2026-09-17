@@ -67,7 +67,16 @@ describe('reducer', () => {
       vol: { 'r1:1': 0.42 }
     })
     expect(state.vol['r1:1']).toBe(0.42)
-    expect(state.vol['r1:6']).toBeCloseTo(sqrtGain(2), 10)
+    expect(state.vol['r1:6']).toBe(sqrtGain(2))
+  })
+
+  it('an explicit vol entry of 0 survives as a real override, not swallowed by a falsy check', () => {
+    const state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r2' }),
+      vol: { 'r2:1': 0 }
+    })
+    expect(state.vol['r2:1']).toBe(0)
   })
 
   it('placing on the timeline sets startBar, selects, and enables stretch, without forcing it expanded', () => {

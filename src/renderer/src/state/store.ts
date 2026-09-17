@@ -348,17 +348,16 @@ export type Action =
       type: 'ADD_TO_SHELF'
       rifff: Rifff
       /** Each stem's own committed gain (DiscoverPanel's own per-slot volume
-       * slider), keyed by stemKey(groupId, slot) -- optional and merged into
-       * state.vol the same way PLACE_LOOP_ON_TIMELINE's own vol field is.
-       * When a key is present here, it wins over this case's own sqrtGain
-       * loudness-compensation default below -- Discover's own per-slot
-       * gains are real, user-adjusted values already; silently
-       * re-compensating them a second time would reintroduce exactly the
-       * "secret hidden" volume behavior that was reverted from Discover
-       * earlier (see docs/superpowers/specs/2026-09-16-discover-seed-stems-
-       * design.md). Every existing caller (the Inspector's re-import-from-
-       * folder flow) omits this field and keeps today's sqrtGain-default
-       * behavior exactly unchanged. */
+       * slider), keyed by stemKey(groupId, slot) -- optional, and applied
+       * only for stems in THIS rifff where state.vol has no entry yet,
+       * unlike PLACE_LOOP_ON_TIMELINE's own vol field (an unconditional
+       * spread that also clobbers existing entries). When a key is present
+       * here, it wins over this case's own sqrtGain loudness-compensation
+       * default below -- Discover's own per-slot gains are already real,
+       * user-adjusted values (see discoverRifffAssembly.ts), so blindly
+       * re-compensating them a second time would make them quieter than
+       * intended. Every existing caller omits this field and keeps today's
+       * sqrtGain-default behavior unchanged. */
       vol?: Record<string, number>
     }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
@@ -583,7 +582,9 @@ export function reducer(state: AppState, action: Action): AppState {
       // sliders are still the ongoing control from here, this only sets where
       // they start. Never overwrites an existing entry, so re-importing (the
       // Inspector's re-import-from-folder flow reuses this same action) doesn't
-      // clobber volumes the user already adjusted.
+      // clobber volumes the user already adjusted. action.vol lets a caller
+      // with already-real per-stem gains (Discover) override the sqrtGain
+      // default outright, still subject to that same never-clobber rule.
       const gain = sqrtGain(action.rifff.stems.length)
       const vol = { ...state.vol }
       for (const stem of action.rifff.stems) {
