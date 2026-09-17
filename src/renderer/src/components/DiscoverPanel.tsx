@@ -1923,46 +1923,6 @@ function LockGlyph({ locked }: { locked: boolean }): React.JSX.Element {
   )
 }
 
-// Hand-drawn die-face glyph, styled after Phosphor's DiceFive icon -- same
-// "drawn directly as inline SVG, no icon package" convention as LockGlyph
-// just above. Direct request, 2026-09-15: an icon-only button (no text
-// label) for "random" -- skips role-matching entirely and picks a genuinely
-// random stem, so a literal die reads correctly for exactly that one
-// action (see ShuffleIcon just below for "reroll," which is a DIFFERENT,
-// ranked-pool action and got its own distinct glyph after direct feedback
-// that dice-for-both was ambiguous once the text labels came off).
-// No longer takes a `rolling` prop -- direct report, 2026-09-15 (v3): the
-// previous spin-while-rolling animation read as too busy. Callers now show
-// a small LoadingLoader in this icon's place while a roll is in flight
-// instead (see DiscoverSlotRow's own random/reroll buttons, below) --
-// same "still working" indicator, just borrowed from the app's own
-// existing brand-consistent loading animation instead of a custom one.
-function DiceIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
-    >
-      <rect x="2" y="2" width="12" height="12" rx="2.5" />
-      {/* Five pips (a DiceFive face) -- doesn't need to represent any real
-          rolled value, it's decorative either way, and five reads clearly
-          at this size where six pips would blur together. */}
-      <circle cx="5" cy="5" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="11" cy="5" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="5" cy="11" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="11" cy="11" r="0.9" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
 // Hand-drawn shuffle glyph (two crossing arrows), styled after Phosphor's
 // own Shuffle icon -- same "no icon package" convention as every other
 // glyph in this file. Direct request, 2026-09-15: "instead of a dice for
@@ -1970,8 +1930,9 @@ function DiceIcon(): React.JSX.Element {
 // ranked candidate pool (see rankCandidates/pickReroll), a meaningfully
 // different action from "random"'s own literal dice-roll, so it earns a
 // visually distinct icon now that the text labels are gone. No longer
-// takes a `rolling` prop -- see DiceIcon's own doc comment just above for
-// why.
+// takes a `rolling` prop -- still used by the toolbar's own reroll-all
+// button (per-slot rows switched to a plain text "similar" button instead,
+// see DiscoverSlotRow below).
 function ShuffleIcon(): React.JSX.Element {
   return (
     <svg
@@ -2061,31 +2022,6 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
       style={{ flexShrink: 0 }}
     >
       <path d="M8 1.5 L9.53 5.9 L14.18 5.99 L10.47 8.8 L11.82 13.26 L8 10.6 L4.18 13.26 L5.53 8.8 L1.82 5.99 L6.47 5.9 Z" />
-    </svg>
-  )
-}
-
-// Three connected waypoints -- "browse nearby points along this jam's own
-// timeline." Same hand-drawn, monochrome-via-currentColor convention as
-// LockGlyph/ShuffleIcon/DiceIcon/StarIcon just above -- no icon library.
-function NearbyIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-    >
-      <circle cx="3" cy="8" r="1.6" />
-      <circle cx="8" cy="3" r="1.6" />
-      <circle cx="8" cy="13" r="1.6" />
-      <circle cx="13" cy="8" r="1.6" />
-      <line x1="4.3" y1="7.3" x2="6.7" y2="4.3" />
-      <line x1="4.3" y1="8.7" x2="6.7" y2="11.7" />
-      <line x1="9.3" y1="4.3" x2="11.7" y2="7.3" />
-      <line x1="9.3" y1="11.7" x2="11.7" y2="8.7" />
     </svg>
   )
 }
@@ -2417,16 +2353,39 @@ function DiscoverSlotRow({
     <>
       <div
         style={{
-          display: 'flex',
+          display: 'grid',
+          gridTemplateColumns:
+            '18px 18px 64px 14px 18px 18px 18px 14px 1fr 110px 14px auto auto auto',
           alignItems: 'center',
-          gap: 10,
+          columnGap: 8,
           padding: '8px 0',
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >
         <button
+          onClick={onRemove}
+          data-tooltip="remove"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 10,
+            fontWeight: 700,
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          X
+        </button>
+        <button
           onClick={onToggleLock}
-          title={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
+          data-tooltip={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -2446,6 +2405,76 @@ function DiscoverSlotRow({
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64, flexShrink: 0 }}>
           {slot.role}
         </span>
+        <div />
+        {(resolvedStem !== null || slot.candidate !== null) && (
+          <button
+            onClick={onTogglePreview}
+            data-tooltip={
+              previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
+            }
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 10,
+              fontWeight: 700,
+              background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
+              border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+              color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+              cursor: 'pointer'
+            }}
+          >
+            m
+          </button>
+        )}
+        {(resolvedStem !== null || slot.candidate !== null) && (
+          <button
+            onClick={onToggleSolo}
+            data-tooltip={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 10,
+              fontWeight: 700,
+              background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+              border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+              color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            s
+          </button>
+        )}
+        {(resolvedStem !== null || slot.candidate !== null) && (
+          <button
+            onClick={onToggleFavourite}
+            data-tooltip={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              padding: 0,
+              background: 'var(--ra-bg-row-active)',
+              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+              color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            <StarIcon favourited={favourited} />
+          </button>
+        )}
+        <div />
         {resolvedStem ? (
           // Clicking the glyph toggles this slot in/out of the shared,
           // looping mix -- same click-the-thumbnail-to-hear-it convention
@@ -2460,7 +2489,7 @@ function DiscoverSlotRow({
           <button
             onClick={onTogglePreview}
             onMouseDown={handleGainDragStart}
-            title={
+            data-tooltip={
               (previewing
                 ? 'playing in the loop -- click to remove'
                 : 'click to add to the loop preview') +
@@ -2618,7 +2647,7 @@ function DiscoverSlotRow({
           </button>
         ) : (
           <div
-            title={
+            data-tooltip={
               resolving
                 ? 'downloading + analyzing…'
                 : resolveFailed
@@ -2695,247 +2724,72 @@ function DiscoverSlotRow({
                     ? 'no match for this role yet'
                     : 'no candidate yet'}
         </span>
-        {/* Direct report, 2026-09-16: "when wave is loading, the width of
-            the loader is wider than the width of the waveforms" (the
-            dashed resolving placeholder just above). Root cause: this
-            whole mute/solo/favourite/nearby button group used to be
-            entirely absent while resolving (gated on `resolvedStem`
-            alone), so the row's OWN flex-grow waveform/placeholder saw
-            fewer fixed-width siblings and grew wider during that window
-            than it does once resolved and this group's own ~102px
-            (4 x 18px buttons + 3 x 10px gaps) reappears and claims that
-            space back. Always reserving this exact width -- rendering an
-            empty flex container instead of nothing at all while
-            `resolvedStem` is null -- keeps the waveform/placeholder's own
-            available space constant across the whole resolve lifecycle. */}
-        <div
-          style={{
-            marginLeft: 'auto',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            width: 102,
-            flexShrink: 0
-          }}
-        >
-          {/* Direct report, 2026-09-16: "the buttons shouldn't disappear
-              when they are rerolling" -- gating on resolvedStem alone
-              meant this whole group vanished the instant a reroll landed a
-              new slot.candidate, since resolvedForCurrent's own identity
-              check (see resolvedStem's own derivation above) immediately
-              stops matching the OLD resolved stem, well before the NEW
-              one's own resolve finishes. slot.candidate itself is set
-              synchronously the moment a roll/reroll lands (rollForSlot's
-              own setSlots call) and stays valid throughout the resolve
-              that follows, so treating either as "there's something real
-              here to act on" keeps the group visible continuously through
-              a reroll, only truly hiding for a slot that's never been
-              rolled at all (both null). resolvedStem alone still covers a
-              seedStem-only slot (Shelf-sourced, no candidate ever, but
-              resolvedStem resolves synchronously via seedResolved). */}
-          {(resolvedStem !== null || slot.candidate !== null) && (
-            <>
-              {/* Direct request, 2026-09-15: "can we add a mute for each
-              channel" -- toggleSlotPreview already existed (the waveform
-              itself was already clickable to the same effect), but wasn't
-              discoverable as a mute control -- only a hover tooltip
-              explained it. Same handler as the waveform click, so either one
-              keeps the other in sync; only shown once there's a real stem to
-              mute (matching the waveform toggle's own guard). */}
-              <button
-                onClick={onTogglePreview}
-                title={
-                  previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
-                }
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 18,
-                  height: 18,
-                  padding: 0,
-                  fontFamily: 'inherit',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  // Direct request, 2026-09-15: "mute should look exactly like
-                  // mute on the arrangement view" -- matches ChannelRow.tsx's
-                  // own muteButtonStyle exactly (background/border/color-by-
-                  // state), rather than this row's own earlier ad hoc treatment
-                  // (transparent-when-off instead of the real
-                  // `--ra-bg-row-active` fill every other unmuted mute button in
-                  // this app uses).
-                  background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-                  border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-                  color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
-                  cursor: 'pointer'
-                }}
-              >
-                {/* Lowercase "m" -- matches ChannelRow.tsx's own mute button
-                glyph exactly (its solo/record siblings are also lowercase
-                single letters), rather than this row's own earlier
-                uppercase "M". */}
-                m
-              </button>
-              {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo button
-              next to mute, same M/S pairing Upcycle's own cards use and
-              ChannelRow.tsx already has on the real arrangement. Matches
-              ChannelRow.tsx's own soloButtonStyle exactly (a soft tinted
-              background with the accent color on border/text, not a hard
-              fill like mute's). */}
-              <button
-                onClick={onToggleSolo}
-                title={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 18,
-                  height: 18,
-                  padding: 0,
-                  fontFamily: 'inherit',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-                  border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                  color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                  cursor: 'pointer'
-                }}
-              >
-                s
-              </button>
-              {/* Direct request, 2026-09-16: star a stem to favourite it, then
-              optionally bias future rolls toward favourites (the panel's
-              own "prefer favourites" toolbar checkbox). Reuses
-              `--ra-recording-live` for the filled/active state -- the same
-              token RiffCircle.tsx already uses for its own "favourited"
-              semantic, just applied to a literal star glyph here instead
-              of a circle fill. */}
-              <button
-                onClick={onToggleFavourite}
-                title={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 18,
-                  height: 18,
-                  padding: 0,
-                  background: 'var(--ra-bg-row-active)',
-                  border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-                  color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
-                  cursor: 'pointer'
-                }}
-              >
-                <StarIcon favourited={favourited} />
-              </button>
-              {nearbyAnchor !== null && (
-                <button
-                  ref={nearbyButtonRef}
-                  onClick={(e) => {
-                    if (nearbyMenu) {
-                      closeNearbyMenu()
-                      return
-                    }
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
-                  }}
-                  title="explore riffs recorded near this one in the same jam"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 18,
-                    height: 18,
-                    padding: 0,
-                    background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-                    border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                    color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <NearbyIcon />
-                </button>
-              )}
-            </>
-          )}
-        </div>
+        <div />
         <button
           onClick={onReroll}
           disabled={rerolling}
-          // "roll" for a slot's first pick, "reroll" once it already has a
-          // candidate -- an empty slot has never been rolled, so "rerolling"
-          // was never the correct verb for it. Icon-only (direct request,
-          // 2026-09-15). No "still working" animation on this button
-          // (direct follow-up report, 2026-09-16, after trying both
-          // LoadingLoader and an icon-jump bounce first) -- the dimmed
-          // color/default cursor plus the title tooltip below are the only
-          // in-flight cues now.
-          title={
-            rerolling
-              ? slot.candidate
-                ? 'rerolling…'
-                : 'rolling…'
-              : slot.candidate
-                ? 'reroll'
-                : 'roll'
-          }
           style={{
-            marginLeft: resolvedStem ? 0 : 'auto',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '3px 7px',
+            whiteSpace: 'nowrap',
             background: 'transparent',
             border: '1px solid var(--ra-border)',
             color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
             cursor: rerolling ? 'default' : 'pointer'
           }}
         >
-          <ShuffleIcon />
+          {rerolling ? 'similar…' : 'similar'}
         </button>
+        {nearbyAnchor !== null && (
+          <button
+            ref={nearbyButtonRef}
+            onClick={(e) => {
+              if (nearbyMenu) {
+                closeNearbyMenu()
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'inherit',
+              fontSize: 9,
+              padding: '3px 7px',
+              whiteSpace: 'nowrap',
+              background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'transparent',
+              border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+              color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            adjacent
+          </button>
+        )}
         <button
           onClick={onRerollRandom}
           disabled={rerolling}
-          title="random -- skip role matching, pick any random stem from your own library"
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '3px 7px',
+            whiteSpace: 'nowrap',
             background: 'transparent',
             border: '1px solid var(--ra-border)',
             color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
             cursor: rerolling ? 'default' : 'pointer'
           }}
         >
-          <DiceIcon />
-        </button>
-        <button
-          onClick={onRemove}
-          title="remove"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
-            fontFamily: 'inherit',
-            fontSize: 10,
-            fontWeight: 700,
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
-            as every other row button now. */}
-          X
+          random
         </button>
       </div>
       {nearbyMenu && nearbyAnchor !== null && (
