@@ -1069,12 +1069,17 @@ export function DiscoverPanel({
       previewingSlotIdsRef.current = pruned
       setPreviewingSlotIds(pruned)
       void syncPreviewToEngine(pruned)
-    } else if (forgotAny) {
+    } else if (forgotAny && previewLoadedRef.current) {
       // A forgotten slot wasn't necessarily part of the preview mix (e.g.
       // muted, or resolved but never toggled on) -- but if it contributed
       // to maxBarLength, the engine still needs a fresh sync to pick up
       // the now-shorter reference even though `pruned` itself, and
-      // therefore the branch above, is unchanged.
+      // therefore the branch above, is unchanged. Gated on
+      // previewLoadedRef.current (found in code review) -- without it, an
+      // undo/redo with nothing currently previewing would still call
+      // syncPreviewToEngine, which (via its own `!previewLoadedRef.current
+      // && seedBpm !== null` branch) silently retunes the whole project's
+      // tempo to the seed bpm even though nothing is playing.
       void syncPreviewToEngine(pruned)
     }
   }
@@ -2566,9 +2571,43 @@ function DiscoverSlotRow({
   // still needs to treat as a genuine, permanent forget -- separate from
   // the shared resolvedStem effect above, which must stay a no-op-on-null
   // for the transient case.
+  //
+  // CRITICAL, found in a second round of code review: this first shipped
+  // as `if (resolveFailed || noMatchFound) onSlotResolutionAbandoned()`
+  // with NO resolvedStem guard, deps `[resolveFailed, noMatchFound,
+  // onSlotResolutionAbandoned]`. Two compounding bugs: (1) noMatchFound is
+  // TRUE for every Shelf-seeded slot (candidate: null, hasRerolled: true
+  // -- see buildSeedSlotsFromStems -- exactly the shape noMatchFound's own
+  // definition can't distinguish from "rerolled into nothing"), even
+  // though a seeded slot has a perfectly good resolvedStem via
+  // seedResolved -- so this effect abandoned every Shelf-seeded slot on
+  // mount, forgetting its resolution and dropping it from the mix right
+  // after the OTHER effect (above) had just added it, making Shelf-seeded
+  // Discover content silently unplayable (and unrecoverable -- toggling
+  // the waveform can't re-add a slot whose own resolvedStemsRef entry
+  // keeps getting deleted again every render). (2) listing
+  // onSlotResolutionAbandoned in the deps -- a fresh closure every
+  // DiscoverPanel render, per its own call site -- meant this effect
+  // re-ran on every one of THIS component's own ~30Hz playhead-tick
+  // re-renders while previewing, not once per transition, exactly the
+  // footgun the onResolvedChange effect above already documents avoiding.
+  // Fixed by (a) requiring resolvedStem === null too -- a seeded slot's
+  // resolvedStem is never null, so this can no longer fire for one
+  // regardless of what noMatchFound alone says -- and (b) depending on
+  // resolvedStem/resolveFailed/noMatchFound (real values, not a closure
+  // identity) instead of the callback prop, matching the sibling effect's
+  // own established convention exactly.
   useEffect(() => {
-    if (resolveFailed || noMatchFound) onSlotResolutionAbandoned()
-  }, [resolveFailed, noMatchFound, onSlotResolutionAbandoned])
+    if (resolvedStem === null && (resolveFailed || noMatchFound)) onSlotResolutionAbandoned()
+    // Same reasoning as the onResolvedChange effect above: onSlotResolutionAbandoned
+    // is a fresh closure every parent render (wraps abandonSlotResolution with this
+    // row's own slot.id) and depending on it would re-fire this effect on every
+    // unrelated parent re-render instead of only when THIS row's own
+    // resolvedStem/resolveFailed/noMatchFound actually change. Safe to omit:
+    // abandonSlotResolution only reads refs (resolvedStemsRef/resolvedBarLengthsRef/
+    // previewingSlotIdsRef) plus setState, no stale closed-over state to go wrong.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedStem, resolveFailed, noMatchFound])
 
   // Direct report, 2026-09-16: "the buttons shouldn't disappear when they
   // are rerolling" -- gating the mute/solo/favourite group on resolvedStem
