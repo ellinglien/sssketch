@@ -15,7 +15,7 @@ export function BusyOverlay(): React.JSX.Element | null {
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 1000,
+        zIndex: 'var(--ra-z-fullscreen)',
         background: 'color-mix(in srgb, var(--ra-bg-page) 80%, transparent)',
         display: 'flex',
         flexDirection: 'column',

@@ -102,7 +102,7 @@ export function ContextMenu({
         position: 'fixed',
         left: position.left,
         top: position.top,
-        zIndex: 20,
+        zIndex: 'var(--ra-z-anchored)',
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border-strong)',
         borderRadius: 0,
