@@ -1989,19 +1989,24 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          {/* LoadingLoader's own `size` prop is its rendered WIDTH (see its
-              doc comment) -- 90 is deliberately wider than this 30px button
-              can actually show, used only as a lever to get bar HEIGHT/
-              THICKNESS up (height = round(size*9/60) = 14px here) without a
-              dedicated height prop on that shared component. It doesn't
-              overflow only because this flex child has no explicit
-              flexShrink/flexBasis, so the browser's default flex-shrink
-              clamps its rendered width back down to the 30px content box --
-              if this button's own layout ever changes (overflow:hidden
-              removed elsewhere, flexShrink:0 added here, moved out of a
-              flex context), re-check this doesn't start clipping/
-              overflowing instead of silently shrinking. */}
-          {rerollingSlotIds.size > 0 ? <LoadingLoader size={90} /> : <DiceIcon size={18} />}
+          {/* Direct report, 2026-09-17: "the loader where the dice icon
+              is... it's not the same animation file as the others, is
+              it? the lines seem a lot thicker" -- it WAS the same
+              LoadingLoader.tsx, but this spot used to pass size={90}
+              purely as a lever to force taller/thicker bars (height/
+              barThickness scale off `size`, see LoadingLoader's own doc
+              comment), relying on the browser's default flex-shrink to
+              squash the rendered WIDTH back down to fit this 30px
+              button. Flex-shrink only compresses width, not the fixed-
+              pixel height/bar-thickness LoadingLoader computes from the
+              UNSHRUNK size -- so the bars kept their size=90 proportions
+              (14px tall, 5px thick) crammed into a ~30px-wide box,
+              visibly thicker/stockier than every other LoadingLoader in
+              the app (all of which pass size directly, so width and
+              thickness scale together). Plain size={30}, matching this
+              button's own width, restores the same proportions as
+              everywhere else. */}
+          {rerollingSlotIds.size > 0 ? <LoadingLoader size={30} /> : <DiceIcon size={18} />}
         </button>
         <button
           onClick={() => void addToShelf()}
