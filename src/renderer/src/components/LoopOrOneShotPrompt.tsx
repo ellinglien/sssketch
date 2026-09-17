@@ -11,7 +11,7 @@ export type LoopOrOneShotChoice =
 // request, 2026-09-16: "simplify the buttons and text in that prompt so
 // it's minimal," matching this app's established "hand-drawn SVG glyph,
 // title attribute for the tooltip, no text label" convention
-// (DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/StarIcon/NearbyIcon etc.).
+// (DiscoverPanel.tsx's own DiceIcon/StarIcon/LockGlyph etc.).
 function iconButtonStyle(active = false): React.CSSProperties {
   return {
     width: 26,
@@ -71,8 +71,7 @@ function OneShotIcon(): React.JSX.Element {
 }
 
 // Two arcs, each ending in its own arrowhead, forming a closed loop --
-// the classic "repeat" read, distinct from DiscoverPanel.tsx's own
-// ShuffleIcon (two independent crossing lanes, a different action).
+// the classic "repeat" read.
 function LoopIcon(): React.JSX.Element {
   return (
     <svg

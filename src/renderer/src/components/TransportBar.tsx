@@ -131,7 +131,7 @@ function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX
 }
 
 // Hand-drawn SVG glyphs -- no icon library, monochrome via currentColor,
-// same convention as DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/
+// same convention as DiscoverPanel.tsx's own DiceIcon/StarIcon/
 // LockGlyph etc. Direct request, 2026-09-16: "check for any other
 // buttons in the interface that might be replaced with icons." These four
 // sit in the same transport toolbar row as this file's own already-icon

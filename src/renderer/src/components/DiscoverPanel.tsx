@@ -1644,7 +1644,7 @@ export function DiscoverPanel({
           +
         </button>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
-        {seedBpm !== null && seedBpm !== bpm && (
+        {seedBpm !== null && Math.round(seedBpm) !== bpm && (
           <button
             onClick={() => dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })}
             title={`Match seeded riff's own tempo (${Math.round(seedBpm)} bpm)`}
@@ -1771,7 +1771,7 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          {rerollingSlotIds.size > 0 ? <LoadingLoader size={16} /> : <DiceIcon size={18} />}
+          {rerollingSlotIds.size > 0 ? <LoadingLoader size={90} /> : <DiceIcon size={18} />}
         </button>
         <button
           onClick={() => void addToShelf()}
@@ -1981,9 +1981,12 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
 }
 
 // Hand-drawn dice glyph -- same "no icon package" convention as every other
-// glyph in this file. Purely decorative (see its own usage in
-// DiscoverSlotRow below): sits beside the similar/adjacent/random buttons
-// to suggest they're all randomizers. Direct request, 2026-09-17.
+// glyph in this file. Two usages: purely decorative in DiscoverSlotRow
+// (default size, sits beside the similar/adjacent/random buttons to suggest
+// they're all randomizers -- direct request, 2026-09-17), and the toolbar's
+// own "similar all" button (a real interactive icon, rendered bigger via
+// the size prop). Optional `size` (default 12) lets both call sites share
+// one component instead of duplicating the SVG.
 function DiceIcon({ size = 12 }: { size?: number }): React.JSX.Element {
   return (
     <svg

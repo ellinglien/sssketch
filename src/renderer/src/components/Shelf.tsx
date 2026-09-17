@@ -441,13 +441,14 @@ export function Shelf({
             onClick={onOpenLibrary}
             data-tour-id="tour-import"
             style={{
-              height: 18,
+              height: 36,
               borderRadius: 0,
-              padding: '0 6px',
-              fontSize: 9,
-              border: '1px solid var(--ra-border)',
+              padding: '0 18px',
+              fontSize: 13,
+              fontWeight: 700,
+              border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)'
+              color: 'var(--ra-text)'
             }}
           >
             import

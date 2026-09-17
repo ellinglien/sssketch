@@ -19,7 +19,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
 }
 
 // Hand-drawn SVG glyph -- no icon library, same convention as
-// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// DiscoverPanel.tsx's own DiceIcon/StarIcon/LockGlyph etc. Direct
 // request, 2026-09-16: replace the repeated-per-row "use" text button.
 function CheckmarkIcon(): React.JSX.Element {
   return (
