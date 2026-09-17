@@ -5,6 +5,16 @@ import { extractEmbeddingAndTopClass } from './yamnetClient'
 
 const cache = new Map<string, Promise<number[] | null>>()
 
+/** Shared decode chain used both by a fresh extraction below and by
+ * ensureYamnetZeroShotClassified's own retroactive re-run -- read the raw
+ * bytes over IPC, decode, resample to YAMNet's own required 16kHz mono. */
+async function decodeAndResample(path: string): Promise<Float32Array> {
+  const bytes = await window.rifffApi.readAudioFile(path)
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+  return resampleTo16kMono(audioBuffer)
+}
+
 /** Extracts (or returns the already-in-flight/cached extraction for) one
  * stem's YAMNet embedding -- persistent-cache-first (a stem the background
  * scan or a prior session already extracted needs no decode/inference at
@@ -48,10 +58,7 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
       const persisted = await window.rifffApi.getStemEmbeddingCache(path)
       if (persisted) return persisted
 
-      const bytes = await window.rifffApi.readAudioFile(path)
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-      const pcm = await resampleTo16kMono(audioBuffer)
+      const pcm = await decodeAndResample(path)
       const result = await extractEmbeddingAndTopClass(pcm)
       if (!result || result.embedding.every((v) => v === 0)) return null
 
@@ -59,6 +66,10 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
       // call -- a real library stem's path persists for next time; a
       // non-library path is silently skipped main-process-side.
       void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
+      // Marks the attempt regardless of topClassIndex -- see
+      // markYamnetZeroShotAttempted's own doc comment (main process) for
+      // why "tried, found nothing mappable" still needs recording.
+      void window.rifffApi.markYamnetZeroShotAttempted(path)
       if (result.topClassIndex !== null) {
         void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
       }
@@ -72,4 +83,47 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
 
   cache.set(path, promise)
   return promise
+}
+
+/** Retroactive counterpart to getOrExtractStemEmbedding's own zero-shot
+ * write, for a stem whose embedding was already cached BEFORE the
+ * zero-shot classification path existed -- see
+ * yamnetZeroShotRetroactiveScan.ts's own doc comment (main process) for
+ * the real, one-time migration gap this closes: getOrExtractStemEmbedding
+ * is cache-hit-first and returns the persisted embedding immediately,
+ * without ever reaching extractEmbeddingAndTopClass again, so a stem
+ * embedded before this classification path existed would otherwise never
+ * get a chance to run it.
+ *
+ * ONLY ever called from YamnetZeroShotRetroactiveScan.tsx's own one-time
+ * scan, for a target that component's own IPC query has already confirmed
+ * has a cached embedding and no recorded attempt -- re-decodes and re-runs
+ * inference specifically to recover topClassIndex, which the ORIGINAL
+ * extraction never computed/persisted. Does NOT re-write the embedding
+ * itself (already correct, cached) and does NOT consult/populate the
+ * module-level `cache` above -- this is a one-off classification pass for
+ * a specific stem, not something any other caller would ever ask this
+ * module for again.
+ *
+ * Always marks the stem "attempted" on a SUCCESSFUL extraction, even if
+ * topClassIndex itself ends up null or doesn't map to any ArrangeRole --
+ * a real inference result, however unhelpful, is deterministic for the
+ * same audio file, so retrying it later would just waste the same
+ * decode+inference cost for the same answer (see
+ * markYamnetZeroShotAttempted's own doc comment, main process). Does NOT
+ * mark "attempted" on an outright extraction failure (decode error, model
+ * unavailable) -- those ARE worth retrying, since they're plausibly
+ * transient, matching getOrExtractStemEmbedding's own error handling. */
+export async function ensureYamnetZeroShotClassified(path: string): Promise<void> {
+  try {
+    const pcm = await decodeAndResample(path)
+    const result = await extractEmbeddingAndTopClass(pcm)
+    if (!result) return
+    void window.rifffApi.markYamnetZeroShotAttempted(path)
+    if (result.topClassIndex !== null) {
+      void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
+    }
+  } catch (err) {
+    console.error('ensureYamnetZeroShotClassified: failed for stem', path, err)
+  }
 }

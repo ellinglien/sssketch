@@ -13,6 +13,7 @@ import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
+import type { YamnetZeroShotRetroactiveTarget } from '../main/yamnetZeroShotRetroactiveScan'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
@@ -260,6 +261,10 @@ const api = {
     ipcRenderer.invoke('set-stem-embedding-cache', path, embedding),
   setYamnetZeroShotCategory: (path: string, audiosetClassIndex: number): Promise<void> =>
     ipcRenderer.invoke('set-yamnet-zeroshot-category', path, audiosetClassIndex),
+  markYamnetZeroShotAttempted: (path: string): Promise<void> =>
+    ipcRenderer.invoke('mark-yamnet-zeroshot-attempted', path),
+  getYamnetZeroShotRetroactiveTargets: (): Promise<YamnetZeroShotRetroactiveTarget[]> =>
+    ipcRenderer.invoke('get-yamnet-zeroshot-retroactive-targets'),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>

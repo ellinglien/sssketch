@@ -93,6 +93,32 @@ export function isStemEligibleForAutoCategory(ownDb: Database.Database, stemCID:
   return row !== undefined
 }
 
+/** Records that a YAMNet zero-shot classification attempt has happened
+ * for this stem -- regardless of whether it produced a StemAutoCategory
+ * row (most stems' own top AudioSet class won't map to anything in
+ * audiosetClasses.ts's deliberately narrow table, and that's a genuine,
+ * deterministic answer for a given audio file, not a reason to retry).
+ * `ON CONFLICT ... DO NOTHING` makes this idempotent -- a stem attempted
+ * twice (e.g. by both a fresh extraction and, in a narrow race, the
+ * retroactive scan) keeps its FIRST AttemptedAt rather than one silently
+ * overwriting the other; nothing downstream reads this table's own
+ * timestamp for ordering/conflict resolution the way StemCategories'
+ * UpdatedAt does, so there's no correctness reason to prefer "latest"
+ * here. */
+export function markYamnetZeroShotAttempted(
+  ownDb: Database.Database,
+  stemCID: string,
+  attemptedAt: number
+): void {
+  ownDb
+    .prepare(
+      `INSERT INTO StemYamnetZeroShotAttempted (StemCID, AttemptedAt)
+       VALUES (@stemCID, @attemptedAt)
+       ON CONFLICT(StemCID) DO NOTHING`
+    )
+    .run({ stemCID, attemptedAt })
+}
+
 export function upsertStemAutoCategory(
   ownDb: Database.Database,
   stemCID: string,

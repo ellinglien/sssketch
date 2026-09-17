@@ -63,6 +63,7 @@ import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
+import { YamnetZeroShotRetroactiveScan } from './audio/YamnetZeroShotRetroactiveScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { markManualSeek } from './state/manualSeek'
@@ -2162,6 +2163,11 @@ function Frame(): React.JSX.Element {
        * the full "why" (fixes the scan restarting on every Discover tab
        * switch). */}
       {discoverConsented && <DiscoverLibraryScan />}
+      {/* Same mount pattern/consent gate as DiscoverLibraryScan directly
+       * above -- a one-time migration pass for stems already embedded
+       * before zero-shot classification existed, see its own doc comment
+       * (YamnetZeroShotRetroactiveScan.tsx) for the real gap this closes. */}
+      {discoverConsented && <YamnetZeroShotRetroactiveScan />}
       <div className="ra-frame">
         <div
           style={{

@@ -5,6 +5,7 @@ import {
   getAutoCategorizedStemCIDs,
   getStemAutoClassifyProgress,
   isStemEligibleForAutoCategory,
+  markYamnetZeroShotAttempted,
   upsertStemAutoCategory
 } from './stemAutoCategoryStore'
 
@@ -24,6 +25,9 @@ function freshDb(): Database.Database {
     CREATE TABLE StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
       Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+    );
+    CREATE TABLE StemYamnetZeroShotAttempted (
+      StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL
     );
   `)
   return db
@@ -121,4 +125,25 @@ describe('isStemEligibleForAutoCategory', () => {
       expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
     }
   )
+})
+
+describe('markYamnetZeroShotAttempted', () => {
+  it('inserts a row readable back by StemCID', () => {
+    const db = freshDb()
+    markYamnetZeroShotAttempted(db, 's1', 1000)
+    const row = db
+      .prepare(`SELECT StemCID, AttemptedAt FROM StemYamnetZeroShotAttempted WHERE StemCID = ?`)
+      .get('s1')
+    expect(row).toEqual({ StemCID: 's1', AttemptedAt: 1000 })
+  })
+
+  it('is idempotent -- calling it twice for the same stem does not throw and keeps the FIRST AttemptedAt', () => {
+    const db = freshDb()
+    markYamnetZeroShotAttempted(db, 's1', 1000)
+    markYamnetZeroShotAttempted(db, 's1', 2000)
+    const row = db
+      .prepare(`SELECT AttemptedAt FROM StemYamnetZeroShotAttempted WHERE StemCID = ?`)
+      .get('s1') as { AttemptedAt: number }
+    expect(row.AttemptedAt).toBe(1000)
+  })
 })

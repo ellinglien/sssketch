@@ -76,12 +76,17 @@ import type { DiscoverSettings } from './discoverSettingsStore'
 import {
   getStemAutoClassifyProgress,
   isStemEligibleForAutoCategory,
+  markYamnetZeroShotAttempted,
   upsertStemAutoCategory,
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import type { LibraryScanTarget } from './discoverLibraryStems'
+import {
+  listYamnetZeroShotRetroactiveTargets,
+  type YamnetZeroShotRetroactiveTarget
+} from './yamnetZeroShotRetroactiveScan'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -1080,6 +1085,30 @@ app.whenReady().then(async () => {
         Math.floor(Date.now() / 1000)
       )
     }
+  )
+
+  // Records a zero-shot classification ATTEMPT, independent of whether
+  // set-yamnet-zeroshot-category above actually wrote a role for it --
+  // see StemYamnetZeroShotAttempted's own schema doc comment
+  // (riffLibrarySchema.ts) for the full reasoning: most stems' own top
+  // AudioSet class won't map to anything in audiosetClasses.ts's
+  // deliberately narrow table, and that's a genuine, deterministic
+  // answer for a given audio file -- without recording that the attempt
+  // happened at all, listYamnetZeroShotRetroactiveTargets below would
+  // keep re-selecting the same never-classifiable stems forever.
+  ipcMain.handle('mark-yamnet-zeroshot-attempted', (_event, path: string) => {
+    const db = openOwnRiffLibraryDb()
+    const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())
+    if (!stemCID) return
+    markYamnetZeroShotAttempted(db, stemCID, Math.floor(Date.now() / 1000))
+  })
+
+  // Feeds YamnetZeroShotRetroactiveScan.tsx's own one-time migration pass
+  // (see yamnetZeroShotRetroactiveScan.ts's own doc comment) -- every
+  // stem whose embedding was cached before the zero-shot classification
+  // path existed, so it never got a chance to run.
+  ipcMain.handle('get-yamnet-zeroshot-retroactive-targets', (): YamnetZeroShotRetroactiveTarget[] =>
+    listYamnetZeroShotRetroactiveTargets(openOwnRiffLibraryDb())
   )
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
