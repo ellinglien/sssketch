@@ -1518,7 +1518,7 @@ export function LibraryBrowser({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 1000
+        zIndex: 'var(--ra-z-fullscreen)'
       }}
       onClick={onClose}
     >
@@ -1577,6 +1577,7 @@ export function LibraryBrowser({
           </div>
           <button
             onClick={onClose}
+            title="close"
             style={{
               height: 22,
               borderRadius: 0,
@@ -1587,7 +1588,7 @@ export function LibraryBrowser({
               color: 'var(--ra-text-2)'
             }}
           >
-            close
+            ×
           </button>
         </div>
 
