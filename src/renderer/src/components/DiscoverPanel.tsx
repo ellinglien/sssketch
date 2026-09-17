@@ -2755,7 +2755,15 @@ function DiscoverSlotRow({
                 BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
                 and subtle, for brand consistency instead of a custom
                 animation. */}
-              {resolving && <LoadingLoader size={120} />}
+              {/* Direct report, 2026-09-17: bumped this up to size={120} once
+                  (read as "a jarring 2px sliver against the 40px-tall
+                  waveform it replaces"), then reverted -- "i was fine with
+                  it being the dotted line... add 1px to the height." size=16
+                  gave a 2px-tall, 1px-thick bar (LoadingLoader's own
+                  height = round(size*9/60) formula); size=17 is the same
+                  dotted-line look at 3px tall, 1px thick -- the requested
+                  +1px, nothing more. */}
+              {resolving && <LoadingLoader size={17} />}
             </div>
           )}
         </div>
