@@ -41,7 +41,7 @@ import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
-import { buildSeedSlotsFromCandidates } from '../audio/discoverSeed'
+import { buildSeedSlotsFromCandidates, discoverHasRealContent } from '../audio/discoverSeed'
 import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
@@ -197,8 +197,9 @@ export function LibraryBrowser({
   /** App.tsx's Frame() own single source of truth for Discover's
    * whole-library-scan consent — threaded straight through to
    * DiscoverPanel below, same lift-up-and-thread-down pattern already
-   * used for discoverSlots/discoverChaos just below (this component
-   * itself doesn't read either, it's purely a pass-through here). */
+   * used for discoverSlots/discoverChaos just below -- unlike those,
+   * this component itself doesn't read discoverConsented, it's purely a
+   * pass-through here. */
   discoverConsented: boolean
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
@@ -230,7 +231,7 @@ export function LibraryBrowser({
   // 'discover' tab, matching direct request 2026-09-17 ("return to
   // working on the group of stems i had before").
   const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(() =>
-    discoverSlots.some((s) => s.candidate !== null) ? 'discover' : 'browse'
+    discoverHasRealContent(discoverSlots) ? 'discover' : 'browse'
   )
 
   // Auth (gates sync-triggering and live jam-membership discovery)
@@ -437,8 +438,9 @@ export function LibraryBrowser({
   // automatic real-project engine sync (state.bpm is one of its own
   // listed dependencies) against DiscoverPanel's own ownership claim,
   // which doesn't happen until its first slot actually resolves. Reverted
-  // to manual-only -- discoverSeedBpm is still seeded above (the lazy
-  // useState initializer), driving the "match seed" button.
+  // to manual-only -- discoverSeedBpm is still seeded (now by App.tsx's own
+  // openRiffLibraryWithDiscoverSeed, since this component no longer owns
+  // that state locally), driving the "match seed" button.
 
   // ---------------------------------------------------------------------
   // Jam list unification
@@ -1310,7 +1312,7 @@ export function LibraryBrowser({
     // uses elsewhere (e.g. its own jam-sync-removal confirmation above).
     // An empty/never-touched Discover (every slot has no candidate at all)
     // needs no confirmation -- there's nothing to lose.
-    const hasRealContent = discoverSlots.some((s) => s.candidate !== null)
+    const hasRealContent = discoverHasRealContent(discoverSlots)
     if (
       hasRealContent &&
       !window.confirm(
@@ -1371,8 +1373,10 @@ export function LibraryBrowser({
       // Discover slot-content action already uses (DiscoverPanel.tsx's own
       // pushUndoSnapshot) -- inlined here rather than calling into
       // DiscoverPanel directly, since discoverUndoStack/setDiscoverUndoStack
-      // (like discoverSlots itself) are owned HERE, lifted up specifically so
-      // they survive a 'browse' <-> 'discover' switch.
+      // (like discoverSlots itself) are App.tsx's own state now, threaded
+      // down as props -- lifted up specifically so they survive not just a
+      // 'browse' <-> 'discover' switch but the whole LibraryBrowser modal
+      // closing too.
       setDiscoverUndoStack((prev) => [...prev, discoverSlots].slice(-DISCOVER_UNDO_LIMIT))
       setDiscoverRedoStack([])
       setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))

@@ -36,7 +36,7 @@ import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LibraryBrowser } from './components/LibraryBrowser'
 import { type DiscoverSlot } from './components/DiscoverPanel'
-import { buildSeedSlotsFromStems } from './audio/discoverSeed'
+import { buildSeedSlotsFromStems, discoverHasRealContent } from './audio/discoverSeed'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
@@ -1520,7 +1520,7 @@ function Frame(): React.JSX.Element {
   // LibraryBrowser always mounted fresh on open, so there was never
   // anything to lose).
   function openRiffLibraryWithDiscoverSeed(rifff: Rifff): void {
-    const hasRealContent = discoverSlots.some((s) => s.candidate !== null)
+    const hasRealContent = discoverHasRealContent(discoverSlots)
     if (
       hasRealContent &&
       !window.confirm(

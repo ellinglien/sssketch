@@ -14,6 +14,27 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 // a "plunk in arranger" could ever turn back into a single rifff anyway.
 const MAX_SEED_SLOTS = 8
 
+/** Whether any slot in a Discover loop is real, meaningful content worth
+ * confirming before destroying/worth reopening onto the 'discover' tab for
+ * -- NOT the same check as `s.candidate !== null` alone, which misses
+ * every seedStem-only slot (Shelf-sourced, `candidate: null` by design --
+ * see buildSeedSlotsFromStems' own doc comment above). Real bug, found in
+ * code review, 2026-09-17: two fresh call sites (App.tsx's own
+ * openRiffLibraryWithDiscoverSeed overwrite guard, and LibraryBrowser.tsx's
+ * own libraryMode initial-tab check) used the narrower `candidate !== null`
+ * form, which silently treated a Shelf-seeded, never-rerolled loop as
+ * "empty" -- reopening Discover after seeding from Shelf landed on the
+ * 'browse' tab instead of 'discover', and seeding from a DIFFERENT Shelf
+ * riff while one was already in progress skipped the confirm-before-
+ * overwrite dialog entirely. The correct predicate (`candidate !== null ||
+ * seedStem !== undefined`) already existed once, in DiscoverPanel.tsx's
+ * own `placeable` filter (a direct report, 2026-09-16, fixed the identical
+ * class of bug for "add to timeline"/"add to shelf") -- this is that same
+ * check, shared, so it can't drift out of sync across call sites again. */
+export function discoverHasRealContent(slots: readonly DiscoverSlot[]): boolean {
+  return slots.some((s) => s.candidate !== null || s.seedStem !== undefined)
+}
+
 /** Builds Discover's replacement slots from a list of already-resolved,
  * local Stem objects -- the Shelf-sourced seed path (a Shelf riff is
  * already a real `Rifff` with real local Stem data, `state.rifffs`, no
