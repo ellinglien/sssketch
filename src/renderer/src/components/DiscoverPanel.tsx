@@ -5,7 +5,7 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
-import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
+import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -926,25 +926,30 @@ export function DiscoverPanel({
   const rerollGenerationRef = useRef<Map<string, number>>(new Map())
   const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
-  // In-flight tracking for plunkInArranger -- same disabled/label-swap
-  // convention as rerollingSlotIds above, just a single boolean rather than
-  // a per-slot Set since there's only ever one "plunk in arranger" button.
   // Doesn't fix a correctness bug on its own (the groupId fix above already
   // makes a genuine double-click safe from corrupting existing placements),
   // but without it a double-click before the first click's own
   // Promise.all/resolveCandidateStem round trip resolves would still fire
   // TWO separate, fully-valid PLACE_LOOP_ON_TIMELINE dispatches from one
   // intended click -- two full copies of the loop placed back-to-back.
-  const [placing, setPlacing] = useState(false)
-  // Direct report, 2026-09-16: "plunk in arranger doesn't have much of a
-  // confirmation thing.. can we indicate it works somehow? maybe a subtle
-  // microanimation" -- a brief, one-shot ring pulse on the button itself
-  // right after a successful placement, matching this session's own
-  // established "subtle quick microanimation" preference and reusing the
-  // exact pattern ClusterStemsBrowser.tsx's own celebratingRow already
-  // uses for the same purpose (a box-shadow ring, 500ms ease-out, cleared
-  // by its own timeout rather than an animationend round-trip).
-  const [justPlunked, setJustPlunked] = useState(false)
+  //
+  // In-flight + just-succeeded tracking for BOTH "add to timeline" and "add
+  // to shelf" -- independent per button (clicking one doesn't disable or
+  // animate the other), same disabled/label-swap convention as
+  // rerollingSlotIds above, just two single booleans instead of a per-slot
+  // Set since there's only ever one of each button.
+  //
+  // Direct report, 2026-09-17: "right now the glow isn't enough to
+  // convince someone that something has happened, it just feels like a
+  // failed process" -- the box-shadow pulse alone (discover-add-pulse,
+  // below -- was discover-plunk-pulse) wasn't legible enough on its own.
+  // justAddedToTimeline/justAddedToShelf now ALSO swap the button's own
+  // label to "✓ added" for the same 500ms window, which is the primary
+  // confirmation signal; the pulse stays as a supplementary accent.
+  const [addingToTimeline, setAddingToTimeline] = useState(false)
+  const [addingToShelf, setAddingToShelf] = useState(false)
+  const [justAddedToTimeline, setJustAddedToTimeline] = useState(false)
+  const [justAddedToShelf, setJustAddedToShelf] = useState(false)
 
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
@@ -1320,46 +1325,68 @@ export function DiscoverPanel({
   // gives the same "one bad stem doesn't block the others" resilience
   // useStemFeatureScan.ts gets from Promise.allSettled, without needing
   // that API.
-  async function plunkInArranger(): Promise<void> {
-    setPlacing(true)
+  // Shared by addToTimeline and addToShelf below -- resolves every
+  // placeable slot's own candidate down to a real stem and assembles them
+  // into one Rifff, exactly the "which slots are ready, what's their real
+  // gain" logic both actions need identically. Returns null when there's
+  // nothing placeable yet (no slots resolved, or every resolve failed) --
+  // callers early-return on null rather than dispatching an empty rifff.
+  async function resolveDiscoverRifff(): Promise<DiscoverRifffAssembly | null> {
+    // Direct report, 2026-09-16: "when user plunks to the timeline, the
+    // volume levels should be copied over pls" -- root cause traced to
+    // something bigger than just gain: this filter used to require a real
+    // `candidate`, silently excluding every seedStem-only slot
+    // (Shelf-sourced, or anything seeded and never since rerolled) -- not
+    // placed at all, so naturally its own gain (along with everything else
+    // about it) never made it onto the timeline either. A seedStem is
+    // already a real, fully resolved `ResolvedCandidateStem` -- no
+    // resolveCandidateStem await needed for it, unlike a candidate-based
+    // slot.
+    const placeable = slots.filter((s) => s.candidate !== null || s.seedStem !== undefined)
+    if (placeable.length === 0) return null
+
+    const resolved = await Promise.all(
+      placeable.map(
+        async ({
+          candidate,
+          seedStem,
+          gain
+        }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
+          const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
+          return stem ? { stem, gain } : null
+        }
+      )
+    )
+    const placed = resolved.filter(
+      (r): r is { stem: ResolvedCandidateStem; gain: number } => r !== null
+    )
+    if (placed.length === 0) return null
+
+    const roles = [...new Set(placeable.map((s) => s.role))]
+    return assembleDiscoverRifff(
+      `discover: ${roles.join('+')}`,
+      placed.map(({ stem, gain }) => ({ stem, gain })),
+      bpm
+    )
+  }
+
+  // Shared by addToTimeline and addToShelf below -- stops the Discover
+  // preview loop once an action has actually placed/shelved something, so
+  // the confirmation (button label swap, just below) is clearly seen
+  // instead of competing with ongoing playback. Direct report, 2026-09-17:
+  // "i think to make it seem like it worked, i think the loop needs to
+  // stop." Deliberately called AFTER a successful dispatch, not before --
+  // a click that resolves to nothing placeable (resolveDiscoverRifff()
+  // returned null) shouldn't interrupt playback for no reason.
+  function stopPreviewIfPlaying(): void {
+    if (playing) dispatch({ type: 'PAUSE' })
+  }
+
+  async function addToTimeline(): Promise<void> {
+    setAddingToTimeline(true)
     try {
-      // Direct report, 2026-09-16: "when user plunks to the timeline, the
-      // volume levels should be copied over pls" -- root cause traced to
-      // something bigger than just gain: this filter used to require a
-      // real `candidate`, silently excluding every seedStem-only slot
-      // (Shelf-sourced, or anything seeded and never since rerolled) from
-      // "plunk in arranger" entirely -- not placed at all, so naturally
-      // its own gain (along with everything else about it) never made it
-      // onto the timeline either. A seedStem is already a real, fully
-      // resolved `ResolvedCandidateStem` -- no resolveCandidateStem await
-      // needed for it, unlike a candidate-based slot.
-      const placeable = slots.filter((s) => s.candidate !== null || s.seedStem !== undefined)
-      if (placeable.length === 0) return
-
-      const resolved = await Promise.all(
-        placeable.map(
-          async ({
-            candidate,
-            seedStem,
-            gain
-          }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
-            const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
-            return stem ? { stem, gain } : null
-          }
-        )
-      )
-      const placed = resolved.filter(
-        (r): r is { stem: ResolvedCandidateStem; gain: number } => r !== null
-      )
-      if (placed.length === 0) return
-
-      const roles = [...new Set(placeable.map((s) => s.role))]
-      const assembly = assembleDiscoverRifff(
-        `discover: ${roles.join('+')}`,
-        placed.map(({ stem, gain }) => ({ stem, gain })),
-        bpm
-      )
-      if (!assembly) return // placed.length === 0 already returned earlier; unreachable in practice
+      const assembly = await resolveDiscoverRifff()
+      if (!assembly) return
       const { rifff, vol } = assembly
 
       // Appends after the furthest-right currently-placed clip, matching
@@ -1376,7 +1403,7 @@ export function DiscoverPanel({
       // existing, separate coalesced engine-sync effect in StoreContext.tsx
       // picks up and re-sends on its own. Just resetting these two refs
       // means the NEXT slot change (if the user keeps building right after
-      // plunking) correctly starts a fresh preview rather than assuming a
+      // placing) correctly starts a fresh preview rather than assuming a
       // still-loaded one that the real sync effect already silently
       // overwrote.
       //
@@ -1412,10 +1439,34 @@ export function DiscoverPanel({
       // own awaits makes that straggling call's post-await check fail, so
       // it bails out harmlessly instead.
       previewSyncGenerationRef.current += 1
-      setJustPlunked(true)
-      window.setTimeout(() => setJustPlunked(false), 500)
+      stopPreviewIfPlaying()
+      setJustAddedToTimeline(true)
+      window.setTimeout(() => setJustAddedToTimeline(false), 500)
     } finally {
-      setPlacing(false)
+      setAddingToTimeline(false)
+    }
+  }
+
+  // Same underlying build as addToTimeline above, but stops after adding
+  // the assembled loop to the shelf (ADD_TO_SHELF) instead of placing it on
+  // the arranger -- direct request, 2026-09-17: "let's also have a button
+  // to Add to Shelf, which just adds it to the shelf and not the
+  // arrangement proper." Passes the SAME real per-slot vol map
+  // resolveDiscoverRifff() already computed, so ADD_TO_SHELF's own
+  // sqrtGain loudness-compensation default (store.ts) never kicks in for
+  // these stems -- see that reducer case's own doc comment.
+  async function addToShelf(): Promise<void> {
+    setAddingToShelf(true)
+    try {
+      const assembly = await resolveDiscoverRifff()
+      if (!assembly) return
+      const { rifff, vol } = assembly
+      dispatch({ type: 'ADD_TO_SHELF', rifff, vol })
+      stopPreviewIfPlaying()
+      setJustAddedToShelf(true)
+      window.setTimeout(() => setJustAddedToShelf(false), 500)
+    } finally {
+      setAddingToShelf(false)
     }
   }
 
@@ -1444,7 +1495,7 @@ export function DiscoverPanel({
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
         }
-        @keyframes discover-plunk-pulse {
+        @keyframes discover-add-pulse {
           0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
           35% { box-shadow: 0 0 0 3px var(--ra-stretch-on); }
           100% { box-shadow: 0 0 0 0 transparent; }
@@ -1724,21 +1775,38 @@ export function DiscoverPanel({
           {rerollingSlotIds.size > 0 ? <LoadingLoader size={11} /> : <ShuffleIcon />}
         </button>
         <button
-          onClick={() => void plunkInArranger()}
-          disabled={placing}
+          onClick={() => void addToTimeline()}
+          disabled={addingToTimeline}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'var(--ra-stretch-on-bg)',
             border: '1px solid var(--ra-stretch-on)',
-            color: placing ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
+            color: addingToTimeline ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
             fontWeight: 700,
-            cursor: placing ? 'default' : 'pointer',
-            animation: justPlunked ? 'discover-plunk-pulse 500ms ease-out' : undefined
+            cursor: addingToTimeline ? 'default' : 'pointer',
+            animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
-          {placing ? 'placing…' : 'plunk in arranger'}
+          {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
+        </button>
+        <button
+          onClick={() => void addToShelf()}
+          disabled={addingToShelf}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 14px',
+            background: 'transparent',
+            border: '1px solid var(--ra-border-strong)',
+            color: addingToShelf ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            fontWeight: 700,
+            cursor: addingToShelf ? 'default' : 'pointer',
+            animation: justAddedToShelf ? 'discover-add-pulse 500ms ease-out' : undefined
+          }}
+        >
+          {addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf'}
         </button>
       </div>
 
