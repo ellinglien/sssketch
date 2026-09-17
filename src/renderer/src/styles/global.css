@@ -138,7 +138,15 @@ textarea:focus-visible,
  * follow-up, not done here. `aria-label` (already present on every one
  * of these buttons) still carries the accessible name -- this is
  * purely the visual hover tooltip, unrelated to screen-reader
- * behavior. */
+ * behavior. Wraps within a bounded max-width rather than a single
+ * unclamped nowrap line -- direct report, 2026-09-17, with a screenshot
+ * showing "explore riffs recorded near this one in the same jam" running
+ * off the window's edge, unreadable. Tooltip copy across the app was
+ * separately shortened the same day (see DiscoverPanel.tsx), but this is
+ * the defense-in-depth fix so ANY future tooltip, however long, degrades
+ * to wrapped text instead of clipping off-screen. A short single-word
+ * tooltip like "undo" is unaffected -- it's well under 220px and never
+ * wraps. */
 [data-tooltip] {
   position: relative;
 }
@@ -148,7 +156,9 @@ textarea:focus-visible,
   bottom: calc(100% + 4px);
   left: 50%;
   transform: translateX(-50%);
-  white-space: nowrap;
+  max-width: 220px;
+  white-space: normal;
+  text-align: center;
   font-family: var(--ra-font);
   font-size: var(--ra-fs-9);
   color: var(--ra-text);

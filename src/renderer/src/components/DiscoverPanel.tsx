@@ -1542,6 +1542,48 @@ export function DiscoverPanel({
           checkboxes, undo/redo, play/stop, reroll-all, plus the add-to-shelf/
           add-to-timeline pair) packed in too much for one line. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        {/* Direct request, 2026-09-16: "we should add a play/stop button
+            for the discover playing, so user can stop it if they wish" --
+            same merged play/stop toggle + glyphs as TransportBar.tsx's own
+            (`■`/`▶`), dispatching the exact same shared PLAY/PAUSE this
+            panel's own syncPreviewToEngine already uses internally. Doesn't
+            touch previewingSlotIds (which slots are toggled into the mix)
+            -- just starts/stops the transport itself, same as muting
+            everything would achieve for audibility but without losing
+            track of what was toggled on. Moved to the front of the settings
+            row (was the actions row) -- direct request, 2026-09-17. */}
+        <button
+          onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+          disabled={previewingSlotIds.size === 0}
+          data-tooltip={playing ? 'stop' : 'play'}
+          aria-label={playing ? 'stop' : 'play'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            padding: 0,
+            fontSize: 11,
+            border: '1px solid var(--ra-border-strong)',
+            background:
+              previewingSlotIds.size === 0
+                ? 'var(--ra-bg-row-active)'
+                : playing
+                  ? 'var(--ra-play-on)'
+                  : 'var(--ra-bg-row-active)',
+            color:
+              previewingSlotIds.size === 0
+                ? 'var(--ra-text-4)'
+                : playing
+                  ? 'var(--ra-play-on-ink)'
+                  : 'var(--ra-text)',
+            cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
+          }}
+        >
+          {playing ? '■' : '▶'}
+        </button>
+        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tight</span>
         <input
           type="range"
@@ -1724,51 +1766,11 @@ export function DiscoverPanel({
         >
           <RedoIcon />
         </button>
-        {/* Direct request, 2026-09-16: "we should add a play/stop button
-            for the discover playing, so user can stop it if they wish" --
-            same merged play/stop toggle + glyphs as TransportBar.tsx's own
-            (`■`/`▶`), dispatching the exact same shared PLAY/PAUSE this
-            panel's own syncPreviewToEngine already uses internally. Doesn't
-            touch previewingSlotIds (which slots are toggled into the mix)
-            -- just starts/stops the transport itself, same as muting
-            everything would achieve for audibility but without losing
-            track of what was toggled on. */}
-        <button
-          onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
-          disabled={previewingSlotIds.size === 0}
-          data-tooltip={playing ? 'stop the discover preview' : 'play the discover preview'}
-          aria-label={playing ? 'Stop' : 'Play'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 22,
-            height: 22,
-            padding: 0,
-            fontSize: 11,
-            border: '1px solid var(--ra-border-strong)',
-            background:
-              previewingSlotIds.size === 0
-                ? 'var(--ra-bg-row-active)'
-                : playing
-                  ? 'var(--ra-play-on)'
-                  : 'var(--ra-bg-row-active)',
-            color:
-              previewingSlotIds.size === 0
-                ? 'var(--ra-text-4)'
-                : playing
-                  ? 'var(--ra-play-on-ink)'
-                  : 'var(--ra-text)',
-            cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
-          }}
-        >
-          {playing ? '■' : '▶'}
-        </button>
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
-          aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
-          data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
+          aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
+          data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -2024,6 +2026,36 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
       style={{ flexShrink: 0 }}
     >
       <path d="M8 1.5 L9.53 5.9 L14.18 5.99 L10.47 8.8 L11.82 13.26 L8 10.6 L4.18 13.26 L5.53 8.8 L1.82 5.99 L6.47 5.9 Z" />
+    </svg>
+  )
+}
+
+// Hand-drawn dice glyph -- same "no icon package" convention as every other
+// glyph in this file. Purely decorative (see its own usage in
+// DiscoverSlotRow below): sits beside the similar/adjacent/random buttons
+// to suggest they're all randomizers. Direct request, 2026-09-17.
+function DiceIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <rect x="2" y="2" width="12" height="12" rx="2.5" />
+      {/* Five pips (a DiceFive face) -- doesn't need to represent any real
+          rolled value, it's decorative either way, and five reads clearly
+          at this size where six pips would blur together. */}
+      <circle cx="5" cy="5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="11" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="11" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -2373,17 +2405,22 @@ function DiscoverSlotRow({
         style={{
           display: 'grid',
           // 14 tracks, explicit gridColumn on every child below (including
-          // conditionally-rendered ones): 1 delete, 2 lock, 3 role, 4 gap,
-          // 5 mute, 6 solo, 7 favourite, 8 gap, 9 waveform, 10 name, 11 gap,
-          // 12 similar, 13 adjacent, 14 random. Explicit positions matter --
-          // without them, a conditional child that renders NO DOM node (see
+          // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
+          // 5 favourite, 6 gap, 7 waveform, 8 gap, 9 role/category label,
+          // 10 gap, 11 decorative dice icon, 12 similar, 13 adjacent, 14
+          // random. Mute/solo/favourite moved next to lock and the role
+          // label moved down next to similar/adjacent/random -- direct
+          // request, 2026-09-17, freeing up much more width for the
+          // waveform (now 1fr against only three fixed-width siblings
+          // instead of six). Explicit positions matter -- without them, a
+          // conditional child that renders NO DOM node (see
           // hasStemToActOn/nearbyAnchor below) makes grid auto-placement
           // shift every LATER item one track left to fill the gap instead
           // of leaving its own column empty, which is exactly the state
           // every freshly-added slot passes through (no candidate/resolved
           // stem yet). Real bug, found in code review.
           gridTemplateColumns:
-            '18px 18px 64px 14px 18px 18px 18px 14px 1fr 110px 14px auto auto auto',
+            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px auto auto auto',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -2417,8 +2454,8 @@ function DiscoverSlotRow({
         </button>
         <button
           onClick={onToggleLock}
-          data-tooltip={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
-          aria-label={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
+          data-tooltip={slot.locked ? 'unlock' : 'lock'}
+          aria-label={slot.locked ? 'unlock' : 'lock'}
           style={{
             gridColumn: 2,
             display: 'flex',
@@ -2435,10 +2472,6 @@ function DiscoverSlotRow({
         >
           <LockGlyph locked={slot.locked} />
         </button>
-        <span style={{ gridColumn: 3, fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>
-          {slot.role}
-        </span>
-        <div style={{ gridColumn: 4 }} />
         {/* A single guard around a fragment is safe here (rather than one
             guard per button, as this used to be split) because each button
             below carries its own explicit gridColumn -- omitting all three
@@ -2456,14 +2489,10 @@ function DiscoverSlotRow({
                 stem to mute (matching the waveform toggle's own guard). */}
             <button
               onClick={onTogglePreview}
-              data-tooltip={
-                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
-              }
-              aria-label={
-                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
-              }
+              data-tooltip={previewing ? 'mute' : 'unmute'}
+              aria-label={previewing ? 'mute' : 'unmute'}
               style={{
-                gridColumn: 5,
+                gridColumn: 3,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2503,10 +2532,10 @@ function DiscoverSlotRow({
                 a hard fill like mute's). */}
             <button
               onClick={onToggleSolo}
-              data-tooltip={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
-              aria-label={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+              data-tooltip={soloed ? 'unsolo' : 'solo'}
+              aria-label={soloed ? 'unsolo' : 'solo'}
               style={{
-                gridColumn: 6,
+                gridColumn: 4,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2533,12 +2562,10 @@ function DiscoverSlotRow({
                 here instead of a circle fill. */}
             <button
               onClick={onToggleFavourite}
-              data-tooltip={
-                favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'
-              }
-              aria-label={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+              data-tooltip={favourited ? 'unfavourite' : 'favourite'}
+              aria-label={favourited ? 'unfavourite' : 'favourite'}
               style={{
-                gridColumn: 7,
+                gridColumn: 5,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2555,7 +2582,7 @@ function DiscoverSlotRow({
             </button>
           </>
         )}
-        <div style={{ gridColumn: 8 }} />
+        <div style={{ gridColumn: 6 }} />
         {/* This wrapper (not the button/placeholder inside it) carries the
           grid placement, the min-width, AND the data-tooltip -- the
           data-tooltip mechanism renders via a ::after pseudo-element
@@ -2569,17 +2596,15 @@ function DiscoverSlotRow({
           tooltips aren't subject to CSS clipping); converting to
           data-tooltip broke it silently. */}
         <div
-          style={{ gridColumn: 9, minWidth: 140 }}
+          style={{ gridColumn: 7, minWidth: 140 }}
           data-tooltip={
             resolvedStem
-              ? (previewing
-                  ? 'playing in the loop -- click to remove'
-                  : 'click to add to the loop preview') +
-                ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
+              ? (previewing ? 'remove from mix' : 'add to mix') +
+                ` · drag for volume (${Math.round(slot.gain * 100)}%)`
               : resolving
-                ? 'downloading + analyzing…'
+                ? 'loading…'
                 : resolveFailed
-                  ? "couldn't load this stem -- try reroll"
+                  ? 'failed -- retry'
                   : undefined
           }
         >
@@ -2597,11 +2622,7 @@ function DiscoverSlotRow({
             <button
               onClick={onTogglePreview}
               onMouseDown={handleGainDragStart}
-              aria-label={
-                previewing
-                  ? 'playing in the loop -- click to remove'
-                  : 'click to add to the loop preview'
-              }
+              aria-label={previewing ? 'remove from mix' : 'add to mix'}
               style={{
                 position: 'relative',
                 width: '100%',
@@ -2785,50 +2806,34 @@ function DiscoverSlotRow({
             </div>
           )}
         </div>
-        {/* Direct request, 2026-09-15: "waveforms should have a fixed area
-          they occupy... right now the different names change the width of
-          the thing as well." Root cause: this span had no width of its own,
-          so as a plain flex sibling of the waveform's `flex: 1 1 auto` box
-          it took exactly as much room as its own text needed -- a long
-          preset name ("hybrid cine") ate into the waveform's remaining
-          flex space, a short one ("fiin") didn't, so every row's waveform
-          rendered at a different width even though every row uses the SAME
-          maxBarLength/tileOffsetsPx proportional-tiling math above. A fixed
-          width (with ellipsis overflow, same convention as the role label
-          span just above) keeps this span's own footprint constant across
-          every row, so the waveform's flex-grow area -- and therefore its
-          tile width -- is identical row to row regardless of name length. */}
-        <span
+        <div style={{ gridColumn: 8 }} />
+        <span style={{ gridColumn: 9, fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>
+          {slot.role}
+        </span>
+        <div style={{ gridColumn: 10 }} />
+        {/* Purely decorative -- direct request, 2026-09-17: "place a dice
+            icon to the left of the similar/adjacent/random buttons... this
+            will suggest that they are all randomizers." No onClick/
+            data-tooltip/aria-label: the three buttons it sits beside
+            already carry their own, and a screen reader should skip this
+            entirely, which a plain non-interactive div with no role
+            correctly does. */}
+        <div
           style={{
-            gridColumn: 10,
-            fontSize: 9,
-            color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)',
-            width: 110,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
+            gridColumn: 11,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--ra-text-3)'
           }}
         >
-          {rerolling
-            ? slot.candidate
-              ? 'rerolling…'
-              : 'rolling…'
-            : resolveFailed
-              ? "couldn't load -- try again"
-              : slot.candidate
-                ? slot.candidate.presetName
-                : resolvedStem
-                  ? resolvedStem.name
-                  : slot.hasRerolled
-                    ? 'no match for this role yet'
-                    : 'no candidate yet'}
-        </span>
-        <div style={{ gridColumn: 11 }} />
+          <DiceIcon />
+        </div>
         <button
           onClick={onReroll}
           disabled={rerolling}
-          data-tooltip="another stem that still matches this slot's role"
-          aria-label="another stem that still matches this slot's role"
+          data-tooltip="same role"
+          aria-label="same role"
           style={{
             gridColumn: 12,
             display: 'flex',
@@ -2857,8 +2862,8 @@ function DiscoverSlotRow({
               const rect = e.currentTarget.getBoundingClientRect()
               setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
             }}
-            data-tooltip="explore riffs recorded near this one in the same jam"
-            aria-label="explore riffs recorded near this one in the same jam"
+            data-tooltip="nearby jam"
+            aria-label="nearby jam"
             style={{
               gridColumn: 13,
               display: 'flex',
@@ -2880,8 +2885,8 @@ function DiscoverSlotRow({
         <button
           onClick={onRerollRandom}
           disabled={rerolling}
-          data-tooltip="random -- skip role matching, pick any random stem from your own library"
-          aria-label="random -- skip role matching, pick any random stem from your own library"
+          data-tooltip="any stem"
+          aria-label="any stem"
           style={{
             gridColumn: 14,
             display: 'flex',

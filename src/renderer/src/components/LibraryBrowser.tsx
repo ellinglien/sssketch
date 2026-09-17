@@ -1548,8 +1548,8 @@ export function LibraryBrowser({
       <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
       <div
         style={{
-          width: 900,
-          height: 600,
+          width: 'min(1500px, 90vw)',
+          height: 'min(900px, 85vh)',
           background: 'var(--ra-bg-bar)',
           border: '1px solid var(--ra-border-strong)',
           display: 'flex',
