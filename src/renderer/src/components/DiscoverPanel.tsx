@@ -2069,7 +2069,18 @@ export function DiscoverPanel({
         ))
       })()}
 
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 10 }}>
+      {/* Direct request, 2026-09-17: "can we move them to the middle" --
+          centered horizontally, same row/position (still the last row,
+          below the slot list) -- was left-aligned (the default). */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 4,
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          marginTop: 10
+        }}
+      >
         {ARRANGE_ROLE_OPTIONS.map((role) => (
           <button
             key={role}
