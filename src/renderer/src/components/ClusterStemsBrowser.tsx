@@ -151,11 +151,20 @@ interface ClusterGroup {
 // (bright near-white border/text vs. dim gray) rather than a background
 // swap -- the modal's own panel background is itself var(--ra-bg-row-active),
 // so a background-only "active" indicator was blending straight into the
-// panel behind it and reading as not-pressed-at-all. outline:none overrides
-// the browser's own default focus ring, which was otherwise visually
-// indistinguishable from "this bus is assigned" (see 2026-08-05 screenshot
-// report: a plain keyboard-focused, UNassigned "aux" button looked "selected"
-// purely from the native focus outline).
+// panel behind it and reading as not-pressed-at-all.
+//
+// No outline:none override here (there used to be one -- see 2026-08-05
+// screenshot report: a plain keyboard-focused, UNassigned "aux" button
+// looked "selected" purely from the BROWSER'S OWN default focus ring,
+// which was bright/bold enough to be confusable with the "confirmed"
+// active state's own bright near-white border). The app-wide focus rule
+// (global.css, added for the 2026-09-16 unified UI consistency pass) uses
+// a deliberately dim, muted outline (var(--ra-border-strong)) instead of
+// the browser default -- distinct enough from the bright "confirmed"
+// border that the original confusability shouldn't reproduce, while still
+// giving every button in this file a real focus indicator (which, with
+// outline:none, none of them had at all).
+//
 // state 'confirmed' matches the original boolean `active` meaning exactly
 // (this row's own busOf already agrees). 'suggested' is new -- a lighter,
 // dashed-border hint for a bus the centroid classifier proposed but the
@@ -172,9 +181,30 @@ function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
     border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
     color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',
     fontWeight: confirmed ? 700 : 400,
-    cursor: 'pointer',
-    outline: 'none'
+    cursor: 'pointer'
   }
+}
+
+// Hand-drawn SVG glyph -- no icon library, same convention as
+// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// request, 2026-09-16: replace the "split" text button.
+function ForkIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 2 V7" />
+      <path d="M8 7 L3.5 13" />
+      <path d="M8 7 L12.5 13" />
+    </svg>
+  )
 }
 
 export function ClusterStemsBrowser({
@@ -1022,7 +1052,7 @@ function ClusterRow({
           }}
           title="solo + play this whole cluster, from its own earliest clip"
         >
-          {rowIsPreviewing && playing ? '■ playing' : '▶ play'}
+          {rowIsPreviewing && playing ? '■' : '▶'}
         </button>
         <span style={{ fontSize: 10, color: 'var(--ra-text-3)', width: 60 }}>
           {members.length} clip{members.length === 1 ? '' : 's'}
@@ -1042,7 +1072,7 @@ function ClusterRow({
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
             title="split this cluster into its two closest sub-groups"
           >
-            split
+            <ForkIcon />
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
