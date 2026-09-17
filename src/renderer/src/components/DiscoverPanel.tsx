@@ -1688,6 +1688,7 @@ export function DiscoverPanel({
           onClick={undoDiscoverAction}
           disabled={undoStack.length === 0}
           data-tooltip="undo"
+          aria-label="undo"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1707,6 +1708,7 @@ export function DiscoverPanel({
           onClick={redoDiscoverAction}
           disabled={redoStack.length === 0}
           data-tooltip="redo"
+          aria-label="redo"
           style={{
             display: 'flex',
             alignItems: 'center',
