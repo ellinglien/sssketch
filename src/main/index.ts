@@ -113,6 +113,7 @@ import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
+import { backfillInstrumentMaskCategories } from './instrumentMaskCentroidBackfill'
 import { startStemAutoClassifyScheduler } from './stemAutoClassifyScheduler'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
 import { migrateRiffLibraryLocation } from './riffLibraryMigration'
@@ -341,6 +342,11 @@ app.whenReady().then(async () => {
   // project library folder -- see stemCategoriesBackfill.ts's own doc
   // comment.
   backfillStemCategoriesFromProjectLibrary(openOwnRiffLibraryDb())
+
+  // Idempotent, safe-to-call-on-every-startup backfill of drums/bass
+  // ArrangeRole labels from Endlesss's own performer-set Instrument
+  // bitmask -- see instrumentMaskCentroidBackfill.ts's own doc comment.
+  backfillInstrumentMaskCategories(openOwnRiffLibraryDb())
 
   // Background "pre-categorize the whole library" scheduler -- direct
   // request, 2026-09-15 ("why not just do a prelim scan that
