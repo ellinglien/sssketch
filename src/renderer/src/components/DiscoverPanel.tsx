@@ -2349,11 +2349,37 @@ function DiscoverSlotRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [resolvedStem])
 
+  // Direct report, 2026-09-16: "the buttons shouldn't disappear when they
+  // are rerolling" -- gating the mute/solo/favourite group on resolvedStem
+  // alone meant it vanished the instant a reroll landed a new
+  // slot.candidate, since resolvedForCurrent's own identity check (see
+  // resolvedStem's own derivation above) immediately stops matching the OLD
+  // resolved stem, well before the NEW one's own resolve finishes.
+  // slot.candidate itself is set synchronously the moment a roll/reroll
+  // lands (rollForSlot's own setSlots call) and stays valid throughout the
+  // resolve that follows, so treating either as "there's something real
+  // here to act on" keeps the group visible continuously through a reroll,
+  // only truly hiding for a slot that's never been rolled at all (both
+  // null). resolvedStem alone still covers a seedStem-only slot
+  // (Shelf-sourced, no candidate ever, but resolvedStem resolves
+  // synchronously via seedResolved).
+  const hasStemToActOn = resolvedStem !== null || slot.candidate !== null
+
   return (
     <>
       <div
         style={{
           display: 'grid',
+          // 14 tracks, explicit gridColumn on every child below (including
+          // conditionally-rendered ones): 1 delete, 2 lock, 3 role, 4 gap,
+          // 5 mute, 6 solo, 7 favourite, 8 gap, 9 waveform, 10 name, 11 gap,
+          // 12 similar, 13 adjacent, 14 random. Explicit positions matter --
+          // without them, a conditional child that renders NO DOM node (see
+          // hasStemToActOn/nearbyAnchor below) makes grid auto-placement
+          // shift every LATER item one track left to fill the gap instead
+          // of leaving its own column empty, which is exactly the state
+          // every freshly-added slot passes through (no candidate/resolved
+          // stem yet). Real bug, found in code review.
           gridTemplateColumns:
             '18px 18px 64px 14px 18px 18px 18px 14px 1fr 110px 14px auto auto auto',
           alignItems: 'center',
@@ -2362,10 +2388,14 @@ function DiscoverSlotRow({
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >
+        {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
+          as every other row button now. */}
         <button
           onClick={onRemove}
           data-tooltip="remove"
+          aria-label="remove"
           style={{
+            gridColumn: 1,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2386,11 +2416,12 @@ function DiscoverSlotRow({
         <button
           onClick={onToggleLock}
           data-tooltip={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
+          aria-label={slot.locked ? 'locked -- survives reroll all' : 'unlocked'}
           style={{
+            gridColumn: 2,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            flexShrink: 0,
             width: 18,
             height: 18,
             padding: 0,
@@ -2402,112 +2433,180 @@ function DiscoverSlotRow({
         >
           <LockGlyph locked={slot.locked} />
         </button>
-        <span style={{ fontSize: 9, color: 'var(--ra-text-3)', width: 64, flexShrink: 0 }}>
+        <span style={{ gridColumn: 3, fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>
           {slot.role}
         </span>
-        <div />
-        {(resolvedStem !== null || slot.candidate !== null) && (
-          <button
-            onClick={onTogglePreview}
-            data-tooltip={
-              previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
-            }
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 18,
-              height: 18,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 10,
-              fontWeight: 700,
-              background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
-              border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
-              color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
-              cursor: 'pointer'
-            }}
-          >
-            m
-          </button>
+        <div style={{ gridColumn: 4 }} />
+        {/* A single guard around a fragment is safe here (rather than one
+            guard per button, as this used to be split) because each button
+            below carries its own explicit gridColumn -- omitting all three
+            leaves columns 5/6/7 empty instead of shifting anything after
+            them. See hasStemToActOn's own doc comment above for why it's
+            "has a candidate OR resolvedStem," not resolvedStem alone. */}
+        {hasStemToActOn && (
+          <>
+            {/* Direct request, 2026-09-15: "can we add a mute for each
+                channel" -- toggleSlotPreview already existed (the waveform
+                itself was already clickable to the same effect), but wasn't
+                discoverable as a mute control -- only a hover tooltip
+                explained it. Same handler as the waveform click, so either
+                one keeps the other in sync; only shown once there's a real
+                stem to mute (matching the waveform toggle's own guard). */}
+            <button
+              onClick={onTogglePreview}
+              data-tooltip={
+                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
+              }
+              aria-label={
+                previewing ? 'playing in the loop -- click to mute' : 'muted -- click to unmute'
+              }
+              style={{
+                gridColumn: 5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontFamily: 'inherit',
+                fontSize: 10,
+                fontWeight: 700,
+                // Direct request, 2026-09-15: "mute should look exactly
+                // like mute on the arrangement view" -- matches
+                // ChannelRow.tsx's own muteButtonStyle exactly
+                // (background/border/color-by-state, which reads as
+                // "inverted" at a glance: a hard filled/colored look
+                // when OFF/muted, a plain/transparent look when
+                // ON/playing), rather than this row's own earlier ad hoc
+                // treatment (transparent-when-off instead of the real
+                // `--ra-bg-row-active` fill every other unmuted mute
+                // button in this app uses).
+                background: previewing ? 'var(--ra-bg-row-active)' : 'var(--ra-mute-on)',
+                border: `1px solid ${previewing ? 'var(--ra-border)' : 'var(--ra-mute-on)'}`,
+                color: previewing ? 'var(--ra-text-2)' : 'var(--ra-mute-on-ink)',
+                cursor: 'pointer'
+              }}
+            >
+              {/* Lowercase "m" -- matches ChannelRow.tsx's own mute
+                  button glyph exactly (its solo/record siblings are also
+                  lowercase single letters), rather than this row's own
+                  earlier uppercase "M". */}
+              m
+            </button>
+            {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo
+                button next to mute, same M/S pairing Upcycle's own cards use
+                and ChannelRow.tsx already has on the real arrangement.
+                Matches ChannelRow.tsx's own soloButtonStyle exactly (a soft
+                tinted background with the accent color on border/text, not
+                a hard fill like mute's). */}
+            <button
+              onClick={onToggleSolo}
+              data-tooltip={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+              aria-label={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
+              style={{
+                gridColumn: 6,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontFamily: 'inherit',
+                fontSize: 10,
+                fontWeight: 700,
+                background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+                border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+                color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                cursor: 'pointer'
+              }}
+            >
+              s
+            </button>
+            {/* Direct request, 2026-09-16: star a stem to favourite it,
+                then optionally bias future rolls toward favourites (the
+                panel's own "prefer favourites" toolbar checkbox). Reuses
+                `--ra-recording-live` for the filled/active state -- the
+                same token RiffCircle.tsx already uses for its own
+                "favourited" semantic, just applied to a literal star glyph
+                here instead of a circle fill. */}
+            <button
+              onClick={onToggleFavourite}
+              data-tooltip={
+                favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'
+              }
+              aria-label={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
+              style={{
+                gridColumn: 7,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                padding: 0,
+                background: 'var(--ra-bg-row-active)',
+                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+                color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+                cursor: 'pointer'
+              }}
+            >
+              <StarIcon favourited={favourited} />
+            </button>
+          </>
         )}
-        {(resolvedStem !== null || slot.candidate !== null) && (
-          <button
-            onClick={onToggleSolo}
-            data-tooltip={soloed ? 'soloed -- click to hear everything again' : 'solo this slot'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 18,
-              height: 18,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 10,
-              fontWeight: 700,
-              background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-              border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-              color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            s
-          </button>
-        )}
-        {(resolvedStem !== null || slot.candidate !== null) && (
-          <button
-            onClick={onToggleFavourite}
-            data-tooltip={favourited ? 'favourited -- click to unfavourite' : 'favourite this stem'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 18,
-              height: 18,
-              padding: 0,
-              background: 'var(--ra-bg-row-active)',
-              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-              color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            <StarIcon favourited={favourited} />
-          </button>
-        )}
-        <div />
-        {resolvedStem ? (
-          // Clicking the glyph toggles this slot in/out of the shared,
-          // looping mix -- same click-the-thumbnail-to-hear-it convention
-          // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
-          // rows already use elsewhere in this app, adapted so multiple
-          // slots play TOGETHER (Upcycle-style) rather than one at a time.
-          // Direct report, 2026-09-15: the previewing-outline (a near-white
-          // `--ra-stretch-on` box around the whole waveform) read as an
-          // unwanted white halo -- removed; the dedicated mute button below
-          // already carries this row's own on/off state, and the playhead
-          // line (also below) now shows real playback directly.
-          <button
-            onClick={onTogglePreview}
-            onMouseDown={handleGainDragStart}
-            data-tooltip={
-              (previewing
-                ? 'playing in the loop -- click to remove'
-                : 'click to add to the loop preview') +
-              ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
-            }
-            style={{
-              position: 'relative',
-              flex: '1 1 auto',
-              minWidth: 140,
-              height: DISCOVER_WAVEFORM_HEIGHT,
-              padding: 0,
-              background: 'transparent',
-              border: 'none',
-              overflow: 'hidden',
-              cursor: 'ns-resize'
-            }}
-          >
-            {/* Tiled, not a single stretched-to-fit Waveform -- direct
+        <div style={{ gridColumn: 8 }} />
+        {/* This wrapper (not the button/placeholder inside it) carries the
+          grid placement, the min-width, AND the data-tooltip -- the
+          data-tooltip mechanism renders via a ::after pseudo-element
+          positioned OUTSIDE its host element's own box (bottom: calc(100% +
+          4px), see global.css), which an `overflow: hidden` on that SAME
+          element clips away. Both the waveform button and the placeholder
+          below need `overflow: hidden` for their own internal tiled-render/
+          spinner content, so the tooltip has to live one level up, on an
+          element with no overflow clipping of its own. Real regression,
+          found in code review: as a native `title` this worked fine (native
+          tooltips aren't subject to CSS clipping); converting to
+          data-tooltip broke it silently. */}
+        <div
+          style={{ gridColumn: 9, minWidth: 140 }}
+          data-tooltip={
+            resolvedStem
+              ? (previewing
+                  ? 'playing in the loop -- click to remove'
+                  : 'click to add to the loop preview') +
+                ` · drag to adjust volume (${Math.round(slot.gain * 100)}%)`
+              : resolving
+                ? 'downloading + analyzing…'
+                : resolveFailed
+                  ? "couldn't load this stem -- try reroll"
+                  : undefined
+          }
+        >
+          {resolvedStem ? (
+            // Clicking the glyph toggles this slot in/out of the shared,
+            // looping mix -- same click-the-thumbnail-to-hear-it convention
+            // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
+            // rows already use elsewhere in this app, adapted so multiple
+            // slots play TOGETHER (Upcycle-style) rather than one at a time.
+            // Direct report, 2026-09-15: the previewing-outline (a near-white
+            // `--ra-stretch-on` box around the whole waveform) read as an
+            // unwanted white halo -- removed; the dedicated mute button below
+            // already carries this row's own on/off state, and the playhead
+            // line (also below) now shows real playback directly.
+            <button
+              onClick={onTogglePreview}
+              onMouseDown={handleGainDragStart}
+              style={{
+                position: 'relative',
+                width: '100%',
+                height: DISCOVER_WAVEFORM_HEIGHT,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                overflow: 'hidden',
+                cursor: 'ns-resize'
+              }}
+            >
+              {/* Tiled, not a single stretched-to-fit Waveform -- direct
               report: every slot used to render at the same width regardless
               of its real bar length, making a 1-bar drum hit look the same
               size as an 8-bar bassline. `loopBars` is every row's own SAME
@@ -2528,50 +2627,50 @@ function DiscoverSlotRow({
               visibly cuts more of the bright waveform away, revealing gray
               underneath (same "gray means quieter" language the real
               envelope uses), with a thin line marking the exact cutoff. */}
-            {(() => {
-              const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
-              const rawStemBarLength =
-                resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
-              // Real crash, found live: tileOffsetsPx's own tile count is
-              // Math.ceil(loopBars / stemBarLength) with NO upper bound.
-              // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
-              // tiles a rifff against ITS OWN stem's barLength -- both numbers
-              // come from the same already-authored, already-coherent riff,
-              // so their ratio is naturally bounded in practice. Discover's
-              // own loopBars is a DIFFERENT slot's barLength entirely (the
-              // longest one currently resolved anywhere in the loop) -- an
-              // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
-              // an unrelated 32-bar backing loop can drive that ratio into
-              // the hundreds or thousands, each tile mounting a real
-              // <Waveform> (itself dozens of SVG rects) -- enough of those at
-              // once genuinely hung/crashed the renderer. Clamping the
-              // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
-              // count outright; past that point the tiling is an
-              // approximation (fewer, slightly wider tiles than the stem's
-              // true native loop length), which is a fully acceptable
-              // trade-off for "doesn't crash."
-              const MAX_TILES = 24
-              const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
-              const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
-              const tileWidthPct = 100 * (stemBarLength / loopBars)
-              const gainClipPct = (1 - slot.gain) * 100
-              return (
-                <>
-                  {tileOffsets.map((leftPct) => (
-                    <div
-                      key={`dim-${leftPct}`}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: `${leftPct}%`,
-                        width: `${tileWidthPct}%`
-                      }}
-                    >
-                      <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
-                    </div>
-                  ))}
-                  {/* Full-color layer on top -- suppressed entirely while
+              {(() => {
+                const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
+                const rawStemBarLength =
+                  resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
+                // Real crash, found live: tileOffsetsPx's own tile count is
+                // Math.ceil(loopBars / stemBarLength) with NO upper bound.
+                // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
+                // tiles a rifff against ITS OWN stem's barLength -- both numbers
+                // come from the same already-authored, already-coherent riff,
+                // so their ratio is naturally bounded in practice. Discover's
+                // own loopBars is a DIFFERENT slot's barLength entirely (the
+                // longest one currently resolved anywhere in the loop) -- an
+                // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
+                // an unrelated 32-bar backing loop can drive that ratio into
+                // the hundreds or thousands, each tile mounting a real
+                // <Waveform> (itself dozens of SVG rects) -- enough of those at
+                // once genuinely hung/crashed the renderer. Clamping the
+                // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
+                // count outright; past that point the tiling is an
+                // approximation (fewer, slightly wider tiles than the stem's
+                // true native loop length), which is a fully acceptable
+                // trade-off for "doesn't crash."
+                const MAX_TILES = 24
+                const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
+                const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
+                const tileWidthPct = 100 * (stemBarLength / loopBars)
+                const gainClipPct = (1 - slot.gain) * 100
+                return (
+                  <>
+                    {tileOffsets.map((leftPct) => (
+                      <div
+                        key={`dim-${leftPct}`}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          left: `${leftPct}%`,
+                          width: `${tileWidthPct}%`
+                        }}
+                      >
+                        <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
+                      </div>
+                    ))}
+                    {/* Full-color layer on top -- suppressed entirely while
                     muted (not currently in the preview mix), same "mute
                     always wins" convention StemWaveformRow.tsx's own
                     real-arrangement waveform uses (its own `{!muted && ...}`
@@ -2580,112 +2679,105 @@ function DiscoverSlotRow({
                     used to still show the full-color layer (just clipped by
                     gain), reading as "playing, just quiet" rather than
                     "off," unlike every other muted waveform in this app. */}
-                  {previewing && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        clipPath: `inset(${gainClipPct}% 0 0 0)`
-                      }}
-                    >
-                      {tileOffsets.map((leftPct) => (
-                        <div
-                          key={leftPct}
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            bottom: 0,
-                            left: `${leftPct}%`,
-                            width: `${tileWidthPct}%`
-                          }}
-                        >
-                          <Waveform
-                            path={resolvedStem.path}
-                            color={stemColorVar(resolvedStem)}
-                            opacity={1}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {previewing && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        top: `${gainClipPct}%`,
-                        height: 1,
-                        background: 'var(--ra-text)',
-                        pointerEvents: 'none'
-                      }}
-                    />
-                  )}
-                  {/* Real playhead, driven by the actual engine position while
+                    {previewing && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          clipPath: `inset(${gainClipPct}% 0 0 0)`
+                        }}
+                      >
+                        {tileOffsets.map((leftPct) => (
+                          <div
+                            key={leftPct}
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              bottom: 0,
+                              left: `${leftPct}%`,
+                              width: `${tileWidthPct}%`
+                            }}
+                          >
+                            <Waveform
+                              path={resolvedStem.path}
+                              color={stemColorVar(resolvedStem)}
+                              opacity={1}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {previewing && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          right: 0,
+                          top: `${gainClipPct}%`,
+                          height: 1,
+                          background: 'var(--ra-text)',
+                          pointerEvents: 'none'
+                        }}
+                      />
+                    )}
+                    {/* Real playhead, driven by the actual engine position while
                     this loop is previewing -- same `--ra-playhead` accent
                     Playhead.tsx uses on the real timeline. Only this row's
                     own resolved-and-tiled width is relevant (loopBars ===
                     maxBarLength, the shared reference every row ties its
                     tiling to), so `playheadPct` is already directly usable
                     as a left offset with no further per-row math. */}
-                  {playheadPct !== null && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: `${playheadPct}%`,
-                        width: 1,
-                        background: 'var(--ra-playhead)',
-                        pointerEvents: 'none'
-                      }}
-                    />
-                  )}
-                </>
-              )
-            })()}
-          </button>
-        ) : (
-          <div
-            data-tooltip={
-              resolving
-                ? 'downloading + analyzing…'
-                : resolveFailed
-                  ? "couldn't load this stem -- try reroll"
+                    {playheadPct !== null && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          left: `${playheadPct}%`,
+                          width: 1,
+                          background: 'var(--ra-playhead)',
+                          pointerEvents: 'none'
+                        }}
+                      />
+                    )}
+                  </>
+                )
+              })()}
+            </button>
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                border: `1px dashed ${
+                  resolving
+                    ? 'var(--ra-stretch-on)'
+                    : resolveFailed
+                      ? 'var(--ra-mute-on)'
+                      : 'var(--ra-border)'
+                }`,
+                // Static (no animation) once settled either way (failed or
+                // truly empty) -- discover-slot-pulse is still used for the
+                // FAILED state, a static "this stopped" cue.
+                animation: resolveFailed
+                  ? 'discover-slot-pulse 900ms ease-in-out infinite'
                   : undefined
-            }
-            style={{
-              flex: '1 1 auto',
-              minWidth: 140,
-              height: 40,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
-              border: `1px dashed ${
-                resolving
-                  ? 'var(--ra-stretch-on)'
-                  : resolveFailed
-                    ? 'var(--ra-mute-on)'
-                    : 'var(--ra-border)'
-              }`,
-              // Static (no animation) once settled either way (failed or
-              // truly empty) -- discover-slot-pulse is still used for the
-              // FAILED state, a static "this stopped" cue.
-              animation: resolveFailed
-                ? 'discover-slot-pulse 900ms ease-in-out infinite'
-                : undefined
-            }}
-          >
-            {/* Direct report, 2026-09-15 (v3): the previous scrolling-
-              waveform reel read as too busy -- replaced with the shared
-              LoadingLoader component (the same "still working" indicator
-              BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
-              and subtle, for brand consistency instead of a custom
-              animation. */}
-            {resolving && <LoadingLoader size={16} />}
-          </div>
-        )}
+              }}
+            >
+              {/* Direct report, 2026-09-15 (v3): the previous scrolling-
+                waveform reel read as too busy -- replaced with the shared
+                LoadingLoader component (the same "still working" indicator
+                BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
+                and subtle, for brand consistency instead of a custom
+                animation. */}
+              {resolving && <LoadingLoader size={16} />}
+            </div>
+          )}
+        </div>
         {/* Direct request, 2026-09-15: "waveforms should have a fixed area
           they occupy... right now the different names change the width of
           the thing as well." Root cause: this span had no width of its own,
@@ -2701,10 +2793,10 @@ function DiscoverSlotRow({
           tile width -- is identical row to row regardless of name length. */}
         <span
           style={{
+            gridColumn: 10,
             fontSize: 9,
             color: resolveFailed ? 'var(--ra-mute-on)' : 'var(--ra-text)',
             width: 110,
-            flexShrink: 0,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap'
@@ -2724,11 +2816,14 @@ function DiscoverSlotRow({
                     ? 'no match for this role yet'
                     : 'no candidate yet'}
         </span>
-        <div />
+        <div style={{ gridColumn: 11 }} />
         <button
           onClick={onReroll}
           disabled={rerolling}
+          data-tooltip="another stem that still matches this slot's role"
+          aria-label="another stem that still matches this slot's role"
           style={{
+            gridColumn: 12,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2742,7 +2837,7 @@ function DiscoverSlotRow({
             cursor: rerolling ? 'default' : 'pointer'
           }}
         >
-          {rerolling ? 'similar…' : 'similar'}
+          similar
         </button>
         {nearbyAnchor !== null && (
           <button
@@ -2755,7 +2850,10 @@ function DiscoverSlotRow({
               const rect = e.currentTarget.getBoundingClientRect()
               setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
             }}
+            data-tooltip="explore riffs recorded near this one in the same jam"
+            aria-label="explore riffs recorded near this one in the same jam"
             style={{
+              gridColumn: 13,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -2775,7 +2873,10 @@ function DiscoverSlotRow({
         <button
           onClick={onRerollRandom}
           disabled={rerolling}
+          data-tooltip="random -- skip role matching, pick any random stem from your own library"
+          aria-label="random -- skip role matching, pick any random stem from your own library"
           style={{
+            gridColumn: 14,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
