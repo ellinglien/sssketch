@@ -2595,6 +2595,11 @@ function DiscoverSlotRow({
             <button
               onClick={onTogglePreview}
               onMouseDown={handleGainDragStart}
+              aria-label={
+                previewing
+                  ? 'playing in the loop -- click to remove'
+                  : 'click to add to the loop preview'
+              }
               style={{
                 position: 'relative',
                 width: '100%',
