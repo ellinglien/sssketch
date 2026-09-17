@@ -612,7 +612,7 @@ export function DiscoverPanel({
     // button (below) stays as-is, still useful after an individual
     // reroll drifts a slot away from the seed's own tempo.
     if (!previewLoadedRef.current && seedBpm !== null) {
-      dispatch({ type: 'SET_TEMPO', bpm: seedBpm })
+      dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })
     }
 
     const members = [...ids]
@@ -1646,8 +1646,8 @@ export function DiscoverPanel({
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
         {seedBpm !== null && seedBpm !== bpm && (
           <button
-            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedBpm })}
-            title={`Match seeded riff's own tempo (${seedBpm} bpm)`}
+            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })}
+            title={`Match seeded riff's own tempo (${Math.round(seedBpm)} bpm)`}
             aria-label="Match seeded riff's own tempo"
             style={{
               height: 18,
@@ -1659,7 +1659,7 @@ export function DiscoverPanel({
               cursor: 'pointer'
             }}
           >
-            match seed ({seedBpm})
+            match seed ({Math.round(seedBpm)})
           </button>
         )}
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
@@ -1765,8 +1765,8 @@ export function DiscoverPanel({
             width: 30,
             height: 30,
             padding: 0,
-            background: 'var(--ra-stretch-on-bg)',
-            border: '1px solid var(--ra-stretch-on)',
+            background: 'transparent',
+            border: 'none',
             color: rerollingSlotIds.size > 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
