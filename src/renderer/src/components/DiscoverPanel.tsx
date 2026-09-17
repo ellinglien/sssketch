@@ -1426,47 +1426,95 @@ export function DiscoverPanel({
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
       dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
-      // Deliberately NOT restorePreviewIfLoaded()/flushEngineSyncNow() here
-      // -- the dispatch above already changes state.rifffs, which the
-      // existing, separate coalesced engine-sync effect in StoreContext.tsx
-      // picks up and re-sends on its own. Just resetting these two refs
-      // means the NEXT slot change (if the user keeps building right after
-      // plunking) correctly starts a fresh preview rather than assuming a
-      // still-loaded one that the real sync effect already silently
-      // overwrote.
+
+      // Real bug, live-reported 2026-09-17: "i just clicked add to timeline
+      // and the last slot started playing the previous instance of that slot
+      // (maybe one that i had added to the timeline before?) but the
+      // waveform stayed the same."
       //
-      // releaseEngine() IS still required here, though (added after code
-      // review): that automatic coalesced sync effect now SKIPS its own
-      // send entirely while something holds engine ownership (see
-      // StoreContext.tsx's own scheduleEngineSync gating, added earlier in
-      // this same plan) -- without releasing here, this function's own
-      // 'discover-preview' claim (from whatever syncPreviewToEngine call
-      // last ran) stays held, and the automatic sync's state.rifffs-change
-      // pickup described above would silently no-op instead of actually
-      // reaching the engine. This also closes the SAME straggling-call
-      // race the previewSyncGenerationRef bump just below already guards
-      // against, belt-and-suspenders: an in-flight syncPreviewToEngine
-      // call that claimed ownership before this function ran will find its
-      // own token stale (stillOwnEngine returns false) the moment it
-      // resumes after its own await, since release() here bumps the same
-      // shared generation.
-      releaseEngine()
-      previewLoadedRef.current = false
-      currentPreviewMappingRef.current = null
-      // Real bug, found by review: an already-in-flight syncPreviewToEngine
-      // call (e.g. kicked off moments ago by a bpm change or a reroll
-      // landing) is still awaiting buildEngineProject/engineLoadProject
-      // right now, and its own generation was still valid as of the top of
-      // THIS function -- resetting the tracking refs above does nothing to
-      // stop it from landing right after PLACE_LOOP_ON_TIMELINE and
-      // clobbering the real project we just placed with its now-stale
-      // throwaway preview one (plus possibly re-triggering the empty-to-
-      // non-empty pause/seek/play sequence and leaving
-      // currentPreviewMappingRef pointing at stale data). Bumping the SAME
-      // generation ref syncPreviewToEngine itself checks after each of its
-      // own awaits makes that straggling call's post-await check fail, so
-      // it bails out harmlessly instead.
-      previewSyncGenerationRef.current += 1
+      // Root cause, in the version of this function that used to live here:
+      // it unconditionally called releaseEngine() and reset
+      // previewLoadedRef/currentPreviewMappingRef, on the theory that
+      // handing the engine back to the real arrangement was the right thing
+      // to do after plunking. What that actually produced:
+      //   1. PLACE_LOOP_ON_TIMELINE changes state.rifffs, which is a listed
+      //      dependency of StoreContext.tsx's own coalesced engine-sync
+      //      effect.
+      //   2. releaseEngine() dropped the 'discover-preview' claim, so that
+      //      effect's own ownership gate no longer skipped -- on the next
+      //      animation frame it built and sent the REAL project.
+      //   3. Nothing in here touches `playing` or the transport position
+      //      (deliberately -- direct request: "when adding to shelf or
+      //      timeline... i think we can skip the pausing. the temp alert is
+      //      enough"), and load-project never seeks. So the engine kept
+      //      playing from the PREVIEW's current bar position (a small
+      //      number -- the preview loop is a few bars) but against the real
+      //      arrangement, where bar ~0-4 holds whatever was plunked in
+      //      EARLIER. That's the report, exactly: you hear the previous
+      //      placement.
+      //   4. Nothing ever re-triggered syncPreviewToEngine afterwards
+      //      (`slots` unchanged, no row re-resolved, bpm unchanged), and the
+      //      row playheads are gated on previewingSlotIds, not on
+      //      previewLoadedRef -- so Discover went on LOOKING like it was
+      //      previewing while the engine stayed on the real arrangement
+      //      indefinitely. UI current, audio stale.
+      //
+      // The fix keeps the Discover preview owning the engine instead of
+      // handing it back: "imagine it a live composition tool... ensure it's
+      // smooth and doesn't interrupt the flow" (direct request, the framing
+      // for this whole class of Discover playback-continuity issues).
+      // Plunking is an ADDITIVE act -- the user is still building; nothing
+      // about it asks for the audition to stop.
+      //
+      // Why this is race-free, and why it must be a syncPreviewToEngine call
+      // rather than "just don't release":
+      //   - syncPreviewToEngine claims ownership SYNCHRONOUSLY, at its very
+      //     top, before its first await. Calling it here therefore means
+      //     ownership is 'discover-preview' continuously, with no window at
+      //     all in which StoreContext's coalesced sync could observe a null
+      //     owner -- that effect's own check happens inside a rAF callback
+      //     that cannot possibly run before this synchronous body finishes.
+      //     It goes dirty and re-checks every frame, harmlessly, until
+      //     Discover really does release (panel close / last slot toggled
+      //     off), at which point the real project -- including what we just
+      //     placed -- syncs for free. No ordering assumption about WHICH
+      //     rAF was registered first is needed, because we never release.
+      //   - claim() bumps the same shared generation release() did, so the
+      //     straggling-in-flight-call invalidation the old releaseEngine()
+      //     call provided is preserved exactly (an in-flight
+      //     syncPreviewToEngine's stillOwnEngine check goes false), as is
+      //     the previewSyncGenerationRef guard (syncPreviewToEngine bumps
+      //     that itself, at its top, for the same reason).
+      //   - And it must be a real resync, not merely holding the claim: the
+      //     straggler we just invalidated may have been carrying a NEWER
+      //     preview (a reroll that landed mid-flight). Dropping it without
+      //     resyncing would leave the engine on the older preview while the
+      //     rows show the newer one -- the same UI-current/audio-stale bug,
+      //     one layer down.
+      //
+      // previewLoadedRef is deliberately NOT reset: the preview genuinely IS
+      // still loaded (that was only true-by-accident before, when the real
+      // sync effect silently overwrote it). Leaving it true is what keeps
+      // this resync off syncPreviewToEngine's `!previewLoadedRef.current`
+      // branch -- the ONLY place that pauses, seeks to 0 and plays. So the
+      // engine swaps in a rebuilt-but-identical preview project underneath a
+      // transport that never stops or seeks: no restart from zero, no
+      // pause, exactly the same in-place reload every reroll already does
+      // while playing.
+      if (previewLoadedRef.current) {
+        void syncPreviewToEngine(previewingSlotIdsRef.current)
+      } else {
+        // No preview is loaded, so there's nothing to keep playing and no
+        // reason to hold the engine hostage -- hand it back so the
+        // coalesced sync effect picks up the rifff we just placed. release()
+        // also invalidates any in-flight syncPreviewToEngine that claimed
+        // but hasn't loaded anything yet (its stillOwnEngine check goes
+        // false after its next await), and the generation bump below does
+        // the same at this component's own layer.
+        releaseEngine()
+        currentPreviewMappingRef.current = null
+        previewSyncGenerationRef.current += 1
+      }
       setJustAddedToTimeline(true)
       window.setTimeout(() => setJustAddedToTimeline(false), 500)
     } finally {

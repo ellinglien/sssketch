@@ -917,6 +917,32 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // playhead back to the pre-seek spot for a frame. See manualSeek.ts's
       // own doc comment.
       if (isWithinManualSeekGrace()) return
+      // While DiscoverPanel.tsx's throwaway preview project owns the engine,
+      // what's actually LOADED is a single-rifff preview whose own loop
+      // length is that rifff's barLength -- not the real arrangement's. The
+      // wrap below is computed from loopLengthBars(stateRef.current), i.e.
+      // the REAL arrangement, so applying it here force-seeks the preview
+      // back mid-loop at this subscription's own ~30Hz tick rate as soon as
+      // anything on the timeline ends earlier than the preview's own loop.
+      // (Harmless while the timeline is empty -- loopLengthBars falls back
+      // to DEFAULT_LOOP_BARS = 32, longer than any Discover preview -- which
+      // is why this only shows up once something has been plunked in.)
+      //
+      // Skipped entirely rather than switched to some preview-aware length:
+      // no wrap is needed at all here, because Transport.cpp already wraps
+      // its own clock in-thread against whatever project is loaded (see
+      // Transport::setLoopLengthBars / its `pos >= loopEnd` handling), which
+      // for a loaded preview is already the right reference. This renderer-
+      // side wrap only exists as the real arrangement's belt-and-suspenders.
+      //
+      // 'stem-solo-preview' is deliberately NOT excluded: that owner
+      // (useStemPreviewPlayback.ts) loads the REAL project with mute/vol
+      // overrides, so loopLengthBars(stateRef.current) is still its correct
+      // reference.
+      if (engineOwnershipRef.current.current === 'discover-preview') {
+        dispatch({ type: 'SET_POS', pos })
+        return
+      }
       const loopBars = loopLengthBars(stateRef.current)
       if (pos >= loopBars) {
         // Loop wrap-around: the native transport counts up monotonically
