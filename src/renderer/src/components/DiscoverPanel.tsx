@@ -1043,8 +1043,21 @@ export function DiscoverPanel({
   function applySlotsSnapshot(next: DiscoverSlot[]): void {
     setSlots(next)
     const validIds = new Set(next.map((s) => s.id))
+    // forgetSlotResolution (not just resolvedStemsRef.current.delete(id))
+    // as of code review, 2026-09-17 -- undo/redo dropping a resolved slot
+    // used to leave its own barLength behind in resolvedBarLengthsRef/
+    // resolvedBarLengths forever (nothing in `next` could ever remove it
+    // again), silently inflating the engine's own loop-length reference.
+    // Deleting the CURRENT key while iterating a Map's own .keys() is
+    // safe (a key deleted mid-iteration is simply not visited again,
+    // per spec) -- this loop already relied on that before this change,
+    // just via the narrower resolvedStemsRef.current.delete(id) call.
+    let forgotAny = false
     for (const id of resolvedStemsRef.current.keys()) {
-      if (!validIds.has(id)) resolvedStemsRef.current.delete(id)
+      if (!validIds.has(id)) {
+        forgetSlotResolution(id)
+        forgotAny = true
+      }
     }
     // Reads/writes previewingSlotIdsRef synchronously (not a functional
     // setState updater) for the same reason reportSlotResolution above
@@ -1055,6 +1068,13 @@ export function DiscoverPanel({
     if (pruned.size !== current.size) {
       previewingSlotIdsRef.current = pruned
       setPreviewingSlotIds(pruned)
+      void syncPreviewToEngine(pruned)
+    } else if (forgotAny) {
+      // A forgotten slot wasn't necessarily part of the preview mix (e.g.
+      // muted, or resolved but never toggled on) -- but if it contributed
+      // to maxBarLength, the engine still needs a fresh sync to pick up
+      // the now-shorter reference even though `pruned` itself, and
+      // therefore the branch above, is unchanged.
       void syncPreviewToEngine(pruned)
     }
   }
@@ -1090,19 +1110,25 @@ export function DiscoverPanel({
     }
   }
 
-  function removeSlot(id: string): void {
-    pushUndoSnapshot()
-    setSlots((prev) => prev.filter((s) => s.id !== id))
-    // Direct reports, 2026-09-17: this used to rely entirely on the
-    // removed row's own unmount effect calling onResolvedChange(null) ->
-    // reportSlotResolution(id, null) to clear resolvedStemsRef/
-    // resolvedBarLengthsRef/resolvedBarLengths and re-sync the engine.
-    // That null branch is now a deliberate no-op for the (much more
-    // common) "mid-reroll, still resolving" case -- see its own doc
-    // comment -- which means genuine removal can no longer piggyback on
-    // it; removeSlot now does its own full, explicit cleanup instead,
-    // mirroring the exact ref-then-state-then-schedule pattern
-    // reportSlotResolution's own success branch already uses.
+  // Shared by removeSlot and applySlotsSnapshot (undo/redo) -- both need to
+  // permanently forget a slot's own resolution, not just stop showing it.
+  // Direct reports, 2026-09-17: this cleanup used to happen implicitly,
+  // via reportSlotResolution's own null branch, whenever the affected
+  // row's unmount effect fired onResolvedChange(null). That branch is now
+  // a deliberate no-op for the (much more common) "mid-reroll, still
+  // resolving" case -- see its own doc comment -- so genuine, permanent
+  // forgetting (this id is never coming back) can no longer piggyback on
+  // it. Clears resolvedStemsRef AND resolvedBarLengthsRef/
+  // resolvedBarLengths -- the LATTER matters even for a slot that was
+  // never part of the playing mix: syncPreviewToEngine's own
+  // barLengthOverride is computed from EVERY entry in
+  // resolvedBarLengthsRef, not just currently-previewing ones (see its
+  // own doc comment), so a forgotten slot's stale barLength left behind
+  // would keep inflating the engine's own loop length forever -- found in
+  // code review, reproduced via undo: add a slot, let it resolve, press
+  // undo, its barLength survives in both maps with nothing left in
+  // `slots` that could ever overwrite or remove it again.
+  function forgetSlotResolution(id: string): void {
     resolvedStemsRef.current.delete(id)
     if (resolvedBarLengthsRef.current.has(id)) {
       const next = new Map(resolvedBarLengthsRef.current)
@@ -1115,14 +1141,48 @@ export function DiscoverPanel({
       next.delete(id)
       return next
     })
+  }
+
+  // Shared by removeSlot and abandonSlotResolution below -- drops `id`
+  // from the previewing mix (if it's currently in it) and re-syncs the
+  // engine to match, via the RAF-coalesced scheduler (safe to call from
+  // several call sites in quick succession -- e.g. more than one row
+  // hitting a terminal failure in the same frame -- without one full
+  // build+send per row).
+  function dropFromPreviewingMix(id: string): void {
     const currentlyPreviewing = previewingSlotIdsRef.current
-    if (currentlyPreviewing.has(id)) {
-      const next = new Set(currentlyPreviewing)
-      next.delete(id)
-      previewingSlotIdsRef.current = next
-      setPreviewingSlotIds(next)
-      scheduleSyncPreviewToEngine(next)
-    }
+    if (!currentlyPreviewing.has(id)) return
+    const next = new Set(currentlyPreviewing)
+    next.delete(id)
+    previewingSlotIdsRef.current = next
+    setPreviewingSlotIds(next)
+    scheduleSyncPreviewToEngine(next)
+  }
+
+  function removeSlot(id: string): void {
+    pushUndoSnapshot()
+    setSlots((prev) => prev.filter((s) => s.id !== id))
+    forgetSlotResolution(id)
+    dropFromPreviewingMix(id)
+  }
+
+  // Direct reports, 2026-09-17, found in code review: a slot whose reroll
+  // hit a TERMINAL failure (resolveFailed -- a real candidate was found
+  // but couldn't be downloaded/decoded; or noMatchFound -- nothing at all
+  // matched this slot's role) used to keep its OLD stem's audio playing
+  // in the mix forever, silently, under a UI that visibly says "failed"/
+  // "no match" and hides the mute/solo/favourite controls that would let
+  // the user silence it (DiscoverSlotRow's own hasStemToActOn guard).
+  // reportSlotResolution's own null branch is now a deliberate no-op for
+  // the transient "mid-reroll, still resolving" case (a DIFFERENT fix,
+  // same investigation) -- this is the terminal counterpart: called once
+  // by DiscoverSlotRow's own dedicated effect when resolveFailed or
+  // noMatchFound actually settles, so a genuine dead end really does stop
+  // playing and drop out of the mix, same as removeSlot's own cleanup,
+  // just without removing the slot itself (the user can still reroll it).
+  function abandonSlotResolution(id: string): void {
+    forgetSlotResolution(id)
+    dropFromPreviewingMix(id)
   }
 
   function toggleLock(id: string): void {
@@ -1967,6 +2027,7 @@ export function DiscoverPanel({
               if (slot.candidate) toggleStemFavourite(slot.candidate.stemCID)
             }}
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
+            onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
           />
@@ -2148,6 +2209,7 @@ function DiscoverSlotRow({
   onToggleSolo,
   onToggleFavourite,
   onResolvedChange,
+  onSlotResolutionAbandoned,
   onGainChange,
   onSwapFromNearby
 }: {
@@ -2235,6 +2297,14 @@ function DiscoverSlotRow({
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
   onResolvedChange: (stem: ResolvedCandidateStem | null) => void
+  /** DiscoverPanel's own forgetSlotResolution(id) (plus the matching
+   * previewing-mix cleanup) -- called once when this row's own resolution
+   * hits a TERMINAL failure state (resolveFailed or noMatchFound, both
+   * computed locally below), as opposed to onResolvedChange(null) above,
+   * which now stays a no-op for the transient "mid-reroll, still
+   * resolving" case. See this row's own dedicated effect for why the two
+   * are kept separate. */
+  onSlotResolutionAbandoned: () => void
   /** DiscoverPanel's own swapSlotFromNearby -- called when the user picks a
    * candidate from this slot's own "explore nearby" popover. Same instant,
    * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
@@ -2479,6 +2549,26 @@ function DiscoverSlotRow({
     return () => onResolvedChange(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [resolvedStem])
+
+  // Direct reports, 2026-09-17, found in code review of the fix for
+  // "sometimes it stops the playback... starts all of the loops from the
+  // beginning": onResolvedChange(null) above (via the effect's own
+  // cleanup) is now a deliberate no-op in DiscoverPanel for the "mid-
+  // reroll, still resolving" case -- necessary so a reroll doesn't
+  // transiently drop out of the mix and cause the exact restart/blink bugs
+  // that fix addressed. But resolveFailed/noMatchFound are TERMINAL, not
+  // transient -- nothing further is coming without the user taking another
+  // action (reroll again, or remove the slot) -- so silently keeping the
+  // OLD stem's audio playing forever under a UI that says "failed"/"no
+  // match" (and, via hasStemToActOn below, HIDES the mute/solo/favourite
+  // controls that would let the user silence it) is a real regression, not
+  // "doesn't interrupt the flow." This is the one signal DiscoverPanel
+  // still needs to treat as a genuine, permanent forget -- separate from
+  // the shared resolvedStem effect above, which must stay a no-op-on-null
+  // for the transient case.
+  useEffect(() => {
+    if (resolveFailed || noMatchFound) onSlotResolutionAbandoned()
+  }, [resolveFailed, noMatchFound, onSlotResolutionAbandoned])
 
   // Direct report, 2026-09-16: "the buttons shouldn't disappear when they
   // are rerolling" -- gating the mute/solo/favourite group on resolvedStem
