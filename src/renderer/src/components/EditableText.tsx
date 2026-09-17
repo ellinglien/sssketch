@@ -54,7 +54,7 @@ export function EditableText({
         border: '1px solid transparent',
         color: 'inherit',
         font: 'inherit',
-        padding: '1px 3px',
+        padding: '1px var(--ra-s-0)',
         margin: '-1px -3px',
         minWidth: 0,
         ...style

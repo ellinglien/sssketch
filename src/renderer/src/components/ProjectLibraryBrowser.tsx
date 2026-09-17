@@ -24,7 +24,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   return {
     fontFamily: 'inherit',
     fontSize: 10,
-    padding: '3px 8px',
+    padding: 'var(--ra-s-0) 8px',
     background: 'var(--ra-bg-row-active)',
     border: `1px solid ${disabled ? 'var(--ra-border-soft)' : 'var(--ra-border)'}`,
     borderRadius: 2,

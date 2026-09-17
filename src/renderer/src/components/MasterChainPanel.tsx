@@ -25,7 +25,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   return {
     fontFamily: 'inherit',
     fontSize: 10,
-    padding: '3px 8px',
+    padding: 'var(--ra-s-0) 8px',
     background: 'var(--ra-bg-row-active)',
     border: `1px solid ${disabled ? 'var(--ra-border-soft)' : 'var(--ra-border)'}`,
     borderRadius: 2,
@@ -37,7 +37,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
 const selectStyle: React.CSSProperties = {
   fontFamily: 'inherit',
   fontSize: 11,
-  padding: '3px 4px',
+  padding: 'var(--ra-s-0) 4px',
   background: 'var(--ra-bg-row)',
   border: '1px solid var(--ra-border)',
   borderRadius: 2,
@@ -90,7 +90,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
         position: 'fixed',
         inset: 0,
         zIndex: 'var(--ra-z-anchored)',
-        background: 'rgba(0, 0, 0, 0.4)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center'

@@ -176,7 +176,7 @@ function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
   return {
     fontFamily: 'inherit',
     fontSize: 9,
-    padding: '3px 8px',
+    padding: 'var(--ra-s-0) 8px',
     background: confirmed ? 'var(--ra-stretch-on-bg)' : 'transparent',
     border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
     color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',

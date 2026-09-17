@@ -1549,7 +1549,7 @@ export function LibraryBrowser({
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
-                padding: '3px 8px',
+                padding: 'var(--ra-s-0) 8px',
                 background: libraryMode === 'browse' ? 'var(--ra-stretch-on-bg)' : 'transparent',
                 border: `1px solid ${libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                 color: libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
@@ -1564,7 +1564,7 @@ export function LibraryBrowser({
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
-                padding: '3px 8px',
+                padding: 'var(--ra-s-0) 8px',
                 background: libraryMode === 'discover' ? 'var(--ra-stretch-on-bg)' : 'transparent',
                 border: `1px solid ${libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                 color: libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
