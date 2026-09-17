@@ -18,6 +18,26 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   }
 }
 
+// Hand-drawn SVG glyph -- no icon library, same convention as
+// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// request, 2026-09-16: replace the repeated-per-row "use" text button.
+function CheckmarkIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 8.5 L6.5 12 L13 4" />
+    </svg>
+  )
+}
+
 export function PluginCatalogBrowser({
   onSelect,
   onClose
@@ -93,7 +113,7 @@ export function PluginCatalogBrowser({
                 alignItems: 'center',
                 gap: 6,
                 padding: '4px 0',
-                opacity: loadable ? 1 : 0.5
+                opacity: loadable ? 1 : 0.3
               }}
             >
               <button
@@ -123,9 +143,10 @@ export function PluginCatalogBrowser({
                 }}
                 disabled={!loadable}
                 aria-label={`use ${entry.name}`}
+                title={`use ${entry.name}`}
                 style={buttonStyle(!loadable)}
               >
-                use
+                <CheckmarkIcon />
               </button>
             </div>
           )
