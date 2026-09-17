@@ -353,7 +353,18 @@ app.whenReady().then(async () => {
   // Idempotent, safe-to-call-on-every-startup backfill of drums/bass
   // ArrangeRole labels from Endlesss's own performer-set Instrument
   // bitmask -- see instrumentMaskCentroidBackfill.ts's own doc comment.
-  backfillInstrumentMaskCategories(openOwnRiffLibraryDb())
+  // Direct report, 2026-09-17 ("restarted .. no sign of it in the
+  // console"): this call previously discarded its own return value, so
+  // there was no way to tell from the outside whether it ran, or ran and
+  // found nothing left to do (idempotent -- 0 is the expected, correct
+  // result on every restart AFTER the first one that actually backfills
+  // the real backlog). Logged the same way get-discover-candidates' own
+  // TEMPORARY diagnostic log elsewhere in this file already does for
+  // this codebase.
+  const instrumentMaskBackfillSummary = backfillInstrumentMaskCategories(openOwnRiffLibraryDb())
+  console.log(
+    `backfillInstrumentMaskCategories: categorized ${instrumentMaskBackfillSummary.categorizedStems} stems`
+  )
 
   // Background "pre-categorize the whole library" scheduler -- direct
   // request, 2026-09-15 ("why not just do a prelim scan that
