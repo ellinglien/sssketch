@@ -148,6 +148,7 @@ function ChainLinkIcon(): React.JSX.Element {
       strokeWidth="1.3"
       strokeLinecap="round"
       strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
     >
       <rect x="1.5" y="5" width="7" height="6" rx="3" />
       <rect x="7.5" y="5" width="7" height="6" rx="3" />
@@ -210,8 +211,8 @@ function PlusMicIcon(): React.JSX.Element {
       <rect x="6" y="1.5" width="4" height="7" rx="2" />
       <path d="M4 8 a4 4 0 0 0 8 0" />
       <path d="M8 12 V14.5" />
-      <path d="M11.5 2 V5" />
-      <path d="M10 3.5 H13" />
+      <path d="M12.5 1 V5" />
+      <path d="M10.5 3 H14.5" />
     </svg>
   )
 }
@@ -793,6 +794,7 @@ export function TransportBar({
 
       <button
         onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
+        aria-label="add another recording channel"
         title="add another recording channel (/)"
         style={{
           height: 22,
