@@ -289,7 +289,7 @@ export function Shelf({
       )}
       <div
         style={{
-          padding: '11px 14px',
+          padding: '12px 14px',
           background: 'var(--ra-bg-rail)',
           borderBottom: '1px solid var(--ra-border)',
           display: 'flex',
