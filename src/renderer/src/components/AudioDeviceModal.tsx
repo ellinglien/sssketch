@@ -52,23 +52,21 @@ export function AudioDeviceModal({
 
   return (
     <div
-      onClick={onClose}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.6)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 500
+        zIndex: 'var(--ra-z-modal)'
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(340px, 90vw)',
           background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
+          border: '1px solid var(--ra-border)',
           borderRadius: 0,
           padding: 18,
           display: 'flex',
@@ -76,7 +74,7 @@ export function AudioDeviceModal({
           gap: 16
         }}
       >
-        <span className="ra-eyebrow">audio</span>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--ra-text)' }}>audio settings</p>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>audio in</span>
@@ -156,7 +154,7 @@ export function AudioDeviceModal({
             padding: '0 14px',
             fontSize: 11,
             fontWeight: 700,
-            border: '1px solid var(--ra-border-strong)',
+            border: '1px solid var(--ra-border)',
             background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text)',
             cursor: 'pointer'
