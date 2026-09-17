@@ -62,6 +62,7 @@ import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
+import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
@@ -2114,6 +2115,7 @@ function Frame(): React.JSX.Element {
       <SketchModeAutoFollow />
       <BackgroundFeatureScan />
       <LibraryWarmupIndicator />
+      <EngineStartupIndicator />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the

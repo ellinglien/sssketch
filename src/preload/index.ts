@@ -227,6 +227,12 @@ const api = {
     ipcRenderer.on('library-warmup-complete', listener)
     return () => ipcRenderer.removeListener('library-warmup-complete', listener)
   },
+  getEngineStartupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-engine-startup-status'),
+  onEngineStartupComplete: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('engine-startup-complete', listener)
+    return () => ipcRenderer.removeListener('engine-startup-complete', listener)
+  },
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),

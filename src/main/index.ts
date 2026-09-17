@@ -195,6 +195,19 @@ let isQuitting = false
 // possibility on a small/already-cached library).
 let libraryWarmupDone = false
 
+// Direct report, 2026-09-17: "startup is quite sluggish... could we show
+// welcome first to indicate it's loading?... otherwise the user thinks
+// the app didn't start." Root cause: createWindow() below used to be
+// blocked behind `await startPlaybackEngine()` (a real, sometimes-slow
+// native process spawn) -- during that whole window there was no
+// BrowserWindow at all (show: false + 'ready-to-show' means nothing
+// appears until the renderer has mounted, which can't happen before
+// createWindow() itself runs). engineStartupDone is the renderer's own
+// source of truth for "is the engine still starting" -- same
+// query-once-on-mount-plus-push-when-done pattern as libraryWarmupDone/
+// get-library-warmup-status, just above/below.
+let engineStartupDone = false
+
 // Kept in sync with the renderer's own hasUnsavedChanges value via the
 // 'set-dirty-state' IPC call below, fired on each of its transitions (not
 // every keystroke) -- read from the before-quit handler to decide whether
@@ -705,25 +718,30 @@ app.whenReady().then(async () => {
     }
   )
 
-  try {
-    playbackEngine = await startPlaybackEngine()
-  } catch (err) {
-    // Previously nothing could prevent createWindow() below from running —
-    // this await is new this phase, and without a catch, a failed spawn
-    // (binary missing/not yet rebuilt, a port bind failure, the readiness
-    // timeout in engineProcess.ts firing) would throw here, become an
-    // unhandled rejection, and skip createWindow() entirely: the app would
-    // launch with no window and no visible error. The engine-* ipcMain
-    // handlers below already guard every call with `playbackEngine?.`, so
-    // it's safe to just leave playbackEngine undefined and continue —
-    // export and every other feature are unaffected, only live playback is
-    // unavailable for this session.
-    console.error('index: failed to start the native playback engine', err)
-    dialog.showErrorBox(
-      'Playback engine failed to start',
-      `sssketch could not start its native audio engine, so live playback will not work this session. Export and other features are unaffected.\n\n${String(err)}`
-    )
-  }
+  // See engineStartupDone's own doc comment above for why this is no
+  // longer awaited here.
+  void startPlaybackEngine()
+    .then((handle) => {
+      playbackEngine = handle
+    })
+    .catch((err) => {
+      // Same handling as before this became non-blocking -- a failed spawn
+      // (binary missing/not yet rebuilt, a port bind failure, the
+      // readiness timeout in engineProcess.ts firing) leaves playbackEngine
+      // undefined; every engine-* ipcMain handler below already guards
+      // every call with `playbackEngine?.`, so the rest of the app
+      // degrades safely -- export and every other feature are unaffected,
+      // only live playback is unavailable this session.
+      console.error('index: failed to start the native playback engine', err)
+      dialog.showErrorBox(
+        'Playback engine failed to start',
+        `sssketch could not start its native audio engine, so live playback will not work this session. Export and other features are unaffected.\n\n${String(err)}`
+      )
+    })
+    .finally(() => {
+      engineStartupDone = true
+      mainWindow?.webContents.send('engine-startup-complete')
+    })
 
   ipcMain.handle('engine-load-project', (_event, project: unknown) => {
     playbackEngine?.sendLoadProject(project)
@@ -904,6 +922,8 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
+
+  ipcMain.handle('get-engine-startup-status', (): boolean => engineStartupDone)
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
