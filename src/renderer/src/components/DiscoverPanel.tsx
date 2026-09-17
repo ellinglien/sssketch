@@ -1274,6 +1274,19 @@ export function DiscoverPanel({
   }
 
   async function rerollAll(): Promise<void> {
+    // Direct report, 2026-09-17: "clicking the dice in discover if there
+    // are no slots should add a stem" -- an empty loop has nothing for the
+    // loop below to iterate over, so this button was a silent no-op on a
+    // fresh/empty Discover session. Adds the first role in the list
+    // (matching the "+ drums" button's own usual first pick) rather than a
+    // random one -- Math.random() during render/an event handler defined
+    // at the component's top level trips this codebase's react-hooks
+    // purity lint rule, and a random FIRST role isn't something the direct
+    // report actually asked for.
+    if (slots.length === 0) {
+      addSlot(ARRANGE_ROLE_OPTIONS[0])
+      return
+    }
     // One undo snapshot for the WHOLE batch, taken up front -- calls
     // rollForSlot directly below (not the public rerollSlot wrapper, which
     // pushes its OWN snapshot per slot) so "undo" after a "reroll all"
@@ -2241,6 +2254,16 @@ function DiscoverSlotRow({
   // stuck/broken in every one of those cases, including the one where the
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
+  // A reroll actually COMPLETED but found nothing that matched this slot's
+  // role/constraints at all (rollForSlot/rerollSlot left slot.candidate
+  // null) -- distinct from resolveFailed (a real candidate WAS found but
+  // couldn't be downloaded/decoded). Direct report, 2026-09-17: "just tried
+  // to add a vocal and i think it didn't find an appropriate one... but
+  // there was no indication what happened. no failure message" -- the
+  // placeholder below used to show a plain neutral-bordered empty box for
+  // this exact case, visually identical to a slot that's simply never been
+  // touched yet.
+  const noMatchFound = !resolving && !resolveFailed && slot.candidate === null && slot.hasRerolled
 
   // "Explore nearby" popover state -- position (screen coords, set from the
   // trigger button's own getBoundingClientRect on open) or null when closed.
@@ -2396,8 +2419,23 @@ function DiscoverSlotRow({
           // of leaving its own column empty, which is exactly the state
           // every freshly-added slot passes through (no candidate/resolved
           // stem yet). Real bug, found in code review.
+          // Direct report, 2026-09-17 (screenshot): the last three tracks
+          // used to be `auto auto auto` -- fine while every row always
+          // rendered all three buttons, but "adjacent" is conditionally
+          // rendered (nearbyAnchor !== null), and each slot row is its OWN
+          // independent grid (a separate <div> per row, not one shared
+          // grid), so an `auto` track's size is computed per-row from
+          // ONLY that row's own content. A row missing "adjacent" (e.g. a
+          // seedStem-only slot, or one that's never resolved) auto-sizes
+          // that column down toward zero, which leaves MORE leftover width
+          // for that SAME row's own 1fr waveform/placeholder track to
+          // claim -- so its waveform visibly renders wider than every
+          // other row's. Fixed pixel widths (matching the old
+          // fixed-role-label-width fix for the identical class of bug)
+          // make every row's non-1fr tracks identical regardless of which
+          // optional buttons happen to render.
           gridTemplateColumns:
-            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px auto auto auto',
+            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px 70px 70px 70px',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -2582,7 +2620,9 @@ function DiscoverSlotRow({
                 ? 'loading…'
                 : resolveFailed
                   ? 'failed -- retry'
-                  : undefined
+                  : noMatchFound
+                    ? 'no match -- try random'
+                    : undefined
           }
         >
           {resolvedStem ? (
@@ -2761,16 +2801,19 @@ function DiscoverSlotRow({
                 border: `1px dashed ${
                   resolving
                     ? 'var(--ra-stretch-on)'
-                    : resolveFailed
+                    : resolveFailed || noMatchFound
                       ? 'var(--ra-mute-on)'
                       : 'var(--ra-border)'
                 }`,
-                // Static (no animation) once settled either way (failed or
-                // truly empty) -- discover-slot-pulse is still used for the
-                // FAILED state, a static "this stopped" cue.
-                animation: resolveFailed
-                  ? 'discover-slot-pulse 900ms ease-in-out infinite'
-                  : undefined
+                // Static (no animation) once settled either way (failed/no-
+                // match, or truly empty) -- discover-slot-pulse is still
+                // used for both "this stopped" cases, not just resolveFailed
+                // -- a rerolled slot that found nothing is equally worth
+                // flagging, not a silent dead end.
+                animation:
+                  resolveFailed || noMatchFound
+                    ? 'discover-slot-pulse 900ms ease-in-out infinite'
+                    : undefined
               }}
             >
               {/* Direct report, 2026-09-15 (v3): the previous scrolling-
@@ -2789,6 +2832,15 @@ function DiscoverSlotRow({
                   same 1px-thick dotted-line look at 4px tall -- +2px total
                   from the original, arrived at over two rounds of "+1px." */}
               {resolving && <LoadingLoader size={24} />}
+              {/* Visible, not just a hover tooltip -- direct report,
+                  2026-09-17: rerolling into a genuine no-match dead end
+                  ("just tried to add a vocal... no indication what
+                  happened, no failure message") needs to read as a real
+                  outcome, not just silently stay in the same empty-looking
+                  box the slot started in before it was ever touched. */}
+              {noMatchFound && (
+                <span style={{ fontSize: 9, color: 'var(--ra-mute-on)' }}>no match</span>
+              )}
             </div>
           )}
         </div>
