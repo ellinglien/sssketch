@@ -1,7 +1,7 @@
 // src/renderer/src/audio/stemEmbeddingCache.ts
 import { getAudioContext } from './peakCache'
 import { resampleTo16kMono } from './resampleTo16kMono'
-import { extractEmbedding } from './yamnetClient'
+import { extractEmbeddingAndTopClass } from './yamnetClient'
 
 const cache = new Map<string, Promise<number[] | null>>()
 
@@ -52,14 +52,17 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
       const pcm = await resampleTo16kMono(audioBuffer)
-      const embedding = await extractEmbedding(pcm)
-      if (!embedding || embedding.every((v) => v === 0)) return null
+      const result = await extractEmbeddingAndTopClass(pcm)
+      if (!result || result.embedding.every((v) => v === 0)) return null
 
       // Fire-and-forget, matching getStemFeatures' own setStemFeatureCache
       // call -- a real library stem's path persists for next time; a
       // non-library path is silently skipped main-process-side.
-      void window.rifffApi.setStemEmbeddingCache(path, embedding)
-      return embedding
+      void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
+      if (result.topClassIndex !== null) {
+        void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
+      }
+      return result.embedding
     } catch (err) {
       console.error('getOrExtractStemEmbedding: extraction failed for stem', path, err)
       cache.delete(path)

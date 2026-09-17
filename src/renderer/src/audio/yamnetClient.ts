@@ -13,7 +13,10 @@ let readyPromise: Promise<void> | null = null
 let nextRequestId = 0
 const pending = new Map<
   number,
-  { resolve: (embedding: number[]) => void; reject: (err: Error) => void }
+  {
+    resolve: (result: { embedding: number[]; topClassIndex: number | null }) => void
+    reject: (err: Error) => void
+  }
 >()
 
 interface ReadyMessage {
@@ -23,6 +26,7 @@ interface ResultMessage {
   type: 'result'
   requestId: number
   embedding: number[]
+  topClassIndex: number | null
 }
 interface ErrorMessage {
   type: 'error'
@@ -37,7 +41,9 @@ function getWorker(): Worker {
   w.onmessage = (event: MessageEvent<OutMessage>) => {
     const msg = event.data
     if (msg.type === 'result') {
-      pending.get(msg.requestId)?.resolve(msg.embedding)
+      pending
+        .get(msg.requestId)
+        ?.resolve({ embedding: msg.embedding, topClassIndex: msg.topClassIndex })
       pending.delete(msg.requestId)
     } else if (msg.type === 'error') {
       if (msg.requestId !== null) {
@@ -109,22 +115,24 @@ function ensureReady(): Promise<void> {
 }
 
 /** Runs YAMNet inference on one stem's already-decoded, already-16kHz-mono
- * PCM and returns its mean-pooled 1024-dim embedding. Returns null (never
- * throws) on ANY failure -- model unavailable, worker error, malformed
- * input -- since every caller in this plan treats "no embedding" as a
- * normal, expected fallback case (Plan B1's classifier), not an error
- * condition worth surfacing. */
-export async function extractEmbedding(pcm: Float32Array): Promise<number[] | null> {
+ * PCM and returns its mean-pooled 1024-dim embedding alongside the
+ * top-scoring AudioSet class index (see yamnetWorker.ts's own
+ * topClassIndexFromScores). Returns null (never throws) on ANY failure,
+ * same "no embedding" contract as before -- every caller already treats
+ * that as a normal, expected fallback case, not an error. */
+export async function extractEmbeddingAndTopClass(
+  pcm: Float32Array
+): Promise<{ embedding: number[]; topClassIndex: number | null } | null> {
   try {
     await ensureReady()
   } catch (err) {
     console.error('yamnetClient: model failed to load', err)
     return null
   }
-  return new Promise<number[] | null>((resolve) => {
+  return new Promise((resolve) => {
     const requestId = nextRequestId++
     pending.set(requestId, {
-      resolve: (embedding) => resolve(embedding),
+      resolve: (result) => resolve(result),
       reject: (err) => {
         console.error('yamnetClient: inference failed', err)
         resolve(null)
