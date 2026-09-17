@@ -441,10 +441,17 @@ export function Shelf({
             onClick={onOpenLibrary}
             data-tour-id="tour-import"
             style={{
-              height: 36,
+              // Direct follow-up report, 2026-09-17 (screenshot): the first
+              // "a bunch bigger" pass (height: 36) pushed this row's own
+              // content just past its maxHeight: 100 cap above, triggering
+              // an unwanted scrollbar on a row with nothing actually left
+              // to scroll to -- 28 is shorter than TILE_SIZE (42, the "+"
+              // drop-zone/tile height next to it), so it can never be the
+              // tallest thing in this row's own flex-wrap line.
+              height: 28,
               borderRadius: 0,
-              padding: '0 18px',
-              fontSize: 13,
+              padding: '0 14px',
+              fontSize: 12,
               fontWeight: 700,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
