@@ -55,6 +55,21 @@ describe('reducer', () => {
     expect(state.vol['r1:1']).toBe(0.3)
   })
 
+  it('an explicit vol entry wins over the computed sqrtGain default, per stem', () => {
+    // makeRifff() has 2 stems: slot 1 and slot 6 -> keys 'r1:1' and 'r1:6'.
+    // Supplying vol only for 'r1:1' must use that value verbatim for slot 1,
+    // while slot 6 (no matching entry) still falls back to sqrtGain(2) --
+    // both code paths need to coexist correctly within the SAME dispatch,
+    // not just work in isolation.
+    const state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff(),
+      vol: { 'r1:1': 0.42 }
+    })
+    expect(state.vol['r1:1']).toBe(0.42)
+    expect(state.vol['r1:6']).toBeCloseTo(sqrtGain(2), 10)
+  })
+
   it('placing on the timeline sets startBar, selects, and enables stretch, without forcing it expanded', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })

@@ -344,7 +344,23 @@ export const initialState: AppState = {
 // the app (most components) re-rendered on every tick, whether or not it
 // read state.pos at all. See StoreContext.tsx's module doc comment.
 export type Action =
-  | { type: 'ADD_TO_SHELF'; rifff: Rifff }
+  | {
+      type: 'ADD_TO_SHELF'
+      rifff: Rifff
+      /** Each stem's own committed gain (DiscoverPanel's own per-slot volume
+       * slider), keyed by stemKey(groupId, slot) -- optional and merged into
+       * state.vol the same way PLACE_LOOP_ON_TIMELINE's own vol field is.
+       * When a key is present here, it wins over this case's own sqrtGain
+       * loudness-compensation default below -- Discover's own per-slot
+       * gains are real, user-adjusted values already; silently
+       * re-compensating them a second time would reintroduce exactly the
+       * "secret hidden" volume behavior that was reverted from Discover
+       * earlier (see docs/superpowers/specs/2026-09-16-discover-seed-stems-
+       * design.md). Every existing caller (the Inspector's re-import-from-
+       * folder flow) omits this field and keeps today's sqrtGain-default
+       * behavior exactly unchanged. */
+      vol?: Record<string, number>
+    }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
   | { type: 'ASSIGN_TO_BUS'; stemKey: string; busId: BusId }
@@ -572,7 +588,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const vol = { ...state.vol }
       for (const stem of action.rifff.stems) {
         const key = stemKey(action.rifff.groupId, stem.slot)
-        if (vol[key] === undefined) vol[key] = gain
+        if (vol[key] === undefined) vol[key] = action.vol?.[key] ?? gain
       }
       return {
         ...state,
