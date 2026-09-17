@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
 const mockExtractEmbeddingAndTopClass = vi.fn()
 vi.mock('./yamnetClient', () => ({
@@ -30,6 +30,10 @@ describe('getOrExtractStemEmbedding', () => {
     mockGetAudioContext.mockReturnValue({
       decodeAudioData: vi.fn().mockResolvedValue({})
     })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('persists the zero-shot category alongside the embedding when a top class is present', async () => {
