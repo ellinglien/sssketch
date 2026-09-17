@@ -35,6 +35,8 @@ import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LibraryBrowser } from './components/LibraryBrowser'
+import { type DiscoverSlot } from './components/DiscoverPanel'
+import { buildSeedSlotsFromStems } from './audio/discoverSeed'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
@@ -1271,14 +1273,20 @@ function Frame(): React.JSX.Element {
   }, [persistedJson, currentSketch, recoverableAutosave])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
-  // Set by Shelf's own "seed Discover with this riff" right-click action,
-  // read exactly once by LibraryBrowser's own lazy useState initializer at
-  // the moment it mounts (see LibraryBrowser.tsx's own initialDiscoverSeed
-  // prop) -- direct request, 2026-09-16. Cleared back to null by
-  // openRiffLibrary() itself (below) so a LATER, ordinary open (the normal
-  // toolbar button, no seed intended) never accidentally re-seeds from a
-  // stale value left over from an earlier seed action.
-  const [pendingDiscoverSeed, setPendingDiscoverSeed] = useState<Rifff | null>(null)
+  // Direct request, 2026-09-17: "i've had to close discover occasionally
+  // and would like to return to working on the group of stems i had
+  // before, could these be saved temporarily?" -- session-only (resets on
+  // quit, not persisted into the project file -- confirmed with Elling).
+  // Lives here, not inside LibraryBrowser (which used to own these
+  // locally), specifically so it survives the WHOLE LibraryBrowser modal
+  // unmounting when closed, not just a 'browse' <-> 'discover' tab switch
+  // within one already-open session -- App.tsx itself never unmounts for
+  // the life of the app, LibraryBrowser does every time the modal closes.
+  const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  const [discoverChaos, setDiscoverChaos] = useState(35)
+  const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
+  const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
+  const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -1498,15 +1506,35 @@ function Frame(): React.JSX.Element {
   }
   function openRiffLibrary(): void {
     setLibraryBrowserOpen(false)
-    setPendingDiscoverSeed(null)
     setRiffLibraryOpen(true)
   }
   // Shelf's own onSeedDiscover -- see its own doc comment for why this
   // lives here (App.tsx is the one place with access to both Shelf and
-  // LibraryBrowser).
+  // LibraryBrowser). Now seeds discoverSlots/etc. directly (they live here
+  // -- see their own doc comment above) rather than routing through a
+  // "pending seed" LibraryBrowser used to consume once at mount. Confirms
+  // before overwriting real existing Discover content -- same
+  // window.confirm convention LibraryBrowser.tsx's own
+  // seedDiscoverFromBrowseRiff already uses for the identical risk,
+  // applied here too now that it's a real possibility (previously
+  // LibraryBrowser always mounted fresh on open, so there was never
+  // anything to lose).
   function openRiffLibraryWithDiscoverSeed(rifff: Rifff): void {
+    const hasRealContent = discoverSlots.some((s) => s.candidate !== null)
+    if (
+      hasRealContent &&
+      !window.confirm(
+        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+      )
+    ) {
+      return
+    }
     setLibraryBrowserOpen(false)
-    setPendingDiscoverSeed(rifff)
+    setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
+    setDiscoverChaos(35)
+    setDiscoverUndoStack([[]])
+    setDiscoverRedoStack([])
+    setDiscoverSeedBpm(rifff.bpm)
     setRiffLibraryOpen(true)
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
@@ -2290,7 +2318,16 @@ function Frame(): React.JSX.Element {
             currentSketch={currentSketch}
             discoverConsented={discoverConsented}
             setDiscoverConsented={setDiscoverConsented}
-            initialDiscoverSeed={pendingDiscoverSeed}
+            discoverSlots={discoverSlots}
+            setDiscoverSlots={setDiscoverSlots}
+            discoverChaos={discoverChaos}
+            setDiscoverChaos={setDiscoverChaos}
+            discoverUndoStack={discoverUndoStack}
+            setDiscoverUndoStack={setDiscoverUndoStack}
+            discoverRedoStack={discoverRedoStack}
+            setDiscoverRedoStack={setDiscoverRedoStack}
+            discoverSeedBpm={discoverSeedBpm}
+            setDiscoverSeedBpm={setDiscoverSeedBpm}
           />
         )}
         {libraryBrowserOpen && (

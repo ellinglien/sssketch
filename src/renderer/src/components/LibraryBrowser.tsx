@@ -41,7 +41,7 @@ import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
-import { buildSeedSlotsFromCandidates, buildSeedSlotsFromStems } from '../audio/discoverSeed'
+import { buildSeedSlotsFromCandidates } from '../audio/discoverSeed'
 import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
@@ -171,7 +171,16 @@ export function LibraryBrowser({
   currentSketch,
   discoverConsented,
   setDiscoverConsented,
-  initialDiscoverSeed
+  discoverSlots,
+  setDiscoverSlots,
+  discoverChaos,
+  setDiscoverChaos,
+  discoverUndoStack,
+  setDiscoverUndoStack,
+  discoverRedoStack,
+  setDiscoverRedoStack,
+  discoverSeedBpm,
+  setDiscoverSeedBpm
 }: {
   onClose: () => void
   /** Called once import(s) succeed with every newly-created groupId (one for
@@ -192,65 +201,36 @@ export function LibraryBrowser({
    * itself doesn't read either, it's purely a pass-through here). */
   discoverConsented: boolean
   setDiscoverConsented: (value: boolean) => Promise<void>
-  /** Set by App.tsx when Shelf's own "seed Discover with this riff"
-   * right-click action fired -- consumed exactly once, via the lazy
-   * useState initializers just below, at the moment THIS component mounts
-   * (LibraryBrowser fully unmounts/remounts every time it opens, so a lazy
-   * initializer alone is enough; no effect, no "already consumed" flag
-   * needed). `null` for every other, ordinary way of opening this
-   * component. See docs/superpowers/specs/2026-09-16-discover-seed-stems-
-   * design.md. */
-  initialDiscoverSeed: Rifff | null
+  /** App.tsx's own lifted Discover session state -- see its own doc
+   * comment for why it lives there now (survives the WHOLE LibraryBrowser
+   * modal closing, not just a 'browse' <-> 'discover' tab switch within
+   * one open session). Threaded straight through to DiscoverPanel below,
+   * same pass-through as discoverConsented/setDiscoverConsented just
+   * above -- this component itself only reads discoverSlots directly (for
+   * its own seedDiscoverFromBrowseRiff guard and its own initial
+   * libraryMode), never discoverChaos/discoverUndoStack/discoverRedoStack/
+   * discoverSeedBpm, which just pass through untouched. */
+  discoverSlots: DiscoverSlot[]
+  setDiscoverSlots: React.Dispatch<React.SetStateAction<DiscoverSlot[]>>
+  discoverChaos: number
+  setDiscoverChaos: React.Dispatch<React.SetStateAction<number>>
+  discoverUndoStack: DiscoverSlot[][]
+  setDiscoverUndoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
+  discoverRedoStack: DiscoverSlot[][]
+  setDiscoverRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
+  discoverSeedBpm: number | null
+  setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
 }): React.JSX.Element {
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
-  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(
-    initialDiscoverSeed ? 'discover' : 'browse'
-  )
-  // Lifted out of DiscoverPanel (rather than owned internally there) so
-  // the in-progress discover loop survives switching `libraryMode` back
-  // and forth within one open LibraryBrowser session -- DiscoverPanel
-  // itself unmounts/remounts every time `libraryMode` flips (it's
-  // rendered conditionally below, as a sibling of the 'browse' block),
-  // but LibraryBrowser does not, so state living here (not in
-  // DiscoverPanel) survives that unmount. See
-  // docs/superpowers/specs/2026-09-14-library-wide-discover-design.md
-  // §8.1 ("survives closing and reopening the Discover tab").
-  const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>(() =>
-    initialDiscoverSeed ? buildSeedSlotsFromStems(initialDiscoverSeed.stems) : []
-  )
-  const [discoverChaos, setDiscoverChaos] = useState(35)
-  // Undo/redo history for Discover's own slot-content actions (add/remove
-  // slot, reroll one, random-reroll one, reroll all) -- lifted up here for
-  // the exact same reason discoverSlots itself is: DiscoverPanel unmounts
-  // on every 'browse' <-> 'discover' switch, so history kept there would
-  // silently vanish the moment you glanced at another tab. Direct request,
-  // 2026-09-15 (Upcycle-inspired). Each entry is a full snapshot of
-  // discoverSlots at the moment just before an undoable action ran.
-  // Lazily seeded with one entry (the empty state, `[]`) whenever this
-  // mount was seeded from Shelf -- there's no "previous discoverSlots" to
-  // push the normal way (this component didn't exist a moment ago), but
-  // hitting "undo" right after a Shelf-triggered seed should still revert
-  // back to an empty Discover, same as undoing any other slot-content
-  // action. Task 4's own Browse-triggered seed pushes onto this stack the
-  // ordinary way instead (setDiscoverUndoStack, called after this
-  // component already exists) -- this lazy seed only matters for the
-  // Shelf path.
-  const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>(() =>
-    initialDiscoverSeed ? [[]] : []
-  )
-  const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
-  // The most recently seeded riff's own bpm -- lifted up for the same
-  // reason discoverSlots itself is (survives a 'browse' <-> 'discover'
-  // switch). Null until a seed action happens this session. Drives
-  // DiscoverPanel's own "match seed tempo" button, direct request,
-  // 2026-09-16: "maybe a button next to the tempo adjust to set it to the
-  // original rifff tempo?" -- a manual, always-available alternative to
-  // the automatic empty-arranger tempo-follow below, since that's a
-  // one-shot snap at seed time and a stem within Discover can drift away
-  // from it via individual rerolls afterward.
-  const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(() =>
-    initialDiscoverSeed ? initialDiscoverSeed.bpm : null
+  // A non-empty discoverSlots at mount time now means either a fresh
+  // Shelf-triggered seed (App.tsx's own openRiffLibraryWithDiscoverSeed
+  // just populated it) OR real content left over from a previous session
+  // that was never explicitly cleared -- both cases should open on the
+  // 'discover' tab, matching direct request 2026-09-17 ("return to
+  // working on the group of stems i had before").
+  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(() =>
+    discoverSlots.some((s) => s.candidate !== null) ? 'discover' : 'browse'
   )
 
   // Auth (gates sync-triggering and live jam-membership discovery)
@@ -1484,28 +1464,17 @@ export function LibraryBrowser({
   // Escape-to-close
   // ---------------------------------------------------------------------
 
-  // Guards every path that closes this whole browser (backdrop click, the
-  // × button, Escape) against silently discarding in-progress Discover
-  // work -- direct report, 2026-09-17: "i accidentally clicked outside the
-  // discover modal and lost my progress." Same window.confirm convention,
-  // and the same "empty/never-touched Discover needs no confirmation"
-  // exemption, this file already uses for the DIFFERENT case of replacing
-  // Discover's own content wholesale (seedDiscoverFromBrowseRiff, above) --
-  // this just applies that identical guard to closing the whole browser
-  // too, not only to overwriting Discover from within it.
+  // Used to guard every path that closes this whole browser (backdrop
+  // click, the × button, Escape) against silently discarding in-progress
+  // Discover work -- direct report, 2026-09-17: "i accidentally clicked
+  // outside the discover modal and lost my progress." No longer needed:
+  // discoverSlots/etc. now live in App.tsx (see their own doc comment
+  // above), which never unmounts when this browser closes, so closing no
+  // longer actually discards anything -- a confirmation here would just be
+  // an actively misleading warning about data loss that can't happen.
   const attemptClose = useCallback((): void => {
-    const hasRealContent =
-      libraryMode === 'discover' && discoverSlots.some((s) => s.candidate !== null)
-    if (
-      hasRealContent &&
-      !window.confirm(
-        "Close and lose your current Discover loop? Whatever you've built so far in Discover will be lost."
-      )
-    ) {
-      return
-    }
     onClose()
-  }, [libraryMode, discoverSlots, onClose])
+  }, [onClose])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
