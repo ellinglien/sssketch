@@ -1669,6 +1669,8 @@ export function DiscoverPanel({
           />
           prefer favourites
         </label>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
             random-reroll one, reroll all) -- direct request, 2026-09-15,
             inspired by Upcycle's own toolbar undo/redo arrows. Button-only
@@ -1682,7 +1684,6 @@ export function DiscoverPanel({
           disabled={undoStack.length === 0}
           title="undo"
           style={{
-            marginLeft: 'auto',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1777,23 +1778,7 @@ export function DiscoverPanel({
         >
           {rerollingSlotIds.size > 0 ? <LoadingLoader size={11} /> : <ShuffleIcon />}
         </button>
-        <button
-          onClick={() => void addToTimeline()}
-          disabled={addingToTimeline}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 14px',
-            background: 'var(--ra-stretch-on-bg)',
-            border: '1px solid var(--ra-stretch-on)',
-            color: addingToTimeline ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-            fontWeight: 700,
-            cursor: addingToTimeline ? 'default' : 'pointer',
-            animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
-          }}
-        >
-          {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
-        </button>
+        <span style={{ marginLeft: 'auto' }} />
         <button
           onClick={() => void addToShelf()}
           disabled={addingToShelf}
@@ -1810,6 +1795,23 @@ export function DiscoverPanel({
           }}
         >
           {addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf'}
+        </button>
+        <button
+          onClick={() => void addToTimeline()}
+          disabled={addingToTimeline}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 14px',
+            background: 'var(--ra-stretch-on-bg)',
+            border: '1px solid var(--ra-stretch-on)',
+            color: addingToTimeline ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
+            fontWeight: 700,
+            cursor: addingToTimeline ? 'default' : 'pointer',
+            animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
+          }}
+        >
+          {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
         </button>
       </div>
 
