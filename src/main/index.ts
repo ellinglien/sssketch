@@ -73,7 +73,12 @@ import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
-import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
+import {
+  getStemAutoClassifyProgress,
+  upsertStemAutoCategory,
+  type StemAutoClassifyProgress
+} from './stemAutoCategoryStore'
+import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import type { LibraryScanTarget } from './discoverLibraryStems'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
@@ -102,6 +107,7 @@ import {
   upsertStemCategoryBus,
   upsertStemCategoryRole,
   resolveSourceProjectPath,
+  stemCIDForPath,
   type StemBusCategoryEntry,
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
@@ -1032,6 +1038,38 @@ app.whenReady().then(async () => {
       candidateDbsForRiff()
     )
   })
+
+  // Direct counterpart to how the classifier passes in stemAutoClassify.ts
+  // gate their own writes (BASE_ELIGIBILITY_WHERE): never overwrite an
+  // existing StemCategories confirmation OR an existing StemAutoCategory
+  // guess from a DIFFERENT source -- first classifier to claim a stem wins,
+  // same "no source ever re-evaluates/overrides another source's guess"
+  // convention already established there.
+  ipcMain.handle(
+    'set-yamnet-zeroshot-category',
+    (_event, path: string, audiosetClassIndex: number) => {
+      const arrangeRole = arrangeRoleForAudiosetClass(audiosetClassIndex)
+      if (!arrangeRole) return
+      const db = openOwnRiffLibraryDb()
+      const extraCandidateDbs = candidateDbsForRiff()
+      const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
+      if (!stemCID) return
+      const alreadyConfirmed = db
+        .prepare(
+          `SELECT 1 FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL
+           UNION SELECT 1 FROM StemAutoCategory WHERE StemCID = ?`
+        )
+        .get(stemCID, stemCID)
+      if (alreadyConfirmed) return
+      upsertStemAutoCategory(
+        db,
+        stemCID,
+        arrangeRole,
+        'yamnet-zeroshot',
+        Math.floor(Date.now() / 1000)
+      )
+    }
+  )
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
     if (!playbackEngine) return null

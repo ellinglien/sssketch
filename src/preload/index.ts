@@ -258,6 +258,8 @@ const api = {
     ipcRenderer.invoke('get-stem-embedding-cache', path),
   setStemEmbeddingCache: (path: string, embedding: number[]): Promise<void> =>
     ipcRenderer.invoke('set-stem-embedding-cache', path, embedding),
+  setYamnetZeroShotCategory: (path: string, audiosetClassIndex: number): Promise<void> =>
+    ipcRenderer.invoke('set-yamnet-zeroshot-category', path, audiosetClassIndex),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>

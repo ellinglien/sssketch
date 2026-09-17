@@ -2,7 +2,7 @@
 import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
 
-export type StemAutoCategorySource = 'embedding' | 'centroid'
+export type StemAutoCategorySource = 'embedding' | 'centroid' | 'yamnet-zeroshot'
 
 /** Every StemCID, on `ownDb` only (StemAutoCategory, like StemCategories/
  * StemEmbeddingCache/StemFeatureCache, only ever lives there -- see
