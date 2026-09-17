@@ -536,8 +536,30 @@ export function DiscoverPanel({
     if (!previewLoadedRef.current) return
     previewLoadedRef.current = false
     currentPreviewMappingRef.current = null
+    // Direct report: "the arranger clips started playing instead of the
+    // discover looper... like it got knocked out of the discover
+    // groove." Root cause: this function hands the engine back to the
+    // real project (flushEngineSyncNow below) whenever Discover
+    // unmounts -- a 'discover' -> 'browse' tab switch, or closing the
+    // whole library modal, while a preview is still mid-audition -- but
+    // it never touched `playing` itself. StoreContext.tsx's own
+    // `[playing]` effect (the one that actually calls
+    // engineStop()/enginePlay()) only fires on a true/false TRANSITION:
+    // if `playing` was already true here, that effect never re-runs, so
+    // the engine's transport just keeps running under whatever project
+    // is now loaded. The real project lands a moment later (this very
+    // call, or StoreContext's own now-unblocked automatic sync) while
+    // the transport was never told to stop -- audibly continuing
+    // straight into the real arrangement's own clips, mid-stream, with
+    // no explicit play ever asked for. Pausing here (a harmless no-op if
+    // already paused -- StoreContext.tsx's own PAUSE case is just
+    // `setPlaying(false)`) makes leaving Discover behave like every
+    // other "stop auditioning" action in this app: playback actually
+    // stops, instead of silently handing off to a different project's
+    // audio.
+    dispatch({ type: 'PAUSE' })
     void flushEngineSyncNow(undefined, () => !stillOwnEngine(releaseToken))
-  }, [flushEngineSyncNow, releaseEngine, stillOwnEngine])
+  }, [dispatch, flushEngineSyncNow, releaseEngine, stillOwnEngine])
 
   useEffect(() => {
     // Real bug, found live 2026-09-15 ("it loads them into the discover
