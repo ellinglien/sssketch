@@ -1046,6 +1046,7 @@ function ClusterRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
         <button
           onClick={onPlay}
+          aria-label={rowIsPreviewing && playing ? 'stop cluster' : 'play cluster'}
           style={{
             ...buttonStyle(rowIsPreviewing && playing ? 'confirmed' : undefined),
             whiteSpace: 'nowrap'
@@ -1069,6 +1070,7 @@ function ClusterRow({
         {members.length > 1 && splittable && (
           <button
             onClick={onSplit}
+            aria-label="split cluster"
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
             title="split this cluster into its two closest sub-groups"
           >
