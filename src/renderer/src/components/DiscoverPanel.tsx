@@ -1687,7 +1687,7 @@ export function DiscoverPanel({
         <button
           onClick={undoDiscoverAction}
           disabled={undoStack.length === 0}
-          title="undo"
+          data-tooltip="undo"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1706,7 +1706,7 @@ export function DiscoverPanel({
         <button
           onClick={redoDiscoverAction}
           disabled={redoStack.length === 0}
-          title="redo"
+          data-tooltip="redo"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1734,7 +1734,7 @@ export function DiscoverPanel({
         <button
           onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
           disabled={previewingSlotIds.size === 0}
-          title={playing ? 'stop the discover preview' : 'play the discover preview'}
+          data-tooltip={playing ? 'stop the discover preview' : 'play the discover preview'}
           aria-label={playing ? 'Stop' : 'Play'}
           style={{
             display: 'flex',
