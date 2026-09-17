@@ -130,6 +130,92 @@ function RecDotIcon({ dim, pulse }: { dim: boolean; pulse: boolean }): React.JSX
   )
 }
 
+// Hand-drawn SVG glyphs -- no icon library, monochrome via currentColor,
+// same convention as DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/
+// LockGlyph etc. Direct request, 2026-09-16: "check for any other
+// buttons in the interface that might be replaced with icons." These four
+// sit in the same transport toolbar row as this file's own already-icon
+// MetronomeIcon/SettingsGearIcon/RecDotIcon -- the strongest icon/text
+// crowding signal found in the whole app.
+function ChainLinkIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="1.5" y="5" width="7" height="6" rx="3" />
+      <rect x="7.5" y="5" width="7" height="6" rx="3" />
+    </svg>
+  )
+}
+
+function EnvelopeIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    >
+      <path d="M2 12 C 5 12, 5 4, 8 4 S 11 12, 14 12" />
+      <circle cx="2" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="4" r="1" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="12" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function SlidersIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    >
+      <path d="M3 13 V3" />
+      <path d="M8 13 V3" />
+      <path d="M13 13 V3" />
+      <circle cx="3" cy="6" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="10" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="13" cy="4.5" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function PlusMicIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="6" y="1.5" width="4" height="7" rx="2" />
+      <path d="M4 8 a4 4 0 0 0 8 0" />
+      <path d="M8 12 V14.5" />
+      <path d="M11.5 2 V5" />
+      <path d="M10 3.5 H13" />
+    </svg>
+  )
+}
+
 export function TransportBar({
   onEnableGatedRecording,
   onDisableGatedRecording,
@@ -654,6 +740,9 @@ export function TransportBar({
         aria-label="Toggle Ableton Link"
         title="Ableton Link — sync tempo with other Link-enabled apps on this network"
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
           height: 22,
           borderRadius: 0,
           padding: '0 8px',
@@ -663,7 +752,8 @@ export function TransportBar({
           color: linkStatus.enabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        link{linkStatus.enabled && linkStatus.numPeers > 0 ? ` · ${linkStatus.numPeers}` : ''}
+        <ChainLinkIcon />
+        {linkStatus.enabled && linkStatus.numPeers > 0 ? `· ${linkStatus.numPeers}` : ''}
       </button>
 
       <button
@@ -680,7 +770,7 @@ export function TransportBar({
           color: state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        envelope
+        <EnvelopeIcon />
       </button>
 
       <button
@@ -697,7 +787,7 @@ export function TransportBar({
           color: masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        fx on main
+        <SlidersIcon />
       </button>
       {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
@@ -714,7 +804,7 @@ export function TransportBar({
           color: 'var(--ra-text-2)'
         }}
       >
-        + rec channel
+        <PlusMicIcon />
       </button>
 
       <button
