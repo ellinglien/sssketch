@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { buildSeedSlotsFromStems, buildSeedSlotsFromCandidates } from './discoverSeed'
+import {
+  buildSeedSlotsFromStems,
+  buildSeedSlotsFromCandidates,
+  discoverHasRealContent
+} from './discoverSeed'
 import type { Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import type { DiscoverSlot } from '../components/DiscoverPanel'
 
 function fixtureStem(overrides: Partial<Stem> = {}): Stem {
   return {
@@ -104,5 +109,56 @@ describe('buildSeedSlotsFromCandidates', () => {
 
   it('returns an empty array for an empty input', () => {
     expect(buildSeedSlotsFromCandidates([])).toEqual([])
+  })
+})
+
+function fixtureSlot(overrides: Partial<DiscoverSlot> = {}): DiscoverSlot {
+  return {
+    id: 'slot-1',
+    role: 'drums',
+    locked: false,
+    candidate: null,
+    hasRerolled: false,
+    gain: 1,
+    ...overrides
+  }
+}
+
+// Direct bug, code review, 2026-09-17: an earlier commit's own two fresh
+// "does Discover have real content" checks used `candidate !== null` alone,
+// which silently treats every Shelf-seeded slot (seedStem set, candidate
+// always null -- see buildSeedSlotsFromStems' own doc comment above) as
+// empty. This predicate has now regressed once already; these tests exist
+// specifically so extracting it into a shared function actually prevents
+// that, not just reduces how many places it could happen again.
+describe('discoverHasRealContent', () => {
+  it('is true for a slot with a real candidate', () => {
+    expect(discoverHasRealContent([fixtureSlot({ candidate: fixtureCandidate() })])).toBe(true)
+  })
+
+  it('is true for a seedStem-only slot (candidate: null) -- the exact case that regressed', () => {
+    const [seeded] = buildSeedSlotsFromStems([fixtureStem()])
+    expect(seeded.candidate).toBeNull()
+    expect(seeded.seedStem).toBeDefined()
+    expect(discoverHasRealContent([seeded])).toBe(true)
+  })
+
+  it('is false for a never-touched slot (no candidate, no seedStem)', () => {
+    expect(discoverHasRealContent([fixtureSlot()])).toBe(false)
+  })
+
+  it('is false for a slot whose reroll found no match (candidate: null after rolling)', () => {
+    expect(discoverHasRealContent([fixtureSlot({ candidate: null, hasRerolled: true })])).toBe(
+      false
+    )
+  })
+
+  it('is false for an empty array', () => {
+    expect(discoverHasRealContent([])).toBe(false)
+  })
+
+  it('is true if ANY slot among several has real content', () => {
+    const slots = [fixtureSlot(), fixtureSlot({ candidate: fixtureCandidate() }), fixtureSlot()]
+    expect(discoverHasRealContent(slots)).toBe(true)
   })
 })

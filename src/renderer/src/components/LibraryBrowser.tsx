@@ -197,9 +197,9 @@ export function LibraryBrowser({
   /** App.tsx's Frame() own single source of truth for Discover's
    * whole-library-scan consent — threaded straight through to
    * DiscoverPanel below, same lift-up-and-thread-down pattern already
-   * used for discoverSlots/discoverChaos just below -- unlike those,
-   * this component itself doesn't read discoverConsented, it's purely a
-   * pass-through here. */
+   * used for discoverSlots just below -- unlike that one, this component
+   * itself doesn't read discoverConsented, it's purely a pass-through
+   * here. */
   discoverConsented: boolean
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
@@ -1310,8 +1310,8 @@ export function LibraryBrowser({
     // Replaces discoverSlots wholesale -- confirm before destroying real
     // existing content, same window.confirm convention this file already
     // uses elsewhere (e.g. its own jam-sync-removal confirmation above).
-    // An empty/never-touched Discover (every slot has no candidate at all)
-    // needs no confirmation -- there's nothing to lose.
+    // An empty/never-touched Discover (every slot has no candidate AND no
+    // seedStem) needs no confirmation -- there's nothing to lose.
     const hasRealContent = discoverHasRealContent(discoverSlots)
     if (
       hasRealContent &&
