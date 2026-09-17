@@ -2782,12 +2782,13 @@ function DiscoverSlotRow({
               {/* Direct report, 2026-09-17: bumped this up to size={120} once
                   (read as "a jarring 2px sliver against the 40px-tall
                   waveform it replaces"), then reverted -- "i was fine with
-                  it being the dotted line... add 1px to the height." size=16
-                  gave a 2px-tall, 1px-thick bar (LoadingLoader's own
-                  height = round(size*9/60) formula); size=17 is the same
-                  dotted-line look at 3px tall, 1px thick -- the requested
-                  +1px, nothing more. */}
-              {resolving && <LoadingLoader size={17} />}
+                  it being the dotted line... add 1px to the height," then
+                  "i think it needs 1 more px to be stable." size=16 (the
+                  original) gave a 2px-tall, 1px-thick bar (LoadingLoader's
+                  own height = round(size*9/60) formula); size=24 keeps the
+                  same 1px-thick dotted-line look at 4px tall -- +2px total
+                  from the original, arrived at over two rounds of "+1px." */}
+              {resolving && <LoadingLoader size={24} />}
             </div>
           )}
         </div>
