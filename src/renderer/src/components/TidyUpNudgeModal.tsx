@@ -13,31 +13,28 @@ export function TidyUpNudgeModal({
 }): React.JSX.Element {
   return (
     <div
-      onClick={onExportAnyway}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--ra-backdrop)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 30
+        zIndex: 'var(--ra-z-modal)'
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(380px, 90vw)',
           background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
+          border: '1px solid var(--ra-border)',
           borderRadius: 0,
           padding: 16
         }}
       >
-        <span className="ra-eyebrow">this project hasn&apos;t been tidied up yet</span>
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--ra-text-2)' }}>
-          tidy up groups similar stems onto shared Ableton tracks, making the exported project much
-          easier to mix. tidy up first?
+        <div style={{ fontSize: 11, color: 'var(--ra-text)' }}>
+          this project hasn&apos;t been tidied up yet -- tidy up groups similar stems onto shared
+          Ableton tracks, making the exported project much easier to mix. tidy up first?
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
           <button
