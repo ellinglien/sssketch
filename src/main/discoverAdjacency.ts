@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
+import type { SoundType } from '@shared/types'
 import {
   resolveRiffWithContext,
   listRiffs,
@@ -82,6 +83,7 @@ const ADJACENT_FETCH_PER_DIRECTION = ADJACENT_MATCHES_PER_DIRECTION * ADJACENT_F
  * here rather than left for the renderer to resolve a second time. */
 export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
   path: string
+  soundType: SoundType | null
 }
 
 /** Finds up to ADJACENT_MATCHES_PER_DIRECTION riffs recorded near
@@ -151,6 +153,7 @@ export async function getAdjacentDiscoverCandidates(
         arrangeRole: role,
         drumSubRole: null,
         riffBpm: resolved.bpm,
+        soundType: bluntSoundType,
         // Pure string computation (resolveStemPath's own doc comment --
         // no filesystem/db access) -- correct regardless of whether the
         // file is actually on disk YET, since downloadMissingStems below

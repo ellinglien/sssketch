@@ -4,6 +4,7 @@ import { Waveform } from './Waveform'
 import type { ArrangeRole } from '@shared/stemRole'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import type { AdjacentDiscoverCandidate } from '../../../main/discoverAdjacency'
+import { typeColorVar } from '../theme/typeColor'
 
 // Fixed size for every candidate's own waveform thumbnail -- deliberately
 // NOT DiscoverSlotRow's own proportional bar-length tiling (that's for
@@ -63,7 +64,11 @@ function CandidateRow({
           background: 'var(--ra-bg-row-sub)'
         }}
       >
-        <Waveform path={candidate.path} color="var(--ra-text-3)" opacity={1} />
+        <Waveform
+          path={candidate.path}
+          color={typeColorVar(candidate.soundType ?? 'fx')}
+          opacity={1}
+        />
       </div>
       <span
         style={{
