@@ -1577,6 +1577,7 @@ export function LibraryBrowser({
           </div>
           <button
             onClick={onClose}
+            aria-label="close library browser"
             title="close"
             style={{
               height: 22,
@@ -2283,11 +2284,11 @@ export function LibraryBrowser({
           />
         )}
       </div>
-      {/* Rendered INSIDE the modal's own zIndex:1000 stacking context
-            (not as a sibling of it) -- ContextMenu's own zIndex is only 20,
+      {/* Rendered INSIDE the modal's own zIndex:var(--ra-z-fullscreen) stacking context
+            (not as a sibling of it) -- ContextMenu's own zIndex is only var(--ra-z-anchored),
             which is plenty to sit above everything else in here (nothing
             else in this modal sets an explicit z-index), but is nowhere
-            near enough to beat the modal backdrop's 1000 if rendered as a
+            near enough to beat the modal backdrop's var(--ra-z-fullscreen) if rendered as a
             sibling instead. That was a real bug: the menu opened (state
             updated, component mounted) but rendered fully hidden behind
             the backdrop, reading as "right-click does nothing" even
