@@ -16,10 +16,14 @@ import { LoadingLoader } from './LoadingLoader'
  * both a query AND a push exist) -- covers both "the engine already
  * finished starting before this component mounted" and "it hasn't yet."
  *
- * Positioned below LibraryWarmupIndicator (top: 34 vs its top: 10) rather
+ * Positioned below LibraryWarmupIndicator (top: 40 vs its top: 10) rather
  * than at the same top: 10 -- both pills are plausibly visible at once
  * right after a cold launch (engine still starting AND library still
- * warming up), and identical positioning would have them overlap. */
+ * warming up), and identical positioning would have them overlap. 40 (not
+ * 34) leaves a real, intentional-looking gap: at fontSize 9 with
+ * Silkscreen's own line-height, the sibling pill's actual height works out
+ * to ~23.5px, so 34 cleared it by under a pixel -- code review found the
+ * two borders would read as visually flush. */
 export function EngineStartupIndicator(): React.JSX.Element | null {
   const [done, setDone] = useState(true)
 
@@ -48,7 +52,7 @@ export function EngineStartupIndicator(): React.JSX.Element | null {
     <div
       style={{
         position: 'fixed',
-        top: 34,
+        top: 40,
         right: 10,
         zIndex: 2000,
         display: 'flex',

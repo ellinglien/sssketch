@@ -720,9 +720,23 @@ app.whenReady().then(async () => {
 
   // See engineStartupDone's own doc comment above for why this is no
   // longer awaited here.
+  //
+  // CRITICAL, found in code review: this whole app.whenReady().then(async
+  // () => {...}) body has NO top-level `await` anywhere else in it (every
+  // await below lives inside an ipcMain.handle(...) callback, not at this
+  // statement level) -- so everything from here through the end of this
+  // function, including createWindow() further down, runs in one
+  // uninterrupted synchronous turn. subscribeEngineRelays(handle) MUST be
+  // called from inside this .then(), not as a separate `if (playbackEngine)`
+  // block later in this same function body (that was tried first and is
+  // exactly wrong: playbackEngine is still undefined at that point on
+  // 100% of runs, not just sometimes, since the .then() callback can't run
+  // until this synchronous turn drains) -- see subscribeEngineRelays' own
+  // doc comment for what silently breaks if this ever regresses again.
   void startPlaybackEngine()
     .then((handle) => {
       playbackEngine = handle
+      subscribeEngineRelays(handle)
     })
     .catch((err) => {
       // Same handling as before this became non-blocking -- a failed spawn
@@ -740,7 +754,9 @@ app.whenReady().then(async () => {
     })
     .finally(() => {
       engineStartupDone = true
-      mainWindow?.webContents.send('engine-startup-complete')
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('engine-startup-complete')
+      }
     })
 
   ipcMain.handle('engine-load-project', (_event, project: unknown) => {
@@ -1351,8 +1367,23 @@ app.whenReady().then(async () => {
   // EngineClient is actually live. Found and fixed during Task 8 manual
   // verification by reproducing it against the real spawned engine process
   // (see git history for the repro).
-  if (playbackEngine) {
-    const engine = playbackEngine
+  //
+  // CRITICAL, found in code review, 2026-09-17: this used to be a plain
+  // `if (playbackEngine) {...}` block sitting later in this same
+  // whenReady().then(async () => {...}) body, on the (wrong) assumption
+  // that `playbackEngine` would already be assigned by the time execution
+  // reached it. It never was -- see the .then() call site's own doc
+  // comment (above, near startPlaybackEngine()) for why. That made this
+  // whole relay block dead code on every single launch: no playhead
+  // motion, no VU meters, no gated-recording preview, no Link tempo sync,
+  // no plugin-loaded events reaching the renderer, and no crash-recovery
+  // re-subscription -- while transport commands kept working fine (they
+  // read playbackEngine?.client fresh per call), so it presented as "audio
+  // plays but the UI looks frozen," not an obvious break. Now a real
+  // function, called directly from inside startPlaybackEngine()'s own
+  // .then(), right after playbackEngine is actually assigned -- the one
+  // place in this file that's guaranteed to run AFTER that assignment.
+  function subscribeEngineRelays(engine: PlaybackEngineHandle): void {
     function subscribeToPositionUpdates(): void {
       engine.client.on('position-update', (payload) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
