@@ -52,6 +52,8 @@ const selectStyle: React.CSSProperties = {
 // Hand-drawn SVG glyph -- no icon library, same convention as
 // DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
 // request, 2026-09-16: replace the repeated-per-slot "edit" text button.
+// Identical to ChannelChainPanel.tsx's own PencilIcon -- see this file's
+// own buttonStyle comment for why duplicated rather than shared.
 function PencilIcon(): React.JSX.Element {
   return (
     <svg
