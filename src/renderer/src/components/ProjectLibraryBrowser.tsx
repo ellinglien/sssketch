@@ -431,7 +431,7 @@ export function ProjectLibraryBrowser({
                     e.stopPropagation()
                     void handleToggleHistory(sketch.name)
                   }}
-                  title="earlier autosaved versions"
+                  data-tooltip="earlier autosaved versions"
                   aria-label={`earlier versions of ${sketch.name}`}
                   style={{
                     ...buttonStyle(),
@@ -492,7 +492,7 @@ export function ProjectLibraryBrowser({
                           e.stopPropagation()
                           void handlePreviewClick(sketch.name, backup.path)
                         }}
-                        title={
+                        data-tooltip={
                           previewingPath === backup.path ? 'stop preview' : 'preview (audio only)'
                         }
                         aria-label={
@@ -513,7 +513,7 @@ export function ProjectLibraryBrowser({
                           e.stopPropagation()
                           void handleRestoreClick(sketch.name, backup.path)
                         }}
-                        title={
+                        data-tooltip={
                           restoreArmedPath === backup.path
                             ? 'click again to restore this version'
                             : 'restore this version'

@@ -1051,7 +1051,7 @@ function ClusterRow({
             ...buttonStyle(rowIsPreviewing && playing ? 'confirmed' : undefined),
             whiteSpace: 'nowrap'
           }}
-          title="solo + play this whole cluster, from its own earliest clip"
+          data-tooltip="solo + play this whole cluster, from its own earliest clip"
         >
           {rowIsPreviewing && playing ? '■' : '▶'}
         </button>
@@ -1072,7 +1072,7 @@ function ClusterRow({
             onClick={onSplit}
             aria-label="split cluster"
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
-            title="split this cluster into its two closest sub-groups"
+            data-tooltip="split this cluster into its two closest sub-groups"
           >
             <ForkIcon />
           </button>

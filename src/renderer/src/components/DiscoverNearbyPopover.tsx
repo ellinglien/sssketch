@@ -285,7 +285,7 @@ export function DiscoverNearbyPopover({
           onClick={() => handlePick(startCandidate)}
           disabled={atStart}
           aria-label="back to start"
-          title="back to the riff this slot started with"
+          data-tooltip="back to the riff this slot started with"
           style={{
             marginLeft: 'auto',
             display: 'flex',

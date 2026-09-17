@@ -1578,7 +1578,7 @@ export function LibraryBrowser({
           <button
             onClick={onClose}
             aria-label="close library browser"
-            title="close"
+            data-tooltip="close"
             style={{
               height: 22,
               borderRadius: 0,

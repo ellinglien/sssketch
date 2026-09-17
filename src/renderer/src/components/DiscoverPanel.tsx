@@ -1647,7 +1647,7 @@ export function DiscoverPanel({
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
           aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
-          title={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
+          data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'reroll all'}
           style={{
             display: 'flex',
             alignItems: 'center',

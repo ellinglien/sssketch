@@ -739,7 +739,7 @@ export function TransportBar({
           })
         }}
         aria-label="Toggle Ableton Link"
-        title="Ableton Link — sync tempo with other Link-enabled apps on this network"
+        data-tooltip="Ableton Link — sync tempo with other Link-enabled apps on this network"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -760,7 +760,7 @@ export function TransportBar({
       <button
         onClick={() => dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })}
         aria-label="Toggle volume drag mode"
-        title={state.volumeDragMode ? 'envelope drag: on (V)' : 'envelope drag: off (V)'}
+        data-tooltip={state.volumeDragMode ? 'envelope drag: on (V)' : 'envelope drag: off (V)'}
         style={{
           height: 22,
           borderRadius: 0,
@@ -777,7 +777,7 @@ export function TransportBar({
       <button
         onClick={() => setMasterChainPanelOpen((open) => !open)}
         aria-label="Toggle master chain panel"
-        title="master plugin chain"
+        data-tooltip="master plugin chain"
         style={{
           height: 22,
           borderRadius: 0,
@@ -795,7 +795,7 @@ export function TransportBar({
       <button
         onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
         aria-label="add another recording channel"
-        title="add another recording channel (/)"
+        data-tooltip="add another recording channel (/)"
         style={{
           height: 22,
           borderRadius: 0,

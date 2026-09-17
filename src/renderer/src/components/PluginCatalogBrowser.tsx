@@ -143,7 +143,7 @@ export function PluginCatalogBrowser({
                 }}
                 disabled={!loadable}
                 aria-label={`use ${entry.name}`}
-                title={`use ${entry.name}`}
+                data-tooltip={`use ${entry.name}`}
                 style={buttonStyle(!loadable)}
               >
                 <CheckmarkIcon />
