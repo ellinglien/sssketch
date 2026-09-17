@@ -1,5 +1,5 @@
 // src/renderer/src/components/DiscoverPanel.tsx
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
@@ -842,20 +842,31 @@ export function DiscoverPanel({
       scheduleSyncPreviewToEngine(currentlyPreviewing)
       return
     }
-    resolvedStemsRef.current.delete(id)
-    if (resolvedBarLengthsRef.current.has(id)) {
-      const next = new Map(resolvedBarLengthsRef.current)
-      next.delete(id)
-      resolvedBarLengthsRef.current = next
-    }
-    setResolvedBarLengths((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Map(prev)
-      next.delete(id)
-      return next
-    })
-    const currentlyPreviewing = previewingSlotIdsRef.current
-    if (currentlyPreviewing.has(id)) scheduleSyncPreviewToEngine(currentlyPreviewing)
+    // Direct reports, 2026-09-17: "sometimes it stops the playback, and
+    // then starts all of the loops from the beginning" + "sometimes the
+    // waveforms blink away, like they're refreshing." Root cause: this
+    // row's own resolvedStem effect (DiscoverSlotRow, below) fires
+    // onResolvedChange(null) for the ENTIRE "mid-reroll, new candidate
+    // landed but not resolved yet" window -- true for EVERY reroll, not
+    // just failures/removals. This branch used to delete this slot's own
+    // resolvedStemsRef/resolvedBarLengthsRef entry outright whenever that
+    // happened, which could (a) drop `members` to empty mid-reroll if this
+    // was the only resolved+previewing slot -- triggering
+    // restorePreviewIfLoaded's own pause+seek-to-0+play sequence, an
+    // audible full restart -- and (b) shrink maxBarLength (the shared
+    // reference every OTHER row's own waveform tiles proportionally scale
+    // against) for the whole resolve window whenever the rerolling slot
+    // happened to be the longest one, snapping the engine's own loop-wrap
+    // position back to 0 (Transport.cpp's own `pos >= loopEnd` wrap) and
+    // remounting every other row's tiles (see their own key comment above).
+    //
+    // Now a deliberate no-op: keeps playing/showing this slot's LAST
+    // resolved stem through a reroll's own resolve window instead of
+    // yanking it out and back -- "imagine it a live composition tool...
+    // ensure it's smooth and doesn't interrupt the flow," a direct
+    // request. Genuine removal (the one case that really does need this
+    // slot's entries gone for good) is handled entirely by removeSlot
+    // itself now, not by this branch -- see its own doc comment.
   }
 
   // Re-tunes every currently-resolved slot when the project's own bpm
@@ -1082,19 +1093,36 @@ export function DiscoverPanel({
   function removeSlot(id: string): void {
     pushUndoSnapshot()
     setSlots((prev) => prev.filter((s) => s.id !== id))
-    // The removed row's own unmount effect already reports its resolution
-    // as null (clearing resolvedStemsRef and restarting the mix without
-    // it, if it was part of one) -- this just also drops the id from
-    // `previewingSlotIds` itself, so it doesn't sit there forever as a
-    // stale, harmless-but-pointless member of a Set for a slot that no
-    // longer exists.
+    // Direct reports, 2026-09-17: this used to rely entirely on the
+    // removed row's own unmount effect calling onResolvedChange(null) ->
+    // reportSlotResolution(id, null) to clear resolvedStemsRef/
+    // resolvedBarLengthsRef/resolvedBarLengths and re-sync the engine.
+    // That null branch is now a deliberate no-op for the (much more
+    // common) "mid-reroll, still resolving" case -- see its own doc
+    // comment -- which means genuine removal can no longer piggyback on
+    // it; removeSlot now does its own full, explicit cleanup instead,
+    // mirroring the exact ref-then-state-then-schedule pattern
+    // reportSlotResolution's own success branch already uses.
     resolvedStemsRef.current.delete(id)
-    setPreviewingSlotIds((prev) => {
+    if (resolvedBarLengthsRef.current.has(id)) {
+      const next = new Map(resolvedBarLengthsRef.current)
+      next.delete(id)
+      resolvedBarLengthsRef.current = next
+    }
+    setResolvedBarLengths((prev) => {
       if (!prev.has(id)) return prev
-      const next = new Set(prev)
+      const next = new Map(prev)
       next.delete(id)
       return next
     })
+    const currentlyPreviewing = previewingSlotIdsRef.current
+    if (currentlyPreviewing.has(id)) {
+      const next = new Set(currentlyPreviewing)
+      next.delete(id)
+      previewingSlotIdsRef.current = next
+      setPreviewingSlotIds(next)
+      scheduleSyncPreviewToEngine(next)
+    }
   }
 
   function toggleLock(id: string): void {
@@ -2233,13 +2261,34 @@ function DiscoverSlotRow({
   // below), which is also why the effect above never needs its own
   // seedStem branch: `!slot.candidate` already short-circuits it whenever
   // this row is seeded.
-  const seedResolved = slot.seedStem
-    ? {
-        candidate: slot.candidate,
-        status: 'ready' as const,
-        stem: { slot: 1, ...slot.seedStem }
-      }
-    : null
+  // Memoized -- direct report, 2026-09-17, root-caused as part of
+  // investigating why "sometimes the waveforms blink away" and playback
+  // interruptions felt worse on Shelf-seeded loops specifically: an
+  // inline object literal here (the version this replaces) gets a NEW
+  // identity on every single render, so `resolvedStem` below (derived
+  // from `seedResolved` for every seeded slot) also gets a new identity
+  // every render -- which re-fires the `[resolvedStem]` effect further
+  // down on every render, which calls onResolvedChange, which (via
+  // reportSlotResolution) updates resolvedBarLengths/schedules an engine
+  // sync, which re-renders this row, which creates a NEW seedResolved
+  // object again... a self-sustaining loop with no natural end, pegging
+  // the main thread and re-sending a full buildEngineProject/
+  // engineLoadProject to the native engine on every animation frame for
+  // as long as ANY seeded slot exists. Memoizing on the underlying data
+  // (slot.seedStem/slot.candidate) instead of recreating the object every
+  // render breaks the loop: the object's identity now only changes when
+  // what it actually represents changes.
+  const seedResolved = useMemo(
+    () =>
+      slot.seedStem
+        ? {
+            candidate: slot.candidate,
+            status: 'ready' as const,
+            stem: { slot: 1, ...slot.seedStem }
+          }
+        : null,
+    [slot.seedStem, slot.candidate]
+  )
 
   const resolvedForCurrent =
     seedResolved ?? (resolved?.candidate === slot.candidate ? resolved : null)
@@ -2701,9 +2750,24 @@ function DiscoverSlotRow({
                 const gainClipPct = (1 - slot.gain) * 100
                 return (
                   <>
-                    {tileOffsets.map((leftPct) => (
+                    {/* Direct reports, 2026-09-17: "sometimes the waveforms
+                    blink away, like they're refreshing." Root cause: these
+                    keys used to be `dim-${leftPct}`, computed from `loopBars`
+                    -- the SHARED maxBarLength every row's own tiling scales
+                    against. Whenever ANY slot's resolution transiently
+                    changed (a reroll landing elsewhere), maxBarLength
+                    recomputed, which changed every OTHER row's own leftPct
+                    values, which changed their keys, which made React
+                    unmount+remount every tile (a fresh <Waveform> renders
+                    null until its own async peaks promise resolves -- the
+                    blink). Index-based keys are stable across a re-tile:
+                    React now updates each tile's own position/width in
+                    place instead of discarding and recreating the DOM node,
+                    so a legitimate re-tile (this slot's own stem genuinely
+                    changed) no longer blanks the OTHER rows that didn't. */}
+                    {tileOffsets.map((leftPct, i) => (
                       <div
-                        key={`dim-${leftPct}`}
+                        key={i}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -2732,9 +2796,11 @@ function DiscoverSlotRow({
                           clipPath: `inset(${gainClipPct}% 0 0 0)`
                         }}
                       >
-                        {tileOffsets.map((leftPct) => (
+                        {/* Index-based key, same reasoning as the dim layer
+                        above. */}
+                        {tileOffsets.map((leftPct, i) => (
                           <div
-                            key={leftPct}
+                            key={i}
                             style={{
                               position: 'absolute',
                               top: 0,
