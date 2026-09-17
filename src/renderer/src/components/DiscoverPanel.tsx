@@ -1464,15 +1464,31 @@ export function DiscoverPanel({
     const placeable = slots.filter((s) => s.candidate !== null || s.seedStem !== undefined)
     if (placeable.length === 0) return null
 
+    // Direct report, 2026-09-17: "when adding discover-created rifffs to
+    // the arranger, i've noticed that tracks that are muted are not muted
+    // in the arrangement .. can we make it so they are, if they are
+    // muted?" -- this used to pass every placeable slot's own `gain`
+    // (the visible drag-on-waveform slider, 0..1) straight through
+    // unconditionally, with no reference to previewingSlotIds at all, so
+    // a slot muted in Discover's own mix (excluded from what you hear
+    // while auditioning) still landed in the placed rifff at full/whatever
+    // gain. Forcing a muted slot's own gain to 0 here -- rather than
+    // dropping it from `placeable` outright -- keeps the stem itself
+    // present in the resulting rifff (still visible/re-adjustable later
+    // via the real arranger's own per-stem gain drag, StemWaveformRow.tsx),
+    // just silent, matching what "mute" actually means everywhere else in
+    // this app (ChannelRow.tsx's own mute always wins over whatever gain
+    // is set underneath it) rather than a one-way, unrecoverable removal.
     const resolved = await Promise.all(
       placeable.map(
         async ({
+          id,
           candidate,
           seedStem,
           gain
         }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
           const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
-          return stem ? { stem, gain } : null
+          return stem ? { stem, gain: previewingSlotIds.has(id) ? gain : 0 } : null
         }
       )
     )
