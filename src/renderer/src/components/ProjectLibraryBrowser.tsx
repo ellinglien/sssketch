@@ -33,6 +33,50 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   }
 }
 
+// Hand-drawn SVG glyphs -- no icon library, same convention as
+// DiscoverPanel.tsx's own DiceIcon/ShuffleIcon/LockGlyph etc. Direct
+// request, 2026-09-16.
+function HistoryIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="8" cy="8.5" r="5.5" />
+      <path d="M8 5.5 V8.5 L10.5 10" />
+      <path d="M5 1.5 H11" />
+    </svg>
+  )
+}
+
+// Same shape as DiscoverPanel.tsx's own UndoIcon -- re-declared locally
+// rather than imported/shared, matching this codebase's own "each file
+// hand-rolls its small icon components" convention (no shared component
+// library, per the design spec's explicit decision).
+function UndoIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
+      <path d="M5.5 8 l-2.5 2 l2.5 2" />
+    </svg>
+  )
+}
+
 function formatMtime(mtimeMs: number): string {
   return new Date(mtimeMs).toLocaleString(undefined, {
     dateStyle: 'medium',
@@ -394,7 +438,7 @@ export function ProjectLibraryBrowser({
                     color: historyOpenName === sketch.name ? 'var(--ra-text)' : 'var(--ra-text-2)'
                   }}
                 >
-                  history
+                  <HistoryIcon />
                 </button>
                 <button
                   onClick={(e) => {
@@ -462,7 +506,7 @@ export function ProjectLibraryBrowser({
                             previewingPath === backup.path ? 'var(--ra-text)' : 'var(--ra-text-2)'
                         }}
                       >
-                        {previewingPath === backup.path ? 'stop' : 'preview'}
+                        {previewingPath === backup.path ? '■' : '▶'}
                       </button>
                       <button
                         onClick={(e) => {
@@ -481,7 +525,7 @@ export function ProjectLibraryBrowser({
                         }
                         style={buttonStyle()}
                       >
-                        {restoreArmedPath === backup.path ? 'restore?' : 'restore'}
+                        {restoreArmedPath === backup.path ? 'restore?' : <UndoIcon />}
                       </button>
                     </div>
                   ))}
