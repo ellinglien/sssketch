@@ -411,6 +411,26 @@ export function DiscoverPanel({
   // tileOffsetsPx) rather than showing every stem as if it's the same
   // length.
   const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
+  // Synchronously-current mirror of resolvedBarLengths, for the exact same
+  // reason previewingSlotIdsRef exists (see its own comment above) --
+  // syncPreviewToEngine (below) is a plain function closed over on every
+  // render, and reportSlotResolution can invoke it (via
+  // scheduleSyncPreviewToEngine's RAF) before React has flushed the
+  // setResolvedBarLengths call from THIS SAME reportSlotResolution
+  // invocation into a fresh render. Real bug, live-reported 2026-09-17:
+  // "it's only playing half of the loop it seems and jumping to the
+  // beginning again" -- two slots resolving in close succession (a 1-bar
+  // stem then a 2-bar stem) meant the barLengthOverride computed in
+  // syncPreviewToEngine (below) was read from a resolvedBarLengths
+  // snapshot that was one render behind, still missing the longer stem's
+  // own contribution -- the resulting rifff had the LONGER stem's real
+  // audio in it, tiled to fill only the SHORTER stem's barLength, so the
+  // engine's own loop length was set to half the intended value and
+  // wrapped/restarted mid-loop. resolvedBarLengths state itself stays --
+  // it's still the right reactive source for the waveform-tiling UI
+  // (DiscoverSlotRow's own tileOffsetsPx math) -- only
+  // syncPreviewToEngine's own read switches to this ref.
+  const resolvedBarLengthsRef = useRef<Map<string, number>>(new Map())
 
   // True once a Discover preview project is actually loaded+playing in the
   // real engine -- the empty-to-non-empty transition (see
@@ -626,8 +646,23 @@ export function DiscoverPanel({
     // engineLoadProject call -- see assembleDiscoverRifff's own doc comment
     // for the full mechanism. Same computation already used for the
     // waveform-tiling maxBarLength reference elsewhere in this file.
+    //
+    // Reads resolvedBarLengthsRef, NOT the reactive resolvedBarLengths state
+    // -- this function is a plain closure re-created every render, and
+    // reportSlotResolution can invoke it (via scheduleSyncPreviewToEngine's
+    // RAF) before React flushes THIS SAME reportSlotResolution call's own
+    // setResolvedBarLengths into a fresh render. Real bug, live-reported
+    // 2026-09-17: "it's only playing half of the loop it seems and jumping
+    // to the beginning again" -- two slots resolving in close succession (a
+    // short stem then a longer one) meant this read a resolvedBarLengths
+    // snapshot one render behind, still missing the longer stem's own
+    // contribution, so the loop length sent to the engine was half what the
+    // actually-included stems needed. See resolvedBarLengthsRef's own doc
+    // comment for the full mechanism.
     const maxBarLength =
-      resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : undefined
+      resolvedBarLengthsRef.current.size > 0
+        ? Math.max(...resolvedBarLengthsRef.current.values())
+        : undefined
     const assembly = assembleDiscoverRifff(
       'discover preview',
       members.map(({ stem, gain }) => ({ stem, gain })),
@@ -789,6 +824,7 @@ export function DiscoverPanel({
   function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
     if (stem) {
       resolvedStemsRef.current.set(id, stem)
+      resolvedBarLengthsRef.current = new Map(resolvedBarLengthsRef.current).set(id, stem.barLength)
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
         next.set(id, stem.barLength)
@@ -806,6 +842,11 @@ export function DiscoverPanel({
       return
     }
     resolvedStemsRef.current.delete(id)
+    if (resolvedBarLengthsRef.current.has(id)) {
+      const next = new Map(resolvedBarLengthsRef.current)
+      next.delete(id)
+      resolvedBarLengthsRef.current = next
+    }
     setResolvedBarLengths((prev) => {
       if (!prev.has(id)) return prev
       const next = new Map(prev)
