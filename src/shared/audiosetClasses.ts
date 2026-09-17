@@ -48,6 +48,10 @@ const AUDIOSET_CLASS_TO_ARRANGE_ROLE: Partial<Record<number, ArrangeRole>> = {
   250: 'vocal' // A capella
 }
 
+/** Looks up a YAMNet AudioSet class index in AUDIOSET_CLASS_TO_ARRANGE_ROLE
+ * above, returning null for any class deliberately left unmapped (either
+ * genuinely absent from AudioSet, or one of the broad/ambiguous classes
+ * the table above intentionally declines to force-map). */
 export function arrangeRoleForAudiosetClass(classIndex: number): ArrangeRole | null {
   return AUDIOSET_CLASS_TO_ARRANGE_ROLE[classIndex] ?? null
 }

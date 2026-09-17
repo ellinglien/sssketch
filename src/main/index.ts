@@ -75,6 +75,7 @@ import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsSt
 import type { DiscoverSettings } from './discoverSettingsStore'
 import {
   getStemAutoClassifyProgress,
+  isStemEligibleForAutoCategory,
   upsertStemAutoCategory,
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
@@ -1054,13 +1055,12 @@ app.whenReady().then(async () => {
       const extraCandidateDbs = candidateDbsForRiff()
       const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
       if (!stemCID) return
-      const alreadyConfirmed = db
-        .prepare(
-          `SELECT 1 FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL
-           UNION SELECT 1 FROM StemAutoCategory WHERE StemCID = ?`
-        )
-        .get(stemCID, stemCID)
-      if (alreadyConfirmed) return
+      if (!isStemEligibleForAutoCategory(db, stemCID)) return
+      // Floored, same reasoning as set-stem-feature-cache/set-stem-embedding-cache
+      // two handlers above: StemAutoCategory's own upsert (upsertStemAutoCategory)
+      // has no WHERE-guarded comparison against a prior write's timestamp, unlike
+      // upsertStemCategoryRole's, so there's no cross-writer ordering for extra
+      // precision to protect here.
       upsertStemAutoCategory(
         db,
         stemCID,

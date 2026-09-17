@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import {
   getAutoCategorizedStemCIDs,
   getStemAutoClassifyProgress,
+  isStemEligibleForAutoCategory,
   upsertStemAutoCategory
 } from './stemAutoCategoryStore'
 
@@ -98,4 +99,26 @@ describe('getStemAutoClassifyProgress', () => {
 
     expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 0, eligible: 1 })
   })
+})
+
+describe('isStemEligibleForAutoCategory', () => {
+  it('returns true for a stem with neither a StemCategories confirmation nor any StemAutoCategory row', () => {
+    const db = freshDb()
+    expect(isStemEligibleForAutoCategory(db, 's1')).toBe(true)
+  })
+
+  it('returns false for a stem already confirmed in StemCategories (ArrangeRole IS NOT NULL)', () => {
+    const db = freshDb()
+    seedConfirmed(db, 's1', 'bass')
+    expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
+  })
+
+  it.each(['embedding', 'centroid', 'yamnet-zeroshot'] as const)(
+    'returns false for a stem that already has a StemAutoCategory row (source: %s)',
+    (source) => {
+      const db = freshDb()
+      upsertStemAutoCategory(db, 's1', 'drums', source, 1000)
+      expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
+    }
+  )
 })

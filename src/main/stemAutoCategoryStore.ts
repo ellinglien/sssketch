@@ -74,6 +74,25 @@ export function getStemAutoClassifyProgress(ownDb: Database.Database): StemAutoC
  * the scan itself skips anything already in this table -- but a hand-edited
  * db or a future reclassification policy could still want this) overwrites
  * cleanly rather than throwing a PRIMARY KEY conflict. */
+/** Mirrors stemAutoClassify.ts's own BASE_ELIGIBILITY_WHERE idiom (NOT
+ * EXISTS ... AND NOT EXISTS ..., not a UNION -- UNION's implicit DISTINCT
+ * is unnecessary work here) for a single on-demand stem, rather than that
+ * file's own batch queries: a stem is eligible for a fresh auto-category
+ * write only when it has NO StemCategories row with a non-null ArrangeRole
+ * (already human-confirmed) AND NO StemAutoCategory row at all (already
+ * claimed by some other classifier source -- first classifier to claim a
+ * stem wins, same convention BASE_ELIGIBILITY_WHERE's own callers use). */
+export function isStemEligibleForAutoCategory(ownDb: Database.Database, stemCID: string): boolean {
+  const row = ownDb
+    .prepare(
+      `SELECT 1 AS eligible WHERE
+         NOT EXISTS (SELECT 1 FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL)
+         AND NOT EXISTS (SELECT 1 FROM StemAutoCategory WHERE StemCID = ?)`
+    )
+    .get(stemCID, stemCID)
+  return row !== undefined
+}
+
 export function upsertStemAutoCategory(
   ownDb: Database.Database,
   stemCID: string,
