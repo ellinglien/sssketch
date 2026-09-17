@@ -26,11 +26,15 @@ interface EligibleStemRow {
  * a stem with multiple bits, or with the notes/audioIn bits this backfill
  * doesn't cover, is left alone rather than guessed at.
  *
- * This directly resolves these specific stems no differently than
- * resolveStemArrangeRole.ts's own existing blunt instrumentMaskToSoundType
- * fallback already would (mask is checked first there too) -- the real
- * value is in FEEDING TWO DOWNSTREAM CLASSIFIERS this same StemCategories
- * write already reaches: trainCentroidsFromRoleEntries (below, the DSP-
+ * This directly resolves these specific stems no differently than the
+ * blunt instrumentMaskToSoundType (src/shared/riffLibraryTypes.ts) fallback
+ * chain a caller like discoverAdjacency.ts's matchRole already builds and
+ * passes into resolveStemArrangeRole as its own fallback closure (mask is
+ * checked first there too; resolveStemArrangeRole.ts itself never
+ * references instrumentMaskToSoundType -- it only takes an opaque
+ * caller-supplied fallback) -- the real value is in FEEDING TWO DOWNSTREAM
+ * CLASSIFIERS this same StemCategories write already reaches:
+ * trainCentroidsFromRoleEntries (below, the DSP-
  * feature centroid classifier) and getConfirmedEmbeddings (embeddingMatch.ts,
  * a live JOIN against StemCategories -- no separate training call needed,
  * it just reads whatever's there) -- vastly more drums/bass reference
