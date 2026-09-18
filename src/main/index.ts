@@ -1120,8 +1120,10 @@ app.whenReady().then(async () => {
   // (see yamnetZeroShotRetroactiveScan.ts's own doc comment) -- every
   // stem whose embedding was cached before the zero-shot classification
   // path existed, so it never got a chance to run.
-  ipcMain.handle('get-yamnet-zeroshot-retroactive-targets', (): YamnetZeroShotRetroactiveTarget[] =>
-    listYamnetZeroShotRetroactiveTargets(openOwnRiffLibraryDb())
+  ipcMain.handle(
+    'get-yamnet-zeroshot-retroactive-targets',
+    (): Promise<YamnetZeroShotRetroactiveTarget[]> =>
+      listYamnetZeroShotRetroactiveTargets(openOwnRiffLibraryDb())
   )
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {

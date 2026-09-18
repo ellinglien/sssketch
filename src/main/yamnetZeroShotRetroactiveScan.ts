@@ -3,6 +3,28 @@ import { existsSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import { resolveStemPath } from './riffLibraryStore'
 
+// Direct report, 2026-09-18: "just tried to start the app and it appears
+// to be hanging .. stuck here for a minute." Root cause: this function
+// used to call existsFn synchronously for every eligible row (Elling's
+// real library: ~37,000) in one unbroken .filter() call on the Electron
+// MAIN process's single JS thread -- the EXACT bug class
+// discoverLibraryStems.ts's own listLibraryScanTargets already documents
+// a real prior incident for ("clicking 'new project' beachballed for
+// ~30s... tens of thousands of synchronous existsSync syscalls in one
+// unbroken loop... nothing else could run until the whole enumeration
+// finished"). This file copied that function's own injectable-existsFn
+// PATTERN (for testability) when the missing-file check was added, but
+// not its yielding behavior -- reintroducing the identical freeze this
+// codebase already spent real effort fixing once. Same fix: yield back
+// to the event loop every YIELD_EVERY stems so queued IPC/UI work can
+// interleave instead of piling up behind one multi-second-to-tens-of-
+// seconds call.
+const YIELD_EVERY = 200
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
 export interface YamnetZeroShotRetroactiveTarget {
   path: string
 }
@@ -59,10 +81,10 @@ interface EligibleRow {
  * just not a target this pass" convention -- if the file reappears later
  * (re-downloaded, LORE root repointed back), a future pass picks it up
  * naturally. */
-export function listYamnetZeroShotRetroactiveTargets(
+export async function listYamnetZeroShotRetroactiveTargets(
   ownDb: Database.Database,
   existsFn: (path: string) => boolean = existsSync
-): YamnetZeroShotRetroactiveTarget[] {
+): Promise<YamnetZeroShotRetroactiveTarget[]> {
   const rows = ownDb
     .prepare(
       `SELECT s.StemCID AS StemCID, s.OwnerJamCID AS OwnerJamCID
@@ -79,8 +101,17 @@ export function listYamnetZeroShotRetroactiveTargets(
        )`
     )
     .all() as EligibleRow[]
-  return rows
-    .map((row) => resolveStemPath(row.OwnerJamCID, row.StemCID))
-    .filter((path) => existsFn(path))
-    .map((path) => ({ path }))
+
+  const targets: YamnetZeroShotRetroactiveTarget[] = []
+  let sinceYield = 0
+  for (const row of rows) {
+    const path = resolveStemPath(row.OwnerJamCID, row.StemCID)
+    if (existsFn(path)) targets.push({ path })
+    sinceYield += 1
+    if (sinceYield >= YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  return targets
 }
