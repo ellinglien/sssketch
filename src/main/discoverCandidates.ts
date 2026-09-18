@@ -7,6 +7,7 @@ import {
   discoverSlotKindToArrangeRole,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
+import type { StemFeatures } from '@shared/stemFeatures'
 import {
   getCachedRiffCount,
   getCachedStemCount,
@@ -885,17 +886,196 @@ export async function getDiscoverCandidates({
   return out
 }
 
-// Temporary stub -- replaced in full by Task 3. Keeps this task's own tests
-// green without depending on Task 3 landing first.
-async function getTraitDiscoverCandidates(_args: {
+// Field this trait kind ranks/filters candidates by, within StemFeatures.
+// 'bright' and 'warm' share the SAME underlying field (spectralCentroidHz)
+// -- one spectral-brightness axis, two opposite targets, not two
+// independent measurements (see this feature's own design spec).
+const TRAIT_FIELD: Record<
+  'bassHeavy' | 'rhythmic' | 'bright' | 'warm',
+  keyof Pick<StemFeatures, 'bassEnergyRatio' | 'transientDensity' | 'spectralCentroidHz'>
+> = {
+  bassHeavy: 'bassEnergyRatio',
+  rhythmic: 'transientDensity',
+  bright: 'spectralCentroidHz',
+  warm: 'spectralCentroidHz'
+}
+
+interface FeatureCandidateRow {
+  StemCID: string
+  FeaturesJSON: string
+}
+
+/** One StemFeatureCache row that survived the mask-exclusion filter, ready
+ * for the second pass to resolve into a full DiscoverCandidate -- named per
+ * this file's own convention of giving every intermediate row shape its own
+ * interface rather than an inline object type. */
+interface TraitMatchedStem {
+  stemCID: string
+  jamCID: string
+  featureValue: number
+}
+
+/** Candidate pool for the 4 TRAIT slot kinds -- everything a reliable
+ * instrument-mask read can't place (audioIn-masked or unmasked), ranked by
+ * a cheap, already-cached StemFeatureCache numeric field. Never overlaps
+ * with the 3 mask kinds' own pool (getInstrumentMatchedStemCIDs above) --
+ * a drums/bass/notes-masked stem is excluded here even if it also has a
+ * cached feature row.
+ *
+ * StemFeatureCache stores each stem's own features as one JSON blob
+ * (FeaturesJSON), not separate SQL columns -- same "fetch raw rows, parse
+ * in JS" convention stemAutoClassify.ts's own fetchPendingFeatureBatch
+ * already uses, since there's no SQL-level way to ORDER BY a JSON field
+ * without relying on SQLite's JSON1 extension, which nothing else in this
+ * codebase depends on. Bounded to a random MAX_CANDIDATE_RESOLUTION_POOL-
+ * sized sample from StemFeatureCache (same "bounded pool, not an
+ * exhaustive search" discipline the mask-kind path already uses via
+ * pickRandomSample) rather than loading the whole table -- StemFeatureCache
+ * can grow to the size of the whole synced library over time. */
+async function getTraitDiscoverCandidates({
+  ownDb,
+  jams,
+  kind,
+  onlyOwnStems,
+  targetUser
+}: {
   ownDb: Database.Database
   jams: JamDbPair[]
   kind: DiscoverSlotKind
   onlyOwnStems: boolean
   targetUser?: string
 }): Promise<DiscoverCandidate[]> {
-  void _args
-  return []
+  const field = TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]
+
+  let rows: FeatureCandidateRow[]
+  try {
+    rows = ownDb
+      .prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache ORDER BY RANDOM() LIMIT ?`)
+      .all(MAX_CANDIDATE_RESOLUTION_POOL) as FeatureCandidateRow[]
+  } catch {
+    return []
+  }
+  if (rows.length === 0) return []
+
+  // Merge Instrument-mask rows across every unique db in `jams` -- a
+  // stem's own Stems row (and thus its mask) can live in a different db
+  // than ownDb's own StemFeatureCache (external LORE archive stems still
+  // get their features cached in ownDb). Reuses the SAME per-db cache the
+  // mask-kind path already warms.
+  const jamCIDsByDb = new Map<Database.Database, Set<string>>()
+  for (const { jamCID, dbForJam } of jams) {
+    const existing = jamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
+  }
+  const instrumentByStemCID = new Map<string, number | null>()
+  const jamCIDByStemCID = new Map<string, string>()
+  for (const [db, allowedJamCIDs] of jamCIDsByDb) {
+    const instrumentRows = await getInstrumentRowsForDb(db)
+    for (const row of instrumentRows) {
+      if (!allowedJamCIDs.has(row.OwnerJamCID)) continue
+      instrumentByStemCID.set(row.StemCID, row.Instrument)
+      jamCIDByStemCID.set(row.StemCID, row.OwnerJamCID)
+    }
+  }
+
+  const out: TraitMatchedStem[] = []
+  let sinceYield = 0
+  for (const row of rows) {
+    const instrument = instrumentByStemCID.get(row.StemCID)
+    if (instrument !== undefined && instrument !== null) {
+      const soundType = instrumentMaskToSoundType(instrument)
+      if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') {
+        sinceYield += 1
+        if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+          sinceYield = 0
+          await yieldToEventLoop()
+        }
+        continue
+      }
+    }
+    const jamCID = jamCIDByStemCID.get(row.StemCID)
+    if (jamCID === undefined) continue // not among the caller's own jams
+
+    let features: StemFeatures
+    try {
+      features = JSON.parse(row.FeaturesJSON) as StemFeatures
+    } catch {
+      continue
+    }
+
+    out.push({ stemCID: row.StemCID, jamCID, featureValue: features[field] })
+
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  if (out.length === 0) return []
+
+  // Second pass: resolve riff/Stems metadata for exactly the stems that
+  // passed the mask filter above -- same per-db-grouped, chunked shape as
+  // the mask-kind path, reusing the SAME riffIndex/Stems lookups.
+  const byJam = new Map<string, TraitMatchedStem[]>()
+  for (const entry of out) {
+    const list = byJam.get(entry.jamCID)
+    if (list) list.push(entry)
+    else byJam.set(entry.jamCID, [entry])
+  }
+
+  const result: DiscoverCandidate[] = []
+  const jamToDb = new Map(jams.map((j) => [j.jamCID, j.dbForJam]))
+  let sinceYield2 = 0
+  for (const [jamCID, entries] of byJam) {
+    const db = jamToDb.get(jamCID)
+    if (!db) continue
+    const riffIndex = await getRiffIndexForDb(db)
+
+    for (const entryChunk of chunk(entries, CANDIDATE_QUERY_CHUNK_SIZE)) {
+      const stemCIDs = entryChunk.map((e) => e.stemCID)
+      const placeholders = stemCIDs.map(() => '?').join(', ')
+      let stemRows: { StemCID: string; PresetName: string | null; CreatorUserName: string | null }[]
+      try {
+        stemRows = db
+          .prepare(
+            `SELECT StemCID, PresetName, CreatorUserName FROM Stems WHERE StemCID IN (${placeholders})`
+          )
+          .all(...stemCIDs) as typeof stemRows
+      } catch {
+        continue
+      }
+      const stemByCID = new Map(stemRows.map((r) => [r.StemCID, r]))
+
+      for (const entry of entryChunk) {
+        const riffInfo = riffIndex.get(entry.stemCID)
+        if (!riffInfo) continue
+        const stemRow = stemByCID.get(entry.stemCID)
+        if (!stemRow) continue
+        if (onlyOwnStems && stemRow.CreatorUserName !== targetUser) continue
+
+        result.push({
+          stemCID: entry.stemCID,
+          jamCID: riffInfo.ownerJamCID,
+          riffCID: riffInfo.riffCID,
+          presetName: stemRow.PresetName ?? '',
+          creatorUserName: stemRow.CreatorUserName ?? '',
+          slotKind: kind,
+          drumSubRole: null,
+          riffBpm: riffInfo.bpmRnd,
+          traitValue: entry.featureValue
+        })
+      }
+
+      sinceYield2 += 1
+      if (sinceYield2 >= RIFF_QUERY_YIELD_EVERY) {
+        sinceYield2 = 0
+        await yieldToEventLoop()
+      }
+    }
+  }
+
+  return result
 }
 
 // How many jams to try, at most, before giving up and returning null --

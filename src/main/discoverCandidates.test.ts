@@ -146,6 +146,32 @@ function seedCategory(
   })
 }
 
+function seedFeatures(db: Database.Database, stemCID: string, featuresJSON: string): void {
+  db.prepare(
+    `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 1000)`
+  ).run(stemCID, featuresJSON)
+}
+
+function featuresJSON(
+  overrides: Partial<{
+    transientDensity: number
+    bassEnergyRatio: number
+    spectralCentroidHz: number
+    zcrBrightness: number
+  }> = {}
+): string {
+  return JSON.stringify({
+    transientDensity: 0,
+    bassEnergyRatio: 0,
+    spectralCentroidHz: 0,
+    zcrBrightness: 0,
+    voicedFraction: 0,
+    pitchVarianceCents: 0,
+    mfcc: new Array(13).fill(0),
+    ...overrides
+  })
+}
+
 describe('getDiscoverCandidates', () => {
   it('returns only stems with a StemCategories row for the requested role', async () => {
     const own = freshDb()
@@ -1109,5 +1135,75 @@ describe('getRandomLibraryCandidate', () => {
       targetUser: 'elling'
     })
     expect(candidate?.stemCID).toBe('sOwned')
+  })
+})
+
+describe('getDiscoverCandidates (trait kinds)', () => {
+  it('returns bassHeavy candidates ranked by bassEnergyRatio, excluding drums/bass/notes-masked stems', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['high', 'low', 'masked-out'])
+    seedStem(own, 'high', 'jam1')
+    seedFeatures(own, 'high', featuresJSON({ bassEnergyRatio: 0.9 }))
+    seedStem(own, 'low', 'jam1')
+    seedFeatures(own, 'low', featuresJSON({ bassEnergyRatio: 0.1 }))
+    // Drums-masked -- must never appear as a bassHeavy candidate, even with
+    // a cached feature row and a high bassEnergyRatio.
+    seedStem(own, 'masked-out', 'jam1', { instrument: 1 << 1 })
+    seedFeatures(own, 'masked-out', featuresJSON({ bassEnergyRatio: 0.99 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'bassHeavy'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['high', 'low'])
+    const high = candidates.find((c) => c.stemCID === 'high')!
+    expect(high.traitValue).toBeCloseTo(0.9)
+    expect(high.slotKind).toBe('bassHeavy')
+  })
+
+  it('includes an audioIn-masked stem as a trait candidate (mask alone cannot place it)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1', { instrument: 1 << 4 }) // audioIn bit
+    seedFeatures(own, 's1', featuresJSON({ transientDensity: 0.8 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+  })
+
+  it('excludes a stem with no cached StemFeatureCache row', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'bright'
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('respects onlyOwnStems for trait kinds the same way mask kinds already do', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mine', 'theirs'])
+    seedStem(own, 'mine', 'jam1', { creatorUserName: 'elling' })
+    seedFeatures(own, 'mine', featuresJSON({ zcrBrightness: 0.5 }))
+    seedStem(own, 'theirs', 'jam1', { creatorUserName: 'someoneElse' })
+    seedFeatures(own, 'theirs', featuresJSON({ zcrBrightness: 0.5 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'warm',
+      onlyOwnStems: true,
+      targetUser: 'elling'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['mine'])
   })
 })
