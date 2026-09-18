@@ -1,6 +1,7 @@
 // src/main/stemAutoClassify.ts
 import type Database from 'better-sqlite3'
-import type { ArrangeRole } from '@shared/stemRole'
+import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
+import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { suggestCategoryFromEmbedding } from '@shared/embeddingMatch'
 import { suggestCategory } from '@shared/categoryCentroids'
 import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
@@ -16,6 +17,59 @@ const BATCH_SIZE = 200
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
+}
+
+// Real finding, 2026-09-18: a direct query against Elling's real library
+// showed 5,462 of 20,176 embedding-classified 'drums' stems were mask-
+// tagged 'notes'/'bass'/other, not drums at all (confirmed live with a
+// screenshot: a 'notes'-masked stem sitting in the drums slot). Direct
+// correction: "audio in stems can indeed be drums though, so no...
+// otherwise we can rely on the endlesss categories easily" -- audioIn is a
+// catch-all for "recorded via live input" that genuinely can be anything,
+// not a real category by itself, but drums/notes/bass are real, reliable
+// performer-set ground truth (the same reasoning instrumentMaskCentroidBackfill.ts
+// already trusts enough to skip classification for drums/bass entirely).
+// Follow-up direct request: lean into this cheap, reliable signal over the
+// expensive audio-similarity search wherever it meaningfully cuts
+// processing cost, even at the expense of some precision -- "computers
+// aren't always good at [finding the perfect match]... if it means
+// trimming the processing time a lot we can go that way."
+function reliableMaskSoundType(instrument: number): 'drums' | 'notes' | 'bass' | null {
+  const soundType = instrumentMaskToSoundType(instrument)
+  return soundType === 'drums' || soundType === 'notes' || soundType === 'bass' ? soundType : null
+}
+
+/** Looks up each StemCID's own Instrument bitmask by checking `dbs` in
+ * order, stopping early once every StemCID asked for has been found --
+ * real-world shape: a stem's own "Stems" row can live in a DIFFERENT db
+ * than the one its cached embedding/features live in (StemEmbeddingCache/
+ * StemFeatureCache are sssketch-exclusive, ownDb-only, but the stem itself
+ * may belong to a jam synced from an external, read-only LORE archive).
+ * Bounded to exactly the StemCIDs asked for (a plain primary-key
+ * `IN (...)` lookup per db, up to BATCH_SIZE=200 at a time) rather than a
+ * full table scan -- cheap even against a huge external archive. */
+function lookupInstrumentMasks(dbs: Database.Database[], stemCIDs: string[]): Map<string, number> {
+  const found = new Map<string, number>()
+  if (stemCIDs.length === 0) return found
+  const remaining = new Set(stemCIDs)
+  for (const db of dbs) {
+    if (remaining.size === 0) break
+    const placeholders = [...remaining].map(() => '?').join(',')
+    let rows: { StemCID: string; Instrument: number | null }[]
+    try {
+      rows = db
+        .prepare(`SELECT StemCID, Instrument FROM Stems WHERE StemCID IN (${placeholders})`)
+        .all(...remaining) as { StemCID: string; Instrument: number | null }[]
+    } catch {
+      continue
+    }
+    for (const row of rows) {
+      if (row.Instrument === null) continue
+      found.set(row.StemCID, row.Instrument)
+      remaining.delete(row.StemCID)
+    }
+  }
+  return found
 }
 
 interface EmbeddingCandidateRow {
@@ -195,7 +249,14 @@ export interface ClassifyBatchResult {
  * write is an acceptable cost in one stretch, the same assumption the
  * old per-row yield threshold always relied on. */
 export async function classifyAutoCategoryBatch(
-  ownDb: Database.Database
+  ownDb: Database.Database,
+  // Every db that might hold a candidate stem's own "Stems" row (its
+  // Instrument mask) -- defaults to [ownDb] for callers that only ever
+  // classify stems from ownDb's own jams; the real production call site
+  // (stemAutoClassifyScheduler.ts) passes candidateDbsForRiff() so the
+  // mask short-circuit below also covers stems synced from an external
+  // LORE archive.
+  stemDbs: Database.Database[] = [ownDb]
 ): Promise<ClassifyBatchResult> {
   let processed = 0
   let remaining = 0
@@ -210,34 +271,60 @@ export async function classifyAutoCategoryBatch(
   // --- Embedding pass (preferred) ---
   const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
   if (pendingEmbeddingCount > 0) {
-    // Nothing trained yet on this axis -- every call would return null;
-    // count these as "remaining" (there's real work waiting, just not
-    // doable yet) without spending a single classify call on them.
-    if (!embeddingAxisTrained) {
-      remaining += pendingEmbeddingCount
-    } else {
-      const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
-      remaining += Math.max(0, pendingEmbeddingCount - batchRows.length)
-      const now = Date.now()
-      processed += ownDb.transaction((rows: typeof batchRows) => {
-        let count = 0
-        for (const row of rows) {
-          try {
-            const embedding = JSON.parse(row.EmbeddingJSON) as number[]
-            const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
-            if (guessed) {
-              upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
-              count += 1
-            }
-          } catch {
-            // Corrupted row -- skip, same defensive handling this
-            // table's own readers elsewhere already use.
-          }
+    // Fetched regardless of embeddingAxisTrained now (real change,
+    // 2026-09-18): the instrument-mask short-circuit below needs to see
+    // each row's own StemCID to check its mask, so there's no way to
+    // "count these as remaining without spending a call on them" the way
+    // an untrained axis alone used to allow -- a mask-resolvable stem must
+    // still be classified even while the embedding axis itself has never
+    // trained. `remaining` below only ever reflects rows past BATCH_SIZE
+    // that weren't fetched at all this call, same as every other pass;
+    // a fetched row left unresolved (no mask, axis untrained) simply stays
+    // eligible for a later call, same accepted cost as an ambiguous
+    // embedding guess (see "leaves an unclassifiable stem out of
+    // StemAutoCategory", above).
+    const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
+    remaining += Math.max(0, pendingEmbeddingCount - batchRows.length)
+    const masks = lookupInstrumentMasks(
+      stemDbs,
+      batchRows.map((r) => r.StemCID)
+    )
+    const now = Date.now()
+    processed += ownDb.transaction((rows: typeof batchRows) => {
+      let count = 0
+      for (const row of rows) {
+        const instrument = masks.get(row.StemCID)
+        const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
+        if (reliable) {
+          upsertStemAutoCategory(
+            ownDb,
+            row.StemCID,
+            SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
+            'instrumentMask',
+            now
+          )
+          count += 1
+          continue
         }
-        return count
-      })(batchRows)
-      await yieldToEventLoop()
-    }
+        // Nothing trained yet on this axis -- every call would return
+        // null; leave it pending rather than spending a classify call on
+        // it.
+        if (!embeddingAxisTrained) continue
+        try {
+          const embedding = JSON.parse(row.EmbeddingJSON) as number[]
+          const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
+          if (guessed) {
+            upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
+            count += 1
+          }
+        } catch {
+          // Corrupted row -- skip, same defensive handling this
+          // table's own readers elsewhere already use.
+        }
+      }
+      return count
+    })(batchRows)
+    await yieldToEventLoop()
   }
 
   // --- Feature/centroid pass (fallback) ---
@@ -246,10 +333,29 @@ export async function classifyAutoCategoryBatch(
     const centroidStore = loadCategoryCentroidStore()
     const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE, embeddingAxisTrained)
     remaining += Math.max(0, pendingFeatureCount - batchRows.length)
+    // Same instrument-mask short-circuit as the embedding pass above --
+    // see reliableMaskSoundType's own doc comment for why.
+    const masks = lookupInstrumentMasks(
+      stemDbs,
+      batchRows.map((r) => r.StemCID)
+    )
     const now = Date.now()
     processed += ownDb.transaction((rows: typeof batchRows) => {
       let count = 0
       for (const row of rows) {
+        const instrument = masks.get(row.StemCID)
+        const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
+        if (reliable) {
+          upsertStemAutoCategory(
+            ownDb,
+            row.StemCID,
+            SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
+            'instrumentMask',
+            now
+          )
+          count += 1
+          continue
+        }
         try {
           const features = JSON.parse(row.FeaturesJSON) as StemFeatures
           const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))

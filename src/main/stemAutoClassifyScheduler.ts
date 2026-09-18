@@ -2,15 +2,28 @@
 import { classifyAutoCategoryBatch } from './stemAutoClassify'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { loadDiscoverSettings } from './discoverSettingsStore'
+import { candidateDbsForRiff } from './riffLibraryStore'
 
-// Short delay between batches while there's known work waiting -- keeps
-// this from ever monopolizing the main process for long, same "batch,
-// then yield to real usage" spirit as DiscoverLibraryScan.tsx's own
+// Delay between batches while there's known work waiting -- keeps this
+// from ever monopolizing the main process for long, same "batch, then
+// yield to real usage" spirit as DiscoverLibraryScan.tsx's own
 // BATCH_DELAY_MS (renderer side). Longer delay once caught up: nothing to
 // do until the OTHER scan (DiscoverLibraryScan.tsx) embeds/extracts
 // features for more stems, or consent changes, so there's no reason to
 // re-check every second.
-const BUSY_DELAY_MS = 1000
+//
+// Widened from 1000ms, 2026-09-18: direct, repeated feedback ("speed of
+// the app is a big priority") after a real-library measurement showed
+// this batch's own O(200 x confirmedPool) embedding comparison work was
+// sustaining 60-90% background CPU on a 13,806-reference confirmed pool.
+// The instrument-mask short-circuit (see stemAutoClassify.ts's own
+// reliableMaskSoundType) already cuts most of that cost by skipping the
+// comparison entirely for drums/notes/bass-masked stems; this widened gap
+// is an additional, simple lever for whatever's left (audioIn/unmasked
+// stems, which still need the real comparison) -- classification takes
+// longer to fully catch up, in exchange for a lower sustained background
+// share even while there's a real backlog.
+const BUSY_DELAY_MS = 3000
 const IDLE_DELAY_MS = 30_000
 
 let started = false
@@ -32,7 +45,14 @@ async function runOnce(): Promise<void> {
     return
   }
   try {
-    const { remaining } = await classifyAutoCategoryBatch(openOwnRiffLibraryDb())
+    // candidateDbsForRiff() -- so the instrument-mask short-circuit in
+    // classifyAutoCategoryBatch (see its own doc comment) can find a
+    // stem's real Instrument mask even when that stem's own "Stems" row
+    // lives in an external, read-only LORE archive rather than ownDb.
+    const { remaining } = await classifyAutoCategoryBatch(
+      openOwnRiffLibraryDb(),
+      candidateDbsForRiff()
+    )
     scheduleNext(remaining > 0 ? BUSY_DELAY_MS : IDLE_DELAY_MS)
   } catch (err) {
     console.error('stemAutoClassifyScheduler: batch failed:', err)

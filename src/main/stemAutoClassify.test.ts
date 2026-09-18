@@ -38,8 +38,23 @@ function freshDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
       ComputedAt INTEGER NOT NULL
     );
+    CREATE TABLE Stems (
+      StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER
+    );
   `)
   return db
+}
+
+const DRUMS_BIT = 1 << 1
+const NOTES_BIT = 1 << 2
+const BASS_BIT = 1 << 3
+const AUDIO_IN_BIT = 1 << 4
+
+function seedInstrument(db: Database.Database, stemCID: string, instrument: number): void {
+  db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID, Instrument) VALUES (?, 'jam1', ?)`).run(
+    stemCID,
+    instrument
+  )
 }
 
 function seedConfirmed(db: Database.Database, stemCID: string, arrangeRole: string): void {
@@ -145,16 +160,23 @@ describe('classifyAutoCategoryBatch', () => {
     expect(second.remaining).toBe(0)
   })
 
-  it('counts pending embeddings as remaining, without spending a classify call, when nothing is trained on the embedding axis yet', async () => {
+  it('leaves an untrained-axis, mask-unresolvable stem unclassified (not "remaining") when nothing is trained on the embedding axis yet', async () => {
     const db = freshDb()
     // No confirmed StemCategories rows at all -- getConfirmedEmbeddings
     // returns [], so suggestCategoryFromEmbedding could never confidently
-    // classify anything yet.
+    // classify anything yet. No Stems/Instrument row either, so the mask
+    // short-circuit can't resolve it either.
     seedEmbedding(db, 'untrained-1', [1, 0, 0])
 
     const result = await classifyAutoCategoryBatch(db)
     expect(result.processed).toBe(0)
-    expect(result.remaining).toBe(1)
+    // 0, not 1 -- real behavior change, 2026-09-18: this row IS still
+    // fetched this call (the mask short-circuit needs to see its StemCID
+    // regardless of embedding-axis training), just left unresolved. See
+    // the embedding pass's own doc comment on why `remaining` now only
+    // ever reflects rows past BATCH_SIZE, not "fetched but unresolved"
+    // ones -- same accepted cost as an ambiguous embedding guess.
+    expect(result.remaining).toBe(0)
     expect(allClassifiedStemCIDs(db)).toEqual(new Set())
   })
 
@@ -379,5 +401,148 @@ describe('classifyAutoCategoryBatch', () => {
     const result = await classifyAutoCategoryBatch(db)
     expect(result.processed).toBe(10)
     expect(transactionSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // Real finding, 2026-09-18: a direct query against Elling's real library
+  // showed 5,462 of 20,176 embedding-classified 'drums' stems were mask-
+  // tagged 'notes'/'bass'/other, not drums at all -- confirmed live with a
+  // screenshot (a 'notes'-masked stem, wrong waveform color, sitting in the
+  // drums slot). His own correction: audioIn is genuinely ambiguous
+  // ("can indeed be drums") so it must stay excluded, but "otherwise we can
+  // rely on the endlesss categories easily" -- and a follow-up request to
+  // lean into the cheap, reliable signal over expensive audio-similarity
+  // search wherever it cuts real processing cost. These tests cover the
+  // mask short-circuit this drives: a stem confidently mask-tagged drums/
+  // notes/bass skips the embedding/centroid comparison ENTIRELY and is
+  // written directly via the mask -- both for accuracy (no fallible guess
+  // to get wrong) and for cost (no comparison against the whole confirmed
+  // pool at all).
+  describe('instrument-mask short-circuit', () => {
+    it('classifies a drums-masked stem directly via the mask, never touching the embedding comparison', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      // Embeds near the BASS cluster -- if the mask short-circuit didn't
+      // fire, the embedding classifier would call this 'bass', not 'drums'.
+      seedEmbedding(db, 'masked-drums-1', [0, 1, 0])
+      seedInstrument(db, 'masked-drums-1', DRUMS_BIT)
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['masked-drums-1']))
+      const row = db
+        .prepare(`SELECT Source FROM StemAutoCategory WHERE StemCID = ?`)
+        .get('masked-drums-1') as { Source: string }
+      expect(row.Source).toBe('instrumentMask')
+    })
+
+    it('classifies a notes-masked stem as lead via the mask, never the (wrong) embedding guess', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      // Embeds near the DRUMS cluster -- this is the exact real-world bug:
+      // without the short-circuit, this notes-masked stem would land in
+      // 'drums'.
+      seedEmbedding(db, 'masked-notes-1', [0.9, 0.1, 0])
+      seedInstrument(db, 'masked-notes-1', NOTES_BIT)
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(db, 'lead')).toEqual(new Set(['masked-notes-1']))
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set())
+    })
+
+    it('classifies a bass-masked stem directly via the mask', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'masked-bass-1', [0.9, 0.1, 0]) // embeds near drums
+      seedInstrument(db, 'masked-bass-1', BASS_BIT)
+
+      await classifyAutoCategoryBatch(db, [db])
+      expect(getAutoCategorizedStemCIDs(db, 'bass')).toEqual(new Set(['masked-bass-1']))
+    })
+
+    it('does NOT short-circuit an audioIn-masked stem -- audioIn can genuinely be anything', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'masked-audioin-1', [0.9, 0.1, 0]) // near the drums cluster
+      seedInstrument(db, 'masked-audioin-1', AUDIO_IN_BIT)
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      // Falls through to the real embedding classifier, which calls it
+      // 'drums' here -- audioIn genuinely can be drums (direct feedback),
+      // so this is the classifier's own honest best guess, not vetoed.
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['masked-audioin-1']))
+      const row = db
+        .prepare(`SELECT Source FROM StemAutoCategory WHERE StemCID = ?`)
+        .get('masked-audioin-1') as { Source: string }
+      expect(row.Source).toBe('embedding')
+    })
+
+    it('does NOT short-circuit a stem with no Instrument row at all', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'no-mask-1', [0.9, 0.1, 0])
+      // No seedInstrument call -- no Stems row for this StemCID anywhere.
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      const row = db
+        .prepare(`SELECT Source FROM StemAutoCategory WHERE StemCID = ?`)
+        .get('no-mask-1') as { Source: string }
+      expect(row.Source).toBe('embedding')
+    })
+
+    it('resolves a mask-confident stem even when the embedding axis is completely untrained', async () => {
+      const db = freshDb()
+      // No seedTrainedEmbeddings -- embeddingAxisTrained is false.
+      seedEmbedding(db, 'masked-notes-2', [1, 0, 0])
+      seedInstrument(db, 'masked-notes-2', NOTES_BIT)
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      expect(result.remaining).toBe(0)
+      expect(getAutoCategorizedStemCIDs(db, 'lead')).toEqual(new Set(['masked-notes-2']))
+    })
+
+    it('applies the same short-circuit in the centroid/feature pass', async () => {
+      const db = freshDb()
+      let store = emptyCategoryCentroidStore()
+      const zeros = new Array(13).fill(0)
+      for (let i = 0; i < 3; i++) {
+        store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+        store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+      }
+      vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+      // Centroid-classifies as 'drums' (transientDensity/bassEnergyRatio near
+      // the drums cluster) -- the mask says notes, so 'lead' must win.
+      seedFeatures(db, 'masked-notes-feature-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+      seedInstrument(db, 'masked-notes-feature-1', NOTES_BIT)
+
+      const result = await classifyAutoCategoryBatch(db, [db])
+      expect(result.processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(db, 'lead')).toEqual(new Set(['masked-notes-feature-1']))
+    })
+
+    // A stem's own "Stems" row can live in a DIFFERENT db than the one
+    // StemEmbeddingCache/StemAutoCategory live in -- real-world shape:
+    // stems from an external, read-only LORE archive still get their
+    // embeddings cached in sssketch's own db, but their Instrument mask
+    // only exists in the archive's own Stems table. `stemDbs` must be
+    // searched in full, not just `ownDb`.
+    it('finds the Instrument mask in a SEPARATE db from ownDb', async () => {
+      const own = freshDb()
+      seedTrainedEmbeddings(own)
+      seedEmbedding(own, 'external-notes-1', [0.9, 0.1, 0]) // embeds near drums
+
+      const external = new Database(':memory:')
+      external.exec(
+        `CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER)`
+      )
+      seedInstrument(external, 'external-notes-1', NOTES_BIT)
+
+      const result = await classifyAutoCategoryBatch(own, [own, external])
+      expect(result.processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(own, 'lead')).toEqual(new Set(['external-notes-1']))
+    })
   })
 })

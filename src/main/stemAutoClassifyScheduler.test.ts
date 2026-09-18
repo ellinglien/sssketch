@@ -8,10 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const classifyAutoCategoryBatch = vi.fn()
 const loadDiscoverSettings = vi.fn()
 const openOwnRiffLibraryDb = vi.fn(() => ({}) as never)
+const candidateDbsForRiff = vi.fn(() => [] as never[])
 
 vi.mock('./stemAutoClassify', () => ({ classifyAutoCategoryBatch }))
 vi.mock('./riffLibrarySchema', () => ({ openOwnRiffLibraryDb }))
 vi.mock('./discoverSettingsStore', () => ({ loadDiscoverSettings }))
+vi.mock('./riffLibraryStore', () => ({ candidateDbsForRiff }))
 
 // vi.resetModules() before each test, then a fresh dynamic import --
 // startStemAutoClassifyScheduler's own idempotency guard (`started`) is
@@ -25,6 +27,7 @@ beforeEach(() => {
   classifyAutoCategoryBatch.mockReset()
   loadDiscoverSettings.mockReset()
   openOwnRiffLibraryDb.mockClear()
+  candidateDbsForRiff.mockClear()
 })
 
 afterEach(() => {
@@ -47,11 +50,11 @@ describe('startStemAutoClassifyScheduler', () => {
     const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
     startStemAutoClassifyScheduler()
 
-    await vi.advanceTimersByTimeAsync(1000) // BUSY_DELAY_MS, first tick
+    await vi.advanceTimersByTimeAsync(3000) // BUSY_DELAY_MS, first tick
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
-    // remaining > 0 -- reschedules at BUSY_DELAY_MS (1000ms), not idle.
-    await vi.advanceTimersByTimeAsync(1000)
+    // remaining > 0 -- reschedules at BUSY_DELAY_MS (3000ms), not idle.
+    await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
 
@@ -61,7 +64,7 @@ describe('startStemAutoClassifyScheduler', () => {
     const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
     startStemAutoClassifyScheduler()
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
     // Still under IDLE_DELAY_MS (30s) -- no second call yet.
@@ -80,7 +83,7 @@ describe('startStemAutoClassifyScheduler', () => {
     startStemAutoClassifyScheduler()
     startStemAutoClassifyScheduler()
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
     // A second/third chain having started would show up as 2 or 3 here.
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
   })
@@ -91,7 +94,7 @@ describe('startStemAutoClassifyScheduler', () => {
     const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
     startStemAutoClassifyScheduler()
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
     // Consent revoked mid-flight (e.g. the settings-menu toggle).
@@ -106,7 +109,7 @@ describe('startStemAutoClassifyScheduler', () => {
     const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
     startStemAutoClassifyScheduler()
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(2000)
