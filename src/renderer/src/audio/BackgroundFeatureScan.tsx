@@ -41,29 +41,48 @@ export function BackgroundFeatureScan(): null {
     if (toScan.length === 0) return
     let cancelled = false
 
+    // Real regression, found live 2026-09-18 -- see
+    // YamnetZeroShotRetroactiveScan.tsx's own matching fix for the full
+    // root-cause writeup. This loop used to fire every batch member with
+    // `void` (fire-and-forget) and schedule the NEXT batch's setTimeout
+    // unconditionally, never waiting for the current batch's real work
+    // (an IPC file read, a Web Audio decode, and a real Worker round-trip
+    // for embedding inference) to actually finish -- so batches piled up
+    // unbounded well past this loop's own BATCH_SIZE=3 intent. Awaiting
+    // the batch before scheduling the next one caps real concurrency at
+    // BATCH_SIZE and makes BATCH_DELAY_MS a genuine gap after real work
+    // finishes, not just after it's fired.
     function runBatch(startIndex: number): void {
       if (cancelled) return
       const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
       if (batch.length === 0) return
-      for (const fs of batch) {
-        attemptedRef.current.add(fs.stem.path)
-        void getStemFeatures(fs.stem.path).catch((err: unknown) => {
-          console.error(
-            'BackgroundFeatureScan: feature extraction failed for stem',
-            fs.stem.path,
-            err
-          )
-        })
-        // Embedding extraction (Plan B2) rides the exact same batch/
-        // throttle loop as the hand-crafted feature extraction above,
-        // rather than a second parallel scan -- getOrExtractStemEmbedding
-        // never throws (see its own doc comment), so no .catch needed here.
-        void getOrExtractStemEmbedding(fs.stem.path)
-      }
-      const nextIndex = startIndex + BATCH_SIZE
-      if (nextIndex < toScan.length) {
-        window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
-      }
+      void (async () => {
+        await Promise.allSettled(
+          batch.flatMap((fs) => {
+            attemptedRef.current.add(fs.stem.path)
+            return [
+              getStemFeatures(fs.stem.path).catch((err: unknown) => {
+                console.error(
+                  'BackgroundFeatureScan: feature extraction failed for stem',
+                  fs.stem.path,
+                  err
+                )
+              }),
+              // Embedding extraction (Plan B2) rides the exact same batch/
+              // throttle loop as the hand-crafted feature extraction above,
+              // rather than a second parallel scan -- getOrExtractStemEmbedding
+              // never throws (see its own doc comment), so a rejection here
+              // would be a genuine bug, not an expected failure mode.
+              getOrExtractStemEmbedding(fs.stem.path)
+            ]
+          })
+        )
+        if (cancelled) return
+        const nextIndex = startIndex + BATCH_SIZE
+        if (nextIndex < toScan.length) {
+          window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
+        }
+      })()
     }
     runBatch(0)
 

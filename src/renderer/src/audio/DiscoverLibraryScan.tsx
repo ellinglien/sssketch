@@ -76,25 +76,51 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
         setTotal(targets.length)
         const toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
 
+        // Real regression, found live 2026-09-18 (direct report: "very
+        // sluggish buttons... click similar and loader running for about
+        // 3 minutes") -- see YamnetZeroShotRetroactiveScan.tsx's own
+        // matching fix for the full root-cause writeup. This loop used to
+        // fire every batch member with `void` (fire-and-forget) and
+        // schedule the NEXT batch's setTimeout unconditionally, never
+        // waiting for the current batch's real work (an IPC file read,
+        // possibly over the network for a not-yet-locally-cached stem,
+        // plus a Web Audio decode and a real Worker round-trip for
+        // embedding inference) to actually finish -- so batches piled up
+        // unbounded well past this loop's own BATCH_SIZE=3 intent.
+        // Awaiting the batch before scheduling the next one caps real
+        // concurrency at BATCH_SIZE and makes BATCH_DELAY_MS a genuine
+        // gap after real work finishes, not just after it's fired.
         function runBatch(startIndex: number): void {
           if (cancelled) return
           const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
           if (batch.length === 0) return
-          for (const target of batch) {
-            attemptedRef.current.add(target.key)
-            void getStemFeatures(target.path).catch((err: unknown) => {
-              console.error('DiscoverLibraryScan: feature extraction failed for', target.path, err)
-            })
-            // getOrExtractStemEmbedding never throws (see its own doc
-            // comment) -- no .catch needed, same convention
-            // BackgroundFeatureScan.tsx already established.
-            void getOrExtractStemEmbedding(target.path)
-          }
-          setCompleted((c) => c + batch.length)
-          const nextIndex = startIndex + BATCH_SIZE
-          if (nextIndex < toScan.length) {
-            window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
-          }
+          void (async () => {
+            await Promise.allSettled(
+              batch.flatMap((target) => {
+                attemptedRef.current.add(target.key)
+                return [
+                  getStemFeatures(target.path).catch((err: unknown) => {
+                    console.error(
+                      'DiscoverLibraryScan: feature extraction failed for',
+                      target.path,
+                      err
+                    )
+                  }),
+                  // getOrExtractStemEmbedding never throws (see its own doc
+                  // comment), so a rejection here would be a genuine bug,
+                  // not an expected failure mode -- still safe to include
+                  // in Promise.allSettled either way.
+                  getOrExtractStemEmbedding(target.path)
+                ]
+              })
+            )
+            if (cancelled) return
+            setCompleted((c) => c + batch.length)
+            const nextIndex = startIndex + BATCH_SIZE
+            if (nextIndex < toScan.length) {
+              window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
+            }
+          })()
         }
         runBatch(0)
       })

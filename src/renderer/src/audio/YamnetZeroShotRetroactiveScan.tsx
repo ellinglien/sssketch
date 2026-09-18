@@ -67,19 +67,44 @@ export function YamnetZeroShotRetroactiveScan(): React.JSX.Element | null {
         setTotal(targets.length)
         const toScan = targets.filter((t) => !attemptedRef.current.has(t.path))
 
+        // Real regression, found live 2026-09-18 (direct report: "very
+        // sluggish buttons... click similar and loader running for about
+        // 3 minutes"): this used to fire every batch member with `void`
+        // (fire-and-forget) and schedule the NEXT batch's setTimeout
+        // unconditionally, never waiting for the current batch's real
+        // work (an IPC file read + Web Audio decode + a real Worker
+        // round-trip for inference) to actually finish. Since a single
+        // stem's decode+inference routinely takes longer than
+        // BATCH_DELAY_MS=500, batches piled up UNBOUNDED over time --
+        // after a few seconds, dozens of concurrent decode+inference
+        // operations were in flight at once, well past the "small batch,
+        // real delay between them" throttle this loop's own doc comment
+        // promises. Adding this SECOND always-on scanner (against a
+        // ~37,000-stem backlog) alongside the pre-existing
+        // DiscoverLibraryScan/BackgroundFeatureScan, which share this
+        // exact same bug, tripled the effective unthrottled load -- see
+        // those two files' own matching fixes, same day. Awaiting the
+        // batch's own work before scheduling the next one caps real
+        // concurrency at BATCH_SIZE and makes BATCH_DELAY_MS a genuine
+        // gap after real work finishes, not just after it's fired.
         function runBatch(startIndex: number): void {
           if (cancelled) return
           const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
           if (batch.length === 0) return
-          for (const target of batch) {
-            attemptedRef.current.add(target.path)
-            void ensureYamnetZeroShotClassified(target.path)
-          }
-          setCompleted((c) => c + batch.length)
-          const nextIndex = startIndex + BATCH_SIZE
-          if (nextIndex < toScan.length) {
-            window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
-          }
+          void (async () => {
+            await Promise.allSettled(
+              batch.map((target) => {
+                attemptedRef.current.add(target.path)
+                return ensureYamnetZeroShotClassified(target.path)
+              })
+            )
+            if (cancelled) return
+            setCompleted((c) => c + batch.length)
+            const nextIndex = startIndex + BATCH_SIZE
+            if (nextIndex < toScan.length) {
+              window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
+            }
+          })()
         }
         runBatch(0)
       })
