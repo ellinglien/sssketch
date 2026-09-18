@@ -1029,7 +1029,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidate).toMatchObject({
       stemCID: 's1',
@@ -1038,7 +1038,7 @@ describe('getRandomLibraryCandidate', () => {
       riffBpm: 140,
       presetName: 'anything',
       creatorUserName: 'elling',
-      arrangeRole: 'drums',
+      slotKind: 'drums',
       drumSubRole: null
     })
   })
@@ -1047,7 +1047,7 @@ describe('getRandomLibraryCandidate', () => {
     const own = freshDb()
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidate).toBeNull()
   })
@@ -1059,7 +1059,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums',
+      kind: 'drums',
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1075,7 +1075,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'bass',
+      kind: 'bass',
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1093,7 +1093,7 @@ describe('getRandomLibraryCandidate', () => {
         { jamCID: 'jamBroken', dbForJam: broken },
         { jamCID: 'jam1', dbForJam: own }
       ],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidate?.stemCID).toBe('s1')
   })
@@ -1130,7 +1130,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams,
-      arrangeRole: 'drums',
+      kind: 'drums',
       onlyOwnStems: true,
       targetUser: 'elling'
     })

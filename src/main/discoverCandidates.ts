@@ -1,6 +1,6 @@
 // src/main/discoverCandidates.ts
 import type Database from 'better-sqlite3'
-import { type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
+import { type DrumSubRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import {
   DISCOVER_TRAIT_SLOT_KINDS,
@@ -1168,17 +1168,17 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * the same as "no match" from the other candidate sources. */
 export async function getRandomLibraryCandidate({
   jams,
-  arrangeRole,
+  kind,
   onlyOwnStems = false,
   targetUser
 }: {
   jams: JamDbPair[]
-  arrangeRole: ArrangeRole
+  kind: DiscoverSlotKind
   onlyOwnStems?: boolean
   targetUser?: string
 }): Promise<DiscoverCandidate | null> {
   if (onlyOwnStems && targetUser) {
-    return getRandomOwnStemCandidate(jams, arrangeRole, targetUser)
+    return getRandomOwnStemCandidate(jams, kind, targetUser)
   }
 
   const shuffled = [...jams]
@@ -1227,7 +1227,8 @@ export async function getRandomLibraryCandidate({
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      arrangeRole,
+      slotKind: kind,
+      traitValue: null,
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd
     }
@@ -1251,7 +1252,7 @@ export async function getRandomLibraryCandidate({
  * pays a second db's own query cost. */
 async function getRandomOwnStemCandidate(
   jams: JamDbPair[],
-  arrangeRole: ArrangeRole,
+  kind: DiscoverSlotKind,
   targetUser: string
 ): Promise<DiscoverCandidate | null> {
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
@@ -1316,7 +1317,8 @@ async function getRandomOwnStemCandidate(
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      arrangeRole,
+      slotKind: kind,
+      traitValue: null,
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd
     }
