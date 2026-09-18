@@ -1,8 +1,12 @@
 // src/main/discoverCandidates.ts
 import type Database from 'better-sqlite3'
-import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
+import { type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
+import {
+  DISCOVER_TRAIT_SLOT_KINDS,
+  discoverSlotKindToArrangeRole,
+  type DiscoverSlotKind
+} from '@shared/discoverSlotKind'
 import {
   getCachedRiffCount,
   getCachedStemCount,
@@ -12,30 +16,32 @@ import {
   saveInstrumentRowsCache
 } from './discoverIndexCache'
 
-/** One library-wide candidate for a Discover slot -- a stem that's EITHER
- * human-confirmed (StemCategories) for the requested ArrangeRole, or
- * PRE-classified as that role by the background "categorize the whole
- * library overnight" scan (StemAutoCategory -- stemAutoClassify.ts,
- * stemAutoClassifyScheduler.ts; direct request 2026-09-15, "why not just
- * do a prelim scan that pre-categorizes the stems"), or whose own Endlesss
- * instrument category maps to that role (getInstrumentMatchedStemCIDs,
- * below -- real ground truth requiring no prior confirmation OR
- * background scan at all).
+/** One library-wide candidate for a Discover slot.
  *
- * The embedding/centroid CLASSIFIERS themselves used to run HERE, at query
- * time, on every single roll -- moved out to the background scan (same
- * day, after repeated real reports that even cached/parallelized/
- * short-circuited runtime classification still made a cold roll slow).
- * This file now only ever reads their ALREADY-COMPUTED results via a
- * plain, fast SELECT (getAutoCategorizedStemCIDs) -- no classifier math at
- * query time at all. */
+ * For a MASK slot kind (drums/bass/lead -- DISCOVER_MASK_SLOT_KINDS), a
+ * candidate is EITHER human-confirmed (StemCategories) for the requested
+ * kind's own ArrangeRole, or whose own Endlesss instrument category maps
+ * to that kind (getInstrumentMatchedStemCIDs, below -- real ground truth
+ * requiring no prior confirmation at all). The background "categorize the
+ * whole library overnight" scan's own precomputed results (StemAutoCategory
+ * -- stemAutoClassify.ts) used to widen this pool too (direct request
+ * 2026-09-15, "why not just do a prelim scan that pre-categorizes the
+ * stems") but that layer is REMOVED for mask kinds as of the 2026-09-18
+ * Discover trait-based matching redesign -- this codebase no longer trusts
+ * the fallible embedding/centroid classifier for a kind Endlesss's own mask
+ * can answer directly; only a real human confirmation or the mask bit
+ * itself populate a mask kind's pool now.
+ *
+ * For a TRAIT slot kind (bassHeavy/rhythmic/bright/warm --
+ * DISCOVER_TRAIT_SLOT_KINDS), see getTraitDiscoverCandidates (Task 3) --
+ * ranked by a cached StemFeatureCache field instead. */
 export interface DiscoverCandidate {
   stemCID: string
   jamCID: string
   riffCID: string
   presetName: string
   creatorUserName: string
-  arrangeRole: ArrangeRole
+  slotKind: DiscoverSlotKind
   drumSubRole: DrumSubRole | null
   /** The OWNING RIFF's own BPM (Riffs.BPMrnd) -- the compatibility signal
    * this plan's own ranking (Task 3) actually scores against, since a
@@ -43,6 +49,11 @@ export interface DiscoverCandidate {
    * frequently null in real data -- LORE's own resolveRiff falls back to
    * the riff's BPM for exactly this reason, riffLibraryTypes.ts). */
   riffBpm: number
+  /** The raw StemFeatureCache field value this candidate was ranked
+   * against, for a TRAIT slot kind (bassHeavy/rhythmic/bright/warm) -- see
+   * discoverRanking.ts's own trait-distance scoring term. Always null for
+   * a mask-kind candidate (drums/bass/lead), which ranks by BPM alone. */
+  traitValue: number | null
 }
 
 interface JamDbPair {
@@ -547,21 +558,22 @@ function yieldToEventLoop(): Promise<void> {
 /** Every StemCID, across the given jams, that isn't confirmed
  * (StemCategories) for ANY ArrangeRole -- not just the one being queried,
  * so a real human confirmation always wins over a raw instrument-bit
- * match -- but whose own Endlesss instrument category (Stems.Instrument,
- * a bitmask -- instrumentMaskToSoundType) maps to `arrangeRole` via
- * SOUND_TYPE_TO_ARRANGE_ROLE. Direct request, 2026-09-15: "can't we train
- * it with some basic data before handing it to someone?" -- this needs NO
- * prior confirmation and no background scan at all: instrument category
- * is real ground truth Endlesss itself recorded at jam time (see
+ * match -- but whose own Endlesss instrument category (Stems.Instrument, a
+ * bitmask -- instrumentMaskToSoundType) directly identifies it as `kind`.
+ * Only ever called for one of the 3 MASK kinds (drums/bass/lead) -- an
+ * audioIn-masked or unmasked stem never matches here, by design (see this
+ * codebase's own real finding, 2026-09-18: audioIn is not a reliable
+ * signal, "can indeed be drums though"). Direct request, 2026-09-15: "can't
+ * we train it with some basic data before handing it to someone?" -- this
+ * needs NO prior confirmation and no background scan at all: instrument
+ * category is real ground truth Endlesss itself recorded at jam time (see
  * instrumentMaskToSoundType's own doc comment -- "traced directly from
  * OUROVEON's own source, not guessed"), present on every synced stem the
- * moment it syncs. This is the SAME mapping resolveStemRole (stemRole.ts)
- * already uses as its own default/fallback arrangeRole for any stem
- * without a confirmed busId -- reusing it here for Discover's candidate
- * pool is consistent with that established precedent, not new risk. Stays
- * a LIVE query (unlike the embedding/centroid classifiers, moved out to a
- * background scan the same day) since it's already cheap: a bitmask
- * check, no classifier math, no external store to load.
+ * moment it syncs. Stays a LIVE query (unlike the embedding/centroid
+ * classifiers, moved out to a background scan the same day, then dropped
+ * entirely for mask kinds -- see DiscoverCandidate's own doc comment)
+ * since it's already cheap: a bitmask check, no classifier math, no
+ * external store to load.
  *
  * Reads each jam's own `Stems` table directly (not ownDb) for the
  * Instrument values themselves -- a stem's Instrument lives wherever its
@@ -599,7 +611,7 @@ function yieldToEventLoop(): Promise<void> {
 async function getInstrumentMatchedStemCIDs(
   ownDb: Database.Database,
   jams: JamDbPair[],
-  arrangeRole: ArrangeRole
+  kind: DiscoverSlotKind
 ): Promise<Set<string>> {
   const confirmedAnyRole = new Set(
     (
@@ -628,7 +640,11 @@ async function getInstrumentMatchedStemCIDs(
         !matched.has(row.StemCID)
       ) {
         const soundType = instrumentMaskToSoundType(row.Instrument)
-        if (soundType && SOUND_TYPE_TO_ARRANGE_ROLE[soundType] === arrangeRole) {
+        if (
+          (soundType === 'drums' && kind === 'drums') ||
+          (soundType === 'bass' && kind === 'bass') ||
+          (soundType === 'notes' && kind === 'lead')
+        ) {
           matched.add(row.StemCID)
         }
       }
@@ -642,8 +658,14 @@ async function getInstrumentMatchedStemCIDs(
   return matched
 }
 
-/** Every stem, library-wide, already confirmed to the given ArrangeRole --
- * the data source Discover's own reroll (Task 3) samples from.
+/** Every stem, library-wide, that's a candidate for the given
+ * DiscoverSlotKind -- the data source Discover's own reroll (Task 3)
+ * samples from.
+ *
+ * For a TRAIT kind (bassHeavy/rhythmic/bright/warm), delegates entirely to
+ * getTraitDiscoverCandidates (Task 3) -- a completely different query shape
+ * (ranked by a cached StemFeatureCache field, not mask/confirmation). What
+ * follows is the MASK kind (drums/bass/lead) path only.
  *
  * `jams` is caller-supplied (not computed here) so this function stays a
  * pure-ish query over whatever set of {jamCID, db} pairs the caller already
@@ -664,7 +686,7 @@ async function getInstrumentMatchedStemCIDs(
  * production scale) -- and only then looks up those specific StemCIDs'
  * owning riffs/stem rows per jam. This is the inverse of the naive "walk
  * every Riffs row in the whole library" shape: the whole point of Discover
- * calling this once per slot's role is that the confirmed set is tiny next
+ * calling this once per slot's kind is that the confirmed set is tiny next
  * to a 50k+-stem library, so the per-call cost should track the confirmed
  * set's size, not the library's (2026-09-15 code quality review, finding
  * 2). StemCategories is still read ONLY from ownDb, per the note above --
@@ -674,76 +696,59 @@ async function getInstrumentMatchedStemCIDs(
  * only pools for a role Elling hasn't tagged much yet (e.g. only 1-2
  * confirmed "drums" stems) meant reroll kept landing the exact same stem
  * regardless of the chaos/safe slider -- there was nothing else to pick.
- * Two more sources now widen the pool: getAutoCategorizedStemCIDs reads
- * the background classify scan's own PRECOMPUTED results
- * (StemAutoCategory -- embedding or centroid classification, run once per
- * stem in the background, never at query time -- see
- * stemAutoClassify.ts), and getInstrumentMatchedStemCIDs reads Endlesss's
- * own recorded instrument category for each stem (a real bit traced from
- * OUROVEON's own source, not a guess -- instrumentMaskToSoundType's own
- * doc comment), mapped onto ArrangeRole via the exact same
- * SOUND_TYPE_TO_ARRANGE_ROLE table resolveStemRole (stemRole.ts) already
- * uses as its own default guess elsewhere in this app. Both need zero
- * classifier math at query time -- the whole reroll-was-slow saga earlier
- * the same day was BECAUSE the embedding/centroid classifiers used to run
- * live, right here, on every single roll. */
+ * getInstrumentMatchedStemCIDs widens the pool with Endlesss's own recorded
+ * instrument category for each stem (a real bit traced from OUROVEON's own
+ * source, not a guess -- instrumentMaskToSoundType's own doc comment) --
+ * needs zero classifier math at query time.
+ *
+ * NARROWED (2026-09-18, Discover trait-based matching redesign, Task 2): a
+ * SECOND widening source used to exist here too -- getAutoCategorizedStemCIDs,
+ * reading the background classify scan's own PRECOMPUTED results
+ * (StemAutoCategory, embedding/centroid classification). That source is
+ * REMOVED for mask kinds -- this codebase no longer trusts that fallible
+ * classifier layer for a kind Endlesss's own reliable instrument mask can
+ * answer directly. Only human confirmation (StemCategories) and the mask
+ * bit itself (getInstrumentMatchedStemCIDs) populate a mask kind's pool
+ * now -- see DiscoverCandidate's own doc comment for the full rationale. */
 export async function getDiscoverCandidates({
   ownDb,
   jams,
-  arrangeRole,
+  kind,
   onlyOwnStems = false,
   targetUser
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
-  arrangeRole: ArrangeRole
+  kind: DiscoverSlotKind
   onlyOwnStems?: boolean
   targetUser?: string
 }): Promise<DiscoverCandidate[]> {
+  if (DISCOVER_TRAIT_SLOT_KINDS.includes(kind)) {
+    return getTraitDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser })
+  }
+
+  // Human-confirmed StemCategories rows for this exact ArrangeRole still
+  // win outright -- a real confirmation is trusted even over an ambiguous
+  // or missing mask bit. Reuses the SAME ArrangeRole column StemCategories
+  // has always had (untouched by this redesign) -- discoverSlotKindToArrangeRole
+  // gives the identity mapping for the 3 mask kinds.
+  //
   // No inner try/catch here (removed 2026-09-15, finding 1): StemCategories
   // on ownDb is guaranteed present by a real migration that runs on every
   // app start, same established convention as embeddingMatch.ts's own
   // getConfirmedEmbeddings. A real SQL error here (e.g. a typo) should
   // throw, not silently produce an empty Discover pool with no diagnostic
   // trail.
+  const arrangeRole = discoverSlotKindToArrangeRole(kind)
   const confirmedRows = ownDb
     .prepare(`SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories WHERE ArrangeRole = ?`)
     .all(arrangeRole) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
 
-  // Plain, fast SELECT against the background scan's own precomputed
-  // results (stemAutoClassify.ts) -- no classifier math at query time at
-  // all. Guarded against confirmedAnyRole, NOT just `!categoryByStemCID.has`
-  // (a bug caught in review before this shipped): StemAutoCategory can go
-  // stale relative to a LATER human confirmation of the same stem for a
-  // DIFFERENT role (the classify scan only checks "confirmed for any role"
-  // at WRITE time, not on every future read) -- if this only checked
-  // categoryByStemCID (built from StemCategories WHERE ArrangeRole = THIS
-  // role), a stem confirmed 'bass' with a stale StemAutoCategory row still
-  // saying 'drums' would leak into the 'drums' pool. Same cross-role-
-  // leakage guard getInstrumentMatchedStemCIDs already uses, below.
-  const confirmedAnyRole = new Set(
-    (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
-  )
-  for (const stemCID of getAutoCategorizedStemCIDs(ownDb, arrangeRole)) {
-    if (!confirmedAnyRole.has(stemCID)) {
-      categoryByStemCID.set(stemCID, {
-        StemCID: stemCID,
-        ArrangeRole: arrangeRole,
-        DrumSubRole: null
-      })
-    }
-  }
-
-  // Also live (not precomputed): cheap enough (a bitmask check, no
-  // classifier) that persisting it wouldn't save anything worth the extra
-  // moving part.
-  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, arrangeRole)
+  // Live mask match, no StemAutoCategory/embedding widening at all -- see
+  // this function's own doc comment for why.
+  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, kind)
   for (const stemCID of instrumentMatchedStemCIDs) {
     // getInstrumentMatchedStemCIDs already excludes anything confirmed for
     // ANY role (its own doc comment), so this can never overwrite a real
@@ -858,9 +863,10 @@ export async function getDiscoverCandidates({
           riffCID: riffInfo.riffCID,
           presetName: stemRow.PresetName ?? '',
           creatorUserName: stemRow.CreatorUserName ?? '',
-          arrangeRole: category.ArrangeRole as ArrangeRole,
+          slotKind: kind,
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
-          riffBpm: riffInfo.bpmRnd
+          riffBpm: riffInfo.bpmRnd,
+          traitValue: null
         })
       }
 
@@ -877,6 +883,19 @@ export async function getDiscoverCandidates({
   }
 
   return out
+}
+
+// Temporary stub -- replaced in full by Task 3. Keeps this task's own tests
+// green without depending on Task 3 landing first.
+async function getTraitDiscoverCandidates(_args: {
+  ownDb: Database.Database
+  jams: JamDbPair[]
+  kind: DiscoverSlotKind
+  onlyOwnStems: boolean
+  targetUser?: string
+}): Promise<DiscoverCandidate[]> {
+  void _args
+  return []
 }
 
 // How many jams to try, at most, before giving up and returning null --

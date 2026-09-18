@@ -63,9 +63,12 @@ function freshDb(): Database.Database {
  * (stemAutoClassify.ts) own precomputed-results table -- rather than
  * seeding embeddings/features and letting a live classifier run. The
  * classification logic itself (embedding vs. centroid, confidence
- * thresholds) is stemAutoClassify's own concern and is tested there;
- * this file only needs to prove getDiscoverCandidates reads this table's
- * rows correctly. */
+ * thresholds) is stemAutoClassify's own concern and is tested there.
+ * Updated 2026-09-18 (Discover trait-based matching redesign, Task 2):
+ * getDiscoverCandidates no longer widens a MASK kind's pool (drums/bass/
+ * lead) from this table at all -- this helper is now used by this file's
+ * own mask-kind tests specifically to prove that removal (a stem seeded
+ * ONLY here must NOT surface), not to prove the rows ARE read. */
 function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
@@ -155,7 +158,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
 
     expect(candidates).toHaveLength(1)
@@ -172,7 +175,7 @@ describe('getDiscoverCandidates', () => {
       await getDiscoverCandidates({
         ownDb: own,
         jams: [{ jamCID: 'jam1', dbForJam: own }],
-        arrangeRole: 'drums'
+        kind: 'drums'
       })
     ).toEqual([])
   })
@@ -186,7 +189,7 @@ describe('getDiscoverCandidates', () => {
     const [c] = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(c).toMatchObject({
       stemCID: 's1',
@@ -195,7 +198,7 @@ describe('getDiscoverCandidates', () => {
       riffBpm: 140,
       presetName: '808 kick',
       creatorUserName: 'elling',
-      arrangeRole: 'drums'
+      slotKind: 'drums'
     })
   })
 
@@ -213,7 +216,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jamExt', dbForJam: external }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates).toHaveLength(1)
     expect(candidates[0].stemCID).toBe('s1')
@@ -242,7 +245,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jamBroken', dbForJam: brokenExternal },
         { jamCID: 'jam1', dbForJam: own }
       ],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
 
     // The broken jam is skipped silently; the good jam's candidate still
@@ -270,7 +273,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
 
     expect(candidates).toHaveLength(1)
@@ -292,7 +295,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
 
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
@@ -309,7 +312,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums',
+      kind: 'drums',
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -331,7 +334,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam1', dbForJam: own },
         { jamCID: 'jam2', dbForJam: own }
       ],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2'])
   })
@@ -368,7 +371,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam2', dbForJam: own },
         { jamCID: 'jam3', dbForJam: own }
       ],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2', 's3'])
     expect(candidates.map((c) => c.jamCID).sort()).toEqual(['jam1', 'jam2', 'jam3'])
@@ -410,7 +413,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
@@ -441,12 +444,12 @@ describe('getDiscoverCandidates', () => {
     const drumsCandidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     const bassCandidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'bass'
+      kind: 'bass'
     })
     expect(drumsCandidates.map((c) => c.stemCID)).toEqual(['s1'])
     expect(bassCandidates.map((c) => c.stemCID)).toEqual(['s2'])
@@ -487,32 +490,31 @@ describe('getDiscoverCandidates', () => {
     expect(riffsQueries.length).toBe(2)
   })
 
-  // Widening (2026-09-15, direct request): a role with a too-small
-  // confirmed pool should still surface stems the background classify scan
-  // (stemAutoClassify.ts) has already precomputed. The scan's own
-  // embedding-vs-centroid classification logic is tested in
-  // stemAutoClassify.test.ts; this file only needs to prove
-  // getDiscoverCandidates reads StemAutoCategory's rows correctly, so
-  // these tests write directly to that table via seedAutoCategory.
-  it('includes an UNCONFIRMED stem precomputed as the requested role via StemAutoCategory (background scan)', async () => {
+  // REMOVED (2026-09-18, Discover trait-based matching redesign, Task 2):
+  // this used to prove a too-small confirmed pool still surfaced stems the
+  // background classify scan (stemAutoClassify.ts) had precomputed
+  // (StemAutoCategory). That widening is dropped for the 3 MASK kinds
+  // (drums/bass/lead) -- this redesign no longer trusts the fallible
+  // embedding/centroid classifier layer for them, only a real human
+  // confirmation (StemCategories) or Endlesss's own instrument-mask bit
+  // (see getInstrumentMatchedStemCIDs). This test now proves the opposite:
+  // an UNCONFIRMED stem that's ONLY in StemAutoCategory no longer appears
+  // in a mask kind's own pool at all.
+  it('does NOT include an unconfirmed stem whose only signal is a StemAutoCategory row (background-scan widening removed for mask kinds)', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     seedStem(own, 's1', 'jam1', { presetName: 'maybe a kick' })
     // No StemCategories row at all -- this stem was never human-confirmed,
-    // only auto-classified by the background scan.
+    // only auto-classified by the background scan -- and no Instrument
+    // bitmask set either, so nothing else could surface it.
     seedAutoCategory(own, 's1', 'drums')
 
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
-    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
-    expect(candidates[0]).toMatchObject({
-      arrangeRole: 'drums',
-      drumSubRole: null,
-      presetName: 'maybe a kick'
-    })
+    expect(candidates).toEqual([])
   })
 
   it('excludes a StemAutoCategory row for a stem confirmed to a DIFFERENT role (cross-role leakage guard)', async () => {
@@ -530,7 +532,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates).toEqual([])
   })
@@ -544,7 +546,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates).toEqual([])
   })
@@ -562,10 +564,10 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
-    expect(candidates[0]).toMatchObject({ arrangeRole: 'drums', drumSubRole: null })
+    expect(candidates[0]).toMatchObject({ slotKind: 'drums', drumSubRole: null })
   })
 
   it('does NOT include a stem confirmed for a DIFFERENT role even when its own Instrument bitmask would otherwise match', async () => {
@@ -579,7 +581,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates).toEqual([])
   })
@@ -592,18 +594,27 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates).toEqual([])
   })
 
-  it('combines all three sources (confirmed, StemAutoCategory-precomputed, instrument-matched) in one pool', async () => {
+  // Updated (2026-09-18, Discover trait-based matching redesign, Task 2):
+  // a mask kind's pool now combines only TWO sources (confirmed,
+  // instrument-matched) -- the third, StemAutoCategory-precomputed, is
+  // removed for mask kinds (see the "does NOT include an unconfirmed
+  // stem..." test above). `guessed-1` here is seeded with ONLY a
+  // StemAutoCategory row, same as before, specifically to prove it's now
+  // excluded even while sitting alongside real confirmed/instrument-matched
+  // candidates in the same pool.
+  it('combines both remaining sources (confirmed, instrument-matched) in one pool, excluding a StemAutoCategory-only stem', async () => {
     const own = freshDb()
     // Confirmed 'drums'.
     seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
     seedStem(own, 'd1', 'jam1')
     seedCategory(own, 'd1', { arrangeRole: 'drums', busId: 'drums' })
-    // Precomputed via the background scan: unconfirmed, in StemAutoCategory.
+    // StemAutoCategory-only, no confirmation and no instrument bit -- must
+    // NOT appear now that background-scan widening is removed for mask kinds.
     seedRiff(own, 'rg', 'jam1', 128, ['guessed-1'])
     seedStem(own, 'guessed-1', 'jam1')
     seedAutoCategory(own, 'guessed-1', 'drums')
@@ -614,9 +625,9 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
-    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'guessed-1', 'instrument-1'])
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'instrument-1'])
   })
 
   // Real crash, found live via a full macOS crash report: SQLite trapped
@@ -639,7 +650,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual([...stemCIDs].sort())
   })
@@ -663,7 +674,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.length).toBe(1000)
     // Every returned candidate is still a REAL, valid match -- capping
@@ -686,7 +697,7 @@ describe('getDiscoverCandidates', () => {
     const first = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(first.map((c) => c.stemCID)).toEqual(['d1'])
 
@@ -697,7 +708,7 @@ describe('getDiscoverCandidates', () => {
     const second = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     // Still the cached (stale) result.
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
@@ -740,7 +751,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam1', dbForJam: own },
         { jamCID: 'jam2', dbForJam: own }
       ],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2'])
 
@@ -775,14 +786,14 @@ describe('getDiscoverCandidates', () => {
     const drumsResult = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(drumsResult.map((c) => c.stemCID)).toEqual(['d1'])
 
     const bassResult = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'bass'
+      kind: 'bass'
     })
     expect(bassResult.map((c) => c.stemCID)).toEqual(['b1'])
 
@@ -812,7 +823,7 @@ describe('prewarmDiscoverCandidateCaches', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      arrangeRole: 'drums'
+      kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
 
