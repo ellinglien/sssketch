@@ -152,6 +152,66 @@ CREATE TABLE IF NOT EXISTS StemFavourite (
   StemCID TEXT PRIMARY KEY,
   FavouritedAt INTEGER NOT NULL
 );
+
+-- Persisted counterpart to discoverCandidates.ts's own in-memory
+-- riffIndexCache/instrumentRowsCache -- direct report, 2026-09-18: those
+-- caches are process-lifetime-only (a plain WeakMap keyed to the live db
+-- connection object), so a full ~4-5 minute rescan of a large external
+-- LORE archive (372,297 riffs on Elling's own real library) ran on EVERY
+-- app launch, not just the first. Keyed by SourceDbKey (the scanned db's
+-- own file path -- better-sqlite3's Database#name, stable across
+-- restarts, and distinct between sssketch's own warehouse and any
+-- external archive) so a cache for the external archive can live here
+-- even though that db itself is read-only. Freshness is checked via the
+-- separate *CacheMeta tables below (a cheap COUNT(*) against the row
+-- count stored there) rather than any timestamp/mtime -- the archive
+-- doesn't change on its own; only a real sync run adds/removes rows, so
+-- "row count changed" is a reliable-enough signal for when to rebuild,
+-- matching this codebase's own established "good enough, not exhaustive"
+-- cache-invalidation philosophy (see LIMIT/OFFSET pagination's own
+-- accepted imperfections elsewhere in this file's siblings).
+--
+-- One row per (SourceDbKey, StemCID) -- already the fully-resolved,
+-- deduped shape discoverCandidates.ts's own buildRiffIndex computes (a
+-- riff's 8 stem slots flattened into one row per stem), so loading from
+-- here skips that function's own nested per-riff slot loop entirely, not
+-- just the disk I/O.
+CREATE TABLE IF NOT EXISTS DiscoverRiffIndexCache (
+  SourceDbKey TEXT NOT NULL,
+  StemCID TEXT NOT NULL,
+  RiffCID TEXT NOT NULL,
+  OwnerJamCID TEXT NOT NULL,
+  BPMrnd REAL NOT NULL,
+  PRIMARY KEY (SourceDbKey, StemCID)
+);
+
+CREATE TABLE IF NOT EXISTS DiscoverRiffIndexCacheMeta (
+  SourceDbKey TEXT PRIMARY KEY,
+  RiffCount INTEGER NOT NULL,
+  ComputedAt INTEGER NOT NULL
+);
+
+-- Same persisted-cache reasoning as DiscoverRiffIndexCache above, for
+-- discoverCandidates.ts's own getInstrumentRowsForDb (the Stems table's
+-- own StemCID/Instrument/OwnerJamCID columns, used by the instrument-mask
+-- candidate path). A separate meta table (StemCount, not RiffCount) --
+-- deliberately NOT one shared meta table with the riff index cache above,
+-- since the two caches are populated/invalidated independently (one scan
+-- can finish while the other is still cold) and a shared row would need
+-- partial-upsert-with-NULL handling for no real benefit.
+CREATE TABLE IF NOT EXISTS DiscoverInstrumentRowsCache (
+  SourceDbKey TEXT NOT NULL,
+  StemCID TEXT NOT NULL,
+  Instrument INTEGER,
+  OwnerJamCID TEXT NOT NULL,
+  PRIMARY KEY (SourceDbKey, StemCID)
+);
+
+CREATE TABLE IF NOT EXISTS DiscoverInstrumentRowsCacheMeta (
+  SourceDbKey TEXT PRIMARY KEY,
+  StemCount INTEGER NOT NULL,
+  ComputedAt INTEGER NOT NULL
+);
 `
 
 let cachedDb: Database.Database | null = null

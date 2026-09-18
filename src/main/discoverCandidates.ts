@@ -3,6 +3,14 @@ import type Database from 'better-sqlite3'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
+import {
+  getCachedRiffCount,
+  getCachedStemCount,
+  loadCachedRiffIndex,
+  saveRiffIndexCache,
+  loadCachedInstrumentRows,
+  saveInstrumentRowsCache
+} from './discoverIndexCache'
 
 /** One library-wide candidate for a Discover slot -- a stem that's EITHER
  * human-confirmed (StemCategories) for the requested ArrangeRole, or
@@ -296,6 +304,20 @@ async function buildRiffIndex(
   return index
 }
 
+/** Cheap, defensive `SELECT COUNT(*)` against `table` -- same "missing
+ * table on a broken/foreign db is not an error" convention as every other
+ * query in this file. Used only to decide cache freshness below (a real
+ * scan still re-measures its own count via buildRiffIndex/
+ * getInstrumentRowsForDb's own COUNT(*), redundant but cheap -- an index
+ * scan of the count, not a full row read). */
+function tryCountRows(db: Database.Database, table: 'Riffs' | 'Stems'): number | null {
+  try {
+    return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  } catch {
+    return null
+  }
+}
+
 /** Kicks off getRiffIndexForDb (above) for every unique db connection in
  * `jams`, in the BACKGROUND, well before anyone actually rolls -- direct
  * live report: even after caching made every roll AFTER the first one
@@ -308,27 +330,59 @@ async function buildRiffIndex(
  * already warm, so that first click pays nothing extra. Errors are
  * logged, never thrown -- a failed pre-warm just means the FIRST real
  * roll pays the cost itself instead, same as if this were never called;
- * it must never be allowed to affect app startup's own success. */
+ * it must never be allowed to affect app startup's own success.
+ *
+ * Direct report, 2026-09-18: even with the above, this in-memory cache
+ * (riffIndexCache/instrumentRowsCache, both plain WeakMaps keyed to the
+ * live db CONNECTION object) is process-lifetime-only -- a fresh app
+ * launch always starts cold, so the real ~4-5 minute scan cost (372,297
+ * riffs on Elling's own external LORE archive) ran on EVERY single
+ * launch, not just the first ever. `ownDb` (sssketch's own always-on,
+ * writable warehouse -- see discoverIndexCache.ts's own doc comment for
+ * why the cache lives there even for an external archive's own data) is
+ * now checked FIRST for each db+phase: a cheap `SELECT COUNT(*)`
+ * (tryCountRows above) against the row count the cache was last saved
+ * with tells us whether the archive has actually changed since. An
+ * unchanged archive loads straight from `ownDb` (fast -- same disk as
+ * everything else this app already reads/writes, and for the riff index
+ * specifically, already in the fully-resolved per-stem shape, skipping
+ * buildRiffIndex's own per-riff 8-slot loop entirely) instead of
+ * re-scanning the real source db. A changed (or never-cached) archive
+ * still does the real scan as before, then persists the fresh result for
+ * next launch's benefit. */
 export async function prewarmDiscoverCandidateCaches(
   jams: JamDbPair[],
+  ownDb: Database.Database,
   onProgress?: PrewarmProgressCallback
 ): Promise<void> {
   const uniqueDbs = [...new Set(jams.map((j) => j.dbForJam))]
   for (let dbIndex = 0; dbIndex < uniqueDbs.length; dbIndex++) {
     const db = uniqueDbs[dbIndex]
+    const sourceDbKey = db.name
+    const reportRiffIndexProgress = (completed: number, total: number): void =>
+      onProgress?.({ phase: 'riffIndex', dbIndex, dbCount: uniqueDbs.length, completed, total })
+    const reportInstrumentRowsProgress = (completed: number, total: number): void =>
+      onProgress?.({
+        phase: 'instrumentRows',
+        dbIndex,
+        dbCount: uniqueDbs.length,
+        completed,
+        total
+      })
+
     try {
-      await getRiffIndexForDb(db, (completed, total) =>
-        onProgress?.({
-          phase: 'riffIndex',
-          dbIndex,
-          dbCount: uniqueDbs.length,
-          completed,
-          total
-        })
-      )
+      const liveRiffCount = tryCountRows(db, 'Riffs')
+      if (liveRiffCount !== null && getCachedRiffCount(ownDb, sourceDbKey) === liveRiffCount) {
+        const index = await loadCachedRiffIndex(ownDb, sourceDbKey, reportRiffIndexProgress)
+        riffIndexCache.set(db, { index, computedAt: Date.now() })
+      } else {
+        const index = await getRiffIndexForDb(db, reportRiffIndexProgress)
+        if (liveRiffCount !== null) saveRiffIndexCache(ownDb, sourceDbKey, index, liveRiffCount)
+      }
     } catch (err) {
       console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
     }
+
     // Real perf bug, found live 2026-09-15 (see getInstrumentRowsForDb's
     // own doc comment): this only ever warmed the riff index, never the
     // instrument-matched scan's own cache (a SEPARATE, similarly-expensive
@@ -338,16 +392,16 @@ export async function prewarmDiscoverCandidateCaches(
     // user's own critical path. Warmed here too now, same fire-and-forget/
     // never-block-startup discipline as the riff index above -- no
     // try/catch needed, getInstrumentRowsForDb already swallows its own
-    // errors internally (an empty cached result, never a throw).
-    await getInstrumentRowsForDb(db, (completed, total) =>
-      onProgress?.({
-        phase: 'instrumentRows',
-        dbIndex,
-        dbCount: uniqueDbs.length,
-        completed,
-        total
-      })
-    )
+    // errors internally (an empty cached result, never a throw). Same
+    // own-db cache check as the riff index above.
+    const liveStemCount = tryCountRows(db, 'Stems')
+    if (liveStemCount !== null && getCachedStemCount(ownDb, sourceDbKey) === liveStemCount) {
+      const rows = await loadCachedInstrumentRows(ownDb, sourceDbKey, reportInstrumentRowsProgress)
+      instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+    } else {
+      const rows = await getInstrumentRowsForDb(db, reportInstrumentRowsProgress)
+      if (liveStemCount !== null) saveInstrumentRowsCache(ownDb, sourceDbKey, rows, liveStemCount)
+    }
   }
 }
 

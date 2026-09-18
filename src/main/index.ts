@@ -300,6 +300,7 @@ function createWindow(): BrowserWindow {
     // window's own first paint.
     void prewarmDiscoverCandidateCaches(
       listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+      openOwnRiffLibraryDb(),
       (progress: PrewarmScanProgress) => {
         mainWindow?.webContents.send('library-warmup-progress', progress)
       }

@@ -7,6 +7,7 @@ import {
   prewarmDiscoverCandidateCaches,
   getRiffIndexForDb
 } from './discoverCandidates'
+import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -37,6 +38,22 @@ function freshDb(): Database.Database {
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
       ComputedAt INTEGER NOT NULL
+    );
+    CREATE TABLE DiscoverRiffIndexCache (
+      SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
+      OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL,
+      PRIMARY KEY (SourceDbKey, StemCID)
+    );
+    CREATE TABLE DiscoverRiffIndexCacheMeta (
+      SourceDbKey TEXT PRIMARY KEY, RiffCount INTEGER NOT NULL, ComputedAt INTEGER NOT NULL
+    );
+    CREATE TABLE DiscoverInstrumentRowsCache (
+      SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, Instrument INTEGER,
+      OwnerJamCID TEXT NOT NULL,
+      PRIMARY KEY (SourceDbKey, StemCID)
+    );
+    CREATE TABLE DiscoverInstrumentRowsCacheMeta (
+      SourceDbKey TEXT PRIMARY KEY, StemCount INTEGER NOT NULL, ComputedAt INTEGER NOT NULL
     );
   `)
   return db
@@ -789,7 +806,7 @@ describe('prewarmDiscoverCandidateCaches', () => {
     seedStem(own, 's1', 'jam1')
     seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
 
-    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }])
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
 
     const prepareSpy = vi.spyOn(own, 'prepare')
     const candidates = await getDiscoverCandidates({
@@ -811,21 +828,97 @@ describe('prewarmDiscoverCandidateCaches', () => {
     seedStem(own, 's2', 'jam2')
 
     const prepareSpy = vi.spyOn(own, 'prepare')
-    await prewarmDiscoverCandidateCaches([
-      { jamCID: 'jam1', dbForJam: own },
-      { jamCID: 'jam2', dbForJam: own }
-    ])
+    await prewarmDiscoverCandidateCaches(
+      [
+        { jamCID: 'jam1', dbForJam: own },
+        { jamCID: 'jam2', dbForJam: own }
+      ],
+      own
+    )
 
-    // 2, not 1 -- see the "single query per chunk" test above for why.
+    // 3, not 2 -- prewarmDiscoverCandidateCaches now runs its own cheap
+    // `SELECT COUNT(*) FROM Riffs` cache-freshness check (tryCountRows)
+    // BEFORE buildRiffIndex's own COUNT(*) + one LIMIT/OFFSET page (see
+    // the "single query per chunk" test above for why THAT part is 2, not
+    // 1) -- own is passed as both the source db AND the cache-storage
+    // ownDb here, a realistic case (no external archive configured), and
+    // there's no pre-existing cache yet, so this always takes the live-
+    // scan path.
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(2)
+    expect(riffsQueries.length).toBe(3)
   })
 
   it('does not throw when a db lacks a Riffs table', async () => {
     const broken = new Database(':memory:')
     await expect(
-      prewarmDiscoverCandidateCaches([{ jamCID: 'jamBroken', dbForJam: broken }])
+      prewarmDiscoverCandidateCaches([{ jamCID: 'jamBroken', dbForJam: broken }], broken)
     ).resolves.toBeUndefined()
+  })
+
+  // Direct report, 2026-09-18: "it seems to do this on every load" -- the
+  // real ~4-5 minute scan against a large external archive ran on EVERY
+  // app launch, since the in-memory riffIndexCache/instrumentRowsCache are
+  // process-lifetime-only. Proves the on-disk cache (discoverIndexCache.ts)
+  // is actually consulted and actually skips the live scan when the
+  // archive's own row counts haven't changed since it was last saved.
+  it('loads from the on-disk cache instead of re-scanning Riffs/Stems when the row counts match', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+
+    // Simulate a previous session's already-saved cache -- same row counts
+    // (1 riff, 1 stem) as what's really in `own` right now.
+    saveRiffIndexCache(
+      own,
+      own.name,
+      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 }]]),
+      1
+    )
+    saveInstrumentRowsCache(
+      own,
+      own.name,
+      [{ StemCID: 's1', Instrument: null, OwnerJamCID: 'jam1' }],
+      1
+    )
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
+
+    // Only the cheap freshness-check COUNT(*) against the real Riffs/Stems
+    // tables runs (1 each) -- no page-scan query against either live table
+    // at all, unlike the cache-miss case above (3 "FROM Riffs" queries).
+    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    const stemsInstrumentQueries = prepareSpy.mock.calls.filter(([sql]) =>
+      /SELECT StemCID, Instrument, OwnerJamCID FROM Stems|COUNT\(\*\) AS n FROM Stems/.test(sql)
+    )
+    expect(riffsQueries.length).toBe(1)
+    expect(stemsInstrumentQueries.length).toBe(1)
+
+    // And the loaded result is actually correct, not just "didn't crash".
+    const index = await getRiffIndexForDb(own)
+    expect(index.get('s1')).toEqual({ riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 })
+  })
+
+  it('falls back to a live scan when the on-disk cache is stale (row count changed)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+
+    // A stale cache claiming 5 riffs existed when this was last saved --
+    // the real table only has 1 right now, so this must be treated as
+    // stale and re-scanned, not trusted.
+    saveRiffIndexCache(
+      own,
+      own.name,
+      new Map([['stale', { riffCID: 'stale-riff', ownerJamCID: 'stale-jam', bpmRnd: 999 }]]),
+      5
+    )
+
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
+
+    const index = await getRiffIndexForDb(own)
+    expect(index.get('s1')).toEqual({ riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 })
+    expect(index.has('stale')).toBe(false)
   })
 
   // Direct request, 2026-09-18 ("ideally it would also show a progress bar
@@ -846,7 +939,7 @@ describe('prewarmDiscoverCandidateCaches', () => {
       completed: number
       total: number
     }> = []
-    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], (progress) => {
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own, (progress) => {
       updates.push({ ...progress })
     })
 
@@ -869,12 +962,16 @@ describe('prewarmDiscoverCandidateCaches', () => {
     seedRiff(dbB, 'r2', 'jamB', 128, ['s2'])
     seedStem(dbB, 's2', 'jamB')
 
+    // A separate db from either source -- a real ownDb is one single
+    // writable db regardless of how many source dbs get scanned.
+    const ownDb = freshDb()
     const dbIndexesSeen = new Set<number>()
     await prewarmDiscoverCandidateCaches(
       [
         { jamCID: 'jamA', dbForJam: dbA },
         { jamCID: 'jamB', dbForJam: dbB }
       ],
+      ownDb,
       (progress) => {
         expect(progress.dbCount).toBe(2)
         dbIndexesSeen.add(progress.dbIndex)

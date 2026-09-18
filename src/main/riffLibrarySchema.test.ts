@@ -37,6 +37,10 @@ describe('riffLibrarySchema', () => {
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
       .all() as { name: string }[]
     expect(tables.map((t) => t.name)).toEqual([
+      'DiscoverInstrumentRowsCache',
+      'DiscoverInstrumentRowsCacheMeta',
+      'DiscoverRiffIndexCache',
+      'DiscoverRiffIndexCacheMeta',
       'Jams',
       'Riffs',
       'StemAutoCategory',
