@@ -905,10 +905,6 @@ interface FeatureCandidateRow {
   FeaturesJSON: string
 }
 
-/** One StemFeatureCache row that survived the mask-exclusion filter, ready
- * for the second pass to resolve into a full DiscoverCandidate -- named per
- * this file's own convention of giving every intermediate row shape its own
- * interface rather than an inline object type. */
 interface TraitMatchedStem {
   stemCID: string
   jamCID: string
@@ -916,22 +912,34 @@ interface TraitMatchedStem {
 }
 
 /** Candidate pool for the 4 TRAIT slot kinds -- everything a reliable
- * instrument-mask read can't place (audioIn-masked or unmasked), ranked by
- * a cheap, already-cached StemFeatureCache numeric field. Never overlaps
- * with the 3 mask kinds' own pool (getInstrumentMatchedStemCIDs above) --
- * a drums/bass/notes-masked stem is excluded here even if it also has a
- * cached feature row.
+ * instrument-mask read can't place (audioIn-masked or unmasked), AND not
+ * already human-confirmed for any role, ranked by a cheap, already-cached
+ * StemFeatureCache numeric field. Never overlaps with the 3 mask kinds' own
+ * pool (getInstrumentMatchedStemCIDs above) -- a drums/bass/notes-masked
+ * stem, or a stem confirmed via Tidy Up for ANY role, is excluded here even
+ * if it also has a cached feature row.
  *
  * StemFeatureCache stores each stem's own features as one JSON blob
  * (FeaturesJSON), not separate SQL columns -- same "fetch raw rows, parse
  * in JS" convention stemAutoClassify.ts's own fetchPendingFeatureBatch
  * already uses, since there's no SQL-level way to ORDER BY a JSON field
  * without relying on SQLite's JSON1 extension, which nothing else in this
- * codebase depends on. Bounded to a random MAX_CANDIDATE_RESOLUTION_POOL-
- * sized sample from StemFeatureCache (same "bounded pool, not an
- * exhaustive search" discipline the mask-kind path already uses via
- * pickRandomSample) rather than loading the whole table -- StemFeatureCache
- * can grow to the size of the whole synced library over time. */
+ * codebase depends on.
+ *
+ * Bounded via a cheap COUNT + ONE random-offset `ORDER BY StemCID LIMIT/
+ * OFFSET` page (code review, 2026-09-18) -- NOT `ORDER BY RANDOM() LIMIT`,
+ * which was this function's own first-draft shape and is a real bug class
+ * this file has already hit and fixed more than once elsewhere
+ * (buildRiffIndex/getInstrumentRowsForDb's own doc comments): SQLite must
+ * assign a sort key to and fully sort EVERY row before LIMIT ever applies,
+ * so cost scales with the WHOLE table, not the requested pool size -- the
+ * exact "one unbounded synchronous SQL statement" freeze shape already
+ * root-caused at real scale in this same file. A random OFFSET into an
+ * `ORDER BY StemCID` scan (which DOES use the primary-key index) gives
+ * real per-roll variety -- a different contiguous slice of the table each
+ * call -- at a fraction of the cost, same accepted "OFFSET cost grows with
+ * how far in you land, still fast in practice" tradeoff
+ * discoverIndexCache.ts's own pagination already relies on. */
 async function getTraitDiscoverCandidates({
   ownDb,
   jams,
@@ -947,11 +955,25 @@ async function getTraitDiscoverCandidates({
 }): Promise<DiscoverCandidate[]> {
   const field = TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]
 
+  let total: number
+  try {
+    total = (ownDb.prepare(`SELECT COUNT(*) AS n FROM StemFeatureCache`).get() as { n: number }).n
+  } catch {
+    return []
+  }
+  if (total === 0) return []
+
+  const offset =
+    total > MAX_CANDIDATE_RESOLUTION_POOL
+      ? Math.floor(Math.random() * (total - MAX_CANDIDATE_RESOLUTION_POOL))
+      : 0
   let rows: FeatureCandidateRow[]
   try {
     rows = ownDb
-      .prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache ORDER BY RANDOM() LIMIT ?`)
-      .all(MAX_CANDIDATE_RESOLUTION_POOL) as FeatureCandidateRow[]
+      .prepare(
+        `SELECT StemCID, FeaturesJSON FROM StemFeatureCache ORDER BY StemCID LIMIT ? OFFSET ?`
+      )
+      .all(MAX_CANDIDATE_RESOLUTION_POOL, offset) as FeatureCandidateRow[]
   } catch {
     return []
   }
@@ -961,7 +983,10 @@ async function getTraitDiscoverCandidates({
   // stem's own Stems row (and thus its mask) can live in a different db
   // than ownDb's own StemFeatureCache (external LORE archive stems still
   // get their features cached in ownDb). Reuses the SAME per-db cache the
-  // mask-kind path already warms.
+  // mask-kind path already warms. dbByStemCID (not just jamCID) is
+  // captured here too, so the second pass below can group survivors by DB
+  // CONNECTION directly -- see that pass's own comment for why that
+  // matters.
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
     const existing = jamCIDsByDb.get(dbForJam)
@@ -969,42 +994,64 @@ async function getTraitDiscoverCandidates({
     else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
   }
   const instrumentByStemCID = new Map<string, number | null>()
+  const dbByStemCID = new Map<string, Database.Database>()
   const jamCIDByStemCID = new Map<string, string>()
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const instrumentRows = await getInstrumentRowsForDb(db)
     for (const row of instrumentRows) {
       if (!allowedJamCIDs.has(row.OwnerJamCID)) continue
       instrumentByStemCID.set(row.StemCID, row.Instrument)
+      dbByStemCID.set(row.StemCID, db)
       jamCIDByStemCID.set(row.StemCID, row.OwnerJamCID)
     }
   }
 
-  const out: TraitMatchedStem[] = []
+  // Same cross-role-leakage guard getInstrumentMatchedStemCIDs already
+  // uses (code review, 2026-09-18) -- without this, a stem a human has
+  // confirmed via Tidy Up for SOME role, but whose raw mask is audioIn or
+  // unset, would leak into a trait-kind pool too, silently breaking the
+  // "mask kinds and trait kinds never overlap" invariant this function's
+  // own doc comment promises.
+  const confirmedAnyRole = new Set(
+    (
+      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
+        StemCID: string
+      }[]
+    ).map((r) => r.StemCID)
+  )
+
+  const matched: TraitMatchedStem[] = []
   let sinceYield = 0
   for (const row of rows) {
-    const instrument = instrumentByStemCID.get(row.StemCID)
-    if (instrument !== undefined && instrument !== null) {
-      const soundType = instrumentMaskToSoundType(instrument)
-      if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') {
-        sinceYield += 1
-        if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-          sinceYield = 0
-          await yieldToEventLoop()
-        }
-        continue
+    // A single `do {} while (false)` block with `break` on every
+    // disqualifying condition -- so `sinceYield` below increments exactly
+    // ONCE per row regardless of which condition (if any) disqualified it
+    // (code review, 2026-09-18: the original version only incremented on
+    // SOME of this loop's exit paths, an inconsistency with every other
+    // yield-counted loop in this file).
+    do {
+      if (confirmedAnyRole.has(row.StemCID)) break
+
+      const instrument = instrumentByStemCID.get(row.StemCID)
+      if (instrument !== undefined && instrument !== null) {
+        const soundType = instrumentMaskToSoundType(instrument)
+        if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') break
       }
-    }
-    const jamCID = jamCIDByStemCID.get(row.StemCID)
-    if (jamCID === undefined) continue // not among the caller's own jams
 
-    let features: StemFeatures
-    try {
-      features = JSON.parse(row.FeaturesJSON) as StemFeatures
-    } catch {
-      continue
-    }
+      const jamCID = jamCIDByStemCID.get(row.StemCID)
+      if (jamCID === undefined) break // not among the caller's own jams
 
-    out.push({ stemCID: row.StemCID, jamCID, featureValue: features[field] })
+      let features: StemFeatures
+      try {
+        features = JSON.parse(row.FeaturesJSON) as StemFeatures
+      } catch {
+        break
+      }
+
+      matched.push({ stemCID: row.StemCID, jamCID, featureValue: features[field] })
+      // Deliberate do/while(false), see comment above the `do {` for why.
+      // eslint-disable-next-line no-constant-condition
+    } while (false)
 
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
@@ -1012,24 +1059,28 @@ async function getTraitDiscoverCandidates({
       await yieldToEventLoop()
     }
   }
-  if (out.length === 0) return []
+  if (matched.length === 0) return []
 
   // Second pass: resolve riff/Stems metadata for exactly the stems that
-  // passed the mask filter above -- same per-db-grouped, chunked shape as
-  // the mask-kind path, reusing the SAME riffIndex/Stems lookups.
-  const byJam = new Map<string, TraitMatchedStem[]>()
-  for (const entry of out) {
-    const list = byJam.get(entry.jamCID)
+  // survived filtering above -- grouped by DB CONNECTION (dbByStemCID,
+  // captured above), NOT by jamCID (code review, 2026-09-18): grouping by
+  // jamCID here would reintroduce the exact "one query per jam" bug
+  // getInstrumentMatchedStemCIDs's own doc comment already documents as a
+  // real, previously-fixed live incident (5,057 separate round trips on a
+  // real library) -- survivors drawn from a random slice of the whole
+  // library will typically span many jams sharing one db connection.
+  const byDb = new Map<Database.Database, TraitMatchedStem[]>()
+  for (const entry of matched) {
+    const db = dbByStemCID.get(entry.stemCID)
+    if (!db) continue
+    const list = byDb.get(db)
     if (list) list.push(entry)
-    else byJam.set(entry.jamCID, [entry])
+    else byDb.set(db, [entry])
   }
 
   const result: DiscoverCandidate[] = []
-  const jamToDb = new Map(jams.map((j) => [j.jamCID, j.dbForJam]))
   let sinceYield2 = 0
-  for (const [jamCID, entries] of byJam) {
-    const db = jamToDb.get(jamCID)
-    if (!db) continue
+  for (const [db, entries] of byDb) {
     const riffIndex = await getRiffIndexForDb(db)
 
     for (const entryChunk of chunk(entries, CANDIDATE_QUERY_CHUNK_SIZE)) {

@@ -1206,4 +1206,54 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['mine'])
   })
+
+  it('excludes a stem already confirmed (StemCategories) for ANY role, even with no reliable mask signal', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['confirmed-elsewhere'])
+    seedStem(own, 'confirmed-elsewhere', 'jam1') // no instrument mask at all
+    seedFeatures(own, 'confirmed-elsewhere', featuresJSON({ bassEnergyRatio: 0.9 }))
+    seedCategory(own, 'confirmed-elsewhere', { arrangeRole: 'vocal' })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'bassHeavy'
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('skips a stem with malformed FeaturesJSON rather than crashing', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['broken', 'good'])
+    seedStem(own, 'broken', 'jam1')
+    own
+      .prepare(
+        `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 1000)`
+      )
+      .run('broken', 'not valid json{{{')
+    seedStem(own, 'good', 'jam1')
+    seedFeatures(own, 'good', featuresJSON({ bassEnergyRatio: 0.5 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'bassHeavy'
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['good'])
+  })
+
+  it('does not throw when a surviving stem has no matching db entry in the caller-supplied jams list', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedFeatures(own, 's1', featuresJSON({ bassEnergyRatio: 0.5 }))
+
+    // Empty jams list -- s1 is sampled from StemFeatureCache but has no
+    // known owning jam/db at all, matching the real "stem exists in the
+    // feature cache but the caller's own jams list doesn't cover it"
+    // shape this function must tolerate rather than throw on.
+    await expect(
+      getDiscoverCandidates({ ownDb: own, jams: [], kind: 'bassHeavy' })
+    ).resolves.toEqual([])
+  })
 })
