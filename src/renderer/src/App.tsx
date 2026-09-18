@@ -66,6 +66,7 @@ import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { YamnetZeroShotRetroactiveScan } from './audio/YamnetZeroShotRetroactiveScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
+import { StartupGate } from './components/StartupGate'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
@@ -2151,6 +2152,7 @@ function Frame(): React.JSX.Element {
 
   return (
     <div className="ra-viewport">
+      <StartupGate />
       <SketchModeAutoFollow />
       <BackgroundFeatureScan />
       <LibraryWarmupIndicator />
