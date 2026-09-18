@@ -269,6 +269,35 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => {
     win.show()
+    // Direct report, 2026-09-18: "still hanging... stuck for a minute"
+    // (then several more minutes, CPU climbing the whole time -- 57%,
+    // 67%...) against Elling's real, large external LORE archive
+    // (372,297 riffs). Root cause: this call USED to sit directly in
+    // app.whenReady()'s own body, before createWindow() -- `void` on an
+    // async call does NOT protect the caller from its callee's own
+    // SYNCHRONOUS prefix (everything before that callee's own first
+    // real `await`), and prewarmDiscoverCandidateCaches's synchronous
+    // prefix runs several async-function-calls deep (through
+    // getRiffIndexForDb straight into buildRiffIndex) before ever
+    // reaching buildRiffIndex's own per-CLASSIFY_YIELD_EVERY yield
+    // point -- including buildRiffIndex's own single, un-chunked
+    // `SELECT * FROM Riffs` fetch of the WHOLE table. On a library this
+    // size, against an external (possibly slower) volume, that one
+    // synchronous fetch alone can take minutes -- and for that whole
+    // stretch, NOTHING ELSE in the single-threaded main process can run,
+    // including the rest of app.whenReady()'s own body that calls
+    // createWindow() itself further down. Moved here, inside
+    // ready-to-show, so the window is GUARANTEED to already be visible
+    // before this scan's own synchronous prefix ever gets a chance to
+    // start -- it can now only ever compete with the app's OWN later
+    // responsiveness (matching this comment's original intent), never
+    // with the window showing up at all.
+    void prewarmDiscoverCandidateCaches(
+      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
+    ).finally(() => {
+      libraryWarmupDone = true
+      mainWindow?.webContents.send('library-warmup-complete')
+    })
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -391,37 +420,22 @@ app.whenReady().then(async () => {
   // AFTER the first one fast, the very FIRST roll of a fresh app session
   // still paid a real, one-time table-scan cost (confirmed live: 57+
   // seconds on a real 5,057-jam library) on the user's own critical path,
-  // right as they opened Discover for the first time. Fire-and-forget --
-  // never awaited here, and its own errors are caught and logged
-  // internally, never allowed to affect startup. Deliberately NOT gated
-  // on discover consent (loadDiscoverSettings) the way
+  // right as they opened Discover for the first time. Deliberately NOT
+  // gated on discover consent (loadDiscoverSettings) the way
   // startStemAutoClassifyScheduler is -- this only warms the SAME
   // Riffs/Stems reads getDiscoverCandidates always needed regardless of
   // consent (consent gates the separate whole-library feature/embedding
   // extraction scan, not basic candidate resolution).
-  // Direct report, 2026-09-16: "the app takes a long time to be
-  // responsive, buttons to be able to be pressed... is there a lot going
-  // on? maybe a loader until it's ready?" -- root-caused: Electron's main
-  // process is single-threaded, and prewarmDiscoverCandidateCaches's own
-  // real table scan (the whole reason this function exists -- see its own
-  // doc comment) genuinely blocks it for real wall-clock time on a large
-  // library, even though the promise itself is fire-and-forget and never
-  // blocks createWindow() above. libraryWarmupDone (module scope, below)
-  // is the renderer's own source of truth for "is the app still doing
-  // that startup work" -- queried once on mount (get-library-warmup-
-  // status) and pushed once here, when it actually finishes, covering
-  // both "the renderer mounted before this resolved" and "after."
-  // Deliberately NOT blocking the window from showing or interaction
-  // entirely (a full block could mean tens of seconds of a frozen-looking
-  // app on a cold, large library) -- just gives the renderer a real
-  // signal to show a small, honest "still indexing" status instead of
-  // silent, unexplained sluggishness.
-  void prewarmDiscoverCandidateCaches(
-    listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
-  ).finally(() => {
-    libraryWarmupDone = true
-    mainWindow?.webContents.send('library-warmup-complete')
-  })
+  //
+  // The actual call moved to createWindow()'s own ready-to-show handler
+  // (direct report, 2026-09-18: "still hanging... stuck for a minute" --
+  // several minutes, on a real large external archive) -- `void` alone
+  // does NOT stop this function's own synchronous prefix (several
+  // async-function-calls deep, down into buildRiffIndex's own single
+  // un-chunked full-table SELECT) from blocking the ENTIRE single-
+  // threaded main process, including createWindow() itself, for however
+  // long that first synchronous chunk takes on a large library. See that
+  // handler's own comment for the full mechanism.
 
   // macOS only (app.dock is undefined elsewhere) -- a packaged build's Dock
   // icon comes from build/icon.icns, embedded in the .app bundle at build
