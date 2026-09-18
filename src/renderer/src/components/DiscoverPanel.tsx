@@ -6,7 +6,7 @@ import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
-import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from '@shared/stemRole'
+import { ARRANGE_ROLE_OPTIONS, resolveStemRole, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
@@ -316,6 +316,10 @@ export function DiscoverPanel({
   // state, so the fields-based helper is the right fit here.
   const playedBarsState = useAppSelector((s) => s.playedBars)
   const bpm = useAppSelector((s) => s.bpm)
+  // Purely cosmetic (a border highlight while an external file is
+  // dragged over the panel, see handleExternalFileDrop's own doc
+  // comment below) -- never read by anything else.
+  const [isDraggingOverExternalFile, setIsDraggingOverExternalFile] = useState(false)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
   const pluginCatalog = usePluginCatalog()
@@ -1157,6 +1161,87 @@ export function DiscoverPanel({
     }
   }
 
+  // Direct request, 2026-09-18: "drag a loop into discover as an added
+  // channel" -- drop target is the whole panel (per Elling's own
+  // preference over a narrower add-slot-only target), always treated as
+  // a loop (never a one-shot -- no LoopOrOneShotPrompt here, see
+  // importDiscoverLoopSeed's own doc comment for why Discover's own
+  // slots don't have a meaningful one-shot shape), one new seedStem slot
+  // per successfully-imported file. Non-.wav files are silently skipped
+  // (pre-filtered here, before ever calling the IPC -- matches
+  // importDiscoverLoopSeed's own "reject outright" behavior for anything
+  // else, just without the wasted round trip), same as every other
+  // failure this function's own IPC call can report (over the 60s length
+  // cap, unreadable as a WAV, etc.) -- one bad file in a multi-file drop
+  // doesn't abort the rest.
+  //
+  // ONE pushUndoSnapshot() for the whole drop (not one per file) and ONE
+  // setSlots call appending every successfully-imported slot at once --
+  // undoing a multi-file drop should undo all of it in one step, and
+  // batching avoids a snapshot for a drop that ultimately imported
+  // nothing (every file failed/was filtered).
+  //
+  // Role/type: resolveStemRole (same helper buildSeedSlotsFromStems
+  // already uses, discoverSeed.ts) tries a preset-name-based role guess
+  // first, falling back to type 'fx' -- there's no instrumentMask or any
+  // other classification signal at all for an arbitrary external file,
+  // matching this app's own established "unclassifiable -> fx" fallback
+  // used throughout the classifier work elsewhere in this session.
+  async function handleExternalFileDrop(files: FileList): Promise<void> {
+    const wavFiles = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.wav'))
+    if (wavFiles.length === 0) return
+
+    // Captured synchronously, BEFORE the first await below -- code review:
+    // pushUndoSnapshot() itself reads the LIVE `slots` closure var, so
+    // calling it only at the end (after this function's own multi-file
+    // await loop) would capture whatever `slots` happens to be by THEN,
+    // not what it was when the drop started. This file's background
+    // machinery (candidate resolution, autoplay-join) can legitimately
+    // mutate `slots` via its own setSlots calls during that same window --
+    // an undo snapshot captured late would silently fold those unrelated
+    // changes into "what Undo reverts," discarding them with no
+    // indication to the user. Every OTHER undoable action in this file
+    // calls pushUndoSnapshot() synchronously as its very first line,
+    // before any await -- this preserves that same invariant while still
+    // only actually pushing the snapshot (see the end of this function)
+    // once something real is confirmed to have imported, not on an
+    // all-failed drop.
+    const preDropSlots = slots
+
+    const newSlots: DiscoverSlot[] = []
+    for (const file of wavFiles) {
+      const path = window.rifffApi.getPathForFile(file)
+      const result = await window.rifffApi.importDiscoverLoopSeed(path, bpm)
+      if (!result) continue
+
+      const seedStem: ResolvedCandidateStem = {
+        author: '',
+        name: result.name,
+        type: 'fx',
+        path: result.path,
+        durationSec: result.durationSec,
+        barLength: result.barLength
+      }
+      const roleGuessStem: Stem = { slot: 1, ...seedStem }
+      const { arrangeRole } = resolveStemRole(roleGuessStem, roleGuessStem.path, null)
+
+      newSlots.push({
+        id: freshSlotId(),
+        role: arrangeRole,
+        locked: false,
+        candidate: null,
+        hasRerolled: true,
+        gain: 1,
+        seedStem
+      })
+    }
+
+    if (newSlots.length === 0) return
+    setUndoStack((prev) => [...prev, preDropSlots].slice(-DISCOVER_UNDO_LIMIT))
+    setRedoStack([])
+    setSlots((prev) => [...prev, ...newSlots])
+  }
+
   // Shared by removeSlot and applySlotsSnapshot (undo/redo) -- both need to
   // permanently forget a slot's own resolution, not just stop showing it.
   // Direct reports, 2026-09-17: this cleanup used to happen implicitly,
@@ -1694,7 +1779,36 @@ export function DiscoverPanel({
   const seedTempo = seedBpm !== null ? Math.min(200, Math.max(40, Math.round(seedBpm))) : null
 
   return (
-    <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
+    <div
+      style={{
+        padding: 10,
+        overflowY: 'auto',
+        flex: 1,
+        // Cosmetic-only drag-over highlight, see isDraggingOverExternalFile's
+        // own doc comment -- an inset outline (not a real border) so it
+        // doesn't shift any layout while active.
+        outline: isDraggingOverExternalFile ? '2px dashed var(--ra-stretch-on)' : 'none',
+        outlineOffset: -2
+      }}
+      onDragOver={(e) => {
+        // Only ever true for a real OS file drag (Finder), never any of
+        // this app's own internal HTML5 drags (e.g. the Timeline's own
+        // rifff-group-id text payload) -- those never populate
+        // dataTransfer.files. preventDefault() is required for onDrop to
+        // ever fire at all (the browser default is "reject the drop").
+        if (e.dataTransfer.types.includes('Files')) e.preventDefault()
+      }}
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes('Files')) setIsDraggingOverExternalFile(true)
+      }}
+      onDragLeave={() => setIsDraggingOverExternalFile(false)}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length === 0) return
+        e.preventDefault()
+        setIsDraggingOverExternalFile(false)
+        void handleExternalFileDrop(e.dataTransfer.files)
+      }}
+    >
       {/* One-time keyframes for a resolving slot's own placeholder box
           (DiscoverSlotRow, below) -- injected once here rather than per-row,
           same "one <style> tag for the whole list" convention

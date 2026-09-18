@@ -3,7 +3,13 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { encodeWavPCM16 } from '@shared/encodeWav'
-import { importOneShot, importLoop, importRecordedTake, importRecordedStem } from './importOneShot'
+import {
+  importOneShot,
+  importLoop,
+  importRecordedTake,
+  importRecordedStem,
+  importDiscoverLoopSeed
+} from './importOneShot'
 
 function writeTestWav(dir: string, name: string, seconds: number, sampleRate = 44100): string {
   const numSamples = Math.round(seconds * sampleRate)
@@ -254,5 +260,73 @@ describe('importRecordedStem', () => {
 
   it('returns null for a non-wav path', () => {
     expect(importRecordedStem('/tmp/not-a-wav.mp3', 120, 4, [])).toBeNull()
+  })
+})
+
+describe('importDiscoverLoopSeed', () => {
+  it('copies the file into the managed library and reports its real duration', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-discoverloopseed-test-'))
+    try {
+      const path = writeTestWav(dir, 'loop.wav', 2.0)
+      const result = importDiscoverLoopSeed(path, 120)
+      expect(result).not.toBeNull()
+      expect(result!.name).toBe('loop')
+      expect(result!.durationSec).toBeCloseTo(2.0, 1)
+      expect(result!.path).not.toBe(path)
+      expect(existsSync(result!.path)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to the project bpm when the filename has no usable tempo hint', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-discoverloopseed-test-'))
+    try {
+      // 1 bar at 120bpm (secPerBar = 2s) = exactly 2 real seconds.
+      const path = writeTestWav(dir, 'Halftime Dnb Drums 1.wav', 2.0)
+      const result = importDiscoverLoopSeed(path, 120)
+      expect(result!.barLength).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers a filename-embedded bpm over a very different project bpm', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-discoverloopseed-test-'))
+    try {
+      // 2 bars at 165bpm (secPerBar = 240/165) = 2*240/165 real seconds.
+      // Project bpm is deliberately far off (90) -- guessLoopBars(duration, 90)
+      // alone would pick barLength=1, not 2; the filename's own 165 must win.
+      const path = writeTestWav(dir, 'cw_amen08_165.wav', (2 * 240) / 165)
+      const result = importDiscoverLoopSeed(path, 90)
+      expect(result!.barLength).toBe(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a file longer than the max discover loop seed duration', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-discoverloopseed-test-'))
+    try {
+      const path = writeTestWav(dir, 'full-track.wav', 70)
+      expect(importDiscoverLoopSeed(path, 120)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a non-WAV file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-discoverloopseed-test-'))
+    try {
+      const path = join(dir, 'not-audio.txt')
+      writeFileSync(path, 'hello')
+      expect(importDiscoverLoopSeed(path, 120)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null for a path that does not exist, without throwing', () => {
+    expect(importDiscoverLoopSeed('/no/such/file.wav', 120)).toBeNull()
   })
 })

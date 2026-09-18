@@ -13,6 +13,7 @@ import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
+import type { DiscoverLoopSeedResult } from '../main/importOneShot'
 import type { YamnetZeroShotRetroactiveTarget } from '../main/yamnetZeroShotRetroactiveScan'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
@@ -31,6 +32,14 @@ const api = {
   // count rather than bpm is what's asked for.
   importLoop: (path: string, barCount: number): Promise<Rifff | null> =>
     ipcRenderer.invoke('import-loop', path, barCount),
+  // See importDiscoverLoopSeed's own doc comment (src/main/importOneShot.ts)
+  // -- always a loop, projectBpm is the fallback tempo target when the
+  // dropped file's own filename carries no usable BPM hint.
+  importDiscoverLoopSeed: (
+    path: string,
+    projectBpm: number
+  ): Promise<DiscoverLoopSeedResult | null> =>
+    ipcRenderer.invoke('import-discover-loop-seed', path, projectBpm),
   // Used only to pre-fill the loop-import prompt's own bar-count guess
   // (loopBarGuess.ts's guessLoopBars) -- null when the file can't be read
   // as a WAV at all (the prompt just falls back to its default candidate).

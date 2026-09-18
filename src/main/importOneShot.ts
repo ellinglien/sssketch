@@ -6,7 +6,8 @@ import { readWavHeaderBytes, libraryRoot } from './importRifff'
 import { readWavDurationSeconds } from '../shared/wavDuration'
 import { randomAdjectiveNoun } from './projectFile'
 import { snapToWholeBarIfNearlyExact } from '../shared/barLengthSnap'
-import { bpmForLoopBars } from '../shared/loopBarGuess'
+import { bpmForLoopBars, guessLoopBars } from '../shared/loopBarGuess'
+import { guessBpmFromFilename } from '../shared/guessBpmFromFilename'
 import type { Rifff, Stem } from '@shared/types'
 
 interface CopiedAudioFile {
@@ -26,8 +27,18 @@ interface CopiedAudioFile {
  * importRifff's own "can't build a rifff -> return null" convention, and
  * cleans up any partially-created destination folder if a later step
  * fails after the folder was already made.
+ *
+ * `maxDurationSec` (optional, unused by every existing caller below) lets
+ * importDiscoverLoopSeed reject an over-long file BEFORE copying it into
+ * the library -- checked right after `durationSec` is known, same place
+ * the existing `durationSec <= 0` guard already sits, so a rejected file
+ * costs one cheap WAV-header read, not a wasted copy.
  */
-function copyIntoLibrary(path: string, logLabel: string): CopiedAudioFile | null {
+function copyIntoLibrary(
+  path: string,
+  logLabel: string,
+  maxDurationSec?: number
+): CopiedAudioFile | null {
   if (!path.toLowerCase().endsWith('.wav')) return null
 
   let destDir: string | undefined
@@ -36,6 +47,7 @@ function copyIntoLibrary(path: string, logLabel: string): CopiedAudioFile | null
 
     const durationSec = readWavDurationSeconds(readWavHeaderBytes(path))
     if (durationSec <= 0) return null
+    if (maxDurationSec !== undefined && durationSec > maxDurationSec) return null
 
     const groupId = randomUUID()
     destDir = join(libraryRoot(), groupId)
@@ -285,4 +297,69 @@ export function importRecordedStem(
     barLength,
     recordedInApp: true
   }
+}
+
+export interface DiscoverLoopSeedResult {
+  path: string
+  name: string
+  durationSec: number
+  barLength: number
+}
+
+// Direct request, 2026-09-18: "i'd like them to be treated as loops in
+// this case automatically.. maybe a limit of a certain length to make
+// sure full tracks don't get looped or something." A real one-shot
+// break/loop is essentially always well under a minute; this is a plain,
+// predictable hard cap (not a tempo-plausibility heuristic) specifically
+// because "why did this get rejected" needs to be obvious at a glance --
+// see copyIntoLibrary's own maxDurationSec param, checked before ever
+// copying the file.
+const MAX_DISCOVER_LOOP_SEED_DURATION_SEC = 60
+
+/**
+ * Imports a WAV file dropped directly onto Discover as an ALREADY-
+ * resolved loop seed for a brand new slot -- the drag-and-drop
+ * counterpart to buildSeedSlotsFromStems (discoverSeed.ts, renderer),
+ * just sourced from an arbitrary external file instead of an existing
+ * placed/shelved Stem. Always treated as a loop, never a one-shot --
+ * unlike importOneShot/importLoop (Shelf/Timeline's own drop handlers),
+ * there is no LoopOrOneShotPrompt here: Discover's own slots are
+ * inherently loop-shaped (tiled/stretched to fill the shared preview
+ * loop length, see DiscoverPanel.tsx's own maxBarLength), so treating a
+ * dropped file as anything else wouldn't fit that model at all.
+ *
+ * `projectBpm` is the CURRENT project's own tempo (DiscoverPanel.tsx's
+ * own `bpm`, the same project-tempo-relative fallback
+ * guessLoopBars/importLoop's own prompt-default already uses) -- the
+ * fallback target when the filename itself carries no usable tempo hint.
+ * `guessBpmFromFilename` is tried FIRST: a real filename-embedded tempo
+ * (e.g. "cw_amen08_165.wav") is a much stronger signal than "assume
+ * roughly the project's own tempo," when it's actually present. Either
+ * way, `guessLoopBars` does the real bar-count snapping (power-of-two
+ * candidates, log-space distance) -- reused unchanged, not reimplemented,
+ * so a dropped external loop tiles exactly as predictably as any other
+ * externally-imported loop in this app.
+ *
+ * Rejects (returns null) anything over MAX_DISCOVER_LOOP_SEED_DURATION_SEC
+ * -- see that constant's own doc comment -- before ever copying the file
+ * into the library, same "cheap header read, no wasted copy" shape
+ * copyIntoLibrary's own early durationSec<=0 guard already has.
+ */
+export function importDiscoverLoopSeed(
+  path: string,
+  projectBpm: number
+): DiscoverLoopSeedResult | null {
+  const copied = copyIntoLibrary(
+    path,
+    'importDiscoverLoopSeed',
+    MAX_DISCOVER_LOOP_SEED_DURATION_SEC
+  )
+  if (!copied) return null
+  const { destPath, durationSec } = copied
+
+  const displayName = basename(path, '.wav')
+  const targetBpm = guessBpmFromFilename(displayName) ?? projectBpm
+  const barLength = guessLoopBars(durationSec, targetBpm)
+
+  return { path: destPath, name: displayName, durationSec, barLength }
 }

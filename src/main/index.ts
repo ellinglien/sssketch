@@ -6,7 +6,13 @@ import icon from '../../resources/icon.png?asset'
 import { importRifff, readWavHeaderBytes } from './importRifff'
 import { readWavDurationSeconds } from '../shared/wavDuration'
 import { importDemoRifff } from './demoRifff'
-import { importOneShot, importLoop, importRecordedTake, importRecordedStem } from './importOneShot'
+import {
+  importOneShot,
+  importLoop,
+  importRecordedTake,
+  importRecordedStem,
+  importDiscoverLoopSeed
+} from './importOneShot'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -449,6 +455,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('import-loop', (_event, path: string, barCount: number) => {
     return importLoop(path, barCount)
+  })
+
+  // Discover's own drop target (DiscoverPanel.tsx) -- always a loop, no
+  // LoopOrOneShotPrompt, see importDiscoverLoopSeed's own doc comment
+  // (importOneShot.ts) for why.
+  ipcMain.handle('import-discover-loop-seed', (_event, path: string, projectBpm: number) => {
+    return importDiscoverLoopSeed(path, projectBpm)
   })
 
   // Read-only, for Shelf's own "one-shot or loop?" import prompt to show a
