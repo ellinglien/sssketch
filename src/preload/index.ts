@@ -15,6 +15,7 @@ import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
 import type { YamnetZeroShotRetroactiveTarget } from '../main/yamnetZeroShotRetroactiveScan'
+import type { PrewarmScanProgress } from '../main/discoverCandidates'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
@@ -236,6 +237,11 @@ const api = {
     const listener = (): void => callback()
     ipcRenderer.on('library-warmup-complete', listener)
     return () => ipcRenderer.removeListener('library-warmup-complete', listener)
+  },
+  onLibraryWarmupProgress: (callback: (progress: PrewarmScanProgress) => void): (() => void) => {
+    const listener = (_event: unknown, progress: PrewarmScanProgress): void => callback(progress)
+    ipcRenderer.on('library-warmup-progress', listener)
+    return () => ipcRenderer.removeListener('library-warmup-progress', listener)
   },
   getEngineStartupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-engine-startup-status'),
   onEngineStartupComplete: (callback: () => void): (() => void) => {

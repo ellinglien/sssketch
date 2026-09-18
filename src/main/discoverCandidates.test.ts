@@ -356,8 +356,12 @@ describe('getDiscoverCandidates', () => {
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2', 's3'])
     expect(candidates.map((c) => c.jamCID).sort()).toEqual(['jam1', 'jam2', 'jam3'])
 
+    // 2, not 1 -- buildRiffIndex now pages via COUNT(*) + one LIMIT/OFFSET
+    // page (PREWARM_CHUNK_SIZE=5000, this fixture's 3 rows fit in one page)
+    // rather than a single un-chunked SELECT *; see PREWARM_CHUNK_SIZE's
+    // own doc comment for why.
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(1)
+    expect(riffsQueries.length).toBe(2)
   })
 
   // Real perf bug, found live AGAIN at real scale (5,057 jams sharing one
@@ -430,11 +434,14 @@ describe('getDiscoverCandidates', () => {
     expect(drumsCandidates.map((c) => c.stemCID)).toEqual(['s1'])
     expect(bassCandidates.map((c) => c.stemCID)).toEqual(['s2'])
 
+    // 2, not 1 -- see the "single query per chunk" test above for why
+    // (COUNT(*) + one LIMIT/OFFSET page for this fixture's row count).
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(1)
-    // The one query that DOES run has no WHERE clause at all -- a plain
-    // sequential scan, the cheapest possible shape for a full read.
+    expect(riffsQueries.length).toBe(2)
+    // Neither query has a WHERE clause -- a plain sequential
+    // COUNT/LIMIT-OFFSET scan, not a per-row-predicate evaluation.
     expect(riffsQueries[0][0]).not.toMatch(/WHERE/)
+    expect(riffsQueries[1][0]).not.toMatch(/WHERE/)
   })
 
   // Direct request, 2026-09-16 ("can we take a good look at the things we
@@ -458,8 +465,9 @@ describe('getDiscoverCandidates', () => {
 
     expect(indexA).toBe(indexB)
     expect(indexA.get('s1')?.riffCID).toBe('r1')
+    // 2, not 1 -- see the "single query per chunk" test above for why.
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(1)
+    expect(riffsQueries.length).toBe(2)
   })
 
   // Widening (2026-09-15, direct request): a role with a too-small
@@ -808,8 +816,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
       { jamCID: 'jam2', dbForJam: own }
     ])
 
+    // 2, not 1 -- see the "single query per chunk" test above for why.
     const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(1)
+    expect(riffsQueries.length).toBe(2)
   })
 
   it('does not throw when a db lacks a Riffs table', async () => {
@@ -817,6 +826,62 @@ describe('prewarmDiscoverCandidateCaches', () => {
     await expect(
       prewarmDiscoverCandidateCaches([{ jamCID: 'jamBroken', dbForJam: broken }])
     ).resolves.toBeUndefined()
+  })
+
+  // Direct request, 2026-09-18 ("ideally it would also show a progress bar
+  // or meter, or something telling details about what is happening and
+  // how long to expect"): proves onProgress is actually threaded through
+  // both phases with the right phase/dbIndex/dbCount/completed/total
+  // shape, not just that the scan itself still works.
+  it('reports onProgress for both phases, reaching completed === total', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1')
+    seedStem(own, 's2', 'jam1')
+
+    const updates: Array<{
+      phase: string
+      dbIndex: number
+      dbCount: number
+      completed: number
+      total: number
+    }> = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], (progress) => {
+      updates.push({ ...progress })
+    })
+
+    const riffUpdates = updates.filter((u) => u.phase === 'riffIndex')
+    const instrumentUpdates = updates.filter((u) => u.phase === 'instrumentRows')
+    expect(riffUpdates.length).toBeGreaterThan(0)
+    expect(instrumentUpdates.length).toBeGreaterThan(0)
+
+    const lastRiffUpdate = riffUpdates[riffUpdates.length - 1]
+    expect(lastRiffUpdate).toMatchObject({ dbIndex: 0, dbCount: 1, completed: 1, total: 1 })
+    const lastInstrumentUpdate = instrumentUpdates[instrumentUpdates.length - 1]
+    expect(lastInstrumentUpdate).toMatchObject({ dbIndex: 0, dbCount: 1, completed: 2, total: 2 })
+  })
+
+  it('reports the correct dbIndex/dbCount when warming multiple unique dbs', async () => {
+    const dbA = freshDb()
+    seedRiff(dbA, 'r1', 'jamA', 128, ['s1'])
+    seedStem(dbA, 's1', 'jamA')
+    const dbB = freshDb()
+    seedRiff(dbB, 'r2', 'jamB', 128, ['s2'])
+    seedStem(dbB, 's2', 'jamB')
+
+    const dbIndexesSeen = new Set<number>()
+    await prewarmDiscoverCandidateCaches(
+      [
+        { jamCID: 'jamA', dbForJam: dbA },
+        { jamCID: 'jamB', dbForJam: dbB }
+      ],
+      (progress) => {
+        expect(progress.dbCount).toBe(2)
+        dbIndexesSeen.add(progress.dbIndex)
+      }
+    )
+
+    expect([...dbIndexesSeen].sort()).toEqual([0, 1])
   })
 })
 

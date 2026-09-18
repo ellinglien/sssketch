@@ -72,7 +72,8 @@ import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
   prewarmDiscoverCandidateCaches,
-  type DiscoverCandidate
+  type DiscoverCandidate,
+  type PrewarmScanProgress
 } from './discoverCandidates'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
@@ -293,7 +294,10 @@ function createWindow(): BrowserWindow {
     // responsiveness (matching this comment's original intent), never
     // with the window showing up at all.
     void prewarmDiscoverCandidateCaches(
-      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
+      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+      (progress: PrewarmScanProgress) => {
+        mainWindow?.webContents.send('library-warmup-progress', progress)
+      }
     ).finally(() => {
       libraryWarmupDone = true
       mainWindow?.webContents.send('library-warmup-complete')

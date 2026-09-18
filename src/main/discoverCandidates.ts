@@ -42,6 +42,39 @@ interface JamDbPair {
   dbForJam: Database.Database
 }
 
+/** One progress update from prewarmDiscoverCandidateCaches's own two-phase,
+ * per-db scan (below) -- pushed to the renderer (main/index.ts) so
+ * LibraryWarmupIndicator.tsx can show real numbers instead of a static
+ * "indexing library…" message. `phase` names which table this update is
+ * for; `dbIndex`/`dbCount` are 0-indexed/total for the OUTER per-db loop
+ * (almost always 1 or 2 in practice -- the own warehouse, plus an external
+ * LORE archive if one's configured); `completed`/`total` are ROW counts
+ * for THIS specific phase+db's own scan. Deliberately not a single
+ * unified 0-100% across every phase/db at once -- the two phases have
+ * genuinely different real costs (a riff has up to 8 stem slots to walk,
+ * a stem row is flat), so a naive combined percentage would be
+ * misleading about how much real time is actually left; showing "phase X
+ * of Y, N / M rows" and letting the renderer derive its own ETA from
+ * elapsed-time-so-far is more honest than pretending to know the total
+ * cost upfront. */
+export interface PrewarmScanProgress {
+  phase: 'riffIndex' | 'instrumentRows'
+  dbIndex: number
+  dbCount: number
+  completed: number
+  total: number
+}
+
+type PrewarmProgressCallback = (progress: PrewarmScanProgress) => void
+
+// Both buildRiffIndex and getInstrumentRowsForDb are single-phase,
+// single-db scans -- they don't know their own phase name or their
+// dbIndex/dbCount context within the outer multi-db loop, so they report
+// bare (completed, total) pairs; prewarmDiscoverCandidateCaches (below) is
+// the one place that knows enough to wrap that into a full
+// PrewarmScanProgress before forwarding to its own caller's onProgress.
+type ScanProgressCallback = (completed: number, total: number) => void
+
 interface RiffCandidateRow {
   RiffCID: string
   OwnerJamCID: string
@@ -66,6 +99,24 @@ interface RiffCandidateRow {
 // IPC call (menus, saves, everything) for however long classification
 // takes, the exact same beachball this session already fixed once.
 const CLASSIFY_YIELD_EVERY = 200
+
+// Direct request, 2026-09-18 ("ideally it would also show a progress bar
+// or meter, or something telling details about what is happening and how
+// long to expect"): rows-per-page for buildRiffIndex/getInstrumentRowsForDb's
+// own table scans, below. Real report on the SAME day ("still
+// hanging... 5 minutes") root-caused to these two functions each doing
+// ONE single, un-chunked `SELECT * FROM <table>` -- entirely synchronous,
+// no yield point reachable until the WHOLE fetch (372,297 rows on
+// Elling's real external archive) finished, which blocked the single-
+// threaded main process for that whole stretch (moving the caller to only
+// start after the window shows, see main/index.ts's own fix, stopped this
+// from blocking the WINDOW specifically, but the scan itself was still
+// one giant synchronous chunk once it started). Paginating via LIMIT/
+// OFFSET, yielding between pages, bounds any ONE synchronous fetch to
+// roughly PREWARM_CHUNK_SIZE rows' worth of work, AND gives onProgress
+// something real to report between chunks -- both problems share the same
+// fix.
+const PREWARM_CHUNK_SIZE = 5000
 
 // Real crash, found live via a full macOS crash report: SQLite trapping
 // (EXC_BREAKPOINT, inside sqlite3CodeRhsOfIN/sqlite3FindInIndex) while
@@ -137,7 +188,8 @@ const riffIndexInFlight = new WeakMap<Database.Database, Promise<Map<string, Rif
  * `db` share one in-flight scan (riffIndexInFlight, above) rather than
  * each starting their own. */
 export async function getRiffIndexForDb(
-  db: Database.Database
+  db: Database.Database,
+  onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
   const cached = riffIndexCache.get(db)
   if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.index
@@ -145,7 +197,7 @@ export async function getRiffIndexForDb(
   const inFlight = riffIndexInFlight.get(db)
   if (inFlight) return inFlight
 
-  const promise = buildRiffIndex(db).finally(() => {
+  const promise = buildRiffIndex(db, onProgress).finally(() => {
     riffIndexInFlight.delete(db)
   })
   riffIndexInFlight.set(db, promise)
@@ -158,46 +210,66 @@ export async function getRiffIndexForDb(
  * that appears in more than one riff (shouldn't normally happen, but a
  * hand-edited or corrupted archive could) keeps whichever riff this scan
  * saw FIRST -- an arbitrary but stable, good-enough tiebreak for what's
- * fundamentally an edge case. Yields periodically while building, same
- * "real synchronous CPU work, don't block the main process" discipline as
- * every other bulk loop in this file. */
-async function buildRiffIndex(db: Database.Database): Promise<Map<string, RiffIndexEntry>> {
+ * fundamentally an edge case.
+ *
+ * Paginates via LIMIT/OFFSET (PREWARM_CHUNK_SIZE rows at a time,
+ * yielding between pages) rather than one single `SELECT *` -- see that
+ * constant's own doc comment for the real live incident this fixes (a
+ * single un-chunked fetch of the whole table blocked the main process,
+ * including window creation, for minutes on a large external archive).
+ * A cheap `SELECT COUNT(*)` upfront gives onProgress a real `total` to
+ * report against from the very first page, rather than only knowing the
+ * true total once the last page comes back short. */
+async function buildRiffIndex(
+  db: Database.Database,
+  onProgress?: ScanProgressCallback
+): Promise<Map<string, RiffIndexEntry>> {
   const index = new Map<string, RiffIndexEntry>()
-  let rows: RiffCandidateRow[]
+  let total: number
   try {
-    rows = db
-      .prepare(
-        `SELECT RiffCID, OwnerJamCID, BPMrnd,
-                StemCID_1, StemCID_2, StemCID_3, StemCID_4,
-                StemCID_5, StemCID_6, StemCID_7, StemCID_8
-         FROM Riffs`
-      )
-      .all() as RiffCandidateRow[]
+    total = (db.prepare(`SELECT COUNT(*) AS n FROM Riffs`).get() as { n: number }).n
   } catch {
-    // Same defensive handling as the main loop below -- `db` may be an
-    // external file missing even a core table. Cache the empty result so
-    // a broken db doesn't retry this same expensive-to-fail scan on every
-    // call within the TTL window.
+    // Same defensive handling as the page-fetch loop below -- `db` may be
+    // an external file missing even a core table. Cache the empty result
+    // so a broken db doesn't retry this same expensive-to-fail scan on
+    // every call within the TTL window.
     riffIndexCache.set(db, { index, computedAt: Date.now() })
     return index
   }
 
-  let sinceYield = 0
-  for (const riff of rows) {
-    for (let slot = 1; slot <= 8; slot++) {
-      const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
-      if (!stemCID || index.has(stemCID)) continue
-      index.set(stemCID, {
-        riffCID: riff.RiffCID,
-        ownerJamCID: riff.OwnerJamCID,
-        bpmRnd: riff.BPMrnd
-      })
+  let offset = 0
+  while (offset < total) {
+    let page: RiffCandidateRow[]
+    try {
+      page = db
+        .prepare(
+          `SELECT RiffCID, OwnerJamCID, BPMrnd,
+                  StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+                  StemCID_5, StemCID_6, StemCID_7, StemCID_8
+           FROM Riffs LIMIT ? OFFSET ?`
+        )
+        .all(PREWARM_CHUNK_SIZE, offset) as RiffCandidateRow[]
+    } catch {
+      break
     }
-    sinceYield += 1
-    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-      sinceYield = 0
-      await yieldToEventLoop()
+    if (page.length === 0) break
+
+    for (const riff of page) {
+      for (let slot = 1; slot <= 8; slot++) {
+        const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
+        if (!stemCID || index.has(stemCID)) continue
+        index.set(stemCID, {
+          riffCID: riff.RiffCID,
+          ownerJamCID: riff.OwnerJamCID,
+          bpmRnd: riff.BPMrnd
+        })
+      }
     }
+
+    offset += page.length
+    onProgress?.(offset, total)
+    if (page.length < PREWARM_CHUNK_SIZE) break
+    await yieldToEventLoop()
   }
 
   riffIndexCache.set(db, { index, computedAt: Date.now() })
@@ -217,11 +289,23 @@ async function buildRiffIndex(db: Database.Database): Promise<Map<string, RiffIn
  * logged, never thrown -- a failed pre-warm just means the FIRST real
  * roll pays the cost itself instead, same as if this were never called;
  * it must never be allowed to affect app startup's own success. */
-export async function prewarmDiscoverCandidateCaches(jams: JamDbPair[]): Promise<void> {
-  const uniqueDbs = new Set(jams.map((j) => j.dbForJam))
-  for (const db of uniqueDbs) {
+export async function prewarmDiscoverCandidateCaches(
+  jams: JamDbPair[],
+  onProgress?: PrewarmProgressCallback
+): Promise<void> {
+  const uniqueDbs = [...new Set(jams.map((j) => j.dbForJam))]
+  for (let dbIndex = 0; dbIndex < uniqueDbs.length; dbIndex++) {
+    const db = uniqueDbs[dbIndex]
     try {
-      await getRiffIndexForDb(db)
+      await getRiffIndexForDb(db, (completed, total) =>
+        onProgress?.({
+          phase: 'riffIndex',
+          dbIndex,
+          dbCount: uniqueDbs.length,
+          completed,
+          total
+        })
+      )
     } catch (err) {
       console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
     }
@@ -235,7 +319,15 @@ export async function prewarmDiscoverCandidateCaches(jams: JamDbPair[]): Promise
     // never-block-startup discipline as the riff index above -- no
     // try/catch needed, getInstrumentRowsForDb already swallows its own
     // errors internally (an empty cached result, never a throw).
-    await getInstrumentRowsForDb(db)
+    await getInstrumentRowsForDb(db, (completed, total) =>
+      onProgress?.({
+        phase: 'instrumentRows',
+        dbIndex,
+        dbCount: uniqueDbs.length,
+        completed,
+        total
+      })
+    )
   }
 }
 
@@ -314,21 +406,47 @@ const instrumentRowsCache = new WeakMap<
  * only the FIRST role rolled in a session pays this cost; every other role
  * after it becomes a plain in-memory filter. */
 async function getInstrumentRowsForDb(
-  db: Database.Database
+  db: Database.Database,
+  onProgress?: ScanProgressCallback
 ): Promise<{ StemCID: string; Instrument: number | null; OwnerJamCID: string }[]> {
   const cached = instrumentRowsCache.get(db)
   if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.rows
 
-  let rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+  type Row = { StemCID: string; Instrument: number | null; OwnerJamCID: string }
+  const rows: Row[] = []
+  let total: number
   try {
-    rows = db.prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems`).all() as typeof rows
+    total = (db.prepare(`SELECT COUNT(*) AS n FROM Stems`).get() as { n: number }).n
   } catch {
     // Same defensive handling as every other per-db query in this file --
     // an external db missing even a core table shouldn't abort the whole
     // multi-db scan. Cache the empty result so a broken db doesn't retry
     // this same expensive-to-fail scan on every call within the TTL.
-    rows = []
+    instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+    return rows
   }
+
+  // Same PREWARM_CHUNK_SIZE/LIMIT-OFFSET pagination as buildRiffIndex, and
+  // for the identical reason -- see PREWARM_CHUNK_SIZE's own doc comment.
+  let offset = 0
+  while (offset < total) {
+    let page: Row[]
+    try {
+      page = db
+        .prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems LIMIT ? OFFSET ?`)
+        .all(PREWARM_CHUNK_SIZE, offset) as Row[]
+    } catch {
+      break
+    }
+    if (page.length === 0) break
+
+    rows.push(...page)
+    offset += page.length
+    onProgress?.(offset, total)
+    if (page.length < PREWARM_CHUNK_SIZE) break
+    await yieldToEventLoop()
+  }
+
   instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
   return rows
 }
