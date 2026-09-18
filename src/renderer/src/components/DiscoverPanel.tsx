@@ -1187,15 +1187,20 @@ export function DiscoverPanel({
   // other classification signal at all for an arbitrary external file,
   // matching this app's own established "unclassifiable -> fx" fallback
   // used throughout the classifier work elsewhere in this session.
-  async function handleExternalFileDrop(files: FileList): Promise<void> {
-    const wavFiles = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.wav'))
-    if (wavFiles.length === 0) return
+  // Shared by the drop handler and handlePickSampleImport below -- both
+  // ultimately just have a list of real filesystem paths to import as
+  // loop-seeded slots, one new seedStem slot per successfully-imported
+  // file, matching this codebase's own drop-and-pick pairing convention
+  // (Shelf.tsx's own handleDrop/handlePickImport, both funneling into
+  // importFromPaths).
+  async function importPathsAsLoopSeeds(paths: string[]): Promise<void> {
+    if (paths.length === 0) return
 
     // Captured synchronously, BEFORE the first await below -- code review:
     // pushUndoSnapshot() itself reads the LIVE `slots` closure var, so
     // calling it only at the end (after this function's own multi-file
     // await loop) would capture whatever `slots` happens to be by THEN,
-    // not what it was when the drop started. This file's background
+    // not what it was when the import started. This file's background
     // machinery (candidate resolution, autoplay-join) can legitimately
     // mutate `slots` via its own setSlots calls during that same window --
     // an undo snapshot captured late would silently fold those unrelated
@@ -1205,12 +1210,11 @@ export function DiscoverPanel({
     // before any await -- this preserves that same invariant while still
     // only actually pushing the snapshot (see the end of this function)
     // once something real is confirmed to have imported, not on an
-    // all-failed drop.
-    const preDropSlots = slots
+    // all-failed import.
+    const preImportSlots = slots
 
     const newSlots: DiscoverSlot[] = []
-    for (const file of wavFiles) {
-      const path = window.rifffApi.getPathForFile(file)
+    for (const path of paths) {
       const result = await window.rifffApi.importDiscoverLoopSeed(path, bpm)
       if (!result) continue
 
@@ -1237,9 +1241,27 @@ export function DiscoverPanel({
     }
 
     if (newSlots.length === 0) return
-    setUndoStack((prev) => [...prev, preDropSlots].slice(-DISCOVER_UNDO_LIMIT))
+    setUndoStack((prev) => [...prev, preImportSlots].slice(-DISCOVER_UNDO_LIMIT))
     setRedoStack([])
     setSlots((prev) => [...prev, ...newSlots])
+  }
+
+  async function handleExternalFileDrop(files: FileList): Promise<void> {
+    const wavFiles = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.wav'))
+    await importPathsAsLoopSeeds(wavFiles.map((f) => window.rifffApi.getPathForFile(f)))
+  }
+
+  // Direct request, 2026-09-18 ("took a while for the window to recognize
+  // that it was a target [of the drag]... maybe we could have a
+  // conventional file import + as well in the list '+ sample'") -- the
+  // click-to-pick equivalent of handleExternalFileDrop above, for the
+  // "+ sample" button alongside the per-role "+ {role}" add-slot buttons
+  // below. The main-process picker's own WAV filter (pick-discover-loop-
+  // seed-paths) means every path returned here is already the right type,
+  // unlike the drop handler which has to filter an arbitrary FileList
+  // itself.
+  async function handlePickSampleImport(): Promise<void> {
+    await importPathsAsLoopSeeds(await window.rifffApi.pickDiscoverLoopSeedPaths())
   }
 
   // Shared by removeSlot and applySlotsSnapshot (undo/redo) -- both need to
@@ -2268,6 +2290,21 @@ export function DiscoverPanel({
             + {role}
           </button>
         ))}
+        <button
+          onClick={() => void handlePickSampleImport()}
+          title="pick a WAV file from disk and add it as a new loop-seeded slot -- same import as dragging a file onto this panel"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '4px 8px',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          + sample
+        </button>
       </div>
     </div>
   )

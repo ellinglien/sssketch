@@ -41,6 +41,10 @@ const api = {
     projectBpm: number
   ): Promise<DiscoverLoopSeedResult | null> =>
     ipcRenderer.invoke('import-discover-loop-seed', path, projectBpm),
+  // Click-to-pick equivalent of Discover's own drag-and-drop loop import --
+  // see pick-discover-loop-seed-paths' own doc comment (main/index.ts).
+  pickDiscoverLoopSeedPaths: (): Promise<string[]> =>
+    ipcRenderer.invoke('pick-discover-loop-seed-paths'),
   // Used only to pre-fill the loop-import prompt's own bar-count guess
   // (loopBarGuess.ts's guessLoopBars) -- null when the file can't be read
   // as a WAV at all (the prompt just falls back to its default candidate).

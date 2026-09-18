@@ -487,6 +487,22 @@ app.whenReady().then(async () => {
     return importDiscoverLoopSeed(path, projectBpm)
   })
 
+  // Direct request, 2026-09-18: "took a while for the window to recognize
+  // that it was a target... maybe we could have a conventional file
+  // import + as well in the list '+ sample'" -- the click-to-pick
+  // equivalent of Discover's own drag-and-drop loop import, same shape as
+  // Shelf's own 'pick-rifff-import-paths' (that handler's own doc comment
+  // explains the same "+" tile pattern). WAV-only filter matches
+  // importDiscoverLoopSeed's own hard requirement -- no point letting the
+  // user pick a file type that import would just reject.
+  ipcMain.handle('pick-discover-loop-seed-paths', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'WAV audio', extensions: ['wav'] }]
+    })
+    return result.canceled ? [] : result.filePaths
+  })
+
   // Read-only, for Shelf's own "one-shot or loop?" import prompt to show a
   // pre-filled bar-count guess (loopBarGuess.ts's guessLoopBars) before the
   // user commits to importLoop -- never throws, matching this codebase's
