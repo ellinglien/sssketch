@@ -212,14 +212,28 @@ export async function getRiffIndexForDb(
  * saw FIRST -- an arbitrary but stable, good-enough tiebreak for what's
  * fundamentally an edge case.
  *
- * Paginates via LIMIT/OFFSET (PREWARM_CHUNK_SIZE rows at a time,
- * yielding between pages) rather than one single `SELECT *` -- see that
- * constant's own doc comment for the real live incident this fixes (a
- * single un-chunked fetch of the whole table blocked the main process,
- * including window creation, for minutes on a large external archive).
- * A cheap `SELECT COUNT(*)` upfront gives onProgress a real `total` to
- * report against from the very first page, rather than only knowing the
- * true total once the last page comes back short. */
+ * Paginates via `ORDER BY RiffCID LIMIT/OFFSET` (PREWARM_CHUNK_SIZE rows
+ * at a time, yielding between pages) rather than one single `SELECT *` --
+ * see that constant's own doc comment for the real live incident this
+ * fixes (a single un-chunked fetch of the whole table blocked the main
+ * process, including window creation, for minutes on a large external
+ * archive). The explicit ORDER BY (code review, 2026-09-18) matters
+ * because `db` can be the app's OWN always-on riff-sync db, which DOES
+ * receive concurrent writes/deletes from other IPC handlers while this
+ * scan runs (the app stays usable during warmup, by design) -- LIMIT/
+ * OFFSET with no stable ordering can silently skip a row that a
+ * concurrent delete shifts backward across an already-consumed OFFSET
+ * boundary. A cheap `SELECT COUNT(*)` upfront gives onProgress a real
+ * `total` to report against from the very first page, rather than only
+ * knowing the true total once the last page comes back short.
+ *
+ * Also yields WITHIN a page, not just between pages (code review,
+ * 2026-09-18): a page can hold up to PREWARM_CHUNK_SIZE=5000 riffs, each
+ * walking 8 stem slots -- up to 40,000 synchronous Map operations with no
+ * yield point, well past CLASSIFY_YIELD_EVERY's own established "safe
+ * cap for cheap JS-only work" threshold elsewhere in this file. Reuses
+ * that same constant so both loops share one definition of "too much
+ * synchronous work without yielding." */
 async function buildRiffIndex(
   db: Database.Database,
   onProgress?: ScanProgressCallback
@@ -246,7 +260,7 @@ async function buildRiffIndex(
           `SELECT RiffCID, OwnerJamCID, BPMrnd,
                   StemCID_1, StemCID_2, StemCID_3, StemCID_4,
                   StemCID_5, StemCID_6, StemCID_7, StemCID_8
-           FROM Riffs LIMIT ? OFFSET ?`
+           FROM Riffs ORDER BY RiffCID LIMIT ? OFFSET ?`
         )
         .all(PREWARM_CHUNK_SIZE, offset) as RiffCandidateRow[]
     } catch {
@@ -254,6 +268,7 @@ async function buildRiffIndex(
     }
     if (page.length === 0) break
 
+    let sinceYield = 0
     for (const riff of page) {
       for (let slot = 1; slot <= 8; slot++) {
         const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
@@ -263,6 +278,11 @@ async function buildRiffIndex(
           ownerJamCID: riff.OwnerJamCID,
           bpmRnd: riff.BPMrnd
         })
+      }
+      sinceYield += 1
+      if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+        sinceYield = 0
+        await yieldToEventLoop()
       }
     }
 
@@ -404,7 +424,14 @@ const instrumentRowsCache = new WeakMap<
  * per-role JS filtering happens fresh every call in
  * getInstrumentMatchedStemCIDs, measured at ~50ms even for 367k rows) means
  * only the FIRST role rolled in a session pays this cost; every other role
- * after it becomes a plain in-memory filter. */
+ * after it becomes a plain in-memory filter.
+ *
+ * Paginated the same way, for the same ORDER BY reason, as buildRiffIndex
+ * above -- see that function's own doc comment. Each row here is O(1) to
+ * process (a plain array push, no per-riff nested slot loop), so unlike
+ * buildRiffIndex this doesn't need its own inner yield counter -- yielding
+ * once per PREWARM_CHUNK_SIZE page is already well within
+ * CLASSIFY_YIELD_EVERY's own established safe-cap territory. */
 async function getInstrumentRowsForDb(
   db: Database.Database,
   onProgress?: ScanProgressCallback
@@ -433,7 +460,9 @@ async function getInstrumentRowsForDb(
     let page: Row[]
     try {
       page = db
-        .prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems LIMIT ? OFFSET ?`)
+        .prepare(
+          `SELECT StemCID, Instrument, OwnerJamCID FROM Stems ORDER BY StemCID LIMIT ? OFFSET ?`
+        )
         .all(PREWARM_CHUNK_SIZE, offset) as Row[]
     } catch {
       break

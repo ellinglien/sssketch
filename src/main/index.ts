@@ -278,21 +278,26 @@ function createWindow(): BrowserWindow {
     // async call does NOT protect the caller from its callee's own
     // SYNCHRONOUS prefix (everything before that callee's own first
     // real `await`), and prewarmDiscoverCandidateCaches's synchronous
-    // prefix runs several async-function-calls deep (through
+    // prefix used to run several async-function-calls deep (through
     // getRiffIndexForDb straight into buildRiffIndex) before ever
-    // reaching buildRiffIndex's own per-CLASSIFY_YIELD_EVERY yield
-    // point -- including buildRiffIndex's own single, un-chunked
+    // reaching a yield point -- including a single, un-chunked
     // `SELECT * FROM Riffs` fetch of the WHOLE table. On a library this
     // size, against an external (possibly slower) volume, that one
-    // synchronous fetch alone can take minutes -- and for that whole
-    // stretch, NOTHING ELSE in the single-threaded main process can run,
+    // synchronous fetch alone could take minutes -- and for that whole
+    // stretch, NOTHING ELSE in the single-threaded main process could run,
     // including the rest of app.whenReady()'s own body that calls
     // createWindow() itself further down. Moved here, inside
     // ready-to-show, so the window is GUARANTEED to already be visible
     // before this scan's own synchronous prefix ever gets a chance to
     // start -- it can now only ever compete with the app's OWN later
     // responsiveness (matching this comment's original intent), never
-    // with the window showing up at all.
+    // with the window showing up at all. buildRiffIndex/
+    // getInstrumentRowsForDb were themselves later rewritten to paginate
+    // via LIMIT/OFFSET rather than one giant fetch -- see
+    // discoverCandidates.ts's own PREWARM_CHUNK_SIZE doc comment -- but
+    // this call still belongs here regardless, since even a well-chunked
+    // scan is real ongoing work that should never compete with the
+    // window's own first paint.
     void prewarmDiscoverCandidateCaches(
       listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
       (progress: PrewarmScanProgress) => {
