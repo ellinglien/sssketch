@@ -1785,7 +1785,254 @@ git commit -m "Discover: rename slot role to DiscoverSlotKind, 7-button slot-cre
 
 ---
 
-### Task 9: Full verification sweep
+### Task 9: `discoverSeed.ts` and `LibraryBrowser.tsx` — the Browse/Shelf seed paths
+
+**Found mid-execution, not in the original plan**: Task 2's own implementer
+correctly flagged that `npm run typecheck` shows real errors beyond
+`discoverCandidates.ts` itself — `src/renderer/src/audio/discoverSeed.ts`
+and `src/renderer/src/components/LibraryBrowser.tsx` both construct
+`DiscoverCandidate`/`DiscoverSlot` objects with `arrangeRole`/`role` fields
+directly, entirely OUTSIDE `getDiscoverCandidates`. These are Discover's two
+"seed from something that already exists" paths (Shelf-sourced and
+Browse-sourced) — this plan's original file inventory missed them. This
+task closes that gap.
+
+**Files:**
+- Modify: `src/renderer/src/audio/discoverSeed.ts`
+- Modify: `src/renderer/src/components/LibraryBrowser.tsx`
+
+No test file for either — same established convention as Task 8 (React/
+renderer-adjacent code here is verified via typecheck + lint + manual
+walkthrough, not new automated tests).
+
+**What changes and why:** Both paths currently guess a role via one of two
+mechanisms that this whole redesign moves away from for Discover's own
+matching: `buildSeedSlotsFromStems` (Shelf-sourced) calls `resolveStemRole`
+(the same heuristic Tidy Up's own role picker uses — untouched elsewhere,
+per this plan's own "does not change" list, but not what Discover's new
+model should seed a slot's KIND from); `seedDiscoverFromBrowseRiff`
+(Browse-sourced, in `LibraryBrowser.tsx`) calls the `resolve-stem-arrange-
+roles` IPC handler, which trusts `StemCategories`/`StemAutoCategory` —
+exactly the fallible machine-guessed layer Task 2 just stopped trusting for
+mask-kind candidate pools.
+
+The fix: a new, small, PURE `discoverSlotKindForSoundType` helper in
+`discoverSeed.ts`, used by both paths, that maps a stem's own `SoundType`
+directly to a `DiscoverSlotKind` — `drums`/`bass`/`notes` map to their
+obvious mask kind (`notes` → `lead`, matching `SOUND_TYPE_TO_ARRANGE_ROLE`'s
+own existing convention), everything else (`audioIn`, `fx`, `extInst`,
+`sampler`, `extFx` — none of which have a reliable mask-kind signal) falls
+back to a single fixed trait kind, `'bright'` — the SAME "cheap and fast
+over exactly right" default Task 8 already established for externally
+dragged-in samples (no per-stem computation, no IPC round trip, no
+classifier). This ELIMINATES the `resolve-stem-arrange-roles` IPC call from
+`seedDiscoverFromBrowseRiff` entirely (do not remove the IPC handler itself
+— `resolve-stem-arrange-roles` may have other callers; only stop calling it
+from THIS call site) and the `resolveStemRole` call from
+`buildSeedSlotsFromStems` (check with a fresh grep whether `resolveStemRole`
+is still imported/used anywhere else in `discoverSeed.ts` after this change
+— if not, remove the now-unused import).
+
+- [ ] **Step 1: Re-read both files fresh**
+
+Run `grep -n "arrangeRole\|ArrangeRole\|resolveStemArrangeRoles\|resolveStemRole" src/renderer/src/audio/discoverSeed.ts src/renderer/src/components/LibraryBrowser.tsx`
+and read the surrounding context for every hit — do not trust this plan's
+own quoted line numbers or code below without confirming it still matches.
+
+- [ ] **Step 2: Add `discoverSlotKindForSoundType` to `discoverSeed.ts`**
+
+```ts
+import type { SoundType } from '@shared/types'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+
+/** Best-effort DiscoverSlotKind for a stem's own SoundType -- used by both
+ * seed paths in this file (Shelf-sourced and, via LibraryBrowser.tsx,
+ * Browse-sourced). A real Endlesss instrument mask reliably identifies
+ * drums/bass/notes (see reliableMaskSoundType, stemAutoClassify.ts, for
+ * the same real-data finding this mirrors); everything else -- audioIn,
+ * fx, extInst, sampler, extFx -- has no reliable mask-kind signal, so it
+ * falls back to a single fixed trait kind rather than guessing, same
+ * "cheap and fast over exactly right" tradeoff as DiscoverPanel.tsx's own
+ * external-sample-import default (see that file's own doc comment on why
+ * 'bright' specifically). */
+export function discoverSlotKindForSoundType(soundType: SoundType): DiscoverSlotKind {
+  if (soundType === 'drums') return 'drums'
+  if (soundType === 'bass') return 'bass'
+  if (soundType === 'notes') return 'lead'
+  return 'bright'
+}
+```
+
+- [ ] **Step 3: Update `buildSeedSlotsFromStems`**
+
+Replace:
+
+```ts
+    const { arrangeRole } = resolveStemRole(stem, stem.path, null)
+    return {
+      id: freshSlotId(),
+      role: arrangeRole,
+      locked: false,
+      candidate: null,
+      hasRerolled: true,
+      gain: 1,
+      seedStem
+    }
+```
+
+with:
+
+```ts
+    return {
+      id: freshSlotId(),
+      kind: discoverSlotKindForSoundType(stem.type),
+      locked: false,
+      candidate: null,
+      hasRerolled: true,
+      gain: 1,
+      seedStem
+    }
+```
+
+If `resolveStemRole` is no longer used anywhere else in this file, remove
+its now-unused import (`import { resolveStemRole } from '@shared/stemRole'`).
+
+- [ ] **Step 4: Update `buildSeedSlotsFromCandidates`**
+
+Replace:
+
+```ts
+export function buildSeedSlotsFromCandidates(
+  candidates: readonly DiscoverCandidate[]
+): DiscoverSlot[] {
+  return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
+    id: freshSlotId(),
+    role: candidate.arrangeRole,
+    locked: false,
+    candidate,
+    hasRerolled: true,
+    gain: 1
+  }))
+}
+```
+
+with:
+
+```ts
+export function buildSeedSlotsFromCandidates(
+  candidates: readonly DiscoverCandidate[]
+): DiscoverSlot[] {
+  return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
+    id: freshSlotId(),
+    kind: candidate.slotKind,
+    locked: false,
+    candidate,
+    hasRerolled: true,
+    gain: 1
+  }))
+}
+```
+
+- [ ] **Step 5: Update `seedDiscoverFromBrowseRiff` in `LibraryBrowser.tsx`**
+
+Replace:
+
+```ts
+      const roles = await window.rifffApi.resolveStemArrangeRoles(
+        resolvedRiff.stems.map((stem) => ({
+          stemCID: stem.stemCID,
+          instrumentMask: stem.instrumentMask,
+          presetName: stem.presetName
+        }))
+      )
+      const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
+        stemCID: stem.stemCID,
+        jamCID: selectedJamCID,
+        riffCID: selectedRiffCID,
+        presetName: stem.presetName,
+        creatorUserName: stem.creatorUserName,
+        arrangeRole:
+          roles[stem.stemCID] ??
+          SOUND_TYPE_TO_ARRANGE_ROLE[
+            instrumentMaskToSoundType(stem.instrumentMask) ??
+              guessSoundTypeFromPresetName(stem.presetName) ??
+              'fx'
+          ],
+        drumSubRole: null,
+        riffBpm: resolvedRiff.bpm
+      }))
+```
+
+with:
+
+```ts
+      const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
+        stemCID: stem.stemCID,
+        jamCID: selectedJamCID,
+        riffCID: selectedRiffCID,
+        presetName: stem.presetName,
+        creatorUserName: stem.creatorUserName,
+        slotKind: discoverSlotKindForSoundType(
+          instrumentMaskToSoundType(stem.instrumentMask) ??
+            guessSoundTypeFromPresetName(stem.presetName) ??
+            'fx'
+        ),
+        drumSubRole: null,
+        riffBpm: resolvedRiff.bpm,
+        traitValue: null
+      }))
+```
+
+Update the import at the top of the file:
+`import { buildSeedSlotsFromCandidates, discoverHasRealContent } from '../audio/discoverSeed'`
+becomes
+`import { buildSeedSlotsFromCandidates, discoverSlotKindForSoundType, discoverHasRealContent } from '../audio/discoverSeed'`.
+
+If `SOUND_TYPE_TO_ARRANGE_ROLE` (`import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'`)
+is no longer used anywhere else in this file, remove its now-unused import
+— check with a fresh grep first (this file is large; it may have other,
+unrelated uses). This change also means `seedDiscoverFromBrowseRiff` no
+longer NEEDS to `await` an IPC round trip before building `candidates` —
+leave the function `async`/the rest of its own `try`/`finally` (`setBusy`)
+structure exactly as it is; only the one block above changes. Do NOT remove
+or modify the `resolve-stem-arrange-roles` IPC handler itself (`main/
+index.ts`) or its preload exposure — this task only stops ONE caller from
+using it; it may have other real callers elsewhere in the app that are
+out of scope for this plan.
+
+- [ ] **Step 6: Typecheck and lint**
+
+Run: `npm run typecheck && npx eslint --cache src/renderer/src/audio/discoverSeed.ts src/renderer/src/components/LibraryBrowser.tsx`
+Expected: no errors. If typecheck still shows errors in OTHER files not yet
+touched by this plan's own sequencing, cross-check them against this plan's
+full task list (Tasks 1-9) before assuming something else is broken — a
+file this plan hasn't reached yet touching `DiscoverCandidate`/
+`DiscoverSlot` is expected only if it's `DiscoverPanel.tsx`/
+`DiscoverNearbyPopover.tsx` and Task 8 hasn't run yet relative to this one,
+or vice versa; anything else is a genuine new gap and should be reported
+the same way Task 2's implementer reported this one.
+
+- [ ] **Step 7: Manual walkthrough note**
+
+Add to the SAME manual walkthrough checklist Task 8 Step 7 already produces
+(don't create a second, separate checklist) — report this alongside it:
+
+- Open Browse, select a riff, click "seed Discover from this riff" (or
+  however that action is currently labeled) — confirm Discover opens with
+  real slots, each labeled with a sensible kind (drums-masked stems show
+  "drums", etc.), not an error or empty slots.
+- From Shelf, seed Discover from an existing placed rifff — same check.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/renderer/src/audio/discoverSeed.ts src/renderer/src/components/LibraryBrowser.tsx
+git commit -m "Discover: DiscoverSlotKind for the Browse/Shelf seed paths"
+```
+
+---
+
+### Task 10: Full verification sweep
 
 Not a code task — confirms every prior task's own local verification still
 holds true together, across the whole changed surface.
@@ -1811,20 +2058,27 @@ file untouched by this plan (confirms no unrelated regression)
 
 - [ ] **Step 4: Grep sweep for any leftover `ArrangeRole`/`arrangeRole` reference in Discover's own files**
 
-Run: `grep -rn "ArrangeRole\|arrangeRole" src/main/discoverCandidates.ts src/main/discoverAdjacency.ts src/main/index.ts src/preload/index.ts src/renderer/src/components/DiscoverPanel.tsx src/renderer/src/components/DiscoverNearbyPopover.tsx`
+Run: `grep -rn "ArrangeRole\|arrangeRole" src/main/discoverCandidates.ts src/main/discoverAdjacency.ts src/main/index.ts src/preload/index.ts src/renderer/src/components/DiscoverPanel.tsx src/renderer/src/components/DiscoverNearbyPopover.tsx src/renderer/src/audio/discoverSeed.ts src/renderer/src/components/LibraryBrowser.tsx`
 Expected: zero matches from Discover's own new code, OR only matches inside
 a comment explicitly explaining the `DiscoverSlotKind -> ArrangeRole`
 mapping boundary (Task 1's own `discoverSlotKindToArrangeRole` and its call
 site at add-to-shelf/add-to-timeline time) — `main/index.ts`/
 `preload/index.ts` will still show real, unrelated `ArrangeRole` matches
 from `resolve-stem-arrange-roles` (untouched by this plan, see Task 7 Step
-1's own note); every OTHER reference should have been converted by Tasks
-2-8. If a genuine leftover is found (not a mapping-boundary comment or the
-untouched `resolve-stem-arrange-roles` handler), fix it now.
+1's own note); every OTHER reference should have been converted or removed
+by Tasks 2-9 (Task 9 in particular should leave `SOUND_TYPE_TO_ARRANGE_ROLE`
+and `resolveStemArrangeRoles` with ZERO remaining references in
+`LibraryBrowser.tsx` — that file's own separate PolarGlyph-preview code,
+around line ~2153 as of this plan's own investigation, uses
+`instrumentMaskToSoundType`/`guessSoundTypeFromPresetName` directly for an
+unrelated display glyph, never `SOUND_TYPE_TO_ARRANGE_ROLE`). If a genuine
+leftover is found (not the `resolve-stem-arrange-roles` handler itself),
+fix it now.
 
 - [ ] **Step 5: Report the manual walkthrough checklist back**
 
-Report Task 8 Step 7's checklist to Elling directly (the controller/session
-running this plan), since this environment cannot itself click through the
+Report Task 8 Step 7's checklist AND Task 9 Step 7's own two additional
+items to Elling directly (the controller/session running this plan), since
+this environment cannot itself click through the
 real app — do not consider this plan complete until he's actually run
 through it.
