@@ -1140,7 +1140,7 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * bypasses confirmed/embedding/instrument matching ENTIRELY, so it works
  * regardless of whether anything has been confirmed or scanned yet (the
  * exact "stuck at zero" case that prompted it). Labeled with the CALLER's
- * `arrangeRole` (the slot's own role) rather than anything inferred --
+ * `kind` (the slot's own kind) rather than anything inferred --
  * this is a real, unclassified stem the user picks to start from and can
  * later confirm/replace via Tidy Up, not a claim that it IS that role.
  *
