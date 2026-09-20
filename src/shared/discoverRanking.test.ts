@@ -10,7 +10,8 @@ function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
     riffCID: 'r1',
     presetName: 'test',
     creatorUserName: 'elling',
-    arrangeRole: 'drums',
+    slotKind: 'drums',
+    traitValue: null,
     drumSubRole: null,
     riffBpm: 128,
     ...overrides
@@ -55,6 +56,47 @@ describe('rankCandidates', () => {
   it('favouriteStemCIDs is optional -- omitting it ranks purely by BPM, unchanged', () => {
     const close = candidate({ stemCID: 'close', riffBpm: 128 })
     const far = candidate({ stemCID: 'far', riffBpm: 90 })
+    const ranked = rankCandidates([far, close], { targetBpm: 128 })
+    expect(ranked[0].candidate.stemCID).toBe('close')
+  })
+})
+
+describe('rankCandidates (trait scoring)', () => {
+  it('scores a candidate closer to the trait target higher, for a trait-kind roll', () => {
+    const close = candidate({ stemCID: 'close', riffBpm: 128, traitValue: 0.95 })
+    const far = candidate({ stemCID: 'far', riffBpm: 128, traitValue: 0.1 })
+    const ranked = rankCandidates([far, close], {
+      targetBpm: 128,
+      targetTrait: { direction: 'high', maxValue: 1 }
+    })
+    expect(ranked[0].candidate.stemCID).toBe('close')
+    expect(ranked[0].score).toBeGreaterThan(ranked[1].score)
+  })
+
+  it('"low" direction ranks the smallest traitValue highest -- for the warm end of bright/warm', () => {
+    const warm = candidate({ stemCID: 'warm', riffBpm: 128, traitValue: 0.05 })
+    const bright = candidate({ stemCID: 'bright', riffBpm: 128, traitValue: 0.9 })
+    const ranked = rankCandidates([bright, warm], {
+      targetBpm: 128,
+      targetTrait: { direction: 'low', maxValue: 1 }
+    })
+    expect(ranked[0].candidate.stemCID).toBe('warm')
+  })
+
+  it('a candidate with traitValue null (e.g. mixed into a trait roll by mistake) scores as the worst possible trait match, not a crash', () => {
+    const withTrait = candidate({ stemCID: 'has-trait', riffBpm: 128, traitValue: 0.5 })
+    const noTrait = candidate({ stemCID: 'no-trait', riffBpm: 128, traitValue: null })
+    expect(() =>
+      rankCandidates([withTrait, noTrait], {
+        targetBpm: 128,
+        targetTrait: { direction: 'high', maxValue: 1 }
+      })
+    ).not.toThrow()
+  })
+
+  it('omitting targetTrait ranks purely by BPM, exactly like today -- mask-kind rolls are unaffected', () => {
+    const close = candidate({ stemCID: 'close', riffBpm: 128, traitValue: 0.01 })
+    const far = candidate({ stemCID: 'far', riffBpm: 90, traitValue: 0.99 })
     const ranked = rankCandidates([far, close], { targetBpm: 128 })
     expect(ranked[0].candidate.stemCID).toBe('close')
   })
