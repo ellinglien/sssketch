@@ -41,8 +41,11 @@ import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
-import { buildSeedSlotsFromCandidates, discoverHasRealContent } from '../audio/discoverSeed'
-import { SOUND_TYPE_TO_ARRANGE_ROLE } from '@shared/stemRole'
+import {
+  buildSeedSlotsFromCandidates,
+  discoverSlotKindForSoundType,
+  discoverHasRealContent
+} from '../audio/discoverSeed'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 
 // Persisted locally (not in project files or app state) since it's a
@@ -1324,50 +1327,42 @@ export function LibraryBrowser({
     // Direct request, 2026-09-16 ("can we take a good look at the things
     // we just added... and see if we can improve the speed... or
     // incorporating some pauses for the user to wait for things to
-    // load"): this whole function only became async the same day
-    // (resolveStemArrangeRoles below is a real IPC round trip), but the
-    // button itself never showed anything different while it ran --
-    // reads as frozen/unresponsive for however long that round trip
-    // takes, the exact "not snappy" complaint this was raised alongside.
+    // load"): this whole function became async that same day, when
+    // building candidates below still required a real IPC round trip (a
+    // since-removed call to resolve-stem-arrange-roles -- see the comment
+    // on the block below for why), and the button itself never showed
+    // anything different while it ran -- reads as frozen/unresponsive for
+    // however long that round trip took, the exact "not snappy" complaint
+    // this was raised alongside. Kept async/setBusy-wrapped even now that
+    // building candidates is synchronous, since setLibraryMode('discover')
+    // below still hands off into Discover's own async per-slot resolution.
     // Same setBusy(...)/setBusy(null) convention this file already uses
     // for handleImport/handleImportSelected/download-missing-stems, just
     // applied here too.
     setBusy('seeding discover…')
     try {
-      // Direct request, 2026-09-16: "the audio analysis should be able to
-      // detect and differentiate drums from leads etc etc. there must be a
-      // better way [than hand-tuning Tidy Up]." Checks the real trained
-      // classifier (StemCategories human confirmations, else
-      // StemAutoCategory's own audio-analysis result) for every stem in ONE
-      // batched round trip, before ever falling back to the blunt
-      // instrument-mask/preset-name guess this used to rely on alone --
-      // resolve-stem-arrange-roles' own main-process handler computes that
-      // SAME blunt chain internally as its own last resort, so `?? 'fx'`
-      // here is unreachable in practice but kept as a real type-level
-      // fallback (the IPC's own return type is nullable) rather than an
-      // unsafe assertion.
-      const roles = await window.rifffApi.resolveStemArrangeRoles(
-        resolvedRiff.stems.map((stem) => ({
-          stemCID: stem.stemCID,
-          instrumentMask: stem.instrumentMask,
-          presetName: stem.presetName
-        }))
-      )
+      // Kind comes straight off the stem's own instrument mask/preset-name
+      // guess via discoverSlotKindForSoundType -- NOT the trained
+      // StemCategories/StemAutoCategory classifier (resolve-stem-arrange-
+      // roles) this used to round-trip to main for. That classifier is
+      // exactly the fallible machine-guessed layer Discover's own new
+      // mask-kind/trait-kind model stops trusting elsewhere (see
+      // discoverCandidates.ts); this seed path now matches that everywhere,
+      // and needs no IPC round trip to build candidates at all.
       const candidates: DiscoverCandidate[] = resolvedRiff.stems.map((stem) => ({
         stemCID: stem.stemCID,
         jamCID: selectedJamCID,
         riffCID: selectedRiffCID,
         presetName: stem.presetName,
         creatorUserName: stem.creatorUserName,
-        arrangeRole:
-          roles[stem.stemCID] ??
-          SOUND_TYPE_TO_ARRANGE_ROLE[
-            instrumentMaskToSoundType(stem.instrumentMask) ??
-              guessSoundTypeFromPresetName(stem.presetName) ??
-              'fx'
-          ],
+        slotKind: discoverSlotKindForSoundType(
+          instrumentMaskToSoundType(stem.instrumentMask) ??
+            guessSoundTypeFromPresetName(stem.presetName) ??
+            'fx'
+        ),
         drumSubRole: null,
-        riffBpm: resolvedRiff.bpm
+        riffBpm: resolvedRiff.bpm,
+        traitValue: null
       }))
       // Same "push a snapshot before mutating" convention every other
       // Discover slot-content action already uses (DiscoverPanel.tsx's own

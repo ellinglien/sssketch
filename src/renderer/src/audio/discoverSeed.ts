@@ -1,11 +1,28 @@
-import { resolveStemRole } from '@shared/stemRole'
-import type { Stem } from '@shared/types'
+import type { SoundType, Stem } from '@shared/types'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import {
   freshSlotId,
   type DiscoverSlot,
   type ResolvedCandidateStem
 } from '../components/DiscoverPanel'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+
+/** Best-effort DiscoverSlotKind for a stem's own SoundType -- used by both
+ * seed paths in this file (Shelf-sourced and, via LibraryBrowser.tsx,
+ * Browse-sourced). A real Endlesss instrument mask reliably identifies
+ * drums/bass/notes (see reliableMaskSoundType, stemAutoClassify.ts, for
+ * the same real-data finding this mirrors); everything else -- audioIn,
+ * fx, extInst, sampler, extFx -- has no reliable mask-kind signal, so it
+ * falls back to a single fixed trait kind rather than guessing, same
+ * "cheap and fast over exactly right" tradeoff as DiscoverPanel.tsx's own
+ * external-sample-import default (see that file's own doc comment on why
+ * 'bright' specifically). */
+export function discoverSlotKindForSoundType(soundType: SoundType): DiscoverSlotKind {
+  if (soundType === 'drums') return 'drums'
+  if (soundType === 'bass') return 'bass'
+  if (soundType === 'notes') return 'lead'
+  return 'bright'
+}
 
 // A real Rifff can only ever have 8 stems (StemCID_1..8, see
 // riffLibrarySchema.ts) -- caps defensively at the same number
@@ -45,12 +62,11 @@ export function discoverHasRealContent(slots: readonly DiscoverSlot[]): boolean 
  * DiscoverCandidate to speak of -- a real placed/shelved Stem carries no
  * riffCID/stemCID at all).
  *
- * Role is inferred via `resolveStemRole` (the SAME heuristic
+ * Kind is inferred directly from the stem's own `SoundType` via
+ * `discoverSlotKindForSoundType` -- NOT `resolveStemRole` (the heuristic
  * AutoArrangeRoleStep.tsx/ClusterStemsBrowser.tsx's own role-confirmation
- * pickers already use) with `busId: null` -- a Shelf/unplaced stem has no
- * channel/bus assignment yet (that only exists for PLACED rifffs), so this
- * always falls through to `resolveStemRole`'s own preset-name-guess-then-
- * soundType-fallback chain, never its busId shortcut.
+ * pickers use for Tidy Up, untouched elsewhere): Discover's own matching
+ * wants a direct mask-kind/trait-kind split, not Tidy Up's role guess.
  *
  * Every slot starts unlocked and `hasRerolled: true` (there is no
  * meaningful "hasn't rolled yet" state for a slot that already has real
@@ -66,10 +82,9 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
       durationSec: stem.durationSec,
       barLength: stem.barLength
     }
-    const { arrangeRole } = resolveStemRole(stem, stem.path, null)
     return {
       id: freshSlotId(),
-      role: arrangeRole,
+      kind: discoverSlotKindForSoundType(stem.type),
       locked: false,
       candidate: null,
       hasRerolled: true,
@@ -84,8 +99,8 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
  * becomes one slot with `candidate` set (the existing, UNCHANGED
  * DiscoverSlotRow resolution path handles it exactly like a normal roll's
  * own candidate -- same lazy per-row "downloading + analyzing…" state, same
- * caching). `arrangeRole` comes directly off the candidate (already
- * populated by whoever built it -- see LibraryBrowser.tsx's own
+ * caching). `kind` comes directly off the candidate's own `slotKind`
+ * (already populated by whoever built it -- see LibraryBrowser.tsx's own
  * seed-triggering handler). Every slot starts unlocked and
  * `hasRerolled: true`, `gain: 1`, `seedStem: undefined` -- same defaults as
  * the Stems path above. Returns `[]` for an empty input. */
@@ -94,7 +109,7 @@ export function buildSeedSlotsFromCandidates(
 ): DiscoverSlot[] {
   return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
     id: freshSlotId(),
-    role: candidate.arrangeRole,
+    kind: candidate.slotKind,
     locked: false,
     candidate,
     hasRerolled: true,
