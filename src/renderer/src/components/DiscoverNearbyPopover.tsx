@@ -1,7 +1,7 @@
 // src/renderer/src/components/DiscoverNearbyPopover.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
-import type { ArrangeRole } from '@shared/stemRole'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import type { AdjacentDiscoverCandidate } from '../../../main/discoverAdjacency'
 import { typeColorVar } from '../theme/typeColor'
@@ -151,7 +151,7 @@ export function DiscoverNearbyPopover({
   x,
   y,
   startCandidate,
-  role,
+  kind,
   onPick,
   onClose,
   ignoreRef
@@ -162,7 +162,7 @@ export function DiscoverNearbyPopover({
    * "back to start" returns to exactly this, without needing a fresh IPC
    * round trip to reconstruct it. */
   startCandidate: DiscoverCandidate
-  role: ArrangeRole
+  kind: DiscoverSlotKind
   /** DiscoverSlotRow's own onSwapFromNearby -- fires on every pick, INCLUDING
    * a step-button pick or "back to start." This popover recenters its own
    * browsing around whatever was just picked; it does NOT close itself. */
@@ -176,7 +176,7 @@ export function DiscoverNearbyPopover({
   // wouldn't give us without a second IPC round trip. Starts as
   // `startCandidate`, becomes whatever was last picked.
   const [centerCandidate, setCenterCandidate] = useState(startCandidate)
-  // Paired with the (riffCID, role) key it was fetched FOR -- same
+  // Paired with the (riffCID, kind) key it was fetched FOR -- same
   // identity-comparison convention as CandidateRow's own `resolved` above
   // (and DiscoverSlotRow's own resolved/resolvedForCurrent in
   // DiscoverPanel.tsx), so recentering onto a newly-picked candidate reads
@@ -187,12 +187,12 @@ export function DiscoverNearbyPopover({
     key: string
     candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
-  const resultKey = `${centerCandidate.riffCID}:${role}`
+  const resultKey = `${centerCandidate.riffCID}:${kind}`
 
   useEffect(() => {
     let cancelled = false
     window.rifffApi
-      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, role)
+      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kind)
       .then((candidates) => {
         if (!cancelled) setResult({ key: resultKey, candidates })
       })
@@ -203,7 +203,7 @@ export function DiscoverNearbyPopover({
     return () => {
       cancelled = true
     }
-  }, [centerCandidate.riffCID, role, resultKey])
+  }, [centerCandidate.riffCID, kind, resultKey])
 
   const resultForCurrent = result?.key === resultKey ? result : null
   const candidates = resultForCurrent?.candidates ?? { newer: [], older: [] }
