@@ -145,7 +145,7 @@ export interface DiscoverSlot {
    * once (regardless of outcome -- a genuinely empty result sets this same
    * as a found one does), so DiscoverSlotRow below can distinguish "nobody
    * has clicked reroll on this slot yet" from "rerolled, and there's
-   * really nothing compatible for this role." Only the reroll call whose
+   * really nothing compatible for this kind." Only the reroll call whose
    * result actually lands (i.e. survives rerollSlot's own generation-guard
    * check) sets this -- a superseded/stale call's result is discarded
    * wholesale, this field included, same as `candidate` itself. Left
@@ -1058,7 +1058,7 @@ export function DiscoverPanel({
   // Direct request: adding a slot used to require a second, separate click
   // on its own "roll" button before it showed anything -- this rolls it
   // immediately, same generation-guarded IPC round trip rerollSlot already
-  // uses, just parameterized by `role` directly instead of looked up from
+  // uses, just parameterized by `kind` directly instead of looked up from
   // `slots` state (a slot minted THIS SAME tick isn't in that state's own
   // closure yet -- see rollForSlot's own doc comment below).
   //
@@ -1270,7 +1270,7 @@ export function DiscoverPanel({
   // that it was a target [of the drag]... maybe we could have a
   // conventional file import + as well in the list '+ sample'") -- the
   // click-to-pick equivalent of handleExternalFileDrop above, for the
-  // "+ sample" button alongside the per-role "+ {role}" add-slot buttons
+  // "+ sample" button alongside the per-kind "+ {kind}" add-slot buttons
   // below. The main-process picker's own WAV filter (pick-discover-loop-
   // seed-paths) means every path returned here is already the right type,
   // unlike the drop handler which has to filter an arbitrary FileList
@@ -1338,7 +1338,7 @@ export function DiscoverPanel({
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
   // hit a TERMINAL failure (resolveFailed -- a real candidate was found
   // but couldn't be downloaded/decoded; or noMatchFound -- nothing at all
-  // matched this slot's role) used to keep its OLD stem's audio playing
+  // matched this slot's kind) used to keep its OLD stem's audio playing
   // in the mix forever, silently, under a UI that visibly says "failed"/
   // "no match" and hides the mute/solo/favourite controls that would let
   // the user silence it (DiscoverSlotRow's own hasStemToActOn guard).
@@ -1375,7 +1375,7 @@ export function DiscoverPanel({
   }
 
   // Core roll logic, shared by addSlot (a brand-new slot's own first roll)
-  // and rerollSlot (an existing slot's later rerolls) -- takes `role`
+  // and rerollSlot (an existing slot's later rerolls) -- takes `kind`
   // directly rather than looking it up via `slots.find(...)`, since addSlot
   // needs to roll a slot in the SAME tick it mints it, before that slot has
   // made it into `slots` state (a plain function defined in this render
@@ -1417,14 +1417,14 @@ export function DiscoverPanel({
         `DiscoverPanel: rollForSlot(${kind}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
-      // Direct report: adding two or three slots of the same role (e.g.
+      // Direct report: adding two or three slots of the same kind (e.g.
       // several "lead" slots) often landed the exact SAME stem in every
       // one -- each slot's own roll is otherwise unaware of what every
       // OTHER slot in this same loop already picked. Prefer a candidate not
       // already used by another slot right now, when one exists; fall back
       // to the full pool otherwise (a small confirmed-candidate pool
       // duplicating across slots is still better than wrongly reporting "no
-      // match" for a role that really does have candidates, just not
+      // match" for a kind that really does have candidates, just not
       // enough distinct ones for every slot). `slots` here is this
       // function's own closure from whenever it was called (addSlot or
       // rerollSlot) -- a slightly stale read if another slot changed mid-
@@ -1487,7 +1487,7 @@ export function DiscoverPanel({
   // random stem of the user's from their library, then go from there" --
   // bypasses confirmed/embedding/instrument matching entirely (unlike
   // rollForSlot above), for the exact case that prompted it: stuck at
-  // "no match" regardless of how loose/confirmed the role-based pool is.
+  // "no match" regardless of how loose/confirmed the kind-based pool is.
   // Shares rerollGenerationRef/rerollingSlotIds with rollForSlot -- both
   // ultimately just set `candidate` on the same slot, so they need the
   // SAME stale-response guard against each other (a random roll landing
@@ -1534,11 +1534,11 @@ export function DiscoverPanel({
     // Direct report, 2026-09-17: "clicking the dice in discover if there
     // are no slots should add a stem" -- an empty loop has nothing for the
     // loop below to iterate over, so this button was a silent no-op on a
-    // fresh/empty Discover session. Adds the first role in the list
+    // fresh/empty Discover session. Adds the first kind in the list
     // (matching the "+ drums" button's own usual first pick) rather than a
     // random one -- Math.random() during render/an event handler defined
     // at the component's top level trips this codebase's react-hooks
-    // purity lint rule, and a random FIRST role isn't something the direct
+    // purity lint rule, and a random FIRST kind isn't something the direct
     // report actually asked for.
     if (slots.length === 0) {
       addSlot(DISCOVER_SLOT_KIND_OPTIONS[0])
@@ -1619,9 +1619,9 @@ export function DiscoverPanel({
     )
     if (placed.length === 0) return null
 
-    const roles = [...new Set(placeable.map((s) => s.kind))]
+    const kinds = [...new Set(placeable.map((s) => s.kind))]
     return assembleDiscoverRifff(
-      `discover: ${roles.join('+')}`,
+      `discover: ${kinds.join('+')}`,
       placed.map(({ stem, gain }) => ({ stem, gain })),
       bpm
     )
@@ -2273,7 +2273,7 @@ export function DiscoverPanel({
           14px 1fr 14px 64px 14px 16px 70px 70px 70px', columnGap: 8) --
           left = delete+lock+mute+solo+favourite+gap widths (104) + the 5
           gaps between them (40) + the gap before the waveform track (8)
-          = 152; right = the gap after the waveform (8) + gap+role+gap+
+          = 152; right = the gap after the waveform (8) + gap+kind+gap+
           dice+similar+adjacent+random widths (318) + the 6 gaps between
           THEM (48) = 374. If that grid template's own column widths ever
           change, these two numbers need updating to match. */}
@@ -2690,7 +2690,7 @@ function DiscoverSlotRow({
   // spinner would otherwise have kept insisting it was still working.
   const resolving = slot.candidate !== null && resolvedStem === null && !resolveFailed
   // A reroll actually COMPLETED but found nothing that matched this slot's
-  // role/constraints at all (rollForSlot/rerollSlot left slot.candidate
+  // kind/constraints at all (rollForSlot/rerollSlot left slot.candidate
   // null) -- distinct from resolveFailed (a real candidate WAS found but
   // couldn't be downloaded/decoded). Direct report, 2026-09-17: "just tried
   // to add a vocal and i think it didn't find an appropriate one... but
@@ -2922,9 +2922,9 @@ function DiscoverSlotRow({
           display: 'grid',
           // 14 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
-          // 5 favourite, 6 gap, 7 waveform, 8 gap, 9 role/category label,
+          // 5 favourite, 6 gap, 7 waveform, 8 gap, 9 kind/category label,
           // 10 gap, 11 decorative dice icon, 12 similar, 13 adjacent, 14
-          // random. Mute/solo/favourite moved next to lock and the role
+          // random. Mute/solo/favourite moved next to lock and the kind
           // label moved down next to similar/adjacent/random -- direct
           // request, 2026-09-17, freeing up much more width for the
           // waveform (now 1fr against only three fixed-width siblings
@@ -3389,8 +3389,8 @@ function DiscoverSlotRow({
         <button
           onClick={onReroll}
           disabled={rerolling}
-          data-tooltip="same role"
-          aria-label="same role"
+          data-tooltip="same kind"
+          aria-label="same kind"
           style={{
             gridColumn: 12,
             display: 'flex',
