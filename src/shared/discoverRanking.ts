@@ -46,8 +46,8 @@ const TRAIT_SCORE_WEIGHT = 1
 export interface TraitTarget {
   /** Which end of the field's own real range this roll targets --
    * 'high' for bassHeavy/rhythmic/bright, 'low' for warm (see
-   * DiscoverSlotKind's own doc comment: bright/warm share one field, two
-   * opposite targets). */
+   * discoverCandidates.ts's own TRAIT_FIELD table: bright/warm share one
+   * field, spectralCentroidHz, as two opposite targets). */
   direction: 'high' | 'low'
   /** The field's own plausible max value, for normalizing distance into a
    * 0-1 score -- StemFeatures' own continuous fields are roughly 0-1 already

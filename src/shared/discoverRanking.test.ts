@@ -86,12 +86,17 @@ describe('rankCandidates (trait scoring)', () => {
   it('a candidate with traitValue null (e.g. mixed into a trait roll by mistake) scores as the worst possible trait match, not a crash', () => {
     const withTrait = candidate({ stemCID: 'has-trait', riffBpm: 128, traitValue: 0.5 })
     const noTrait = candidate({ stemCID: 'no-trait', riffBpm: 128, traitValue: null })
-    expect(() =>
-      rankCandidates([withTrait, noTrait], {
-        targetBpm: 128,
-        targetTrait: { direction: 'high', maxValue: 1 }
-      })
-    ).not.toThrow()
+    const ranked = rankCandidates([noTrait, withTrait], {
+      targetBpm: 128,
+      targetTrait: { direction: 'high', maxValue: 1 }
+    })
+    // Not just "didn't throw" -- the null-trait candidate must actually
+    // rank BELOW the real one (code review: the original version of this
+    // test only asserted .not.toThrow(), which a buggy traitScore
+    // returning 1 -- best -- instead of 0 for null would still have
+    // passed).
+    expect(ranked[0].candidate.stemCID).toBe('has-trait')
+    expect(ranked[0].score).toBeGreaterThan(ranked[1].score)
   })
 
   it('omitting targetTrait ranks purely by BPM, exactly like today -- mask-kind rolls are unaffected', () => {
