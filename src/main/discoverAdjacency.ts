@@ -149,6 +149,16 @@ export async function getAdjacentDiscoverCandidates(
     for (const stem of resolved.stems) {
       const soundType = instrumentMaskToSoundType(stem.instrumentMask)
 
+      // traitValue stays null for the mask-kind path (it ranks by BPM
+      // alone, same as a normal roll) -- only set once a trait kind's own
+      // cached feature row is confirmed to exist and parse below. Both
+      // branches build ONE shared return object at the bottom of this
+      // loop body (code review, 2026-09-18: the original version had two
+      // full, ~20-line-apart duplicate object literals differing only in
+      // this one field -- a real drift risk for any future field added to
+      // one copy and forgotten in the other).
+      let traitValue: number | null = null
+
       if (!isTraitKind) {
         // Mask kinds: direct check, same shape as discoverCandidates.ts's
         // own getInstrumentMatchedStemCIDs.
@@ -157,46 +167,25 @@ export async function getAdjacentDiscoverCandidates(
           (soundType === 'bass' && kind === 'bass') ||
           (soundType === 'notes' && kind === 'lead')
         if (!isMatch) continue
-        return {
-          stemCID: stem.stemCID,
-          jamCID,
-          riffCID: summary.riffCID,
-          presetName: stem.presetName,
-          creatorUserName: stem.creatorUserName,
-          slotKind: kind,
-          drumSubRole: null,
-          riffBpm: resolved.bpm,
-          traitValue: null,
-          soundType,
-          // Pure string computation (resolveStemPath's own doc comment --
-          // no filesystem/db access) -- correct regardless of whether the
-          // file is actually on disk YET, since downloadMissingStems below
-          // ensures it will be by the time this whole function returns.
-          // Direct request, 2026-09-16 ("can we take a good look at the
-          // things we just added... and see if we can improve the speed"):
-          // pre-resolving here means DiscoverNearbyPopover.tsx's own
-          // CandidateRow no longer needs a second, redundant full-riff
-          // resolve (riffLibraryResolveRiff) per candidate just to learn a
-          // path this function already knew.
-          path: resolveStemPath(jamCID, stem.stemCID)
+      } else {
+        // Trait kinds: excluded if the mask reliably places it elsewhere
+        // (drums/bass/notes already belong to the 3 mask kinds' own pool),
+        // otherwise needs a cached StemFeatureCache row to have any trait
+        // value to match on at all.
+        if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') continue
+        const featureRow = ownDb
+          .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
+          .get(stem.stemCID) as { FeaturesJSON: string } | undefined
+        if (!featureRow) continue
+        let features: StemFeatures
+        try {
+          features = JSON.parse(featureRow.FeaturesJSON) as StemFeatures
+        } catch {
+          continue
         }
+        traitValue = features[TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]]
       }
 
-      // Trait kinds: excluded if the mask reliably places it elsewhere
-      // (drums/bass/notes already belong to the 3 mask kinds' own pool),
-      // otherwise needs a cached StemFeatureCache row to have any trait
-      // value to match on at all.
-      if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') continue
-      const featureRow = ownDb
-        .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
-        .get(stem.stemCID) as { FeaturesJSON: string } | undefined
-      if (!featureRow) continue
-      let features: StemFeatures
-      try {
-        features = JSON.parse(featureRow.FeaturesJSON) as StemFeatures
-      } catch {
-        continue
-      }
       return {
         stemCID: stem.stemCID,
         jamCID,
@@ -206,8 +195,18 @@ export async function getAdjacentDiscoverCandidates(
         slotKind: kind,
         drumSubRole: null,
         riffBpm: resolved.bpm,
-        traitValue: features[TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]],
+        traitValue,
         soundType,
+        // Pure string computation (resolveStemPath's own doc comment --
+        // no filesystem/db access) -- correct regardless of whether the
+        // file is actually on disk YET, since downloadMissingStems below
+        // ensures it will be by the time this whole function returns.
+        // Direct request, 2026-09-16 ("can we take a good look at the
+        // things we just added... and see if we can improve the speed"):
+        // pre-resolving here means DiscoverNearbyPopover.tsx's own
+        // CandidateRow no longer needs a second, redundant full-riff
+        // resolve (riffLibraryResolveRiff) per candidate just to learn a
+        // path this function already knew.
         path: resolveStemPath(jamCID, stem.stemCID)
       }
     }
