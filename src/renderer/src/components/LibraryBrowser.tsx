@@ -1333,12 +1333,14 @@ export function LibraryBrowser({
     // on the block below for why), and the button itself never showed
     // anything different while it ran -- reads as frozen/unresponsive for
     // however long that round trip took, the exact "not snappy" complaint
-    // this was raised alongside. Kept async/setBusy-wrapped even now that
-    // building candidates is synchronous, since setLibraryMode('discover')
-    // below still hands off into Discover's own async per-slot resolution.
-    // Same setBusy(...)/setBusy(null) convention this file already uses
-    // for handleImport/handleImportSelected/download-missing-stems, just
-    // applied here too.
+    // this was raised alongside. Now that building candidates is fully
+    // synchronous (no `await` anywhere left in this function), the
+    // setBusy('seeding discover…')/setBusy(null) pair below lands in the
+    // same React batch and the overlay never actually paints -- kept
+    // anyway, harmlessly, for handler-shape consistency with this file's
+    // other async handlers (handleImport/handleImportSelected/
+    // download-missing-stems) rather than because it still does anything
+    // visible here.
     setBusy('seeding discover…')
     try {
       // Kind comes straight off the stem's own instrument mask/preset-name
