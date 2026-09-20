@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff, Stem, BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type {
   RiffLibraryJam,
@@ -212,22 +213,22 @@ const api = {
   getConfirmedEmbeddings: (axis: CategoryAxis): Promise<ConfirmedEmbedding[]> =>
     ipcRenderer.invoke('get-confirmed-embeddings', axis),
   getDiscoverCandidates: (
-    arrangeRole: ArrangeRole,
+    kind: DiscoverSlotKind,
     onlyOwnStems: boolean,
     targetUser?: string
   ): Promise<DiscoverCandidate[]> =>
-    ipcRenderer.invoke('get-discover-candidates', arrangeRole, onlyOwnStems, targetUser),
+    ipcRenderer.invoke('get-discover-candidates', kind, onlyOwnStems, targetUser),
   getRandomDiscoverCandidate: (
-    arrangeRole: ArrangeRole,
+    kind: DiscoverSlotKind,
     onlyOwnStems: boolean,
     targetUser?: string
   ): Promise<DiscoverCandidate | null> =>
-    ipcRenderer.invoke('get-random-discover-candidate', arrangeRole, onlyOwnStems, targetUser),
+    ipcRenderer.invoke('get-random-discover-candidate', kind, onlyOwnStems, targetUser),
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
-    role: ArrangeRole
+    kind: DiscoverSlotKind
   ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
-    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, role),
+    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kind),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{ stemCID: string; riffCID: string; jamCID: string; bpm: number } | null> =>

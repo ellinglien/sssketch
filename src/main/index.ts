@@ -95,6 +95,7 @@ import {
   type YamnetZeroShotRetroactiveTarget
 } from './yamnetZeroShotRetroactiveScan'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
@@ -931,7 +932,7 @@ app.whenReady().then(async () => {
     'get-discover-candidates',
     async (
       _event,
-      arrangeRole: ArrangeRole,
+      kind: DiscoverSlotKind,
       onlyOwnStems: boolean,
       targetUser?: string
     ): Promise<DiscoverCandidate[]> => {
@@ -943,17 +944,17 @@ app.whenReady().then(async () => {
       const jams = listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
       const t1 = Date.now()
       console.log(
-        `get-discover-candidates(${arrangeRole}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
+        `get-discover-candidates(${kind}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
       )
       const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
         jams,
-        arrangeRole,
+        kind,
         onlyOwnStems,
         targetUser
       })
       console.log(
-        `get-discover-candidates(${arrangeRole}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
+        `get-discover-candidates(${kind}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
       )
       return result
     }
@@ -963,13 +964,13 @@ app.whenReady().then(async () => {
     'get-random-discover-candidate',
     (
       _event,
-      arrangeRole: ArrangeRole,
+      kind: DiscoverSlotKind,
       onlyOwnStems: boolean,
       targetUser?: string
     ): Promise<DiscoverCandidate | null> =>
       getRandomLibraryCandidate({
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
-        arrangeRole,
+        kind,
         onlyOwnStems,
         targetUser
       })
@@ -977,8 +978,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'get-adjacent-discover-candidates',
-    (_event, centerRiffCID: string, role: ArrangeRole) =>
-      getAdjacentDiscoverCandidates(centerRiffCID, role)
+    (_event, centerRiffCID: string, kind: DiscoverSlotKind) =>
+      getAdjacentDiscoverCandidates(centerRiffCID, kind)
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>
