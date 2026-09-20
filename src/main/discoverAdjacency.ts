@@ -1,9 +1,9 @@
 // src/main/discoverAdjacency.ts
 import { basename } from 'node:path'
-import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import type { SoundType } from '@shared/types'
+import { DISCOVER_TRAIT_SLOT_KINDS, type DiscoverSlotKind } from '@shared/discoverSlotKind'
+import type { StemFeatures } from '@shared/stemFeatures'
 import {
   resolveRiffWithContext,
   listRiffs,
@@ -13,7 +13,6 @@ import {
   resolveStemPath
 } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
-import { resolveStemArrangeRole } from './resolveStemArrangeRole'
 import { getRiffIndexForDb, type DiscoverCandidate } from './discoverCandidates'
 
 /** Result of walking outward from a center index in both directions --
@@ -86,9 +85,26 @@ export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
   soundType: SoundType | null
 }
 
+// Field this trait kind's adjacency match requires a cached row for --
+// mirrors discoverCandidates.ts's own TRAIT_FIELD table exactly (kept as a
+// separate small copy here rather than exported/shared, matching this
+// codebase's own "small duplicated tables are cheaper than coupling two
+// independently-scoped files" convention used elsewhere, e.g.
+// DiscoverLibraryScan.tsx's own BATCH_SIZE not importing from
+// BackgroundFeatureScan.tsx).
+const TRAIT_FIELD: Record<
+  'bassHeavy' | 'rhythmic' | 'bright' | 'warm',
+  keyof Pick<StemFeatures, 'bassEnergyRatio' | 'transientDensity' | 'spectralCentroidHz'>
+> = {
+  bassHeavy: 'bassEnergyRatio',
+  rhythmic: 'transientDensity',
+  bright: 'spectralCentroidHz',
+  warm: 'spectralCentroidHz'
+}
+
 /** Finds up to ADJACENT_MATCHES_PER_DIRECTION riffs recorded near
  * `centerRiffCID`, in the SAME jam's own iteration sequence, that have at
- * least one stem matching `role` -- see this plan's own header for the
+ * least one stem matching `kind` -- see this plan's own header for the
  * architecture. `newer`/`older` are unambiguous, real chronological
  * directions (see walkAdjacentWindow's own doc comment) -- the CALLER maps
  * them to "earlier"/"later" UI labels (older -> earlier, newer -> later).
@@ -98,7 +114,7 @@ export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
  * codebase already follows. */
 export async function getAdjacentDiscoverCandidates(
   centerRiffCID: string,
-  role: ArrangeRole
+  kind: DiscoverSlotKind
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
@@ -119,17 +135,11 @@ export async function getAdjacentDiscoverCandidates(
   // const's narrowing into a nested function closure.
   const jamCID = context.jamCID
 
-  // Direct request, 2026-09-16: "the audio analysis should be able to
-  // detect and differentiate drums from leads etc etc." Checks the real
-  // trained classifier (resolveStemArrangeRole -- human-confirmed
-  // StemCategories, else the audio-analysis-backed StemAutoCategory) for
-  // each stem BEFORE falling back to the blunt instrument-mask/preset-name
-  // chain, same precedence discoverCandidates.ts's own pool-building
-  // already uses for the opposite lookup direction (role -> matching
-  // stems). Opened once, outside the per-riff matchRole closure below, not
-  // once per stem -- openOwnRiffLibraryDb() caches its own connection, but
+  // Opened once, outside the per-riff matchRole closure below, not once
+  // per stem -- openOwnRiffLibraryDb() caches its own connection, but
   // there's no reason to re-look-it-up on every call either.
   const ownDb = openOwnRiffLibraryDb()
+  const isTraitKind = DISCOVER_TRAIT_SLOT_KINDS.includes(kind)
 
   async function matchRole(summary: {
     riffCID: string
@@ -137,33 +147,67 @@ export async function getAdjacentDiscoverCandidates(
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
-      const bluntSoundType =
-        instrumentMaskToSoundType(stem.instrumentMask) ??
-        guessSoundTypeFromPresetName(stem.presetName)
-      const stemRole = resolveStemArrangeRole(ownDb, stem.stemCID, () =>
-        bluntSoundType === null ? null : SOUND_TYPE_TO_ARRANGE_ROLE[bluntSoundType]
-      )
-      if (stemRole !== role) continue
+      const soundType = instrumentMaskToSoundType(stem.instrumentMask)
+
+      if (!isTraitKind) {
+        // Mask kinds: direct check, same shape as discoverCandidates.ts's
+        // own getInstrumentMatchedStemCIDs.
+        const isMatch =
+          (soundType === 'drums' && kind === 'drums') ||
+          (soundType === 'bass' && kind === 'bass') ||
+          (soundType === 'notes' && kind === 'lead')
+        if (!isMatch) continue
+        return {
+          stemCID: stem.stemCID,
+          jamCID,
+          riffCID: summary.riffCID,
+          presetName: stem.presetName,
+          creatorUserName: stem.creatorUserName,
+          slotKind: kind,
+          drumSubRole: null,
+          riffBpm: resolved.bpm,
+          traitValue: null,
+          soundType,
+          // Pure string computation (resolveStemPath's own doc comment --
+          // no filesystem/db access) -- correct regardless of whether the
+          // file is actually on disk YET, since downloadMissingStems below
+          // ensures it will be by the time this whole function returns.
+          // Direct request, 2026-09-16 ("can we take a good look at the
+          // things we just added... and see if we can improve the speed"):
+          // pre-resolving here means DiscoverNearbyPopover.tsx's own
+          // CandidateRow no longer needs a second, redundant full-riff
+          // resolve (riffLibraryResolveRiff) per candidate just to learn a
+          // path this function already knew.
+          path: resolveStemPath(jamCID, stem.stemCID)
+        }
+      }
+
+      // Trait kinds: excluded if the mask reliably places it elsewhere
+      // (drums/bass/notes already belong to the 3 mask kinds' own pool),
+      // otherwise needs a cached StemFeatureCache row to have any trait
+      // value to match on at all.
+      if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') continue
+      const featureRow = ownDb
+        .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
+        .get(stem.stemCID) as { FeaturesJSON: string } | undefined
+      if (!featureRow) continue
+      let features: StemFeatures
+      try {
+        features = JSON.parse(featureRow.FeaturesJSON) as StemFeatures
+      } catch {
+        continue
+      }
       return {
         stemCID: stem.stemCID,
         jamCID,
         riffCID: summary.riffCID,
         presetName: stem.presetName,
         creatorUserName: stem.creatorUserName,
-        arrangeRole: role,
+        slotKind: kind,
         drumSubRole: null,
         riffBpm: resolved.bpm,
-        soundType: bluntSoundType,
-        // Pure string computation (resolveStemPath's own doc comment --
-        // no filesystem/db access) -- correct regardless of whether the
-        // file is actually on disk YET, since downloadMissingStems below
-        // ensures it will be by the time this whole function returns.
-        // Direct request, 2026-09-16 ("can we take a good look at the
-        // things we just added... and see if we can improve the speed"):
-        // pre-resolving here means DiscoverNearbyPopover.tsx's own
-        // CandidateRow no longer needs a second, redundant full-riff
-        // resolve (riffLibraryResolveRiff) per candidate just to learn a
-        // path this function already knew.
+        traitValue: features[TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]],
+        soundType,
         path: resolveStemPath(jamCID, stem.stemCID)
       }
     }
