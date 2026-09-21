@@ -10,6 +10,8 @@ import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/disc
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
+  DISCOVER_TRAIT_SLOT_KINDS,
+  isMaskSlotKind,
   isTraitSlotKind,
   slotKindsKey,
   slotKindsLabel,
@@ -1624,7 +1626,7 @@ export function DiscoverPanel({
     // purity lint rule, and a random FIRST kind isn't something the direct
     // report actually asked for.
     if (slots.length === 0) {
-      addSlot(DISCOVER_SLOT_KIND_OPTIONS[0])
+      addSlot(soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS[0] : DISCOVER_TRAIT_SLOT_KINDS[0])
       return
     }
     // One undo snapshot for the WHOLE batch, taken up front -- calls
@@ -2180,10 +2182,12 @@ export function DiscoverPanel({
           split once for being "cluttered"; adding two more checkboxes to
           the SAME already-tuned row risks the exact same complaint again.
           Direct request, 2026-09-21: "a way to only enable audio in or
-          microphone stems." Only meaningfully affects the 4 trait kinds
-          (bassHeavy/rhythmic/bright/warm) -- see getDiscoverCandidates'
-          own soundSource doc comment (discoverCandidates.ts) for why mask
-          kinds (drums/bass/lead) are unaffected by design. */}
+          microphone stems." Turning "endlesss" off also disables the 3
+          mask kinds (drums/bass/lead) -- they're Endlesss content by
+          definition, so with the source off they can't match anything;
+          see getDiscoverCandidates' own soundSource doc comment
+          (discoverCandidates.ts). "non-endlesss" only ever affects the 4
+          trait kinds (bassHeavy/rhythmic/bright/warm). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <label
           style={{
@@ -2197,7 +2201,7 @@ export function DiscoverPanel({
           <input
             type="checkbox"
             checked={soundSourceEndlesss}
-            title="drums/bass/lead, plus every bright/warm/rhythmic/bass-heavy roll drawn from an Endlesss-produced sound (instrument or effect, lumped together) -- only affects bright/warm/rhythmic/bass-heavy rolls, since drums/bass/lead are always Endlesss-produced by definition"
+            title="stems made with Endlesss instruments or effects -- turning this off also turns off drums/bass/lead, which are Endlesss-only"
             onChange={(e) => setSoundSourceEndlesss(e.target.checked)}
           />
           endlesss
@@ -2214,7 +2218,7 @@ export function DiscoverPanel({
           <input
             type="checkbox"
             checked={soundSourceAudioIn}
-            title="only affects bright/warm/rhythmic/bass-heavy rolls -- audio in/microphone stems (real recorded/mic input, not an Endlesss instrument or effect)"
+            title="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect)"
             onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
           />
           non-endlesss
@@ -2424,23 +2428,31 @@ export function DiscoverPanel({
           marginRight: 498
         }}
       >
-        {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
-          <button
-            key={kind}
-            onClick={() => addSlot(kind)}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 9,
-              padding: '4px 8px',
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            + {DISCOVER_SLOT_KIND_LABEL[kind]}
-          </button>
-        ))}
+        {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
+          // Instrument kinds are Endlesss content by definition -- with the
+          // "endlesss" source off they can't match anything (spec, 2026-09-21).
+          const disabled = !soundSourceEndlesss && isMaskSlotKind(kind)
+          return (
+            <button
+              key={kind}
+              disabled={disabled}
+              onClick={() => addSlot(kind)}
+              data-tooltip={disabled ? 'needs endlesss on' : undefined}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 9,
+                padding: '4px 8px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--ra-text-2)',
+                opacity: disabled ? 0.3 : 1,
+                cursor: disabled ? 'not-allowed' : 'pointer'
+              }}
+            >
+              + {DISCOVER_SLOT_KIND_LABEL[kind]}
+            </button>
+          )
+        })}
         {/* Direct request, 2026-09-20: "add + Random to the bottom list" --
             an eighth button alongside the 7 kind buttons above, for a slot
             seeded from a genuinely random stem rather than any one kind's
