@@ -41,9 +41,33 @@ const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
 // doesn't allocate a fresh empty Set on every render.
 const EMPTY_NODE_ID_SET: ReadonlySet<number> = new Set()
 
+// Direct request, 2026-09-20: "for suggested groupings of more than 8,
+// default to split unless audio is very very similar (it's hard to judge
+// when user can't look at the wave)." A group above this size, with
+// nothing manually split yet, auto-splits into its two dendrogram
+// children UNLESS its own top-level merge distance (see
+// SUGGESTED_GROUP_VERY_SIMILAR_DISTANCE below) says the members are
+// already tight enough to trust as one row.
+const SUGGESTED_GROUP_AUTO_SPLIT_MAX_MEMBERS = 8
+
+// Average-linkage Euclidean distance, over the SAME standardizeFeatures'
+// z-scored 19-dim space this file's clustering already runs in (mean 0,
+// std 1 per dimension) -- two genuinely UNRELATED stems land around
+// sqrt(19 * 2) ≈ 6.2 apart in that space (each dimension independently
+// contributing ~2 expected squared distance). "Very very similar" is set
+// well below that -- roughly a sixth of the unrelated-pair baseline -- so
+// only a genuinely tight group skips the default-to-split above. NOT YET
+// VALIDATED against real data (same honest caveat as discoverRanking.ts's
+// own BPM_FALLOFF) -- this hasn't been checked against Elling's own real
+// Tidy Up sessions, only reasoned about from the feature space's own
+// statistics; revisit once there's a real library of sessions to check it
+// against.
+const SUGGESTED_GROUP_VERY_SIMILAR_DISTANCE = 1.0
+
 /** Lazily splits a flat, non-dendrogram group (a "suggested" row's own
  * members -- there's no real clustering behind it until this is actually
- * called) into however many rows `splitNodeIds` has flagged, via the same
+ * needed) into however many rows `splitNodeIds` has flagged (a manual
+ * per-row split) OR the auto-split default above produces, via the same
  * agglomerativeCluster.ts primitives (computeMergeSequence/cutAtKWithIds/
  * splitNode) the real DSP `clusters` useMemo below already uses -- computes
  * a fresh local dendrogram over just THESE members every call rather than
@@ -51,26 +75,46 @@ const EMPTY_NODE_ID_SET: ReadonlySet<number> = new Set()
  * group's membership has nothing to do with which stems the DSP side is
  * clustering (2026-09-15, direct request: "real split, on demand" for
  * suggested rows). `members.length <= 1` short-circuits (nothing to
- * cluster) as does an unsplit group (no ids flagged yet, the common case)
- * -- both return the whole group as a single row, matching a plain
- * suggested row's original shape exactly when nothing's been split. */
+ * cluster); a small (<= SUGGESTED_GROUP_AUTO_SPLIT_MAX_MEMBERS), never-
+ * manually-split group ALSO short-circuits without computing a dendrogram
+ * at all, matching the original "nothing to do" fast path for the common
+ * case. Once the user has manually split a group at all (splitNodeIds
+ * non-empty), their own choices entirely replace the auto-split default --
+ * this function never layers the heuristic on top of a manual split. */
 function expandFlatGroupIntoRows(
   members: ClusterableStem[],
   rawVectorsByKey: Map<string, number[]>,
   splitNodeIds: ReadonlySet<number>
 ): { nodeId: number; members: ClusterableStem[] }[] {
-  if (members.length <= 1 || splitNodeIds.size === 0) {
+  if (members.length <= 1) {
+    return [{ nodeId: -1, members }]
+  }
+  if (splitNodeIds.size === 0 && members.length <= SUGGESTED_GROUP_AUTO_SPLIT_MAX_MEMBERS) {
     return [{ nodeId: -1, members }]
   }
   const vectors = members.map((m) => rawVectorsByKey.get(m.key)!)
   const mergeSequence = computeMergeSequence(standardizeFeatures(vectors))
   let nodes: CutNode[] = cutAtKWithIds(mergeSequence, members.length, 1)
+
+  // computeMergeSequence appends merges closest-pair-first, so the LAST
+  // entry is the one that joined the final two remaining top-level
+  // clusters -- exactly the single root node cutAtKWithIds(..., 1) above
+  // just returned as `nodes[0]`. Its own `distance` is this group's own
+  // top-level merge distance.
+  const idsToExpand =
+    splitNodeIds.size > 0
+      ? splitNodeIds
+      : members.length > SUGGESTED_GROUP_AUTO_SPLIT_MAX_MEMBERS &&
+          mergeSequence[mergeSequence.length - 1].distance >= SUGGESTED_GROUP_VERY_SIMILAR_DISTANCE
+        ? new Set([nodes[0].id])
+        : EMPTY_NODE_ID_SET
+
   let changed = true
   while (changed) {
     changed = false
     const next: CutNode[] = []
     for (const node of nodes) {
-      const children = splitNodeIds.has(node.id)
+      const children = idsToExpand.has(node.id)
         ? splitNode(mergeSequence, members.length, node.id)
         : null
       if (children) {
