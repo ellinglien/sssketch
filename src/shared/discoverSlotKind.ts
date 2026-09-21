@@ -102,13 +102,15 @@ export function normalizeSlotKinds(kinds: readonly DiscoverSlotKind[]): Discover
 
 /** One chip click in the kind picker. Turning a kind on also turns its
  * bright/warm opposite off; turning off the LAST kind is a no-op (a slot
- * always targets at least one kind). */
+ * always targets at least one kind) unless `allowEmpty` -- the add row's
+ * pending selection, which starts empty and may go back to empty. */
 export function toggleSlotKind(
   kinds: readonly DiscoverSlotKind[],
-  kind: DiscoverSlotKind
+  kind: DiscoverSlotKind,
+  { allowEmpty = false }: { allowEmpty?: boolean } = {}
 ): DiscoverSlotKind[] {
   if (kinds.includes(kind)) {
-    if (kinds.length === 1) return normalizeSlotKinds(kinds)
+    if (kinds.length === 1 && !allowEmpty) return normalizeSlotKinds(kinds)
     return normalizeSlotKinds(kinds.filter((k) => k !== kind))
   }
   const opposite = OPPOSITE_KIND[kind]

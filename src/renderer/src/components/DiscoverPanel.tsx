@@ -15,6 +15,7 @@ import {
   isTraitSlotKind,
   slotKindsKey,
   slotKindsLabel,
+  toggleSlotKind,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
@@ -1213,19 +1214,36 @@ export function DiscoverPanel({
     applySlotsSnapshot(snapshot)
   }
 
-  function addSlot(kind: DiscoverSlotKind): void {
+  function addSlot(kinds: DiscoverSlotKind[]): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
-      { id, kinds: [kind], locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
     const projectIsEmpty = !Object.values(rifffsState).some((r) => r.startBar !== undefined)
     if (projectIsEmpty) {
-      void rollRandomForSlot(id, [kind])
+      void rollRandomForSlot(id, kinds)
     } else {
-      void rollForSlot(id, [kind])
+      void rollForSlot(id, kinds)
     }
+  }
+
+  // Direct request, 2026-09-21 (combination slots): the add row is a
+  // select-then-add picker -- every kind click toggles it into this pending
+  // set, and a separate "+ add …" button commits the whole set as ONE new
+  // slot. Mask kinds are dropped from what gets added while the "endlesss"
+  // source is off (they can't match anything then), so a selection made
+  // before unticking it never produces a dead slot.
+  const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
+  const addableKinds = soundSourceEndlesss
+    ? pendingAddKinds
+    : pendingAddKinds.filter((k) => !isMaskSlotKind(k))
+
+  function addPendingSlot(): void {
+    if (addableKinds.length === 0) return
+    addSlot(addableKinds)
+    setPendingAddKinds([])
   }
 
   // Direct request, 2026-09-20: "add + Random to the bottom list" -- an
@@ -1655,7 +1673,7 @@ export function DiscoverPanel({
     // purity lint rule, and a random FIRST kind isn't something the direct
     // report actually asked for.
     if (slots.length === 0) {
-      addSlot(soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS[0] : DISCOVER_TRAIT_SLOT_KINDS[0])
+      addSlot([soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS[0] : DISCOVER_TRAIT_SLOT_KINDS[0]])
       return
     }
     // One undo snapshot for the WHOLE batch, taken up front -- calls
@@ -2473,24 +2491,28 @@ export function DiscoverPanel({
           // Instrument kinds are Endlesss content by definition -- with the
           // "endlesss" source off they can't match anything (spec, 2026-09-21).
           const disabled = !soundSourceEndlesss && isMaskSlotKind(kind)
+          const selected = !disabled && pendingAddKinds.includes(kind)
           return (
             <button
               key={kind}
               disabled={disabled}
-              onClick={() => addSlot(kind)}
+              aria-pressed={selected}
+              onClick={() =>
+                setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
+              }
               data-tooltip={disabled ? 'needs endlesss on' : undefined}
               style={{
                 fontFamily: 'inherit',
                 fontSize: 9,
                 padding: '4px 8px',
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--ra-text-2)',
+                background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
+                border: `1px solid ${selected ? 'var(--ra-text)' : 'transparent'}`,
+                color: selected ? 'var(--ra-text)' : 'var(--ra-text-2)',
                 opacity: disabled ? 0.3 : 1,
                 cursor: disabled ? 'not-allowed' : 'pointer'
               }}
             >
-              + {DISCOVER_SLOT_KIND_LABEL[kind]}
+              {DISCOVER_SLOT_KIND_LABEL[kind]}
             </button>
           )
         })}
@@ -2529,6 +2551,32 @@ export function DiscoverPanel({
           + sample
         </button>
       </div>
+      {addableKinds.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            marginTop: 6,
+            marginLeft: 152,
+            marginRight: 498
+          }}
+        >
+          <button
+            onClick={addPendingSlot}
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 9,
+              padding: '4px 10px',
+              background: 'transparent',
+              border: '1px solid var(--ra-border-strong)',
+              color: 'var(--ra-text)',
+              cursor: 'pointer'
+            }}
+          >
+            + add {slotKindsLabel(addableKinds)}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

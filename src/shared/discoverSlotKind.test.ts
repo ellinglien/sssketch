@@ -100,6 +100,11 @@ describe('toggleSlotKind', () => {
     expect(toggleSlotKind(['warm'], 'warm')).toEqual(['warm'])
   })
 
+  it("allowEmpty: the last kind CAN be turned off (the add row's pending selection)", () => {
+    expect(toggleSlotKind(['warm'], 'warm', { allowEmpty: true })).toEqual([])
+    expect(toggleSlotKind([], 'drums', { allowEmpty: true })).toEqual(['drums'])
+  })
+
   it('turning bright on turns warm off, and vice versa', () => {
     expect(toggleSlotKind(['drums', 'warm'], 'bright')).toEqual(['drums', 'bright'])
     expect(toggleSlotKind(['bright'], 'warm')).toEqual(['warm'])
