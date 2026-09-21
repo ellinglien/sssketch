@@ -224,9 +224,16 @@ const api = {
   getRandomDiscoverCandidate: (
     kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
-    targetUser?: string
+    targetUser?: string,
+    soundSource?: DiscoverSoundSourceFilter
   ): Promise<DiscoverCandidate | null> =>
-    ipcRenderer.invoke('get-random-discover-candidate', kinds, onlyOwnStems, targetUser),
+    ipcRenderer.invoke(
+      'get-random-discover-candidate',
+      kinds,
+      onlyOwnStems,
+      targetUser,
+      soundSource
+    ),
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
     kinds: DiscoverSlotKind[],

@@ -1225,15 +1225,49 @@ async function getTraitPoolCandidates({
 // one query over the whole library, is the deliberate design here).
 const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
 
+// The mic-bit condition SQL-side, tied directly to soundSourceMatchesFilter's
+// own semantics (@shared/riffLibraryTypes): a stem counts as "audioIn" only
+// when its Instrument mask has the mic bit (1<<4 = 16) set AND none of the
+// drum/note/bass bits (1<<1 | 1<<2 | 1<<3 = 14) are set -- mirroring
+// instrumentMaskToSoundType's own drum-then-note-then-bass-then-mic
+// resolution order. A NULL Instrument (no confident mask at all) is
+// excluded here (not audioIn), same as soundSourceMatchesFilter treating a
+// null/undefined mask as Endlesss.
+const AUDIO_IN_INSTRUMENT_SQL =
+  '(Instrument IS NOT NULL AND (Instrument & 16) != 0 AND (Instrument & 14) = 0)'
+
+/** A SQL fragment (ANDed onto a query against a table with an `Instrument`
+ * column) implementing soundSourceMatchesFilter's own semantics
+ * (@shared/riffLibraryTypes) directly in SQL, for a caller that needs to
+ * filter the DB query itself rather than post-filter a single already-
+ * picked row -- see getRandomLibraryCandidate/getRandomOwnStemCandidate's
+ * own doc comments for why post-filtering one random pick doesn't work
+ * here (an audioIn-only filter would almost always come back empty after
+ * a bounded number of jam/db attempts, since audioIn stems are a small
+ * minority of a real library). Returns null when `soundSource` doesn't
+ * need any filtering at all (both flags true, the default) -- callers skip
+ * adding a WHERE clause entirely in that case rather than appending a
+ * trivial always-true condition. Callers are expected to have already
+ * handled the both-false case (return null / empty, no query at all)
+ * before calling this. */
+function soundSourceSqlFragment(soundSource: DiscoverSoundSourceFilter): string | null {
+  if (soundSource.endlesss && soundSource.audioIn) return null
+  return soundSource.audioIn ? AUDIO_IN_INSTRUMENT_SQL : `NOT ${AUDIO_IN_INSTRUMENT_SQL}`
+}
+
 /** Direct request, 2026-09-15: "an option to just start with a completely
  * random stem of the user's from their library, then go from there" --
- * bypasses confirmed/embedding/instrument matching ENTIRELY, so it works
- * regardless of whether anything has been confirmed or scanned yet (the
- * exact "stuck at zero" case that prompted it). Labeled with the CALLER's
- * `kinds` (the slot's own normalized kind set) rather than anything
- * inferred -- this is a real, unclassified stem the user picks to start
- * from and can later confirm/replace via Tidy Up, not a claim that it IS
- * that role.
+ * bypasses confirmed/embedding/instrument-MASK-KIND matching ENTIRELY, so
+ * it works regardless of whether anything has been confirmed or scanned
+ * yet (the exact "stuck at zero" case that prompted it). Labeled with the
+ * CALLER's `kinds` (the slot's own normalized kind set) rather than
+ * anything inferred -- this is a real, unclassified stem the user picks to
+ * start from and can later confirm/replace via Tidy Up, not a claim that
+ * it IS that role. `kinds` never filters here (that's the whole point of
+ * this escape hatch) -- but `soundSource` still does (direct bug report,
+ * 2026-09-21: "unticked endlesss, still got a random Endlesss stem" --
+ * random rolls stay kind-agnostic by design, but they must still honor the
+ * endlesss/audioIn checkboxes like every other roll).
  *
  * Picks a RANDOM JAM first (not `ORDER BY RANDOM() LIMIT 1` over every
  * jam's Stems table unioned together), then a random stem WITHIN that one
@@ -1243,7 +1277,11 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS different jams (shuffled) before
  * giving up, since a single jam might have no stems at all (rare) -- an
  * acceptable, bounded gamble for the UNFILTERED case, where nearly every
- * jam has SOME stem to offer.
+ * jam has SOME stem to offer. The soundSource filter is applied IN SQL
+ * (soundSourceSqlFragment, above), not by post-filtering the one row this
+ * function's own `ORDER BY RANDOM() LIMIT 1` already picked -- an
+ * audioIn-only filter applied AFTER picking would almost always come back
+ * empty, since audioIn stems are a small minority of a real jam's stems.
  *
  * Real bug, found live 2026-09-15 (root cause of "no match for this
  * role" on EVERY role, for a brand-new empty project, right after
@@ -1256,22 +1294,29 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * to getRandomOwnStemCandidate (below) instead when onlyOwnStems is on --
  * a targeted, still-fast search rather than an unbounded-odds lottery.
  * Returns null (never throws) if nothing turns up; the caller treats this
- * the same as "no match" from the other candidate sources. */
+ * the same as "no match" from the other candidate sources. Also returns
+ * null immediately when `soundSource` disables both flags -- there's
+ * nothing left to draw from. */
 export async function getRandomLibraryCandidate({
   jams,
   kinds,
   onlyOwnStems = false,
-  targetUser
+  targetUser,
+  soundSource = { endlesss: true, audioIn: true }
 }: {
   jams: JamDbPair[]
   kinds: readonly DiscoverSlotKind[]
   onlyOwnStems?: boolean
   targetUser?: string
+  soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate | null> {
+  if (!soundSource.endlesss && !soundSource.audioIn) return null
+
   if (onlyOwnStems && targetUser) {
-    return getRandomOwnStemCandidate(jams, kinds, targetUser)
+    return getRandomOwnStemCandidate(jams, kinds, targetUser, soundSource)
   }
 
+  const soundSourceFragment = soundSourceSqlFragment(soundSource)
   const shuffled = [...jams]
     .sort(() => Math.random() - 0.5)
     .slice(0, RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS)
@@ -1283,7 +1328,8 @@ export async function getRandomLibraryCandidate({
       stemRow = dbForJam
         .prepare(
           `SELECT StemCID, PresetName, CreatorUserName FROM Stems
-           WHERE OwnerJamCID = ? ORDER BY RANDOM() LIMIT 1`
+           WHERE OwnerJamCID = ?${soundSourceFragment ? ` AND ${soundSourceFragment}` : ''}
+           ORDER BY RANDOM() LIMIT 1`
         )
         .get(jamCID) as typeof stemRow
     } catch {
@@ -1341,12 +1387,16 @@ export async function getRandomLibraryCandidate({
  * has a matching stem, so the common case (the user's own content lives in
  * their own small self-synced db) resolves in one fast query; only a setup
  * where NONE of the user's own stems live in whichever db is tried first
- * pays a second db's own query cost. */
+ * pays a second db's own query cost. `soundSource` is applied the same way
+ * as getRandomLibraryCandidate's own jam-scoped query -- SQL-side
+ * (soundSourceSqlFragment), not by post-filtering the single picked row. */
 async function getRandomOwnStemCandidate(
   jams: JamDbPair[],
   kinds: readonly DiscoverSlotKind[],
-  targetUser: string
+  targetUser: string,
+  soundSource: DiscoverSoundSourceFilter
 ): Promise<DiscoverCandidate | null> {
+  const soundSourceFragment = soundSourceSqlFragment(soundSource)
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
     const existing = jamCIDsByDb.get(dbForJam)
@@ -1372,7 +1422,8 @@ async function getRandomOwnStemCandidate(
       stemRow = db
         .prepare(
           `SELECT StemCID, OwnerJamCID, PresetName, CreatorUserName FROM Stems
-           WHERE CreatorUserName = ? ORDER BY RANDOM() LIMIT 1`
+           WHERE CreatorUserName = ?${soundSourceFragment ? ` AND ${soundSourceFragment}` : ''}
+           ORDER BY RANDOM() LIMIT 1`
         )
         .get(targetUser) as typeof stemRow
     } catch {

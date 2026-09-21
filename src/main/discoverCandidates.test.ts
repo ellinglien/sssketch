@@ -1152,6 +1152,105 @@ describe('getRandomLibraryCandidate', () => {
     })
     expect(candidate?.stemCID).toBe('sOwned')
   })
+
+  // Direct bug report, 2026-09-21: "unticked endlesss, still got Endlesss
+  // drums" -- random rolls stayed kind-agnostic by design (that's the whole
+  // point of the "+ random" escape hatch), but used to ignore the
+  // endlesss/audioIn sound-source checkboxes entirely too, which was never
+  // the intent. Filtered IN SQL (soundSourceSqlFragment), not by
+  // post-filtering the one row already picked -- see that function's own
+  // doc comment for why post-filtering would make an audioIn-only roll
+  // almost always come back empty.
+  describe('soundSource filtering', () => {
+    it('audioIn-only returns only a mic-masked stem, never an unmasked/Endlesss one', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['drum-stem', 'mic-stem'])
+      seedStem(own, 'drum-stem', 'jam1', { instrument: 1 << 1 })
+      seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 })
+
+      const candidate = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: false, audioIn: true }
+      })
+      expect(candidate?.stemCID).toBe('mic-stem')
+    })
+
+    it('endlesss-only never returns a mic-masked stem', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['drum-stem', 'mic-stem'])
+      seedStem(own, 'drum-stem', 'jam1', { instrument: 1 << 1 })
+      seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 })
+
+      const candidate = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: true, audioIn: false }
+      })
+      expect(candidate?.stemCID).toBe('drum-stem')
+    })
+
+    it('an unmasked stem (no confident mask at all) counts as endlesss, not audioIn', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['unmasked-stem'])
+      seedStem(own, 'unmasked-stem', 'jam1') // Instrument left NULL
+
+      const audioInOnly = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: false, audioIn: true }
+      })
+      expect(audioInOnly).toBeNull()
+
+      const endlesssOnly = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: true, audioIn: false }
+      })
+      expect(endlesssOnly?.stemCID).toBe('unmasked-stem')
+    })
+
+    it('returns null immediately when both endlesss and audioIn are false', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+      seedStem(own, 's1', 'jam1')
+
+      const candidate = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: false, audioIn: false }
+      })
+      expect(candidate).toBeNull()
+    })
+
+    it('defaults to unfiltered (both true) when soundSource is omitted, same as before', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['mic-stem'])
+      seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 })
+
+      const candidate = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+      expect(candidate?.stemCID).toBe('mic-stem')
+    })
+
+    it('threads through to the onlyOwnStems path too', async () => {
+      const own = freshDb()
+      seedRiff(own, 'r1', 'jam1', 128, ['drum-stem', 'mic-stem'])
+      seedStem(own, 'drum-stem', 'jam1', { creatorUserName: 'elling', instrument: 1 << 1 })
+      seedStem(own, 'mic-stem', 'jam1', { creatorUserName: 'elling', instrument: 1 << 4 })
+
+      const candidate = await getRandomLibraryCandidate({
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        onlyOwnStems: true,
+        targetUser: 'elling',
+        soundSource: { endlesss: false, audioIn: true }
+      })
+      expect(candidate?.stemCID).toBe('mic-stem')
+    })
+  })
 })
 
 describe('getDiscoverCandidates (trait kinds)', () => {

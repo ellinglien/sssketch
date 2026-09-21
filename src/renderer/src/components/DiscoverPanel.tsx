@@ -199,17 +199,21 @@ export function freshSlotId(): string {
   return `slot-${crypto.randomUUID()}`
 }
 
-// Picks one of the 7 DiscoverSlotKind options uniformly at random, for the
-// "+ random" slot-creation button (addRandomSlot below). Deliberately NOT
+// Picks one of `options` uniformly at random, for the "+ random"
+// slot-creation button (addRandomSlot below). Deliberately NOT
 // Math.random() -- this file avoids that specific global inside any
 // component-scoped function (see rerollAll's own doc comment on why: it
 // trips this codebase's react-hooks purity lint rule) -- so this lives at
 // module scope, like freshSlotId above, and uses the Web Crypto API
 // instead, the same non-Math.random() convention freshSlotId itself
-// already established.
-function randomDiscoverSlotKind(): DiscoverSlotKind {
-  const index = crypto.getRandomValues(new Uint32Array(1))[0] % DISCOVER_SLOT_KIND_OPTIONS.length
-  return DISCOVER_SLOT_KIND_OPTIONS[index]
+// already established. Takes the allowed option list rather than always
+// picking from all 7 (DISCOVER_SLOT_KIND_OPTIONS) -- mask kinds (drums/
+// bass/lead) are Endlesss-only and must never be handed out while the
+// "endlesss" sound-source checkbox is off (see addRandomSlot's own call
+// site, which passes DISCOVER_TRAIT_SLOT_KINDS in that case).
+function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverSlotKind {
+  const index = crypto.getRandomValues(new Uint32Array(1))[0] % options.length
+  return options[index]
 }
 
 // Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
@@ -1217,11 +1221,17 @@ export function DiscoverPanel({
   // randomDiscoverSlotKind (module scope, near freshSlotId above) picks
   // which kind label to show/map to a bus with, matching
   // getRandomLibraryCandidate's own "labeled with the caller's kind, not a
-  // claim it IS that role" convention.
+  // claim it IS that role" convention. Only offers trait kinds while
+  // "endlesss" is off -- a mask-kind label (drums/bass/lead) would be a lie
+  // for a slot that can't actually draw Endlesss content.
   function addRandomSlot(): void {
     pushUndoSnapshot()
     const id = freshSlotId()
-    const kinds = [randomDiscoverSlotKind()]
+    const kinds = [
+      randomDiscoverSlotKind(
+        soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS : DISCOVER_TRAIT_SLOT_KINDS
+      )
+    ]
     setSlots((prev) => [
       ...prev,
       { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
@@ -1587,7 +1597,8 @@ export function DiscoverPanel({
       const candidate = await window.rifffApi.getRandomDiscoverCandidate(
         kinds,
         effectiveOnlyOwnStems,
-        currentUsername
+        currentUsername,
+        { endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       setSlots((prev) =>

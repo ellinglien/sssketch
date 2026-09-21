@@ -973,13 +973,15 @@ app.whenReady().then(async () => {
       _event,
       kinds: DiscoverSlotKind[],
       onlyOwnStems: boolean,
-      targetUser?: string
+      targetUser?: string,
+      soundSource?: DiscoverSoundSourceFilter
     ): Promise<DiscoverCandidate | null> =>
       getRandomLibraryCandidate({
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         kinds,
         onlyOwnStems,
-        targetUser
+        targetUser,
+        soundSource
       })
   )
 
