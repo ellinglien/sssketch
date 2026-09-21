@@ -1357,14 +1357,16 @@ export function LibraryBrowser({
         riffCID: selectedRiffCID,
         presetName: stem.presetName,
         creatorUserName: stem.creatorUserName,
-        slotKind: discoverSlotKindForSoundType(
-          instrumentMaskToSoundType(stem.instrumentMask) ??
-            guessSoundTypeFromPresetName(stem.presetName) ??
-            'fx'
-        ),
+        slotKinds: [
+          discoverSlotKindForSoundType(
+            instrumentMaskToSoundType(stem.instrumentMask) ??
+              guessSoundTypeFromPresetName(stem.presetName) ??
+              'fx'
+          )
+        ],
         drumSubRole: null,
         riffBpm: resolvedRiff.bpm,
-        traitValue: null,
+        traitValues: {},
         riffCreationTime: resolvedRiff.creationTime ?? null
       }))
       // Same "push a snapshot before mutating" convention every other

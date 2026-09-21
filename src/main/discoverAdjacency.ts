@@ -6,7 +6,12 @@ import {
   type DiscoverSoundSourceFilter
 } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
-import { DISCOVER_TRAIT_SLOT_KINDS, type DiscoverSlotKind } from '@shared/discoverSlotKind'
+import {
+  DISCOVER_TRAIT_SLOT_KINDS,
+  type DiscoverSlotKind,
+  type DiscoverTraitKind
+} from '@shared/discoverSlotKind'
+import { DISCOVER_TRAIT_FIELD } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   resolveRiffWithContext,
@@ -87,23 +92,6 @@ const ADJACENT_FETCH_PER_DIRECTION = ADJACENT_MATCHES_PER_DIRECTION * ADJACENT_F
 export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
   path: string
   soundType: SoundType | null
-}
-
-// Field this trait kind's adjacency match requires a cached row for --
-// mirrors discoverCandidates.ts's own TRAIT_FIELD table exactly (kept as a
-// separate small copy here rather than exported/shared, matching this
-// codebase's own "small duplicated tables are cheaper than coupling two
-// independently-scoped files" convention used elsewhere, e.g.
-// DiscoverLibraryScan.tsx's own BATCH_SIZE not importing from
-// BackgroundFeatureScan.tsx).
-const TRAIT_FIELD: Record<
-  'bassHeavy' | 'rhythmic' | 'bright' | 'warm',
-  keyof Pick<StemFeatures, 'bassEnergyRatio' | 'transientDensity' | 'spectralCentroidHz'>
-> = {
-  bassHeavy: 'bassEnergyRatio',
-  rhythmic: 'transientDensity',
-  bright: 'spectralCentroidHz',
-  warm: 'spectralCentroidHz'
 }
 
 /** Finds up to ADJACENT_MATCHES_PER_DIRECTION riffs recorded near
@@ -195,7 +183,7 @@ export async function getAdjacentDiscoverCandidates(
         } catch {
           continue
         }
-        traitValue = features[TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]]
+        traitValue = features[DISCOVER_TRAIT_FIELD[kind as DiscoverTraitKind]]
       }
 
       return {
@@ -204,10 +192,10 @@ export async function getAdjacentDiscoverCandidates(
         riffCID: summary.riffCID,
         presetName: stem.presetName,
         creatorUserName: stem.creatorUserName,
-        slotKind: kind,
+        slotKinds: [kind],
         drumSubRole: null,
         riffBpm: resolved.bpm,
-        traitValue,
+        traitValues: isTraitKind ? { [kind as DiscoverTraitKind]: traitValue } : {},
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --

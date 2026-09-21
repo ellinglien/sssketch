@@ -99,7 +99,7 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
  * becomes one slot with `candidate` set (the existing, UNCHANGED
  * DiscoverSlotRow resolution path handles it exactly like a normal roll's
  * own candidate -- same lazy per-row "downloading + analyzing…" state, same
- * caching). `kind` comes directly off the candidate's own `slotKind`
+ * caching). `kind` comes directly off the candidate's own `slotKinds[0]`
  * (already populated by whoever built it -- see LibraryBrowser.tsx's own
  * seed-triggering handler). Every slot starts unlocked and
  * `hasRerolled: true`, `gain: 1`, `seedStem: undefined` -- same defaults as
@@ -109,7 +109,7 @@ export function buildSeedSlotsFromCandidates(
 ): DiscoverSlot[] {
   return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
     id: freshSlotId(),
-    kind: candidate.slotKind,
+    kind: candidate.slotKinds[0],
     locked: false,
     candidate,
     hasRerolled: true,

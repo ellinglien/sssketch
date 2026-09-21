@@ -28,10 +28,10 @@ function fixtureCandidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverC
     riffCID: 'riff-1',
     presetName: 'a preset',
     creatorUserName: 'elling',
-    slotKind: 'drums',
+    slotKinds: ['drums'],
     drumSubRole: null,
     riffBpm: 120,
-    traitValue: null,
+    traitValues: {},
     riffCreationTime: null,
     ...overrides
   }
@@ -88,8 +88,8 @@ describe('buildSeedSlotsFromStems', () => {
 describe('buildSeedSlotsFromCandidates', () => {
   it('returns one slot per candidate, in order, with that candidate set and kind from it', () => {
     const candidates = [
-      fixtureCandidate({ stemCID: 'a', slotKind: 'drums' }),
-      fixtureCandidate({ stemCID: 'b', slotKind: 'bass' })
+      fixtureCandidate({ stemCID: 'a', slotKinds: ['drums'] }),
+      fixtureCandidate({ stemCID: 'b', slotKinds: ['bass'] })
     ]
     const slots = buildSeedSlotsFromCandidates(candidates)
     expect(slots).toHaveLength(2)

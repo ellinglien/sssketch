@@ -2918,8 +2918,8 @@ function DiscoverSlotRow({
                 riffCID: result.riffCID,
                 presetName: seedStem.name,
                 creatorUserName: seedStem.author,
-                slotKind: slot.kind,
-                traitValue: null,
+                slotKinds: [slot.kind],
+                traitValues: {},
                 drumSubRole: null,
                 riffBpm: result.bpm,
                 riffCreationTime: result.creationTime

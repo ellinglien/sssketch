@@ -10,8 +10,9 @@ function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
     riffCID: 'r1',
     presetName: 'test',
     creatorUserName: 'elling',
-    slotKind: 'drums',
-    traitValue: null,
+    slotKinds: ['drums'],
+    traitValues: {},
+    riffCreationTime: null,
     drumSubRole: null,
     riffBpm: 128,
     ...overrides
@@ -62,46 +63,57 @@ describe('rankCandidates', () => {
 })
 
 describe('rankCandidates (trait scoring)', () => {
-  it('scores a candidate closer to the trait target higher, for a trait-kind roll', () => {
-    const close = candidate({ stemCID: 'close', riffBpm: 128, traitValue: 0.95 })
-    const far = candidate({ stemCID: 'far', riffBpm: 128, traitValue: 0.1 })
-    const ranked = rankCandidates([far, close], {
-      targetBpm: 128,
-      targetTrait: { direction: 'high', maxValue: 1 }
-    })
-    expect(ranked[0].candidate.stemCID).toBe('close')
+  it('ranks the candidate at the "high" end of the pool first', () => {
+    const high = candidate({ stemCID: 'high', traitValues: { bassHeavy: 0.9 } })
+    const low = candidate({ stemCID: 'low', traitValues: { bassHeavy: 0.1 } })
+    const ranked = rankCandidates([low, high], { targetBpm: 128, targetTraits: ['bassHeavy'] })
+    expect(ranked[0].candidate.stemCID).toBe('high')
     expect(ranked[0].score).toBeGreaterThan(ranked[1].score)
   })
 
-  it('"low" direction ranks the smallest traitValue highest -- for the warm end of bright/warm', () => {
-    const warm = candidate({ stemCID: 'warm', riffBpm: 128, traitValue: 0.05 })
-    const bright = candidate({ stemCID: 'bright', riffBpm: 128, traitValue: 0.9 })
-    const ranked = rankCandidates([bright, warm], {
-      targetBpm: 128,
-      targetTrait: { direction: 'low', maxValue: 1 }
-    })
+  it('warm ("low" direction) ranks the smallest centroid first, in real Hz', () => {
+    const warm = candidate({ stemCID: 'warm', traitValues: { warm: 300 } })
+    const bright = candidate({ stemCID: 'bright', traitValues: { warm: 4200 } })
+    const ranked = rankCandidates([bright, warm], { targetBpm: 128, targetTraits: ['warm'] })
     expect(ranked[0].candidate.stemCID).toBe('warm')
   })
 
-  it('a candidate with traitValue null (e.g. mixed into a trait roll by mistake) scores as the worst possible trait match, not a crash', () => {
-    const withTrait = candidate({ stemCID: 'has-trait', riffBpm: 128, traitValue: 0.5 })
-    const noTrait = candidate({ stemCID: 'no-trait', riffBpm: 128, traitValue: null })
-    const ranked = rankCandidates([noTrait, withTrait], {
-      targetBpm: 128,
-      targetTrait: { direction: 'high', maxValue: 1 }
+  it('sums scores across traits -- good at both beats great at one', () => {
+    const both = candidate({ stemCID: 'both', traitValues: { warm: 300, rhythmic: 0.9 } })
+    const onlyWarm = candidate({ stemCID: 'onlyWarm', traitValues: { warm: 300, rhythmic: 0.1 } })
+    const onlyRhythm = candidate({
+      stemCID: 'onlyRhythm',
+      traitValues: { warm: 4000, rhythmic: 0.9 }
     })
-    // Not just "didn't throw" -- the null-trait candidate must actually
-    // rank BELOW the real one (code review: the original version of this
-    // test only asserted .not.toThrow(), which a buggy traitScore
-    // returning 1 -- best -- instead of 0 for null would still have
-    // passed).
-    expect(ranked[0].candidate.stemCID).toBe('has-trait')
-    expect(ranked[0].score).toBeGreaterThan(ranked[1].score)
+    const ranked = rankCandidates([onlyWarm, onlyRhythm, both], {
+      targetBpm: 128,
+      targetTraits: ['warm', 'rhythmic']
+    })
+    expect(ranked[0].candidate.stemCID).toBe('both')
   })
 
-  it('omitting targetTrait ranks purely by BPM, exactly like today -- mask-kind rolls are unaffected', () => {
-    const close = candidate({ stemCID: 'close', riffBpm: 128, traitValue: 0.01 })
-    const far = candidate({ stemCID: 'far', riffBpm: 90, traitValue: 0.99 })
+  it('a null/missing trait value never outranks a real one', () => {
+    const top = candidate({ stemCID: 'top', traitValues: { bright: 0.8 } })
+    const bottom = candidate({ stemCID: 'bottom', traitValues: { bright: 0.2 } })
+    const unknown = candidate({ stemCID: 'unknown', traitValues: {} })
+    const ranked = rankCandidates([unknown, bottom, top], {
+      targetBpm: 128,
+      targetTraits: ['bright']
+    })
+    expect(ranked[0].candidate.stemCID).toBe('top')
+    expect(ranked[ranked.length - 1].score).toBeLessThanOrEqual(ranked[1].score)
+  })
+
+  it('a trait with no spread across the pool adds nothing', () => {
+    const a = candidate({ stemCID: 'a', traitValues: { rhythmic: 0.5 } })
+    const b = candidate({ stemCID: 'b', traitValues: { rhythmic: 0.5 } })
+    const ranked = rankCandidates([a, b], { targetBpm: 128, targetTraits: ['rhythmic'] })
+    expect(ranked[0].score).toBeCloseTo(ranked[1].score, 5)
+  })
+
+  it('omitting targetTraits ranks purely by BPM', () => {
+    const close = candidate({ stemCID: 'close', riffBpm: 128, traitValues: { bright: 0.01 } })
+    const far = candidate({ stemCID: 'far', riffBpm: 90, traitValues: { bright: 0.99 } })
     const ranked = rankCandidates([far, close], { targetBpm: 128 })
     expect(ranked[0].candidate.stemCID).toBe('close')
   })

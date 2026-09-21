@@ -9,8 +9,10 @@ import {
 import {
   DISCOVER_TRAIT_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
-  type DiscoverSlotKind
+  type DiscoverSlotKind,
+  type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
+import { DISCOVER_TRAIT_FIELD, type TraitValues } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   getCachedRiffCount,
@@ -46,7 +48,9 @@ export interface DiscoverCandidate {
   riffCID: string
   presetName: string
   creatorUserName: string
-  slotKind: DiscoverSlotKind
+  /** The slot's own normalized kind set this candidate was drawn for
+   * (normalizeSlotKinds) -- combination slots, 2026-09-21. */
+  slotKinds: DiscoverSlotKind[]
   drumSubRole: DrumSubRole | null
   /** The OWNING RIFF's own BPM (Riffs.BPMrnd) -- the compatibility signal
    * this plan's own ranking (Task 3) actually scores against, since a
@@ -54,11 +58,10 @@ export interface DiscoverCandidate {
    * frequently null in real data -- LORE's own resolveRiff falls back to
    * the riff's BPM for exactly this reason, riffLibraryTypes.ts). */
   riffBpm: number
-  /** The raw StemFeatureCache field value this candidate was ranked
-   * against, for a TRAIT slot kind (bassHeavy/rhythmic/bright/warm) -- see
-   * discoverRanking.ts's own trait-distance scoring term. Always null for
-   * a mask-kind candidate (drums/bass/lead), which ranks by BPM alone. */
-  traitValue: number | null
+  /** Raw StemFeatureCache field value per requested TRAIT kind, for
+   * rankCandidates' trait terms. {} when the slot has no trait kinds or the
+   * stem has no cached features. */
+  traitValues: TraitValues
   /** The OWNING RIFF's own creation time (Riffs.CreationTime, Unix
    * seconds) -- same "riff-level, not stem-level, since it's always
    * populated" rationale as riffBpm above. Copied onto the eventual placed
@@ -893,10 +896,10 @@ export async function getDiscoverCandidates({
           riffCID: riffInfo.riffCID,
           presetName: stemRow.PresetName ?? '',
           creatorUserName: stemRow.CreatorUserName ?? '',
-          slotKind: kind,
+          slotKinds: [kind],
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
           riffBpm: riffInfo.bpmRnd,
-          traitValue: null,
+          traitValues: {},
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -914,20 +917,6 @@ export async function getDiscoverCandidates({
   }
 
   return out
-}
-
-// Field this trait kind ranks/filters candidates by, within StemFeatures.
-// 'bright' and 'warm' share the SAME underlying field (spectralCentroidHz)
-// -- one spectral-brightness axis, two opposite targets, not two
-// independent measurements (see this feature's own design spec).
-const TRAIT_FIELD: Record<
-  'bassHeavy' | 'rhythmic' | 'bright' | 'warm',
-  keyof Pick<StemFeatures, 'bassEnergyRatio' | 'transientDensity' | 'spectralCentroidHz'>
-> = {
-  bassHeavy: 'bassEnergyRatio',
-  rhythmic: 'transientDensity',
-  bright: 'spectralCentroidHz',
-  warm: 'spectralCentroidHz'
 }
 
 interface FeatureCandidateRow {
@@ -985,7 +974,7 @@ async function getTraitDiscoverCandidates({
   targetUser?: string
   soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
-  const field = TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]
+  const field = DISCOVER_TRAIT_FIELD[kind as DiscoverTraitKind]
 
   let total: number
   try {
@@ -1151,10 +1140,10 @@ async function getTraitDiscoverCandidates({
           riffCID: riffInfo.riffCID,
           presetName: stemRow.PresetName ?? '',
           creatorUserName: stemRow.CreatorUserName ?? '',
-          slotKind: kind,
+          slotKinds: [kind],
           drumSubRole: null,
           riffBpm: riffInfo.bpmRnd,
-          traitValue: entry.featureValue,
+          traitValues: { [kind as DiscoverTraitKind]: entry.featureValue },
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1268,8 +1257,8 @@ export async function getRandomLibraryCandidate({
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      slotKind: kind,
-      traitValue: null,
+      slotKinds: [kind],
+      traitValues: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime
@@ -1359,8 +1348,8 @@ async function getRandomOwnStemCandidate(
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      slotKind: kind,
-      traitValue: null,
+      slotKinds: [kind],
+      traitValues: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime

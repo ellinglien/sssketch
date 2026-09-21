@@ -225,7 +225,7 @@ describe('getDiscoverCandidates', () => {
       riffBpm: 140,
       presetName: '808 kick',
       creatorUserName: 'elling',
-      slotKind: 'drums'
+      slotKinds: ['drums']
     })
   })
 
@@ -594,7 +594,7 @@ describe('getDiscoverCandidates', () => {
       kind: 'drums'
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
-    expect(candidates[0]).toMatchObject({ slotKind: 'drums', drumSubRole: null })
+    expect(candidates[0]).toMatchObject({ slotKinds: ['drums'], drumSubRole: null })
   })
 
   it('does NOT include a stem confirmed for a DIFFERENT role even when its own Instrument bitmask would otherwise match', async () => {
@@ -1054,7 +1054,7 @@ describe('getRandomLibraryCandidate', () => {
       riffBpm: 140,
       presetName: 'anything',
       creatorUserName: 'elling',
-      slotKind: 'drums',
+      slotKinds: ['drums'],
       drumSubRole: null
     })
   })
@@ -1174,8 +1174,8 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['high', 'low'])
     const high = candidates.find((c) => c.stemCID === 'high')!
-    expect(high.traitValue).toBeCloseTo(0.9)
-    expect(high.slotKind).toBe('bassHeavy')
+    expect(high.traitValues.bassHeavy).toBeCloseTo(0.9)
+    expect(high.slotKinds).toEqual(['bassHeavy'])
   })
 
   it('includes an audioIn-masked stem as a trait candidate (mask alone cannot place it)', async () => {

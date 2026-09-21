@@ -1,5 +1,7 @@
 // src/shared/discoverRanking.ts
 import type { DiscoverCandidate } from '../main/discoverCandidates'
+import { DISCOVER_TRAIT_DIRECTION } from './discoverTraits'
+import type { DiscoverTraitKind } from './discoverSlotKind'
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -32,64 +34,73 @@ const BPM_FALLOFF = 40
 // score-proportional draw still gives it real, if smaller, odds).
 const FAVOURITE_BOOST = 1.5
 
-// Added to a trait-kind candidate's own BPM score before weighting, same
-// additive-with-tunable-weight shape as FAVOURITE_BOOST above -- direct
-// request, 2026-09-18: rank trait-kind rolls (bassHeavy/rhythmic/bright/
-// warm) by real closeness to the target end of their own StemFeatureCache
-// field, on top of the existing BPM term (never a replacement for it).
-// 1 (not larger, unlike FAVOURITE_BOOST's 1.5) -- a trait roll's WHOLE
-// point is trait closeness, so it should be able to meaningfully outweigh
-// a BPM-only near-miss, but doesn't need to be an even bigger gap than
-// FAVOURITE_BOOST's own deliberately-dominant weight.
+// Added to a candidate's own BPM score before weighting, once per requested
+// trait kind, same additive-with-tunable-weight shape as FAVOURITE_BOOST
+// above -- direct request, 2026-09-18: rank trait-kind rolls (bassHeavy/
+// rhythmic/bright/warm) by real closeness to the target end of their own
+// StemFeatureCache field, on top of the existing BPM term (never a
+// replacement for it). 1 (not larger, unlike FAVOURITE_BOOST's 1.5) -- a
+// trait roll's WHOLE point is trait closeness, so it should be able to
+// meaningfully outweigh a BPM-only near-miss, but doesn't need to be an
+// even bigger gap than FAVOURITE_BOOST's own deliberately-dominant weight.
 const TRAIT_SCORE_WEIGHT = 1
 
-export interface TraitTarget {
-  /** Which end of the field's own real range this roll targets --
-   * 'high' for bassHeavy/rhythmic/bright, 'low' for warm (see
-   * discoverCandidates.ts's own TRAIT_FIELD table: bright/warm share one
-   * field, spectralCentroidHz, as two opposite targets). */
-  direction: 'high' | 'low'
-  /** The field's own plausible max value, for normalizing distance into a
-   * 0-1 score -- StemFeatures' own continuous fields are roughly 0-1 already
-   * (bassEnergyRatio, transientDensity, zcrBrightness) except
-   * spectralCentroidHz (real Hz values, a few hundred to a few thousand) --
-   * callers pass whatever's appropriate for the field actually being
-   * targeted. */
-  maxValue: number
+/** Pool-relative closeness for one trait: min-max scaled across the pool
+ * being ranked (a fixed max can't normalize spectralCentroidHz, which is
+ * raw Hz), then flipped for 'low'. A null value, or a trait with no spread
+ * across the pool (range undefined), scores 0 -- never NaN, never a win. */
+function traitScore(
+  value: number | null | undefined,
+  direction: 'high' | 'low',
+  range: { min: number; max: number } | undefined
+): number {
+  if (value === null || value === undefined || !range) return 0
+  const normalized = (value - range.min) / (range.max - range.min)
+  return direction === 'high' ? normalized : 1 - normalized
 }
 
-/** Normalized [0, 1] closeness to the trait target -- 1 at the extreme
- * (direction='high': traitValue === maxValue; direction='low':
- * traitValue === 0), degrading linearly toward 0 at the opposite extreme.
- * A null traitValue (a candidate somehow missing its own feature value)
- * scores 0 -- worst possible trait match, never a crash or a NaN leaking
- * into the final score. */
-function traitScore(traitValue: number | null, target: TraitTarget): number {
-  if (traitValue === null || target.maxValue <= 0) return 0
-  const normalized = Math.max(0, Math.min(1, traitValue / target.maxValue))
-  return target.direction === 'high' ? normalized : 1 - normalized
-}
-
-/** Scores every candidate by BPM closeness to the target, optionally
- * boosted for favourited stems and/or a trait-kind roll's own closeness to
- * a trait target -- see this plan's own header for why key/root-scale
- * matching isn't included (no existing normalized "project's own target
- * key" value to compare against). Returns candidates in descending score
- * order. Never throws; an empty input returns an empty ranking. */
+/** Scores every candidate by BPM closeness, plus an optional favourites
+ * boost, plus one pool-relative score per requested trait kind, summed
+ * (combination slots: trait kinds AND together). Descending score order.
+ * Never throws; an empty input returns an empty ranking. */
 export function rankCandidates(
   candidates: DiscoverCandidate[],
   {
     targetBpm,
     favouriteStemCIDs,
-    targetTrait
-  }: { targetBpm: number; favouriteStemCIDs?: Set<string>; targetTrait?: TraitTarget }
+    targetTraits = []
+  }: {
+    targetBpm: number
+    favouriteStemCIDs?: Set<string>
+    targetTraits?: readonly DiscoverTraitKind[]
+  }
 ): RankedCandidate[] {
+  const ranges = new Map<DiscoverTraitKind, { min: number; max: number }>()
+  for (const kind of targetTraits) {
+    let min = Infinity
+    let max = -Infinity
+    for (const c of candidates) {
+      const v = c.traitValues[kind]
+      if (v === null || v === undefined) continue
+      if (v < min) min = v
+      if (v > max) max = v
+    }
+    if (max > min) ranges.set(kind, { min, max })
+  }
+
   return candidates
     .map((candidate) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
       let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
       if (favouriteStemCIDs?.has(candidate.stemCID)) score += FAVOURITE_BOOST
-      if (targetTrait) score += traitScore(candidate.traitValue, targetTrait) * TRAIT_SCORE_WEIGHT
+      for (const kind of targetTraits) {
+        score +=
+          traitScore(
+            candidate.traitValues[kind],
+            DISCOVER_TRAIT_DIRECTION[kind],
+            ranges.get(kind)
+          ) * TRAIT_SCORE_WEIGHT
+      }
       return { candidate, score }
     })
     .sort((a, b) => b.score - a.score)
