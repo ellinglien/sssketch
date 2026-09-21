@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { initialState } from '../state/store'
 
 /** Shown when "New" is clicked, after the discard-unsaved-changes confirm
  * already passed -- lets the user see and edit the auto-generated name
@@ -14,10 +15,19 @@ export function NewProjectModal({
   onCancel
 }: {
   defaultName: string
-  onCreate: (name: string) => void
+  onCreate: (name: string, bpm: number) => void
   onCancel: () => void
 }): React.JSX.Element {
   const [name, setName] = useState(defaultName)
+  // Direct request, 2026-09-20: "when creating a new project, prompt user
+  // to adjust the tempo" -- every new project used to silently start at
+  // initialState's own hardcoded bpm with no chance to set it up front.
+  // Seeded from initialState.bpm itself (not a duplicated magic number)
+  // so this can never silently drift out of sync with the real default.
+  // Free-type-until-blur/Enter, clamped to [40, 200] on commit rather than
+  // on every keystroke -- same pattern TransportBar.tsx's and Discover's
+  // own tempo fields already use.
+  const [bpmText, setBpmText] = useState(String(initialState.bpm))
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -26,7 +36,11 @@ export function NewProjectModal({
 
   function commit(): void {
     const trimmed = name.trim()
-    onCreate(trimmed.length > 0 ? trimmed : defaultName)
+    const parsedBpm = Number(bpmText)
+    const bpm = Number.isFinite(parsedBpm)
+      ? Math.min(200, Math.max(40, Math.round(parsedBpm)))
+      : initialState.bpm
+    onCreate(trimmed.length > 0 ? trimmed : defaultName, bpm)
   }
 
   return (
@@ -61,6 +75,29 @@ export function NewProjectModal({
             if (e.key === 'Escape') onCancel()
           }}
           autoFocus
+          style={{
+            display: 'block',
+            width: '100%',
+            marginTop: 10,
+            height: 26,
+            padding: '0 8px',
+            fontSize: 12,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row)',
+            color: 'var(--ra-text)'
+          }}
+        />
+        <p style={{ margin: 0, marginTop: 14, fontSize: 11, color: 'var(--ra-text)' }}>tempo</p>
+        <input
+          type="number"
+          min={40}
+          max={200}
+          value={bpmText}
+          onChange={(e) => setBpmText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit()
+            if (e.key === 'Escape') onCancel()
+          }}
           style={{
             display: 'block',
             width: '100%',

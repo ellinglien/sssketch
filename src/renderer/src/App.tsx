@@ -1126,9 +1126,15 @@ function Frame(): React.JSX.Element {
     setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
   }
 
-  function commitNewProject(name: string): void {
-    dispatch({ type: 'LOAD_STATE', state: initialState })
-    lastSavedJsonRef.current = serializeProject(initialState)
+  function commitNewProject(name: string, bpm: number): void {
+    // NewProjectModal's own tempo field (direct request, 2026-09-20) --
+    // freshState (not bare `initialState`) is used for BOTH the dispatch
+    // AND the dirty-tracking baseline below, so picking a tempo up front
+    // doesn't immediately read as an unsaved change the instant the
+    // project is created.
+    const freshState = { ...initialState, bpm }
+    dispatch({ type: 'LOAD_STATE', state: freshState })
+    lastSavedJsonRef.current = serializeProject(freshState)
     setCurrentSketch({ kind: 'library', name })
     setNewProjectModal(null)
   }
