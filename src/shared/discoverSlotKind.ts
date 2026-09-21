@@ -2,18 +2,23 @@ import type { ArrangeRole } from './stemRole'
 
 /** Discover's own candidate-matching taxonomy -- replaces the old, fallible
  * ArrangeRole-classifier-driven slot model (see
- * docs/superpowers/specs/2026-09-18-discover-trait-based-matching-design.md).
- * The 3 mask kinds are filtered directly by Endlesss's own reliable
- * instrument bitmask (drums/bass/notes bits -- see
- * instrumentMaskToSoundType, @shared/riffLibraryTypes); the 4 trait kinds
- * are filtered/ranked by cheap, already-cached StemFeatureCache numeric
- * fields, restricted to stems the mask can't reliably place (audioIn or
- * unmasked) -- the two groups' candidate pools never overlap. Literal
- * string values double as their own UI display text (matching
- * ARRANGE_ROLE_OPTIONS' own established convention, stemRole.ts) except
- * for the 3 camelCase ones, which DiscoverPanel.tsx's own label rendering
- * maps to a hyphenated display string (see DISCOVER_SLOT_KIND_LABEL
- * there) since 'bassHeavy' isn't itself a valid display string. */
+ * docs/superpowers/specs/2026-09-18-discover-trait-based-matching-design.md),
+ * then extended to combination slots (docs/superpowers/specs/2026-09-21-
+ * discover-combo-slot-kinds-design.md): a slot carries a SET of these, not
+ * one. The 3 mask kinds (drums/bass/lead) are an OR filter directly on
+ * Endlesss's own reliable instrument bitmask (instrumentMaskToSoundType,
+ * @shared/riffLibraryTypes) -- Endlesss content only, by definition, so
+ * they match nothing while the "endlesss" sound-source checkbox is off
+ * (soundSourceMatchesFilter, riffLibraryTypes.ts). The 4 trait kinds are
+ * rankings, not a filter -- they score any stem with a cached
+ * StemFeatureCache row (tagged or not) by cheap numeric fields; a set
+ * combining a mask kind with a trait kind (e.g. {drums, bright}) filters by
+ * the mask and ranks the mask's own pool by the trait, rather than drawing
+ * from two disjoint pools. Literal string values double as their own UI
+ * display text (matching ARRANGE_ROLE_OPTIONS' own established convention,
+ * stemRole.ts) except for the 3 camelCase ones, which this file's own
+ * DISCOVER_SLOT_KIND_LABEL (below) maps to a hyphenated display string
+ * since 'bassHeavy' isn't itself a valid display string. */
 export type DiscoverSlotKind =
   'drums' | 'bass' | 'lead' | 'bassHeavy' | 'rhythmic' | 'bright' | 'warm'
 
