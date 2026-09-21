@@ -195,6 +195,19 @@ export function freshSlotId(): string {
   return `slot-${crypto.randomUUID()}`
 }
 
+// Picks one of the 7 DiscoverSlotKind options uniformly at random, for the
+// "+ random" slot-creation button (addRandomSlot below). Deliberately NOT
+// Math.random() -- this file avoids that specific global inside any
+// component-scoped function (see rerollAll's own doc comment on why: it
+// trips this codebase's react-hooks purity lint rule) -- so this lives at
+// module scope, like freshSlotId above, and uses the Web Crypto API
+// instead, the same non-Math.random() convention freshSlotId itself
+// already established.
+function randomDiscoverSlotKind(): DiscoverSlotKind {
+  const index = crypto.getRandomValues(new Uint32Array(1))[0] % DISCOVER_SLOT_KIND_OPTIONS.length
+  return DISCOVER_SLOT_KIND_OPTIONS[index]
+}
+
 // Undo/redo for Discover's own slot-CONTENT actions (add/remove slot,
 // reroll one, random-reroll one, reroll all, and seeding -- see
 // docs/superpowers/plans/2026-09-16-discover-seed-stems.md) -- deliberately
@@ -1176,6 +1189,29 @@ export function DiscoverPanel({
     }
   }
 
+  // Direct request, 2026-09-20: "add + Random to the bottom list" -- an
+  // eighth button alongside the 7 kind buttons, for a slot seeded from a
+  // genuinely random stem rather than narrowed to any one kind's own pool.
+  // Always rolls via rollRandomForSlot (getRandomDiscoverCandidate's own
+  // unranked, unfiltered pick -- see that function's own doc comment),
+  // unconditionally -- unlike addSlot above, which only takes this path for
+  // an EMPTY project; this button's whole point is "skip matching
+  // entirely," not "match, unless the project happens to be empty."
+  // randomDiscoverSlotKind (module scope, near freshSlotId above) picks
+  // which kind label to show/map to a bus with, matching
+  // getRandomLibraryCandidate's own "labeled with the caller's kind, not a
+  // claim it IS that role" convention.
+  function addRandomSlot(): void {
+    pushUndoSnapshot()
+    const id = freshSlotId()
+    const kind = randomDiscoverSlotKind()
+    setSlots((prev) => [
+      ...prev,
+      { id, kind, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+    ])
+    void rollRandomForSlot(id, kind)
+  }
+
   // Direct request, 2026-09-18: "drag a loop into discover as an added
   // channel" -- drop target is the whole panel (per Elling's own
   // preference over a narrower add-slot-only target), always treated as
@@ -1333,6 +1369,22 @@ export function DiscoverPanel({
     setSlots((prev) => prev.filter((s) => s.id !== id))
     forgetSlotResolution(id)
     dropFromPreviewingMix(id)
+  }
+
+  // Direct request, 2026-09-20: "add duplicate channel to discover" --
+  // clones this slot's own current state (kind, candidate, gain, lock,
+  // seedStem) into a brand-new slot appended to the end of the list, with
+  // a fresh id (two slots can never share a React key). Doesn't re-roll or
+  // touch candidate/hasRerolled at all -- an exact copy of whatever this
+  // slot currently shows. The new row resolves and auto-joins the preview
+  // mix on its own, same as any other slot with a real candidate (see
+  // reportSlotResolution's own auto-join-on-first-resolve behavior) -- no
+  // special-casing needed here.
+  function duplicateSlot(id: string): void {
+    const slot = slots.find((s) => s.id === id)
+    if (!slot) return
+    pushUndoSnapshot()
+    setSlots((prev) => [...prev, { ...slot, id: freshSlotId() }])
   }
 
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
@@ -2248,6 +2300,7 @@ export function DiscoverPanel({
             playheadPct={playheadPct}
             onToggleLock={() => toggleLock(slot.id)}
             onRemove={() => removeSlot(slot.id)}
+            onDuplicate={() => duplicateSlot(slot.id)}
             onReroll={() => void rerollSlot(slot.id)}
             onRerollRandom={() => void rerollRandomSlot(slot.id)}
             onTogglePreview={() => toggleSlotPreview(slot.id)}
@@ -2270,13 +2323,13 @@ export function DiscoverPanel({
           waveform track itself occupies in each per-slot row's own grid,
           not the panel's full width. marginLeft/marginRight below mirror
           that grid's own gridTemplateColumns ('18px 18px 18px 18px 18px
-          14px 1fr 14px 64px 14px 16px 70px 70px 70px', columnGap: 8) --
-          left = delete+lock+mute+solo+favourite+gap widths (104) + the 5
-          gaps between them (40) + the gap before the waveform track (8)
+          14px 1fr 14px 64px 14px 16px 70px 70px 70px 70px', columnGap: 8)
+          -- left = delete+lock+mute+solo+favourite+gap widths (104) + the
+          5 gaps between them (40) + the gap before the waveform track (8)
           = 152; right = the gap after the waveform (8) + gap+kind+gap+
-          dice+similar+adjacent+random widths (318) + the 6 gaps between
-          THEM (48) = 374. If that grid template's own column widths ever
-          change, these two numbers need updating to match. */}
+          dice+similar+adjacent+random+duplicate widths (388) + the 7 gaps
+          between THEM (56) = 452. If that grid template's own column
+          widths ever change, these two numbers need updating to match. */}
       <div
         style={{
           display: 'flex',
@@ -2285,7 +2338,7 @@ export function DiscoverPanel({
           justifyContent: 'center',
           marginTop: 10,
           marginLeft: 152,
-          marginRight: 374
+          marginRight: 452
         }}
       >
         {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
@@ -2305,6 +2358,25 @@ export function DiscoverPanel({
             + {DISCOVER_SLOT_KIND_LABEL[kind]}
           </button>
         ))}
+        {/* Direct request, 2026-09-20: "add + Random to the bottom list" --
+            an eighth button alongside the 7 kind buttons above, for a slot
+            seeded from a genuinely random stem rather than any one kind's
+            own pool (see addRandomSlot's own doc comment). */}
+        <button
+          onClick={addRandomSlot}
+          title="add a slot seeded from a genuinely random stem, skipping kind matching entirely"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '4px 8px',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          + random
+        </button>
         <button
           onClick={() => void handlePickSampleImport()}
           title="pick a WAV file from disk and add it as a new loop-seeded slot -- same import as dragging a file onto this panel"
@@ -2471,6 +2543,7 @@ function DiscoverSlotRow({
   playheadPct,
   onToggleLock,
   onRemove,
+  onDuplicate,
   onReroll,
   onRerollRandom,
   onTogglePreview,
@@ -2524,6 +2597,12 @@ function DiscoverSlotRow({
   playheadPct: number | null
   onToggleLock: () => void
   onRemove: () => void
+  /** DiscoverPanel's own duplicateSlot(id) -- clones this slot's current
+   * state (kind, candidate, gain, lock, seedStem) into a brand-new slot
+   * appended to the end of the list. See duplicateSlot's own doc comment
+   * for why the new row needs no special-casing to resolve/auto-join the
+   * mix. */
+  onDuplicate: () => void
   onReroll: () => void
   /** DiscoverPanel's own rerollRandomSlot -- bypasses confirmed/embedding/
    * instrument matching entirely, picking any stem from the user's own
@@ -2538,14 +2617,16 @@ function DiscoverSlotRow({
   /** Toggles whether THIS slot is included in DiscoverPanel's own shared
    * playing mix -- the row itself doesn't own any audio state, it only
    * asks the parent to flip its own membership (see DiscoverPanel's own
-   * toggleSlotPreview). Triggered two ways: clicking the row's own
-   * waveform (the original gesture, doubling as volume-drag via
-   * onMouseDown), and a dedicated "mute"/"unmute" button (direct request,
-   * 2026-09-15 -- the waveform click alone wasn't discoverable as mute,
-   * only a hover tooltip explained it). Both call the exact same handler,
-   * so muting via either one keeps the other in sync. Neither renders
-   * (not merely disabled) until resolvedStem exists -- nothing to
-   * add to/remove from the mix before then. */
+   * toggleSlotPreview). Originally triggered two ways -- clicking the
+   * row's own waveform (doubling as volume-drag via onMouseDown) or a
+   * dedicated "mute"/"unmute" button, added 2026-09-15 because the
+   * waveform click alone wasn't discoverable as mute -- but the waveform
+   * click made it too easy to mute a slot by accident while reaching for
+   * the gain drag on the same element. Direct request, 2026-09-20: the
+   * dedicated "m" button is now the ONLY way to trigger this; the
+   * waveform itself no longer calls it at all. Doesn't render (not merely
+   * disabled) until resolvedStem exists -- nothing to add to/remove from
+   * the mix before then. */
   onTogglePreview: () => void
   /** Solos THIS slot -- see DiscoverPanel's own toggleSlotSolo for the
    * exact semantics (drop every other slot out of the mix; a second click
@@ -2793,10 +2874,10 @@ function DiscoverSlotRow({
   // dispatch, only committed once on release), onGainChange writes directly
   // into this component's own pre-placement `slots` state on every tick --
   // there's nothing to "commit" separately, and no undo history to spare
-  // from a flood of intermediate values. A plain click (no movement) still
-  // toggles preview normally afterward: startPointerDrag's own
-  // suppressNextSyntheticClick only fires when a real drag happened, so the
-  // button's existing onClick is untouched by a mousedown that never moved.
+  // from a flood of intermediate values. Direct request, 2026-09-20: the
+  // waveform button no longer has an onClick at all (mute moved to the
+  // dedicated "m" button only) -- a plain click here is now simply inert,
+  // not a toggle.
   function handleGainDragStart(e: React.MouseEvent): void {
     const startGain = slot.gain
     startPointerDrag(e, (_dx, deltaY) => {
@@ -2920,12 +3001,20 @@ function DiscoverSlotRow({
       <div
         style={{
           display: 'grid',
-          // 14 tracks, explicit gridColumn on every child below (including
+          // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
           // 5 favourite, 6 gap, 7 waveform, 8 gap, 9 kind/category label,
           // 10 gap, 11 decorative dice icon, 12 similar, 13 adjacent, 14
-          // random. Mute/solo/favourite moved next to lock and the kind
-          // label moved down next to similar/adjacent/random -- direct
+          // random, 15 duplicate. Duplicate (direct request, 2026-09-20:
+          // "add duplicate channel to discover") was appended as a NEW
+          // last track rather than inserted earlier and renumbering
+          // everything after it -- this row's own explicit-position
+          // discipline (see below) makes a renumber a real risk of an
+          // off-by-one somewhere across this many hardcoded gridColumn
+          // values, for no real UX benefit over just adding one more
+          // track at the end. Mute/solo/favourite moved next to lock and
+          // the kind label moved down next to similar/adjacent/random --
+          // direct
           // request, 2026-09-17, freeing up much more width for the
           // waveform (now 1fr against only three fixed-width siblings
           // instead of six). Explicit positions matter -- without them, a
@@ -2951,7 +3040,7 @@ function DiscoverSlotRow({
           // make every row's non-1fr tracks identical regardless of which
           // optional buttons happen to render.
           gridTemplateColumns:
-            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px 70px 70px 70px',
+            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px 70px 70px 70px 70px',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -3124,24 +3213,28 @@ function DiscoverSlotRow({
           above the cursor mid-drag read as actively interfering with the
           drag gesture, not just cosmetically noisy. Removed outright rather
           than trimmed -- the inner button's own aria-label (below) still
-          carries a plain accessible name (add to mix/remove from mix),
-          just without the drag hint or the live percentage. */}
+          carries a plain accessible name (drag to adjust volume), just
+          without the drag hint or the live percentage. */}
         <div style={{ gridColumn: 7, minWidth: 140 }}>
           {resolvedStem ? (
-            // Clicking the glyph toggles this slot in/out of the shared,
-            // looping mix -- same click-the-thumbnail-to-hear-it convention
-            // Shelf.tsx's own tiles and ClusterStemsBrowser.tsx's own waveform
-            // rows already use elsewhere in this app, adapted so multiple
-            // slots play TOGETHER (Upcycle-style) rather than one at a time.
+            // Direct request, 2026-09-20: "clicking on wave shouldn't mute
+            // it, leave that to the M button" -- clicking the waveform used
+            // to double as mute/unmute (onTogglePreview), same click-the-
+            // thumbnail-to-hear-it convention Shelf.tsx's own tiles and
+            // ClusterStemsBrowser.tsx's own waveform rows use elsewhere in
+            // this app -- but that made it too easy to mute a slot by
+            // accident while reaching for the gain-drag gesture on the same
+            // element. The dedicated "m" button (below) is now the ONLY way
+            // to toggle this slot in/out of the shared mix; the waveform
+            // itself only responds to a vertical drag (handleGainDragStart).
             // Direct report, 2026-09-15: the previewing-outline (a near-white
             // `--ra-stretch-on` box around the whole waveform) read as an
             // unwanted white halo -- removed; the dedicated mute button below
             // already carries this row's own on/off state, and the playhead
             // line (also below) now shows real playback directly.
             <button
-              onClick={onTogglePreview}
               onMouseDown={handleGainDragStart}
-              aria-label={previewing ? 'remove from mix' : 'add to mix'}
+              aria-label="drag to adjust volume"
               style={{
                 position: 'relative',
                 width: '100%',
@@ -3460,6 +3553,34 @@ function DiscoverSlotRow({
           }}
         >
           random
+        </button>
+        {/* Direct request, 2026-09-20: "add duplicate channel to discover"
+            -- same 70px labeled-text-button style as similar/adjacent/
+            random above (not an 18px single-letter icon like delete/lock:
+            a bare letter risks misreading, e.g. "D" for "delete" instead
+            of "duplicate"), placed as its own new LAST track (15) rather
+            than reordered next to delete/lock -- see this row's own
+            gridTemplateColumns doc comment above for why. */}
+        <button
+          onClick={onDuplicate}
+          data-tooltip="duplicate"
+          aria-label="duplicate"
+          style={{
+            gridColumn: 15,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: 'inherit',
+            fontSize: 9,
+            padding: '3px 7px',
+            whiteSpace: 'nowrap',
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          duplicate
         </button>
       </div>
       {nearbyMenu && nearbyAnchor !== null && (
