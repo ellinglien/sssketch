@@ -1,5 +1,5 @@
 import type { SoundType, Stem } from '@shared/types'
-import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import { normalizeSlotKinds, type DiscoverSlotKind } from '@shared/discoverSlotKind'
 import {
   freshSlotId,
   type DiscoverSlot,
@@ -84,7 +84,7 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
     }
     return {
       id: freshSlotId(),
-      kind: discoverSlotKindForSoundType(stem.type),
+      kinds: [discoverSlotKindForSoundType(stem.type)],
       locked: false,
       candidate: null,
       hasRerolled: true,
@@ -99,9 +99,11 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
  * becomes one slot with `candidate` set (the existing, UNCHANGED
  * DiscoverSlotRow resolution path handles it exactly like a normal roll's
  * own candidate -- same lazy per-row "downloading + analyzing…" state, same
- * caching). `kind` comes directly off the candidate's own `slotKinds[0]`
+ * caching). `kinds` comes directly off the candidate's own `slotKinds`
  * (already populated by whoever built it -- see LibraryBrowser.tsx's own
- * seed-triggering handler). Every slot starts unlocked and
+ * seed-triggering handler), normalized here so a candidate built before
+ * normalization existed (or an out-of-order/duplicate set) still lands as
+ * a canonical slot kind set. Every slot starts unlocked and
  * `hasRerolled: true`, `gain: 1`, `seedStem: undefined` -- same defaults as
  * the Stems path above. Returns `[]` for an empty input. */
 export function buildSeedSlotsFromCandidates(
@@ -109,7 +111,7 @@ export function buildSeedSlotsFromCandidates(
 ): DiscoverSlot[] {
   return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
     id: freshSlotId(),
-    kind: candidate.slotKinds[0],
+    kinds: normalizeSlotKinds(candidate.slotKinds),
     locked: false,
     candidate,
     hasRerolled: true,

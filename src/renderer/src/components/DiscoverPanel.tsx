@@ -9,6 +9,9 @@ import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/disc
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
+  isTraitSlotKind,
+  slotKindsKey,
+  slotKindsLabel,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
@@ -119,7 +122,10 @@ function resolveCandidateStem(candidate: DiscoverCandidate): Promise<ResolvedCan
 
 export interface DiscoverSlot {
   id: string
-  kind: DiscoverSlotKind
+  /** Combination slots, 2026-09-21: the normalized set of kinds this slot
+   * targets (normalizeSlotKinds) -- never empty. A one-click "+ drums" slot
+   * is ['drums']. Editable after creation via the kind picker. */
+  kinds: DiscoverSlotKind[]
   locked: boolean
   candidate: DiscoverCandidate | null
   /** An already-resolved stem this slot should start showing immediately,
@@ -1187,13 +1193,13 @@ export function DiscoverPanel({
     const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
-      { id, kind, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      { id, kinds: [kind], locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
     const projectIsEmpty = !Object.values(rifffsState).some((r) => r.startBar !== undefined)
     if (projectIsEmpty) {
-      void rollRandomForSlot(id, kind)
+      void rollRandomForSlot(id, [kind])
     } else {
-      void rollForSlot(id, kind)
+      void rollForSlot(id, [kind])
     }
   }
 
@@ -1212,12 +1218,12 @@ export function DiscoverPanel({
   function addRandomSlot(): void {
     pushUndoSnapshot()
     const id = freshSlotId()
-    const kind = randomDiscoverSlotKind()
+    const kinds = [randomDiscoverSlotKind()]
     setSlots((prev) => [
       ...prev,
-      { id, kind, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
-    void rollRandomForSlot(id, kind)
+    void rollRandomForSlot(id, kinds)
   }
 
   // Direct request, 2026-09-18: "drag a loop into discover as an added
@@ -1290,7 +1296,7 @@ export function DiscoverPanel({
       }
       newSlots.push({
         id: freshSlotId(),
-        kind: 'bright',
+        kinds: ['bright'],
         locked: false,
         candidate: null,
         hasRerolled: true,
@@ -1440,7 +1446,7 @@ export function DiscoverPanel({
   // needs to roll a slot in the SAME tick it mints it, before that slot has
   // made it into `slots` state (a plain function defined in this render
   // still closes over THIS render's `slots`, which doesn't include it yet).
-  async function rollForSlot(id: string, kind: DiscoverSlotKind): Promise<void> {
+  async function rollForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
     // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
     // comment above. Any earlier call for this SAME slot id that's still
     // awaiting getDiscoverCandidates when THIS call resolves is now stale
@@ -1467,15 +1473,17 @@ export function DiscoverPanel({
       // Date.now() inside a component-defined function) -- the main
       // process's own matching log (index.ts's get-discover-candidates
       // handler) already reports its own internal timing.
-      console.log(`DiscoverPanel: rollForSlot(${kind}) -- calling getDiscoverCandidates`)
+      console.log(
+        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
+      )
       const candidates = await window.rifffApi.getDiscoverCandidates(
-        [kind],
+        kinds,
         effectiveOnlyOwnStems,
         currentUsername,
         { endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }
       )
       console.log(
-        `DiscoverPanel: rollForSlot(${kind}) -- getDiscoverCandidates returned ${candidates.length} candidates`
+        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       // Direct report: adding two or three slots of the same kind (e.g.
@@ -1498,13 +1506,17 @@ export function DiscoverPanel({
       const pool = deduped.length > 0 ? deduped : candidates
       const ranked = rankCandidates(pool, {
         targetBpm: bpm,
-        favouriteStemCIDs: preferFavourites ? stemFavourites : undefined
+        favouriteStemCIDs: preferFavourites ? stemFavourites : undefined,
+        // Finding, 2026-09-21: trait kinds were never passed here before,
+        // so a "warm" roll ranked by BPM alone. Every trait kind in the set
+        // now adds its own pool-relative score (rankCandidates).
+        targetTraits: kinds.filter(isTraitSlotKind)
       })
       const picked = pickReroll(ranked, chaos)
       // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
       // above. Remove once confirmed.
       console.log(
-        `DiscoverPanel: rollForSlot(${kind}) -- ranked/picked, calling setSlots (picked=${picked?.stemCID ?? 'null'})`
+        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- ranked/picked, calling setSlots (picked=${picked?.stemCID ?? 'null'})`
       )
       // hasRerolled set true in this same setSlots call, alongside
       // candidate -- see DiscoverSlot's own doc comment above for why this
@@ -1525,7 +1537,7 @@ export function DiscoverPanel({
       // silently producing an empty pool, so a genuine failure here is a
       // real one worth surfacing to the console -- just not by crashing the
       // renderer or nulling out a slot's existing candidate.
-      console.error(`DiscoverPanel: rollForSlot(${kind}) failed:`, err)
+      console.error(`DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) failed:`, err)
     } finally {
       if (rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
@@ -1541,7 +1553,7 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
-    await rollForSlot(id, slot.kind)
+    await rollForSlot(id, slot.kinds)
   }
 
   // Direct request, 2026-09-15: "an option to just start with a completely
@@ -1554,14 +1566,14 @@ export function DiscoverPanel({
   // SAME stale-response guard against each other (a random roll landing
   // after a NEWER normal reroll for the same slot, or vice versa, must
   // not overwrite it).
-  async function rollRandomForSlot(id: string, kind: DiscoverSlotKind): Promise<void> {
+  async function rollRandomForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
       const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
       const candidate = await window.rifffApi.getRandomDiscoverCandidate(
-        [kind],
+        kinds,
         effectiveOnlyOwnStems,
         currentUsername
       )
@@ -1572,7 +1584,7 @@ export function DiscoverPanel({
         )
       )
     } catch (err) {
-      console.error(`DiscoverPanel: rollRandomForSlot(${kind}) failed:`, err)
+      console.error(`DiscoverPanel: rollRandomForSlot(${slotKindsKey(kinds)}) failed:`, err)
     } finally {
       if (rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
@@ -1588,7 +1600,7 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
-    await rollRandomForSlot(id, slot.kind)
+    await rollRandomForSlot(id, slot.kinds)
   }
 
   async function rerollAll(): Promise<void> {
@@ -1620,7 +1632,7 @@ export function DiscoverPanel({
     // catches and logs internally, above), so one slot failing can't abort
     // this loop and silently leave every LATER unlocked slot untouched.
     for (const slot of slots) {
-      if (!slot.locked) await rollForSlot(slot.id, slot.kind)
+      if (!slot.locked) await rollForSlot(slot.id, slot.kinds)
     }
   }
 
@@ -1680,7 +1692,7 @@ export function DiscoverPanel({
     )
     if (placed.length === 0) return null
 
-    const kinds = [...new Set(placeable.map((s) => s.kind))]
+    const kinds = [...new Set(placeable.map((s) => slotKindsLabel(s.kinds)))]
     return assembleDiscoverRifff(
       `discover: ${kinds.join('+')}`,
       placed.map(({ stem, gain }) => ({ stem, gain })),
@@ -2918,7 +2930,7 @@ function DiscoverSlotRow({
                 riffCID: result.riffCID,
                 presetName: seedStem.name,
                 creatorUserName: seedStem.author,
-                slotKinds: [slot.kind],
+                slotKinds: slot.kinds,
                 traitValues: {},
                 drumSubRole: null,
                 riffBpm: result.bpm,
@@ -2933,7 +2945,7 @@ function DiscoverSlotRow({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- slot.seedStem/slot.kind are read inside via the closure above, not tracked as deps here; seedStemLookupPath already changes whenever slot.seedStem's own path does (it's derived from it), and slot.kind changing without the path also changing would be a same-slot mid-flight kind edit, which doesn't happen in this codebase (kind is fixed at slot creation) -- listing them would only cause redundant re-lookups of the SAME path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- slot.seedStem/slot.kinds are read inside via the closure above, not tracked as deps here; seedStemLookupPath already changes whenever slot.seedStem's own path does (it's derived from it), and slot.kinds changing without the path also changing would be a same-slot mid-flight kind edit -- kinds only change via the picker (Task 6), which rerolls and sets a real `candidate`, so seedStemLookupPath (only non-null while `candidate` is null) goes to null in the same update and this lookup no longer applies -- listing them would only cause redundant re-lookups of the SAME path.
   }, [seedStemLookupPath])
   const seedStemAnchor = seedStemLookup?.path === seedStemLookupPath ? seedStemLookup.anchor : null
   // The real candidate always wins when present; a seedStem-only slot
@@ -3563,7 +3575,7 @@ function DiscoverSlotRow({
         </div>
         <div style={{ gridColumn: 8 }} />
         <span style={{ gridColumn: 9, fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>
-          {DISCOVER_SLOT_KIND_LABEL[slot.kind]}
+          {slotKindsLabel(slot.kinds)}
         </span>
         <div style={{ gridColumn: 10 }} />
         {/* Purely decorative -- direct request, 2026-09-17: "place a dice
@@ -3693,7 +3705,7 @@ function DiscoverSlotRow({
           x={nearbyMenu.x}
           y={nearbyMenu.y}
           startCandidate={nearbyAnchor}
-          kinds={[slot.kind]}
+          kinds={slot.kinds}
           soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}

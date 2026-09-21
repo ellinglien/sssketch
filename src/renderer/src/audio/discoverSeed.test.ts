@@ -52,12 +52,12 @@ describe('buildSeedSlotsFromStems', () => {
 
   it('infers kind from stem type via discoverSlotKindForSoundType', () => {
     const slots = buildSeedSlotsFromStems([fixtureStem({ type: 'bass', name: 'a random name' })])
-    expect(slots[0].kind).toBe('bass')
+    expect(slots[0].kinds).toEqual(['bass'])
   })
 
   it('falls back to the bright trait kind for a stem type with no reliable mask signal', () => {
     const slots = buildSeedSlotsFromStems([fixtureStem({ type: 'fx' })])
-    expect(slots[0].kind).toBe('bright')
+    expect(slots[0].kinds).toEqual(['bright'])
   })
 
   it('each slot has candidate: null and hasRerolled: true, gain: 1', () => {
@@ -94,9 +94,9 @@ describe('buildSeedSlotsFromCandidates', () => {
     const slots = buildSeedSlotsFromCandidates(candidates)
     expect(slots).toHaveLength(2)
     expect(slots[0].candidate?.stemCID).toBe('a')
-    expect(slots[0].kind).toBe('drums')
+    expect(slots[0].kinds).toEqual(['drums'])
     expect(slots[1].candidate?.stemCID).toBe('b')
-    expect(slots[1].kind).toBe('bass')
+    expect(slots[1].kinds).toEqual(['bass'])
   })
 
   it('each slot has seedStem: undefined, locked: false, hasRerolled: true, gain: 1', () => {
@@ -122,7 +122,7 @@ describe('buildSeedSlotsFromCandidates', () => {
 function fixtureSlot(overrides: Partial<DiscoverSlot> = {}): DiscoverSlot {
   return {
     id: 'slot-1',
-    kind: 'drums',
+    kinds: ['drums'],
     locked: false,
     candidate: null,
     hasRerolled: false,
