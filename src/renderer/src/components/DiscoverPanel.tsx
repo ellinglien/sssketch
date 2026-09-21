@@ -1941,6 +1941,10 @@ export function DiscoverPanel({
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
         }
+        @keyframes discover-slot-working {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
         @keyframes discover-add-pulse {
           0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
           35% { box-shadow: 0 0 0 3px var(--ra-stretch-on); }
@@ -2855,7 +2859,15 @@ function DiscoverSlotRow({
   // placeholder below used to show a plain neutral-bordered empty box for
   // this exact case, visually identical to a slot that's simply never been
   // touched yet.
-  const noMatchFound = !resolving && !resolveFailed && slot.candidate === null && slot.hasRerolled
+  const noMatchFound =
+    !rerolling && !resolving && !resolveFailed && slot.candidate === null && slot.hasRerolled
+  // Direct report, 2026-09-21: "the dotted outline is good but seems to
+  // appear quite late in the process" -- `resolving` alone only covers the
+  // download/decode half (a candidate already picked); the candidate SEARCH
+  // before it (rerolling, getDiscoverCandidates in flight) left an empty
+  // slot's placeholder looking untouched. `working` spans both halves, so
+  // the lit outline + loader show from the moment of the click.
+  const working = resolving || (rerolling && resolvedStem === null)
 
   // "Explore nearby" popover state -- position (screen coords, set from the
   // trigger button's own getBoundingClientRect on open) or null when closed.
@@ -3339,7 +3351,15 @@ function DiscoverSlotRow({
                 background: 'transparent',
                 border: 'none',
                 overflow: 'hidden',
-                cursor: 'ns-resize'
+                cursor: 'ns-resize',
+                // Same 2026-09-21 report as `working` above -- a slot that
+                // already has a stem keeps showing it while a reroll
+                // searches, so the waveform itself breathes until the new
+                // pick lands (then it swaps to the dotted placeholder while
+                // that pick downloads/decodes).
+                animation: rerolling
+                  ? 'discover-slot-working 1100ms ease-in-out infinite'
+                  : undefined
               }}
             >
               {/* Tiled, not a single stretched-to-fit Waveform -- direct
@@ -3507,7 +3527,7 @@ function DiscoverSlotRow({
                 justifyContent: 'center',
                 overflow: 'hidden',
                 border: `1px dashed ${
-                  resolving
+                  working
                     ? 'var(--ra-stretch-on)'
                     : resolveFailed || noMatchFound
                       ? 'var(--ra-mute-on)'
@@ -3539,7 +3559,7 @@ function DiscoverSlotRow({
                   own height = round(size*9/60) formula); size=24 keeps the
                   same 1px-thick dotted-line look at 4px tall -- +2px total
                   from the original, arrived at over two rounds of "+1px." */}
-              {resolving && <LoadingLoader size={24} />}
+              {working && <LoadingLoader size={24} />}
               {/* Visible, not just a hover tooltip -- direct report,
                   2026-09-17: rerolling into a genuine no-match dead end
                   ("just tried to add a vocal... no indication what
