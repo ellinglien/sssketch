@@ -2189,7 +2189,7 @@ export function DiscoverPanel({
             title="drums/bass/lead, plus every bright/warm/rhythmic/bass-heavy roll drawn from an Endlesss-produced sound (instrument or effect, lumped together) -- only affects bright/warm/rhythmic/bass-heavy rolls, since drums/bass/lead are always Endlesss-produced by definition"
             onChange={(e) => setSoundSourceEndlesss(e.target.checked)}
           />
-          endlesss sounds
+          endlesss
         </label>
         <label
           style={{
@@ -2206,7 +2206,7 @@ export function DiscoverPanel({
             title="only affects bright/warm/rhythmic/bass-heavy rolls -- audio in/microphone stems (real recorded/mic input, not an Endlesss instrument or effect)"
             onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
           />
-          audio in / microphone
+          non-endlesss
         </label>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
