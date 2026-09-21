@@ -215,18 +215,18 @@ const api = {
   getConfirmedEmbeddings: (axis: CategoryAxis): Promise<ConfirmedEmbedding[]> =>
     ipcRenderer.invoke('get-confirmed-embeddings', axis),
   getDiscoverCandidates: (
-    kind: DiscoverSlotKind,
+    kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
     targetUser?: string,
     soundSource?: DiscoverSoundSourceFilter
   ): Promise<DiscoverCandidate[]> =>
-    ipcRenderer.invoke('get-discover-candidates', kind, onlyOwnStems, targetUser, soundSource),
+    ipcRenderer.invoke('get-discover-candidates', kinds, onlyOwnStems, targetUser, soundSource),
   getRandomDiscoverCandidate: (
-    kind: DiscoverSlotKind,
+    kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
     targetUser?: string
   ): Promise<DiscoverCandidate | null> =>
-    ipcRenderer.invoke('get-random-discover-candidate', kind, onlyOwnStems, targetUser),
+    ipcRenderer.invoke('get-random-discover-candidate', kinds, onlyOwnStems, targetUser),
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
     kind: DiscoverSlotKind,

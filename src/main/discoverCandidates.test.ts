@@ -185,7 +185,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
 
     expect(candidates).toHaveLength(1)
@@ -202,7 +202,7 @@ describe('getDiscoverCandidates', () => {
       await getDiscoverCandidates({
         ownDb: own,
         jams: [{ jamCID: 'jam1', dbForJam: own }],
-        kind: 'drums'
+        kinds: ['drums']
       })
     ).toEqual([])
   })
@@ -216,7 +216,7 @@ describe('getDiscoverCandidates', () => {
     const [c] = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(c).toMatchObject({
       stemCID: 's1',
@@ -243,7 +243,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jamExt', dbForJam: external }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toHaveLength(1)
     expect(candidates[0].stemCID).toBe('s1')
@@ -272,7 +272,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jamBroken', dbForJam: brokenExternal },
         { jamCID: 'jam1', dbForJam: own }
       ],
-      kind: 'drums'
+      kinds: ['drums']
     })
 
     // The broken jam is skipped silently; the good jam's candidate still
@@ -300,7 +300,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
 
     expect(candidates).toHaveLength(1)
@@ -322,7 +322,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
 
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
@@ -339,7 +339,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums',
+      kinds: ['drums'],
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -361,7 +361,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam1', dbForJam: own },
         { jamCID: 'jam2', dbForJam: own }
       ],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2'])
   })
@@ -398,7 +398,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam2', dbForJam: own },
         { jamCID: 'jam3', dbForJam: own }
       ],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2', 's3'])
     expect(candidates.map((c) => c.jamCID).sort()).toEqual(['jam1', 'jam2', 'jam3'])
@@ -440,7 +440,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
@@ -471,12 +471,12 @@ describe('getDiscoverCandidates', () => {
     const drumsCandidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     const bassCandidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bass'
+      kinds: ['bass']
     })
     expect(drumsCandidates.map((c) => c.stemCID)).toEqual(['s1'])
     expect(bassCandidates.map((c) => c.stemCID)).toEqual(['s2'])
@@ -539,7 +539,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toEqual([])
   })
@@ -559,7 +559,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toEqual([])
   })
@@ -573,7 +573,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toEqual([])
   })
@@ -591,7 +591,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
     expect(candidates[0]).toMatchObject({ slotKinds: ['drums'], drumSubRole: null })
@@ -608,7 +608,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toEqual([])
   })
@@ -621,7 +621,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates).toEqual([])
   })
@@ -652,7 +652,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'instrument-1'])
   })
@@ -677,7 +677,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual([...stemCIDs].sort())
   })
@@ -701,7 +701,7 @@ describe('getDiscoverCandidates', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.length).toBe(1000)
     // Every returned candidate is still a REAL, valid match -- capping
@@ -724,7 +724,7 @@ describe('getDiscoverCandidates', () => {
     const first = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(first.map((c) => c.stemCID)).toEqual(['d1'])
 
@@ -735,7 +735,7 @@ describe('getDiscoverCandidates', () => {
     const second = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     // Still the cached (stale) result.
     expect(second.map((c) => c.stemCID)).toEqual(['d1'])
@@ -778,7 +778,7 @@ describe('getDiscoverCandidates', () => {
         { jamCID: 'jam1', dbForJam: own },
         { jamCID: 'jam2', dbForJam: own }
       ],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2'])
 
@@ -813,14 +813,14 @@ describe('getDiscoverCandidates', () => {
     const drumsResult = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(drumsResult.map((c) => c.stemCID)).toEqual(['d1'])
 
     const bassResult = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bass'
+      kinds: ['bass']
     })
     expect(bassResult.map((c) => c.stemCID)).toEqual(['b1'])
 
@@ -850,7 +850,7 @@ describe('prewarmDiscoverCandidateCaches', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
 
@@ -1045,7 +1045,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidate).toMatchObject({
       stemCID: 's1',
@@ -1063,7 +1063,7 @@ describe('getRandomLibraryCandidate', () => {
     const own = freshDb()
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidate).toBeNull()
   })
@@ -1075,7 +1075,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'drums',
+      kinds: ['drums'],
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1091,7 +1091,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bass',
+      kinds: ['bass'],
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1109,7 +1109,7 @@ describe('getRandomLibraryCandidate', () => {
         { jamCID: 'jamBroken', dbForJam: broken },
         { jamCID: 'jam1', dbForJam: own }
       ],
-      kind: 'drums'
+      kinds: ['drums']
     })
     expect(candidate?.stemCID).toBe('s1')
   })
@@ -1146,7 +1146,7 @@ describe('getRandomLibraryCandidate', () => {
 
     const candidate = await getRandomLibraryCandidate({
       jams,
-      kind: 'drums',
+      kinds: ['drums'],
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1155,24 +1155,25 @@ describe('getRandomLibraryCandidate', () => {
 })
 
 describe('getDiscoverCandidates (trait kinds)', () => {
-  it('returns bassHeavy candidates ranked by bassEnergyRatio, excluding drums/bass/notes-masked stems', async () => {
+  it('trait-only pool includes mask-tagged stems too', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['high', 'low', 'masked-out'])
     seedStem(own, 'high', 'jam1')
     seedFeatures(own, 'high', featuresJSON({ bassEnergyRatio: 0.9 }))
     seedStem(own, 'low', 'jam1')
     seedFeatures(own, 'low', featuresJSON({ bassEnergyRatio: 0.1 }))
-    // Drums-masked -- must never appear as a bassHeavy candidate, even with
-    // a cached feature row and a high bassEnergyRatio.
+    // Drums-masked -- a trait-only set no longer excludes mask-tagged
+    // stems (combination slots, 2026-09-21) -- this one still surfaces
+    // despite a cached feature row and a high bassEnergyRatio.
     seedStem(own, 'masked-out', 'jam1', { instrument: 1 << 1 })
     seedFeatures(own, 'masked-out', featuresJSON({ bassEnergyRatio: 0.99 }))
 
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bassHeavy'
+      kinds: ['bassHeavy']
     })
-    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['high', 'low'])
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['high', 'low', 'masked-out'])
     const high = candidates.find((c) => c.stemCID === 'high')!
     expect(high.traitValues.bassHeavy).toBeCloseTo(0.9)
     expect(high.slotKinds).toEqual(['bassHeavy'])
@@ -1187,7 +1188,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic'
+      kinds: ['rhythmic']
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
   })
@@ -1200,7 +1201,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bright'
+      kinds: ['bright']
     })
     expect(candidates).toEqual([])
   })
@@ -1216,7 +1217,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'warm',
+      kinds: ['warm'],
       onlyOwnStems: true,
       targetUser: 'elling'
     })
@@ -1232,7 +1233,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic',
+      kinds: ['rhythmic'],
       soundSource: { endlesss: true, audioIn: false }
     })
     expect(candidates).toEqual([])
@@ -1247,7 +1248,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic',
+      kinds: ['rhythmic'],
       soundSource: { endlesss: false, audioIn: true }
     })
     expect(candidates).toEqual([])
@@ -1262,7 +1263,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const audioInOnly = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic',
+      kinds: ['rhythmic'],
       soundSource: { endlesss: false, audioIn: true }
     })
     expect(audioInOnly.map((c) => c.stemCID)).toEqual(['mic-stem'])
@@ -1270,7 +1271,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const endlesssOnly = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic',
+      kinds: ['rhythmic'],
       soundSource: { endlesss: true, audioIn: false }
     })
     expect(endlesssOnly).toEqual([])
@@ -1287,12 +1288,12 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'rhythmic'
+      kinds: ['rhythmic']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['mic-stem', 'unmasked'])
   })
 
-  it('excludes a stem already confirmed (StemCategories) for ANY role, even with no reliable mask signal', async () => {
+  it('trait-only pool includes a stem confirmed for some role', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['confirmed-elsewhere'])
     seedStem(own, 'confirmed-elsewhere', 'jam1') // no instrument mask at all
@@ -1302,9 +1303,9 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bassHeavy'
+      kinds: ['bassHeavy']
     })
-    expect(candidates).toEqual([])
+    expect(candidates.map((c) => c.stemCID)).toEqual(['confirmed-elsewhere'])
   })
 
   it('skips a stem with malformed FeaturesJSON rather than crashing', async () => {
@@ -1322,7 +1323,7 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     const candidates = await getDiscoverCandidates({
       ownDb: own,
       jams: [{ jamCID: 'jam1', dbForJam: own }],
-      kind: 'bassHeavy'
+      kinds: ['bassHeavy']
     })
     expect(candidates.map((c) => c.stemCID)).toEqual(['good'])
   })
@@ -1338,7 +1339,88 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     // feature cache but the caller's own jams list doesn't cover it"
     // shape this function must tolerate rather than throw on.
     await expect(
-      getDiscoverCandidates({ ownDb: own, jams: [], kind: 'bassHeavy' })
+      getDiscoverCandidates({ ownDb: own, jams: [], kinds: ['bassHeavy'] })
     ).resolves.toEqual([])
+  })
+})
+
+describe('getDiscoverCandidates (kind sets)', () => {
+  const DRUM = 1 << 1
+  const BASS = 1 << 3
+
+  it('mask kinds OR together, deduped', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d', 'b', 'n'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedStem(own, 'b', 'jam1', { instrument: BASS })
+    seedStem(own, 'n', 'jam1', { instrument: 1 << 2 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['bass', 'drums']
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['b', 'd'])
+    expect(candidates.every((c) => c.slotKinds.join('+') === 'drums+bass')).toBe(true)
+  })
+
+  it('mask kinds return nothing while the endlesss source is off', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+
+    expect(
+      await getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: false, audioIn: true }
+      })
+    ).toEqual([])
+  })
+
+  it('mask + trait: filters by mask, attaches trait values from StemFeatureCache', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['cached', 'uncached', 'mic'])
+    seedStem(own, 'cached', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'cached', featuresJSON({ spectralCentroidHz: 400 }))
+    seedStem(own, 'uncached', 'jam1', { instrument: DRUM })
+    seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
+    seedFeatures(own, 'mic', featuresJSON({ spectralCentroidHz: 100 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['warm', 'drums']
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['cached', 'uncached'])
+    expect(candidates.find((c) => c.stemCID === 'cached')!.traitValues).toEqual({ warm: 400 })
+    expect(candidates.find((c) => c.stemCID === 'uncached')!.traitValues).toEqual({})
+  })
+
+  it('trait-only: every requested trait value is attached', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedFeatures(own, 's1', featuresJSON({ transientDensity: 0.6, spectralCentroidHz: 900 }))
+
+    const [c] = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['rhythmic', 'warm']
+    })
+    expect(c.traitValues).toEqual({ rhythmic: 0.6, warm: 900 })
+    expect(c.slotKinds).toEqual(['rhythmic', 'warm'])
+  })
+
+  it('an empty kind set returns []', async () => {
+    const own = freshDb()
+    expect(
+      await getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: []
+      })
+    ).toEqual([])
   })
 })

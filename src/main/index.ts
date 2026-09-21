@@ -937,7 +937,7 @@ app.whenReady().then(async () => {
     'get-discover-candidates',
     async (
       _event,
-      kind: DiscoverSlotKind,
+      kinds: DiscoverSlotKind[],
       onlyOwnStems: boolean,
       targetUser?: string,
       soundSource?: DiscoverSoundSourceFilter
@@ -950,18 +950,18 @@ app.whenReady().then(async () => {
       const jams = listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
       const t1 = Date.now()
       console.log(
-        `get-discover-candidates(${kind}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
+        `get-discover-candidates(${kinds.join('+')}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
       )
       const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
         jams,
-        kind,
+        kinds,
         onlyOwnStems,
         targetUser,
         soundSource
       })
       console.log(
-        `get-discover-candidates(${kind}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
+        `get-discover-candidates(${kinds.join('+')}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
       )
       return result
     }
@@ -971,13 +971,13 @@ app.whenReady().then(async () => {
     'get-random-discover-candidate',
     (
       _event,
-      kind: DiscoverSlotKind,
+      kinds: DiscoverSlotKind[],
       onlyOwnStems: boolean,
       targetUser?: string
     ): Promise<DiscoverCandidate | null> =>
       getRandomLibraryCandidate({
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
-        kind,
+        kinds,
         onlyOwnStems,
         targetUser
       })

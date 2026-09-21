@@ -7,12 +7,14 @@ import {
   type DiscoverSoundSourceFilter
 } from '@shared/riffLibraryTypes'
 import {
-  DISCOVER_TRAIT_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
+  isMaskSlotKind,
+  isTraitSlotKind,
+  normalizeSlotKinds,
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
-import { DISCOVER_TRAIT_FIELD, type TraitValues } from '@shared/discoverTraits'
+import { traitValuesFromFeatures, type TraitValues } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   getCachedRiffCount,
@@ -39,9 +41,12 @@ import {
  * can answer directly; only a real human confirmation or the mask bit
  * itself populate a mask kind's pool now.
  *
- * For a TRAIT slot kind (bassHeavy/rhythmic/bright/warm --
- * DISCOVER_TRAIT_SLOT_KINDS), see getTraitDiscoverCandidates (Task 3) --
- * ranked by a cached StemFeatureCache field instead. */
+ * For a TRAIT-ONLY slot kind set (bassHeavy/rhythmic/bright/warm), see
+ * getTraitPoolCandidates -- any stem with a cached StemFeatureCache row,
+ * tagged or not (combination slots, 2026-09-21 -- see
+ * getDiscoverCandidates's own doc comment for the full combination-slot
+ * rule, including why a mask+trait set is no longer a disjoint pool from
+ * a mask-only one). */
 export interface DiscoverCandidate {
   stemCID: string
   jamCID: string
@@ -677,14 +682,107 @@ async function getInstrumentMatchedStemCIDs(
   return matched
 }
 
-/** Every stem, library-wide, that's a candidate for the given
- * DiscoverSlotKind -- the data source Discover's own reroll (Task 3)
- * samples from.
- *
- * For a TRAIT kind (bassHeavy/rhythmic/bright/warm), delegates entirely to
- * getTraitDiscoverCandidates (Task 3) -- a completely different query shape
- * (ranked by a cached StemFeatureCache field, not mask/confirmation). What
- * follows is the MASK kind (drums/bass/lead) path only.
+/** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
+ * slot-kinds-design.md) -- ONE rule for every kind set: mask kinds
+ * (drums/bass/lead) OR together as a filter on Endlesss's own instrument
+ * mask, and yield nothing while the "endlesss" source is off (they are
+ * Endlesss content by definition -- this is the fix for "unticked endlesss,
+ * still got Endlesss drums"); a trait-only set draws from every stem with
+ * cached features (tagged or not) and the sound-source filter. Trait kinds
+ * never filter -- they only attach traitValues for rankCandidates to rank
+ * by, in the renderer. */
+export async function getDiscoverCandidates({
+  ownDb,
+  jams,
+  kinds,
+  onlyOwnStems = false,
+  targetUser,
+  soundSource = { endlesss: true, audioIn: true }
+}: {
+  ownDb: Database.Database
+  jams: JamDbPair[]
+  kinds: readonly DiscoverSlotKind[]
+  onlyOwnStems?: boolean
+  targetUser?: string
+  soundSource?: DiscoverSoundSourceFilter
+}): Promise<DiscoverCandidate[]> {
+  const normalized = normalizeSlotKinds(kinds)
+  const maskKinds = normalized.filter(isMaskSlotKind)
+  const traitKinds = normalized.filter(isTraitSlotKind)
+
+  if (maskKinds.length === 0) {
+    if (traitKinds.length === 0) return []
+    const pool = await getTraitPoolCandidates({
+      ownDb,
+      jams,
+      traitKinds,
+      onlyOwnStems,
+      targetUser,
+      soundSource
+    })
+    return pool.map((c) => ({ ...c, slotKinds: normalized }))
+  }
+
+  if (!soundSource.endlesss) return []
+  const seen = new Set<string>()
+  const pool: DiscoverCandidate[] = []
+  for (const kind of maskKinds) {
+    const perKind = await getMaskDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser })
+    for (const candidate of perKind) {
+      if (seen.has(candidate.stemCID)) continue
+      seen.add(candidate.stemCID)
+      pool.push({ ...candidate, slotKinds: normalized })
+    }
+  }
+  return traitKinds.length > 0 ? attachTraitValues(ownDb, pool, traitKinds) : pool
+}
+
+/** Mask + trait sets: looks up each pooled stem's cached features (ownDb's
+ * StemFeatureCache, primary-key lookups, chunked like every other IN query
+ * in this file) and attaches the requested trait values. A stem with no
+ * cached row (or a malformed one) keeps traitValues {} -- it stays
+ * eligible and simply scores 0 on the trait terms. */
+function attachTraitValues(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[],
+  traitKinds: readonly DiscoverTraitKind[]
+): DiscoverCandidate[] {
+  const featuresByStemCID = new Map<string, StemFeatures>()
+  for (const cidChunk of chunk(
+    pool.map((c) => c.stemCID),
+    CANDIDATE_QUERY_CHUNK_SIZE
+  )) {
+    const placeholders = cidChunk.map(() => '?').join(', ')
+    let rows: FeatureCandidateRow[]
+    try {
+      rows = ownDb
+        .prepare(
+          `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
+        )
+        .all(...cidChunk) as FeatureCandidateRow[]
+    } catch {
+      continue
+    }
+    for (const row of rows) {
+      try {
+        featuresByStemCID.set(row.StemCID, JSON.parse(row.FeaturesJSON) as StemFeatures)
+      } catch {
+        // malformed row -- this stem just gets no trait values
+      }
+    }
+  }
+  return pool.map((c) => {
+    const features = featuresByStemCID.get(c.stemCID)
+    return features ? { ...c, traitValues: traitValuesFromFeatures(features, traitKinds) } : c
+  })
+}
+
+/** Every stem, library-wide, that's a candidate for the given MASK
+ * DiscoverSlotKind (drums/bass/lead) -- the data source
+ * getDiscoverCandidates (below) samples from for a set's mask kinds. Called
+ * once per mask kind in the set and unioned there -- see
+ * getDiscoverCandidates's own doc comment for the full combination-slot
+ * rule.
  *
  * `jams` is caller-supplied (not computed here) so this function stays a
  * pure-ish query over whatever set of {jamCID, db} pairs the caller already
@@ -729,37 +827,19 @@ async function getInstrumentMatchedStemCIDs(
  * answer directly. Only human confirmation (StemCategories) and the mask
  * bit itself (getInstrumentMatchedStemCIDs) populate a mask kind's pool
  * now -- see DiscoverCandidate's own doc comment for the full rationale. */
-export async function getDiscoverCandidates({
+async function getMaskDiscoverCandidates({
   ownDb,
   jams,
   kind,
   onlyOwnStems = false,
-  targetUser,
-  soundSource = { endlesss: true, audioIn: true }
+  targetUser
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
   kind: DiscoverSlotKind
   onlyOwnStems?: boolean
   targetUser?: string
-  /** Direct request, 2026-09-21: "a way to only enable audio in or
-   * microphone stems." Only ever applied to the 4 TRAIT kinds below
-   * (getTraitDiscoverCandidates) -- deliberately NOT to the 3 mask kinds
-   * (drums/bass/lead) just below this branch: those are, by construction,
-   * always real Endlesss instrument content (a live mask match can only
-   * ever resolve to drums/notes/bass, never audioIn -- see
-   * getInstrumentMatchedStemCIDs's own mask-priority logic), so filtering
-   * them by sound source would either be a no-op or exclude a rare,
-   * deliberate human StemCategories confirmation -- neither is what this
-   * filter is actually for. Defaults to no filtering (both true), same as
-   * every other optional filter here, so every existing caller keeps
-   * today's unfiltered behavior. */
-  soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
-  if (DISCOVER_TRAIT_SLOT_KINDS.includes(kind)) {
-    return getTraitDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser, soundSource })
-  }
-
   // Human-confirmed StemCategories rows for this exact ArrangeRole still
   // win outright -- a real confirmation is trusted even over an ambiguous
   // or missing mask bit. Reuses the SAME ArrangeRole column StemCategories
@@ -927,16 +1007,13 @@ interface FeatureCandidateRow {
 interface TraitMatchedStem {
   stemCID: string
   jamCID: string
-  featureValue: number
+  traitValues: TraitValues
 }
 
-/** Candidate pool for the 4 TRAIT slot kinds -- everything a reliable
- * instrument-mask read can't place (audioIn-masked or unmasked), AND not
- * already human-confirmed for any role, ranked by a cheap, already-cached
- * StemFeatureCache numeric field. Never overlaps with the 3 mask kinds' own
- * pool (getInstrumentMatchedStemCIDs above) -- a drums/bass/notes-masked
- * stem, or a stem confirmed via Tidy Up for ANY role, is excluded here even
- * if it also has a cached feature row.
+/** Candidate pool for a TRAIT-ONLY kind set -- any stem with a cached
+ * StemFeatureCache row (tagged or not, since combination slots, 2026-09-21),
+ * narrowed by the sound-source filter. Trait values for every requested
+ * kind are attached from the same parse.
  *
  * StemFeatureCache stores each stem's own features as one JSON blob
  * (FeaturesJSON), not separate SQL columns -- same "fetch raw rows, parse
@@ -959,23 +1036,21 @@ interface TraitMatchedStem {
  * call -- at a fraction of the cost, same accepted "OFFSET cost grows with
  * how far in you land, still fast in practice" tradeoff
  * discoverIndexCache.ts's own pagination already relies on. */
-async function getTraitDiscoverCandidates({
+async function getTraitPoolCandidates({
   ownDb,
   jams,
-  kind,
+  traitKinds,
   onlyOwnStems,
   targetUser,
   soundSource = { endlesss: true, audioIn: true }
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
-  kind: DiscoverSlotKind
+  traitKinds: readonly DiscoverTraitKind[]
   onlyOwnStems: boolean
   targetUser?: string
   soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
-  const field = DISCOVER_TRAIT_FIELD[kind as DiscoverTraitKind]
-
   let total: number
   try {
     total = (ownDb.prepare(`SELECT COUNT(*) AS n FROM StemFeatureCache`).get() as { n: number }).n
@@ -1027,20 +1102,6 @@ async function getTraitDiscoverCandidates({
     }
   }
 
-  // Same cross-role-leakage guard getInstrumentMatchedStemCIDs already
-  // uses (code review, 2026-09-18) -- without this, a stem a human has
-  // confirmed via Tidy Up for SOME role, but whose raw mask is audioIn or
-  // unset, would leak into a trait-kind pool too, silently breaking the
-  // "mask kinds and trait kinds never overlap" invariant this function's
-  // own doc comment promises.
-  const confirmedAnyRole = new Set(
-    (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
-  )
-
   const matched: TraitMatchedStem[] = []
   let sinceYield = 0
   for (const row of rows) {
@@ -1051,13 +1112,7 @@ async function getTraitDiscoverCandidates({
     // SOME of this loop's exit paths, an inconsistency with every other
     // yield-counted loop in this file).
     do {
-      if (confirmedAnyRole.has(row.StemCID)) break
-
       const instrument = instrumentByStemCID.get(row.StemCID)
-      if (instrument !== undefined && instrument !== null) {
-        const soundType = instrumentMaskToSoundType(instrument)
-        if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') break
-      }
 
       // Direct request, 2026-09-21: "a way to only enable audio in or
       // microphone stems." instrument may be undefined here (no known
@@ -1077,7 +1132,11 @@ async function getTraitDiscoverCandidates({
         break
       }
 
-      matched.push({ stemCID: row.StemCID, jamCID, featureValue: features[field] })
+      matched.push({
+        stemCID: row.StemCID,
+        jamCID,
+        traitValues: traitValuesFromFeatures(features, traitKinds)
+      })
       // Deliberate do/while(false), see comment above the `do {` for why.
       // eslint-disable-next-line no-constant-condition
     } while (false)
@@ -1140,10 +1199,10 @@ async function getTraitDiscoverCandidates({
           riffCID: riffInfo.riffCID,
           presetName: stemRow.PresetName ?? '',
           creatorUserName: stemRow.CreatorUserName ?? '',
-          slotKinds: [kind],
+          slotKinds: [...traitKinds],
           drumSubRole: null,
           riffBpm: riffInfo.bpmRnd,
-          traitValues: { [kind as DiscoverTraitKind]: entry.featureValue },
+          traitValues: entry.traitValues,
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1170,9 +1229,10 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * bypasses confirmed/embedding/instrument matching ENTIRELY, so it works
  * regardless of whether anything has been confirmed or scanned yet (the
  * exact "stuck at zero" case that prompted it). Labeled with the CALLER's
- * `kind` (the slot's own kind) rather than anything inferred --
- * this is a real, unclassified stem the user picks to start from and can
- * later confirm/replace via Tidy Up, not a claim that it IS that role.
+ * `kinds` (the slot's own normalized kind set) rather than anything
+ * inferred -- this is a real, unclassified stem the user picks to start
+ * from and can later confirm/replace via Tidy Up, not a claim that it IS
+ * that role.
  *
  * Picks a RANDOM JAM first (not `ORDER BY RANDOM() LIMIT 1` over every
  * jam's Stems table unioned together), then a random stem WITHIN that one
@@ -1198,17 +1258,17 @@ const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
  * the same as "no match" from the other candidate sources. */
 export async function getRandomLibraryCandidate({
   jams,
-  kind,
+  kinds,
   onlyOwnStems = false,
   targetUser
 }: {
   jams: JamDbPair[]
-  kind: DiscoverSlotKind
+  kinds: readonly DiscoverSlotKind[]
   onlyOwnStems?: boolean
   targetUser?: string
 }): Promise<DiscoverCandidate | null> {
   if (onlyOwnStems && targetUser) {
-    return getRandomOwnStemCandidate(jams, kind, targetUser)
+    return getRandomOwnStemCandidate(jams, kinds, targetUser)
   }
 
   const shuffled = [...jams]
@@ -1257,7 +1317,7 @@ export async function getRandomLibraryCandidate({
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      slotKinds: [kind],
+      slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
@@ -1283,7 +1343,7 @@ export async function getRandomLibraryCandidate({
  * pays a second db's own query cost. */
 async function getRandomOwnStemCandidate(
   jams: JamDbPair[],
-  kind: DiscoverSlotKind,
+  kinds: readonly DiscoverSlotKind[],
   targetUser: string
 ): Promise<DiscoverCandidate | null> {
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
@@ -1348,7 +1408,7 @@ async function getRandomOwnStemCandidate(
       riffCID: riffRow.RiffCID,
       presetName: stemRow.PresetName ?? '',
       creatorUserName: stemRow.CreatorUserName ?? '',
-      slotKinds: [kind],
+      slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,

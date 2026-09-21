@@ -1469,7 +1469,7 @@ export function DiscoverPanel({
       // handler) already reports its own internal timing.
       console.log(`DiscoverPanel: rollForSlot(${kind}) -- calling getDiscoverCandidates`)
       const candidates = await window.rifffApi.getDiscoverCandidates(
-        kind,
+        [kind],
         effectiveOnlyOwnStems,
         currentUsername,
         { endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }
@@ -1561,7 +1561,7 @@ export function DiscoverPanel({
     try {
       const effectiveOnlyOwnStems = onlyOwnStems && hasUsername
       const candidate = await window.rifffApi.getRandomDiscoverCandidate(
-        kind,
+        [kind],
         effectiveOnlyOwnStems,
         currentUsername
       )
