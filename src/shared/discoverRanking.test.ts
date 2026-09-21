@@ -92,7 +92,7 @@ describe('rankCandidates (trait scoring)', () => {
     expect(ranked[0].candidate.stemCID).toBe('both')
   })
 
-  it('a null/missing trait value never outranks a real one', () => {
+  it('a null/missing trait value scores no better than the worst real one', () => {
     const top = candidate({ stemCID: 'top', traitValues: { bright: 0.8 } })
     const bottom = candidate({ stemCID: 'bottom', traitValues: { bright: 0.2 } })
     const unknown = candidate({ stemCID: 'unknown', traitValues: {} })
@@ -100,8 +100,21 @@ describe('rankCandidates (trait scoring)', () => {
       targetBpm: 128,
       targetTraits: ['bright']
     })
+    const scoreOf = (id: string): number => ranked.find((r) => r.candidate.stemCID === id)!.score
     expect(ranked[0].candidate.stemCID).toBe('top')
-    expect(ranked[ranked.length - 1].score).toBeLessThanOrEqual(ranked[1].score)
+    expect(scoreOf('unknown')).toBeLessThanOrEqual(scoreOf('bottom'))
+  })
+
+  it('a non-finite trait value scores 0 instead of poisoning the sort with NaN', () => {
+    const top = candidate({ stemCID: 'top', traitValues: { bright: 0.8 } })
+    const bottom = candidate({ stemCID: 'bottom', traitValues: { bright: 0.2 } })
+    const broken = candidate({ stemCID: 'broken', traitValues: { bright: Number.NaN } })
+    const ranked = rankCandidates([broken, bottom, top], {
+      targetBpm: 128,
+      targetTraits: ['bright']
+    })
+    expect(ranked.every((r) => Number.isFinite(r.score))).toBe(true)
+    expect(ranked[0].candidate.stemCID).toBe('top')
   })
 
   it('a trait with no spread across the pool adds nothing', () => {

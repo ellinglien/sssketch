@@ -54,7 +54,7 @@ function traitScore(
   direction: 'high' | 'low',
   range: { min: number; max: number } | undefined
 ): number {
-  if (value === null || value === undefined || !range) return 0
+  if (value === null || value === undefined || !Number.isFinite(value) || !range) return 0
   const normalized = (value - range.min) / (range.max - range.min)
   return direction === 'high' ? normalized : 1 - normalized
 }
@@ -81,7 +81,7 @@ export function rankCandidates(
     let max = -Infinity
     for (const c of candidates) {
       const v = c.traitValues[kind]
-      if (v === null || v === undefined) continue
+      if (v === null || v === undefined || !Number.isFinite(v)) continue
       if (v < min) min = v
       if (v > max) max = v
     }
