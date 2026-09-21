@@ -315,6 +315,24 @@ export function DiscoverPanel({
   // unused-vars until a real use turns up.
   void currentSketch
 
+  // Synchronously-current mirror of the `slots` prop -- same reason
+  // previewingSlotIdsRef exists (see its own comment below): rerollAll is a
+  // long-running async loop (one IPC round trip per slot, sequential) whose
+  // closure over `slots` is fixed to whatever this render's prop value was
+  // when the loop started. Combination slots (2026-09-21) let the kind
+  // picker (changeSlotKinds) edit a slot's own kinds WHILE a "reroll all"
+  // is still mid-flight for an earlier slot -- without this ref, a later
+  // iteration would reroll with the STALE kinds/locked flag captured at the
+  // loop's start, and a slot removed mid-batch would still get rolled
+  // (setSlots' own `s.id === id ? ... : s` map is a no-op for a missing id,
+  // but the IPC round trip and its "picked a candidate" state update still
+  // happen pointlessly). Written only from an effect below, never during
+  // render, matching this file's own established ref-mirroring convention.
+  const slotsRef = useRef<DiscoverSlot[]>(slots)
+  useEffect(() => {
+    slotsRef.current = slots
+  }, [slots])
+
   const dispatch = useDispatch()
   const playing = usePlaying()
   // Real, live engine playback position (bars) -- while a Discover preview
@@ -1654,8 +1672,20 @@ export function DiscoverPanel({
     // No try/catch of its own -- rollForSlot itself never throws (it
     // catches and logs internally, above), so one slot failing can't abort
     // this loop and silently leave every LATER unlocked slot untouched.
-    for (const slot of slots) {
-      if (!slot.locked) await rollForSlot(slot.id, slot.kinds)
+    //
+    // Iterates over the id list captured NOW, but re-reads each slot's own
+    // kinds/locked from slotsRef (above) at the START of its own turn, not
+    // from the `slots` array this call started with -- combination slots
+    // (2026-09-21) let the kind picker edit a slot's kinds mid-batch via
+    // changeSlotKinds, and a stale kinds/locked read here would reroll with
+    // the WRONG kind set or ignore a lock toggled after this loop began. A
+    // slot removed mid-batch (id no longer in slotsRef.current) is skipped
+    // outright rather than rolling a candidate nothing will ever show.
+    const slotIds = slots.map((s) => s.id)
+    for (const slotId of slotIds) {
+      const current = slotsRef.current.find((s) => s.id === slotId)
+      if (!current) continue
+      if (!current.locked) await rollForSlot(current.id, current.kinds)
     }
   }
 
