@@ -1,17 +1,18 @@
 // src/main/discoverAdjacency.ts
 import { basename } from 'node:path'
-import {
-  instrumentMaskToSoundType,
-  soundSourceMatchesFilter,
-  type DiscoverSoundSourceFilter
-} from '@shared/riffLibraryTypes'
+import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
 import {
-  DISCOVER_TRAIT_SLOT_KINDS,
-  type DiscoverSlotKind,
-  type DiscoverTraitKind
+  isMaskSlotKind,
+  isTraitSlotKind,
+  normalizeSlotKinds,
+  type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
-import { DISCOVER_TRAIT_FIELD } from '@shared/discoverTraits'
+import {
+  stemMatchesSlotKinds,
+  traitValuesFromFeatures,
+  type TraitValues
+} from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   resolveRiffWithContext,
@@ -96,9 +97,10 @@ export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
 
 /** Finds up to ADJACENT_MATCHES_PER_DIRECTION riffs recorded near
  * `centerRiffCID`, in the SAME jam's own iteration sequence, that have at
- * least one stem matching `kind` -- see this plan's own header for the
- * architecture. `newer`/`older` are unambiguous, real chronological
- * directions (see walkAdjacentWindow's own doc comment) -- the CALLER maps
+ * least one stem matching `kinds` (stemMatchesSlotKinds, @shared/discoverTraits)
+ * -- see this plan's own header for the architecture. `newer`/`older` are
+ * unambiguous, real chronological directions (see walkAdjacentWindow's own
+ * doc comment) -- the CALLER maps
  * them to "earlier"/"later" UI labels (older -> earlier, newer -> later).
  * Returns `{ newer: [], older: [] }` (never throws) if `centerRiffCID`
  * can't be resolved at all -- same "never throws, empty means unavailable"
@@ -106,13 +108,13 @@ export interface AdjacentDiscoverCandidate extends DiscoverCandidate {
  * codebase already follows. */
 export async function getAdjacentDiscoverCandidates(
   centerRiffCID: string,
-  kind: DiscoverSlotKind,
+  kinds: readonly DiscoverSlotKind[],
   // Direct request, 2026-09-21: "a way to only enable audio in or
-  // microphone stems." Only applied to the 4 trait kinds below (matchRole's
-  // own trait-kind branch) -- same reasoning as getDiscoverCandidates' own
-  // soundSource param: mask kinds (drums/bass/lead) are always real
-  // Endlesss content by construction, so filtering them by sound source
-  // wouldn't do anything meaningful. Defaults to no filtering.
+  // microphone stems." Combination-slot rule (stemMatchesSlotKinds,
+  // @shared/discoverTraits): mask kinds (drums/bass/lead) are always real
+  // Endlesss content by construction, so a mask-kind set matches nothing
+  // while "endlesss" is off; a trait-only set is filtered by this instead.
+  // Defaults to no filtering.
   soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true }
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
@@ -138,7 +140,9 @@ export async function getAdjacentDiscoverCandidates(
   // per stem -- openOwnRiffLibraryDb() caches its own connection, but
   // there's no reason to re-look-it-up on every call either.
   const ownDb = openOwnRiffLibraryDb()
-  const isTraitKind = DISCOVER_TRAIT_SLOT_KINDS.includes(kind)
+  const normalizedKinds = normalizeSlotKinds(kinds)
+  const traitKinds = normalizedKinds.filter(isTraitSlotKind)
+  const hasMaskKind = normalizedKinds.some(isMaskSlotKind)
 
   async function matchRole(summary: {
     riffCID: string
@@ -147,43 +151,27 @@ export async function getAdjacentDiscoverCandidates(
     if (!resolved) return null
     for (const stem of resolved.stems) {
       const soundType = instrumentMaskToSoundType(stem.instrumentMask)
+      if (!stemMatchesSlotKinds(stem.instrumentMask, normalizedKinds, soundSource)) continue
 
-      // traitValue stays null for the mask-kind path (it ranks by BPM
-      // alone, same as a normal roll) -- only set once a trait kind's own
-      // cached feature row is confirmed to exist and parse below. Both
-      // branches build ONE shared return object at the bottom of this
-      // loop body (code review, 2026-09-18: the original version had two
-      // full, ~20-line-apart duplicate object literals differing only in
-      // this one field -- a real drift risk for any future field added to
-      // one copy and forgotten in the other).
-      let traitValue: number | null = null
-
-      if (!isTraitKind) {
-        // Mask kinds: direct check, same shape as discoverCandidates.ts's
-        // own getInstrumentMatchedStemCIDs.
-        const isMatch =
-          (soundType === 'drums' && kind === 'drums') ||
-          (soundType === 'bass' && kind === 'bass') ||
-          (soundType === 'notes' && kind === 'lead')
-        if (!isMatch) continue
-      } else {
-        // Trait kinds: excluded if the mask reliably places it elsewhere
-        // (drums/bass/notes already belong to the 3 mask kinds' own pool),
-        // otherwise needs a cached StemFeatureCache row to have any trait
-        // value to match on at all.
-        if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') continue
-        if (!soundSourceMatchesFilter(stem.instrumentMask, soundSource)) continue
+      // Trait kinds rank, never filter -- but a TRAIT-ONLY set has nothing
+      // to rank by without a cached feature row, so it still requires one
+      // (same as before combination slots). A mask + trait set keeps a
+      // mask-matched stem either way.
+      let traitValues: TraitValues = {}
+      if (traitKinds.length > 0) {
         const featureRow = ownDb
           .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
           .get(stem.stemCID) as { FeaturesJSON: string } | undefined
-        if (!featureRow) continue
-        let features: StemFeatures
-        try {
-          features = JSON.parse(featureRow.FeaturesJSON) as StemFeatures
-        } catch {
-          continue
+        let features: StemFeatures | null = null
+        if (featureRow) {
+          try {
+            features = JSON.parse(featureRow.FeaturesJSON) as StemFeatures
+          } catch {
+            features = null
+          }
         }
-        traitValue = features[DISCOVER_TRAIT_FIELD[kind as DiscoverTraitKind]]
+        if (features) traitValues = traitValuesFromFeatures(features, traitKinds)
+        else if (!hasMaskKind) continue
       }
 
       return {
@@ -192,10 +180,10 @@ export async function getAdjacentDiscoverCandidates(
         riffCID: summary.riffCID,
         presetName: stem.presetName,
         creatorUserName: stem.creatorUserName,
-        slotKinds: [kind],
+        slotKinds: normalizedKinds,
         drumSubRole: null,
         riffBpm: resolved.bpm,
-        traitValues: isTraitKind ? { [kind as DiscoverTraitKind]: traitValue } : {},
+        traitValues,
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --

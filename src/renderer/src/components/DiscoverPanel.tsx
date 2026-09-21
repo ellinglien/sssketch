@@ -3693,7 +3693,7 @@ function DiscoverSlotRow({
           x={nearbyMenu.x}
           y={nearbyMenu.y}
           startCandidate={nearbyAnchor}
-          kind={slot.kind}
+          kinds={[slot.kind]}
           soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}

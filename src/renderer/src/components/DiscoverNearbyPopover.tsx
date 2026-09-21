@@ -1,7 +1,7 @@
 // src/renderer/src/components/DiscoverNearbyPopover.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
-import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import { slotKindsKey, type DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import type { AdjacentDiscoverCandidate } from '../../../main/discoverAdjacency'
@@ -152,7 +152,7 @@ export function DiscoverNearbyPopover({
   x,
   y,
   startCandidate,
-  kind,
+  kinds,
   soundSource,
   onPick,
   onClose,
@@ -164,11 +164,12 @@ export function DiscoverNearbyPopover({
    * "back to start" returns to exactly this, without needing a fresh IPC
    * round trip to reconstruct it. */
   startCandidate: DiscoverCandidate
-  kind: DiscoverSlotKind
+  kinds: DiscoverSlotKind[]
   /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
-   * checkboxes -- see getDiscoverCandidates' own soundSource doc comment
-   * (discoverCandidates.ts) for the full "why." Only meaningfully affects
-   * the 4 trait kinds; mask kinds ignore it by design. */
+   * checkboxes. Combination-slot rule (stemMatchesSlotKinds,
+   * @shared/discoverTraits): mask kinds match nothing while "endlesss" is
+   * off (they're Endlesss content by construction); trait kinds only ever
+   * rank, so this filters a trait-only set instead. */
   soundSource: DiscoverSoundSourceFilter
   /** DiscoverSlotRow's own onSwapFromNearby -- fires on every pick, INCLUDING
    * a step-button pick or "back to start." This popover recenters its own
@@ -194,12 +195,13 @@ export function DiscoverNearbyPopover({
     key: string
     candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
-  const resultKey = `${centerCandidate.riffCID}:${kind}:${soundSource.endlesss}:${soundSource.audioIn}`
+  const kindsKey = slotKindsKey(kinds)
+  const resultKey = `${centerCandidate.riffCID}:${kindsKey}:${soundSource.endlesss}:${soundSource.audioIn}`
 
   useEffect(() => {
     let cancelled = false
     window.rifffApi
-      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kind, soundSource)
+      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kinds, soundSource)
       .then((candidates) => {
         if (!cancelled) setResult({ key: resultKey, candidates })
       })
@@ -216,8 +218,10 @@ export function DiscoverNearbyPopover({
     // this effect (and re-fetch) on every DiscoverPanel render regardless
     // of whether either actual value changed, not just when this
     // popover's own resultKey (which already encodes both values) does.
+    // `kinds` itself is also omitted -- it's a fresh array every render;
+    // `kindsKey` carries its identity instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [centerCandidate.riffCID, kind, soundSource.endlesss, soundSource.audioIn, resultKey])
+  }, [centerCandidate.riffCID, kindsKey, soundSource.endlesss, soundSource.audioIn, resultKey])
 
   const resultForCurrent = result?.key === resultKey ? result : null
   const candidates = resultForCurrent?.candidates ?? { newer: [], older: [] }

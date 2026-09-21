@@ -988,9 +988,9 @@ app.whenReady().then(async () => {
     (
       _event,
       centerRiffCID: string,
-      kind: DiscoverSlotKind,
+      kinds: DiscoverSlotKind[],
       soundSource?: DiscoverSoundSourceFilter
-    ) => getAdjacentDiscoverCandidates(centerRiffCID, kind, soundSource)
+    ) => getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource)
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>

@@ -229,10 +229,10 @@ const api = {
     ipcRenderer.invoke('get-random-discover-candidate', kinds, onlyOwnStems, targetUser),
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
-    kind: DiscoverSlotKind,
+    kinds: DiscoverSlotKind[],
     soundSource?: DiscoverSoundSourceFilter
   ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
-    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kind, soundSource),
+    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kinds, soundSource),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{
