@@ -49,7 +49,13 @@ export function buildImportedRifff(
         ('fx' as const),
       path: s.path!,
       durationSec: s.durationSec,
-      barLength: s.barLength
+      barLength: s.barLength,
+      // Every stem in a NORMAL import shares its owning riff's own real
+      // creation moment (Stem.creationTime's own doc comment, @shared/
+      // types) -- resolved.creationTime undefined (live Endlesss API path)
+      // just leaves this undefined too, same graceful-absence convention
+      // as `key` above.
+      creationTime: resolved.creationTime
     }))
 
   if (existing && newStems.length === 0) {

@@ -61,7 +61,7 @@ export async function loadCachedRiffIndex(
   while (offset < total) {
     const page = ownDb
       .prepare(
-        `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd FROM DiscoverRiffIndexCache
+        `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime FROM DiscoverRiffIndexCache
          WHERE SourceDbKey = ? ORDER BY StemCID LIMIT ? OFFSET ?`
       )
       .all(sourceDbKey, PAGE_SIZE, offset) as {
@@ -69,6 +69,7 @@ export async function loadCachedRiffIndex(
       RiffCID: string
       OwnerJamCID: string
       BPMrnd: number
+      CreationTime: number | null
     }[]
     if (page.length === 0) break
 
@@ -76,7 +77,8 @@ export async function loadCachedRiffIndex(
       index.set(row.StemCID, {
         riffCID: row.RiffCID,
         ownerJamCID: row.OwnerJamCID,
-        bpmRnd: row.BPMrnd
+        bpmRnd: row.BPMrnd,
+        creationTime: row.CreationTime
       })
     }
     offset += page.length
@@ -103,8 +105,8 @@ export function saveRiffIndexCache(
 ): void {
   const del = ownDb.prepare(`DELETE FROM DiscoverRiffIndexCache WHERE SourceDbKey = ?`)
   const insert = ownDb.prepare(
-    `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
+     VALUES (?, ?, ?, ?, ?, ?)`
   )
   const setMeta = ownDb.prepare(
     `INSERT INTO DiscoverRiffIndexCacheMeta (SourceDbKey, RiffCount, ComputedAt) VALUES (?, ?, ?)
@@ -113,7 +115,14 @@ export function saveRiffIndexCache(
   const tx = ownDb.transaction(() => {
     del.run(sourceDbKey)
     for (const [stemCID, entry] of index) {
-      insert.run(sourceDbKey, stemCID, entry.riffCID, entry.ownerJamCID, entry.bpmRnd)
+      insert.run(
+        sourceDbKey,
+        stemCID,
+        entry.riffCID,
+        entry.ownerJamCID,
+        entry.bpmRnd,
+        entry.creationTime
+      )
     }
     setMeta.run(sourceDbKey, riffCount, Date.now())
   })

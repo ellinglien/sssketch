@@ -32,6 +32,7 @@ function fixtureCandidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverC
     drumSubRole: null,
     riffBpm: 120,
     traitValue: null,
+    riffCreationTime: null,
     ...overrides
   }
 }

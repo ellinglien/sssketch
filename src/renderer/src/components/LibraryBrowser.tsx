@@ -1364,7 +1364,8 @@ export function LibraryBrowser({
         ),
         drumSubRole: null,
         riffBpm: resolvedRiff.bpm,
-        traitValue: null
+        traitValue: null,
+        riffCreationTime: resolvedRiff.creationTime ?? null
       }))
       // Same "push a snapshot before mutating" convention every other
       // Discover slot-content action already uses (DiscoverPanel.tsx's own

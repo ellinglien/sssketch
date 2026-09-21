@@ -231,8 +231,13 @@ const api = {
     ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kind),
   findRiffForStemPath: (
     stemPath: string
-  ): Promise<{ stemCID: string; riffCID: string; jamCID: string; bpm: number } | null> =>
-    ipcRenderer.invoke('find-riff-for-stem-path', stemPath),
+  ): Promise<{
+    stemCID: string
+    riffCID: string
+    jamCID: string
+    bpm: number
+    creationTime: number | null
+  } | null> => ipcRenderer.invoke('find-riff-for-stem-path', stemPath),
   resolveStemArrangeRoles: (
     entries: { stemCID: string; instrumentMask: number; presetName: string }[]
   ): Promise<Record<string, ArrangeRole | null>> =>

@@ -196,6 +196,7 @@ export async function getAdjacentDiscoverCandidates(
         drumSubRole: null,
         riffBpm: resolved.bpm,
         traitValue,
+        riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --
         // no filesystem/db access) -- correct regardless of whether the
@@ -254,16 +255,26 @@ export async function getAdjacentDiscoverCandidates(
  * possibility for a stem that came from somewhere other than this app's
  * own riff-library sync (a locally-recorded take, a plain folder import
  * unrelated to any Endlesss jam). */
-export async function findRiffForStemPath(
-  stemPath: string
-): Promise<{ stemCID: string; riffCID: string; jamCID: string; bpm: number } | null> {
+export async function findRiffForStemPath(stemPath: string): Promise<{
+  stemCID: string
+  riffCID: string
+  jamCID: string
+  bpm: number
+  creationTime: number | null
+} | null> {
   const stemCID = basename(stemPath)
   const uniqueDbs = new Set(listJamsWithDb().map(({ db }) => db))
   for (const db of uniqueDbs) {
     const index = await getRiffIndexForDb(db)
     const entry = index.get(stemCID)
     if (entry)
-      return { stemCID, riffCID: entry.riffCID, jamCID: entry.ownerJamCID, bpm: entry.bpmRnd }
+      return {
+        stemCID,
+        riffCID: entry.riffCID,
+        jamCID: entry.ownerJamCID,
+        bpm: entry.bpmRnd,
+        creationTime: entry.creationTime
+      }
   }
   return null
 }

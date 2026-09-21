@@ -51,6 +51,11 @@ export interface ResolvedCandidateStem {
   path: string
   durationSec: number
   barLength: number
+  /** The owning riff's own creation time (RiffLibraryResolvedRiff.
+   * creationTime, Unix seconds) -- see @shared/types's Stem.creationTime
+   * doc comment. Undefined only if the resolved riff itself predates this
+   * field (the live Endlesss API path). */
+  creationTime?: number
 }
 
 // Speed: DiscoverSlotRow's own preview resolve effect and resolveDiscoverRifff
@@ -107,7 +112,8 @@ function resolveCandidateStem(candidate: DiscoverCandidate): Promise<ResolvedCan
           'fx',
         path: stem.path,
         durationSec: stem.durationSec,
-        barLength: stem.barLength
+        barLength: stem.barLength,
+        creationTime: resolved.creationTime
       }
     } catch (err) {
       console.error('resolveCandidateStem: failed to resolve candidate', candidate.riffCID, err)
@@ -2844,7 +2850,8 @@ function DiscoverSlotRow({
                 slotKind: slot.kind,
                 traitValue: null,
                 drumSubRole: null,
-                riffBpm: result.bpm
+                riffBpm: result.bpm,
+                riffCreationTime: result.creationTime
               }
             : null
         })
@@ -3235,6 +3242,25 @@ function DiscoverSlotRow({
             <button
               onMouseDown={handleGainDragStart}
               aria-label="drag to adjust volume"
+              // Direct request, 2026-09-20: "date could be a tooltip on
+              // hover.. in discovery and in arranger or sketch" --
+              // resolvedStem.creationTime is the OWNING RIFF's own real
+              // creation date (see ResolvedCandidateStem's own doc
+              // comment), undefined only for content resolved via the
+              // live Endlesss API path (not Discover's own, which always
+              // reads the local, already-synced library), in which case
+              // this simply omits the tooltip rather than showing a wrong
+              // date. Same year/month/day format LibraryBrowser.tsx's own
+              // date-grouped riff listing already uses.
+              data-tooltip={
+                resolvedStem.creationTime
+                  ? new Date(resolvedStem.creationTime * 1000).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric'
+                    })
+                  : undefined
+              }
               style={{
                 position: 'relative',
                 width: '100%',

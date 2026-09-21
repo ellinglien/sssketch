@@ -133,6 +133,15 @@ export interface RiffLibraryResolvedRiff {
    * (loreWarehouse.ts's own resolveRiff only derives `key`, not these). */
   root?: number
   scale?: number
+  /** Unix seconds -- when this riff was created on Endlesss (Riffs.
+   * CreationTime). Copied onto every one of its own imported Stem's own
+   * `creationTime` (see @shared/types's Stem.creationTime doc comment for
+   * why that's per-stem, not per-riff, despite this being the single
+   * source every NORMAL import copies from). Undefined for a construction
+   * site that doesn't have it (the live Endlesss API path, endlesssApi.ts,
+   * does not populate this -- only the local, already-synced riff library
+   * does). */
+  creationTime?: number
   stems: RiffLibraryResolvedStem[]
 }
 

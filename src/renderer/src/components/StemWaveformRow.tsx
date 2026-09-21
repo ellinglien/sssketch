@@ -418,7 +418,26 @@ export function StemWaveformRow({
             const target = sqrtGain(rifff.stems.length)
             if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
-          title="right-click to mute · double-click to reset volume"
+          // Direct request, 2026-09-20: "date could be a tooltip on
+          // hover.. in discovery and in arranger or sketch" -- appended to
+          // this box's EXISTING title (not a second, separate
+          // data-tooltip -- mixing both tooltip mechanisms on one element
+          // would show two overlapping tooltips) rather than a new
+          // element, since stem.creationTime is undefined for a one-shot/
+          // recorded-in-app/live-API-resolved stem, or any import
+          // predating this field -- gracefully just omits the date suffix
+          // rather than showing a wrong one.
+          title={
+            stem.creationTime
+              ? `right-click to mute · double-click to reset volume · ${new Date(
+                  stem.creationTime * 1000
+                ).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                })}`
+              : 'right-click to mute · double-click to reset volume'
+          }
           style={{
             position: 'absolute',
             top: 0,

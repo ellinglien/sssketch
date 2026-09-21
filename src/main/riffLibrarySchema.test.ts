@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import Database from 'better-sqlite3'
 
 let musicDir: string
 
@@ -67,5 +68,59 @@ describe('riffLibrarySchema', () => {
     openOwnRiffLibraryDb()
     closeOwnRiffLibraryDb()
     expect(() => openOwnRiffLibraryDb()).not.toThrow()
+  })
+
+  it('opening a db whose DiscoverRiffIndexCache predates CreationTime adds the column and clears the (now-unrecoverable) stale cache rather than crashing', async () => {
+    const { ownRiffLibraryDbPath } = await import('./riffLibrarySchema')
+    const path = ownRiffLibraryDbPath()
+    // Simulates a real pre-existing db from before this column existed --
+    // a raw connection, not openOwnRiffLibraryDb() itself (which would
+    // already create the CURRENT, post-migration schema). Directory
+    // creation normally happens inside openOwnRiffLibraryDb() itself, so
+    // it's replicated here for this raw connection.
+    mkdirSync(dirname(path), { recursive: true })
+    const raw = new Database(path)
+    raw.exec(`
+      CREATE TABLE DiscoverRiffIndexCache (
+        SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
+        OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL,
+        PRIMARY KEY (SourceDbKey, StemCID)
+      );
+      CREATE TABLE DiscoverRiffIndexCacheMeta (
+        SourceDbKey TEXT PRIMARY KEY, RiffCount INTEGER NOT NULL, ComputedAt INTEGER NOT NULL
+      );
+    `)
+    raw
+      .prepare(
+        `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd)
+         VALUES ('db-a', 's1', 'r1', 'j1', 128)`
+      )
+      .run()
+    raw
+      .prepare(
+        `INSERT INTO DiscoverRiffIndexCacheMeta (SourceDbKey, RiffCount, ComputedAt) VALUES ('db-a', 1, 0)`
+      )
+      .run()
+    raw.close()
+
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+
+    const columns = db.prepare(`PRAGMA table_info(DiscoverRiffIndexCache)`).all() as {
+      name: string
+    }[]
+    expect(columns.some((c) => c.name === 'CreationTime')).toBe(true)
+
+    // The stale row (and its Meta sibling's stale RiffCount, which would
+    // otherwise wrongly read the now-empty table as still fresh) must both
+    // be gone -- the whole point of dropping rather than a no-op ALTER.
+    const rowCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM DiscoverRiffIndexCache`).get() as { n: number }
+    ).n
+    expect(rowCount).toBe(0)
+    const metaRow = db
+      .prepare(`SELECT RiffCount FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = 'db-a'`)
+      .get()
+    expect(metaRow).toBeUndefined()
   })
 })

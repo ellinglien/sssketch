@@ -41,7 +41,7 @@ function freshDb(): Database.Database {
     );
     CREATE TABLE DiscoverRiffIndexCache (
       SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
-      OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL,
+      OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL, CreationTime INTEGER,
       PRIMARY KEY (SourceDbKey, StemCID)
     );
     CREATE TABLE DiscoverRiffIndexCacheMeta (
@@ -908,7 +908,7 @@ describe('prewarmDiscoverCandidateCaches', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 }]]),
+      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
       1
     )
     saveInstrumentRowsCache(
@@ -933,7 +933,12 @@ describe('prewarmDiscoverCandidateCaches', () => {
 
     // And the loaded result is actually correct, not just "didn't crash".
     const index = await getRiffIndexForDb(own)
-    expect(index.get('s1')).toEqual({ riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 })
+    expect(index.get('s1')).toEqual({
+      riffCID: 'r1',
+      ownerJamCID: 'jam1',
+      bpmRnd: 128,
+      creationTime: 1000
+    })
   })
 
   it('falls back to a live scan when the on-disk cache is stale (row count changed)', async () => {
@@ -947,14 +952,24 @@ describe('prewarmDiscoverCandidateCaches', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['stale', { riffCID: 'stale-riff', ownerJamCID: 'stale-jam', bpmRnd: 999 }]]),
+      new Map([
+        ['stale', { riffCID: 'stale-riff', ownerJamCID: 'stale-jam', bpmRnd: 999, creationTime: 1 }]
+      ]),
       5
     )
 
     await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
 
     const index = await getRiffIndexForDb(own)
-    expect(index.get('s1')).toEqual({ riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128 })
+    // seedRiff's own CreationTime, 1000 -- see that helper's own fixture
+    // above -- confirms this came from a REAL live rescan of Riffs, not
+    // the stale cached 'stale' entry.
+    expect(index.get('s1')).toEqual({
+      riffCID: 'r1',
+      ownerJamCID: 'jam1',
+      bpmRnd: 128,
+      creationTime: 1000
+    })
     expect(index.has('stale')).toBe(false)
   })
 

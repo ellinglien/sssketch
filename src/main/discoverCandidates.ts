@@ -55,6 +55,14 @@ export interface DiscoverCandidate {
    * discoverRanking.ts's own trait-distance scoring term. Always null for
    * a mask-kind candidate (drums/bass/lead), which ranks by BPM alone. */
   traitValue: number | null
+  /** The OWNING RIFF's own creation time (Riffs.CreationTime, Unix
+   * seconds) -- same "riff-level, not stem-level, since it's always
+   * populated" rationale as riffBpm above. Copied onto the eventual placed
+   * Stem's own `creationTime` once this candidate is committed to the
+   * shelf/timeline (see @shared/types's Stem.creationTime doc comment for
+   * why THAT field is per-stem). Direct request, 2026-09-20: "date could
+   * be a tooltip on hover.. in discovery and in arranger or sketch." */
+  riffCreationTime: number | null
 }
 
 interface JamDbPair {
@@ -99,6 +107,7 @@ interface RiffCandidateRow {
   RiffCID: string
   OwnerJamCID: string
   BPMrnd: number
+  CreationTime: number | null
   StemCID_1: string | null
   StemCID_2: string | null
   StemCID_3: string | null
@@ -175,6 +184,7 @@ export interface RiffIndexEntry {
   riffCID: string
   ownerJamCID: string
   bpmRnd: number
+  creationTime: number | null
 }
 
 const riffIndexCache = new WeakMap<
@@ -277,7 +287,7 @@ async function buildRiffIndex(
     try {
       page = db
         .prepare(
-          `SELECT RiffCID, OwnerJamCID, BPMrnd,
+          `SELECT RiffCID, OwnerJamCID, BPMrnd, CreationTime,
                   StemCID_1, StemCID_2, StemCID_3, StemCID_4,
                   StemCID_5, StemCID_6, StemCID_7, StemCID_8
            FROM Riffs ORDER BY RiffCID LIMIT ? OFFSET ?`
@@ -296,7 +306,8 @@ async function buildRiffIndex(
         index.set(stemCID, {
           riffCID: riff.RiffCID,
           ownerJamCID: riff.OwnerJamCID,
-          bpmRnd: riff.BPMrnd
+          bpmRnd: riff.BPMrnd,
+          creationTime: riff.CreationTime
         })
       }
       sinceYield += 1
@@ -867,7 +878,8 @@ export async function getDiscoverCandidates({
           slotKind: kind,
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
           riffBpm: riffInfo.bpmRnd,
-          traitValue: null
+          traitValue: null,
+          riffCreationTime: riffInfo.creationTime
         })
       }
 
@@ -1114,7 +1126,8 @@ async function getTraitDiscoverCandidates({
           slotKind: kind,
           drumSubRole: null,
           riffBpm: riffInfo.bpmRnd,
-          traitValue: entry.featureValue
+          traitValue: entry.featureValue,
+          riffCreationTime: riffInfo.creationTime
         })
       }
 
@@ -1203,11 +1216,11 @@ export async function getRandomLibraryCandidate({
     }
     if (!stemRow) continue
 
-    let riffRow: { RiffCID: string; BPMrnd: number } | undefined
+    let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
     try {
       riffRow = dbForJam
         .prepare(
-          `SELECT RiffCID, BPMrnd FROM Riffs WHERE OwnerJamCID = ? AND (
+          `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
              StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
              StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
            ) LIMIT 1`
@@ -1230,7 +1243,8 @@ export async function getRandomLibraryCandidate({
       slotKind: kind,
       traitValue: null,
       drumSubRole: null,
-      riffBpm: riffRow.BPMrnd
+      riffBpm: riffRow.BPMrnd,
+      riffCreationTime: riffRow.CreationTime
     }
   }
   return null
@@ -1294,11 +1308,11 @@ async function getRandomOwnStemCandidate(
     // skip rather than return a candidate the caller never asked to see.
     if (!stemRow || !allowedJamCIDs.has(stemRow.OwnerJamCID)) continue
 
-    let riffRow: { RiffCID: string; BPMrnd: number } | undefined
+    let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
     try {
       riffRow = db
         .prepare(
-          `SELECT RiffCID, BPMrnd FROM Riffs WHERE OwnerJamCID = ? AND (
+          `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
              StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
              StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
            ) LIMIT 1`
@@ -1320,7 +1334,8 @@ async function getRandomOwnStemCandidate(
       slotKind: kind,
       traitValue: null,
       drumSubRole: null,
-      riffBpm: riffRow.BPMrnd
+      riffBpm: riffRow.BPMrnd,
+      riffCreationTime: riffRow.CreationTime
     }
   }
   return null

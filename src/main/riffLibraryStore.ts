@@ -507,6 +507,7 @@ function buildResolvedRiff(db: Database.Database, riffRow: FullRiffRow): RiffLib
     bpm: riffRow.BPMrnd,
     barLength: riffRow.BarLength,
     key: resolveKeyName(riffRow.Root, riffRow.Scale),
+    creationTime: riffRow.CreationTime,
     stems
   }
 }

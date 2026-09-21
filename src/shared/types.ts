@@ -79,6 +79,19 @@ export interface Stem {
    * recording should read as its own distinct category, not just another
    * audio-in-typed clip. Undefined/false for every other stem. */
   recordedInApp?: boolean
+  /** Unix seconds -- when this stem's OWN original riff was created on
+   * Endlesss (Riffs.CreationTime), not when it was imported/placed here.
+   * Direct request, 2026-09-20: "date could be a tooltip on hover.. in
+   * discovery and in arranger or sketch." Deliberately per-STEM, not
+   * per-riff, even though every stem normally imported from ONE real LORE
+   * riff shares the identical value (mirrors Rifff.key's own "riff-level
+   * data, only ever populated from a real import" shape) -- a Discover-
+   * assembled Rifff (DiscoverPanel.tsx's assembleDiscoverRifff) collages
+   * stems from MANY different original riffs into one synthetic Rifff, so
+   * only a per-stem field can carry each one's own real provenance date
+   * correctly. Undefined for a one-shot/recorded-in-app stem (no
+   * originating riff at all) or any import path that predates this field. */
+  creationTime?: number
 }
 
 export interface Rifff {

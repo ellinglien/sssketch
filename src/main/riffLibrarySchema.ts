@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS DiscoverRiffIndexCache (
   RiffCID TEXT NOT NULL,
   OwnerJamCID TEXT NOT NULL,
   BPMrnd REAL NOT NULL,
+  CreationTime INTEGER,
   PRIMARY KEY (SourceDbKey, StemCID)
 );
 
@@ -216,6 +217,32 @@ CREATE TABLE IF NOT EXISTS DiscoverInstrumentRowsCacheMeta (
 
 let cachedDb: Database.Database | null = null
 
+// Direct request, 2026-09-20 ("date could be a tooltip on hover"):
+// DiscoverRiffIndexCache predates its own CreationTime column -- unlike
+// every other column here, CREATE TABLE IF NOT EXISTS can't retroactively
+// add a column to a table that already exists on a real, already-used db
+// (this app's first time needing that). Safe to just DROP and let CREATE
+// TABLE IF NOT EXISTS below recreate it fresh rather than a real ALTER
+// TABLE migration, since this table is a PURE, always-rebuildable derived
+// cache (discoverCandidates.ts's own buildRiffIndex can always recompute
+// it from a live scan) -- costs one rescan, the exact same cost this
+// table already pays on its very first-ever cold start. Its own Meta
+// sibling (DiscoverRiffIndexCacheMeta, tracking the RiffCount the cache
+// was last saved with) MUST be dropped in the same breath: leaving a
+// stale RiffCount behind would make a later freshness check wrongly read
+// the now-EMPTY data table as still up to date (the live count hasn't
+// changed, even though the cached rows have all vanished), skipping the
+// rescan that would otherwise repopulate it. Checked on every open
+// (cheap: one PRAGMA query) so it self-heals even after a future revert
+// of this column.
+function ensureDiscoverRiffIndexCacheHasCreationTime(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(DiscoverRiffIndexCache)`).all() as {
+    name: string
+  }[]
+  if (columns.length === 0 || columns.some((c) => c.name === 'CreationTime')) return
+  db.exec(`DROP TABLE DiscoverRiffIndexCache; DROP TABLE IF EXISTS DiscoverRiffIndexCacheMeta;`)
+}
+
 /** Opens (creating the file/directories if needed) sssketch's own writable
  * riff-library connection and ensures the schema exists -- CREATE
  * TABLE/INDEX IF NOT EXISTS make re-running the DDL on every open a cheap
@@ -230,6 +257,7 @@ export function openOwnRiffLibraryDb(): Database.Database {
   if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
+  ensureDiscoverRiffIndexCacheHasCreationTime(db)
   db.exec(SCHEMA_SQL)
   cachedDb = db
   return db
