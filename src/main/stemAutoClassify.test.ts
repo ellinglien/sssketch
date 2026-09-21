@@ -547,3 +547,25 @@ describe('classifyAutoCategoryBatch', () => {
     })
   })
 })
+
+describe('classifyAutoCategoryBatch (confirmed-embedding cache)', () => {
+  it('picks up confirmations added between calls on the same db -- the prepared set is reused, never stale', async () => {
+    const db = freshDb()
+    for (let i = 0; i < 3; i++) {
+      seedConfirmed(db, `train-drums-${i}`, 'drums')
+      seedEmbedding(db, `train-drums-${i}`, [1, 0, 0])
+    }
+    seedEmbedding(db, 'query', [0, 1, 0])
+
+    // Only one trained category -- no suggestion possible yet.
+    await classifyAutoCategoryBatch(db)
+    expect(allClassifiedStemCIDs(db).has('query')).toBe(false)
+
+    for (let i = 0; i < 3; i++) {
+      seedConfirmed(db, `train-bass-${i}`, 'bass')
+      seedEmbedding(db, `train-bass-${i}`, [0, 1, 0])
+    }
+    await classifyAutoCategoryBatch(db)
+    expect(allClassifiedStemCIDs(db).has('query')).toBe(true)
+  })
+})

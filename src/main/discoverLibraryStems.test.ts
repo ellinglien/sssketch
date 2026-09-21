@@ -105,3 +105,47 @@ describe('listLibraryScanTargets', () => {
     expect(interleaved).toBe(true)
   })
 })
+
+describe('listLibraryScanTargets (jams sharing one db)', () => {
+  it('reads Riffs in a few ordered pages per db, not once per jam, and still filters to the given jams', async () => {
+    // Real live freeze, profiled 2026-09-21: ~5,000 jams sharing one
+    // external archive db meant ~5,000 separate unindexed Riffs scans.
+    const db = freshDb()
+    const jams: { jamCID: string; dbForJam: Database.Database }[] = []
+    for (let j = 0; j < 100; j++) {
+      seedRiff(db, `r${j}`, `jam${j}`, [`s${j}`])
+      jams.push({ jamCID: `jam${j}`, dbForJam: db })
+    }
+    seedRiff(db, 'r-outside', 'jam-not-listed', ['s-outside'])
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    const targets = await listLibraryScanTargets(jams, () => true)
+    expect(targets).toHaveLength(100)
+    expect(targets.some((t) => t.key === 's-outside')).toBe(false)
+    expect(prepareSpy.mock.calls.length).toBeLessThan(10)
+  })
+})
+
+describe('createDirListingExists', () => {
+  it('answers from one directory listing per folder, matching the real filesystem', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { createDirListingExists } = await import('./discoverLibraryStems')
+    const root = mkdtempSync(join(tmpdir(), 'sssketch-dirlist-'))
+    try {
+      mkdirSync(join(root, 'a'))
+      writeFileSync(join(root, 'a', 'stem1'), '')
+      const exists = createDirListingExists()
+      expect(exists(join(root, 'a', 'stem1'))).toBe(true)
+      expect(exists(join(root, 'a', 'missing'))).toBe(false)
+      expect(exists(join(root, 'no-such-dir', 'stem1'))).toBe(false)
+      // Listing is taken once per folder -- a file created afterwards in an
+      // already-listed folder isn't seen (acceptable: the scan list is built
+      // once per session, same as before).
+      writeFileSync(join(root, 'a', 'stem2'), '')
+      expect(exists(join(root, 'a', 'stem2'))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

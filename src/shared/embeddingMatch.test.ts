@@ -116,3 +116,23 @@ describe('suggestCategoryFromEmbedding', () => {
     expect(suggestCategoryFromEmbedding(confirmed, vec(0, 1, 0))).toBeNull()
   })
 })
+
+describe('createEmbeddingSuggester', () => {
+  it('gives exactly the same answer as suggestCategoryFromEmbedding, for many queries against one prepared set', async () => {
+    const { createEmbeddingSuggester } = await import('./embeddingMatch')
+    let seed = 7
+    const rand = (): number => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1
+    const vec = (dim: number): number[] => Array.from({ length: dim }, rand)
+    const confirmed = [
+      ...Array.from({ length: 5 }, () => ({ category: 'drums', embedding: vec(16) })),
+      ...Array.from({ length: 5 }, () => ({ category: 'bass', embedding: vec(16) })),
+      ...Array.from({ length: 4 }, () => ({ category: 'lead', embedding: vec(16) })),
+      { category: 'odd-dim', embedding: vec(8) }
+    ]
+    const suggest = createEmbeddingSuggester(confirmed)
+    for (let i = 0; i < 200; i++) {
+      const q = i % 20 === 0 ? new Array(16).fill(0) : vec(i % 17 === 0 ? 8 : 16)
+      expect(suggest(q)).toBe(suggestCategoryFromEmbedding(confirmed, q))
+    }
+  })
+})

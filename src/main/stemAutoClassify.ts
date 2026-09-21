@@ -2,7 +2,7 @@
 import type Database from 'better-sqlite3'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { suggestCategoryFromEmbedding } from '@shared/embeddingMatch'
+import { createEmbeddingSuggester } from '@shared/embeddingMatch'
 import { suggestCategory } from '@shared/categoryCentroids'
 import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { getConfirmedEmbeddings } from './embeddingMatch'
@@ -17,6 +17,90 @@ const BATCH_SIZE = 200
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
+}
+
+// Real live freeze, profiled 2026-09-21 (typing lag + macOS beachball):
+// one BATCH_SIZE (200) transaction of embedding classification -- a
+// nearest-neighbor search against every confirmed embedding, per row
+// (~50ms each on Elling's real library: ~5,850 confirmed x 1024 dims) --
+// ran as a single multi-second synchronous block on the main process every
+// few seconds, stalling all input to the app. Rows are now committed in
+// TIME-budgeted transactions: keep classifying into the current transaction
+// until TRANSACTION_BUDGET_MS has passed, then commit and yield. Cheap rows
+// (mask short-circuits, centroid guesses) still share one commit -- per-row
+// commits are their own real cost, see "writes each pass batch inside a
+// single transaction" in the tests -- while an expensive row never holds
+// the thread much past one budget. Rows are a plain array (already
+// .all()-fetched), never an iterator held across the await.
+const TRANSACTION_BUDGET_MS = 16
+
+async function classifyInYieldingChunks<Row>(
+  db: Database.Database,
+  rows: Row[],
+  classifyRow: (row: Row) => boolean
+): Promise<number> {
+  let count = 0
+  let index = 0
+  while (index < rows.length) {
+    count += db.transaction(() => {
+      const start = performance.now()
+      let n = 0
+      do {
+        if (classifyRow(rows[index])) n += 1
+        index += 1
+      } while (index < rows.length && performance.now() - start < TRANSACTION_BUDGET_MS)
+      return n
+    })()
+    await yieldToEventLoop()
+  }
+  return count
+}
+
+// Real live freeze, profiled 2026-09-21 (typing lag + macOS beachball):
+// every call (one per BUSY_DELAY_MS, 3s) re-read and JSON-parsed EVERY
+// confirmed embedding -- ~5,850 x 1024 floats on Elling's real library,
+// 100+ MB of JSON -- in one synchronous block, then prepared it again.
+// That set only changes when a stem is confirmed (or gains an embedding),
+// which this batch loop never does itself, so it's prepared once and
+// reused until a cheap fingerprint query says otherwise. Keyed by db
+// connection (WeakMap) so separate dbs -- e.g. each test's fresh in-memory
+// one -- never share an entry.
+interface PreparedConfirmed {
+  fingerprint: string
+  embeddingAxisTrained: boolean
+  suggestFromEmbedding: (embedding: number[]) => string | null
+}
+const preparedConfirmedByDb = new WeakMap<Database.Database, PreparedConfirmed>()
+
+function confirmedEmbeddingsFingerprint(db: Database.Database): string {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n, MAX(c.UpdatedAt) AS latest
+       FROM StemCategories c JOIN StemEmbeddingCache e ON e.StemCID = c.StemCID
+       WHERE c.ArrangeRole IS NOT NULL`
+    )
+    .get() as { n: number; latest: number | null }
+  // Deliberately NOT MAX(e.ExtractedAt): that column sits after the ~20KB
+  // EmbeddingJSON blob, so reading it walked every blob's overflow pages
+  // (~100ms). Count + latest confirmation catches every real change (a new
+  // confirmation, a changed role, a confirmed stem gaining an embedding);
+  // only a re-extraction of an ALREADY-confirmed stem's embedding goes
+  // unseen until the next confirmation, an acceptable staleness.
+  return `${row.n}:${row.latest}`
+}
+
+function getPreparedConfirmedEmbeddings(db: Database.Database): PreparedConfirmed {
+  const fingerprint = confirmedEmbeddingsFingerprint(db)
+  const cached = preparedConfirmedByDb.get(db)
+  if (cached && cached.fingerprint === fingerprint) return cached
+  const confirmed = getConfirmedEmbeddings(db, 'arrangeRole')
+  const prepared: PreparedConfirmed = {
+    fingerprint,
+    embeddingAxisTrained: confirmed.length > 0,
+    suggestFromEmbedding: createEmbeddingSuggester(confirmed)
+  }
+  preparedConfirmedByDb.set(db, prepared)
+  return prepared
 }
 
 // Real finding, 2026-09-18: a direct query against Elling's real library
@@ -96,7 +180,7 @@ const BASE_ELIGIBILITY_WHERE = (alias: string): string => `
 // with ANY cached embedding used to be excluded from the centroid pass
 // UNCONDITIONALLY, even while the embedding axis had never been trained
 // (fewer than 3 confirmed+embedded samples in 2+ roles -- see
-// `confirmedEmbeddings.length === 0` below). DiscoverLibraryScan.tsx's
+// `embeddingAxisTrained` in getPreparedConfirmedEmbeddings). DiscoverLibraryScan.tsx's
 // own renderer-side extraction embeds AND extracts features for nearly
 // every stem, so almost the WHOLE backlog has an embedding -- with no
 // centroid fallback while untrained, this meant classification could
@@ -129,13 +213,24 @@ function fetchPendingEmbeddingBatch(
   ownDb: Database.Database,
   limit: number
 ): EmbeddingCandidateRow[] {
-  return ownDb
+  // Two steps -- real live freeze, profiled 2026-09-21: `ORDER BY RANDOM()`
+  // over the whole eligible set sorted every row WITH its ~20KB
+  // EmbeddingJSON blob (~53k rows on Elling's library), ~250ms every call.
+  // Shuffle just the ids, then read blobs only for the rows actually picked.
+  const picked = ownDb
     .prepare(
-      `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache e
+      `SELECT StemCID FROM StemEmbeddingCache e
        WHERE ${BASE_ELIGIBILITY_WHERE('e')}
        ORDER BY RANDOM() LIMIT ?`
     )
-    .all(limit) as EmbeddingCandidateRow[]
+    .all(limit) as { StemCID: string }[]
+  if (picked.length === 0) return []
+  const placeholders = picked.map(() => '?').join(', ')
+  return ownDb
+    .prepare(
+      `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID IN (${placeholders})`
+    )
+    .all(...picked.map((r) => r.StemCID)) as EmbeddingCandidateRow[]
 }
 
 function countPendingFeatures(ownDb: Database.Database, embeddingAxisTrained: boolean): number {
@@ -265,8 +360,7 @@ export async function classifyAutoCategoryBatch(
   // pass's own eligibility depends on whether the embedding axis is
   // trained (see featureEligibilityWhere's own doc comment), so both
   // passes must agree on the same answer within one call.
-  const confirmedEmbeddings = getConfirmedEmbeddings(ownDb, 'arrangeRole')
-  const embeddingAxisTrained = confirmedEmbeddings.length > 0
+  const { embeddingAxisTrained, suggestFromEmbedding } = getPreparedConfirmedEmbeddings(ownDb)
 
   // --- Embedding pass (preferred) ---
   const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
@@ -290,41 +384,36 @@ export async function classifyAutoCategoryBatch(
       batchRows.map((r) => r.StemCID)
     )
     const now = Date.now()
-    processed += ownDb.transaction((rows: typeof batchRows) => {
-      let count = 0
-      for (const row of rows) {
-        const instrument = masks.get(row.StemCID)
-        const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
-        if (reliable) {
-          upsertStemAutoCategory(
-            ownDb,
-            row.StemCID,
-            SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
-            'instrumentMask',
-            now
-          )
-          count += 1
-          continue
-        }
-        // Nothing trained yet on this axis -- every call would return
-        // null; leave it pending rather than spending a classify call on
-        // it.
-        if (!embeddingAxisTrained) continue
-        try {
-          const embedding = JSON.parse(row.EmbeddingJSON) as number[]
-          const guessed = suggestCategoryFromEmbedding(confirmedEmbeddings, embedding)
-          if (guessed) {
-            upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
-            count += 1
-          }
-        } catch {
-          // Corrupted row -- skip, same defensive handling this
-          // table's own readers elsewhere already use.
-        }
+    processed += await classifyInYieldingChunks(ownDb, batchRows, (row) => {
+      const instrument = masks.get(row.StemCID)
+      const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
+      if (reliable) {
+        upsertStemAutoCategory(
+          ownDb,
+          row.StemCID,
+          SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
+          'instrumentMask',
+          now
+        )
+        return true
       }
-      return count
-    })(batchRows)
-    await yieldToEventLoop()
+      // Nothing trained yet on this axis -- every call would return
+      // null; leave it pending rather than spending a classify call on
+      // it.
+      if (!embeddingAxisTrained) return false
+      try {
+        const embedding = JSON.parse(row.EmbeddingJSON) as number[]
+        const guessed = suggestFromEmbedding(embedding)
+        if (guessed) {
+          upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'embedding', now)
+          return true
+        }
+      } catch {
+        // Corrupted row -- skip, same defensive handling this
+        // table's own readers elsewhere already use.
+      }
+      return false
+    })
   }
 
   // --- Feature/centroid pass (fallback) ---
@@ -340,36 +429,31 @@ export async function classifyAutoCategoryBatch(
       batchRows.map((r) => r.StemCID)
     )
     const now = Date.now()
-    processed += ownDb.transaction((rows: typeof batchRows) => {
-      let count = 0
-      for (const row of rows) {
-        const instrument = masks.get(row.StemCID)
-        const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
-        if (reliable) {
-          upsertStemAutoCategory(
-            ownDb,
-            row.StemCID,
-            SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
-            'instrumentMask',
-            now
-          )
-          count += 1
-          continue
-        }
-        try {
-          const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-          const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))
-          if (guessed) {
-            upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'centroid', now)
-            count += 1
-          }
-        } catch {
-          // Corrupted row -- skip.
-        }
+    processed += await classifyInYieldingChunks(ownDb, batchRows, (row) => {
+      const instrument = masks.get(row.StemCID)
+      const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
+      if (reliable) {
+        upsertStemAutoCategory(
+          ownDb,
+          row.StemCID,
+          SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
+          'instrumentMask',
+          now
+        )
+        return true
       }
-      return count
-    })(batchRows)
-    await yieldToEventLoop()
+      try {
+        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
+        const guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))
+        if (guessed) {
+          upsertStemAutoCategory(ownDb, row.StemCID, guessed as ArrangeRole, 'centroid', now)
+          return true
+        }
+      } catch {
+        // Corrupted row -- skip.
+      }
+      return false
+    })
   }
 
   return { processed, remaining }

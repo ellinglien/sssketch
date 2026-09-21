@@ -63,6 +63,7 @@ function carryForwardLegacyRiffLibraryPrefs(): void {
 let riffLibraryRootOverride: string | null = null
 export function setRiffLibraryRootForTests(root: string | null): void {
   riffLibraryRootOverride = root
+  cachedRiffLibraryRoot = null
   closeRiffLibraryDb()
 }
 
@@ -77,8 +78,23 @@ export function setRiffLibraryRootForTests(root: string | null): void {
  * default is only consulted on a genuinely first-ever launch. Read fresh
  * every call rather than cached, matching projectLibrary.ts's own
  * libraryRootPath convention. */
+// Memoized -- real live freeze, profiled 2026-09-21 (typing lag + macOS
+// beachball): resolveStemPath calls this once PER STEM, and
+// listLibraryScanTargets resolves every stem in the library, so re-reading
+// and re-parsing the prefs file (plus two existsSync calls) each time cost
+// ~15s of main-process time per 25s sampled, in ~2s synchronous stalls.
+// The root only ever changes through setRiffLibraryRoot (or the test seam
+// above), both of which reset this.
+let cachedRiffLibraryRoot: string | null = null
+
 export function riffLibraryRootPath(): string {
   if (riffLibraryRootOverride !== null) return riffLibraryRootOverride
+  if (cachedRiffLibraryRoot !== null) return cachedRiffLibraryRoot
+  cachedRiffLibraryRoot = readRiffLibraryRootFromPrefs()
+  return cachedRiffLibraryRoot
+}
+
+function readRiffLibraryRootFromPrefs(): string {
   carryForwardLegacyRiffLibraryPrefs()
   const path = riffLibraryPrefsPath()
   if (!existsSync(path)) return ownRiffLibraryRoot()
@@ -101,6 +117,7 @@ export function setRiffLibraryRoot(newRoot: string): void {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`setRiffLibraryRoot: failed to write ${riffLibraryPrefsPath()}: ${message}`)
   }
+  cachedRiffLibraryRoot = null
   closeRiffLibraryDb()
 }
 

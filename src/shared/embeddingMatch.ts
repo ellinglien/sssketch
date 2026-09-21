@@ -40,19 +40,6 @@ const MIN_CATEGORIES_FOR_SUGGESTION = 2
 // will be wrong and need correcting by hand via Tidy Up.
 const SIMILARITY_MARGIN = 0.02
 
-function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0
-  let normA = 0
-  let normB = 0
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i]
-    normA += a[i] * a[i]
-    normB += b[i] * b[i]
-  }
-  if (normA < 1e-10 || normB < 1e-10) return 0
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
-}
-
 /**
  * Nearest-neighbor classification for one new stem's embedding, over every
  * OTHER individually confirmed stem's own embedding on the same axis (not a
@@ -68,45 +55,87 @@ export function suggestCategoryFromEmbedding(
   confirmed: ConfirmedEmbedding[],
   queryEmbedding: number[]
 ): string | null {
-  // Excludes any confirmed embedding whose dimensionality doesn't match the
-  // query's -- cosineSimilarity's own loop runs to a.length regardless of
-  // b's actual length, so a mismatch would otherwise silently produce
-  // either NaN (b shorter -- NaN then sorts unpredictably, since
-  // Array.prototype.sort treats a NaN comparator result as tied rather than
-  // "last") or a numerically wrong-but-plausible-looking similarity (b
-  // longer -- silently truncated). There's a single producer today (the
-  // YAMNet worker, always 1024-dim), so this is currently latent, not
-  // live, but a future model-version bump or a hand-edited DB row could
-  // otherwise silently corrupt a suggestion instead of just being excluded
-  // (2026-09-14 code quality review).
-  const comparable = confirmed.filter((c) => c.embedding.length === queryEmbedding.length)
+  return createEmbeddingSuggester(confirmed)(queryEmbedding)
+}
 
-  const countsByCategory = new Map<string, number>()
-  for (const c of comparable) {
-    countsByCategory.set(c.category, (countsByCategory.get(c.category) ?? 0) + 1)
+interface PreparedEmbedding {
+  category: string
+  embedding: number[]
+  /** Squared norm (sum of squares), precomputed once per confirmed vector
+   * instead of once per query. */
+  norm: number
+}
+
+/** Same answers as suggestCategoryFromEmbedding (above, whose doc comment
+ * covers the rules), prepared ONCE for a fixed confirmed set and then
+ * queried many times. Real live freeze, profiled 2026-09-21 (typing lag +
+ * macOS beachball): the overnight classify scan called
+ * suggestCategoryFromEmbedding once per stem, re-filtering, re-counting and
+ * re-norming the whole confirmed set every time -- ~5s of main-process
+ * cosine math per 25s sampled. Eligibility (per query dimensionality) and
+ * every confirmed vector's norm are now computed once per set; each query
+ * costs one dot product per eligible vector. Arithmetic is kept identical
+ * (same dot order, same dot / (sqrt(normA) * sqrt(normB))) so results match
+ * exactly, not just approximately. */
+export function createEmbeddingSuggester(
+  confirmed: ConfirmedEmbedding[]
+): (queryEmbedding: number[]) => string | null {
+  // Keyed by dimensionality -- a query is only ever compared against
+  // confirmed embeddings of its own length (see the doc comment above).
+  const eligibleByDim = new Map<number, PreparedEmbedding[] | null>()
+
+  function eligibleFor(dim: number): PreparedEmbedding[] | null {
+    const cached = eligibleByDim.get(dim)
+    if (cached !== undefined) return cached
+    const comparable = confirmed.filter((c) => c.embedding.length === dim)
+    const countsByCategory = new Map<string, number>()
+    for (const c of comparable) {
+      countsByCategory.set(c.category, (countsByCategory.get(c.category) ?? 0) + 1)
+    }
+    const eligibleCategories = new Set(
+      [...countsByCategory.entries()]
+        .filter(([, count]) => count >= MIN_SAMPLES_PER_CATEGORY)
+        .map(([category]) => category)
+    )
+    const result =
+      eligibleCategories.size < MIN_CATEGORIES_FOR_SUGGESTION
+        ? null
+        : comparable
+            .filter((c) => eligibleCategories.has(c.category))
+            .map((c) => {
+              let normB = 0
+              for (let i = 0; i < c.embedding.length; i++) normB += c.embedding[i] * c.embedding[i]
+              return { category: c.category, embedding: c.embedding, norm: normB }
+            })
+    eligibleByDim.set(dim, result)
+    return result
   }
-  const eligibleCategories = new Set(
-    [...countsByCategory.entries()]
-      .filter(([, count]) => count >= MIN_SAMPLES_PER_CATEGORY)
-      .map(([category]) => category)
-  )
-  if (eligibleCategories.size < MIN_CATEGORIES_FOR_SUGGESTION) return null
 
-  const eligible = comparable.filter((c) => eligibleCategories.has(c.category))
-  const withSimilarity = eligible
-    .map((c) => ({
-      category: c.category,
-      similarity: cosineSimilarity(queryEmbedding, c.embedding)
-    }))
-    .sort((a, b) => b.similarity - a.similarity)
+  return (queryEmbedding) => {
+    const eligible = eligibleFor(queryEmbedding.length)
+    if (!eligible) return null
 
-  const nearest = withSimilarity[0]
-  const nearestOtherCategory = withSimilarity.find((w) => w.category !== nearest.category)
-  if (
-    nearestOtherCategory &&
-    nearest.similarity - nearestOtherCategory.similarity < SIMILARITY_MARGIN
-  ) {
-    return null
+    let normA = 0
+    for (let i = 0; i < queryEmbedding.length; i++) normA += queryEmbedding[i] * queryEmbedding[i]
+
+    const withSimilarity = eligible
+      .map((c) => {
+        let dot = 0
+        for (let i = 0; i < queryEmbedding.length; i++) dot += queryEmbedding[i] * c.embedding[i]
+        const similarity =
+          normA < 1e-10 || c.norm < 1e-10 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(c.norm))
+        return { category: c.category, similarity }
+      })
+      .sort((a, b) => b.similarity - a.similarity)
+
+    const nearest = withSimilarity[0]
+    const nearestOtherCategory = withSimilarity.find((w) => w.category !== nearest.category)
+    if (
+      nearestOtherCategory &&
+      nearest.similarity - nearestOtherCategory.similarity < SIMILARITY_MARGIN
+    ) {
+      return null
+    }
+    return nearest.category
   }
-  return nearest.category
 }

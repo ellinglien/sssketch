@@ -1,5 +1,6 @@
 // src/main/discoverLibraryStems.ts
-import { existsSync } from 'fs'
+import { readdirSync } from 'fs'
+import { basename, dirname } from 'path'
 import type Database from 'better-sqlite3'
 import { resolveStemPath } from './riffLibraryStore'
 
@@ -43,8 +44,44 @@ interface RiffStemColumnsRow {
 // responsive to everything else while it runs.
 const YIELD_EVERY = 200
 
+// Rows per keyset page when walking a db's whole Riffs table -- see
+// listLibraryScanTargets.
+const RIFF_PAGE_SIZE = 2000
+
+interface RiffPageRow extends RiffStemColumnsRow {
+  RiffCID: string
+  OwnerJamCID: string
+}
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
+}
+
+/** Default `existsFn` for listLibraryScanTargets: reads each FOLDER once
+ * (readdirSync) and answers every later check in that folder from memory.
+ * Real live freeze, profiled 2026-09-21 (typing lag + macOS beachball):
+ * one existsSync per stem across a ~50k-stem library was still ~12s of
+ * main-process time per 25s sampled even with the YIELD_EVERY batching
+ * above -- 200 stats per batch on a slow or external volume is itself a
+ * long block. Stems live in a small number of shard folders, so this turns
+ * tens of thousands of stat calls into a handful of directory reads. A
+ * folder that can't be read counts as "nothing exists there". Listings are
+ * taken once per instance -- fine for a list built once per session. */
+export function createDirListingExists(): (path: string) => boolean {
+  const listings = new Map<string, Set<string> | null>()
+  return (path) => {
+    const dir = dirname(path)
+    let entries = listings.get(dir)
+    if (entries === undefined) {
+      try {
+        entries = new Set(readdirSync(dir))
+      } catch {
+        entries = null
+      }
+      listings.set(dir, entries)
+    }
+    return entries?.has(basename(path)) ?? false
+  }
 }
 
 /** Every stem, library-wide, whose audio is ALREADY downloaded locally --
@@ -56,43 +93,68 @@ function yieldToEventLoop(): Promise<void> {
  * Riffs row's own StemCID_1..8 columns).
  *
  * `jams` is caller-supplied and `existsFn` is injectable (defaults to the
- * real `existsSync`) for the same testability reason as
+ * folder-listing createDirListingExists above) for the same testability reason as
  * discoverCandidates.ts's own getDiscoverCandidates -- this keeps the test
  * suite free of any real filesystem dependency. */
 export async function listLibraryScanTargets(
   jams: JamDbPair[],
-  existsFn: (path: string) => boolean = existsSync
+  existsFn: (path: string) => boolean = createDirListingExists()
 ): Promise<LibraryScanTarget[]> {
   const seen = new Set<string>()
   const out: LibraryScanTarget[] = []
   let sinceYield = 0
 
+  // One ordered, paged pass over each DB's Riffs table, filtering to the
+  // caller's jams in memory -- real live freeze, profiled 2026-09-21: jams
+  // share one db (~5,000 of them in one external archive), and the old
+  // per-jam `WHERE OwnerJamCID = ?` query was a separate scan of that whole
+  // table per jam (an external archive is read-only, so no index can be
+  // added there). Keyset pagination (`RiffCID > ?`), not OFFSET, so each
+  // page costs the same no matter how deep into the table it is.
+  const jamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
-    let riffRows: RiffStemColumnsRow[]
+    const existing = jamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
+  }
+
+  for (const [db, allowedJamCIDs] of jamCIDsByDb) {
+    let page: RiffPageRow[]
+    let afterRiffCID = ''
+    let statement: Database.Statement
     try {
-      riffRows = dbForJam
-        .prepare(
-          `SELECT StemCID_1, StemCID_2, StemCID_3, StemCID_4,
-                  StemCID_5, StemCID_6, StemCID_7, StemCID_8
-           FROM Riffs WHERE OwnerJamCID = ?`
-        )
-        .all(jamCID) as RiffStemColumnsRow[]
+      statement = db.prepare(
+        `SELECT RiffCID, OwnerJamCID, StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+                StemCID_5, StemCID_6, StemCID_7, StemCID_8
+         FROM Riffs WHERE RiffCID > ? ORDER BY RiffCID LIMIT ?`
+      )
     } catch {
       continue
     }
-    for (const riff of riffRows) {
-      for (let slot = 1; slot <= 8; slot++) {
-        const stemCID = riff[`StemCID_${slot}` as keyof RiffStemColumnsRow]
-        if (!stemCID || seen.has(stemCID)) continue
-        seen.add(stemCID)
-        const path = resolveStemPath(jamCID, stemCID)
-        if (existsFn(path)) out.push({ key: stemCID, path })
-        sinceYield += 1
-        if (sinceYield >= YIELD_EVERY) {
-          sinceYield = 0
-          await yieldToEventLoop()
+    for (;;) {
+      try {
+        page = statement.all(afterRiffCID, RIFF_PAGE_SIZE) as RiffPageRow[]
+      } catch {
+        break
+      }
+      if (page.length === 0) break
+      afterRiffCID = page[page.length - 1].RiffCID
+      for (const riff of page) {
+        if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue
+        for (let slot = 1; slot <= 8; slot++) {
+          const stemCID = riff[`StemCID_${slot}` as keyof RiffStemColumnsRow]
+          if (!stemCID || seen.has(stemCID)) continue
+          seen.add(stemCID)
+          const path = resolveStemPath(riff.OwnerJamCID, stemCID)
+          if (existsFn(path)) out.push({ key: stemCID, path })
+          sinceYield += 1
+          if (sinceYield >= YIELD_EVERY) {
+            sinceYield = 0
+            await yieldToEventLoop()
+          }
         }
       }
+      await yieldToEventLoop()
     }
   }
   return out

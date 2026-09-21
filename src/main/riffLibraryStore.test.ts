@@ -90,6 +90,19 @@ describe('riffLibraryStore', () => {
     expect(prefs).toEqual({ root: '/Users/someone/Music/EndlesssSync' })
   })
 
+  it('riffLibraryRootPath() reads prefs once, then serves from memory until the root is set again', () => {
+    setRiffLibraryRootForTests(null)
+    setRiffLibraryRoot('/Users/someone/First')
+    expect(riffLibraryRootPath()).toBe('/Users/someone/First')
+    // An out-of-band edit is NOT re-read per call (that per-stem re-read was
+    // a real main-process freeze) ...
+    writeFileSync(join(userDataDir, 'riffLibraryPrefs.json'), JSON.stringify({ root: '/x' }))
+    expect(riffLibraryRootPath()).toBe('/Users/someone/First')
+    // ... but going through setRiffLibraryRoot always takes effect.
+    setRiffLibraryRoot('/Users/someone/Second')
+    expect(riffLibraryRootPath()).toBe('/Users/someone/Second')
+  })
+
   it('setRiffLibraryRoot() picks up a real warehouse at the new root immediately', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createFixtureWarehouse(root)
