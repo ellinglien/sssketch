@@ -2013,6 +2013,10 @@ export function DiscoverPanel({
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
         }
+        @keyframes discover-dice-spin {
+          0% { transform: rotate(0deg); }
+          35%, 100% { transform: rotate(360deg); }
+        }
         @keyframes discover-slot-working {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
@@ -2351,24 +2355,10 @@ export function DiscoverPanel({
             cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
           }}
         >
-          {/* Direct report, 2026-09-17: "the loader where the dice icon
-              is... it's not the same animation file as the others, is
-              it? the lines seem a lot thicker" -- it WAS the same
-              LoadingLoader.tsx, but this spot used to pass size={90}
-              purely as a lever to force taller/thicker bars (height/
-              barThickness scale off `size`, see LoadingLoader's own doc
-              comment), relying on the browser's default flex-shrink to
-              squash the rendered WIDTH back down to fit this 30px
-              button. Flex-shrink only compresses width, not the fixed-
-              pixel height/bar-thickness LoadingLoader computes from the
-              UNSHRUNK size -- so the bars kept their size=90 proportions
-              (14px tall, 5px thick) crammed into a ~30px-wide box,
-              visibly thicker/stockier than every other LoadingLoader in
-              the app (all of which pass size directly, so width and
-              thickness scale together). Plain size={30}, matching this
-              button's own width, restores the same proportions as
-              everywhere else. */}
-          {rerollingSlotIds.size > 0 ? <LoadingLoader size={30} /> : <DiceIcon size={18} />}
+          {/* Direct request, 2026-09-21: "instead of that loader, have the
+              dice spin intermittently" -- replaces the LoadingLoader that
+              used to swap in here while anything rerolls. */}
+          <DiceIcon size={18} spinning={rerollingSlotIds.size > 0} />
         </button>
         <button
           onClick={() => void addToShelf()}
@@ -2685,7 +2675,16 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
 // own "similar all" button (a real interactive icon, rendered bigger via
 // the size prop). Optional `size` (default 12) lets both call sites share
 // one component instead of duplicating the SVG.
-function DiceIcon({ size = 12 }: { size?: number }): React.JSX.Element {
+// Direct request, 2026-09-21: "instead of that loader, have the dice spin
+// intermittently" -- a quick full turn, then a rest (discover-dice-spin's
+// own 0-35% / 35-100% split), for as long as a roll is in flight.
+function DiceIcon({
+  size = 12,
+  spinning = false
+}: {
+  size?: number
+  spinning?: boolean
+}): React.JSX.Element {
   return (
     <svg
       width={size}
@@ -2696,7 +2695,10 @@ function DiceIcon({ size = 12 }: { size?: number }): React.JSX.Element {
       strokeWidth="1.3"
       strokeLinecap="round"
       strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
+      style={{
+        flexShrink: 0,
+        animation: spinning ? 'discover-dice-spin 1200ms ease-in-out infinite' : undefined
+      }}
     >
       <rect x="2" y="2" width="12" height="12" rx="2.5" />
       {/* Five pips (a DiceFive face) -- doesn't need to represent any real
@@ -3749,7 +3751,7 @@ function DiscoverSlotRow({
             color: 'var(--ra-text-3)'
           }}
         >
-          <DiceIcon />
+          <DiceIcon spinning={rerolling} />
         </div>
         <button
           onClick={onReroll}
