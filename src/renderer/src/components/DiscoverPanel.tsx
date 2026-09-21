@@ -6,7 +6,11 @@ import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
-import { DISCOVER_SLOT_KIND_OPTIONS, type DiscoverSlotKind } from '@shared/discoverSlotKind'
+import {
+  DISCOVER_SLOT_KIND_LABEL,
+  DISCOVER_SLOT_KIND_OPTIONS,
+  type DiscoverSlotKind
+} from '@shared/discoverSlotKind'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
@@ -28,21 +32,6 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
 import { scheduleLiveParamSync } from './liveParamSync'
-
-// DiscoverSlotKind's own literal values double as their own display text
-// (matching ARRANGE_ROLE_OPTIONS' established "the value IS the label"
-// convention) for every kind except the 3 camelCase trait kinds, which
-// aren't themselves valid display strings -- used by both the slot-creation
-// button row and each slot row's own kind label span below.
-const DISCOVER_SLOT_KIND_LABEL: Record<DiscoverSlotKind, string> = {
-  drums: 'drums',
-  bass: 'bass',
-  lead: 'lead',
-  bassHeavy: 'bass-heavy',
-  rhythmic: 'rhythmic',
-  bright: 'bright',
-  warm: 'warm'
-}
 
 export interface ResolvedCandidateStem {
   author: string

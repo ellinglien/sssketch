@@ -49,3 +49,75 @@ const DISCOVER_SLOT_KIND_TO_ARRANGE_ROLE: Record<DiscoverSlotKind, ArrangeRole> 
 export function discoverSlotKindToArrangeRole(kind: DiscoverSlotKind): ArrangeRole {
   return DISCOVER_SLOT_KIND_TO_ARRANGE_ROLE[kind]
 }
+
+export type DiscoverTraitKind = 'bassHeavy' | 'rhythmic' | 'bright' | 'warm'
+
+/** Display text per kind -- the literal value except for the camelCase
+ * trait kind. Moved here from DiscoverPanel.tsx so slotKindsLabel (and the
+ * kind picker) share one table. */
+export const DISCOVER_SLOT_KIND_LABEL: Record<DiscoverSlotKind, string> = {
+  drums: 'drums',
+  bass: 'bass',
+  lead: 'lead',
+  bassHeavy: 'bass-heavy',
+  rhythmic: 'rhythmic',
+  bright: 'bright',
+  warm: 'warm'
+}
+
+export function isMaskSlotKind(kind: DiscoverSlotKind): boolean {
+  return DISCOVER_MASK_SLOT_KINDS.includes(kind)
+}
+
+export function isTraitSlotKind(kind: DiscoverSlotKind): kind is DiscoverTraitKind {
+  return DISCOVER_TRAIT_SLOT_KINDS.includes(kind)
+}
+
+// bright and warm are opposite ends of ONE field (spectralCentroidHz) --
+// both in one set would cancel out, so a set holds at most one of them.
+const OPPOSITE_KIND: Partial<Record<DiscoverSlotKind, DiscoverSlotKind>> = {
+  bright: 'warm',
+  warm: 'bright'
+}
+
+/** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
+ * slot-kinds-design.md): dedupes, drops the later of bright/warm if both
+ * appear, and returns canonical order (DISCOVER_SLOT_KIND_OPTIONS -- mask
+ * kinds first). Every stored/transmitted kind set goes through this so
+ * {warm, drums} and {drums, warm} are the same slot. */
+export function normalizeSlotKinds(kinds: readonly DiscoverSlotKind[]): DiscoverSlotKind[] {
+  const kept = new Set<DiscoverSlotKind>()
+  for (const kind of kinds) {
+    const opposite = OPPOSITE_KIND[kind]
+    if (opposite && kept.has(opposite)) continue
+    kept.add(kind)
+  }
+  return DISCOVER_SLOT_KIND_OPTIONS.filter((k) => kept.has(k))
+}
+
+/** One chip click in the kind picker. Turning a kind on also turns its
+ * bright/warm opposite off; turning off the LAST kind is a no-op (a slot
+ * always targets at least one kind). */
+export function toggleSlotKind(
+  kinds: readonly DiscoverSlotKind[],
+  kind: DiscoverSlotKind
+): DiscoverSlotKind[] {
+  if (kinds.includes(kind)) {
+    if (kinds.length === 1) return normalizeSlotKinds(kinds)
+    return normalizeSlotKinds(kinds.filter((k) => k !== kind))
+  }
+  const opposite = OPPOSITE_KIND[kind]
+  return normalizeSlotKinds([...kinds.filter((k) => k !== opposite), kind])
+}
+
+export function slotKindsLabel(kinds: readonly DiscoverSlotKind[]): string {
+  return normalizeSlotKinds(kinds)
+    .map((k) => DISCOVER_SLOT_KIND_LABEL[k])
+    .join(' · ')
+}
+
+/** Stable string identity for a kind set -- cache/result keys and effect
+ * deps (an array prop is a new object every render). */
+export function slotKindsKey(kinds: readonly DiscoverSlotKind[]): string {
+  return normalizeSlotKinds(kinds).join('+')
+}

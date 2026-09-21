@@ -3,7 +3,14 @@ import {
   DISCOVER_SLOT_KIND_OPTIONS,
   DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_TRAIT_SLOT_KINDS,
-  discoverSlotKindToArrangeRole
+  discoverSlotKindToArrangeRole,
+  DISCOVER_SLOT_KIND_LABEL,
+  isMaskSlotKind,
+  isTraitSlotKind,
+  normalizeSlotKinds,
+  toggleSlotKind,
+  slotKindsLabel,
+  slotKindsKey
 } from './discoverSlotKind'
 
 describe('DISCOVER_SLOT_KIND_OPTIONS', () => {
@@ -47,5 +54,69 @@ describe('discoverSlotKindToArrangeRole', () => {
     for (const kind of DISCOVER_SLOT_KIND_OPTIONS) {
       expect(() => discoverSlotKindToArrangeRole(kind)).not.toThrow()
     }
+  })
+})
+
+describe('isMaskSlotKind / isTraitSlotKind', () => {
+  it('splits the 7 kinds into 3 mask + 4 trait', () => {
+    expect(['drums', 'bass', 'lead'].every((k) => isMaskSlotKind(k as never))).toBe(true)
+    expect(
+      ['bassHeavy', 'rhythmic', 'bright', 'warm'].every((k) => isTraitSlotKind(k as never))
+    ).toBe(true)
+    expect(isMaskSlotKind('warm')).toBe(false)
+    expect(isTraitSlotKind('drums')).toBe(false)
+  })
+})
+
+describe('normalizeSlotKinds', () => {
+  it('dedupes and puts mask kinds first, in DISCOVER_SLOT_KIND_OPTIONS order', () => {
+    expect(normalizeSlotKinds(['warm', 'drums', 'rhythmic', 'drums'])).toEqual([
+      'drums',
+      'rhythmic',
+      'warm'
+    ])
+  })
+
+  it('keeps whichever of bright/warm comes first in the input, never both', () => {
+    expect(normalizeSlotKinds(['warm', 'bright'])).toEqual(['warm'])
+    expect(normalizeSlotKinds(['bright', 'warm'])).toEqual(['bright'])
+  })
+
+  it('returns [] for []', () => {
+    expect(normalizeSlotKinds([])).toEqual([])
+  })
+})
+
+describe('toggleSlotKind', () => {
+  it('adds a kind that is off', () => {
+    expect(toggleSlotKind(['drums'], 'warm')).toEqual(['drums', 'warm'])
+  })
+
+  it('removes a kind that is on', () => {
+    expect(toggleSlotKind(['drums', 'warm'], 'drums')).toEqual(['warm'])
+  })
+
+  it('never removes the last remaining kind', () => {
+    expect(toggleSlotKind(['warm'], 'warm')).toEqual(['warm'])
+  })
+
+  it('turning bright on turns warm off, and vice versa', () => {
+    expect(toggleSlotKind(['drums', 'warm'], 'bright')).toEqual(['drums', 'bright'])
+    expect(toggleSlotKind(['bright'], 'warm')).toEqual(['warm'])
+  })
+})
+
+describe('slotKindsLabel / slotKindsKey', () => {
+  it('joins display labels with a middle dot, canonical order', () => {
+    expect(slotKindsLabel(['warm', 'bassHeavy', 'drums'])).toBe('drums · bass-heavy · warm')
+  })
+
+  it('key is order-independent', () => {
+    expect(slotKindsKey(['warm', 'drums'])).toBe(slotKindsKey(['drums', 'warm']))
+    expect(slotKindsKey(['warm', 'drums'])).toBe('drums+warm')
+  })
+
+  it('DISCOVER_SLOT_KIND_LABEL hyphenates the camelCase kind', () => {
+    expect(DISCOVER_SLOT_KIND_LABEL.bassHeavy).toBe('bass-heavy')
   })
 })
