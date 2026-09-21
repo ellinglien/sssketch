@@ -166,7 +166,7 @@ const PREWARM_CHUNK_SIZE = 5000
 // `8 * confirmedStemCIDs.length` bound parameters -- once the widened
 // pool (embedding-guessed + instrument-matched, on top of confirmed) grew
 // into the thousands, that single statement became too large for SQLite
-// to compile at all. See getDiscoverCandidates's own main loop, below,
+// to compile at all. See getMaskDiscoverCandidates's own main loop, below,
 // for where this bounds every query regardless of pool size.
 const CANDIDATE_QUERY_CHUNK_SIZE = 200
 // Real per-chunk SQL round trips (not cheap JS-only work like
@@ -712,7 +712,9 @@ export async function getDiscoverCandidates({
 
   if (maskKinds.length === 0) {
     if (traitKinds.length === 0) return []
-    const pool = await getTraitPoolCandidates({
+    // traitKinds IS the whole normalized set here (no mask kinds), so the
+    // pool's own slotKinds already match it.
+    return getTraitPoolCandidates({
       ownDb,
       jams,
       traitKinds,
@@ -720,7 +722,6 @@ export async function getDiscoverCandidates({
       targetUser,
       soundSource
     })
-    return pool.map((c) => ({ ...c, slotKinds: normalized }))
   }
 
   if (!soundSource.endlesss) return []
