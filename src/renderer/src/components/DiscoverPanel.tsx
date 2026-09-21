@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
+import { DiscoverKindPicker } from './DiscoverKindPicker'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
@@ -1556,6 +1557,15 @@ export function DiscoverPanel({
     await rollForSlot(id, slot.kinds)
   }
 
+  // Combination slots, 2026-09-21: the kind picker on a slot's own label.
+  // One undo step per change; always rerolls, since the old candidate was
+  // drawn for the old kind set.
+  function changeSlotKinds(id: string, kinds: DiscoverSlotKind[]): void {
+    pushUndoSnapshot()
+    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, kinds } : s)))
+    void rollForSlot(id, kinds)
+  }
+
   // Direct request, 2026-09-15: "an option to just start with a completely
   // random stem of the user's from their library, then go from there" --
   // bypasses confirmed/embedding/instrument matching entirely (unlike
@@ -2382,6 +2392,7 @@ export function DiscoverPanel({
             onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
+            onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
             soundSourceEndlesss={soundSourceEndlesss}
             soundSourceAudioIn={soundSourceAudioIn}
           />
@@ -2395,12 +2406,12 @@ export function DiscoverPanel({
           waveform track itself occupies in each per-slot row's own grid,
           not the panel's full width. marginLeft/marginRight below mirror
           that grid's own gridTemplateColumns ('18px 18px 18px 18px 18px
-          14px 1fr 14px 64px 14px 16px 70px 70px 70px 70px', columnGap: 8)
+          14px 1fr 14px 110px 14px 16px 70px 70px 70px 70px', columnGap: 8)
           -- left = delete+lock+mute+solo+favourite+gap widths (104) + the
           5 gaps between them (40) + the gap before the waveform track (8)
           = 152; right = the gap after the waveform (8) + gap+kind+gap+
-          dice+similar+adjacent+random+duplicate widths (388) + the 7 gaps
-          between THEM (56) = 452. If that grid template's own column
+          dice+similar+adjacent+random+duplicate widths (434) + the 7 gaps
+          between THEM (56) = 498. If that grid template's own column
           widths ever change, these two numbers need updating to match. */}
       <div
         style={{
@@ -2410,7 +2421,7 @@ export function DiscoverPanel({
           justifyContent: 'center',
           marginTop: 10,
           marginLeft: 152,
-          marginRight: 452
+          marginRight: 498
         }}
       >
         {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
@@ -2625,6 +2636,7 @@ function DiscoverSlotRow({
   onSlotResolutionAbandoned,
   onGainChange,
   onSwapFromNearby,
+  onChangeKinds,
   soundSourceEndlesss,
   soundSourceAudioIn
 }: {
@@ -2733,6 +2745,9 @@ function DiscoverSlotRow({
    * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
    * doc comment in DiscoverPanel. */
   onSwapFromNearby: (candidate: DiscoverCandidate) => void
+  /** DiscoverPanel's own changeSlotKinds -- fired by the kind picker on
+   * every chip toggle (the panel rerolls this slot). */
+  onChangeKinds: (kinds: DiscoverSlotKind[]) => void
   /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
    * checkboxes -- passed as two primitive booleans, not one object, so
    * this row's own re-render checks stay cheap; combined into a real
@@ -2886,6 +2901,13 @@ function DiscoverSlotRow({
   // setTimeout(0)-delayed (re-)attach never got a settled window to catch a
   // real click while playback kept remounting the effect out from under it.
   const closeNearbyMenu = useCallback(() => setNearbyMenu(null), [])
+
+  // "Kind picker" popover state -- same position/dismissal pattern as
+  // nearbyMenu above. See DiscoverKindPicker.tsx.
+  const [kindMenu, setKindMenu] = useState<{ x: number; y: number } | null>(null)
+  const kindButtonRef = useRef<HTMLButtonElement>(null)
+  // Stable identity -- same playhead-tick re-render reasoning as closeNearbyMenu.
+  const closeKindMenu = useCallback(() => setKindMenu(null), [])
 
   // Direct request, 2026-09-16: "i imported a batch of rifffs using the
   // import from library feature and attempting to discover the individual
@@ -3130,7 +3152,7 @@ function DiscoverSlotRow({
           // make every row's non-1fr tracks identical regardless of which
           // optional buttons happen to render.
           gridTemplateColumns:
-            '18px 18px 18px 18px 18px 14px 1fr 14px 64px 14px 16px 70px 70px 70px 70px',
+            '18px 18px 18px 18px 18px 14px 1fr 14px 110px 14px 16px 70px 70px 70px 70px',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -3574,9 +3596,41 @@ function DiscoverSlotRow({
           )}
         </div>
         <div style={{ gridColumn: 8 }} />
-        <span style={{ gridColumn: 9, fontSize: 9, color: 'var(--ra-text-3)', width: 64 }}>
-          {slotKindsLabel(slot.kinds)}
-        </span>
+        <button
+          ref={kindButtonRef}
+          disabled={slot.locked}
+          onClick={(e) => {
+            if (kindMenu) {
+              closeKindMenu()
+              return
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            setKindMenu({ x: rect.left, y: rect.bottom + 4 })
+          }}
+          aria-expanded={kindMenu !== null}
+          aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
+          data-tooltip={slot.locked ? 'unlock to change kinds' : slotKindsLabel(slot.kinds)}
+          style={{
+            gridColumn: 9,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+            width: 110,
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 9,
+            textAlign: 'left',
+            background: 'transparent',
+            border: 'none',
+            color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+            cursor: slot.locked ? 'default' : 'pointer'
+          }}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {slotKindsLabel(slot.kinds)}
+          </span>
+          {!slot.locked && <span aria-hidden="true">▾</span>}
+        </button>
         <div style={{ gridColumn: 10 }} />
         {/* Purely decorative -- direct request, 2026-09-17: "place a dice
             icon to the left of the similar/adjacent/random buttons... this
@@ -3710,6 +3764,17 @@ function DiscoverSlotRow({
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
+        />
+      )}
+      {kindMenu && !slot.locked && (
+        <DiscoverKindPicker
+          x={kindMenu.x}
+          y={kindMenu.y}
+          kinds={slot.kinds}
+          maskKindsDisabled={!soundSourceEndlesss}
+          onChange={onChangeKinds}
+          onClose={closeKindMenu}
+          ignoreRef={kindButtonRef}
         />
       )}
     </>
