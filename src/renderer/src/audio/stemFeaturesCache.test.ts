@@ -28,7 +28,13 @@ describe('stemFeaturesCache', () => {
       rifffApi: {
         readAudioFile: readAudioFileMock,
         getStemFeatureCache: getStemFeatureCacheMock,
-        setStemFeatureCache: setStemFeatureCacheMock
+        setStemFeatureCache: setStemFeatureCacheMock,
+        // getStemFeatures pulls getBrightness in from peakCache.ts, which
+        // (2026-09-21) now also checks its own persisted cache first --
+        // stubbed as a permanent miss so this file's own decode-path
+        // tests keep exercising a real decode, same as before that change.
+        getStemPeaksCache: vi.fn().mockResolvedValue(null),
+        setStemPeaksCache: vi.fn().mockResolvedValue(undefined)
       }
     })
     class FakeAudioContext {

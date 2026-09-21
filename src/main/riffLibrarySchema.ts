@@ -102,6 +102,24 @@ CREATE TABLE IF NOT EXISTS StemFeatureCache (
   ExtractedAt INTEGER NOT NULL
 );
 
+-- Direct request, 2026-09-21 ("can prep work for the audio-resolve step
+-- be done in advance, clustered with overall scans? ... lets do it....
+-- to make it all snappy"): persists peakCache.ts's own per-stem waveform
+-- decode (peaks + zero-crossing brightness, 128 buckets each) across
+-- sessions, mirroring StemFeatureCache's exact shape/pattern above. The
+-- renderer's own background feature scan already calls getBrightness (a
+-- dependency of getStemFeatures) for every stem it visits -- this table
+-- just gives that already-happening decode somewhere durable to land, so
+-- a LATER session's first Discover roll / re-one open / Tidy Up browse of
+-- an already-scanned stem renders its waveform instantly instead of
+-- paying a fresh decode.
+CREATE TABLE IF NOT EXISTS StemPeaksCache (
+  StemCID TEXT PRIMARY KEY,
+  PeaksJSON TEXT NOT NULL,
+  BrightnessJSON TEXT NOT NULL,
+  ExtractedAt INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS StemEmbeddingCache (
   StemCID TEXT PRIMARY KEY,
   EmbeddingJSON TEXT NOT NULL,

@@ -21,6 +21,7 @@ import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentro
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
+import type { StemPeaks } from '../main/stemPeaksCacheStore'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 const api = {
@@ -280,6 +281,10 @@ const api = {
     ipcRenderer.invoke('get-stem-feature-cache', path),
   setStemFeatureCache: (path: string, features: StemFeatures): Promise<void> =>
     ipcRenderer.invoke('set-stem-feature-cache', path, features),
+  getStemPeaksCache: (path: string): Promise<StemPeaks | null> =>
+    ipcRenderer.invoke('get-stem-peaks-cache', path),
+  setStemPeaksCache: (path: string, peaks: StemPeaks): Promise<void> =>
+    ipcRenderer.invoke('set-stem-peaks-cache', path, peaks),
   getStemEmbeddingCache: (path: string): Promise<number[] | null> =>
     ipcRenderer.invoke('get-stem-embedding-cache', path),
   setStemEmbeddingCache: (path: string, embedding: number[]): Promise<void> =>

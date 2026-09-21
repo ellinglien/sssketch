@@ -39,6 +39,23 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
 
   const promise = (async () => {
     try {
+      // Persistent, cross-session cache first (stemPeaksCacheStore.ts, via
+      // IPC) -- direct request, 2026-09-21 ("can prep work for the audio-
+      // resolve step be done in advance, clustered with overall scans?
+      // ... lets do it.... to make it all snappy"): the background
+      // feature scan (BackgroundFeatureScan.tsx, via getStemFeatures'
+      // own getBrightness call) already decodes every stem it visits --
+      // this just gives that decode somewhere durable to land, mirroring
+      // stemFeaturesCache.ts's own exact "persisted cache first, else
+      // decode+persist" pattern. Returns null both for "never scanned"
+      // and "not a real library stem," same as that function's own
+      // doc comment -- either way, fall through to decoding fresh below.
+      const persisted = await window.rifffApi.getStemPeaksCache(path)
+      if (persisted) {
+        settled.set(path, persisted)
+        return persisted
+      }
+
       const bytes = await window.rifffApi.readAudioFile(path)
       // Defensive copy: bytes.buffer may be a larger backing ArrayBuffer than the
       // Uint8Array's own view (e.g. depending on how it was reconstituted across the
@@ -52,6 +69,12 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
         brightness: zcrFromChannel(channel, 128)
       }
       settled.set(path, result)
+      // Fire-and-forget -- a real library stem's path persists for next
+      // session (this session's own renderer-memory `cache`/`settled`
+      // above already cover repeat calls within THIS session regardless
+      // of whether this write succeeds); a non-library path is silently
+      // skipped by the main-process side (see stemPeaksCacheStore.ts).
+      void window.rifffApi.setStemPeaksCache(path, result)
       return result
     } catch (err) {
       // Don't let a transient failure (mid-copy read, permission hiccup, corrupt

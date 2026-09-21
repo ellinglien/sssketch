@@ -126,6 +126,7 @@ import {
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
+import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeaksCacheStore'
 import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { readYamnetModelBytes } from './yamnetModel'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -1074,6 +1075,23 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>
     getStemFeatureCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
   )
+
+  ipcMain.handle('get-stem-peaks-cache', (_event, path: string): StemPeaks | null =>
+    getStemPeaksCache(openOwnRiffLibraryDb(), path, candidateDbsForRiff())
+  )
+
+  ipcMain.handle('set-stem-peaks-cache', (_event, path: string, peaks: StemPeaks) => {
+    // Floored, same reasoning as set-stem-feature-cache below --
+    // StemPeaksCache has exactly one writer and its own upsert has no
+    // WHERE-guarded comparison against a prior write's timestamp.
+    setStemPeaksCache(
+      openOwnRiffLibraryDb(),
+      path,
+      peaks,
+      Math.floor(Date.now() / 1000),
+      candidateDbsForRiff()
+    )
+  })
 
   ipcMain.handle('get-yamnet-model', (): Promise<Uint8Array | null> => readYamnetModelBytes())
 

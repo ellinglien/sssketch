@@ -50,6 +50,7 @@ describe('riffLibrarySchema', () => {
       'StemFavourite',
       'StemFeatureCache',
       'StemLedger',
+      'StemPeaksCache',
       'StemYamnetZeroShotAttempted',
       'Stems',
       'Tags'

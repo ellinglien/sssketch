@@ -11,6 +11,8 @@ function fakeAudioBuffer(): { getChannelData: () => Float32Array } {
 describe('peakCache', () => {
   let readAudioFileMock: ReturnType<typeof vi.fn>
   let decodeAudioDataMock: ReturnType<typeof vi.fn>
+  let getStemPeaksCacheMock: ReturnType<typeof vi.fn>
+  let setStemPeaksCacheMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     // Fresh module instance per test so the internal cache Map (and sharedContext)
@@ -18,8 +20,16 @@ describe('peakCache', () => {
     vi.resetModules()
     readAudioFileMock = vi.fn()
     decodeAudioDataMock = vi.fn()
+    getStemPeaksCacheMock = vi.fn().mockResolvedValue(null)
+    setStemPeaksCacheMock = vi.fn().mockResolvedValue(undefined)
 
-    vi.stubGlobal('window', { rifffApi: { readAudioFile: readAudioFileMock } })
+    vi.stubGlobal('window', {
+      rifffApi: {
+        readAudioFile: readAudioFileMock,
+        getStemPeaksCache: getStemPeaksCacheMock,
+        setStemPeaksCache: setStemPeaksCacheMock
+      }
+    })
     class FakeAudioContext {
       decodeAudioData = decodeAudioDataMock
     }
@@ -106,5 +116,35 @@ describe('peakCache', () => {
       expect(v).toBeGreaterThanOrEqual(0)
       expect(v).toBeLessThanOrEqual(1)
     }
+  })
+
+  it('returns a persisted peaks/brightness pair without decoding at all', async () => {
+    const persisted = {
+      peaks: Array.from({ length: 128 }, (_, i) => i / 128),
+      brightness: Array.from({ length: 128 }, (_, i) => 1 - i / 128)
+    }
+    getStemPeaksCacheMock.mockResolvedValue(persisted)
+
+    const { getPeaks, getBrightness } = await import('./peakCache')
+    const peaks = await getPeaks('/some/path.wav')
+    const brightness = await getBrightness('/some/path.wav')
+
+    expect(peaks).toEqual(persisted.peaks)
+    expect(brightness).toEqual(persisted.brightness)
+    expect(readAudioFileMock).not.toHaveBeenCalled()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+  })
+
+  it('persists a freshly decoded peaks/brightness pair via setStemPeaksCache', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getPeaks } = await import('./peakCache')
+    const peaks = await getPeaks('/some/path.wav')
+
+    expect(setStemPeaksCacheMock).toHaveBeenCalledWith('/some/path.wav', {
+      peaks,
+      brightness: expect.any(Array)
+    })
   })
 })
