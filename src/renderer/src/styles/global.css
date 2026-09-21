@@ -114,18 +114,21 @@ button:not(:disabled):hover,
  * exactly tokens.css's "hover = background one step brighter"
  * (--ra-bg-row-active); pressed doubles it. "Pressable" also covers
  * clickable text/divs that aren't real buttons, found by their own inline
- * `cursor: pointer` (how every clickable element in this app marks itself).
+ * `cursor: pointer` (how every clickable element in this app marks itself),
+ * and draggable clips/tiles/blocks, found by `cursor: grab`.
  * No transition on :active -- a press should read instantly. */
 button:not(:disabled):hover,
 [role='button']:hover,
-[style*='cursor: pointer']:hover {
+[style*='cursor: pointer']:hover,
+[style*='cursor: grab']:hover {
   box-shadow: inset 0 0 0 100vmax rgba(255, 255, 255, 0.05);
   transition: box-shadow var(--ra-dur-fast);
 }
 
 button:not(:disabled):active,
 [role='button']:active,
-[style*='cursor: pointer']:active {
+[style*='cursor: pointer']:active,
+[style*='cursor: grab']:active {
   box-shadow: inset 0 0 0 100vmax rgba(255, 255, 255, 0.1);
   filter: brightness(1.25);
   transition: none;
