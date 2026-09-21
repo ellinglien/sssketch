@@ -273,7 +273,12 @@ const api = {
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-bus', entries, source, project),
   upsertStemCategoryRole: (
-    entries: { path: string; arrangeRole: ArrangeRole; drumSubRole?: DrumSubRole }[],
+    entries: {
+      path: string
+      arrangeRole: ArrangeRole
+      drumSubRole?: DrumSubRole
+      subcategoryNote?: string
+    }[],
     source: string,
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),

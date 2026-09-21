@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS StemCategories (
   BusId TEXT,
   Source TEXT NOT NULL,
   SourceProject TEXT,
-  UpdatedAt INTEGER NOT NULL
+  UpdatedAt INTEGER NOT NULL,
+  SubcategoryNote TEXT
 );
 
 CREATE TABLE IF NOT EXISTS StemFeatureCache (
@@ -261,6 +262,25 @@ function ensureDiscoverRiffIndexCacheHasCreationTime(db: Database.Database): voi
   db.exec(`DROP TABLE DiscoverRiffIndexCache; DROP TABLE IF EXISTS DiscoverRiffIndexCacheMeta;`)
 }
 
+// Direct request, 2026-09-21 ("i think you can guess about tidy up
+// subcats.......but in the meantime just log the subcat but keep them
+// the same for centroid for the moment"): StemCategories predates its
+// own SubcategoryNote column too -- but UNLIKE DiscoverRiffIndexCache
+// above, this table holds real, irreplaceable data (weeks of real Tidy
+// Up assignments, feeding live centroid training) -- dropping and
+// recreating it would destroy that. A genuine, non-destructive ALTER
+// TABLE ADD COLUMN instead: SQLite has supported this reliably for
+// decades for a nullable column with no default-value backfill needed
+// (every existing row simply reads NULL for it, correctly meaning "no
+// note recorded yet"). This app's first ALTER TABLE migration against
+// real user data -- checked on every open (cheap: one PRAGMA query) so
+// it self-heals even after a future revert of this column.
+function ensureStemCategoriesHasSubcategoryNote(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
+  if (columns.length === 0 || columns.some((c) => c.name === 'SubcategoryNote')) return
+  db.exec(`ALTER TABLE StemCategories ADD COLUMN SubcategoryNote TEXT`)
+}
+
 /** Opens (creating the file/directories if needed) sssketch's own writable
  * riff-library connection and ensures the schema exists -- CREATE
  * TABLE/INDEX IF NOT EXISTS make re-running the DDL on every open a cheap
@@ -276,6 +296,7 @@ export function openOwnRiffLibraryDb(): Database.Database {
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
   ensureDiscoverRiffIndexCacheHasCreationTime(db)
+  ensureStemCategoriesHasSubcategoryNote(db)
   db.exec(SCHEMA_SQL)
   cachedDb = db
   return db

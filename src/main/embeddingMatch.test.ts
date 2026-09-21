@@ -14,7 +14,8 @@ function freshDb(): Database.Database {
       BusId TEXT,
       Source TEXT NOT NULL,
       SourceProject TEXT,
-      UpdatedAt INTEGER NOT NULL
+      UpdatedAt INTEGER NOT NULL,
+      SubcategoryNote TEXT
     );
     CREATE TABLE StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL

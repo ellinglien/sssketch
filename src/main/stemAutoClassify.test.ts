@@ -26,7 +26,8 @@ function freshDb(): Database.Database {
   db.exec(`
     CREATE TABLE StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
-      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
+      SubcategoryNote TEXT
     );
     CREATE TABLE StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL

@@ -17,7 +17,8 @@ function freshDb(): Database.Database {
   db.exec(`
     CREATE TABLE StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
-      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
+      SubcategoryNote TEXT
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY);
   `)
@@ -160,6 +161,38 @@ describe('stemCategoriesStore', () => {
         1000
       )
       expect(getStemCategory(db, 'cid-1')?.drumSubRole).toBe(null)
+    })
+
+    it('writes a free-text subcategoryNote alongside the category -- direct request, 2026-09-21', async () => {
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
+      const { upsertStemCategoryRole } = await import('./stemCategoriesStore')
+      upsertStemCategoryRole(
+        db,
+        [{ path: '/x/cid-1', arrangeRole: 'drums', subcategoryNote: 'hi-hat, closed' }],
+        'tidyup',
+        null,
+        1000
+      )
+      // getStemCategory (above) deliberately doesn't surface this column --
+      // it's a write-only log for now, not read back into this session's
+      // own UI (see subcategoryNote's own doc comment, StemRoleCategoryEntry)
+      // -- so this reads the raw column directly to confirm the write.
+      const row = db
+        .prepare(`SELECT SubcategoryNote FROM StemCategories WHERE StemCID = 'cid-1'`)
+        .get() as { SubcategoryNote: string | null }
+      expect(row.SubcategoryNote).toBe('hi-hat, closed')
+    })
+
+    it('an omitted subcategoryNote is stored as null, not undefined/absent', async () => {
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
+      const { upsertStemCategoryRole } = await import('./stemCategoriesStore')
+      upsertStemCategoryRole(db, [{ path: '/x/cid-1', arrangeRole: 'bass' }], 'tidyup', null, 1000)
+      const row = db
+        .prepare(`SELECT SubcategoryNote FROM StemCategories WHERE StemCID = 'cid-1'`)
+        .get() as { SubcategoryNote: string | null }
+      expect(row.SubcategoryNote).toBe(null)
     })
   })
 

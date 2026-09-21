@@ -124,4 +124,50 @@ describe('riffLibrarySchema', () => {
       .get()
     expect(metaRow).toBeUndefined()
   })
+
+  it('opening a db whose StemCategories predates SubcategoryNote adds the column WITHOUT touching existing rows -- real Tidy Up assignments, unlike DiscoverRiffIndexCache, must survive', async () => {
+    const { ownRiffLibraryDbPath } = await import('./riffLibrarySchema')
+    const path = ownRiffLibraryDbPath()
+    mkdirSync(dirname(path), { recursive: true })
+    const raw = new Database(path)
+    raw.exec(`
+      CREATE TABLE StemCategories (
+        StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
+        Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+      );
+    `)
+    raw
+      .prepare(
+        `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, BusId, Source, SourceProject, UpdatedAt)
+         VALUES ('s1', 'drums', 'kick', 'drums', 'tidyup', 'my-sketch', 1000)`
+      )
+      .run()
+    raw.close()
+
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+
+    const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
+    expect(columns.some((c) => c.name === 'SubcategoryNote')).toBe(true)
+
+    // Unlike the DiscoverRiffIndexCache migration above, the pre-existing
+    // row must survive completely intact -- this table is real user data,
+    // not a rebuildable cache.
+    const row = db.prepare(`SELECT * FROM StemCategories WHERE StemCID = 's1'`).get() as {
+      ArrangeRole: string
+      DrumSubRole: string
+      BusId: string
+      Source: string
+      SourceProject: string
+      UpdatedAt: number
+      SubcategoryNote: string | null
+    }
+    expect(row.ArrangeRole).toBe('drums')
+    expect(row.DrumSubRole).toBe('kick')
+    expect(row.BusId).toBe('drums')
+    expect(row.Source).toBe('tidyup')
+    expect(row.SourceProject).toBe('my-sketch')
+    expect(row.UpdatedAt).toBe(1000)
+    expect(row.SubcategoryNote).toBeNull()
+  })
 })

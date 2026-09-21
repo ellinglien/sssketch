@@ -24,7 +24,8 @@ function freshDb(): Database.Database {
     );
     CREATE TABLE StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
-      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
+      SubcategoryNote TEXT
     );
     CREATE TABLE StemYamnetZeroShotAttempted (
       StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL
