@@ -55,7 +55,11 @@ import {
   trainCentroidsFromRoleEntries
 } from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
-import { instrumentMaskToSoundType, type RiffFilters } from '@shared/riffLibraryTypes'
+import {
+  instrumentMaskToSoundType,
+  type RiffFilters,
+  type DiscoverSoundSourceFilter
+} from '@shared/riffLibraryTypes'
 import {
   riffLibraryAvailable,
   riffLibraryRootPath,
@@ -935,7 +939,8 @@ app.whenReady().then(async () => {
       _event,
       kind: DiscoverSlotKind,
       onlyOwnStems: boolean,
-      targetUser?: string
+      targetUser?: string,
+      soundSource?: DiscoverSoundSourceFilter
     ): Promise<DiscoverCandidate[]> => {
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
@@ -952,7 +957,8 @@ app.whenReady().then(async () => {
         jams,
         kind,
         onlyOwnStems,
-        targetUser
+        targetUser,
+        soundSource
       })
       console.log(
         `get-discover-candidates(${kind}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
@@ -979,8 +985,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'get-adjacent-discover-candidates',
-    (_event, centerRiffCID: string, kind: DiscoverSlotKind) =>
-      getAdjacentDiscoverCandidates(centerRiffCID, kind)
+    (
+      _event,
+      centerRiffCID: string,
+      kind: DiscoverSlotKind,
+      soundSource?: DiscoverSoundSourceFilter
+    ) => getAdjacentDiscoverCandidates(centerRiffCID, kind, soundSource)
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>

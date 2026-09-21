@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import type { DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import type { AdjacentDiscoverCandidate } from '../../../main/discoverAdjacency'
 import { typeColorVar } from '../theme/typeColor'
@@ -152,6 +153,7 @@ export function DiscoverNearbyPopover({
   y,
   startCandidate,
   kind,
+  soundSource,
   onPick,
   onClose,
   ignoreRef
@@ -163,6 +165,11 @@ export function DiscoverNearbyPopover({
    * round trip to reconstruct it. */
   startCandidate: DiscoverCandidate
   kind: DiscoverSlotKind
+  /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
+   * checkboxes -- see getDiscoverCandidates' own soundSource doc comment
+   * (discoverCandidates.ts) for the full "why." Only meaningfully affects
+   * the 4 trait kinds; mask kinds ignore it by design. */
+  soundSource: DiscoverSoundSourceFilter
   /** DiscoverSlotRow's own onSwapFromNearby -- fires on every pick, INCLUDING
    * a step-button pick or "back to start." This popover recenters its own
    * browsing around whatever was just picked; it does NOT close itself. */
@@ -187,12 +194,12 @@ export function DiscoverNearbyPopover({
     key: string
     candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
-  const resultKey = `${centerCandidate.riffCID}:${kind}`
+  const resultKey = `${centerCandidate.riffCID}:${kind}:${soundSource.endlesss}:${soundSource.audioIn}`
 
   useEffect(() => {
     let cancelled = false
     window.rifffApi
-      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kind)
+      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kind, soundSource)
       .then((candidates) => {
         if (!cancelled) setResult({ key: resultKey, candidates })
       })
@@ -203,7 +210,14 @@ export function DiscoverNearbyPopover({
     return () => {
       cancelled = true
     }
-  }, [centerCandidate.riffCID, kind, resultKey])
+    // soundSource itself (not its own two scalar fields) is deliberately
+    // omitted here -- DiscoverPanel.tsx builds it as a fresh object
+    // literal on every render, so listing the object itself would re-fire
+    // this effect (and re-fetch) on every DiscoverPanel render regardless
+    // of whether either actual value changed, not just when this
+    // popover's own resultKey (which already encodes both values) does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerCandidate.riffCID, kind, soundSource.endlesss, soundSource.audioIn, resultKey])
 
   const resultForCurrent = result?.key === resultKey ? result : null
   const candidates = resultForCurrent?.candidates ?? { newer: [], older: [] }

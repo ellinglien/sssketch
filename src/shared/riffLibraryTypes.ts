@@ -160,6 +160,44 @@ export function instrumentMaskToSoundType(mask: number): SoundType | null {
   return null
 }
 
+/** Which Endlesss instrument-mask-derived sound sources a Discover roll is
+ * allowed to draw from -- direct request, 2026-09-21: "a way to only
+ * enable audio in or microphone stems... a checkbox for endlesss sounds,
+ * or audio in or microphone (non-endlesss sounds)." Two independent
+ * toggles, not three -- Elling's own clarification, after being told
+ * "Endlesss sounds" vs "Endlesss effects" has no reliable mask-based
+ * signal to split on: "it's fine to lump all fx and instruments together
+ * for endlesss stuff... i just want a endlesss sounds switch and a
+ * non-endlesss sounds switch." Both default true (no filtering) so every
+ * EXISTING caller that doesn't pass this explicitly keeps today's
+ * unfiltered behavior. */
+export interface DiscoverSoundSourceFilter {
+  endlesss: boolean
+  audioIn: boolean
+}
+
+/** True if a stem's own raw Instrument mask (or the ABSENCE of one --
+ * `null`/`undefined`, meaning no confident mask signal at all) is allowed
+ * under `filter`. Only a mask that resolves to 'audioIn' (instrumentMaskToSoundType's
+ * own mic-bit priority, above) counts as the non-Endlesss bucket --
+ * everything else (a real drums/notes/bass mask hit, OR no confident mask
+ * at all -- which covers Endlesss's own on-board/external FX and
+ * instrument sounds that don't set a recognizable mask bit) counts as
+ * "Endlesss," lumped together per Elling's own explicit instruction:
+ * "anything but audio in and microphone would be a[n Endlesss] sound."
+ * There's no reliable mask-based signal to split "Endlesss instrument"
+ * from "Endlesss effect" further -- doing so would mean falling back to
+ * the same preset-name-guessing heuristic Discover's whole redesign moved
+ * away from trusting. */
+export function soundSourceMatchesFilter(
+  mask: number | null | undefined,
+  filter: DiscoverSoundSourceFilter
+): boolean {
+  const isAudioIn =
+    mask !== null && mask !== undefined && instrumentMaskToSoundType(mask) === 'audioIn'
+  return isAudioIn ? filter.audioIn : filter.endlesss
+}
+
 /** The stem's direct download URL, from its Stems row's FileEndpoint/
  * FileBucket/FileKey columns. Verified empirically against several real
  * FileEndpoint values (a mix of endpoints with FileBucket empty, where

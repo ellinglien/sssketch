@@ -376,6 +376,19 @@ export function DiscoverPanel({
   const [preferFavourites, setPreferFavourites] = useState(false)
   const stemFavourites = useStemFavourites()
   const { toggleStemFavourite } = useStemFavouritesActions()
+  // Direct request, 2026-09-21: "a way to only enable audio in or
+  // microphone stems... a checkbox for endlesss sounds, or audio in or
+  // microphone (non-endlesss sounds)." Two independent booleans (not one
+  // combined object) -- simpler useState wiring, matching this file's own
+  // convention for every other toolbar checkbox; combined into a real
+  // DiscoverSoundSourceFilter object only at each call site that actually
+  // needs one, same as onlyOwnStems/targetUser's own "combine at the use
+  // site" pattern just above. Both default true (no filtering) -- see
+  // soundSourceMatchesFilter's own doc comment (@shared/riffLibraryTypes)
+  // for why "both false" is a real, if unhelpful, degenerate state rather
+  // than something this UI needs to actively prevent.
+  const [soundSourceEndlesss, setSoundSourceEndlesss] = useState(true)
+  const [soundSourceAudioIn, setSoundSourceAudioIn] = useState(true)
 
   // Direct request, 2026-09-15: "it'd be nice to be able to adjust the
   // track tempo from the discover section" -- a real scope reversal of
@@ -1469,7 +1482,8 @@ export function DiscoverPanel({
       const candidates = await window.rifffApi.getDiscoverCandidates(
         kind,
         effectiveOnlyOwnStems,
-        currentUsername
+        currentUsername,
+        { endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }
       )
       console.log(
         `DiscoverPanel: rollForSlot(${kind}) -- getDiscoverCandidates returned ${candidates.length} candidates`
@@ -2146,6 +2160,51 @@ export function DiscoverPanel({
           prefer favourites
         </label>
       </div>
+      {/* Own row, not squeezed into the settings row above -- direct
+          report, 2026-09-17, is the whole reason that row already got
+          split once for being "cluttered"; adding two more checkboxes to
+          the SAME already-tuned row risks the exact same complaint again.
+          Direct request, 2026-09-21: "a way to only enable audio in or
+          microphone stems." Only meaningfully affects the 4 trait kinds
+          (bassHeavy/rhythmic/bright/warm) -- see getDiscoverCandidates'
+          own soundSource doc comment (discoverCandidates.ts) for why mask
+          kinds (drums/bass/lead) are unaffected by design. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={soundSourceEndlesss}
+            title="drums/bass/lead, plus every bright/warm/rhythmic/bass-heavy roll drawn from an Endlesss-produced sound (instrument or effect, lumped together) -- only affects bright/warm/rhythmic/bass-heavy rolls, since drums/bass/lead are always Endlesss-produced by definition"
+            onChange={(e) => setSoundSourceEndlesss(e.target.checked)}
+          />
+          endlesss sounds
+        </label>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={soundSourceAudioIn}
+            title="only affects bright/warm/rhythmic/bass-heavy rolls -- audio in/microphone stems (real recorded/mic input, not an Endlesss instrument or effect)"
+            onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
+          />
+          audio in / microphone
+        </label>
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
             random-reroll one, reroll all) -- direct request, 2026-09-15,
@@ -2318,6 +2377,8 @@ export function DiscoverPanel({
             onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
+            soundSourceEndlesss={soundSourceEndlesss}
+            soundSourceAudioIn={soundSourceAudioIn}
           />
         ))
       })()}
@@ -2558,7 +2619,9 @@ function DiscoverSlotRow({
   onResolvedChange,
   onSlotResolutionAbandoned,
   onGainChange,
-  onSwapFromNearby
+  onSwapFromNearby,
+  soundSourceEndlesss,
+  soundSourceAudioIn
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -2665,6 +2728,13 @@ function DiscoverSlotRow({
    * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
    * doc comment in DiscoverPanel. */
   onSwapFromNearby: (candidate: DiscoverCandidate) => void
+  /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
+   * checkboxes -- passed as two primitive booleans, not one object, so
+   * this row's own re-render checks stay cheap; combined into a real
+   * DiscoverSoundSourceFilter object only where actually needed below
+   * (the "explore nearby" popover). */
+  soundSourceEndlesss: boolean
+  soundSourceAudioIn: boolean
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -3615,6 +3685,7 @@ function DiscoverSlotRow({
           y={nearbyMenu.y}
           startCandidate={nearbyAnchor}
           kind={slot.kind}
+          soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}

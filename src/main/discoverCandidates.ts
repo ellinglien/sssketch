@@ -1,7 +1,11 @@
 // src/main/discoverCandidates.ts
 import type Database from 'better-sqlite3'
 import { type DrumSubRole } from '@shared/stemRole'
-import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
+import {
+  instrumentMaskToSoundType,
+  soundSourceMatchesFilter,
+  type DiscoverSoundSourceFilter
+} from '@shared/riffLibraryTypes'
 import {
   DISCOVER_TRAIT_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
@@ -727,16 +731,30 @@ export async function getDiscoverCandidates({
   jams,
   kind,
   onlyOwnStems = false,
-  targetUser
+  targetUser,
+  soundSource = { endlesss: true, audioIn: true }
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
   kind: DiscoverSlotKind
   onlyOwnStems?: boolean
   targetUser?: string
+  /** Direct request, 2026-09-21: "a way to only enable audio in or
+   * microphone stems." Only ever applied to the 4 TRAIT kinds below
+   * (getTraitDiscoverCandidates) -- deliberately NOT to the 3 mask kinds
+   * (drums/bass/lead) just below this branch: those are, by construction,
+   * always real Endlesss instrument content (a live mask match can only
+   * ever resolve to drums/notes/bass, never audioIn -- see
+   * getInstrumentMatchedStemCIDs's own mask-priority logic), so filtering
+   * them by sound source would either be a no-op or exclude a rare,
+   * deliberate human StemCategories confirmation -- neither is what this
+   * filter is actually for. Defaults to no filtering (both true), same as
+   * every other optional filter here, so every existing caller keeps
+   * today's unfiltered behavior. */
+  soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
   if (DISCOVER_TRAIT_SLOT_KINDS.includes(kind)) {
-    return getTraitDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser })
+    return getTraitDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser, soundSource })
   }
 
   // Human-confirmed StemCategories rows for this exact ArrangeRole still
@@ -957,13 +975,15 @@ async function getTraitDiscoverCandidates({
   jams,
   kind,
   onlyOwnStems,
-  targetUser
+  targetUser,
+  soundSource = { endlesss: true, audioIn: true }
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
   kind: DiscoverSlotKind
   onlyOwnStems: boolean
   targetUser?: string
+  soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
   const field = TRAIT_FIELD[kind as keyof typeof TRAIT_FIELD]
 
@@ -1049,6 +1069,14 @@ async function getTraitDiscoverCandidates({
         const soundType = instrumentMaskToSoundType(instrument)
         if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') break
       }
+
+      // Direct request, 2026-09-21: "a way to only enable audio in or
+      // microphone stems." instrument may be undefined here (no known
+      // Instrument row at all) or null (Stems.Instrument itself is NULL)
+      // -- soundSourceMatchesFilter treats both the same as "no confident
+      // mask," which counts as Endlesss, not audioIn (see its own doc
+      // comment).
+      if (!soundSourceMatchesFilter(instrument, soundSource)) break
 
       const jamCID = jamCIDByStemCID.get(row.StemCID)
       if (jamCID === undefined) break // not among the caller's own jams

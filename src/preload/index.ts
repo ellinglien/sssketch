@@ -6,7 +6,8 @@ import type { StretchedStem } from '@shared/buildEngineProject'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
-  RiffLibraryResolvedRiff
+  RiffLibraryResolvedRiff,
+  DiscoverSoundSourceFilter
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
@@ -216,9 +217,10 @@ const api = {
   getDiscoverCandidates: (
     kind: DiscoverSlotKind,
     onlyOwnStems: boolean,
-    targetUser?: string
+    targetUser?: string,
+    soundSource?: DiscoverSoundSourceFilter
   ): Promise<DiscoverCandidate[]> =>
-    ipcRenderer.invoke('get-discover-candidates', kind, onlyOwnStems, targetUser),
+    ipcRenderer.invoke('get-discover-candidates', kind, onlyOwnStems, targetUser, soundSource),
   getRandomDiscoverCandidate: (
     kind: DiscoverSlotKind,
     onlyOwnStems: boolean,
@@ -227,9 +229,10 @@ const api = {
     ipcRenderer.invoke('get-random-discover-candidate', kind, onlyOwnStems, targetUser),
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
-    kind: DiscoverSlotKind
+    kind: DiscoverSlotKind,
+    soundSource?: DiscoverSoundSourceFilter
   ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
-    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kind),
+    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kind, soundSource),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{

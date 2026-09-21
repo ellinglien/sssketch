@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   instrumentMaskToSoundType,
+  soundSourceMatchesFilter,
   computeOwnerFraction,
   stemDownloadUrl,
   resolveKeyName,
@@ -38,6 +39,51 @@ describe('instrumentMaskToSoundType', () => {
 
   it('prioritizes bass over mic when both bits are set', () => {
     expect(instrumentMaskToSoundType(8 | 16)).toBe('bass')
+  })
+})
+
+describe('soundSourceMatchesFilter', () => {
+  const both = { endlesss: true, audioIn: true }
+  const endlesssOnly = { endlesss: true, audioIn: false }
+  const audioInOnly = { endlesss: false, audioIn: true }
+  const neither = { endlesss: false, audioIn: false }
+
+  it('a mic-masked (audioIn) stem passes audioIn-only, fails endlesss-only', () => {
+    expect(soundSourceMatchesFilter(16, audioInOnly)).toBe(true)
+    expect(soundSourceMatchesFilter(16, endlesssOnly)).toBe(false)
+  })
+
+  it('a drums-masked stem passes endlesss-only, fails audioIn-only', () => {
+    expect(soundSourceMatchesFilter(2, endlesssOnly)).toBe(true)
+    expect(soundSourceMatchesFilter(2, audioInOnly)).toBe(false)
+  })
+
+  it('a bass or notes mask also counts as Endlesss, same as drums', () => {
+    expect(soundSourceMatchesFilter(8, endlesssOnly)).toBe(true) // bass
+    expect(soundSourceMatchesFilter(4, endlesssOnly)).toBe(true) // notes
+  })
+
+  it('no confident mask (0, meaning likely an Endlesss FX/instrument sound with no recognizable bit) counts as Endlesss, not audioIn', () => {
+    expect(soundSourceMatchesFilter(0, endlesssOnly)).toBe(true)
+    expect(soundSourceMatchesFilter(0, audioInOnly)).toBe(false)
+  })
+
+  it('a null or undefined mask (no known Instrument row at all) also counts as Endlesss, not audioIn', () => {
+    expect(soundSourceMatchesFilter(null, endlesssOnly)).toBe(true)
+    expect(soundSourceMatchesFilter(undefined, endlesssOnly)).toBe(true)
+    expect(soundSourceMatchesFilter(null, audioInOnly)).toBe(false)
+  })
+
+  it('both true (the default, no filtering) always passes regardless of mask', () => {
+    expect(soundSourceMatchesFilter(16, both)).toBe(true)
+    expect(soundSourceMatchesFilter(2, both)).toBe(true)
+    expect(soundSourceMatchesFilter(null, both)).toBe(true)
+  })
+
+  it('both false always fails regardless of mask', () => {
+    expect(soundSourceMatchesFilter(16, neither)).toBe(false)
+    expect(soundSourceMatchesFilter(2, neither)).toBe(false)
+    expect(soundSourceMatchesFilter(null, neither)).toBe(false)
   })
 })
 

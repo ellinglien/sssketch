@@ -1,6 +1,10 @@
 // src/main/discoverAdjacency.ts
 import { basename } from 'node:path'
-import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
+import {
+  instrumentMaskToSoundType,
+  soundSourceMatchesFilter,
+  type DiscoverSoundSourceFilter
+} from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
 import { DISCOVER_TRAIT_SLOT_KINDS, type DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -114,7 +118,14 @@ const TRAIT_FIELD: Record<
  * codebase already follows. */
 export async function getAdjacentDiscoverCandidates(
   centerRiffCID: string,
-  kind: DiscoverSlotKind
+  kind: DiscoverSlotKind,
+  // Direct request, 2026-09-21: "a way to only enable audio in or
+  // microphone stems." Only applied to the 4 trait kinds below (matchRole's
+  // own trait-kind branch) -- same reasoning as getDiscoverCandidates' own
+  // soundSource param: mask kinds (drums/bass/lead) are always real
+  // Endlesss content by construction, so filtering them by sound source
+  // wouldn't do anything meaningful. Defaults to no filtering.
+  soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true }
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
@@ -173,6 +184,7 @@ export async function getAdjacentDiscoverCandidates(
         // otherwise needs a cached StemFeatureCache row to have any trait
         // value to match on at all.
         if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') continue
+        if (!soundSourceMatchesFilter(stem.instrumentMask, soundSource)) continue
         const featureRow = ownDb
           .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
           .get(stem.stemCID) as { FeaturesJSON: string } | undefined

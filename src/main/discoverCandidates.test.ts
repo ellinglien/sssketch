@@ -1223,6 +1223,75 @@ describe('getDiscoverCandidates (trait kinds)', () => {
     expect(candidates.map((c) => c.stemCID)).toEqual(['mine'])
   })
 
+  it('soundSource: excludes an audioIn-masked stem when audioIn is turned off (endlesss-only)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic-stem'])
+    seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 }) // audioIn bit
+    seedFeatures(own, 'mic-stem', featuresJSON({ transientDensity: 0.8 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic',
+      soundSource: { endlesss: true, audioIn: false }
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('soundSource: audioIn-only excludes an unmasked (no confident mask) stem, which counts as Endlesss', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['unmasked'])
+    seedStem(own, 'unmasked', 'jam1') // no instrument mask at all
+    seedFeatures(own, 'unmasked', featuresJSON({ transientDensity: 0.8 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic',
+      soundSource: { endlesss: false, audioIn: true }
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('soundSource: audioIn-only INCLUDES an audioIn-masked stem, endlesss-only EXCLUDES it', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic-stem'])
+    seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 })
+    seedFeatures(own, 'mic-stem', featuresJSON({ transientDensity: 0.8 }))
+
+    const audioInOnly = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic',
+      soundSource: { endlesss: false, audioIn: true }
+    })
+    expect(audioInOnly.map((c) => c.stemCID)).toEqual(['mic-stem'])
+
+    const endlesssOnly = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic',
+      soundSource: { endlesss: true, audioIn: false }
+    })
+    expect(endlesssOnly).toEqual([])
+  })
+
+  it("soundSource omitted defaults to no filtering (both sources allowed), matching today's behavior", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic-stem', 'unmasked'])
+    seedStem(own, 'mic-stem', 'jam1', { instrument: 1 << 4 })
+    seedFeatures(own, 'mic-stem', featuresJSON({ transientDensity: 0.8 }))
+    seedStem(own, 'unmasked', 'jam1')
+    seedFeatures(own, 'unmasked', featuresJSON({ transientDensity: 0.2 }))
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kind: 'rhythmic'
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['mic-stem', 'unmasked'])
+  })
+
   it('excludes a stem already confirmed (StemCategories) for ANY role, even with no reliable mask signal', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['confirmed-elsewhere'])
