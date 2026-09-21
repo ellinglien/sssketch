@@ -75,6 +75,20 @@ describe('stemFeaturesCache', () => {
     expect(a).toEqual(b)
   })
 
+  it('primes the pitch cache from its own analysis -- no second decode for pitch', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getStemFeatures } = await import('./stemFeaturesCache')
+    const { getPitchContour } = await import('./pitchCache')
+    await getStemFeatures('/some/stem.wav')
+    const contour = await getPitchContour('/some/stem.wav')
+    expect(contour.numFrames).toBeGreaterThan(0)
+    // One decode for brightness (peakCache.ts), one for the analysis --
+    // pitch used to cost a third, separate decode of the same file.
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(2)
+  })
+
   it('evicts a rejected computation from the cache so a later call retries', async () => {
     readAudioFileMock
       .mockRejectedValueOnce(new Error('permission denied'))

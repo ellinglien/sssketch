@@ -1,5 +1,6 @@
-import { computePitchContour, type PitchContour } from '@shared/pitchContour'
+import type { PitchContour } from '@shared/pitchContour'
 import { getAudioContext } from './peakCache'
+import { computePitchContourOffThread } from './stemAnalysisClient'
 
 const cache = new Map<string, Promise<PitchContour>>()
 
@@ -19,7 +20,11 @@ export function getPitchContour(path: string): Promise<PitchContour> {
       const bytes = await window.rifffApi.readAudioFile(path)
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-      return computePitchContour(audioBuffer.getChannelData(0), audioBuffer.sampleRate)
+      // Off the main thread (stemAnalysisClient.ts, 2026-09-21).
+      return await computePitchContourOffThread(
+        audioBuffer.getChannelData(0),
+        audioBuffer.sampleRate
+      )
     } catch (err) {
       cache.delete(path)
       throw err
@@ -28,4 +33,12 @@ export function getPitchContour(path: string): Promise<PitchContour> {
 
   cache.set(path, promise)
   return promise
+}
+
+/** Seeds the cache with a contour computed elsewhere -- stemFeaturesCache.ts
+ * gets one for free from its own full analysis, so a stem the background
+ * scan already analyzed never pays a second decode + pitch pass here. A
+ * path that's already cached (or in flight) is left alone. */
+export function primePitchContour(path: string, contour: PitchContour): void {
+  if (!cache.has(path)) cache.set(path, Promise.resolve(contour))
 }
