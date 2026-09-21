@@ -520,19 +520,30 @@ export function ClusterStemsBrowser({
       .sort((a, b) => b.members.length - a.members.length)
   }, [partitioned, clusterCount, splitNodeIds])
 
-  // Stored focus index can point past the end once the row list shrinks
-  // (slider moved to a lower cluster count) -- clamped inline at every read
-  // site below rather than via a syncing effect (which would need a
-  // synchronous setState in its body, see the `computed`/loading comment
-  // above for why this codebase's linter forbids that pattern).
-  const [focusedRow, setFocusedRow] = useState(0)
-  const clampedFocusedRow = Math.min(focusedRow, Math.max(0, clusters.length - 1))
+  // Direct report, 2026-09-20 ("when splitting in tidy up sometimes it
+  // gets confused what section is the active one.. multiple sections
+  // highlighted"): `clusters` (above) is SORTED BY MEMBER COUNT on every
+  // recompute (`.sort((a, b) => b.members.length - a.members.length)`) --
+  // splitting a row changes member counts, which reshuffles array order,
+  // which used to leave a plain numeric row-index focus/celebration state
+  // pointing at a completely different, unrelated cluster the moment a
+  // split (or even just the clusterCount slider) changed. Tracked by the
+  // cluster's own STABLE dendrogram node id instead (see `clusters`'s own
+  // `id: node.id` above) -- a split changes WHERE a node sits in the
+  // list, never WHAT id it has, so this survives a re-sort correctly. A
+  // split that consumes the focused/celebrating node's own id entirely
+  // (replacing it with its two new children) falls back to index 0 below,
+  // same as this state's own original initial default.
+  const [focusedId, setFocusedId] = useState<number | null>(null)
+  const focusedIndex = focusedId !== null ? clusters.findIndex((c) => c.id === focusedId) : -1
+  const clampedFocusedIndex = focusedIndex >= 0 ? focusedIndex : 0
+  const clampedFocusedId = clusters[clampedFocusedIndex]?.id ?? null
 
   // The row-level "play" button -- seeks to the EARLIEST member's own
   // clip start (not wherever the transport already was) so a cluster
   // spanning many different timeline positions still starts somewhere
   // meaningful and audible immediately.
-  function playRow(rowIndex: number, members: ClusterableStem[]): void {
+  function playRow(id: number, members: ClusterableStem[]): void {
     // Pressing "playing" again on the SAME row it's already showing on
     // stops playback instead of re-triggering it -- a real toggle, not a
     // one-way button. PAUSE (not STOP) so it stops right where it is
@@ -549,7 +560,7 @@ export function ClusterStemsBrowser({
       dispatch({ type: 'PAUSE' })
       return
     }
-    setFocusedRow(rowIndex)
+    setFocusedId(id)
     const targetBar = Math.min(...members.map((m) => m.startBar))
     void startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
   }
@@ -609,10 +620,11 @@ export function ClusterStemsBrowser({
   // celebratory pulse on the just-assigned row acknowledges the action
   // and invites you to keep going yourself (arrow keys / click "play" on
   // whichever row you want next), matching direct user feedback that the
-  // auto-skip felt presumptuous. `celebratingRow` is cleared by its own
+  // auto-skip felt presumptuous. `celebratingId` is cleared by its own
   // timeout rather than needing an onAnimationEnd round-trip through
-  // ClusterRow.
-  const [celebratingRow, setCelebratingRow] = useState<number | null>(null)
+  // ClusterRow. Tracked by the cluster's own stable dendrogram node id,
+  // not a row index -- see focusedId's own doc comment above for why.
+  const [celebratingId, setCelebratingId] = useState<number | null>(null)
 
   // `category` is one of ARRANGE_ROLE_OPTIONS' 8 values, not just a BusId --
   // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
@@ -620,18 +632,14 @@ export function ClusterStemsBrowser({
   // still recording the finer category via recordRoleCategories. For the 5
   // shared categories this is unchanged from before except for also now
   // calling recordRoleCategories (see its own doc comment above).
-  function assignCluster(
-    rowIndex: number,
-    members: ClusterableStem[],
-    category: ArrangeRole
-  ): void {
+  function assignCluster(id: number, members: ClusterableStem[], category: ArrangeRole): void {
     const busId = ARRANGE_ROLE_TO_BUS[category]
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
     recordRoleCategories(members, category)
-    setCelebratingRow(rowIndex)
+    setCelebratingId(id)
     window.setTimeout(() => {
-      setCelebratingRow((current) => (current === rowIndex ? null : current))
+      setCelebratingId((current) => (current === id ? null : current))
     }, 500)
   }
 
@@ -639,21 +647,21 @@ export function ClusterStemsBrowser({
   // never changes busId (already 'drums', assigned via assignCluster
   // above) or re-dispatches ASSIGN_STEMS_TO_BUS, just records the finer
   // drumSubRole. Two thin wrappers below (one per celebration scheme, DSP
-  // row index vs. suggested-row busId -- same split as assignCluster vs.
+  // row id vs. suggested-row busId -- same split as assignCluster vs.
   // assignSuggestedGroup) share this celebration-free core.
   function assignDrumSubRole(members: ClusterableStem[], drumSubRole: DrumSubRole): void {
     recordRoleCategories(members, 'drums', drumSubRole)
   }
 
   function assignDrumSubRoleForRow(
-    rowIndex: number,
+    id: number,
     members: ClusterableStem[],
     drumSubRole: DrumSubRole
   ): void {
     assignDrumSubRole(members, drumSubRole)
-    setCelebratingRow(rowIndex)
+    setCelebratingId(id)
     window.setTimeout(() => {
-      setCelebratingRow((current) => (current === rowIndex ? null : current))
+      setCelebratingId((current) => (current === id ? null : current))
     }, 500)
   }
 
@@ -674,11 +682,14 @@ export function ClusterStemsBrowser({
   }
 
   // Suggested rows live in their own list, separate from the DSP
-  // dendrogram's own row indices -- own play-toggle/celebration state
-  // rather than reusing playRow/celebratingRow's numeric indices, which
-  // would otherwise collide (row 0 of "suggested" isn't row 0 of the DSP
-  // clusters below it). Keyed by {busId, nodeId} rather than busId alone
-  // (2026-09-15) -- now that a suggested group can be split into several
+  // dendrogram's own clusters -- own play-toggle/celebration state rather
+  // than reusing playRow/celebratingId's own node ids, which would
+  // otherwise collide (expandFlatGroupIntoRows computes its own SEPARATE
+  // local dendrogram per suggested group, via its own computeMergeSequence
+  // call -- its node ids are not guaranteed disjoint from the DSP
+  // clusters' own, unrelated merge sequence). Keyed by {busId, nodeId}
+  // rather than busId alone (2026-09-15) -- now that a suggested group
+  // can be split into several
   // rows sharing the same busId (see expandFlatGroupIntoRows), busId alone
   // could no longer identify a single row.
   const [celebratingSuggested, setCelebratingSuggested] = useState<{
@@ -740,25 +751,31 @@ export function ClusterStemsBrowser({
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setFocusedRow((row) => Math.min(clusters.length - 1, row + 1))
+        // Moves by INDEX position in the current (possibly just re-sorted)
+        // list, same as before -- only the state it lands on changed, from
+        // a bare index to that target row's own stable id (see focusedId's
+        // own doc comment above).
+        const next = Math.min(clusters.length - 1, clampedFocusedIndex + 1)
+        setFocusedId(clusters[next]?.id ?? null)
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setFocusedRow((row) => Math.max(0, row - 1))
+        const prev = Math.max(0, clampedFocusedIndex - 1)
+        setFocusedId(clusters[prev]?.id ?? null)
       } else if (e.key === 'Escape') {
         handleClose()
       } else if (e.key >= '1' && e.key <= '8') {
         const categoryIndex = Number(e.key) - 1
         const category = ARRANGE_ROLE_OPTIONS[categoryIndex]
-        const activeCluster = clusters[clampedFocusedRow]
+        const activeCluster = clusters[clampedFocusedIndex]
         if (category && activeCluster) {
-          assignCluster(clampedFocusedRow, activeCluster.members, category)
+          assignCluster(activeCluster.id, activeCluster.members, category)
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- assignCluster/handleClose are stable closures over dispatch/props each render; re-binding every render is unnecessary and would thrash the listener on every keystroke's own state update
-  }, [clusters, clampedFocusedRow])
+  }, [clusters, clampedFocusedIndex])
 
   const sliderMax = Math.max(1, Math.min(20, stems.length))
   const sliderFillPercent = ((clusterCount - 1) / Math.max(1, sliderMax - 1)) * 100
@@ -919,17 +936,17 @@ export function ClusterStemsBrowser({
         )}
 
         {!loading &&
-          clusters.map(({ id, members }, i) => (
+          clusters.map(({ id, members }) => (
             <ClusterRow
               key={id}
               members={members}
-              focused={i === clampedFocusedRow}
-              celebrating={i === celebratingRow}
-              onAssign={(category) => assignCluster(i, members, category)}
+              focused={id === clampedFocusedId}
+              celebrating={id === celebratingId}
+              onAssign={(category) => assignCluster(id, members, category)}
               onAssignDrumSubRole={(drumSubRole) =>
-                assignDrumSubRoleForRow(i, members, drumSubRole)
+                assignDrumSubRoleForRow(id, members, drumSubRole)
               }
-              onPlay={() => playRow(i, members)}
+              onPlay={() => playRow(id, members)}
               onSplit={() => splitCluster(id)}
               onPreviewStem={previewStem}
               previewingKeys={previewingKeys}
