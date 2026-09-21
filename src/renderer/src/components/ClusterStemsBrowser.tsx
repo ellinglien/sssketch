@@ -937,6 +937,27 @@ export function ClusterStemsBrowser({
               pos={pos}
             />
           ))}
+        {/* Direct request, 2026-09-20: "at the bottom of the tidy up
+            modal, add a confirm button" -- calls the same handleClose the
+            header's own "×" already does (there's no separate "apply"
+            step: every assignment/split here is already committed live as
+            it happens, so "confirm" and "close" are the same action) --
+            just a second, more discoverable way to finish up from the
+            bottom of a modal whose own content can run long enough to
+            scroll past the header's close button entirely. */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            marginTop: 16,
+            paddingTop: 10,
+            borderTop: '1px solid var(--ra-border)'
+          }}
+        >
+          <button onClick={handleClose} style={buttonStyle('confirmed')}>
+            confirm
+          </button>
+        </div>
       </div>
     </div>
   )
