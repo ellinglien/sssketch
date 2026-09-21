@@ -69,7 +69,12 @@ export function DiscoverKindPicker({
 
   function chip(kind: DiscoverSlotKind): React.JSX.Element {
     const on = kinds.includes(kind)
-    const disabled = maskKindsDisabled && DISCOVER_MASK_SLOT_KINDS.includes(kind)
+    // maskKindsDisabled only blocks turning a mask chip ON -- an already-ON
+    // one (e.g. a 'drums' slot after "endlesss" gets unticked) must stay
+    // toggleable OFF, or the picker becomes a dead end: no way to remove
+    // the one kind that's no longer selectable at all (the last-chip guard
+    // below still stops it being the very last kind on the slot).
+    const disabled = maskKindsDisabled && !on && DISCOVER_MASK_SLOT_KINDS.includes(kind)
     const isLastOn = on && kinds.length === 1
     return (
       <button
