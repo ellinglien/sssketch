@@ -1,4 +1,5 @@
 // src/renderer/src/audio/BackgroundFeatureScan.tsx
+import { backgroundScanGate } from './backgroundScanGate'
 import { useEffect, useRef } from 'react'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
 import { getOrExtractStemEmbedding } from './stemEmbeddingCache'
@@ -54,6 +55,13 @@ export function BackgroundFeatureScan(): null {
     // finishes, not just after it's fired.
     function runBatch(startIndex: number): void {
       if (cancelled) return
+      // Yield to the user -- see backgroundScanGate.ts (2026-09-21): this
+      // batch's decode/analysis runs on the UI thread, so wait while a
+      // modal is open or input just happened. Deferred, never skipped.
+      if (!backgroundScanGate.mayRun(performance.now())) {
+        window.setTimeout(() => runBatch(startIndex), BATCH_DELAY_MS)
+        return
+      }
       const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
       if (batch.length === 0) return
       void (async () => {

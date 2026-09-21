@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { backgroundScanGate } from '../audio/backgroundScanGate'
 import { initialState } from '../state/store'
 
 /** Shown when "New" is clicked, after the discard-unsaved-changes confirm
@@ -18,6 +19,10 @@ export function NewProjectModal({
   onCreate: (name: string, bpm: number) => void
   onCancel: () => void
 }): React.JSX.Element {
+  // Background scans stay paused while this modal is open -- their
+  // UI-thread analysis made its inputs lag (backgroundScanGate.ts).
+  useEffect(() => backgroundScanGate.hold(), [])
+
   const [name, setName] = useState(defaultName)
   // Direct request, 2026-09-20: "when creating a new project, prompt user
   // to adjust the tempo" -- every new project used to silently start at

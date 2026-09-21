@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { backgroundScanGate } from '../audio/backgroundScanGate'
 
 const WORDMARK = 'SSSKETCH'.split('')
 
@@ -134,6 +135,10 @@ export function OnboardingModal({
    * special-casing. */
   endlesssLoggedIn: boolean
 }): React.JSX.Element {
+  // Background scans stay paused while this modal is open -- their
+  // UI-thread analysis made its inputs lag (backgroundScanGate.ts).
+  useEffect(() => backgroundScanGate.hold(), [])
+
   const [dontShowAgain, setDontShowAgain] = useState(false)
 
   return (

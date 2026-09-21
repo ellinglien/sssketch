@@ -62,6 +62,7 @@ import { buildPluginStatesMap } from '@shared/pluginStates'
 import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
+import { installBackgroundScanInteractionListeners } from './audio/backgroundScanGate'
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { YamnetZeroShotRetroactiveScan } from './audio/YamnetZeroShotRetroactiveScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
@@ -919,6 +920,11 @@ function Frame(): React.JSX.Element {
   const dispatch = useDispatch()
   const restoreState = useRestoreState()
   const setBusy = useBusy()
+
+  // Any key/pointer/wheel input pauses the background scans briefly
+  // (backgroundScanGate.ts, 2026-09-21) so their UI-thread analysis never
+  // lands mid-typing or mid-click.
+  useEffect(() => installBackgroundScanInteractionListeners(), [])
 
   // A project should always have somewhere to record onto -- fires on
   // mount and again any time recordingChannelIds empties out (e.g.

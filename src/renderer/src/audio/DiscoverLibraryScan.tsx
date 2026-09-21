@@ -1,4 +1,5 @@
 // src/renderer/src/audio/DiscoverLibraryScan.tsx
+import { backgroundScanGate } from './backgroundScanGate'
 import { useEffect, useRef, useState } from 'react'
 import { getOrExtractStemEmbedding } from './stemEmbeddingCache'
 import { getStemFeatures } from './stemFeaturesCache'
@@ -92,6 +93,13 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
         // gap after real work finishes, not just after it's fired.
         function runBatch(startIndex: number): void {
           if (cancelled) return
+          // Yield to the user -- see backgroundScanGate.ts (2026-09-21): this
+          // batch's decode/analysis runs on the UI thread, so wait while a
+          // modal is open or input just happened. Deferred, never skipped.
+          if (!backgroundScanGate.mayRun(performance.now())) {
+            window.setTimeout(() => runBatch(startIndex), BATCH_DELAY_MS)
+            return
+          }
           const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
           if (batch.length === 0) return
           void (async () => {
