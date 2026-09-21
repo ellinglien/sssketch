@@ -168,6 +168,23 @@ describe('linearWaveBars', () => {
   it('returns an empty array for empty input', () => {
     expect(linearWaveBars([])).toEqual([])
   })
+
+  it('scales overall bar height DOWN for a quiet stem (low absolute peak), not just relative to its own max -- direct report, 2026-09-20: a near-silent stem used to look identical to a normally-loud one', () => {
+    const loud = linearWaveBars([0.5, 1]) // max peak 1.0 (0dBFS)
+    const quiet = linearWaveBars([0.005, 0.01]) // max peak 0.01 (~-40dBFS)
+    // Same RELATIVE shape within the stem (loudest bucket still exactly
+    // 2x the other) -- the fix must not distort a stem's own internal
+    // dynamics, only its overall scale.
+    expect(quiet[1].height).toBeCloseTo(quiet[0].height * 2, 5)
+    // ...but the quiet stem's own loudest bar should draw noticeably
+    // shorter than the loud stem's loudest bar, not identical.
+    expect(quiet[1].height).toBeLessThan(loud[1].height * 0.5)
+  })
+
+  it('a stem well below the silence floor draws essentially flat (near-zero height)', () => {
+    const silent = linearWaveBars([0.0001, 0.0002]) // ~-74dBFS
+    for (const bar of silent) expect(bar.height).toBeCloseTo(0, 2)
+  })
 })
 
 describe('zcrFromChannel', () => {

@@ -99,18 +99,40 @@ export interface WaveformBar {
   height: number
 }
 
-/** Same geometry linearWave draws (128-wide box, centered at y=50, height
- * scaled relative to the peak array's own max), but returned as one
- * rectangle per bucket instead of a single filled path — needed wherever a
- * bucket needs its own fill (e.g. opacity keyed to that bucket's spectral
- * brightness), which a single <path> can't express. */
+// Below this peak loudness (dBFS), a stem draws essentially flat --
+// direct report, 2026-09-20: "the waveform appears normalized... when
+// something is very quiet it shows a normal looking waveform but it's
+// very quiet... makes it difficult to know what the stem is by looking
+// at it, makes you wonder if it's playing at all." Every stem's own
+// local max peak used to get rescaled to the exact same visual height
+// regardless of its real, absolute loudness (peaksFromChannel's own
+// Math.abs(sample) values ARE real, absolute [0,1] amplitude -- nothing
+// upstream of this function normalizes them away). -40dBFS is a soft,
+// perceptually-reasonable "barely audible" floor for a single STEM (not
+// a full mix) -- loud enough that a genuinely quiet-but-real stem still
+// shows real signal, quiet enough that an ordinarily-mixed stem rarely
+// dips this low across its own whole peak.
+const SILENCE_FLOOR_DB = -40
+
+/** Same geometry linearWave draws (128-wide box, centered at y=50), but
+ * returned as one rectangle per bucket instead of a single filled path —
+ * needed wherever a bucket needs its own fill (e.g. opacity keyed to that
+ * bucket's spectral brightness), which a single <path> can't express.
+ * Height is scaled relative to the peak array's own max (so a stem's own
+ * internal shape/dynamics stay fully legible) AND THEN scaled down by how
+ * quiet that own max is in absolute, perceptual (dB) terms (see
+ * SILENCE_FLOOR_DB above) -- a normally-loud stem draws the same as
+ * before, a near-silent one draws visibly flat instead of identical to a
+ * loud one. */
 export function linearWaveBars(peaks: number[]): WaveformBar[] {
   const n = peaks.length
   if (n === 0) return []
   const mx = Math.max.apply(null, peaks) || 1
+  const mxDb = mx > 0 ? 20 * Math.log10(mx) : -Infinity
+  const loudness = Math.max(0, Math.min(1, (mxDb - SILENCE_FLOOR_DB) / -SILENCE_FLOOR_DB))
   const stepWidth = 128 / n
   return peaks.map((p, i) => {
-    const h = (p / mx) * 45
+    const h = (p / mx) * loudness * 45
     return { x: i * stepWidth, width: stepWidth, y: 50 - h, height: h * 2 }
   })
 }
