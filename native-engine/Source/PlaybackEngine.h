@@ -1,6 +1,7 @@
 // native-engine/Source/PlaybackEngine.h
 #pragma once
 #include "EngineProject.h"
+#include "NoiseRiser.h"
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
 #include "LiveParamOverrides.h"
@@ -130,7 +131,19 @@ namespace sssketch
             // snapshot's OWN project.rifffs vector -- never the previous
             // snapshot's -- so they stay valid for exactly this
             // snapshot's own lifetime.
+            //
+            // A channel carrying ONLY risers gets an entry here too, with an
+            // empty vector: this map is what decides the channel set the
+            // render loop walks and the scratch buffers are sized for, so a
+            // riser-only row would otherwise be silently dropped (it has no
+            // EngineRifff to be grouped by). Same reason selectors.ts's
+            // channelsInOrder includes riser channels on the renderer side.
             std::map<juce::String, std::vector<const EngineRifff*>> channelGroups;
+
+            // Groups project.risers by channelId, same lifetime and same
+            // pointers-into-this-snapshot rule as channelGroups above. A
+            // channelId absent from here simply has no risers on it.
+            std::map<juce::String, std::vector<const EngineRiser*>> riserGroups;
 
             // Per-channel accumulation scratch for renderBlock() -- one
             // entry per channelGroups entry, in the same order. `mutable`:
@@ -165,6 +178,13 @@ namespace sssketch
             // stem's own EngineStem::hasToolkit is narrowed in the same pass,
             // so the per-stem check in the render loop is also one bool.
             bool anyToolkitActive = false;
+
+            // True if this project has any riser at all -- decided once here,
+            // off the real-time thread, so renderBlock's per-channel riser
+            // cost for the overwhelmingly common no-riser case is one bool
+            // test rather than a map lookup per channel per block. Exactly
+            // the same shape (and the same purpose) as anyToolkitActive.
+            bool anyRisers = false;
         };
 
         /** Per-CLIP toolkit DSP state: a filter has memory, a send has a
@@ -289,6 +309,16 @@ namespace sssketch
         // are: renderBlock() reads the engine through a const pointer but
         // real DSP cannot be stateless.
         mutable std::map<juce::String, std::unique_ptr<StemDspState>> stemDsp;
+
+        /** Per-RISER live DSP -- only a bandpass, since a riser's source is
+         * index-addressed and its envelope is a pure function of position
+         * (see NoiseRiser.h). Keyed by the riser's own id, and living under
+         * exactly the same threading, lifetime and lazy-creation rules as
+         * stemDsp above: created on the first block a given riser actually
+         * sounds in, never pruned, only ever touched by the single rendering
+         * thread, and never constructed at all by a project with no risers. */
+        mutable std::map<juce::String, std::unique_ptr<RiserVoice>> riserVoices;
+
         mutable ReverbBus reverbBus;
 
         LiveParamOverrides liveParamOverrides;

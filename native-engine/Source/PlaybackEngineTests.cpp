@@ -1782,6 +1782,226 @@ namespace sssketch
                 tone.deleteFile();
             }
 
+            beginTest("a project with no risers renders bit-identically to before they existed");
+            {
+                // The neutral-project regression. A riser is generated audio
+                // added into a channel's own accumulator, so the one thing
+                // that must stay true is that a project WITHOUT one takes
+                // exactly the path it took before -- same additions, same
+                // order, same bits. Rendered twice from one engine and
+                // compared against an independently-built expectation (the
+                // fixture's constant value times its volume), which is what
+                // the pre-riser code produced.
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = fixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.playedBars = 1.0;
+                stem.volume = 0.5;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                expect(project.risers.empty());
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                // Source value 0.5 * stem volume 0.5 = 0.25, sampled past the
+                // always-on ~3ms anti-click fade-in floor (see FadeGain.cpp)
+                // -- the same index the pre-riser stem test above uses, and
+                // for the same reason.
+                for (int i = 200; i < 512; ++i)
+                {
+                    expectWithinAbsoluteError(l[(size_t) i], 0.25f, 1.0e-4f);
+                    expectWithinAbsoluteError(r[(size_t) i], 0.25f, 1.0e-4f);
+                }
+            }
+
+            beginTest("a riser is generated into its own channel and nowhere else");
+            {
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                // One clip on ch1, one riser on ch2 -- so "did the riser
+                // land" and "did it land on the right row" are separable.
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = fixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                stem.playedBars = 1.0;
+                stem.volume = 0.5;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                EngineRiser riser;
+                riser.id = "riser-1";
+                riser.channelId = "ch2";
+                riser.startBar = 0.0;
+                riser.lengthBars = 1.0; // 4 seconds
+                riser.startCutoffValue = 0.2;
+                riser.endCutoffValue = 0.95;
+                riser.level = 0.9;
+                project.risers.push_back(riser);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                const int blockSize = 512;
+                std::vector<float> l((size_t) blockSize, 0.0f), r((size_t) blockSize, 0.0f);
+
+                // At the very start the clip is at its flat 0.25 and the
+                // riser's squared swell is still essentially nothing -- so
+                // this is what "the riser has not leaked in early" looks
+                // like, measured on the summed output.
+                engine.renderBlock(0.0, 44100.0, blockSize, l.data(), r.data(), channelChains);
+                for (int i = 200; i < blockSize; ++i)
+                    expectWithinAbsoluteError(l[(size_t) i], 0.25f, 1.0e-3f);
+
+                // Near the riser's end the clip has run out (the fixture is
+                // one second long) and the swell is at its loudest, so
+                // anything here at all is the riser and only the riser.
+                std::fill(l.begin(), l.end(), 0.0f);
+                std::fill(r.begin(), r.end(), 0.0f);
+                engine.renderBlock(0.95, 44100.0, blockSize, l.data(), r.data(), channelChains);
+                double peak = 0.0;
+                for (int i = 0; i < blockSize; ++i)
+                    peak = juce::jmax(peak, (double) std::abs(l[(size_t) i]));
+                expect(peak > 0.05, "riser did not reach the mix (peak " + juce::String(peak) + ")");
+            }
+
+            beginTest("a riser on an empty channel is still heard, and silent before it starts");
+            {
+                // The riser-only row: nothing groups it by an EngineRifff, so
+                // this is the case that would silently vanish if setProject
+                // didn't give it a channelGroups entry of its own.
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRiser riser;
+                riser.id = "riser-solo";
+                riser.channelId = "lonely";
+                riser.startBar = 1.0; // starts 4 seconds in
+                riser.lengthBars = 1.0;
+                riser.startCutoffValue = 0.3;
+                riser.endCutoffValue = 0.95;
+                riser.level = 0.9;
+                project.risers.push_back(riser);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                for (int i = 0; i < 512; ++i)
+                    expectEquals(l[(size_t) i], 0.0f); // before it starts
+
+                std::fill(l.begin(), l.end(), 0.0f);
+                std::fill(r.begin(), r.end(), 0.0f);
+                engine.renderBlock(1.95, 44100.0, 512, l.data(), r.data(), channelChains);
+                double peak = 0.0;
+                for (int i = 0; i < 512; ++i)
+                    peak = juce::jmax(peak, (double) std::abs(l[(size_t) i]));
+                expect(peak > 0.05, "riser-only channel was silent (peak " + juce::String(peak) + ")");
+            }
+
+            beginTest("an offline render of a riser is the same audio as playing it");
+            {
+                // The requirement the whole design hangs on: there is ONE
+                // renderBlock, so a bounce cannot drift from the pass that
+                // was listened to. Rendered here through the real offline
+                // path (RenderExport's own fresh PlaybackEngine) and compared
+                // sample for sample against a live-style block-by-block
+                // render from the same start.
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRiser riser;
+                riser.id = "riser-bounce";
+                riser.channelId = "ch1";
+                riser.startBar = 0.0;
+                riser.lengthBars = 0.5; // 2 seconds
+                riser.startCutoffValue = 0.2;
+                riser.endCutoffValue = 0.95;
+                riser.level = 0.8;
+                project.risers.push_back(riser);
+
+                auto out = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                               .getChildFile("sssketch_pe_riser_bounce.wav");
+                out.deleteFile();
+                juce::String error;
+                expect(renderProjectToWavFile(project, out.getFullPathName(), 2.0, error),
+                       "offline render failed: " + error);
+
+                juce::AudioFormatManager formats;
+                formats.registerBasicFormats();
+                std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(out));
+                expect(reader != nullptr, "could not read back the bounce");
+                if (reader != nullptr)
+                {
+                    const int numSamples = (int) reader->lengthInSamples;
+                    juce::AudioBuffer<float> bounced(2, numSamples);
+                    reader->read(&bounced, 0, numSamples, 0, true, true);
+
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(project);
+                    std::vector<float> live((size_t) numSamples, 0.0f);
+                    std::vector<float> liveR((size_t) numSamples, 0.0f);
+                    const int blockSize = 512;
+                    const double secPerBar = 4.0;
+                    for (int i = 0; i < numSamples; i += blockSize)
+                    {
+                        const int n = juce::jmin(blockSize, numSamples - i);
+                        engine.renderBlock(
+                            ((double) i / 44100.0) / secPerBar,
+                            44100.0,
+                            n,
+                            live.data() + i,
+                            liveR.data() + i,
+                            channelChains);
+                    }
+
+                    double worst = 0.0;
+                    double livePeak = 0.0;
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        worst = juce::jmax(worst,
+                            std::abs((double) bounced.getSample(0, i) - (double) live[(size_t) i]));
+                        livePeak = juce::jmax(livePeak, (double) std::abs(live[(size_t) i]));
+                    }
+                    // The bounce is a 16-bit WAV, so equality here is "within
+                    // one quantisation step", not bit-for-bit -- the file
+                    // format is the only thing between the two, which is
+                    // exactly the point.
+                    expect(livePeak > 0.05, "nothing was rendered live (peak " + juce::String(livePeak) + ")");
+                    expect(worst < 2.0e-4, "bounce differs from playback by " + juce::String(worst));
+                }
+                out.deleteFile();
+            }
+
             fixture.deleteFile();
         }
     };

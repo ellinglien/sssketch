@@ -86,6 +86,19 @@ namespace sssketch
         for (const auto& rifff : next->project.rifffs)
             next->channelGroups[rifff.channelId].push_back(&rifff);
 
+        // Risers, grouped the same way -- and, crucially, given an entry in
+        // channelGroups too (operator[] default-constructs an empty vector),
+        // since that map is what decides both the channel set renderBlock
+        // walks and how much scratch space is sized just below. A channel
+        // whose only content is a riser has no EngineRifff to be grouped by,
+        // so without this it would be silently missing from the mix.
+        for (const auto& riser : next->project.risers)
+        {
+            next->riserGroups[riser.channelId].push_back(&riser);
+            next->channelGroups[riser.channelId];
+        }
+        next->anyRisers = !next->project.risers.empty();
+
         // Scratch space for the new channel set -- off the real-time thread
         // (see renderBlock's own comment on why this lives here, not
         // there). Inner per-numSamples buffers are left empty; renderBlock
@@ -209,7 +222,9 @@ namespace sssketch
             }
         }
 
-        if (snap->project.rifffs.empty())
+        // Risers count as content: a project consisting of nothing but a
+        // riser still has to be heard, so this can't test rifffs alone.
+        if (snap->project.rifffs.empty() && snap->project.risers.empty())
             return;
 
         // Per-channel accumulation: each channel's stems sum into their own
@@ -604,6 +619,40 @@ namespace sssketch
 
                 finishStem();
             }
+            }
+
+            // This channel's risers, generated straight into the channel's
+            // own accumulator -- so they join the mix at exactly the point a
+            // stem does, UPSTREAM of the channel's plugin chain (and so of
+            // the master chain), which is what "the riser is a source on this
+            // channel, not an effect on it" actually means in the signal
+            // path. Because it happens here, inside the one renderBlock both
+            // live playback (Transport.cpp) and offline export
+            // (RenderExport.cpp) call, a bounce contains the riser for free
+            // and contains exactly the riser that was heard.
+            //
+            // A riser does NOT feed the shared reverb bus: its data shape has
+            // no send of its own (see EngineRiser), and inventing one on its
+            // behalf would be a parameter with nothing to set it. A reverb
+            // reached through this channel's plugin chain still applies.
+            //
+            // Skipped on one bool test for a project with no risers, and
+            // inside that, on one map lookup for a channel with none -- so
+            // the ordinary case adds nothing measurable to the callback.
+            if (snap->anyRisers)
+            {
+                const auto risersHere = snap->riserGroups.find(channelId);
+                if (risersHere != snap->riserGroups.end())
+                {
+                    for (const auto* riserPtr : risersHere->second)
+                    {
+                        auto& voice = riserVoices[riserPtr->id];
+                        if (voice == nullptr)
+                            voice = std::make_unique<RiserVoice>();
+                        voice->render(
+                            *riserPtr, blockStartSec, sampleRate, spb, numSamples, chOutL, chOutR);
+                    }
+                }
             }
         }
 
