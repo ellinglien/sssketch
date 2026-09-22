@@ -2294,7 +2294,7 @@ export function DiscoverPanel({
             title="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect) -- applies to every kind, drums/bass/lead included"
             onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
           />
-          non-endlesss
+          other
         </label>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
