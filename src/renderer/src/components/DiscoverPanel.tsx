@@ -2074,7 +2074,15 @@ export function DiscoverPanel({
           rethink it all" -- the single row (chaos slider, tempo controls, two
           checkboxes, undo/redo, play/stop, reroll-all, plus the add-to-shelf/
           add-to-timeline pair) packed in too much for one line. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 10
+        }}
+      >
         {/* Direct request, 2026-09-16: "we should add a play/stop button
             for the discover playing, so user can stop it if they wish" --
             same merged play/stop toggle + glyphs as TransportBar.tsx's own
@@ -2249,19 +2257,13 @@ export function DiscoverPanel({
           />
           prefer favourites
         </label>
-      </div>
-      {/* Own row, not squeezed into the settings row above -- direct
-          report, 2026-09-17, is the whole reason that row already got
-          split once for being "cluttered"; adding two more checkboxes to
-          the SAME already-tuned row risks the exact same complaint again.
-          Direct request, 2026-09-21: "a way to only enable audio in or
-          microphone stems." Both checkboxes apply to EVERY kind, by each
-          stem's own instrument mask: "endlesss" = sounds made with Endlesss
-          instruments/effects, "non-endlesss" = audio-in/mic. Since
-          2026-09-22 drums/bass/lead can draw audio-in/mic stems too (via
-          the overnight classifier) -- see getDiscoverCandidates' own doc
-          comment (discoverCandidates.ts). */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        {/* Sound-source filters -- direct request, 2026-09-21 ("a way to only
+            enable audio in or microphone stems"); moved onto this row beside
+            the other filter checkboxes, with undo/redo, 2026-09-22. Both apply
+            to EVERY kind, by each stem's own instrument mask: "endlesss" =
+            sounds made with Endlesss instruments/effects, "other" =
+            audio-in/mic -- see getDiscoverCandidates' own doc comment
+            (discoverCandidates.ts). */}
         <label
           style={{
             display: 'flex',
@@ -2296,8 +2298,7 @@ export function DiscoverPanel({
           />
           other
         </label>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
             random-reroll one, reroll all) -- direct request, 2026-09-15,
             inspired by Upcycle's own toolbar undo/redo arrows. Button-only
@@ -2346,6 +2347,8 @@ export function DiscoverPanel({
         >
           <RedoIcon />
         </button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ marginLeft: 'auto' }} />
         <button
           onClick={() => void rerollAll()}
@@ -2408,7 +2411,7 @@ export function DiscoverPanel({
 
       {slots.length === 0 && (
         <div style={{ fontSize: 11, color: 'var(--ra-text-2)', padding: 12 }}>
-          add a slot below to start building a loop
+          select one to start
         </div>
       )}
 
