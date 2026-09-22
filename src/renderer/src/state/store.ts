@@ -2,6 +2,7 @@ import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@sh
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
+  defaultFilterSettings,
   normaliseAutomationCurve,
   type AutomationParam,
   type AutomationPoint,
@@ -64,6 +65,51 @@ function writeCurve(
     else clip[param] = points
     if (Object.keys(clip).length === 0) delete next[key]
     else next[key] = clip
+  }
+  return next
+}
+
+/**
+ * Writes one resonance value onto every given clip's filter settings,
+ * leaving the mode and cutoff alone.
+ *
+ * Resonance is the only part of StemFilterSettings anything currently
+ * writes (the dial in the filter lane's corner -- see AutomationLane.tsx),
+ * which is why this is resonance-shaped rather than a general filter write:
+ * a wider action would have to invent an answer for two fields with no UI.
+ *
+ * A clip whose settings end up back at the untouched default is REMOVED
+ * rather than stored, exactly like writeCurve above and for the same
+ * reason -- only absence lets the clip drop off the wire entirely and take
+ * the engine's pre-toolkit path (buildEngineProject.ts). Turning the dial
+ * down to zero therefore really does undo it, rather than leaving a
+ * `{ mode: 'lowpass', cutoff: 1, resonance: 0 }` fossil in the saved file.
+ */
+function writeFilterResonance(
+  all: Record<string, StemFilterSettings>,
+  keys: string[],
+  resonance: number
+): Record<string, StemFilterSettings> {
+  const safe = Number.isFinite(resonance) ? Math.min(1, Math.max(0, resonance)) : 0
+  const next = { ...all }
+  for (const key of keys) {
+    const settings: StemFilterSettings = {
+      ...(next[key] ?? defaultFilterSettings()),
+      resonance: safe
+    }
+    // Only the fully-default shape is dropped -- a deliberately exact
+    // compare including the MODE, so an entry that exists solely to
+    // remember a non-default mode survives the dial going back to zero.
+    const untouched = defaultFilterSettings()
+    if (
+      settings.mode === untouched.mode &&
+      settings.cutoff === untouched.cutoff &&
+      settings.resonance === untouched.resonance
+    ) {
+      delete next[key]
+    } else {
+      next[key] = settings
+    }
   }
   return next
 }
@@ -554,6 +600,20 @@ export type Action =
       param: AutomationParam
       points: AutomationPoint[]
     }
+  /** One finished turn of the resonance dial in a clip's filter lane.
+   * Resonance is a stored per-clip SETTING, not a curve (see
+   * AUTOMATION_PARAMS in @shared/toolkit): one filter lane you draw, with
+   * its resonance as a knob in the corner. Dispatched once per gesture,
+   * from the Dial's own onCommit, so a drag is one undo step -- the same
+   * split every other live-audible drag here uses, minus the transient
+   * preview half (the dial keeps its in-progress value locally; nothing
+   * outside the lane needs to see it). */
+  | { type: 'SET_STEM_FILTER_RESONANCE'; stemKey: string; resonance: number }
+  /** The same turn, on a COLLAPSED clip's lane: one value written to every
+   * stem in the rifff, the whole-rifff treatment SET_GROUP_VOLUME /
+   * SET_GROUP_MUTE / SET_GROUP_AUTOMATION already give the collapsed view.
+   * Stored per stem either way, so expanding afterwards lets them diverge. */
+  | { type: 'SET_GROUP_FILTER_RESONANCE'; groupId: string; resonance: number }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
@@ -1548,6 +1608,25 @@ export function reducer(state: AppState, action: Action): AppState {
           rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)),
           action.param,
           action.points
+        )
+      }
+    }
+
+    case 'SET_STEM_FILTER_RESONANCE':
+      return {
+        ...state,
+        stemFilters: writeFilterResonance(state.stemFilters, [action.stemKey], action.resonance)
+      }
+
+    case 'SET_GROUP_FILTER_RESONANCE': {
+      const rifff = state.rifffs[action.groupId]
+      if (!rifff) return state
+      return {
+        ...state,
+        stemFilters: writeFilterResonance(
+          state.stemFilters,
+          rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)),
+          action.resonance
         )
       }
     }

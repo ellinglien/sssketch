@@ -2562,3 +2562,84 @@ describe('automation curves', () => {
     expect({ ...back, mode: placed.mode }).toEqual(placed)
   })
 })
+
+describe('the filter lane resonance dial', () => {
+  it("stores one clip's resonance, clamped, without touching its mode or cutoff", () => {
+    const state = reducer(initialState, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: 1.4
+    })
+    expect(state.stemFilters['r1:0']).toEqual({ mode: 'lowpass', cutoff: 1, resonance: 1 })
+  })
+
+  it('turning the dial back to zero removes the entry, so the clip leaves the wire again', () => {
+    const turned = reducer(initialState, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: 0.6
+    })
+    const back = reducer(turned, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: 0
+    })
+    expect(Object.keys(back.stemFilters)).toEqual([])
+  })
+
+  it('keeps a clip whose filter is non-default even once its resonance is zeroed', () => {
+    const withFilter = {
+      ...initialState,
+      stemFilters: { 'r1:0': { mode: 'lowpass' as const, cutoff: 0.3, resonance: 0.5 } }
+    }
+    const state = reducer(withFilter, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: 0
+    })
+    expect(state.stemFilters['r1:0']).toEqual({ mode: 'lowpass', cutoff: 0.3, resonance: 0 })
+  })
+
+  it("a collapsed clip's dial writes the same value to every stem in the rifff", () => {
+    const shelved = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    const state = reducer(shelved, {
+      type: 'SET_GROUP_FILTER_RESONANCE',
+      groupId: 'r1',
+      resonance: 0.4
+    })
+    // makeRifff's own two stems live in slots 1 and 6.
+    expect(state.stemFilters['r1:1'].resonance).toBe(0.4)
+    expect(state.stemFilters['r1:6'].resonance).toBe(0.4)
+  })
+
+  it('ignores a group dial for a rifff that is gone', () => {
+    const state = reducer(initialState, {
+      type: 'SET_GROUP_FILTER_RESONANCE',
+      groupId: 'long-deleted',
+      resonance: 0.4
+    })
+    expect(state).toBe(initialState)
+  })
+
+  it('does not mutate the previous state -- undo snapshots have to stay intact', () => {
+    const before = reducer(initialState, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: 0.5
+    })
+    reducer(before, { type: 'SET_STEM_FILTER_RESONANCE', stemKey: 'r1:0', resonance: 0.9 })
+    expect(before.stemFilters['r1:0'].resonance).toBe(0.5)
+  })
+
+  it('never stores a non-finite value a hand-edited action could carry', () => {
+    const state = reducer(initialState, {
+      type: 'SET_STEM_FILTER_RESONANCE',
+      stemKey: 'r1:0',
+      resonance: Number.NaN
+    })
+    expect(Object.keys(state.stemFilters)).toEqual([])
+  })
+})

@@ -25,6 +25,7 @@ import {
   xToBar,
   yToValue
 } from '@shared/automationEdit'
+import { LaneResonanceDial } from './LaneResonanceDial'
 import { startPointerDrag } from './dragUtils'
 import { useAppSelector, useDispatch, useZoom } from '../state/StoreContext'
 
@@ -66,6 +67,13 @@ const EDGE_GRABBER_HIT_SIZE = 14
  * leaving nothing to draw on. The lane itself still works (it keeps whatever
  * parameter it was last set to) -- zooming in brings the picker back. */
 const PICKER_MIN_LANE_WIDTH_PX = 54
+
+/** Below this the resonance dial is dropped from the filter lane's corner,
+ * so a narrow clip keeps its picker AND something left to draw on. The dial
+ * is 16px wide on top of the picker's own 46 plus the corner's gaps; the
+ * filter's resonance is still reachable on that clip by zooming in, the
+ * same way its picker is. */
+const RESONANCE_DIAL_MIN_LANE_WIDTH_PX = 80
 
 /** A stable identity for "this lane has no curve", so the useAppSelector
  * below can compare with Object.is and not re-render every dispatch. */
@@ -364,6 +372,16 @@ export function AutomationLane({
 
   const showPicker = widthPx >= PICKER_MIN_LANE_WIDTH_PX
 
+  /** The filter lane -- and only the filter lane -- carries its resonance
+   * in its corner. Resonance is a stored per-clip setting rather than a
+   * fourth curve to draw (see AUTOMATION_PARAMS in @shared/toolkit): one
+   * filter you draw, with its resonance as a knob beside it, which is what
+   * Elling asked for on seeing the two separate lanes. It writes the same
+   * way this lane's own curve does -- per stem on an expanded rifff, across
+   * the whole rifff on a collapsed one -- by being handed the same target. */
+  const showResonanceDial =
+    showPicker && param === 'filterCutoff' && widthPx >= RESONANCE_DIAL_MIN_LANE_WIDTH_PX
+
   // Read directly off `points` (gesture-or-committed, same as the polyline
   // above), not off a separately-tracked drag value -- so a grabber's own
   // dot slides live during ITS OWN drag (setGesture triggers this re-render
@@ -441,6 +459,22 @@ export function AutomationLane({
               </option>
             ))}
           </select>
+          {showResonanceDial && (
+            // The same three guards the picker and the clear button carry,
+            // for the same reason: this corner sits ON the drawing surface,
+            // so without them turning the knob would also scribble a curve
+            // under it, a double-click reset would delete a breakpoint, and
+            // a right-click would clear the whole lane. The dial's own drag
+            // is pointer-captured, so only these first events can leak.
+            <span
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.stopPropagation()}
+              style={{ display: 'flex' }}
+            >
+              <LaneResonanceDial target={target} ariaLabel={`filter resonance for ${laneId}`} />
+            </span>
+          )}
           {committed.length > 0 && (
             <button
               onClick={(e) => {
