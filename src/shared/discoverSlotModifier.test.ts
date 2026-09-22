@@ -2,9 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   DISCOVER_SLOT_MODIFIER_LABEL,
   DISCOVER_SLOT_MODIFIER_OPTIONS,
-  normalizeSlotModifiers,
-  slotLabel,
-  slotModifiersKey,
   slotRollOptions,
   toggleSlotModifier
 } from './discoverSlotModifier'
@@ -24,24 +21,6 @@ describe('DISCOVER_SLOT_MODIFIER_OPTIONS', () => {
   })
 })
 
-describe('normalizeSlotModifiers', () => {
-  it('dedupes and returns canonical order', () => {
-    expect(normalizeSlotModifiers(['mine', 'endlesss', 'mine', 'preferFaves'])).toEqual([
-      'preferFaves',
-      'endlesss',
-      'mine'
-    ])
-  })
-
-  it('allows empty', () => {
-    expect(normalizeSlotModifiers([])).toEqual([])
-  })
-
-  it('treats a missing value (older slot objects) as empty', () => {
-    expect(normalizeSlotModifiers(undefined)).toEqual([])
-  })
-})
-
 describe('toggleSlotModifier', () => {
   it('turns a modifier on, keeping canonical order', () => {
     expect(toggleSlotModifier(['mine'], 'endlesss')).toEqual(['endlesss', 'mine'])
@@ -52,32 +31,12 @@ describe('toggleSlotModifier', () => {
     expect(toggleSlotModifier(['mine'], 'mine')).toEqual([])
   })
 
+  it('dedupes', () => {
+    expect(toggleSlotModifier(['mine', 'mine'], 'endlesss')).toEqual(['endlesss', 'mine'])
+  })
+
   it('endlesss and other are independent (both may be on)', () => {
     expect(toggleSlotModifier(['endlesss'], 'other')).toEqual(['endlesss', 'other'])
-  })
-})
-
-describe('slotModifiersKey', () => {
-  it('is order-independent', () => {
-    expect(slotModifiersKey(['mine', 'other'])).toBe(slotModifiersKey(['other', 'mine']))
-  })
-
-  it('differs by set', () => {
-    expect(slotModifiersKey(['mine'])).not.toBe(slotModifiersKey([]))
-  })
-})
-
-describe('slotLabel', () => {
-  it('joins kinds then modifiers', () => {
-    expect(slotLabel(['drums'], ['mine', 'other'])).toBe('drums · other sounds · my sounds')
-  })
-
-  it('is just the kinds label with no modifiers', () => {
-    expect(slotLabel(['warm', 'drums'], [])).toBe('drums · warm')
-  })
-
-  it('uses display labels for camelCase kinds', () => {
-    expect(slotLabel(['bassHeavy'], ['preferFaves'])).toBe('bass-heavy · prefer faves')
   })
 })
 

@@ -5,6 +5,7 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { Dial } from './Dial'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
+import { BracketToggle } from './BracketToggle'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
@@ -21,9 +22,6 @@ import {
 import {
   DISCOVER_SLOT_MODIFIER_LABEL,
   DISCOVER_SLOT_MODIFIER_OPTIONS,
-  normalizeSlotModifiers,
-  slotLabel,
-  slotModifiersKey,
   slotRollOptions,
   toggleSlotModifier,
   type DiscoverSlotModifier
@@ -140,12 +138,6 @@ export interface DiscoverSlot {
    * targets (normalizeSlotKinds) -- never empty. A one-click "+ drums" slot
    * is ['drums']. Editable after creation via the kind picker. */
   kinds: DiscoverSlotKind[]
-  /** Per-slot modifiers, 2026-09-22 (mockup "option A"): what used to be
-   * Discover's four global toolbar filters (prefer favourites, endlesss /
-   * other sound source, only my stems), now chosen per slot in the add row
-   * and the kind picker. Normalized (normalizeSlotModifiers); may be empty.
-   * Every roll derives its filters from this via slotRollOptions. */
-  modifiers: DiscoverSlotModifier[]
   locked: boolean
   candidate: DiscoverCandidate | null
   /** An already-resolved stem this slot should start showing immediately,
@@ -216,8 +208,8 @@ export function freshSlotId(): string {
   return `slot-${crypto.randomUUID()}`
 }
 
-// Armed by default in the add row -- see pendingAddModifiers.
-const DEFAULT_ADD_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', 'mine']
+// The global roll filters' starting state -- see globalModifiers.
+const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', 'mine']
 
 // Picks one of `options` uniformly at random, for the "+ random"
 // slot-creation button (addRandomSlot below). Deliberately NOT
@@ -400,6 +392,16 @@ export function DiscoverPanel({
     release: releaseEngine
   } = useEngineOwnership()
   const hasUsername = currentUsername.trim() !== ''
+  // Direct request, 2026-09-22: the four roll filters (prefer faves,
+  // endlesss sounds, other sounds, my sounds) are GLOBAL sticky [x] toggles
+  // in their own row under the add row -- after a same-day stint as
+  // per-slot modifiers. Every roll and reroll of every slot reads the
+  // current set, so toggling one affects all future rolls. In-memory only,
+  // like the pre-modifier globals were. 'my sounds' is shown unchecked and
+  // disabled -- and slotRollOptions ignores it -- while no username is set.
+  const [globalModifiers, setGlobalModifiers] =
+    useState<DiscoverSlotModifier[]>(DEFAULT_GLOBAL_MODIFIERS)
+  const globalRollOptions = slotRollOptions(globalModifiers, { hasUsername })
   const stemFavourites = useStemFavourites()
   const { toggleStemFavourite } = useStemFavouritesActions()
 
@@ -1206,18 +1208,18 @@ export function DiscoverPanel({
     applySlotsSnapshot(snapshot)
   }
 
-  function addSlot(kinds: DiscoverSlotKind[], modifiers: DiscoverSlotModifier[] = []): void {
+  function addSlot(kinds: DiscoverSlotKind[]): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
-      { id, kinds, modifiers, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
     const projectIsEmpty = !Object.values(rifffsState).some((r) => r.startBar !== undefined)
     if (projectIsEmpty) {
-      void rollRandomForSlot(id, kinds, modifiers)
+      void rollRandomForSlot(id, kinds)
     } else {
-      void rollForSlot(id, kinds, modifiers)
+      void rollForSlot(id, kinds)
     }
   }
 
@@ -1229,28 +1231,7 @@ export function DiscoverPanel({
   // click bright = a drums · bright slot"). The row's order never changes,
   // so combining never needs the cursor to move. Esc disarms.
   //
-  // Per-slot modifiers, 2026-09-22 (mockup "option A"): the pending
-  // selection also holds modifiers (prefer faves, endlesss/other sounds,
-  // my sounds). A modifier on its own can't make a slot, so a plain click
-  // on a modifier with no kind armed just arms it; with a kind armed it
-  // adds (armed + that modifier), same as clicking a kind.
-  //
-  // Direct request, 2026-09-22: endlesss sounds, other sounds and my sounds
-  // start ARMED (DEFAULT_ADD_MODIFIERS) -- the user deselects them with
-  // cmd-click; a plain click never un-arms a lit modifier. Adding a slot
-  // and Esc both return to this default, not to empty. 'mine' is dropped
-  // from what's actually added (and shown unlit) while no username is set.
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
-  const [pendingAddModifiers, setPendingAddModifiers] =
-    useState<DiscoverSlotModifier[]>(DEFAULT_ADD_MODIFIERS)
-  const effectiveAddModifiers = hasUsername
-    ? pendingAddModifiers
-    : pendingAddModifiers.filter((m) => m !== 'mine')
-
-  function clearPendingAdd(): void {
-    setPendingAddKinds([])
-    setPendingAddModifiers(DEFAULT_ADD_MODIFIERS)
-  }
 
   function handleAddRowKindClick(kind: DiscoverSlotKind, arm: boolean): void {
     if (arm) {
@@ -1263,29 +1244,11 @@ export function DiscoverPanel({
       ? pendingAddKinds
       : toggleSlotKind(pendingAddKinds, kind, { allowEmpty: true })
     if (withClicked.length === 0) return
-    addSlot(withClicked, effectiveAddModifiers)
-    clearPendingAdd()
+    addSlot(withClicked)
+    setPendingAddKinds([])
   }
 
-  function handleAddRowModifierClick(modifier: DiscoverSlotModifier, arm: boolean): void {
-    if (modifier === 'mine' && !hasUsername) return
-    if (arm) {
-      setPendingAddModifiers((prev) => toggleSlotModifier(prev, modifier))
-      return
-    }
-    if (pendingAddKinds.length === 0) {
-      // No kind to apply it to yet: a plain click only ever ARMS (never
-      // un-arms -- that takes cmd-click).
-      setPendingAddModifiers((prev) => normalizeSlotModifiers([...prev, modifier]))
-      return
-    }
-    addSlot(pendingAddKinds, normalizeSlotModifiers([...effectiveAddModifiers, modifier]))
-    clearPendingAdd()
-  }
-
-  const hasPendingAdd =
-    pendingAddKinds.length > 0 ||
-    slotModifiersKey(pendingAddModifiers) !== slotModifiersKey(DEFAULT_ADD_MODIFIERS)
+  const hasPendingAdd = pendingAddKinds.length > 0
   useEffect(() => {
     if (!hasPendingAdd) return
     function handleKeyDown(e: KeyboardEvent): void {
@@ -1293,7 +1256,6 @@ export function DiscoverPanel({
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       setPendingAddKinds([])
-      setPendingAddModifiers(DEFAULT_ADD_MODIFIERS)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -1312,19 +1274,18 @@ export function DiscoverPanel({
   // getRandomLibraryCandidate's own "labeled with the caller's kind, not a
   // claim it IS that role" convention. Picks from every kind -- since
   // 2026-09-22 every kind can draw audio-in/mic stems too, and the roll
-  // itself still honours the slot's own sound-source/my-sounds modifiers
-  // (the add row's armed ones, since 2026-09-22; the kind stays random).
+  // itself still honours the global sound-source/my-sounds toggles (the
+  // kind stays random).
   function addRandomSlot(): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     const kinds = [randomDiscoverSlotKind(DISCOVER_SLOT_KIND_OPTIONS)]
-    const modifiers = effectiveAddModifiers
     setSlots((prev) => [
       ...prev,
-      { id, kinds, modifiers, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
-    void rollRandomForSlot(id, kinds, modifiers)
-    clearPendingAdd()
+    void rollRandomForSlot(id, kinds)
+    setPendingAddKinds([])
   }
 
   // Direct request, 2026-09-18: "drag a loop into discover as an added
@@ -1398,7 +1359,6 @@ export function DiscoverPanel({
       newSlots.push({
         id: freshSlotId(),
         kinds: ['bright'],
-        modifiers: [],
         locked: false,
         candidate: null,
         hasRerolled: true,
@@ -1548,11 +1508,7 @@ export function DiscoverPanel({
   // needs to roll a slot in the SAME tick it mints it, before that slot has
   // made it into `slots` state (a plain function defined in this render
   // still closes over THIS render's `slots`, which doesn't include it yet).
-  async function rollForSlot(
-    id: string,
-    kinds: DiscoverSlotKind[],
-    modifiers: DiscoverSlotModifier[]
-  ): Promise<void> {
+  async function rollForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
     // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
     // comment above. Any earlier call for this SAME slot id that's still
     // awaiting getDiscoverCandidates when THIS call resolves is now stale
@@ -1561,14 +1517,14 @@ export function DiscoverPanel({
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      // The slot's own modifiers (per-slot since 2026-09-22). An empty
+      // The global [x] toggles under the add row (globalRollOptions). An empty
       // currentUsername means "no known identity," not "filter to the empty
       // string" -- slotRollOptions only sets onlyOwnStems with a username,
       // mirroring LibraryBrowser.tsx's own buildRiffFilters guard. Without
       // that, (onlyOwnStems: true, targetUser: '') would make
       // getDiscoverCandidates' own `CreatorUserName !== targetUser` check
       // exclude essentially every real stem -- zero candidates, forever.
-      const rollOptions = slotRollOptions(modifiers, { hasUsername })
+      const rollOptions = globalRollOptions
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
       // from the outside, whether the IPC call itself was the slow part
@@ -1657,7 +1613,7 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
-    await rollForSlot(id, slot.kinds, slot.modifiers)
+    await rollForSlot(id, slot.kinds)
   }
 
   // Combination slots, 2026-09-21: the kind picker on a slot's own label.
@@ -1668,18 +1624,7 @@ export function DiscoverPanel({
     if (!slot) return
     pushUndoSnapshot()
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, kinds } : s)))
-    void rollForSlot(id, kinds, slot.modifiers)
-  }
-
-  // Per-slot modifiers, 2026-09-22: the kind picker's modifiers row. Same
-  // shape as changeSlotKinds -- one undo step, always rerolls (the old
-  // candidate was drawn under the old filters).
-  function changeSlotModifiers(id: string, modifiers: DiscoverSlotModifier[]): void {
-    const slot = slots.find((s) => s.id === id)
-    if (!slot) return
-    pushUndoSnapshot()
-    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, modifiers } : s)))
-    void rollForSlot(id, slot.kinds, modifiers)
+    void rollForSlot(id, kinds)
   }
 
   // Direct request, 2026-09-15: "an option to just start with a completely
@@ -1692,16 +1637,12 @@ export function DiscoverPanel({
   // SAME stale-response guard against each other (a random roll landing
   // after a NEWER normal reroll for the same slot, or vice versa, must
   // not overwrite it).
-  async function rollRandomForSlot(
-    id: string,
-    kinds: DiscoverSlotKind[],
-    modifiers: DiscoverSlotModifier[]
-  ): Promise<void> {
+  async function rollRandomForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      const rollOptions = slotRollOptions(modifiers, { hasUsername })
+      const rollOptions = globalRollOptions
       const candidate = await window.rifffApi.getRandomDiscoverCandidate(
         kinds,
         rollOptions.onlyOwnStems,
@@ -1731,7 +1672,7 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
-    await rollRandomForSlot(id, slot.kinds, slot.modifiers)
+    await rollRandomForSlot(id, slot.kinds)
   }
 
   async function rerollAll(): Promise<void> {
@@ -1775,7 +1716,7 @@ export function DiscoverPanel({
     for (const slotId of slotIds) {
       const current = slotsRef.current.find((s) => s.id === slotId)
       if (!current) continue
-      if (!current.locked) await rollForSlot(current.id, current.kinds, current.modifiers)
+      if (!current.locked) await rollForSlot(current.id, current.kinds)
     }
   }
 
@@ -2430,8 +2371,8 @@ export function DiscoverPanel({
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
             onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
-            onChangeModifiers={(modifiers) => changeSlotModifiers(slot.id, modifiers)}
-            hasUsername={hasUsername}
+            soundSourceEndlesss={globalRollOptions.soundSource.endlesss}
+            soundSourceAudioIn={globalRollOptions.soundSource.audioIn}
           />
         ))
       })()}
@@ -2460,7 +2401,14 @@ export function DiscoverPanel({
           Direct request, 2026-09-22 ("use more of the space below, no need
           to be constrained by wave length"): the waveform-span margins
           (152/498 above) are dropped -- the chip list now centres across the
-          panel's full width, so it fits on one line instead of wrapping. */}
+          panel's full width, so it fits on one line instead of wrapping.
+
+          Direct request, 2026-09-22 (later the same day): the four roll
+          filters are global again -- [x] toggles in their own row directly
+          under the kinds row (see globalModifiers), and "+ random" joins the
+          trait group. The dial column is vertically centred beside both
+          rows; the hint line sits in a second grid row so it doesn't pull
+          the dial off-centre. */}
       <div
         style={{
           display: 'grid',
@@ -2469,7 +2417,15 @@ export function DiscoverPanel({
         }}
       >
         <div />
-        <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 6
+          }}
+        >
           <div
             style={{
               display: 'flex',
@@ -2493,26 +2449,10 @@ export function DiscoverPanel({
                 </Fragment>
               )
             })}
-            <AddRowDivider />
-            {/* Per-slot modifiers, 2026-09-22 -- see handleAddRowModifierClick. */}
-            {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
-              const disabled = modifier === 'mine' && !hasUsername
-              return (
-                <AddRowChip
-                  key={modifier}
-                  selected={effectiveAddModifiers.includes(modifier)}
-                  disabled={disabled}
-                  tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
-                  onClick={(e) => handleAddRowModifierClick(modifier, e.metaKey)}
-                >
-                  {DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
-                </AddRowChip>
-              )
-            })}
-            <AddRowDivider />
             {/* Direct request, 2026-09-20: "add + Random to the bottom list" --
                 a slot seeded from a genuinely random stem rather than any
-                one kind's own pool (see addRandomSlot's own doc comment). */}
+                one kind's own pool (see addRandomSlot's own doc comment).
+                Sits right after warm, in the trait group, since 2026-09-22. */}
             <AddRowChip
               selected={false}
               title="add a slot seeded from a genuinely random stem, skipping kind matching entirely"
@@ -2520,6 +2460,7 @@ export function DiscoverPanel({
             >
               + random
             </AddRowChip>
+            <AddRowDivider />
             <AddRowChip
               selected={false}
               title="pick a WAV file from disk and add it as a new loop-seeded slot -- same import as dragging a file onto this panel"
@@ -2528,17 +2469,29 @@ export function DiscoverPanel({
               + sample
             </AddRowChip>
           </div>
-          {/* Always rendered (fixed height) so nothing shifts on screen. */}
+          {/* Global roll filters -- see globalModifiers. */}
           <div
             style={{
-              height: 14,
-              marginTop: 6,
-              textAlign: 'center',
-              fontSize: 9,
-              color: 'var(--ra-text-3)'
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
           >
-            hold cmd to combine
+            {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
+              const disabled = modifier === 'mine' && !hasUsername
+              return (
+                <BracketToggle
+                  key={modifier}
+                  checked={!disabled && globalModifiers.includes(modifier)}
+                  onChange={() => setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))}
+                  label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
+                  disabled={disabled}
+                  tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
+                />
+              )
+            })}
           </div>
         </div>
         <div
@@ -2571,6 +2524,19 @@ export function DiscoverPanel({
             </span>
           </div>
         </div>
+        {/* Always rendered (fixed height) so nothing shifts on screen. */}
+        <div
+          style={{
+            gridColumn: 2,
+            height: 14,
+            marginTop: 6,
+            textAlign: 'center',
+            fontSize: 9,
+            color: 'var(--ra-text-3)'
+          }}
+        >
+          hold cmd to combine
+        </div>
       </div>
     </div>
   )
@@ -2592,19 +2558,15 @@ function AddRowDivider(): React.JSX.Element {
   )
 }
 
-// One chip in the add row -- kinds, modifiers and the + random / + sample
-// actions all share this styling (lit while armed).
+// One chip in the add row -- kinds and the + random / + sample actions all
+// share this styling (lit while armed).
 function AddRowChip({
   selected,
-  disabled = false,
-  tooltip,
   title,
   onClick,
   children
 }: {
   selected: boolean
-  disabled?: boolean
-  tooltip?: string
   title?: string
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   children: React.ReactNode
@@ -2612,12 +2574,8 @@ function AddRowChip({
   return (
     <button
       aria-pressed={selected}
-      aria-disabled={disabled}
-      data-tooltip={tooltip}
       title={title}
-      onClick={(e) => {
-        if (!disabled) onClick(e)
-      }}
+      onClick={onClick}
       style={{
         fontFamily: 'inherit',
         fontSize: 9,
@@ -2625,8 +2583,7 @@ function AddRowChip({
         background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
         border: `1px solid ${selected ? 'var(--ra-text)' : 'transparent'}`,
         color: selected ? 'var(--ra-text)' : 'var(--ra-text-2)',
-        opacity: disabled ? 0.3 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer'
+        cursor: 'pointer'
       }}
     >
       {children}
@@ -2807,8 +2764,8 @@ function DiscoverSlotRow({
   onGainChange,
   onSwapFromNearby,
   onChangeKinds,
-  onChangeModifiers,
-  hasUsername
+  soundSourceEndlesss,
+  soundSourceAudioIn
 }: {
   slot: DiscoverSlot
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
@@ -2830,7 +2787,7 @@ function DiscoverSlotRow({
   soloed: boolean
   /** True when this slot's own resolved candidate's stemCID is in
    * DiscoverPanel's own `stemFavourites` set -- direct request,
-   * 2026-09-16, star a stem so a slot's own "prefer faves" modifier can
+   * 2026-09-16, star a stem so the global "prefer faves" toggle can
    * bias future rolls toward it. Persisted (see
    * StoreContext.tsx's useStemFavourites), not per-session. */
   favourited: boolean
@@ -2918,11 +2875,13 @@ function DiscoverSlotRow({
   /** DiscoverPanel's own changeSlotKinds -- fired by the kind picker on
    * every chip toggle (the panel rerolls this slot). */
   onChangeKinds: (kinds: DiscoverSlotKind[]) => void
-  /** DiscoverPanel's own changeSlotModifiers -- the kind picker's modifiers
-   * row (per-slot modifiers, 2026-09-22). */
-  onChangeModifiers: (modifiers: DiscoverSlotModifier[]) => void
-  /** Gates the 'my sounds' modifier chip in the kind picker. */
-  hasUsername: boolean
+  /** DiscoverPanel's own global endlesss sounds / other sounds toggles
+   * (globalRollOptions) -- passed as two primitive booleans, not one
+   * object, so this row's own re-render checks stay cheap; combined into a
+   * real DiscoverSoundSourceFilter object only where actually needed below
+   * (the "explore nearby" popover). */
+  soundSourceEndlesss: boolean
+  soundSourceAudioIn: boolean
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -3457,7 +3416,7 @@ function DiscoverSlotRow({
             </button>
             {/* Direct request, 2026-09-16: star a stem to favourite it,
                 then optionally bias future rolls toward favourites (the
-                slot's own "prefer faves" modifier). Reuses
+                global "prefer faves" toggle). Reuses
                 `--ra-recording-live` for the filled/active state -- the
                 same token RiffCircle.tsx already uses for its own
                 "favourited" semantic, just applied to a literal star glyph
@@ -3776,10 +3735,8 @@ function DiscoverSlotRow({
             setKindMenu({ x: rect.left, y: rect.bottom + 4 })
           }}
           aria-expanded={kindMenu !== null}
-          aria-label={`kinds: ${slotLabel(slot.kinds, slot.modifiers)}`}
-          data-tooltip={
-            slot.locked ? 'unlock to change kinds' : slotLabel(slot.kinds, slot.modifiers)
-          }
+          aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
+          data-tooltip={slot.locked ? 'unlock to change kinds' : slotKindsLabel(slot.kinds)}
           style={{
             gridColumn: 9,
             display: 'flex',
@@ -3797,7 +3754,7 @@ function DiscoverSlotRow({
           }}
         >
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {slotLabel(slot.kinds, slot.modifiers)}
+            {slotKindsLabel(slot.kinds)}
           </span>
           {!slot.locked && <span aria-hidden="true">▾</span>}
         </button>
@@ -3930,7 +3887,7 @@ function DiscoverSlotRow({
           y={nearbyMenu.y}
           startCandidate={nearbyAnchor}
           kinds={slot.kinds}
-          soundSource={slotRollOptions(slot.modifiers, { hasUsername }).soundSource}
+          soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
@@ -3941,10 +3898,7 @@ function DiscoverSlotRow({
           x={kindMenu.x}
           y={kindMenu.y}
           kinds={slot.kinds}
-          modifiers={normalizeSlotModifiers(slot.modifiers)}
-          hasUsername={hasUsername}
           onChange={onChangeKinds}
-          onChangeModifiers={onChangeModifiers}
           onClose={closeKindMenu}
           ignoreRef={kindButtonRef}
         />

@@ -85,7 +85,6 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
     return {
       id: freshSlotId(),
       kinds: [discoverSlotKindForSoundType(stem.type)],
-      modifiers: [],
       locked: false,
       candidate: null,
       hasRerolled: true,
@@ -113,7 +112,6 @@ export function buildSeedSlotsFromCandidates(
   return candidates.slice(0, MAX_SEED_SLOTS).map((candidate) => ({
     id: freshSlotId(),
     kinds: normalizeSlotKinds(candidate.slotKinds),
-    modifiers: [],
     locked: false,
     candidate,
     hasRerolled: true,

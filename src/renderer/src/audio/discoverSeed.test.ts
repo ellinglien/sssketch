@@ -67,11 +67,6 @@ describe('buildSeedSlotsFromStems', () => {
     expect(slots[0].gain).toBe(1)
   })
 
-  it('starts every slot with no modifiers', () => {
-    const slots = buildSeedSlotsFromStems([fixtureStem()])
-    expect(slots[0].modifiers).toEqual([])
-  })
-
   it('gives every slot a fresh, distinct id', () => {
     const slots = buildSeedSlotsFromStems([fixtureStem(), fixtureStem()])
     expect(slots[0].id).not.toBe(slots[1].id)
@@ -104,11 +99,6 @@ describe('buildSeedSlotsFromCandidates', () => {
     expect(slots[1].kinds).toEqual(['bass'])
   })
 
-  it('starts every slot with no modifiers', () => {
-    const slots = buildSeedSlotsFromCandidates([fixtureCandidate({ slotKinds: ['drums'] })])
-    expect(slots[0].modifiers).toEqual([])
-  })
-
   it('each slot has seedStem: undefined, locked: false, hasRerolled: true, gain: 1', () => {
     const slots = buildSeedSlotsFromCandidates([fixtureCandidate()])
     expect(slots[0].seedStem).toBeUndefined()
@@ -133,7 +123,6 @@ function fixtureSlot(overrides: Partial<DiscoverSlot> = {}): DiscoverSlot {
   return {
     id: 'slot-1',
     kinds: ['drums'],
-    modifiers: [],
     locked: false,
     candidate: null,
     hasRerolled: false,
