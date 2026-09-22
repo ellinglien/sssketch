@@ -62,7 +62,13 @@ const BATCH_DELAY_MS = 500
  * underneath (getStemFeatures/getOrExtractStemEmbedding's own caches make
  * a re-attempt on an already-cached stem cheap, not wasted) -- this
  * display just doesn't claim credit for it, rather than inventing a
- * persisted cursor this v1 doesn't have. */
+ * persisted cursor this v1 doesn't have.
+ *
+ * Feature versions (2026-09-22, Phase 3): stems whose persisted features
+ * predate STEM_FEATURE_VERSION are re-extracted by this same loop, so the
+ * first pass after a version bump is a real re-analysis of every old row
+ * (same hours-long throttled scale as the very first pass), not a series
+ * of cache hits. Old rows stay usable by Discover until replaced. */
 export function DiscoverLibraryScan(): React.JSX.Element | null {
   const [total, setTotal] = useState<number | null>(null)
   const [completed, setCompleted] = useState(0)
@@ -107,13 +113,21 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
               batch.flatMap((target) => {
                 attemptedRef.current.add(target.key)
                 return [
-                  getStemFeatures(target.path).catch((err: unknown) => {
-                    console.error(
-                      'DiscoverLibraryScan: feature extraction failed for',
-                      target.path,
-                      err
-                    )
-                  }),
+                  // requireCurrentVersion: a row extracted before
+                  // STEM_FEATURE_VERSION is re-extracted and re-persisted
+                  // (Phase 3 of the 2026-09-22 promise-vs-delivery spec).
+                  // The target list is every downloaded stem, extracted or
+                  // not, so old rows are always reached; current rows stay
+                  // a cheap persisted-cache hit.
+                  getStemFeatures(target.path, { requireCurrentVersion: true }).catch(
+                    (err: unknown) => {
+                      console.error(
+                        'DiscoverLibraryScan: feature extraction failed for',
+                        target.path,
+                        err
+                      )
+                    }
+                  ),
                   // getOrExtractStemEmbedding never throws (see its own doc
                   // comment), so a rejection here would be a genuine bug,
                   // not an expected failure mode -- still safe to include

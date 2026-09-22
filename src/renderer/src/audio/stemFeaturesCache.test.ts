@@ -131,4 +131,76 @@ describe('stemFeaturesCache', () => {
 
     expect(setStemFeatureCacheMock).toHaveBeenCalledWith('/some/stem.wav', features)
   })
+
+  describe('feature versions', () => {
+    const oldRow = {
+      transientDensity: 0.7,
+      bassEnergyRatio: 0.2,
+      spectralCentroidHz: 900,
+      zcrBrightness: 0.3,
+      voicedFraction: 0.5,
+      pitchVarianceCents: 15,
+      mfcc: Array.from({ length: 13 }, (_, i) => i)
+    }
+
+    it('an interactive caller still gets an old-version persisted row immediately', async () => {
+      getStemFeatureCacheMock.mockResolvedValue(oldRow)
+      const { getStemFeatures } = await import('./stemFeaturesCache')
+      expect(await getStemFeatures('/some/stem.wav')).toEqual(oldRow)
+      expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    })
+
+    it('requireCurrentVersion re-extracts and re-persists an old-version row', async () => {
+      getStemFeatureCacheMock.mockResolvedValue(oldRow)
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+      const { getStemFeatures } = await import('./stemFeaturesCache')
+      const { STEM_FEATURE_VERSION } = await import('@shared/stemFeatures')
+
+      const features = await getStemFeatures('/some/stem.wav', { requireCurrentVersion: true })
+      expect(features.featureVersion).toBe(STEM_FEATURE_VERSION)
+      expect(typeof features.rhythmicStrength).toBe('number')
+      expect(setStemFeatureCacheMock).toHaveBeenCalledWith('/some/stem.wav', features)
+    })
+
+    it('requireCurrentVersion returns a current-version persisted row without decoding', async () => {
+      const { STEM_FEATURE_VERSION } = await import('@shared/stemFeatures')
+      const current = { ...oldRow, rhythmicStrength: 0.4, featureVersion: STEM_FEATURE_VERSION }
+      getStemFeatureCacheMock.mockResolvedValue(current)
+      const { getStemFeatures } = await import('./stemFeaturesCache')
+      expect(await getStemFeatures('/some/stem.wav', { requireCurrentVersion: true })).toEqual(
+        current
+      )
+      expect(decodeAudioDataMock).not.toHaveBeenCalled()
+      expect(setStemFeatureCacheMock).not.toHaveBeenCalled()
+    })
+
+    it('an old row already in the session cache is refreshed for requireCurrentVersion, and later interactive calls get the fresh one', async () => {
+      getStemFeatureCacheMock.mockResolvedValue(oldRow)
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+      const { getStemFeatures } = await import('./stemFeaturesCache')
+      const { STEM_FEATURE_VERSION } = await import('@shared/stemFeatures')
+
+      expect(await getStemFeatures('/some/stem.wav')).toEqual(oldRow)
+      const fresh = await getStemFeatures('/some/stem.wav', { requireCurrentVersion: true })
+      expect(fresh.featureVersion).toBe(STEM_FEATURE_VERSION)
+      expect(await getStemFeatures('/some/stem.wav')).toBe(fresh)
+    })
+
+    it('concurrent requireCurrentVersion callers share one re-extraction', async () => {
+      getStemFeatureCacheMock.mockResolvedValue(oldRow)
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+      const { getStemFeatures } = await import('./stemFeaturesCache')
+
+      await getStemFeatures('/some/stem.wav')
+      const [a, b] = await Promise.all([
+        getStemFeatures('/some/stem.wav', { requireCurrentVersion: true }),
+        getStemFeatures('/some/stem.wav', { requireCurrentVersion: true })
+      ])
+      expect(a).toBe(b)
+      expect(setStemFeatureCacheMock).toHaveBeenCalledTimes(1)
+    })
+  })
 })

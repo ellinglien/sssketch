@@ -69,13 +69,17 @@ export function BackgroundFeatureScan(): null {
           batch.flatMap((fs) => {
             attemptedRef.current.add(fs.stem.path)
             return [
-              getStemFeatures(fs.stem.path).catch((err: unknown) => {
-                console.error(
-                  'BackgroundFeatureScan: feature extraction failed for stem',
-                  fs.stem.path,
-                  err
-                )
-              }),
+              // requireCurrentVersion: re-extract a row older than
+              // STEM_FEATURE_VERSION (2026-09-22 spec, Phase 3).
+              getStemFeatures(fs.stem.path, { requireCurrentVersion: true }).catch(
+                (err: unknown) => {
+                  console.error(
+                    'BackgroundFeatureScan: feature extraction failed for stem',
+                    fs.stem.path,
+                    err
+                  )
+                }
+              ),
               // Embedding extraction (Plan B2) rides the exact same batch/
               // throttle loop as the hand-crafted feature extraction above,
               // rather than a second parallel scan -- getOrExtractStemEmbedding
