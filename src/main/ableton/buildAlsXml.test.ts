@@ -1351,3 +1351,415 @@ function sendHolderIds(track: AlsNode, trackTag: string): string[] {
   const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
   return findAllChildren(childArray(sends, 'Sends'), 'TrackSendHolder').map((n) => attrs(n)['@_Id'])
 }
+
+// Navigates <trackTag> > AutomationEnvelopes > Envelopes and returns each
+// envelope as the pair that actually matters: what it points at, and its
+// events in document order.
+function envelopesOf(
+  track: AlsNode,
+  trackTag: 'AudioTrack' | 'ReturnTrack' = 'AudioTrack'
+): { pointeeId: string; events: { time: number; value: number }[] }[] {
+  const body = childArray(track, trackTag)
+  const automationEnvelopes = findChild(body, 'AutomationEnvelopes')!
+  const envelopes = findChild(childArray(automationEnvelopes, 'AutomationEnvelopes'), 'Envelopes')!
+  return findAllChildren(childArray(envelopes, 'Envelopes'), 'AutomationEnvelope').map((env) => {
+    const envBody = childArray(env, 'AutomationEnvelope')
+    const target = findChild(envBody, 'EnvelopeTarget')!
+    const pointeeId = attrs(findChild(childArray(target, 'EnvelopeTarget'), 'PointeeId')!)[
+      '@_Value'
+    ]
+    const automation = findChild(envBody, 'Automation')!
+    const events = findChild(childArray(automation, 'Automation'), 'Events')!
+    return {
+      pointeeId,
+      events: findAllChildren(childArray(events, 'Events'), 'FloatEvent').map((e) => ({
+        time: Number(attrs(e)['@_Time']),
+        value: Number(attrs(e)['@_Value'])
+      }))
+    }
+  })
+}
+
+/** The devices on a track -- AudioTrack > DeviceChain > DeviceChain >
+ * Devices, the INNER one (the outer holds the mixer and the sequencer). */
+function devicesOfTrack(track: AlsNode): AlsNode[] {
+  const body = childArray(track, 'AudioTrack')
+  const outer = findChild(body, 'DeviceChain')!
+  const inner = findChild(childArray(outer, 'DeviceChain'), 'DeviceChain')!
+  return childArray(findChild(childArray(inner, 'DeviceChain'), 'Devices')!, 'Devices')
+}
+
+function manualOf(param: AlsNode, tag: string): number {
+  return Number(attrs(findChild(childArray(param, tag), 'Manual')!)['@_Value'])
+}
+
+function automationTargetIdOf(param: AlsNode, tag: string): string {
+  return attrs(findChild(childArray(param, tag), 'AutomationTarget')!)['@_Id']
+}
+
+function mixerBodyOf(
+  track: AlsNode,
+  trackTag: 'AudioTrack' | 'ReturnTrack' = 'AudioTrack'
+): AlsNode[] {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  return childArray(findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!, 'Mixer')
+}
+
+const AUTO_FILTER_XML = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'autoFilter2.xml'),
+  'utf-8'
+)
+
+/** Two stems on one bus that do NOT overlap in time -- the case packIntoTracks
+ * exists for, and therefore the case that shows automation mode refusing to
+ * pack. */
+function twoStemState(): AppState {
+  const early: Rifff = { ...drumsRifff(), groupId: 'a', name: 'early', startBar: 0 }
+  const late: Rifff = { ...drumsRifff(), groupId: 'b', name: 'late', startBar: 16 }
+  return emptyAppState({
+    rifffs: { a: early, b: late },
+    busOf: { 'a:0': 'drums', 'b:0': 'drums' },
+    channelOrder: ['a', 'b'],
+    channelOf: { a: 'a', b: 'b' }
+  })
+}
+
+describe('the built-in sound toolkit', () => {
+  const fileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+  function toolkitState(overrides: Partial<AppState>): AppState {
+    return emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() }, // startBar 8, 4 bars long
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' },
+      ...overrides
+    })
+  }
+
+  it('leaves a project that uses none of it byte-for-byte unchanged', () => {
+    const state = toolkitState({})
+    const before = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames)
+    const after = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+      mode: 'bake',
+      toolkitAudio: { bakedClips: new Map() },
+      autoFilterXml: AUTO_FILTER_XML
+    })
+    expect(after).toBe(before)
+  })
+
+  describe('bake in', () => {
+    it('references the baked render as one unwarped, unlooped clip at unity volume', () => {
+      const state = toolkitState({
+        vol: { 'rifff-1:0': 0.4 },
+        stemAutomation: { 'rifff-1:0': { volume: [{ bar: 0, value: 0.2 }] } }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map(), new Map(), {
+        mode: 'bake',
+        toolkitAudio: {
+          bakedClips: new Map([['rifff-1:0', { fileName: 'baked.wav', tailBars: 2 }]])
+        }
+      })
+      const { tracks } = tracksOf(xml)
+      const clip = findAudioClip(findChild(tracks, 'AudioTrack'))
+      const clipBody = childArray(clip, 'AudioClip')
+
+      // startBar 8 -> beat 32; 4 bars of clip + 2 bars of rendered reverb
+      // tail -> beat 32 + 24.
+      expect(attrs(clip)['@_Time']).toBe('32')
+      expect(attrs(findChild(clipBody, 'CurrentStart')!)['@_Value']).toBe('32')
+      expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('56')
+      expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
+      const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
+      expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
+      // The render is laid out on the arrangement's own timeline, so "where
+      // in the file" is just "where on the timeline".
+      expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('32')
+      expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('56')
+      // The gain dial and the volume curve are both already in the audio.
+      expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('1')
+      expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('false')
+      const fileRef = findChild(
+        childArray(findChild(clipBody, 'SampleRef')!, 'SampleRef'),
+        'FileRef'
+      )!
+      expect(attrs(findChild(childArray(fileRef, 'FileRef'), 'RelativePath')!)['@_Value']).toBe(
+        join('Samples', 'Imported', 'baked.wav')
+      )
+    })
+
+    it('does not split a baked clip at its mute regions -- they are baked too', () => {
+      const state = toolkitState({
+        muteRegions: { 'rifff-1:0': [{ startBar: 9, endBar: 10 }] },
+        stemSends: { 'rifff-1:0': 0.5 }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', new Map(), new Map(), {
+        mode: 'bake',
+        toolkitAudio: {
+          bakedClips: new Map([['rifff-1:0', { fileName: 'baked.wav', tailBars: 0 }]])
+        }
+      })
+      const { tracks } = tracksOf(xml)
+      const body = childArray(findChild(tracks, 'AudioTrack')!, 'AudioTrack')
+      const deviceChain = findChild(body, 'DeviceChain')!
+      const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+      const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+      const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+      const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+      expect(findAllChildren(childArray(events, 'Events'), 'AudioClip')).toHaveLength(1)
+    })
+
+    it('still packs two non-overlapping stems onto one track', () => {
+      const xml = buildAlsXml(
+        TEMPLATE_XML,
+        twoStemState(),
+        '/out',
+        new Map([
+          ['a:0', 'early.wav'],
+          ['b:0', 'late.wav']
+        ])
+      )
+      const { tracks } = tracksOf(xml)
+      expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(1)
+    })
+  })
+
+  describe('export the automation', () => {
+    it('gives every stem its own track, so no envelope is shared', () => {
+      const xml = buildAlsXml(
+        TEMPLATE_XML,
+        twoStemState(),
+        '/out',
+        new Map([
+          ['a:0', 'early.wav'],
+          ['b:0', 'late.wav']
+        ]),
+        new Map(),
+        { mode: 'automation', toolkitAudio: { bakedClips: new Map() } }
+      )
+      const { tracks } = tracksOf(xml)
+      expect(findAllChildren(tracks, 'AudioTrack')).toHaveLength(2)
+    })
+
+    it('writes the volume curve onto the track Volume, dial multiplied through, in beats', () => {
+      const state = toolkitState({
+        vol: { 'rifff-1:0': 0.5 },
+        stemAutomation: {
+          'rifff-1:0': {
+            volume: [
+              { bar: 0, value: 1 },
+              { bar: 4, value: 0 }
+            ]
+          }
+        }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() },
+        autoFilterXml: AUTO_FILTER_XML
+      })
+      const { tracks } = tracksOf(xml)
+      const track = findChild(tracks, 'AudioTrack')!
+      const volume = findChild(mixerBodyOf(track), 'Volume')!
+
+      // The dial itself lands on the track's own Volume (the reference doc's
+      // mapping for the gain dial) and comes OFF the clip, so it's applied
+      // exactly once.
+      expect(manualOf(volume, 'Volume')).toBe(0.5)
+      expect(
+        attrs(findChild(childArray(findAudioClip(track), 'AudioClip'), 'SampleVolume')!)['@_Value']
+      ).toBe('1')
+
+      const envelopes = envelopesOf(track)
+      expect(envelopes).toHaveLength(1)
+      expect(envelopes[0].pointeeId).toBe(automationTargetIdOf(volume, 'Volume'))
+      expect(envelopes[0].events).toEqual([
+        // The "before the timeline" sentinel carries the starting value.
+        { time: -63072000, value: 0.5 },
+        // Clip-relative bar 0 is the clip's own left edge, bar 8 -> beat 32;
+        // bar 4 of the curve -> beat 48. Values are dial x curve.
+        { time: 32, value: 0.5 },
+        { time: 48, value: 0 }
+      ])
+    })
+
+    it('does not also write clip fades when the volume curve is exported', () => {
+      const state = toolkitState({
+        stemAutomation: {
+          'rifff-1:0': {
+            volume: [
+              { bar: 0, value: 0 },
+              { bar: 1, value: 1 }
+            ]
+          }
+        }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(
+        TEMPLATE_XML,
+        state,
+        '/out',
+        fileNames,
+        new Map([['rifff-1:0', 44100]]),
+        {
+          mode: 'automation',
+          toolkitAudio: { bakedClips: new Map() }
+        }
+      )
+      const { tracks } = tracksOf(xml)
+      const clipBody = childArray(findAudioClip(findChild(tracks, 'AudioTrack')), 'AudioClip')
+      expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('false')
+    })
+
+    it('keeps ONE reverb return, one send holder per track, and automates that send', () => {
+      const state = toolkitState({
+        stemSends: { 'rifff-1:0': 0.25 },
+        stemAutomation: {
+          'rifff-1:0': {
+            reverbSend: [
+              { bar: 0, value: 0 },
+              { bar: 2, value: 1 }
+            ]
+          }
+        }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() }
+      })
+      const { liveSetChildren, tracks } = tracksOf(xml)
+
+      const returns = findAllChildren(tracks, 'ReturnTrack')
+      expect(returns).toHaveLength(1)
+      // Every track's send-holder count has to match the return count -- the
+      // mismatch is what used to crash Ableton.
+      expect(sendHolderIds(findChild(tracks, 'AudioTrack')!, 'AudioTrack')).toHaveLength(1)
+      expect(sendHolderIds(findChild(tracks, 'GroupTrack')!, 'GroupTrack')).toHaveLength(1)
+      expect(sendHolderIds(returns[0], 'ReturnTrack')).toHaveLength(1)
+      const sendsPre = findChild(liveSetChildren, 'SendsPre')!
+      expect(childArray(sendsPre, 'SendsPre')).toHaveLength(1)
+
+      const track = findChild(tracks, 'AudioTrack')!
+      const sends = findChild(mixerBodyOf(track), 'Sends')!
+      const holder = findChild(childArray(sends, 'Sends'), 'TrackSendHolder')!
+      const send = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
+      const envelope = envelopesOf(track).find(
+        (e) => e.pointeeId === automationTargetIdOf(send, 'Send')
+      )!
+      expect(envelope).toBeDefined()
+      // A send bottoms out at -70dB, not at zero.
+      expect(envelope.events[1]).toEqual({ time: 32, value: 0.0003162277571 })
+      expect(envelope.events[2]).toEqual({ time: 40, value: 1 })
+    })
+
+    it('emits an Auto Filter with fresh ids and automates its frequency in real Hz', () => {
+      const state = toolkitState({
+        stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.5, resonance: 0.3 } },
+        stemAutomation: {
+          'rifff-1:0': {
+            filterCutoff: [
+              { bar: 0, value: 0 },
+              { bar: 4, value: 1 }
+            ]
+          }
+        }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() },
+        autoFilterXml: AUTO_FILTER_XML
+      })
+      const { liveSetChildren, tracks } = tracksOf(xml)
+      const track = findChild(tracks, 'AudioTrack')!
+      const device = findChild(devicesOfTrack(track), 'AutoFilter2')!
+      const deviceBody = childArray(device, 'AutoFilter2')
+
+      // Resonance is a knob, not a lane (spec 2c) -- it lands as a static
+      // value on the device.
+      expect(manualOf(findChild(deviceBody, 'Filter_Resonance')!, 'Filter_Resonance')).toBe(0.3)
+      expect(manualOf(findChild(deviceBody, 'Filter_Type')!, 'Filter_Type')).toBe(0)
+
+      const frequency = findChild(deviceBody, 'Filter_Frequency')!
+      const freqTargetId = automationTargetIdOf(frequency, 'Filter_Frequency')
+      // Fresh: the captured device's own AutomationTarget Id was 22230, and
+      // two exported tracks must not point at one parameter.
+      expect(freqTargetId).not.toBe('22230')
+
+      const envelope = envelopesOf(track).find((e) => e.pointeeId === freqTargetId)!
+      expect(envelope).toBeDefined()
+      // REAL Hz, through the same log map the engine uses: 0 -> 20Hz,
+      // 1 -> 20kHz. (REAPER's own parameter envelopes are normalised 0..1
+      // instead; this is the conversion that differs between the two.)
+      expect(envelope.events[1].value).toBeCloseTo(20, 6)
+      expect(envelope.events[2].value).toBeCloseTo(20000, 3)
+      expect(envelope.events[1].time).toBe(32)
+      expect(envelope.events[2].time).toBe(48)
+
+      // Ableton refuses to open a Set whose NextPointeeId is below an Id it
+      // actually uses, and this mode hands out a lot of them.
+      const nextPointeeId = Number(attrs(findChild(liveSetChildren, 'NextPointeeId')!)['@_Value'])
+      expect(nextPointeeId).toBeGreaterThan(Number(freqTargetId))
+    })
+
+    it('leaves the filter out entirely when the cutoff is parked at its neutral end', () => {
+      const state = toolkitState({
+        stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 1, resonance: 0.8 } },
+        stemSends: { 'rifff-1:0': 0.5 }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() },
+        autoFilterXml: AUTO_FILTER_XML
+      })
+      const { tracks } = tracksOf(xml)
+      // A resonance dial with nothing moving the cutoff is inaudible -- the
+      // same rule isStemToolkitNeutral applies to the wire.
+      expect(
+        findChild(devicesOfTrack(findChild(tracks, 'AudioTrack')!), 'AutoFilter2')
+      ).toBeUndefined()
+    })
+  })
+
+  describe('risers', () => {
+    it('places one clip per riser on a track of their own, in both modes', () => {
+      for (const mode of ['bake', 'automation'] as const) {
+        const state = toolkitState({
+          risers: {
+            r1: {
+              id: 'r1',
+              channelId: 'rifff-1',
+              startBar: 4,
+              lengthBars: 2,
+              startCutoffValue: 0.3,
+              endCutoffValue: 0.95,
+              curve: [],
+              level: 0.6
+            }
+          }
+        } as Partial<AppState>)
+        const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+          mode,
+          toolkitAudio: { bakedClips: new Map(), riserFileName: 'risers.wav' }
+        })
+        const { tracks } = tracksOf(xml)
+        const riserTrack = findAllChildren(tracks, 'AudioTrack').find((t) => {
+          const name = findChild(childArray(t, 'AudioTrack'), 'Name')!
+          return (
+            attrs(findChild(childArray(name, 'Name'), 'EffectiveName')!)['@_Value'] === 'risers'
+          )
+        })!
+        expect(riserTrack).toBeDefined()
+        const clip = findAudioClip(riserTrack)
+        const clipBody = childArray(clip, 'AudioClip')
+        expect(attrs(clip)['@_Time']).toBe('16')
+        expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('24')
+        expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
+        const fileRef = findChild(
+          childArray(findChild(clipBody, 'SampleRef')!, 'SampleRef'),
+          'FileRef'
+        )!
+        expect(attrs(findChild(childArray(fileRef, 'FileRef'), 'RelativePath')!)['@_Value']).toBe(
+          join('Samples', 'Imported', 'risers.wav')
+        )
+      }
+    })
+  })
+})

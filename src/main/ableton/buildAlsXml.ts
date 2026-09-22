@@ -8,9 +8,21 @@ import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName, summarizeSoundTypes } from '@shared/busNaming'
 import {
+  filterCutoffHz,
+  isStemToolkitNeutral,
+  neutralCutoff,
+  normaliseAutomationCurve,
+  type AutomationPoint
+} from '@shared/toolkit'
+// TYPE-ONLY, and it has to stay that way: exportToolkitAudio.ts spawns engine
+// subprocesses and imports Electron, while this file is a pure function with
+// pure tests (see buildAlsXml's own doc comment).
+import type { BakedClip, ToolkitExportOptions } from '../exportToolkitAudio'
+import {
   parseAls,
   serializeAls,
   findChild,
+  findAllChildren,
   childArray,
   attrs,
   setAttr,
@@ -332,13 +344,163 @@ function computeLoopWindow(
  * docs/superpowers/specs/2026-08-04-ableton-export-design.md's "Known
  * risks" for the full history of what didn't work before this.
  */
-function clearSends(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): void {
+function clearSends(
+  track: AlsNode,
+  trackTag: 'AudioTrack' | 'GroupTrack' | 'ReturnTrack',
+  /** How many `<TrackSendHolder>`s to LEAVE in place -- 0 everywhere, except
+   * in the toolkit's `automation` export mode, which keeps exactly one
+   * ReturnTrack (the stock Reverb our single shared bus maps onto) and so
+   * needs exactly one holder per track. The rule that matters, learned the
+   * expensive way, is that the two counts must AGREE: it was 0 holders
+   * against 2 returns that crashed Ableton outright, not the holders
+   * themselves. */
+  keep = 0
+): void {
   const body = childArray(track, trackTag)
   const deviceChain = findChild(body, 'DeviceChain')!
   const mixer = findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
   const sends = findChild(childArray(mixer, 'Mixer'), 'Sends')!
-  sends['Sends'] = []
+  sends['Sends'] = childArray(sends, 'Sends').slice(0, keep)
 }
+
+/** The `<Mixer>` inside a track of any kind. */
+function mixerOf(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack' | 'ReturnTrack'): AlsNode {
+  const body = childArray(track, trackTag)
+  const deviceChain = findChild(body, 'DeviceChain')!
+  return findChild(childArray(deviceChain, 'DeviceChain'), 'Mixer')!
+}
+
+/** The `<Devices>` list a track's own effects live in --
+ * `DeviceChain > DeviceChain > Devices`, NOT the outer DeviceChain (which
+ * holds the mixer and the sequencer). Empty on the template's audio track,
+ * which is what the Auto Filter gets appended to. */
+function devicesOf(track: AlsNode, trackTag: 'AudioTrack' | 'GroupTrack'): AlsNode {
+  const body = childArray(track, trackTag)
+  const outer = findChild(body, 'DeviceChain')!
+  const inner = findChild(childArray(outer, 'DeviceChain'), 'DeviceChain')!
+  return findChild(childArray(inner, 'DeviceChain'), 'Devices')!
+}
+
+/**
+ * The Id a parameter element's own `<AutomationTarget>` carries -- the number
+ * an envelope's `<PointeeId>` has to equal for Ableton to connect the two.
+ * That linkage IS the trick (docs/superpowers/references/
+ * ableton12-automation-mapping.md); a PointeeId pointing at nothing produces
+ * a device with an envelope that silently does nothing at all.
+ *
+ * Only ever read AFTER the containing track/device has been cloned and
+ * renumberIds'd, or it would hand back the template's own Id and every
+ * exported track would point its envelopes at the same parameter.
+ */
+function automationTargetId(param: AlsNode, tag: string): string {
+  return attrs(findChild(childArray(param, tag), 'AutomationTarget')!)['@_Id']
+}
+
+/** `<Manual Value="..."/>`, the static value of a parameter element -- what a
+ * knob sits at when no envelope is overriding it. */
+function setManual(param: AlsNode, tag: string, value: number): void {
+  setAttr(findChild(childArray(param, tag), 'Manual')!, '@_Value', String(value))
+}
+
+/** Ableton's own "before the timeline starts" sentinel Time, carrying the
+ * value a parameter holds from the beginning of the Set until the first real
+ * breakpoint. Copied from a real captured project; without it a parameter
+ * reads as whatever its Manual says right up until the envelope's first
+ * point, which for a filter sweep means the wrong cutoff for the whole intro. */
+const BEFORE_TIMELINE_SENTINEL = -63072000
+
+/** One `<FloatEvent Id Time Value/>`. Time is in BEATS (4 = one bar at 4/4) --
+ * the single most important unit fact about this file's envelopes, and the
+ * one that differs from REAPER's (seconds). */
+function floatEvent(nextId: () => number, timeBeats: number, value: number): AlsNode {
+  return {
+    FloatEvent: [],
+    ':@': {
+      '@_Id': String(nextId()),
+      '@_Time': String(timeBeats),
+      '@_Value': String(value)
+    }
+  }
+}
+
+/**
+ * Appends one `<AutomationEnvelope>` to a track's own
+ * `AutomationEnvelopes > Envelopes`, pointed at `pointeeId`.
+ *
+ * The element's shape (EnvelopeTarget, Automation > Events, and the
+ * AutomationTransformViewState that Ableton writes after them) is copied from
+ * the template's own MainTrack tempo envelope -- a real Ableton-produced
+ * example already sitting in this repo -- rather than from the shorter
+ * illustration in the reference doc.
+ */
+function addTrackEnvelope(
+  trackBody: AlsNode[],
+  nextId: () => number,
+  pointeeId: string,
+  points: { timeBeats: number; value: number }[]
+): void {
+  if (points.length === 0) return
+  const automationEnvelopes = findChild(trackBody, 'AutomationEnvelopes')!
+  const envelopes = findChild(childArray(automationEnvelopes, 'AutomationEnvelopes'), 'Envelopes')!
+  const events: AlsNode[] = [
+    // The value the parameter holds before the first real point.
+    floatEvent(nextId, BEFORE_TIMELINE_SENTINEL, points[0].value),
+    ...points.map((point) => floatEvent(nextId, point.timeBeats, point.value))
+  ]
+  const envelope: AlsNode = {
+    AutomationEnvelope: [
+      { EnvelopeTarget: [{ PointeeId: [], ':@': { '@_Value': pointeeId } }] },
+      {
+        Automation: [
+          { Events: events },
+          {
+            AutomationTransformViewState: [
+              { IsTransformPending: [], ':@': { '@_Value': 'false' } },
+              { TimeAndValueTransforms: [] }
+            ]
+          }
+        ]
+      }
+    ],
+    ':@': { '@_Id': String(nextId()) }
+  }
+  envelopes['Envelopes'] = [...childArray(envelopes, 'Envelopes'), envelope]
+}
+
+/** A drawn curve as envelope points, in absolute arrangement BEATS with its
+ * values mapped into the target parameter's own units. Curve bars are
+ * CLIP-relative (0 = the clip's own left edge, spec section 2b), so
+ * `originBar` -- the same number buildEngineProject sends the engine as
+ * EngineStemToolkit.originBar -- is what puts them back on the timeline. */
+function curvePoints(
+  curve: AutomationPoint[],
+  originBar: number,
+  mapValue: (value: number) => number
+): { timeBeats: number; value: number }[] {
+  return normaliseAutomationCurve(curve).map((point) => ({
+    timeBeats: (originBar + point.bar) * 4,
+    value: mapValue(point.value)
+  }))
+}
+
+/** A send's own floor: Ableton's Send parameter bottoms out at -70dB, not at
+ * zero (docs/superpowers/references/ableton12-automation-mapping.md). Writing
+ * a real 0 is out of range for the parameter, so silence is this instead. */
+const SEND_MIN = 0.0003162277571
+
+function sendValue(value: number): number {
+  return Math.max(SEND_MIN, Math.min(1, value))
+}
+
+/** Auto Filter's `Filter_Type` enum for our two modes. 0 is the captured
+ * device's own value and the device is a lowpass in the capture, so that one
+ * is ground truth; 1 for highpass is the obvious neighbour in a 0..9 list but
+ * is NOT verified against real Ableton (no Ableton in this environment) --
+ * same best-effort caveat this file's WARP_MODE_* constants already carry. If
+ * it's wrong the exported device opens as the wrong filter shape, fixable with
+ * one click per track, not a corrupt file. */
+const FILTER_TYPE_LOWPASS = 0
+const FILTER_TYPE_HIGHPASS = 1
 
 interface AudibleSegment {
   segStartBeats: number
@@ -409,6 +571,15 @@ function findCanonicalClip(canonicalAudioTrack: AlsNode): AlsNode {
 interface StemClipsResult {
   clips: AlsNode[]
   trackName: string
+  /** stemKey(groupId, slot) -- carried so the track-building pass can find
+   * this stem's own curves/filter/send again when it's writing real
+   * automation onto the track (the `automation` export mode). */
+  key: string
+  /** The ABSOLUTE bar this stem's clip-relative curves are measured from --
+   * the clip's own left edge. The same number buildEngineProject.ts sends the
+   * engine as EngineStemToolkit.originBar, derived the same way, so an
+   * exported envelope lands where the drawn line was. */
+  originBar: number
   /** This stem's own SoundType (drums/notes/bass/etc, see @shared/types) --
    * carried alongside the clip geometry purely so the bus/shared-track
    * naming below (busGroupName/uniqueSharedTrackName) can summarize what's
@@ -564,9 +735,101 @@ function buildStemClips(
   return {
     clips,
     trackName,
+    key: stemKey(rifff.groupId, stem.slot),
+    originBar: (rifff.startBar ?? 0) + (stem.oneShot ? 0 : leftCropBars),
     soundType: stem.type,
     startBeats: clipStartBeats,
     endBeats: clipEndBeats
+  }
+}
+
+/**
+ * ONE clip for a stem whose toolkit was rendered into its own WAV (the
+ * "bake in" export mode -- see exportToolkitAudio.ts).
+ *
+ * Simpler than buildStemClips in every direction, because everything that
+ * function has to express in clip fields is already in the audio:
+ * - the render is laid out on the ARRANGEMENT's own timeline, so the source
+ *   offset is the clip's own start and Loop* collapse onto CurrentStart/
+ *   CurrentEnd. Nothing is warped (the baked file is already at the project's
+ *   tempo) and nothing loops (it is already as long as the clip);
+ * - no mute-region splitting: the mutes are baked, and splitting the clip
+ *   would ALSO chop off a reverb tail ringing through a muted gap, which
+ *   playback keeps;
+ * - no fades: the drawn volume curve, edge fades included, is in the audio;
+ * - SampleVolume 1: the gain dial is in the audio too, and applying it again
+ *   would square it.
+ *
+ * `tailBars` is the room the render left past the clip's own end for the
+ * reverb tail; the clip has to be that much longer or the export would trim
+ * off audio it deliberately rendered.
+ */
+function buildBakedStemClip(
+  canonicalClipTemplate: AlsNode,
+  nextId: () => number,
+  rifff: Rifff,
+  stem: Stem,
+  baked: BakedClip,
+  outputDir: string,
+  leftCropBars: number,
+  playedBars: number,
+  projectBpm: number,
+  colorIndex: number
+): StemClipsResult {
+  const trackName = `${rifff.name} - ${stem.name}`
+  const startBar = rifff.startBar ?? 0
+  const projectBeatsPerSecond = projectBpm / 60
+  // A one-shot occupies its own trimmed real duration; everything else
+  // occupies the bars it was resized to, starting at its cropped left edge.
+  // Deliberately computed here rather than through computeLoopWindow: that
+  // function's one-shot branch reports an END, not a duration, which is only
+  // the same thing while trimStartSec is 0.
+  const startBeats = stem.oneShot ? startBar * 4 : (startBar + leftCropBars) * 4
+  const audibleBeats = stem.oneShot
+    ? ((stem.trimEndSec ?? stem.durationSec) - (stem.trimStartSec ?? 0)) * projectBeatsPerSecond
+    : (playedBars - leftCropBars) * 4
+  const endBeats = startBeats + audibleBeats + baked.tailBars * 4
+
+  const clip = cloneNode(canonicalClipTemplate)
+  renumberIds(clip, nextId)
+  setAttr(clip, '@_Time', String(startBeats))
+  const clipBody = childArray(clip, 'AudioClip')
+  setAttr(findChild(clipBody, 'Name')!, '@_Value', trackName)
+  setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(startBeats))
+  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(endBeats))
+
+  const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
+  // For an UNWARPED clip these are sample time expressed in beats at the
+  // project's own tempo (the same convention computeLoopWindow's one-shot
+  // branch uses). The baked file's own time t seconds is arrangement beat
+  // t * bps, so "where in the file does this clip start" is just its start.
+  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(startBeats))
+  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', 'false')
+  setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
+  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', 'false')
+
+  const relativePath = join('Samples', 'Imported', baked.fileName)
+  const sampleRef = findChild(clipBody, 'SampleRef')!
+  const fileRefBody = childArray(
+    findChild(childArray(sampleRef, 'SampleRef'), 'FileRef')!,
+    'FileRef'
+  )
+  setAttr(findChild(fileRefBody, 'Path')!, '@_Value', join(outputDir, relativePath))
+  setAttr(findChild(fileRefBody, 'RelativePath')!, '@_Value', relativePath)
+
+  setColor(clipBody, colorIndex)
+  setAttr(findChild(clipBody, 'SampleVolume')!, '@_Value', '1')
+
+  return {
+    clips: [clip],
+    trackName,
+    key: stemKey(rifff.groupId, stem.slot),
+    originBar: startBar + (stem.oneShot ? 0 : leftCropBars),
+    soundType: stem.type,
+    startBeats,
+    endBeats
   }
 }
 
@@ -605,11 +868,13 @@ function buildSharedAudioTrack(
   groupTrackId: string,
   trackName: string,
   clips: AlsNode[],
-  colorIndex: number
+  colorIndex: number,
+  /** See clearSends: 0 normally, 1 in the mode that keeps a reverb return. */
+  keepSends = 0
 ): AlsNode {
   const track = cloneNode(canonicalAudioTrack)
   renumberIds(track, nextId)
-  clearSends(track, 'AudioTrack')
+  clearSends(track, 'AudioTrack', keepSends)
 
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
@@ -647,6 +912,192 @@ function uniqueSharedTrackName(
   return count === 1 ? base : `${base} ${count}`
 }
 
+/** Whether any placed stem sends into the shared reverb at all -- either a
+ * raised static send or a drawn `reverbSend` curve. The one question that
+ * decides whether an exported Set carries a return track, so it's asked once,
+ * up front, over the same placed stems the clip loop walks. */
+function anyStemSends(state: AppState): boolean {
+  for (const rifff of Object.values(state.rifffs)) {
+    if (rifff.startBar === undefined) continue
+    for (const stem of rifff.stems) {
+      const key = stemKey(rifff.groupId, stem.slot)
+      if ((state.stemSends?.[key] ?? 0) > 0) return true
+      if ((state.stemAutomation?.[key]?.reverbSend?.length ?? 0) > 0) return true
+    }
+  }
+  return false
+}
+
+/** Whether `tag` appears anywhere in this subtree -- used to pick the stock
+ * Reverb return track out of the template's returns by what it CONTAINS
+ * rather than by its position or its name, neither of which is guaranteed. */
+function containsTag(node: AlsNode, tag: string): boolean {
+  for (const key of Object.keys(node)) {
+    if (key === ':@') continue
+    if (key === tag) return true
+    const children = node[key]
+    if (!Array.isArray(children)) continue
+    for (const child of children) if (containsTag(child, tag)) return true
+  }
+  return false
+}
+
+/**
+ * Writes one stem's toolkit onto its own exported track as real Ableton
+ * automation -- the `automation` export mode.
+ *
+ * Every mapping here comes from a real project Elling drew in Live 12.4.6 and
+ * captured for this purpose (docs/superpowers/references/
+ * ableton12-automation-mapping.md):
+ * - gain dial -> the track's `Mixer/Volume` (linear gain, 1.0 = 0dB);
+ * - `volume` curve -> an envelope on that same parameter, the dial multiplied
+ *   THROUGH the curve, exactly as buildEngineProject.ts's scaleCurveByGain
+ *   does for the engine, so what's exported is what's heard;
+ * - `reverbSend` -> the track's one `TrackSendHolder`'s Send, floored at
+ *   -70dB (Ableton's own bottom for that parameter, not zero);
+ * - `filterCutoff` -> an Auto Filter emitted from the captured device, its
+ *   `Filter_Frequency` automated in REAL Hz (this is the conversion REAPER's
+ *   normalised parameter envelopes don't need);
+ * - resonance -> that device's static `Filter_Resonance`, a knob, not a lane
+ *   (spec section 2c).
+ *
+ * Only ever called with the track that holds exactly this one stem: in
+ * automation mode tracks aren't packed, precisely because a track envelope
+ * belongs to the whole track and would otherwise apply one stem's sweep to
+ * whatever else shared it.
+ */
+function applyTrackToolkit(
+  track: AlsNode,
+  nextId: () => number,
+  state: AppState,
+  entry: StemClipsResult,
+  autoFilterTemplate: AlsNode | undefined
+): void {
+  const key = entry.key
+  const automation = state.stemAutomation?.[key]
+  const filter = state.stemFilters?.[key]
+  const send = state.stemSends?.[key] ?? 0
+  if (isStemToolkitNeutral(filter, send, automation)) return
+
+  const trackBody = childArray(track, 'AudioTrack')
+  const mixerBody = childArray(mixerOf(track, 'AudioTrack'), 'Mixer')
+  const gain = state.vol[key] ?? 1
+
+  const volume = findChild(mixerBody, 'Volume')!
+  setManual(volume, 'Volume', gain)
+  const volumeCurve = automation?.volume ?? []
+  if (volumeCurve.length > 0) {
+    addTrackEnvelope(
+      trackBody,
+      nextId,
+      automationTargetId(volume, 'Volume'),
+      curvePoints(volumeCurve, entry.originBar, (value) => value * gain)
+    )
+  }
+
+  const sendCurve = automation?.reverbSend ?? []
+  const holder = findChild(childArray(findChild(mixerBody, 'Sends')!, 'Sends'), 'TrackSendHolder')
+  if (holder && (send > 0 || sendCurve.length > 0)) {
+    const sendParam = findChild(childArray(holder, 'TrackSendHolder'), 'Send')!
+    setManual(sendParam, 'Send', sendValue(send))
+    if (sendCurve.length > 0) {
+      addTrackEnvelope(
+        trackBody,
+        nextId,
+        automationTargetId(sendParam, 'Send'),
+        curvePoints(sendCurve, entry.originBar, sendValue)
+      )
+    }
+  }
+
+  const cutoffCurve = automation?.filterCutoff ?? []
+  const mode = filter?.mode ?? 'lowpass'
+  const cutoff = filter?.cutoff ?? neutralCutoff(mode)
+  const filterDoesSomething =
+    cutoffCurve.length > 0 || Math.abs(cutoff - neutralCutoff(mode)) > 1e-6
+  if (!filterDoesSomething || !autoFilterTemplate) return
+
+  // An Auto Filter is far too big to synthesise by hand (21KB of parameters),
+  // so it's emitted from the captured device with fresh Ids -- the same
+  // clone-and-renumberIds treatment every exported track already gets, which
+  // is what stops two tracks' devices pointing their envelopes at one
+  // parameter.
+  const device = cloneNode(autoFilterTemplate)
+  renumberIds(device, nextId)
+  const deviceBody = childArray(device, 'AutoFilter2')
+  const frequency = findChild(deviceBody, 'Filter_Frequency')!
+  setManual(frequency, 'Filter_Frequency', filterCutoffHz(cutoff))
+  setManual(findChild(deviceBody, 'Filter_Resonance')!, 'Filter_Resonance', filter?.resonance ?? 0)
+  setManual(
+    findChild(deviceBody, 'Filter_Type')!,
+    'Filter_Type',
+    mode === 'lowpass' ? FILTER_TYPE_LOWPASS : FILTER_TYPE_HIGHPASS
+  )
+  const devices = devicesOf(track, 'AudioTrack')
+  devices['Devices'] = [...childArray(devices, 'Devices'), device]
+
+  if (cutoffCurve.length > 0) {
+    addTrackEnvelope(
+      trackBody,
+      nextId,
+      automationTargetId(frequency, 'Filter_Frequency'),
+      curvePoints(cutoffCurve, entry.originBar, filterCutoffHz)
+    )
+  }
+}
+
+/** One riser's clip. Risers are generated audio with no source file at all,
+ * so they are ALWAYS exported as rendered audio, in both modes (Elling's
+ * decision, spec section 4) -- every placed riser is in ONE file laid out on
+ * the arrangement's own timeline, so this is the same identity mapping a
+ * baked clip uses. */
+function buildRiserClip(
+  canonicalClipTemplate: AlsNode,
+  nextId: () => number,
+  riser: { id: string; startBar: number; lengthBars: number },
+  fileName: string,
+  outputDir: string,
+  colorIndex: number
+): AlsNode {
+  const clip = cloneNode(canonicalClipTemplate)
+  renumberIds(clip, nextId)
+  const startBeats = riser.startBar * 4
+  const endBeats = (riser.startBar + riser.lengthBars) * 4
+  setAttr(clip, '@_Time', String(startBeats))
+  const clipBody = childArray(clip, 'AudioClip')
+  setAttr(findChild(clipBody, 'Name')!, '@_Value', 'riser')
+  setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(startBeats))
+  setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(endBeats))
+  const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
+  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(startBeats))
+  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', 'false')
+  setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
+  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', 'false')
+  const relativePath = join('Samples', 'Imported', fileName)
+  const sampleRef = findChild(clipBody, 'SampleRef')!
+  const fileRefBody = childArray(
+    findChild(childArray(sampleRef, 'SampleRef'), 'FileRef')!,
+    'FileRef'
+  )
+  setAttr(findChild(fileRefBody, 'Path')!, '@_Value', join(outputDir, relativePath))
+  setAttr(findChild(fileRefBody, 'RelativePath')!, '@_Value', relativePath)
+  setColor(clipBody, colorIndex)
+  setAttr(findChild(clipBody, 'SampleVolume')!, '@_Value', '1')
+  return clip
+}
+
+/** What the toolkit adds to an Ableton export: which mode the user picked,
+ * what audio was rendered for it, and the captured Auto Filter device to
+ * emit. `autoFilterXml` is passed in as TEXT for exactly the reason
+ * templateXml is (see exportAbleton.ts's own note): vitest has no
+ * electron-vite plugin to resolve a `?asset` import, so this function reads
+ * no files at all. */
+export interface AlsToolkitOptions extends ToolkitExportOptions {
+  autoFilterXml?: string
+}
+
 /**
  * Builds the finished (ungzipped) .als XML text for the current arrangement.
  * Pure: no filesystem access beyond string path-joining (path.join never
@@ -662,8 +1113,18 @@ export function buildAlsXml(
   state: AppState,
   outputDir: string,
   stemFileNames: Map<string, string>,
-  stemSampleRates: Map<string, number> = new Map()
+  stemSampleRates: Map<string, number> = new Map(),
+  /** Defaults to "bake, with nothing rendered" -- which is exactly what a
+   * project that uses none of the toolkit is, so such a project's export is
+   * byte-for-byte what it was before this existed. */
+  toolkit: AlsToolkitOptions = { mode: 'bake', toolkitAudio: { bakedClips: new Map() } }
 ): string {
+  const automationMode = toolkit.mode === 'automation'
+  const { bakedClips, riserFileName } = toolkit.toolkitAudio
+  const autoFilterTemplate =
+    automationMode && toolkit.autoFilterXml
+      ? findChild(parseAls(toolkit.autoFilterXml), 'AutoFilter2')
+      : undefined
   const doc = parseAls(templateXml)
   const ableton = findChild(doc, 'Ableton')!
   const abletonBody = childArray(ableton, 'Ableton')
@@ -688,8 +1149,21 @@ export function buildAlsXml(
   // clearSends). The exported project simply opens without the 2 default
   // reverb/delay returns pre-configured; the user adds their own once
   // they start mixing in Ableton.
+  //
+  // The `automation` export mode is the one exception, and it keeps exactly
+  // ONE return: the stock Reverb our single shared reverb bus maps onto
+  // (docs/superpowers/references/ableton12-automation-mapping.md -- "our
+  // single shared reverb maps to ONE return track"). The history above isn't
+  // a reason not to: what crashed Ableton was a MISMATCH -- tracks with zero
+  // TrackSendHolders while the Set still declared 2 ReturnTracks. One return
+  // and one holder per track is the same rule satisfied at a different count,
+  // and every track this export emits goes through clearSends, so the count
+  // is the same on all of them by construction. Unverifiable here (no Ableton
+  // in this environment); this is the part of the export most worth opening
+  // first.
+  const keepReverbReturn = automationMode && anyStemSends(state)
   const sendsPreNode = findChild(liveSetChildren, 'SendsPre')!
-  sendsPreNode['SendsPre'] = []
+  sendsPreNode['SendsPre'] = childArray(sendsPreNode, 'SendsPre').slice(0, keepReverbReturn ? 1 : 0)
 
   // A plain closure over an outer-scope counter (not a separate
   // makeIdAllocator helper) specifically so nextIdValue can be read back
@@ -718,19 +1192,52 @@ export function buildAlsXml(
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
       const fileName = stemFileNames.get(key)
-      if (!fileName) continue
+      const baked = bakedClips.get(key)
+      // A baked stem deliberately has no dry copy in Samples/Imported at all
+      // (materializeStemsForExport skips it), so "no fileName" is normal for
+      // one -- it's the stems with NEITHER that have nothing to reference.
+      if (!baked && !fileName) continue
 
       // Computed before buildStemClips (not after, as this loop originally
       // did) so its own colorIndex can be threaded straight into the call
       // below -- see ABLETON_BUS_COLORS.
       const busId = state.busOf[key] ?? DEFAULT_BUS
-      const edgeFades = edgeFadesFor(state, rifff, stem, playedBars, leftCropBars)
+      if (baked) {
+        byBus
+          .get(busId)!
+          .push(
+            buildBakedStemClip(
+              canonicalClipTemplate,
+              nextId,
+              rifff,
+              stem,
+              baked,
+              outputDir,
+              leftCropBars,
+              playedBars,
+              state.bpm,
+              ABLETON_BUS_COLORS[busId]
+            )
+          )
+        continue
+      }
+      // In automation mode the gain dial becomes the TRACK's own Volume (see
+      // applyTrackToolkit), so leaving it on the clip as well would apply it
+      // twice; and a real volume envelope already contains the edge fades
+      // edgeFadesFor exists to rescue, so writing clip fades too would fade
+      // twice. Both drop out here rather than inside buildStemClips, which
+      // knows nothing about export modes.
+      const volumeAutomated =
+        automationMode && (state.stemAutomation?.[key]?.volume?.length ?? 0) > 0
+      const edgeFades = volumeAutomated
+        ? { fadeInBars: 0, fadeOutBars: 0 }
+        : edgeFadesFor(state, rifff, stem, playedBars, leftCropBars)
       const result = buildStemClips(
         canonicalClipTemplate,
         nextId,
         rifff,
         stem,
-        fileName,
+        fileName!,
         outputDir,
         leftCropBars,
         playedBars,
@@ -743,7 +1250,7 @@ export function buildAlsXml(
         // muteRegions below), keeping it present at 0 lets it be
         // re-enabled with a single fader move directly in Ableton, which
         // isn't possible for a clip that was never exported.
-        state.mute[key] ? 0 : (state.vol[key] ?? 1),
+        state.mute[key] ? 0 : automationMode ? 1 : (state.vol[key] ?? 1),
         edgeFades.fadeInBars,
         edgeFades.fadeOutBars,
         stemSampleRates.get(key)
@@ -760,18 +1267,25 @@ export function buildAlsXml(
 
     const groupTrack = cloneNode(canonicalGroupTrack)
     renumberIds(groupTrack, nextId)
-    clearSends(groupTrack, 'GroupTrack')
+    clearSends(groupTrack, 'GroupTrack', keepReverbReturn ? 1 : 0)
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupTrackBody = childArray(groupTrack, 'GroupTrack')
     setTrackName(findChild(groupTrackBody, 'Name')!, busGroupName(busId, entries))
     setColor(groupTrackBody, ABLETON_BUS_COLORS[busId])
     outTracks.push(groupTrack)
 
-    const packed = packIntoTracks(
-      entries,
-      (e) => e.startBeats,
-      (e) => e.endBeats
-    )
+    // In automation mode every stem gets its own track, deliberately: an
+    // Ableton automation envelope belongs to the TRACK, so two stems packed
+    // onto one would share one filter, one send and one volume shape between
+    // them -- the first stem's sweep would be heard on the second. More
+    // tracks is the honest price of envelopes that mean what they say.
+    const packed = automationMode
+      ? entries.map((entry) => [entry])
+      : packIntoTracks(
+          entries,
+          (e) => e.startBeats,
+          (e) => e.endBeats
+        )
     const usedSharedTrackNames = new Map<string, number>()
     for (const trackEntries of packed) {
       const allClips = trackEntries.flatMap((e) => e.clips)
@@ -789,9 +1303,76 @@ export function buildAlsXml(
         groupTrackId,
         trackName,
         allClips,
-        ABLETON_BUS_COLORS[busId]
+        ABLETON_BUS_COLORS[busId],
+        keepReverbReturn ? 1 : 0
       )
+      if (automationMode) {
+        applyTrackToolkit(track, nextId, state, trackEntries[0], autoFilterTemplate)
+      }
       outTracks.push(track)
+    }
+  }
+
+  // Risers: one top-level track (TrackGroupId -1 -- a riser belongs to a
+  // channel, and a channel is not a bus, so there is no group to put it in),
+  // packed the same way stems are so two overlapping risers don't land on one
+  // Ableton track, which can only play one clip at a time. Present in BOTH
+  // modes: a riser is generated, so it always exports as audio.
+  if (riserFileName) {
+    const risers = Object.values(state.risers ?? {}).sort(
+      (a, b) => a.startBar - b.startBar || (a.id < b.id ? -1 : 1)
+    )
+    const packedRisers = packIntoTracks(
+      risers,
+      (r) => r.startBar,
+      (r) => r.startBar + r.lengthBars
+    )
+    packedRisers.forEach((riserGroup, index) => {
+      const clips = riserGroup.map((riser) =>
+        buildRiserClip(
+          canonicalClipTemplate,
+          nextId,
+          riser,
+          riserFileName,
+          outputDir,
+          ABLETON_BUS_COLORS.aux
+        )
+      )
+      outTracks.push(
+        buildSharedAudioTrack(
+          canonicalAudioTrack,
+          nextId,
+          '-1',
+          index === 0 ? 'risers' : `risers ${index + 1}`,
+          clips,
+          ABLETON_BUS_COLORS.aux,
+          keepReverbReturn ? 1 : 0
+        )
+      )
+    })
+  }
+
+  // The one kept return track goes LAST, where Ableton's own Sets put their
+  // returns (see the template) and where every track's single
+  // TrackSendHolder is understood to point.
+  if (keepReverbReturn) {
+    const reverbReturn = findAllChildren(tracks, 'ReturnTrack').find((t) =>
+      containsTag(t, 'Reverb')
+    )
+    if (reverbReturn) {
+      const returnTrack = cloneNode(reverbReturn)
+      renumberIds(returnTrack, nextId)
+      clearSends(returnTrack, 'ReturnTrack', 1)
+      const returnBody = childArray(returnTrack, 'ReturnTrack')
+      setTrackName(findChild(returnBody, 'Name')!, 'reverb')
+      // Whatever the captured project had automated on this return is not
+      // ours and has nothing pointing at it here.
+      const returnEnvelopes = findChild(returnBody, 'AutomationEnvelopes')
+      if (returnEnvelopes) {
+        const envelopes = findChild(childArray(returnEnvelopes, 'AutomationEnvelopes'), 'Envelopes')
+        if (envelopes) envelopes['Envelopes'] = []
+      }
+      outTracks.push(returnTrack)
     }
   }
 

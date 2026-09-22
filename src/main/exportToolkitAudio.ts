@@ -69,6 +69,20 @@ export interface ToolkitAudio {
 
 export const EMPTY_TOOLKIT_AUDIO: ToolkitAudio = { bakedClips: new Map() }
 
+/** What the two project exporters need to know about the toolkit: which mode
+ * the user picked, and what audio was rendered for it. Both take this as ONE
+ * optional argument that defaults to "bake, nothing rendered" -- which is
+ * exactly what a project using none of the toolkit is, so nothing about such
+ * a project's export changes.
+ *
+ * Imported by buildAlsXml.ts/buildRppProject.ts as a TYPE only: this module
+ * spawns engines and reaches for Electron, and those two are pure functions
+ * with pure tests. */
+export interface ToolkitExportOptions {
+  mode: ToolkitExportMode
+  toolkitAudio: ToolkitAudio
+}
+
 /** Every placed clip whose toolkit actually does something, in a stable
  * order. A fully muted clip is left out: it renders silent, so baking it
  * would spend a whole render producing silence, and the existing dry path
