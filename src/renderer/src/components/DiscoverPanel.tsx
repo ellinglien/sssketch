@@ -2575,8 +2575,7 @@ export function DiscoverPanel({
           color: 'var(--ra-text-3)'
         }}
       >
-        {addableKinds.length > 0 &&
-          `click a lit kind to add ${slotKindsLabel(addableKinds)} · esc to clear`}
+        {addableKinds.length > 0 && 'click multiple or click again to add • esc to clear'}
       </div>
     </div>
   )
