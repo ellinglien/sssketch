@@ -44,8 +44,14 @@ const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
  * this IS the welcome screen for the brief window before the real one
  * (or the normal app) can show. */
 export function StartupGate(): React.JSX.Element | null {
-  const [engineDone, setEngineDone] = useState(true)
-  const [warmupDone, setWarmupDone] = useState(true)
+  // null = not answered yet. Direct report, 2026-09-22: these used to START
+  // as `true` (optimistically "done") and only flip to false once the status
+  // IPC answered -- so the welcome screen painted for a few seconds before
+  // this gate covered it on every launch that actually needed indexing
+  // (the main process is at its busiest right then, so the answer is slow).
+  // Unknown now counts as "not done": the gate shows until main says so.
+  const [engineDone, setEngineDone] = useState<boolean | null>(null)
+  const [warmupDone, setWarmupDone] = useState<boolean | null>(null)
   const [progress, setProgress] = useState<PrewarmScanProgress | null>(null)
   const [phaseStartedAt, setPhaseStartedAt] = useState<{ key: string; startedAt: number } | null>(
     null
@@ -57,10 +63,14 @@ export function StartupGate(): React.JSX.Element | null {
     window.rifffApi
       .getEngineStartupStatus()
       .then((status) => {
-        if (!cancelled) setEngineDone(status)
+        // Never un-finish: a completion push can land before this reply.
+        if (!cancelled) setEngineDone((prev) => prev === true || status)
       })
       .catch((err) => {
         console.error('StartupGate: getEngineStartupStatus failed:', err)
+        // Fail open -- a status query that can't answer must never lock the
+        // app behind this screen for good.
+        if (!cancelled) setEngineDone(true)
       })
     const unsubscribeEngine = window.rifffApi.onEngineStartupComplete(() => {
       if (!cancelled) setEngineDone(true)
@@ -69,10 +79,11 @@ export function StartupGate(): React.JSX.Element | null {
     window.rifffApi
       .getLibraryWarmupStatus()
       .then((status) => {
-        if (!cancelled) setWarmupDone(status)
+        if (!cancelled) setWarmupDone((prev) => prev === true || status)
       })
       .catch((err) => {
         console.error('StartupGate: getLibraryWarmupStatus failed:', err)
+        if (!cancelled) setWarmupDone(true)
       })
     const unsubscribeWarmupComplete = window.rifffApi.onLibraryWarmupComplete(() => {
       if (!cancelled) {
@@ -95,7 +106,7 @@ export function StartupGate(): React.JSX.Element | null {
     }
   }, [])
 
-  if (engineDone && warmupDone) return null
+  if (engineDone === true && warmupDone === true) return null
 
   const etaText = describeEta(progress, phaseStartedAt?.startedAt ?? null)
 
@@ -126,7 +137,7 @@ export function StartupGate(): React.JSX.Element | null {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <LoadingLoader size={13} />
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ra-text-2)' }}>
-          {describeStatus(engineDone, progress)}
+          {describeStatus(engineDone === true, progress)}
         </span>
       </div>
       {etaText && <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>{etaText}</span>}
