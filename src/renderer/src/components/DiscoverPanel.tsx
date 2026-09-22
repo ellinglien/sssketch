@@ -2582,7 +2582,7 @@ export function DiscoverPanel({
       >
         {addableKinds.length > 0
           ? `${slotKindsLabel(addableKinds)} armed • click a kind to add • esc to clear`
-          : 'shift-click to combine kinds'}
+          : 'hold shift to combine'}
       </div>
     </div>
   )
