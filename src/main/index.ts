@@ -134,6 +134,7 @@ import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStor
 import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeaksCacheStore'
 import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { readYamnetModelBytes } from './yamnetModel'
+import { enableWorkCounters } from './workCounters'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
@@ -377,6 +378,10 @@ if (is.dev) {
 app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
+
+  // Dev-only once-a-minute work summary (decodes/IPC/SQL counts) -- see
+  // src/main/workCounters.ts. A no-op in packaged builds.
+  enableWorkCounters(!app.isPackaged)
 
   // One-time, idempotent relocation of the project library from its old
   // default (~/Music/sssketch/ directly) onto its new one

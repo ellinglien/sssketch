@@ -1,5 +1,5 @@
 import { computeBandEnergy, type BandEnergy } from '@shared/bandEnergy'
-import { getAudioContext } from './peakCache'
+import { decodeStemFile } from './decodeStemFile'
 
 const cache = new Map<string, Promise<BandEnergy>>()
 
@@ -15,9 +15,7 @@ export function getBandEnergy(path: string): Promise<BandEnergy> {
 
   const promise = (async () => {
     try {
-      const bytes = await window.rifffApi.readAudioFile(path)
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+      const audioBuffer = await decodeStemFile(path)
       return computeBandEnergy(audioBuffer.getChannelData(0), audioBuffer.sampleRate)
     } catch (err) {
       cache.delete(path)

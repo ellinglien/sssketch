@@ -8,6 +8,8 @@
 // touches an embedding-consuming screen never pays the model-load cost at
 // all.
 
+import { countWork } from '../perf/workCounters'
+
 let worker: Worker | null = null
 let readyPromise: Promise<void> | null = null
 let nextRequestId = 0
@@ -123,6 +125,7 @@ function ensureReady(): Promise<void> {
 export async function extractEmbeddingAndTopClass(
   pcm: Float32Array
 ): Promise<{ embedding: number[]; topClassIndex: number | null } | null> {
+  countWork('yamnet')
   try {
     await ensureReady()
   } catch (err) {

@@ -1,4 +1,5 @@
 import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
+import { countWork } from '../perf/workCounters'
 
 interface WaveformAnalysis {
   peaks: number[]
@@ -50,18 +51,21 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
       // decode+persist" pattern. Returns null both for "never scanned"
       // and "not a real library stem," same as that function's own
       // doc comment -- either way, fall through to decoding fresh below.
+      countWork('ipc:get-stem-peaks-cache')
       const persisted = await window.rifffApi.getStemPeaksCache(path)
       if (persisted) {
         settled.set(path, persisted)
         return persisted
       }
 
+      countWork('ipc:read-audio-file')
       const bytes = await window.rifffApi.readAudioFile(path)
       // Defensive copy: bytes.buffer may be a larger backing ArrayBuffer than the
       // Uint8Array's own view (e.g. depending on how it was reconstituted across the
       // IPC boundary), so slice out exactly this view's byte range rather than
       // handing decodeAudioData the raw (possibly oversized) backing buffer.
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      countWork('decode')
       const audioBuffer = await getContext().decodeAudioData(arrayBuffer as ArrayBuffer)
       const channel = audioBuffer.getChannelData(0)
       const result = {
@@ -74,6 +78,7 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
       // above already cover repeat calls within THIS session regardless
       // of whether this write succeeds); a non-library path is silently
       // skipped by the main-process side (see stemPeaksCacheStore.ts).
+      countWork('ipc:set-stem-peaks-cache')
       void window.rifffApi.setStemPeaksCache(path, result)
       return result
     } catch (err) {

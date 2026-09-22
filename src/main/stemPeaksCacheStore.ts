@@ -1,6 +1,7 @@
 // src/main/stemPeaksCacheStore.ts
 import type Database from 'better-sqlite3'
 import { stemCIDForPath } from './stemCategoriesStore'
+import { countWork } from './workCounters'
 
 export interface StemPeaks {
   peaks: number[]
@@ -22,6 +23,7 @@ export function getStemPeaksCache(
 ): StemPeaks | null {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return null
+  countWork('sql:stem-peaks-cache.get')
   const row = db
     .prepare(`SELECT PeaksJSON, BrightnessJSON FROM StemPeaksCache WHERE StemCID = ?`)
     .get(stemCID) as { PeaksJSON: string; BrightnessJSON: string } | undefined
@@ -48,6 +50,7 @@ export function setStemPeaksCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  countWork('sql:stem-peaks-cache.set')
   db.prepare(
     `INSERT INTO StemPeaksCache (StemCID, PeaksJSON, BrightnessJSON, ExtractedAt)
      VALUES (@stemCID, @peaksJson, @brightnessJson, @extractedAt)

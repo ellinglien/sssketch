@@ -1,7 +1,7 @@
 import type { Dispatch } from 'react'
 import type { Rifff } from '@shared/types'
 import { guessSoundType } from '@shared/typeGuess'
-import { getAudioContext } from './peakCache'
+import { decodeStemFile } from './decodeStemFile'
 import type { Action } from '../state/store'
 
 /**
@@ -15,12 +15,7 @@ export async function classifyStems(rifff: Rifff, dispatch: Dispatch<Action>): P
   await Promise.all(
     rifff.stems.map(async (stem) => {
       try {
-        const bytes = await window.rifffApi.readAudioFile(stem.path)
-        const arrayBuffer = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength
-        )
-        const decoded = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+        const decoded = await decodeStemFile(stem.path)
         const guess = guessSoundType(decoded.getChannelData(0), decoded.sampleRate)
         if (guess) {
           dispatch({

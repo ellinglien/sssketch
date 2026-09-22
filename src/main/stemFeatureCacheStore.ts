@@ -2,6 +2,7 @@
 import type Database from 'better-sqlite3'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { stemCIDForPath } from './stemCategoriesStore'
+import { countWork } from './workCounters'
 import { noteStemFeatureRowWritten } from './traitQuantileCache'
 
 /** Reads a stem's persisted StemFeatures by its on-disk path -- resolves
@@ -27,6 +28,7 @@ export function getStemFeatureCache(
 ): StemFeatures | null {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return null
+  countWork('sql:stem-feature-cache.get')
   const row = db
     .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
     .get(stemCID) as { FeaturesJSON: string } | undefined
@@ -58,6 +60,7 @@ export function setStemFeatureCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  countWork('sql:stem-feature-cache.set')
   db.prepare(
     `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt)
      VALUES (@stemCID, @featuresJson, @extractedAt)

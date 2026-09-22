@@ -1,5 +1,6 @@
 // src/renderer/src/audio/DiscoverLibraryScan.tsx
 import { backgroundScanGate } from './backgroundScanGate'
+import { countWork } from '../perf/workCounters'
 import { useEffect, useRef, useState } from 'react'
 import { getOrExtractStemEmbedding } from './stemEmbeddingCache'
 import { getStemFeatures } from './stemFeaturesCache'
@@ -76,6 +77,7 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
 
   useEffect(() => {
     let cancelled = false
+    countWork('ipc:get-discover-library-scan-targets')
     void window.rifffApi
       .getDiscoverLibraryScanTargets()
       .then((targets) => {

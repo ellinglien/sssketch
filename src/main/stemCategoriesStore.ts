@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 import type { BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import { sketchProjectPath } from './projectLibrary'
+import { countWork } from './workCounters'
 
 /** Resolves a renderer-supplied ProjectRef into the real absolute path
  * StemCategories.SourceProject should carry -- a library-kind sketch is
@@ -45,6 +46,7 @@ export function stemCIDForPath(
 ): string | null {
   const candidate = basename(path)
   for (const candidateDb of [db, ...extraCandidateDbs]) {
+    countWork('sql:stemCIDForPath')
     const row = candidateDb.prepare(`SELECT 1 FROM Stems WHERE StemCID = ?`).get(candidate)
     if (row) return candidate
   }

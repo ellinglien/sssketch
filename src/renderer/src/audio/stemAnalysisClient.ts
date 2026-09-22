@@ -7,6 +7,7 @@
 // scans; this moves it off.
 import { analyzeStemSamples, type StemAnalysis } from '@shared/stemAnalysis'
 import { computePitchContour, type PitchContour } from '@shared/pitchContour'
+import { countWork } from '../perf/workCounters'
 
 let worker: Worker | null = null
 let nextRequestId = 0
@@ -61,6 +62,7 @@ export function analyzeStemSamplesOffThread(
   samples: Float32Array,
   sampleRate: number
 ): Promise<StemAnalysis> {
+  countWork('analysis')
   if (typeof Worker === 'undefined') {
     return Promise.resolve(analyzeStemSamples(samples, sampleRate))
   }
@@ -73,6 +75,7 @@ export function computePitchContourOffThread(
   samples: Float32Array,
   sampleRate: number
 ): Promise<PitchContour> {
+  countWork('analysis:pitch')
   if (typeof Worker === 'undefined') {
     return Promise.resolve(computePitchContour(samples, sampleRate))
   }

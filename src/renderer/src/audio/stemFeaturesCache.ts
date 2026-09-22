@@ -1,6 +1,8 @@
 import { assembleStemFeatures } from '@shared/stemAnalysis'
 import { isCurrentStemFeatureVersion, type StemFeatures } from '@shared/stemFeatures'
-import { getAudioContext, getBrightness } from './peakCache'
+import { countWork } from '../perf/workCounters'
+import { decodeStemFile } from './decodeStemFile'
+import { getBrightness } from './peakCache'
 import { primePitchContour } from './pitchCache'
 import { analyzeStemSamplesOffThread } from './stemAnalysisClient'
 
@@ -55,6 +57,7 @@ export function getStemFeatures(
       // stem" (see stemFeatureCacheStore.ts's own doc comment) -- either
       // way, fall through to computing fresh below. An old-version row
       // counts as a miss only for requireCurrentVersion callers.
+      countWork('ipc:get-stem-feature-cache')
       const persisted = await window.rifffApi.getStemFeatureCache(path)
       if (persisted && (!requireCurrentVersion || isCurrentStemFeatureVersion(persisted))) {
         return persisted
@@ -83,12 +86,7 @@ function refreshStale(path: string, stale: Promise<StemFeatures>): Promise<StemF
 }
 
 async function extractAndPersist(path: string): Promise<StemFeatures> {
-  const [brightness, bytes] = await Promise.all([
-    getBrightness(path),
-    window.rifffApi.readAudioFile(path)
-  ])
-  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-  const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+  const [brightness, audioBuffer] = await Promise.all([getBrightness(path), decodeStemFile(path)])
   const analysis = await analyzeStemSamplesOffThread(
     audioBuffer.getChannelData(0),
     audioBuffer.sampleRate
@@ -100,6 +98,7 @@ async function extractAndPersist(path: string): Promise<StemFeatures> {
   // covers repeat calls within THIS session regardless of whether this
   // write succeeds); a non-library path is silently skipped by the
   // main-process side (see stemFeatureCacheStore.ts).
+  countWork('ipc:set-stem-feature-cache')
   void window.rifffApi.setStemFeatureCache(path, features)
   return features
 }

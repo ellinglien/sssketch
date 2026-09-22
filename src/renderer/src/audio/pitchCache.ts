@@ -1,5 +1,5 @@
 import type { PitchContour } from '@shared/pitchContour'
-import { getAudioContext } from './peakCache'
+import { decodeStemFile } from './decodeStemFile'
 import { computePitchContourOffThread } from './stemAnalysisClient'
 
 const cache = new Map<string, Promise<PitchContour>>()
@@ -17,9 +17,7 @@ export function getPitchContour(path: string): Promise<PitchContour> {
 
   const promise = (async () => {
     try {
-      const bytes = await window.rifffApi.readAudioFile(path)
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+      const audioBuffer = await decodeStemFile(path)
       // Off the main thread (stemAnalysisClient.ts, 2026-09-21).
       return await computePitchContourOffThread(
         audioBuffer.getChannelData(0),

@@ -1,5 +1,6 @@
 // src/renderer/src/audio/stemEmbeddingCache.ts
-import { getAudioContext } from './peakCache'
+import { countWork } from '../perf/workCounters'
+import { decodeStemFile } from './decodeStemFile'
 import { resampleTo16kMono } from './resampleTo16kMono'
 import { extractEmbeddingAndTopClass } from './yamnetClient'
 
@@ -9,10 +10,7 @@ const cache = new Map<string, Promise<number[] | null>>()
  * ensureYamnetZeroShotClassified's own retroactive re-run -- read the raw
  * bytes over IPC, decode, resample to YAMNet's own required 16kHz mono. */
 async function decodeAndResample(path: string): Promise<Float32Array> {
-  const bytes = await window.rifffApi.readAudioFile(path)
-  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-  const audioBuffer = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-  return resampleTo16kMono(audioBuffer)
+  return resampleTo16kMono(await decodeStemFile(path))
 }
 
 /** Extracts (or returns the already-in-flight/cached extraction for) one
@@ -55,6 +53,7 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
 
   const promise = (async (): Promise<number[] | null> => {
     try {
+      countWork('ipc:get-stem-embedding-cache')
       const persisted = await window.rifffApi.getStemEmbeddingCache(path)
       if (persisted) return persisted
 
@@ -65,12 +64,15 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
       // Fire-and-forget, matching getStemFeatures' own setStemFeatureCache
       // call -- a real library stem's path persists for next time; a
       // non-library path is silently skipped main-process-side.
+      countWork('ipc:set-stem-embedding-cache')
       void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
       // Marks the attempt regardless of topClassIndex -- see
       // markYamnetZeroShotAttempted's own doc comment (main process) for
       // why "tried, found nothing mappable" still needs recording.
+      countWork('ipc:mark-yamnet-zeroshot-attempted')
       void window.rifffApi.markYamnetZeroShotAttempted(path)
       if (result.topClassIndex !== null) {
+        countWork('ipc:set-yamnet-zeroshot-category')
         void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
       }
       return result.embedding

@@ -1,6 +1,7 @@
 // src/main/stemEmbeddingCacheStore.ts
 import type Database from 'better-sqlite3'
 import { stemCIDForPath } from './stemCategoriesStore'
+import { countWork } from './workCounters'
 
 /** Reads a stem's persisted YAMNet embedding by its on-disk path -- exact
  * structural mirror of stemFeatureCacheStore.ts's own getStemFeatureCache,
@@ -18,6 +19,7 @@ export function getStemEmbeddingCache(
 ): number[] | null {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return null
+  countWork('sql:stem-embedding-cache.get')
   const row = db
     .prepare(`SELECT EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID = ?`)
     .get(stemCID) as { EmbeddingJSON: string } | undefined
@@ -46,6 +48,7 @@ export function setStemEmbeddingCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  countWork('sql:stem-embedding-cache.set')
   db.prepare(
     `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt)
      VALUES (@stemCID, @embeddingJson, @extractedAt)
