@@ -58,7 +58,7 @@ describe('startStemAutoClassifyScheduler', () => {
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
 
-  it('backs off to the idle delay once a batch reports no remaining work', async () => {
+  it('sleeps once a batch reports no remaining work -- no further calls until the safety interval', async () => {
     loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
     classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 0 })
     const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
@@ -67,11 +67,87 @@ describe('startStemAutoClassifyScheduler', () => {
     await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
-    // Still under IDLE_DELAY_MS (30s) -- no second call yet.
-    await vi.advanceTimersByTimeAsync(2000)
+    // Before B4 this polled every 30s; now nothing happens for minutes.
+    await vi.advanceTimersByTimeAsync(9 * 60_000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
 
-    await vi.advanceTimersByTimeAsync(28000)
+    // Safety interval (10 min) -- one more batch, then asleep again.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('wakes from sleep when a new embedding/feature row is noted, coalescing a burst into one batch', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 0 })
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    const wake = await import('./stemAutoClassifyWake')
+    startStemAutoClassifyScheduler()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    const db = {} as never
+    wake.noteAutoClassifyInputRow(db, 'embedding', 's1')
+    await vi.advanceTimersByTimeAsync(1000)
+    wake.noteAutoClassifyInputRow(db, 'feature', 's2')
+    wake.noteAutoClassifyInputRow(db, 'embedding', 's3')
+    // Wake delay (3s) from the FIRST signal -- later ones don't push it out
+    // or add batches.
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('wakes on a training change (confirmation / centroid retrain)', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 0 })
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    const wake = await import('./stemAutoClassifyWake')
+    startStemAutoClassifyScheduler()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
+
+    wake.noteAutoClassifyTrainingChanged()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not sleep on a signal that arrived while its batch was running', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    const wake = await import('./stemAutoClassifyWake')
+    classifyAutoCategoryBatch.mockImplementation(async () => {
+      if (classifyAutoCategoryBatch.mock.calls.length === 1) {
+        wake.noteAutoClassifyInputRow({} as never, 'embedding', 'mid-batch')
+      }
+      return { processed: 0, remaining: 0 }
+    })
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    startStemAutoClassifyScheduler()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+    // Second batch saw no signal -- asleep now.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a wake signal does not add calls while busy', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValue({ processed: 5, remaining: 10 })
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    const wake = await import('./stemAutoClassifyWake')
+    startStemAutoClassifyScheduler()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    wake.noteAutoClassifyInputRow({} as never, 'embedding', 's1')
+    wake.noteAutoClassifyTrainingChanged()
+    await vi.advanceTimersByTimeAsync(2000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
 

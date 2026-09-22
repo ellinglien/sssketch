@@ -2,6 +2,7 @@
 import type Database from 'better-sqlite3'
 import { stemCIDForPath } from './stemCategoriesStore'
 import { countWork } from './workCounters'
+import { noteAutoClassifyInputRow } from './stemAutoClassifyWake'
 
 /** Reads a stem's persisted YAMNet embedding by its on-disk path -- exact
  * structural mirror of stemFeatureCacheStore.ts's own getStemFeatureCache,
@@ -56,4 +57,6 @@ export function setStemEmbeddingCache(
        EmbeddingJSON = excluded.EmbeddingJSON,
        ExtractedAt = excluded.ExtractedAt`
   ).run({ stemCID, embeddingJson: JSON.stringify(embedding), extractedAt })
+  // Wakes the overnight classifier with this stem (background efficiency B4).
+  noteAutoClassifyInputRow(db, 'embedding', stemCID)
 }

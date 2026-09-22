@@ -4,6 +4,7 @@ import { join } from 'path'
 import { app } from 'electron'
 import type { CategoryCentroidStore } from '@shared/categoryCentroids'
 import { emptyCategoryCentroidStore } from '@shared/categoryCentroids'
+import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
 // Filename intentionally UNCHANGED from busCentroidStore.ts's own -- real
 // users already have this file on disk, shaped {buses, global}. Renaming
@@ -48,6 +49,9 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
 export function saveCategoryCentroidStore(store: CategoryCentroidStore): void {
   try {
     writeFileSync(storePath(), JSON.stringify(store, null, 2), 'utf-8')
+    // Retrained centroids can place stems the classifier couldn't before --
+    // its pending lists rebuild on the next batch (background efficiency B4).
+    noteAutoClassifyTrainingChanged()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`saveCategoryCentroidStore: failed to write ${storePath()}: ${message}`)

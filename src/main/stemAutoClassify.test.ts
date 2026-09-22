@@ -6,6 +6,9 @@ import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 import * as categoryCentroidStore from './categoryCentroidStore'
 import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
 import type { StemFeatures } from '@shared/stemFeatures'
+import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
+import { setStemFeatureCache } from './stemFeatureCacheStore'
+import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
 // The centroid/feature pass reads app.getPath('userData') via
 // loadCategoryCentroidStore -- mock just that narrow surface, same
@@ -567,5 +570,183 @@ describe('classifyAutoCategoryBatch (confirmed-embedding cache)', () => {
     }
     await classifyAutoCategoryBatch(db)
     expect(allClassifiedStemCIDs(db).has('query')).toBe(true)
+  })
+})
+
+// Background efficiency B4: the eligible ids are read once into a shuffled
+// in-memory pending list and consumed a batch at a time, instead of a
+// COUNT(*) + ORDER BY RANDOM() per batch.
+describe('classifyAutoCategoryBatch (pending list)', () => {
+  function trainedCentroidStore(): void {
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+  }
+
+  function pendingBuildCount(db: Database.Database): () => number {
+    const spy = vi.spyOn(db, 'prepare')
+    return () => spy.mock.calls.filter(([sql]) => String(sql).includes('ORDER BY t.StemCID')).length
+  }
+
+  async function runToCompletion(db: Database.Database): Promise<number> {
+    let calls = 0
+    for (;;) {
+      calls += 1
+      const { remaining } = await classifyAutoCategoryBatch(db)
+      if (remaining === 0 || calls > 100) return calls
+    }
+  }
+
+  function classifications(db: Database.Database): string[] {
+    return (
+      db.prepare(`SELECT StemCID, ArrangeRole, Source FROM StemAutoCategory`).all() as {
+        StemCID: string
+        ArrangeRole: string
+        Source: string
+      }[]
+    )
+      .map((r) => `${r.StemCID}:${r.ArrangeRole}:${r.Source}`)
+      .sort()
+  }
+
+  /** A mixed library: embedding stems near drums / near bass / ambiguous,
+   * feature-only stems (classifiable and ambiguous), mask-tagged stems. */
+  function seedLibrary(db: Database.Database, prefix: string, n: number): void {
+    for (let i = 0; i < n; i++) {
+      seedEmbedding(db, `${prefix}-emb-drums-${i}`, [0.9, 0.1, 0])
+      seedEmbedding(db, `${prefix}-emb-bass-${i}`, [0.1, 0.9, 0])
+      seedEmbedding(db, `${prefix}-emb-ambiguous-${i}`, [0.5, 0.5, 0])
+      seedFeatures(db, `${prefix}-feat-drums-${i}`, { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+      seedFeatures(db, `${prefix}-feat-ambiguous-${i}`, {
+        transientDensity: 0.5,
+        bassEnergyRatio: 0.5
+      })
+      seedInstrument(db, `${prefix}-mask-notes-${i}`, NOTES_BIT)
+      seedFeatures(db, `${prefix}-mask-notes-${i}`, { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    }
+  }
+
+  it('builds the eligible id list once and consumes it across batches', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    trainedCentroidStore()
+    seedLibrary(db, 'a', 150) // 450 embedding ids + 450 feature ids
+    const builds = pendingBuildCount(db)
+
+    const calls = await runToCompletion(db)
+    expect(calls).toBe(3) // 450 ids per list / BATCH_SIZE 200
+    // One build = one keyset page per table.
+    expect(builds()).toBe(2)
+    expect(classifications(db)).toHaveLength(150 * 4)
+  })
+
+  it('yields the same classifications as a from-scratch run, with rows arriving mid-pass through the cache stores', async () => {
+    // Reference: everything present up front.
+    const reference = freshDb()
+    seedTrainedEmbeddings(reference)
+    trainedCentroidStore()
+    seedLibrary(reference, 'a', 120)
+    seedLibrary(reference, 'b', 40)
+    await runToCompletion(reference)
+
+    // Same data, but the 'b' rows arrive between batches via the real
+    // store writers (which note them for the pending list).
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedLibrary(db, 'a', 120)
+    const builds = pendingBuildCount(db)
+    await classifyAutoCategoryBatch(db)
+
+    const late = freshDb()
+    seedLibrary(late, 'b', 40)
+    const embeddings = late
+      .prepare(`SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache`)
+      .all() as {
+      StemCID: string
+      EmbeddingJSON: string
+    }[]
+    const features = late.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all() as {
+      StemCID: string
+      FeaturesJSON: string
+    }[]
+    const masks = late.prepare(`SELECT StemCID, Instrument FROM Stems`).all() as {
+      StemCID: string
+      Instrument: number
+    }[]
+    const maskByStem = new Map(masks.map((m) => [m.StemCID, m.Instrument]))
+    const addStem = (stemCID: string): void => {
+      db.prepare(
+        `INSERT OR IGNORE INTO Stems (StemCID, OwnerJamCID, Instrument) VALUES (?, 'jam1', ?)`
+      ).run(stemCID, maskByStem.get(stemCID) ?? null)
+    }
+    for (const row of embeddings) {
+      addStem(row.StemCID)
+      setStemEmbeddingCache(db, `/x/${row.StemCID}`, JSON.parse(row.EmbeddingJSON), 1000)
+    }
+    for (const row of features) {
+      addStem(row.StemCID)
+      setStemFeatureCache(db, `/x/${row.StemCID}`, JSON.parse(row.FeaturesJSON), 1000)
+    }
+    await runToCompletion(db)
+
+    expect(classifications(db)).toEqual(classifications(reference))
+    // New rows joined the existing list -- no rebuild for them.
+    expect(builds()).toBe(2)
+  })
+
+  it('goes back to the eligibility query only once the list is exhausted and nothing new was noted', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedEmbedding(db, 'ambiguous-1', [0.5, 0.5, 0])
+    const builds = pendingBuildCount(db)
+
+    expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 0, remaining: 0 })
+    expect(builds()).toBe(2)
+    // The scheduler's safety wake: rebuilt (one query per table), and the
+    // unclassifiable stem is re-attempted -- still nothing.
+    expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 0, remaining: 0 })
+    expect(builds()).toBe(4)
+  })
+
+  it('rebuilds on a training change noted by the stores, re-attempting previously unclassifiable stems', async () => {
+    const db = freshDb()
+    seedFeatures(db, 'feat-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    seedFeatures(db, 'feat-2', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    // Untrained centroids -- nothing classifies yet.
+    const first = await classifyAutoCategoryBatch(db)
+    expect(first.processed).toBe(0)
+
+    // A retrain elsewhere (saveCategoryCentroidStore notes it).
+    trainedCentroidStore()
+    noteAutoClassifyTrainingChanged()
+    const second = await classifyAutoCategoryBatch(db)
+    expect(second.processed).toBe(2)
+  })
+
+  it('drops a listed id that was confirmed after the list was built', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    for (let i = 0; i < 201; i++) seedEmbedding(db, `g-${i}`, [0.9, 0.1, 0])
+    const first = await classifyAutoCategoryBatch(db)
+    expect(first).toEqual({ processed: 200, remaining: 1 })
+    const [leftover] = (
+      db
+        .prepare(
+          `SELECT StemCID FROM StemEmbeddingCache e WHERE e.StemCID LIKE 'g-%'
+           AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = e.StemCID)`
+        )
+        .all() as { StemCID: string }[]
+    ).map((r) => r.StemCID)
+    // Confirmed directly (no store) -- the fetch-time eligibility check
+    // still skips it. Confirmed WITHOUT an embedding change, so the
+    // fingerprint moves and the list rebuilds; either way it's skipped.
+    seedConfirmed(db, leftover, 'bass')
+    const second = await classifyAutoCategoryBatch(db)
+    expect(second.processed).toBe(0)
+    expect(allClassifiedStemCIDs(db).has(leftover)).toBe(false)
   })
 })

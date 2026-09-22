@@ -6,6 +6,7 @@ import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import { sketchProjectPath } from './projectLibrary'
 import { countWork } from './workCounters'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
+import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
 /** Resolves a renderer-supplied ProjectRef into the real absolute path
  * StemCategories.SourceProject should carry -- a library-kind sketch is
@@ -152,6 +153,9 @@ export function upsertStemCategoryRole(
   txn(entries)
   // Discover's precomputed per-kind stem lists read ArrangeRole.
   bumpStemClassificationVersion(db)
+  // A confirmation changes the classifier's training and eligibility --
+  // its pending lists rebuild on the next batch (background efficiency B4).
+  noteAutoClassifyTrainingChanged()
 }
 
 export interface StemCategoryRow {

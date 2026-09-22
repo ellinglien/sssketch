@@ -4,6 +4,7 @@ import type { StemFeatures } from '@shared/stemFeatures'
 import { stemCIDForPath } from './stemCategoriesStore'
 import { countWork } from './workCounters'
 import { noteStemFeatureRowWritten } from './traitQuantileCache'
+import { noteAutoClassifyInputRow } from './stemAutoClassifyWake'
 
 /** Reads a stem's persisted StemFeatures by its on-disk path -- resolves
  * the same content-addressed StemCID convention stemCategoriesStore.ts
@@ -72,4 +73,6 @@ export function setStemFeatureCache(
   // re-extraction replaces old rows (traitQuantileCache.ts), and keeps its
   // in-memory trait value table current for Discover rolls -- O(1).
   noteStemFeatureRowWritten(db, features, stemCID)
+  // Wakes the overnight classifier with this stem (background efficiency B4).
+  noteAutoClassifyInputRow(db, 'feature', stemCID)
 }

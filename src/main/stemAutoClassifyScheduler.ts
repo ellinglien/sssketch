@@ -3,6 +3,8 @@ import { classifyAutoCategoryBatch } from './stemAutoClassify'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { loadDiscoverSettings } from './discoverSettingsStore'
 import { candidateDbsForRiff } from './riffLibraryStore'
+import { setAutoClassifyWakeListener } from './stemAutoClassifyWake'
+import { countWork } from './workCounters'
 
 // Delay between batches while there's known work waiting -- keeps this
 // from ever monopolizing the main process for long, same "batch, then
@@ -24,14 +26,46 @@ import { candidateDbsForRiff } from './riffLibraryStore'
 // longer to fully catch up, in exchange for a lower sustained background
 // share even while there's a real backlog.
 const BUSY_DELAY_MS = 3000
+// Consent withheld, or a batch threw: re-check at this pace.
 const IDLE_DELAY_MS = 30_000
+// Background efficiency B4: once a batch reports nothing left, the
+// scheduler SLEEPS instead of polling every IDLE_DELAY_MS -- woken by
+// stemAutoClassifyWake.ts (new embedding/feature rows, a confirmation, a
+// centroid retrain), or at this long safety interval, whose batch rebuilds
+// the pending lists from scratch (catches anything no signal reported).
+const SAFETY_INTERVAL_MS = 10 * 60_000
+// A wake runs the next batch after this delay, so a burst of writes (the
+// renderer scan persists a stem every second or so) coalesces into one.
+const WAKE_DELAY_MS = BUSY_DELAY_MS
 
 let started = false
+let timer: ReturnType<typeof setTimeout> | null = null
+// True only while waiting out SAFETY_INTERVAL_MS after a caught-up batch --
+// the one state a wake signal cuts short.
+let sleeping = false
+// A batch is in flight, and whether a wake arrived meanwhile -- that batch
+// may already have drained its inputs, so it mustn't go to sleep on them.
+let running = false
+let wokeWhileRunning = false
 
-function scheduleNext(delayMs: number): void {
-  setTimeout(() => {
+function scheduleNext(delayMs: number, asSleep = false): void {
+  if (timer !== null) clearTimeout(timer)
+  sleeping = asSleep
+  timer = setTimeout(() => {
+    timer = null
+    sleeping = false
     void runOnce()
   }, delayMs)
+}
+
+function wake(): void {
+  if (running) {
+    wokeWhileRunning = true
+    return
+  }
+  if (!sleeping) return
+  countWork('auto-classify:wake')
+  scheduleNext(WAKE_DELAY_MS)
 }
 
 async function runOnce(): Promise<void> {
@@ -44,7 +78,10 @@ async function runOnce(): Promise<void> {
     scheduleNext(IDLE_DELAY_MS)
     return
   }
+  running = true
+  wokeWhileRunning = false
   try {
+    countWork('auto-classify:batch')
     // candidateDbsForRiff() -- so the instrument-mask short-circuit in
     // classifyAutoCategoryBatch (see its own doc comment) can find a
     // stem's real Instrument mask even when that stem's own "Stems" row
@@ -53,10 +90,13 @@ async function runOnce(): Promise<void> {
       openOwnRiffLibraryDb(),
       candidateDbsForRiff()
     )
-    scheduleNext(remaining > 0 ? BUSY_DELAY_MS : IDLE_DELAY_MS)
+    if (remaining > 0 || wokeWhileRunning) scheduleNext(BUSY_DELAY_MS)
+    else scheduleNext(SAFETY_INTERVAL_MS, true)
   } catch (err) {
     console.error('stemAutoClassifyScheduler: batch failed:', err)
     scheduleNext(IDLE_DELAY_MS)
+  } finally {
+    running = false
   }
 }
 
@@ -68,11 +108,14 @@ async function runOnce(): Promise<void> {
  * Self-reschedules INDEFINITELY, not a one-shot pass -- "something people
  * can leave running overnight," direct request 2026-09-15 -- so it keeps
  * picking up newly-scanned stems for as long as the app stays open and
- * consent remains granted. Idempotent: a second call is a silent no-op,
- * matching the "mount once" precedent other app-lifetime background
- * processes in this codebase already follow. */
+ * consent remains granted -- asleep (no queries at all) while caught up,
+ * woken by the writers that create new work (see SAFETY_INTERVAL_MS).
+ * Idempotent: a second call is a silent no-op, matching the "mount once"
+ * precedent other app-lifetime background processes in this codebase
+ * already follow. */
 export function startStemAutoClassifyScheduler(): void {
   if (started) return
   started = true
+  setAutoClassifyWakeListener(wake)
   scheduleNext(BUSY_DELAY_MS)
 }

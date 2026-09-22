@@ -8,6 +8,11 @@ import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
+import { countWork } from './workCounters'
+import {
+  drainAutoClassifyInputRows,
+  getAutoClassifyTrainingGeneration
+} from './stemAutoClassifyWake'
 
 // How many stems ONE call classifies, per data source, before returning --
 // bounds a single call's own cost so the scheduler driving this (see
@@ -199,71 +204,177 @@ const featureEligibilityWhere = (alias: string, embeddingAxisTrained: boolean): 
        AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)`
     : BASE_ELIGIBILITY_WHERE(alias)
 
-function countPendingEmbeddings(ownDb: Database.Database): number {
-  return (
-    ownDb
-      .prepare(
-        `SELECT COUNT(*) AS n FROM StemEmbeddingCache e WHERE ${BASE_ELIGIBILITY_WHERE('e')}`
-      )
-      .get() as { n: number }
-  ).n
+// Rows per keyset page when (re)building a pending list -- ids only, so a
+// page is a few hundred KB at most; the build yields between pages.
+const PENDING_BUILD_PAGE_SIZE = 5000
+
+/** Every eligible StemCID in `table`, in StemCID order, read as keyset
+ * pages (ids only, never a blob) with a yield between pages. `.all()` per
+ * page -- never a statement held open across the yield. */
+async function eligibleStemCIDs(
+  ownDb: Database.Database,
+  table: 'StemEmbeddingCache' | 'StemFeatureCache',
+  where: string
+): Promise<string[]> {
+  const statement = ownDb.prepare(
+    `SELECT t.StemCID AS StemCID FROM ${table} t
+     WHERE t.StemCID > ? AND ${where}
+     ORDER BY t.StemCID LIMIT ?`
+  )
+  const out: string[] = []
+  let after = ''
+  for (;;) {
+    countWork(`sql:auto-classify.pending-build.${table}`)
+    const page = statement.all(after, PENDING_BUILD_PAGE_SIZE) as { StemCID: string }[]
+    for (const row of page) out.push(row.StemCID)
+    if (page.length < PENDING_BUILD_PAGE_SIZE) break
+    after = page[page.length - 1].StemCID
+    await yieldToEventLoop()
+  }
+  return out
 }
 
-function fetchPendingEmbeddingBatch(
+function shuffleInPlace(ids: string[]): void {
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const tmp = ids[i]
+    ids[i] = ids[j]
+    ids[j] = tmp
+  }
+}
+
+/** One pass's pending ids: shuffled, consumed from the end. `members`
+ * mirrors `ids` so a noted row already waiting isn't queued twice. */
+interface PendingList {
+  ids: string[]
+  members: Set<string>
+}
+
+function pendingListOf(ids: string[]): PendingList {
+  shuffleInPlace(ids)
+  return { ids, members: new Set(ids) }
+}
+
+/** Adds `stemCID` at a uniformly random position among the ids still
+ * waiting -- keeps the list a random order, same as a fresh shuffle. */
+function addPending(list: PendingList, stemCID: string): void {
+  if (list.members.has(stemCID)) return
+  list.members.add(stemCID)
+  list.ids.push(stemCID)
+  const j = Math.floor(Math.random() * list.ids.length)
+  const last = list.ids.length - 1
+  const tmp = list.ids[last]
+  list.ids[last] = list.ids[j]
+  list.ids[j] = tmp
+}
+
+function takePending(list: PendingList, n: number): string[] {
+  const taken = list.ids.splice(Math.max(0, list.ids.length - n))
+  for (const id of taken) list.members.delete(id)
+  return taken
+}
+
+/** Background efficiency B4: the classifier's own pending lists, built once
+ * from the eligibility queries and consumed a batch at a time -- instead of
+ * a COUNT(*) plus an `ORDER BY RANDOM()` over the whole eligible set on
+ * every batch. Rebuilt when the training it was built against changed
+ * (confirmed-embedding fingerprint, or a confirmation/centroid retrain
+ * noted via stemAutoClassifyWake.ts), or when both lists are empty and no
+ * new rows were noted (the scheduler's long safety wake, or a caller that
+ * wrote rows without going through the stores). New embedding/feature rows
+ * noted by the cache stores join the lists directly. An id's eligibility is
+ * re-checked when its batch is fetched, so a list entry that has since been
+ * confirmed or classified by another source is simply dropped. */
+interface PendingState {
+  fingerprint: string
+  trainingGeneration: number
+  embedding: PendingList
+  feature: PendingList
+}
+const pendingByDb = new WeakMap<Database.Database, PendingState>()
+
+async function getPendingState(
   ownDb: Database.Database,
-  limit: number
+  prepared: PreparedConfirmed
+): Promise<PendingState> {
+  const state = pendingByDb.get(ownDb)
+  const added = drainAutoClassifyInputRows(ownDb)
+  const generation = getAutoClassifyTrainingGeneration()
+  const exhausted =
+    state !== undefined &&
+    state.embedding.ids.length === 0 &&
+    state.feature.ids.length === 0 &&
+    added.embedding.length === 0 &&
+    added.feature.length === 0
+  if (
+    state &&
+    !exhausted &&
+    state.fingerprint === prepared.fingerprint &&
+    state.trainingGeneration === generation
+  ) {
+    for (const id of added.embedding) addPending(state.embedding, id)
+    for (const id of added.feature) addPending(state.feature, id)
+    return state
+  }
+  const embedding = await eligibleStemCIDs(ownDb, 'StemEmbeddingCache', BASE_ELIGIBILITY_WHERE('t'))
+  const feature = await eligibleStemCIDs(
+    ownDb,
+    'StemFeatureCache',
+    featureEligibilityWhere('t', prepared.embeddingAxisTrained)
+  )
+  const rebuilt: PendingState = {
+    fingerprint: prepared.fingerprint,
+    trainingGeneration: generation,
+    embedding: pendingListOf(embedding),
+    feature: pendingListOf(feature)
+  }
+  pendingByDb.set(ownDb, rebuilt)
+  return rebuilt
+}
+
+function inPlaceholders(ids: string[]): string {
+  return ids.map(() => '?').join(', ')
+}
+
+/** Blobs for one batch of pending ids, re-checking eligibility (the list
+ * may predate a confirmation or another source's write). */
+function fetchPendingEmbeddingRows(
+  ownDb: Database.Database,
+  ids: string[]
 ): EmbeddingCandidateRow[] {
-  // Two steps -- real live freeze, profiled 2026-09-21: `ORDER BY RANDOM()`
-  // over the whole eligible set sorted every row WITH its ~20KB
-  // EmbeddingJSON blob (~53k rows on Elling's library), ~250ms every call.
-  // Shuffle just the ids, then read blobs only for the rows actually picked.
-  const picked = ownDb
-    .prepare(
-      `SELECT StemCID FROM StemEmbeddingCache e
-       WHERE ${BASE_ELIGIBILITY_WHERE('e')}
-       ORDER BY RANDOM() LIMIT ?`
-    )
-    .all(limit) as { StemCID: string }[]
-  if (picked.length === 0) return []
-  const placeholders = picked.map(() => '?').join(', ')
+  if (ids.length === 0) return []
+  countWork('sql:auto-classify.fetch-embeddings')
   return ownDb
     .prepare(
-      `SELECT StemCID, EmbeddingJSON FROM StemEmbeddingCache WHERE StemCID IN (${placeholders})`
+      `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON FROM StemEmbeddingCache e
+       WHERE e.StemCID IN (${inPlaceholders(ids)}) AND ${BASE_ELIGIBILITY_WHERE('e')}`
     )
-    .all(...picked.map((r) => r.StemCID)) as EmbeddingCandidateRow[]
+    .all(...ids) as EmbeddingCandidateRow[]
 }
 
-function countPendingFeatures(ownDb: Database.Database, embeddingAxisTrained: boolean): number {
-  return (
-    ownDb
-      .prepare(
-        `SELECT COUNT(*) AS n FROM StemFeatureCache f WHERE ${featureEligibilityWhere('f', embeddingAxisTrained)}`
-      )
-      .get() as { n: number }
-  ).n
-}
-
-function fetchPendingFeatureBatch(
+function fetchPendingFeatureRows(
   ownDb: Database.Database,
-  limit: number,
+  ids: string[],
   embeddingAxisTrained: boolean
 ): FeatureCandidateRow[] {
+  if (ids.length === 0) return []
+  countWork('sql:auto-classify.fetch-features')
   return ownDb
     .prepare(
-      `SELECT StemCID, FeaturesJSON FROM StemFeatureCache f
-       WHERE ${featureEligibilityWhere('f', embeddingAxisTrained)}
-       ORDER BY RANDOM() LIMIT ?`
+      `SELECT f.StemCID AS StemCID, f.FeaturesJSON AS FeaturesJSON FROM StemFeatureCache f
+       WHERE f.StemCID IN (${inPlaceholders(ids)})
+       AND ${featureEligibilityWhere('f', embeddingAxisTrained)}`
     )
-    .all(limit) as FeatureCandidateRow[]
+    .all(...ids) as FeatureCandidateRow[]
 }
 
 export interface ClassifyBatchResult {
   /** How many stems this call actually classified and persisted. */
   processed: number
-  /** How many eligible-but-unprocessed stems are left (across both
-   * sources) after this call -- 0 means "fully caught up, for now" (the
-   * scan that feeds this may still be finding new stems to embed/extract
-   * features for, so this can go back above 0 later). */
+  /** How many pending ids are left (across both sources) after this call
+   * -- 0 means "fully caught up, for now": the scheduler sleeps until a
+   * wake signal (new embedding/feature rows, a confirmation -- see
+   * stemAutoClassifyWake.ts) or its safety interval. */
   remaining: number
 }
 
@@ -303,20 +414,25 @@ export interface ClassifyBatchResult {
  * failed" -- it'll be re-attempted on a LATER call, which is deliberate
  * (more Tidy Up confirmations over time can make a previously-unplaceable
  * stem classifiable later) at the cost of some repeated work on stems
- * that stay unclassifiable indefinitely. Each call's own batch is a
- * RANDOM sample of the pending pool (`ORDER BY RANDOM() LIMIT`, done by
- * SQLite directly), not a deterministic "first N" -- a real live bug
- * found this way: a deterministic batch can get permanently stuck
- * retrying the exact same unclassifiable stems forever once they
- * out-number BATCH_SIZE, starving every classifiable stem elsewhere in a
- * real multi-thousand-stem table.
+ * that stay unclassifiable indefinitely -- re-attempted once the training
+ * changes (a confirmation or centroid retrain rebuilds the pending lists,
+ * see PendingState) or at the scheduler's long safety interval, rather
+ * than on every batch as before B4 (the answer can't change until the
+ * training does). Each call's batch is taken from a SHUFFLED pending list,
+ * not a deterministic "first N" -- a real live bug found this way: a
+ * deterministic batch can get permanently stuck retrying the exact same
+ * unclassifiable stems forever once they out-number BATCH_SIZE, starving
+ * every classifiable stem elsewhere in a real multi-thousand-stem table.
+ * The list is consumed through to the end before it's rebuilt, so every
+ * eligible stem gets its turn.
  *
- * Every eligibility/random/bound decision happens IN SQL (NOT EXISTS +
- * ORDER BY RANDOM() + LIMIT) -- JS never materializes the full pending id
- * universe, only ever the >= BATCH_SIZE rows actually selected for this
- * call. A real, live perf bug this specifically fixes: the original
- * version of this function read every row of StemEmbeddingCache/
- * StemFeatureCache/StemAutoCategory into a JS array and built Sets from
+ * Eligibility is decided IN SQL (NOT EXISTS) both when the pending list is
+ * built (ids only, keyset pages with yields -- background efficiency B4:
+ * once per rebuild, not a COUNT(*) + `ORDER BY RANDOM()` per batch) and
+ * again for each batch's own <= BATCH_SIZE ids when their blobs are read.
+ * A real, live perf bug this specifically avoids: the original version of
+ * this function read every row of StemEmbeddingCache/StemFeatureCache/
+ * StemAutoCategory (blobs included) into a JS array and built Sets from
  * them on EVERY call, once a second, for as long as a real backlog
  * remained -- tens of thousands of row reads a second, confirmed live via
  * 10M+ Unix syscalls within minutes of a fresh launch and multiple
@@ -354,31 +470,29 @@ export async function classifyAutoCategoryBatch(
   stemDbs: Database.Database[] = [ownDb]
 ): Promise<ClassifyBatchResult> {
   let processed = 0
-  let remaining = 0
 
   // Computed ONCE per call, shared by both passes below -- the feature
   // pass's own eligibility depends on whether the embedding axis is
   // trained (see featureEligibilityWhere's own doc comment), so both
   // passes must agree on the same answer within one call.
-  const { embeddingAxisTrained, suggestFromEmbedding } = getPreparedConfirmedEmbeddings(ownDb)
+  const prepared = getPreparedConfirmedEmbeddings(ownDb)
+  const { embeddingAxisTrained, suggestFromEmbedding } = prepared
+  const pending = await getPendingState(ownDb, prepared)
 
   // --- Embedding pass (preferred) ---
-  const pendingEmbeddingCount = countPendingEmbeddings(ownDb)
-  if (pendingEmbeddingCount > 0) {
+  if (pending.embedding.ids.length > 0) {
     // Fetched regardless of embeddingAxisTrained now (real change,
     // 2026-09-18): the instrument-mask short-circuit below needs to see
     // each row's own StemCID to check its mask, so there's no way to
     // "count these as remaining without spending a call on them" the way
     // an untrained axis alone used to allow -- a mask-resolvable stem must
     // still be classified even while the embedding axis itself has never
-    // trained. `remaining` below only ever reflects rows past BATCH_SIZE
-    // that weren't fetched at all this call, same as every other pass;
-    // a fetched row left unresolved (no mask, axis untrained) simply stays
-    // eligible for a later call, same accepted cost as an ambiguous
-    // embedding guess (see "leaves an unclassifiable stem out of
-    // StemAutoCategory", above).
-    const batchRows = fetchPendingEmbeddingBatch(ownDb, BATCH_SIZE)
-    remaining += Math.max(0, pendingEmbeddingCount - batchRows.length)
+    // trained. `remaining` below only ever reflects ids not yet taken
+    // from the pending lists; a fetched row left unresolved (no mask, axis
+    // untrained) stays eligible for the next rebuild, same accepted cost
+    // as an ambiguous embedding guess (see "leaves an unclassifiable stem
+    // out of StemAutoCategory", above).
+    const batchRows = fetchPendingEmbeddingRows(ownDb, takePending(pending.embedding, BATCH_SIZE))
     const masks = lookupInstrumentMasks(
       stemDbs,
       batchRows.map((r) => r.StemCID)
@@ -417,11 +531,13 @@ export async function classifyAutoCategoryBatch(
   }
 
   // --- Feature/centroid pass (fallback) ---
-  const pendingFeatureCount = countPendingFeatures(ownDb, embeddingAxisTrained)
-  if (pendingFeatureCount > 0) {
+  if (pending.feature.ids.length > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    const batchRows = fetchPendingFeatureBatch(ownDb, BATCH_SIZE, embeddingAxisTrained)
-    remaining += Math.max(0, pendingFeatureCount - batchRows.length)
+    const batchRows = fetchPendingFeatureRows(
+      ownDb,
+      takePending(pending.feature, BATCH_SIZE),
+      embeddingAxisTrained
+    )
     // Same instrument-mask short-circuit as the embedding pass above --
     // see reliableMaskSoundType's own doc comment for why.
     const masks = lookupInstrumentMasks(
@@ -456,5 +572,9 @@ export async function classifyAutoCategoryBatch(
     })
   }
 
+  // Ids still waiting in this call's pending lists -- 0 means caught up
+  // until a wake signal (stemAutoClassifyWake.ts) or the scheduler's
+  // safety interval.
+  const remaining = pending.embedding.ids.length + pending.feature.ids.length
   return { processed, remaining }
 }
