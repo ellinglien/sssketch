@@ -45,6 +45,7 @@ import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './components/LoopOrOneShotPrompt'
 import { importPathsWithChoice } from './audio/importPathsWithChoice'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
+import { createRiser } from '@shared/riser'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { loadLastProjectTempo, saveLastProjectTempo } from './state/lastProjectTempo'
@@ -141,11 +142,17 @@ const TRAILING_BLANK_BARS = 4
 
 function Timeline({
   onOpenClipMenu,
+  onOpenRiserMenu,
   onOpenPasteMenu,
   onBackgroundMouseDown
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
-  onOpenPasteMenu: (x: number, y: number, bar: number) => void
+  onOpenRiserMenu: (x: number, y: number, riserId: string) => void
+  /** The timeline's own background menu -- "paste" plus, when the click
+   * landed on a real channel row, "add riser here". `channelId` is null for
+   * a click below the last channel (the ghost rows), where there is no row
+   * for a riser to go on. */
+  onOpenPasteMenu: (x: number, y: number, bar: number, channelId: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -341,11 +348,20 @@ function Timeline({
   )
 
   function handleContextMenu(e: MouseEvent<HTMLDivElement>): void {
-    // Only reached for empty timeline space — RifffBlockRow's clip stops
-    // propagation before this bubbles up, so a right-click on an actual clip
-    // never also triggers the paste menu.
+    // Only reached for empty timeline space — RifffBlockRow's clip (and
+    // RiserBlock) stop propagation before this bubbles up, so a right-click
+    // on an actual element never also triggers this menu.
     e.preventDefault()
-    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget, ppb))
+    // Which row was clicked, read off the DOM rather than threaded through
+    // props: ChannelRow already marks itself with data-channel-id (the drop
+    // handler's own convention), and this menu is the one place that needs
+    // to know "which row is under the cursor" without the row itself having
+    // handled the event.
+    const channelId =
+      (e.target as HTMLElement | null)
+        ?.closest?.('[data-channel-id]')
+        ?.getAttribute('data-channel-id') ?? null
+    onOpenPasteMenu(e.clientX, e.clientY, barForClientX(e.clientX, e.currentTarget, ppb), channelId)
   }
 
   // Ruler's own manual drag-to-set (or double-click-to-clear) loop region --
@@ -429,6 +445,7 @@ function Timeline({
           bus={channel.bus}
           automationMode={state.mode === 'automation'}
           onOpenContextMenu={onOpenClipMenu}
+          onOpenRiserMenu={onOpenRiserMenu}
           onDropOnChannel={handleDropOnChannel}
         />
       ))}
@@ -1712,21 +1729,59 @@ function Frame(): React.JSX.Element {
     [dispatch]
   )
 
-  function openPasteMenu(x: number, y: number, bar: number): void {
-    if (!clipboard || !state.rifffs[clipboard]) return
-    setContextMenu({
-      x,
-      y,
-      items: [
-        {
-          label: 'paste',
-          onClick: () => {
-            const action = pasteRifffAction(state, clipboard, bar)
-            if (action) dispatch(action)
+  // Wrapped in useCallback for the same reason openClipMenu is: Timeline
+  // passes it straight down to React.memo(ChannelRow), which only pays off
+  // while its props stay referentially stable across unrelated dispatches.
+  const openRiserMenu = useCallback(
+    (x: number, y: number, riserId: string): void => {
+      setContextMenu({
+        x,
+        y,
+        items: [
+          {
+            label: 'remove riser',
+            danger: true,
+            onClick: () => dispatch({ type: 'REMOVE_RISER', id: riserId })
           }
+        ]
+      })
+    },
+    [dispatch]
+  )
+
+  function openPasteMenu(x: number, y: number, bar: number, channelId: string | null): void {
+    const items: ContextMenuItem[] = []
+    // Dropping a riser lives here, on the arranger's own background menu,
+    // rather than as a button somewhere: it is "put a thing at this point on
+    // this row", and the point and the row are exactly what a right-click
+    // already carries. Same place, and the same gesture, as pasting a clip.
+    if (channelId) {
+      items.push({
+        label: 'add riser here',
+        onClick: () =>
+          dispatch({
+            type: 'ADD_RISER',
+            // crypto.randomUUID, like every other freshly-minted id in this
+            // file. It is also the riser's NOISE SEED (the engine hashes it
+            // -- see riserSeedFor in NoiseRiser.h), so it has to be unique
+            // and it has to be stable for the riser's whole life: two risers
+            // sharing an id would sound like one doubled, and a riser whose
+            // id changed would change texture under the user.
+            riser: createRiser({ id: crypto.randomUUID(), channelId, startBar: bar })
+          })
+      })
+    }
+    if (clipboard && state.rifffs[clipboard]) {
+      items.push({
+        label: 'paste',
+        onClick: () => {
+          const action = pasteRifffAction(state, clipboard, bar)
+          if (action) dispatch(action)
         }
-      ]
-    })
+      })
+    }
+    if (items.length === 0) return
+    setContextMenu({ x, y, items })
   }
 
   // Delete/Backspace removes the selected clip from the timeline. Skipped while
@@ -2222,6 +2277,7 @@ function Frame(): React.JSX.Element {
             >
               <Timeline
                 onOpenClipMenu={openClipMenu}
+                onOpenRiserMenu={openRiserMenu}
                 onOpenPasteMenu={openPasteMenu}
                 onBackgroundMouseDown={handlePanMouseDown}
               />

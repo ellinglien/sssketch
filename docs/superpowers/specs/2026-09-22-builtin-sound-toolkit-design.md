@@ -112,6 +112,49 @@ reads as broken, because resonance is inaudible unless a cutoff curve is moving.
 - on EXPORT, resonance is therefore a static device value (Auto Filter Resonance / ReaEQ band Q),
   not an envelope -- section 4's table predates this.
 
+## 2d. BUILT, 2026-09-22: step 4, the noise riser
+
+Notes worth keeping, in the same spirit as 2b's:
+
+- **`curve` is a breakpoint list, not a shape exponent.** Section 2 allowed either, but
+  section 3 also wants the sweep DRAWN in a lane -- and once a lane has to express an
+  arbitrary hand-drawn slope, an exponent can't hold the answer and would have needed a
+  breakpoint list beside it anyway. Using the same `AutomationPoint[]` shape everything else
+  uses means the riser's lane IS the lane we already have (`AutomationLaneTarget`'s third
+  case), not a parallel one.
+- **`startCutoffValue`/`endCutoffValue` survive alongside it** as the riser's declared ends,
+  and are what it falls back to when the lane is cleared -- so right-clicking a riser's lane
+  plays the plain ramp it was dropped with rather than flattening or silencing it. A new
+  riser's curve is seeded with exactly those two points, so its lane opens showing the sweep
+  it is actually going to play.
+- **White noise, not pink.** Pink tilts -3dB/octave, so a rising bandpass would make the
+  riser quieter exactly as it rises, fighting the swell. White also is the only one of the
+  two addressable by sample INDEX -- pink is filtered white, and a filter has memory.
+- **Determinism is by index, not by seeding a generator.** `riserNoiseAt(seed, index)` is a
+  pure hash, and the bandpass's coefficient updates are anchored to the riser's own sample
+  index rather than to the render block's start. That is what makes a bounce identical to
+  the pass that was listened to, and what makes a loop-boundary block split a non-event.
+  Pinned by tests at block sizes 1/64/128/333/1024 and by an offline-vs-live parity test.
+- **Real bug found by the tests, not by ear:** JUCE's TPT bandpass output has a peak
+  magnitude response of Q, not 1, so a riser at level 0.8 through a Q of 2 reached 1.6 and
+  clipped -- surfacing as a 16-bit bounce that no longer matched the float render.
+  `kRiserBandpassNormalisation` undoes the passband gain; a test now pins that a riser never
+  exceeds the level it was given.
+- **Risers are sources on a channel, not effects on one.** They render into the channel's own
+  accumulator upstream of its plugin chain, exactly where a stem lands. They do NOT feed the
+  shared reverb bus: their data shape has no send, and inventing one would be a parameter
+  with nothing to set it. Section 1's optional end "whoosh" is therefore not built either.
+- **A riser keeps its own arranger row alive** (`channelHasAnyClip`, `channelsInOrder`) and
+  extends `loopLengthBars`, since the transport wraps there and a riser parked past the last
+  clip is the likeliest place to put one.
+- **The level is a dial on the block**, not a second lane. Section 3's "its level uses the
+  volume lane treatment" didn't fall out: a riser's level envelope is the generated swell,
+  which is what the element IS, and a second drawable parameter would mean giving the shared
+  `AUTOMATION_PARAMS` set a per-target variant for one case.
+- Still unverified by ear or by hand -- a coding agent can't do either here. Needs Elling's
+  walkthrough: how a default riser actually sounds, whether 4 bars / 0.3->0.95 / level 0.6
+  are the right defaults, and whether the hatched block reads as "generated" on screen.
+
 ## 3. Automation mode (renderer)
 
 - A new arranger mode alongside the existing ones (SET_ARRANGER_MODE), reached from the

@@ -3,9 +3,11 @@ import type { BusId, Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
+import { RiserBlock } from './RiserBlock'
 import { ChannelChainPanel } from './ChannelChainPanel'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { busColorHex } from '../theme/typeColor'
+import { risersOnChannel } from '@shared/riser'
 import { linearToMeterFraction, nextMeterValue } from '../audio/meterBallistics'
 import {
   getStateSnapshot,
@@ -98,6 +100,7 @@ function ChannelRowImpl({
   bus,
   automationMode,
   onOpenContextMenu,
+  onOpenRiserMenu,
   onDropOnChannel
 }: {
   channelId: string
@@ -115,6 +118,7 @@ function ChannelRowImpl({
    * interaction change -- nothing about the arrangement moves. */
   automationMode: boolean
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
+  onOpenRiserMenu: (x: number, y: number, riserId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
 }): React.JSX.Element {
   const [chainPanelOpen, setChainPanelOpen] = useState(false)
@@ -127,6 +131,15 @@ function ChannelRowImpl({
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const mute = useAppSelector((s) => s.mute)
   const rifffsMap = useAppSelector((s) => s.rifffs)
+  // The whole record, then narrowed with useMemo -- risersOnChannel builds a
+  // fresh array every call, so selecting it directly would fail Object.is on
+  // every dispatch anywhere and defeat this component's own React.memo.
+  // state.risers itself only changes when a riser actually does.
+  const allRisers = useAppSelector((s) => s.risers)
+  const riserIds = useMemo(
+    () => risersOnChannel(allRisers, channelId).map((riser) => riser.id),
+    [allRisers, channelId]
+  )
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
   // Brief "click here to arm" pointer -- see App.tsx's own "/" key handler
@@ -638,6 +651,16 @@ function ChannelRowImpl({
             groupId={rifff.groupId}
             onOpenContextMenu={onOpenContextMenu}
           />
+        ))}
+        {/* Risers share this row with its clips and share the automation
+            mode's pointer-events wrapper with them too, so in automation mode
+            a riser goes inert and its own lane (RiserBlock mounts one) opts
+            back in -- exactly the arrangement a clip's lane already relies
+            on. Rendered after the clips so a riser overlapping one is drawn
+            on top: a riser is a few translucent strokes, and the audio it
+            stands for is the thing about to happen. */}
+        {riserIds.map((riserId) => (
+          <RiserBlock key={riserId} riserId={riserId} onOpenContextMenu={onOpenRiserMenu} />
         ))}
       </div>
       {isArmed && armedLoopRegion && (

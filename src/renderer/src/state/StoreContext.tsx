@@ -689,7 +689,17 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.stemFilters,
     state.stemSends,
     state.stemAutomation,
-    state.reverb
+    state.reverb,
+    // Placed noise risers -- same class of gap as everything above, and with
+    // a sharper edge than most: a riser has no audio file of its own, so the
+    // ONLY thing that makes one audible at all is this project reload
+    // carrying it to the engine's generator. Missing here, dropping a riser
+    // would draw a block on the timeline that never made a sound until some
+    // unrelated field happened to change. Affordable for the same reason the
+    // toolkit's curves are: a move/resize drag dispatches exactly once, on
+    // release (RiserBlock.tsx keeps the in-progress geometry local), so this
+    // can't fire at drag frequency.
+    state.risers
   ])
 
   // Inbound half of the same bidirectional relationship as the outbound
