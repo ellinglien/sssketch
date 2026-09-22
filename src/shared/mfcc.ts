@@ -83,6 +83,22 @@ function dct(input: number[], numCoefficients: number): number[] {
   return out
 }
 
+/** Frames quieter than this RMS (about -80 dBFS) don't contribute to the
+ * spectral centroid -- a silent gap between hits would otherwise average
+ * in as a meaningless (0 Hz, or noise-floor) centroid. */
+const CENTROID_MIN_FRAME_RMS = 1e-4
+
+export interface MfccAndCentroid {
+  /** Exactly computeMfcc's output. */
+  mfcc: number[]
+  /** True magnitude-weighted spectral centroid, in Hz: per frame,
+   * sum(binHz * |X|) / sum(|X|) over every bin DC..Nyquist of the same
+   * Hann-windowed FFT the MFCCs use, then the plain mean over frames whose
+   * RMS is at least CENTROID_MIN_FRAME_RMS. 0 when no frame qualifies
+   * (silence) -- never NaN. */
+  spectralCentroidHz: number
+}
+
 /**
  * MFCCs (Mel-Frequency Cepstral Coefficients), averaged across every
  * analysis frame into one fixed-length 13-number vector -- the standard
@@ -94,16 +110,26 @@ function dct(input: number[], numCoefficients: number): number[] {
  * stem, not one per frame.
  */
 export function computeMfcc(samples: Float32Array, sampleRate: number): number[] {
+  return computeMfccAndCentroid(samples, sampleRate).mfcc
+}
+
+/** computeMfcc plus the true spectral centroid from the SAME FFT frames
+ * (docs/superpowers/specs/2026-09-22-discover-promise-vs-delivery-
+ * design.md, Phase 3) -- one FFT pass, not two. */
+export function computeMfccAndCentroid(samples: Float32Array, sampleRate: number): MfccAndCentroid {
   const windowSize = 2048
   const hopSize = 1024
   const fftSize = nextPowerOfTwo(windowSize)
   const numBins = fftSize / 2 + 1
   const nyquist = sampleRate / 2
+  const binHz = sampleRate / fftSize
   const filterbank = buildMelFilterbank(numBins, sampleRate, fftSize, 20, Math.min(8000, nyquist))
 
   const numFrames = Math.max(1, Math.ceil(samples.length / hopSize))
   const sums = new Array<number>(NUM_COEFFICIENTS).fill(0)
   let framesUsed = 0
+  let centroidSum = 0
+  let centroidFrames = 0
 
   for (let t = 0; t < numFrames; t++) {
     const start = t * hopSize
@@ -111,7 +137,11 @@ export function computeMfcc(samples: Float32Array, sampleRate: number): number[]
     if (available === 0) continue
 
     const frame = new Float64Array(fftSize)
-    for (let i = 0; i < available; i++) frame[i] = samples[start + i]
+    let sumSq = 0
+    for (let i = 0; i < available; i++) {
+      frame[i] = samples[start + i]
+      sumSq += frame[i] * frame[i]
+    }
     applyHannWindow(frame)
 
     const spectrum = magnitudeSpectrum(frame)
@@ -127,8 +157,26 @@ export function computeMfcc(samples: Float32Array, sampleRate: number): number[]
     const coefficients = dct(melEnergies, NUM_COEFFICIENTS)
     for (let k = 0; k < NUM_COEFFICIENTS; k++) sums[k] += coefficients[k]
     framesUsed++
+
+    if (Math.sqrt(sumSq / available) >= CENTROID_MIN_FRAME_RMS) {
+      let weighted = 0
+      let total = 0
+      for (let bin = 0; bin < numBins; bin++) {
+        weighted += bin * binHz * spectrum[bin]
+        total += spectrum[bin]
+      }
+      if (total > 1e-12) {
+        centroidSum += weighted / total
+        centroidFrames++
+      }
+    }
   }
 
-  if (framesUsed === 0) return new Array<number>(NUM_COEFFICIENTS).fill(0)
-  return sums.map((s) => s / framesUsed)
+  return {
+    mfcc:
+      framesUsed === 0
+        ? new Array<number>(NUM_COEFFICIENTS).fill(0)
+        : sums.map((s) => s / framesUsed),
+    spectralCentroidHz: centroidFrames === 0 ? 0 : centroidSum / centroidFrames
+  }
 }

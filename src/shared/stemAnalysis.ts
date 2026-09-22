@@ -8,11 +8,12 @@
 // every half second, freezing typing/clicks. Decoding stays on the main
 // thread (Web Audio's decodeAudioData isn't available in workers and is
 // already async); only this analysis moves.
-import { transientDensity, bassEnergyRatio } from './typeGuess'
+import { detectOnsetTimes, bassEnergyRatio } from './typeGuess'
+import { onsetRegularity, rhythmicStrength } from './onsetRhythm'
 import { computeBandEnergy } from './bandEnergy'
 import { computePitchContour, voicedPitchFeatures, type PitchContour } from './pitchContour'
-import { computeMfcc } from './mfcc'
-import type { StemFeatures } from './stemFeatures'
+import { computeMfccAndCentroid } from './mfcc'
+import { STEM_FEATURE_VERSION, type StemFeatures } from './stemFeatures'
 
 export interface StemAnalysis {
   /** Also handed to pitchCache.ts, so Waveform/PolarGlyph never need a
@@ -22,6 +23,11 @@ export interface StemAnalysis {
   bassEnergyRatio: number
   spectralCentroidHz: number
   mfcc: number[]
+  /** Phase 3 (docs/superpowers/specs/2026-09-22-discover-promise-vs-
+   * delivery-design.md) -- see StemFeatures for each one's definition. */
+  spectralCentroidFftHz: number
+  onsetRegularity: number
+  rhythmicStrength: number
 }
 
 // Geometric-mean center frequency of each of computeBandEnergy's own fixed
@@ -61,16 +67,25 @@ function spectralCentroidFromBandEnergy(
 
 export function analyzeStemSamples(samples: Float32Array, sampleRate: number): StemAnalysis {
   const bandEnergy = computeBandEnergy(samples, sampleRate)
+  // One onset pass feeds both transientDensity (identical to typeGuess.ts's
+  // transientDensity -- onsets per second) and the regularity measure.
+  const onsets = detectOnsetTimes(samples, sampleRate)
+  const density = onsets.length === 0 ? 0 : onsets.length / (samples.length / sampleRate)
+  const regularity = onsetRegularity(onsets)
+  const { mfcc, spectralCentroidHz: fftCentroid } = computeMfccAndCentroid(samples, sampleRate)
   return {
     pitchContour: computePitchContour(samples, sampleRate),
-    transientDensity: transientDensity(samples, sampleRate),
+    transientDensity: density,
     bassEnergyRatio: bassEnergyRatio(samples, sampleRate),
     spectralCentroidHz: spectralCentroidFromBandEnergy(
       bandEnergy.bass,
       bandEnergy.mid,
       bandEnergy.treble
     ),
-    mfcc: computeMfcc(samples, sampleRate)
+    mfcc,
+    spectralCentroidFftHz: fftCentroid,
+    onsetRegularity: regularity,
+    rhythmicStrength: rhythmicStrength(density, regularity)
   }
 }
 
@@ -85,6 +100,10 @@ export function assembleStemFeatures(analysis: StemAnalysis, brightness: number[
     zcrBrightness: averageArray(brightness),
     voicedFraction: pitch.voicedFraction,
     pitchVarianceCents: pitch.pitchVarianceCents,
-    mfcc: analysis.mfcc
+    mfcc: analysis.mfcc,
+    spectralCentroidFftHz: analysis.spectralCentroidFftHz,
+    onsetRegularity: analysis.onsetRegularity,
+    rhythmicStrength: analysis.rhythmicStrength,
+    featureVersion: STEM_FEATURE_VERSION
   }
 }

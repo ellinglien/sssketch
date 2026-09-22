@@ -39,12 +39,14 @@ export function bassEnergyRatio(samples: Float32Array, sampleRate: number): numb
   return lowPassRMS(samples, sampleRate, 200) / full
 }
 
-/** Sharp attacks per second, via short-window (20ms) RMS jumps — drums have
- * frequent, sudden transients; sustained/melodic material doesn't. */
-export function transientDensity(samples: Float32Array, sampleRate: number): number {
+/** Onset times, in seconds (each onset window's start), via short-window
+ * (20ms) RMS jumps -- the one onset detector behind both transientDensity
+ * below and onsetRhythm.ts's regularity measure. Window 0 is never an onset
+ * (nothing before it to jump from). Empty for fewer than 2 windows. */
+export function detectOnsetTimes(samples: Float32Array, sampleRate: number): number[] {
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02))
   const numWindows = Math.floor(samples.length / windowSize)
-  if (numWindows < 2) return 0
+  if (numWindows < 2) return []
 
   const rms: number[] = []
   for (let w = 0; w < numWindows; w++) {
@@ -54,16 +56,28 @@ export function transientDensity(samples: Float32Array, sampleRate: number): num
     rms.push(Math.sqrt(sumSq / windowSize))
   }
 
-  let attacks = 0
+  const onsets: number[] = []
   for (let w = 1; w < rms.length; w++) {
     // Both a relative jump (nearly doubling in one window) and an absolute floor
     // (0.02) so near-silence between hits doesn't count as an "attack" purely
     // from its own noise floor jittering.
-    if (rms[w] > rms[w - 1] * 1.8 && rms[w] > 0.02) attacks++
+    if (rms[w] > rms[w - 1] * 1.8 && rms[w] > 0.02) onsets.push((w * windowSize) / sampleRate)
   }
+  return onsets
+}
 
-  const durationSec = samples.length / sampleRate
-  return attacks / durationSec
+/** Sharp attacks per second (detectOnsetTimes above, per second of audio) --
+ * drums have frequent, sudden transients; sustained/melodic material
+ * doesn't. Its meaning and scale are fixed: it feeds the overnight
+ * classifier's trained centroids via toFeatureArray. */
+export function transientDensity(samples: Float32Array, sampleRate: number): number {
+  const onsets = detectOnsetTimes(samples, sampleRate)
+  if (onsets.length === 0) {
+    // Same result the pre-refactor version gave for < 2 windows (0) and for
+    // no attacks (0 / duration).
+    return 0
+  }
+  return onsets.length / (samples.length / sampleRate)
 }
 
 export function guessSoundType(samples: Float32Array, sampleRate: number): SoundType | null {

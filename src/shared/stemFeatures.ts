@@ -14,6 +14,46 @@ export interface StemFeatures {
   pitchVarianceCents: number
   /** 13 MFCC coefficients -- see mfcc.ts's computeMfcc. */
   mfcc: number[]
+
+  // ---- Phase 3 (docs/superpowers/specs/2026-09-22-discover-promise-vs-
+  // delivery-design.md), all optional: rows extracted before version 2 lack
+  // them. NOT part of toFeatureArray -- the overnight classifier's trained
+  // centroids and clustering keep reading only the fields above, unchanged.
+
+  /** True magnitude-weighted spectral centroid, in Hz, averaged over the
+   * MFCC pass's own FFT frames (mfcc.ts's computeMfccAndCentroid; silent
+   * frames skipped; 0 for silence). Discover's bright/warm prefer this over
+   * the 3-band spectralCentroidHz approximation. */
+  spectralCentroidFftHz?: number
+  /** How evenly spaced the detected onsets are, [0, 1]: 1 - coefficient of
+   * variation of the inter-onset intervals, clamped; < 3 onsets -> 0
+   * (onsetRhythm.ts's onsetRegularity). */
+  onsetRegularity?: number
+  /** min(1, transientDensity / 4) * onsetRegularity, [0, 1] -- a steady
+   * busy groove scores high, random noise bursts low (onsetRhythm.ts's
+   * rhythmicStrength). Discover's rhythmic prefers this over
+   * transientDensity. */
+  rhythmicStrength?: number
+  /** Which extraction produced this row; absent = version 1. Rows below
+   * STEM_FEATURE_VERSION get re-extracted by the ambient background scans
+   * (stemFeaturesCache.ts's requireCurrentVersion). */
+  featureVersion?: number
+}
+
+/** Current StemFeatures extraction version. 2 = Phase 3 fields added
+ * (spectralCentroidFftHz, onsetRegularity, rhythmicStrength). */
+export const STEM_FEATURE_VERSION = 2
+
+/** A row's extraction version -- rows without a (valid) featureVersion are
+ * version 1. */
+export function stemFeatureVersionOf(features: StemFeatures): number {
+  const v = features.featureVersion
+  return typeof v === 'number' && Number.isFinite(v) ? v : 1
+}
+
+/** True when a row is at least STEM_FEATURE_VERSION (nothing to re-extract). */
+export function isCurrentStemFeatureVersion(features: StemFeatures): boolean {
+  return stemFeatureVersionOf(features) >= STEM_FEATURE_VERSION
 }
 
 /** Flattens a StemFeatures into a single plain number array, in a FIXED

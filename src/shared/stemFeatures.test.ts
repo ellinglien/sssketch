@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { toFeatureArray, standardizeFeatures, type StemFeatures } from './stemFeatures'
+import {
+  toFeatureArray,
+  standardizeFeatures,
+  isCurrentStemFeatureVersion,
+  stemFeatureVersionOf,
+  STEM_FEATURE_VERSION,
+  type StemFeatures
+} from './stemFeatures'
 
 function makeFeatures(overrides: Partial<StemFeatures> = {}): StemFeatures {
   return {
@@ -28,6 +35,41 @@ describe('toFeatureArray', () => {
     expect(toFeatureArray(f)).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
     ])
+  })
+})
+
+describe('toFeatureArray ignores the Phase 3 fields', () => {
+  it('output is unchanged (still 19 numbers) when the new optional fields are present', () => {
+    const base = makeFeatures({ transientDensity: 1, spectralCentroidHz: 3 })
+    const withNew = {
+      ...base,
+      spectralCentroidFftHz: 5000,
+      onsetRegularity: 0.9,
+      rhythmicStrength: 0.7,
+      featureVersion: STEM_FEATURE_VERSION
+    }
+    expect(toFeatureArray(withNew)).toEqual(toFeatureArray(base))
+    expect(toFeatureArray(withNew)).toHaveLength(19)
+  })
+})
+
+describe('feature versions', () => {
+  it('a row without featureVersion is version 1', () => {
+    expect(stemFeatureVersionOf(makeFeatures())).toBe(1)
+    expect(isCurrentStemFeatureVersion(makeFeatures())).toBe(false)
+  })
+
+  it('a row at (or above) the current version is current', () => {
+    expect(
+      isCurrentStemFeatureVersion(makeFeatures({ featureVersion: STEM_FEATURE_VERSION }))
+    ).toBe(true)
+    expect(
+      isCurrentStemFeatureVersion(makeFeatures({ featureVersion: STEM_FEATURE_VERSION + 1 }))
+    ).toBe(true)
+  })
+
+  it('a malformed featureVersion counts as version 1', () => {
+    expect(stemFeatureVersionOf({ featureVersion: 'x' } as unknown as StemFeatures)).toBe(1)
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bassEnergyRatio, transientDensity, guessSoundType } from './typeGuess'
+import { bassEnergyRatio, transientDensity, detectOnsetTimes, guessSoundType } from './typeGuess'
 
 const SAMPLE_RATE = 44100
 
@@ -69,5 +69,29 @@ describe('guessSoundType', () => {
 
   it('declines to guess for a sustained mid-range tone', () => {
     expect(guessSoundType(sineWave(440, 2), SAMPLE_RATE)).toBeNull()
+  })
+})
+
+describe('detectOnsetTimes', () => {
+  it('finds one onset per hit, in seconds, in order', () => {
+    const samples = impulseTrain(0.25, 2) // hits at 0, 0.25, ... 1.75
+    const times = detectOnsetTimes(samples, SAMPLE_RATE)
+    // The very first hit starts at t=0 -- window 0 has no previous window to
+    // jump from, so it's never counted (same as transientDensity always did).
+    expect(times).toHaveLength(7)
+    for (let i = 1; i < times.length; i++) expect(times[i]).toBeGreaterThan(times[i - 1])
+    expect(times[0]).toBeCloseTo(0.25, 1)
+  })
+
+  it('transientDensity is exactly onset count / duration', () => {
+    const samples = impulseTrain(0.3, 2)
+    expect(transientDensity(samples, SAMPLE_RATE)).toBe(
+      detectOnsetTimes(samples, SAMPLE_RATE).length / 2
+    )
+  })
+
+  it('no onsets for silence or a too-short input', () => {
+    expect(detectOnsetTimes(new Float32Array(44100), SAMPLE_RATE)).toEqual([])
+    expect(detectOnsetTimes(new Float32Array(10), SAMPLE_RATE)).toEqual([])
   })
 })
