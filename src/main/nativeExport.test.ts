@@ -59,6 +59,8 @@ import {
   renderStemsToDir,
   renderStemTracksToDir,
   soloState,
+  withoutRisers,
+  riserOnlyState,
   exportStemsToLibrary,
   exportStemsNextToSource,
   exportStemTracksToLibrary,
@@ -1086,4 +1088,97 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
       rmSync(projectDir, { recursive: true, force: true })
     }
   })
+})
+
+describe('risers in an isolated render', () => {
+  const riser = {
+    id: 'ri1',
+    channelId: 'r1',
+    startBar: 12,
+    lengthBars: 4,
+    startCutoffValue: 0.3,
+    endCutoffValue: 0.95,
+    curve: [],
+    level: 0.6
+  }
+
+  it('counts a riser towards the render length, so one past the last clip is not cut off', () => {
+    // The rifff fixture ends at bar 12; this riser runs 12 -> 16, which is
+    // where the mixdown used to stop dead.
+    expect(loopLengthBarsFor(stateWith({ risers: { ri1: riser } }))).toBe(16)
+  })
+
+  it('leaves a riser that ends inside the arrangement alone', () => {
+    expect(loopLengthBarsFor(stateWith({ risers: { ri1: { ...riser, startBar: 0 } } }))).toBe(12)
+  })
+
+  it('withoutRisers empties the risers and touches nothing else', () => {
+    const state = stateWith({ risers: { ri1: riser }, bpm: 133 })
+    const result = withoutRisers(state)
+    expect(result.risers).toEqual({})
+    expect(result.bpm).toBe(133)
+    expect(result.rifffs).toBe(state.rifffs)
+  })
+
+  it('riserOnlyState mutes every stem and keeps the risers', () => {
+    const state = stateWith({ risers: { ri1: riser } })
+    const result = riserOnlyState(state, ['r1:1', 'r1:2'])
+    expect(result.mute).toEqual({ 'r1:1': true, 'r1:2': true })
+    expect(result.risers).toEqual({ ri1: riser })
+    expect(result.masterChain).toEqual([null, null, null, null])
+  })
+
+  it('renders risers into one file of their own, and out of every bus file', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-riser-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-riser-dest-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const oneBarRifff: Rifff = {
+        groupId: 'r1',
+        name: 'my rifff',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'kick',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      vi.mocked(buildEngineProject).mockClear()
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: oneBarRifff },
+        busOf: { 'r1:1': 'drums' },
+        risers: { ri1: { ...riser, startBar: 0, lengthBars: 1 } }
+      }
+
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      expect(fileNames).toEqual(['drums.wav', 'risers.wav'])
+      expect(existsSync(join(destDir, 'risers.wav'))).toBe(true)
+      // The bus render is riser-free; the riser render is stem-free. Without
+      // both halves, every bus file would carry a copy of every riser and
+      // re-summing the exported files would stack them.
+      const projects = await Promise.all(
+        vi.mocked(buildEngineProject).mock.results.map((r) => r.value)
+      )
+      expect(projects).toHaveLength(2)
+      expect(projects[0].risers).toEqual([])
+      expect(projects[1].risers).toHaveLength(1)
+      expect(projects[1].rifffs[0].stems.every((s: { muted: boolean }) => s.muted)).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
 })

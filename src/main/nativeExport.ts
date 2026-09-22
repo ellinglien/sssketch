@@ -43,6 +43,14 @@ const RENDER_EXPORT_TIMEOUT_MS = 10 * 60 * 1000
 // Mirrors src/renderer/src/state/selectors.ts's loopLengthBars (re-implemented
 // here rather than imported wholesale, since that module also exports React-
 // adjacent selectors that assume renderer context).
+//
+// Risers count towards the end, exactly as they do over there -- and for a
+// sharper reason here. This number is the render's own DURATION: a riser
+// parked past the last clip (the likeliest place to put one, right before a
+// drop that hasn't been arranged yet) used to be cut off mid-sweep in every
+// exported mixdown and stems file, while playing in full during playback,
+// because the render simply stopped before it. Found by re-reading this
+// against selectors.ts while building the toolkit's export step, not by ear.
 export function loopLengthBarsFor(state: AppState): number {
   const DEFAULT_LOOP_BARS = 32
   const ends: number[] = []
@@ -51,7 +59,37 @@ export function loopLengthBarsFor(state: AppState): number {
     const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
     ends.push(rifff.startBar + playedBars)
   }
+  for (const riser of Object.values(state.risers ?? {})) {
+    ends.push(riser.startBar + riser.lengthBars)
+  }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
+}
+
+/**
+ * The same project with no risers in it at all.
+ *
+ * Needed by every render that isolates PART of the arrangement, because
+ * soloState's muting reaches stems only: a riser is a source with no stem
+ * behind it (spec section 2d), so it went on sounding in every isolated
+ * render. Concretely, before this, each of the five per-bus stems files
+ * carried a full copy of every riser, and re-summing those files in another
+ * DAW stacked each riser five times over -- a real bug, found by reading
+ * buildEngineProject's unconditional `risers:` against soloState rather than
+ * by listening.
+ */
+export function withoutRisers(state: AppState): AppState {
+  return { ...state, risers: {} }
+}
+
+/** The risers ALONE: every stem muted, the master chain zeroed (same
+ * reasoning as soloState's own), the risers left as they are. Risers get one
+ * file of their own rather than being folded into a bus, because they belong
+ * to no bus -- a riser sits on an arranger channel and has no stem, so there
+ * is no bus assignment to read (state.busOf is keyed by stemKey). One
+ * `risers.wav` beside the bus files is the honest shape: re-summing every
+ * exported file still reconstructs the mix exactly once. */
+export function riserOnlyState(state: AppState, allKeys: string[]): AppState {
+  return soloState(state, new Set(), allKeys)
 }
 
 /**
@@ -229,7 +267,7 @@ export async function renderStemsToDir(
       if (busEntries.length === 0) continue
       const busKeys = busEntries.map((e) => e.key)
 
-      const busState = soloState(state, new Set(busKeys), allKeys)
+      const busState = withoutRisers(soloState(state, new Set(busKeys), allKeys))
       const project = await buildEngineProject(
         busState,
         resolveStretchedForExport,
@@ -256,11 +294,48 @@ export async function renderStemsToDir(
       fileNames.push(fileName)
     }
 
+    const riserFileName = await renderRisersIfAny(client, state, allKeys, destDir, 'risers.wav')
+    if (riserFileName) fileNames.push(riserFileName)
+
     return fileNames
   } finally {
     client.disconnect()
     engineHandle.stop()
   }
+}
+
+/**
+ * Renders every placed riser into ONE file of its own beside the bus/track
+ * files, or does nothing (returning undefined) when the project has no
+ * risers -- see riserOnlyState for why risers get their own file rather than
+ * landing in a bus. Takes an already-connected client, so it costs nothing
+ * more than one extra render on a project that has risers and literally
+ * nothing on one that doesn't.
+ */
+async function renderRisersIfAny(
+  client: EngineClient,
+  state: AppState,
+  allKeys: string[],
+  destDir: string,
+  fileName: string
+): Promise<string | undefined> {
+  if (Object.keys(state.risers ?? {}).length === 0) return undefined
+  const project = await buildEngineProject(
+    riserOnlyState(state, allKeys),
+    resolveStretchedForExport,
+    loadCatalog()
+  )
+  client.send('load-project', project)
+  const result = (await client.sendAndAwaitType(
+    'render-export',
+    { outputPath: join(destDir, fileName), durationBars: loopLengthBarsFor(state) },
+    'render-export-result',
+    RENDER_EXPORT_TIMEOUT_MS
+  )) as { success: boolean; error?: string }
+  if (!result.success) {
+    throw new Error(`native export failed for risers: ${result.error ?? 'unknown error'}`)
+  }
+  return fileName
 }
 
 /**
@@ -378,7 +453,7 @@ export async function renderStemTracksToDir(
       )
       for (let i = 0; i < packed.length; i++) {
         const trackKeys = new Set(packed[i].map((e) => e.key))
-        const trackState = soloState(state, trackKeys, allKeys)
+        const trackState = withoutRisers(soloState(state, trackKeys, allKeys))
         const project = await buildEngineProject(
           trackState,
           resolveStretchedForExport,
@@ -405,6 +480,15 @@ export async function renderStemTracksToDir(
         fileNames.push(fileName)
       }
     }
+
+    const riserFileName = await renderRisersIfAny(
+      client,
+      state,
+      allKeys,
+      destDir,
+      `${sanitizedProjectName} - risers.wav`
+    )
+    if (riserFileName) fileNames.push(riserFileName)
 
     return fileNames
   } finally {

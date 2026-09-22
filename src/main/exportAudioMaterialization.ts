@@ -92,7 +92,13 @@ export interface MaterializedStems {
  */
 export async function materializeStemsForExport(
   state: AppState,
-  outputDir: string
+  outputDir: string,
+  /** Stems the caller has already produced audio for by other means and
+   * doesn't want a dry copy of -- the clips a "bake in" export rendered
+   * through the toolkit (see exportToolkitAudio.ts). Left out of the returned
+   * map as well as of the folder, so an exporter reading only this map still
+   * skips them and has to look at the baked map to place them. */
+  skipKeys: ReadonlySet<string> = new Set()
 ): Promise<MaterializedStems> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   if (placed.length === 0) {
@@ -115,9 +121,11 @@ export async function materializeStemsForExport(
   const stemEntries: { key: string; path: string; destPath: string }[] = []
   for (const rifff of placed) {
     for (const stem of rifff.stems) {
+      const key = stemKey(rifff.groupId, stem.slot)
+      if (skipKeys.has(key)) continue
       const fileName = uniqueFileName(rifff.name, stem.name)
       const entry = {
-        key: stemKey(rifff.groupId, stem.slot),
+        key,
         path: stem.path,
         destPath: join(samplesDir, fileName)
       }
