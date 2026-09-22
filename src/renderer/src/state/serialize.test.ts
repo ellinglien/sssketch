@@ -3,6 +3,7 @@ import { initialState, reducer, type AppState } from './store'
 import { serializeProject, deserializeProject, type LegacyPersistedProject } from './serialize'
 import type { Rifff } from '@shared/types'
 import { edgeFadeState } from '@shared/automationEdit'
+import { createRiser } from '@shared/riser'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -529,5 +530,38 @@ describe('loading a project whose resonance was still a drawn curve', () => {
     const { state } = deserializeProject(savedWithResonanceCurve(curves))
     expect(state.stemAutomation).toEqual(curves)
     expect(state.stemFilters).toEqual({})
+  })
+})
+
+describe('noise risers in the saved file', () => {
+  it('round-trips a placed riser, sweep and all', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 12, lengthBars: 8 })
+    })
+    state = reducer(state, {
+      type: 'SET_RISER_CURVE',
+      id: 'riser-1',
+      points: [
+        { bar: 0, value: 0.1 },
+        { bar: 4, value: 0.4 },
+        { bar: 8, value: 1 }
+      ]
+    })
+
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+
+    expect(restored.risers['riser-1']).toEqual(state.risers['riser-1'])
+    expect(restored.channelOrder).toContain('ch1')
+  })
+
+  it('loads a project saved before risers existed with no risers, not a crash', () => {
+    const legacy = JSON.parse(
+      serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))
+    )
+    delete legacy.risers
+    const { state: restored } = deserializeProject(legacy)
+    expect(restored.risers).toEqual({})
+    expect(restored.rifffs.r1).toBeDefined()
   })
 })

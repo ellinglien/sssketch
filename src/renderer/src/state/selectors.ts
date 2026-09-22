@@ -7,6 +7,7 @@ import {
   type ArrangeMoveRecord
 } from '@shared/autoArrangeApply'
 import type { StemAutomation } from '@shared/toolkit'
+import { riserEndBar } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
@@ -93,14 +94,29 @@ export function channelsInOrder(state: AppState): Channel[] {
   // class). filter()'s own seen-set doubles as the seed for the
   // first-seen-order fallback loop just below, so a channel that made it
   // into `ordered` is never re-added there either.
+  // Channels that hold a riser but no clip. A riser is a placed element of
+  // the arrangement with no Rifff behind it (see @shared/riser), so it never
+  // appears in byChannel -- without this, a row whose only content is a riser
+  // would drop out of the arranger entirely while the engine went on playing
+  // it. Same exemption, and the same reason, as recordingChannelIds just
+  // below; store.ts's channelHasAnyClip keeps such a row in channelOrder in
+  // the first place.
+  const riserChannelIds = new Set(Object.values(state.risers).map((riser) => riser.channelId))
   const seen = new Set<string>()
   const ordered = state.channelOrder.filter((id) => {
     if (seen.has(id)) return false
-    if (!(byChannel.has(id) || state.recordingChannelIds[id])) return false
+    if (!(byChannel.has(id) || riserChannelIds.has(id) || state.recordingChannelIds[id]))
+      return false
     seen.add(id)
     return true
   })
   for (const channelId of byChannel.keys()) {
+    if (!seen.has(channelId)) {
+      ordered.push(channelId)
+      seen.add(channelId)
+    }
+  }
+  for (const channelId of riserChannelIds) {
     if (!seen.has(channelId)) {
       ordered.push(channelId)
       seen.add(channelId)
@@ -455,16 +471,25 @@ export function tileOffsetsPx(
 
 const DEFAULT_LOOP_BARS = 32
 
-/** End bar (startBar + played length) of every rifff actually placed on the
- * timeline, unplaced shelf rifffs excluded. Shared by loopLengthBars and
- * placedTimelineSpanBars below, which differ only in what an empty timeline
- * (no ends at all) should report. */
+/** End bar (startBar + played length) of everything actually placed on the
+ * timeline -- placed rifffs and risers, unplaced shelf rifffs excluded.
+ * Shared by loopLengthBars and placedTimelineSpanBars below, which differ
+ * only in what an empty timeline (no ends at all) should report.
+ *
+ * Risers count for the same reason clips do: the transport WRAPS at
+ * loopLengthBars (EngineProject.loopLengthBars), so a riser hanging past the
+ * last clip -- the single most likely place to put one, right before a drop
+ * that hasn't been arranged yet -- would otherwise be cut off mid-sweep by a
+ * loop point it didn't move. */
 function placedRifffEndBars(state: AppState): number[] {
   const ends: number[] = []
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
     const playedBars = resolvePlayedBars(state, rifff.groupId)
     ends.push(rifff.startBar + playedBars)
+  }
+  for (const riser of Object.values(state.risers)) {
+    ends.push(riserEndBar(riser))
   }
   return ends
 }

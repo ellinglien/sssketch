@@ -10,6 +10,7 @@ import {
   type StemAutomation,
   type StemFilterSettings
 } from '@shared/toolkit'
+import { MIN_RISER_LENGTH_BARS, normaliseRiser, type RiserClip } from '@shared/riser'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
@@ -30,14 +31,26 @@ export const SNAP_DIVS = [1, 2, 4, 8, 16] as const
 // exact value instead of duplicating the literal.
 export const MIN_PLAYED_BARS = 0.25
 
-// True if some placed clip still has channelOf pointing at channelId — used
+// True if some placed clip OR some riser still points at channelId — used
 // to decide whether a channel that just lost a clip (moved elsewhere,
 // removed, or deleted) still has anything left on it, or should drop out of
 // channelOrder entirely. A channel is never a persisted, independently
 // "created"/"deleted" thing — it exists exactly as long as something is on
 // it (see channelOrder's own doc comment).
-function channelHasAnyClip(channelOf: Record<string, string>, channelId: string): boolean {
-  return Object.values(channelOf).includes(channelId)
+//
+// Risers count, and have to: a riser is a placed element of the arrangement
+// with no Rifff behind it (see @shared/riser), so a row holding only risers
+// would otherwise be evicted from channelOrder the moment its last clip left
+// — silently taking the risers off screen while the engine went on playing
+// them. Mirrored by selectors.ts's channelsInOrder, which includes riser
+// channels for exactly the same reason.
+function channelHasAnyClip(
+  channelOf: Record<string, string>,
+  risers: Record<string, RiserClip>,
+  channelId: string
+): boolean {
+  if (Object.values(channelOf).includes(channelId)) return true
+  return Object.values(risers).some((riser) => riser.channelId === channelId)
 }
 
 /**
@@ -310,6 +323,20 @@ export interface AppState {
   /** The one shared reverb's settings -- project-level, not per channel.
    * Only ever audible once some channel actually sends to it. */
   reverb: ProjectReverbSettings
+  /** Placed noise risers, keyed by their own id -- see @shared/riser and
+   * step 4 of docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+   *
+   * Deliberately its own record rather than a synthetic entry in
+   * state.rifffs: a riser has no file, no stems and no slot, so every
+   * stemKey-keyed record in this file (vol/mute/muteRegions/busOf/
+   * stemFilters/stemSends/stemAutomation) would need a "what does this mean
+   * for a thing with no stems" answer it doesn't have. Keeping risers
+   * separate means the clip machinery is untouched and the riser carries its
+   * own few numbers, which is also exactly the shape the engine consumes.
+   *
+   * Real arrangement data: persists normally (serialize.ts), and a project
+   * saved before this existed loads with an empty record via initialState. */
+  risers: Record<string, RiserClip>
   /** The loop-recording region, in bars — null until the user first drags
    * one out on the Ruler. Independent of loopLengthBars (the whole
    * project's own wrap point, computed from placed clips) -- this can be
@@ -445,6 +472,7 @@ export const initialState: AppState = {
   stemSends: {},
   stemAutomation: {},
   reverb: DEFAULT_REVERB,
+  risers: {},
   rifffs: {}
 }
 
@@ -614,6 +642,24 @@ export type Action =
    * SET_GROUP_MUTE / SET_GROUP_AUTOMATION already give the collapsed view.
    * Stored per stem either way, so expanding afterwards lets them diverge. */
   | { type: 'SET_GROUP_FILTER_RESONANCE'; groupId: string; resonance: number }
+  /** Drops a fully-formed riser onto a channel -- the caller builds it with
+   * @shared/riser's createRiser (which is where the defaults live), so this
+   * action carries no policy of its own beyond normalising what it is
+   * handed. */
+  | { type: 'ADD_RISER'; riser: RiserClip }
+  /** One riser's position. `channelId` is optional so a plain horizontal
+   * drag doesn't have to restate the row it is already on. */
+  | { type: 'MOVE_RISER'; id: string; startBar: number; channelId?: string }
+  /** An edge drag. Resizing from the LEFT moves startBar and lengthBars
+   * together, which is why both are here rather than reusing MOVE_RISER. */
+  | { type: 'RESIZE_RISER'; id: string; startBar: number; lengthBars: number }
+  /** The drawn sweep, from the riser's own automation lane. An EMPTY list is
+   * a real, meaningful value here (unlike a stem's cleared curve, which is
+   * deleted): it means "play the declared startCutoffValue -> endCutoffValue
+   * ramp" -- see RiserClip.curve. */
+  | { type: 'SET_RISER_CURVE'; id: string; points: AutomationPoint[] }
+  | { type: 'SET_RISER_LEVEL'; id: string; level: number }
+  | { type: 'REMOVE_RISER'; id: string }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
@@ -795,7 +841,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (
         previousChannelId !== undefined &&
         previousChannelId !== action.channelId &&
-        !channelHasAnyClip(channelOf, previousChannelId) &&
+        !channelHasAnyClip(channelOf, state.risers, previousChannelId) &&
         !state.recordingChannelIds[previousChannelId]
       ) {
         channelOrder = channelOrder.filter((id) => id !== previousChannelId)
@@ -1036,7 +1082,7 @@ export function reducer(state: AppState, action: Action): AppState {
       delete channelOf[action.groupId]
       const channelBecameEmpty =
         previousChannelId !== undefined &&
-        !channelHasAnyClip(channelOf, previousChannelId) &&
+        !channelHasAnyClip(channelOf, state.risers, previousChannelId) &&
         !state.recordingChannelIds[previousChannelId]
       const channelOrder = channelBecameEmpty
         ? state.channelOrder.filter((id) => id !== previousChannelId)
@@ -1086,11 +1132,14 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const channelOf = omitGroups(state.channelOf)
       const channelOrder = state.channelOrder.filter(
-        (id) => channelHasAnyClip(channelOf, id) || state.recordingChannelIds[id]
+        (id) => channelHasAnyClip(channelOf, state.risers, id) || state.recordingChannelIds[id]
       )
       const channelPlugins = { ...state.channelPlugins }
       for (const channelId of Object.keys(channelPlugins)) {
-        if (!channelHasAnyClip(channelOf, channelId) && !state.recordingChannelIds[channelId])
+        if (
+          !channelHasAnyClip(channelOf, state.risers, channelId) &&
+          !state.recordingChannelIds[channelId]
+        )
           delete channelPlugins[channelId]
       }
       return {
@@ -1628,6 +1677,105 @@ export function reducer(state: AppState, action: Action): AppState {
           rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)),
           action.resonance
         )
+      }
+    }
+
+    case 'ADD_RISER': {
+      const riser = normaliseRiser(action.riser)
+      // A riser keeps its own row alive (see channelHasAnyClip), so a riser
+      // landing on a channel nobody has placed a clip on yet has to put that
+      // channel into channelOrder itself -- otherwise channelsInOrder would
+      // render it in first-seen fallback position rather than where the user
+      // dropped it.
+      const channelOrder = state.channelOrder.includes(riser.channelId)
+        ? state.channelOrder
+        : [...state.channelOrder, riser.channelId]
+      return {
+        ...state,
+        channelOrder,
+        risers: { ...state.risers, [riser.id]: riser }
+      }
+    }
+
+    case 'MOVE_RISER': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      const channelId = action.channelId ?? existing.channelId
+      const riser = normaliseRiser({ ...existing, startBar: action.startBar, channelId })
+      const channelOrder = state.channelOrder.includes(channelId)
+        ? state.channelOrder
+        : [...state.channelOrder, channelId]
+      const risers = { ...state.risers, [action.id]: riser }
+      // Same "did the row this just left run out of content" cleanup
+      // MOVE_TO_CHANNEL does for clips -- computed against the NEW risers
+      // record, so a riser dragged onto another row can't leave a ghost row
+      // behind it.
+      const leftBehind = existing.channelId
+      const stillOccupied =
+        leftBehind === channelId ||
+        channelHasAnyClip(state.channelOf, risers, leftBehind) ||
+        !!state.recordingChannelIds[leftBehind]
+      return {
+        ...state,
+        risers,
+        channelOrder: stillOccupied ? channelOrder : channelOrder.filter((id) => id !== leftBehind)
+      }
+    }
+
+    case 'RESIZE_RISER': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      return {
+        ...state,
+        risers: {
+          ...state.risers,
+          [action.id]: normaliseRiser({
+            ...existing,
+            startBar: action.startBar,
+            lengthBars: Math.max(MIN_RISER_LENGTH_BARS, action.lengthBars)
+          })
+        }
+      }
+    }
+
+    case 'SET_RISER_CURVE': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      return {
+        ...state,
+        risers: {
+          ...state.risers,
+          [action.id]: normaliseRiser({ ...existing, curve: action.points })
+        }
+      }
+    }
+
+    case 'SET_RISER_LEVEL': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      return {
+        ...state,
+        risers: {
+          ...state.risers,
+          [action.id]: normaliseRiser({ ...existing, level: action.level })
+        }
+      }
+    }
+
+    case 'REMOVE_RISER': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      const risers = { ...state.risers }
+      delete risers[action.id]
+      const stillOccupied =
+        channelHasAnyClip(state.channelOf, risers, existing.channelId) ||
+        !!state.recordingChannelIds[existing.channelId]
+      return {
+        ...state,
+        risers,
+        channelOrder: stillOccupied
+          ? state.channelOrder
+          : state.channelOrder.filter((id) => id !== existing.channelId)
       }
     }
 

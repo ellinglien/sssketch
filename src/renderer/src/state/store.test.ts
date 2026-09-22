@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { initialState, reducer, type AppState } from './store'
 import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
+import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
+import { channelsInOrder, loopLengthBars } from './selectors'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
   return {
@@ -2641,5 +2643,133 @@ describe('the filter lane resonance dial', () => {
       resonance: Number.NaN
     })
     expect(Object.keys(state.stemFilters)).toEqual([])
+  })
+})
+
+describe('noise risers', () => {
+  const riser = createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 8 })
+
+  function placedOnChannel(channelId = 'ch1'): AppState {
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    return reducer(state, {
+      type: 'MOVE_TO_CHANNEL',
+      groupId: 'r1',
+      startBar: 0,
+      channelId
+    })
+  }
+
+  it('drops a riser onto a channel, normalised', () => {
+    const state = reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: { ...riser, level: 4, startBar: -1 }
+    })
+    expect(state.risers['riser-1'].level).toBe(1)
+    expect(state.risers['riser-1'].startBar).toBe(0)
+  })
+
+  it('gives a riser dropped on a brand-new channel a real row of its own', () => {
+    const state = reducer(initialState, { type: 'ADD_RISER', riser })
+    expect(state.channelOrder).toEqual(['ch1'])
+    expect(channelsInOrder(state).map((c) => c.channelId)).toEqual(['ch1'])
+  })
+
+  it('keeps a row alive when its last CLIP leaves but a riser stays', () => {
+    let state = placedOnChannel()
+    state = reducer(state, { type: 'ADD_RISER', riser })
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    expect(state.channelOrder).toContain('ch1')
+    expect(channelsInOrder(state).map((c) => c.channelId)).toEqual(['ch1'])
+  })
+
+  it('evicts the row once the last riser leaves it too', () => {
+    let state = placedOnChannel()
+    state = reducer(state, { type: 'ADD_RISER', riser })
+    state = reducer(state, { type: 'REMOVE_FROM_TIMELINE', groupId: 'r1' })
+    state = reducer(state, { type: 'REMOVE_RISER', id: 'riser-1' })
+    expect(state.risers).toEqual({})
+    expect(state.channelOrder).not.toContain('ch1')
+  })
+
+  it('moves a riser in time without touching its sweep', () => {
+    let state = reducer(initialState, { type: 'ADD_RISER', riser })
+    state = reducer(state, { type: 'MOVE_RISER', id: 'riser-1', startBar: 24 })
+    expect(state.risers['riser-1'].startBar).toBe(24)
+    expect(state.risers['riser-1'].curve).toEqual(riser.curve)
+  })
+
+  it('takes a riser dragged to another row off the row it left', () => {
+    let state = reducer(initialState, { type: 'ADD_RISER', riser })
+    state = reducer(state, {
+      type: 'MOVE_RISER',
+      id: 'riser-1',
+      startBar: 8,
+      channelId: 'ch2'
+    })
+    expect(state.risers['riser-1'].channelId).toBe('ch2')
+    expect(state.channelOrder).toEqual(['ch2'])
+  })
+
+  it('resizes from either edge, never below the minimum length', () => {
+    let state = reducer(initialState, { type: 'ADD_RISER', riser })
+    state = reducer(state, { type: 'RESIZE_RISER', id: 'riser-1', startBar: 8, lengthBars: 16 })
+    expect(state.risers['riser-1'].lengthBars).toBe(16)
+    state = reducer(state, { type: 'RESIZE_RISER', id: 'riser-1', startBar: 8, lengthBars: 0 })
+    expect(state.risers['riser-1'].lengthBars).toBe(MIN_RISER_LENGTH_BARS)
+  })
+
+  it('stores a drawn sweep, and keeps an emptied one as a real (fall-back-to-ramp) value', () => {
+    let state = reducer(initialState, { type: 'ADD_RISER', riser })
+    state = reducer(state, {
+      type: 'SET_RISER_CURVE',
+      id: 'riser-1',
+      points: [
+        { bar: 4, value: 2 },
+        { bar: 0, value: 0.25 }
+      ]
+    })
+    expect(state.risers['riser-1'].curve).toEqual([
+      { bar: 0, value: 0.25 },
+      { bar: 4, value: 1 }
+    ])
+    // Unlike a stem's cleared lane (which deletes the entry), an empty riser
+    // curve is meaningful: it means "play the declared ramp".
+    state = reducer(state, { type: 'SET_RISER_CURVE', id: 'riser-1', points: [] })
+    expect(state.risers['riser-1']).toBeDefined()
+    expect(state.risers['riser-1'].curve).toEqual([])
+  })
+
+  it('clamps the level dial', () => {
+    let state = reducer(initialState, { type: 'ADD_RISER', riser })
+    state = reducer(state, { type: 'SET_RISER_LEVEL', id: 'riser-1', level: Number.NaN })
+    expect(state.risers['riser-1'].level).toBe(0)
+  })
+
+  it('ignores every edit aimed at a riser that is gone', () => {
+    const state = reducer(initialState, { type: 'ADD_RISER', riser })
+    expect(reducer(state, { type: 'MOVE_RISER', id: 'nope', startBar: 1 })).toBe(state)
+    expect(reducer(state, { type: 'RESIZE_RISER', id: 'nope', startBar: 1, lengthBars: 2 })).toBe(
+      state
+    )
+    expect(reducer(state, { type: 'SET_RISER_CURVE', id: 'nope', points: [] })).toBe(state)
+    expect(reducer(state, { type: 'SET_RISER_LEVEL', id: 'nope', level: 0.5 })).toBe(state)
+    expect(reducer(state, { type: 'REMOVE_RISER', id: 'nope' })).toBe(state)
+  })
+
+  it('does not mutate the previous state -- undo snapshots have to stay intact', () => {
+    const before = reducer(initialState, { type: 'ADD_RISER', riser })
+    reducer(before, { type: 'MOVE_RISER', id: 'riser-1', startBar: 32 })
+    expect(before.risers['riser-1'].startBar).toBe(8)
+  })
+
+  it('stretches the timeline so a riser past the last clip is not cut off by the loop wrap', () => {
+    let state = placedOnChannel()
+    const before = loopLengthBars(state)
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 64, lengthBars: 4 })
+    })
+    expect(before).toBeLessThan(68)
+    expect(loopLengthBars(state)).toBe(68)
   })
 })
