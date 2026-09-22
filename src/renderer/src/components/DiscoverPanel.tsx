@@ -23,6 +23,7 @@ import {
   DISCOVER_SLOT_MODIFIER_OPTIONS,
   normalizeSlotModifiers,
   slotLabel,
+  slotModifiersKey,
   slotRollOptions,
   toggleSlotModifier,
   type DiscoverSlotModifier
@@ -214,6 +215,9 @@ export interface DiscoverSlot {
 export function freshSlotId(): string {
   return `slot-${crypto.randomUUID()}`
 }
+
+// Armed by default in the add row -- see pendingAddModifiers.
+const DEFAULT_ADD_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', 'mine']
 
 // Picks one of `options` uniformly at random, for the "+ random"
 // slot-creation button (addRandomSlot below). Deliberately NOT
@@ -1230,12 +1234,22 @@ export function DiscoverPanel({
   // my sounds). A modifier on its own can't make a slot, so a plain click
   // on a modifier with no kind armed just arms it; with a kind armed it
   // adds (armed + that modifier), same as clicking a kind.
+  //
+  // Direct request, 2026-09-22: endlesss sounds, other sounds and my sounds
+  // start ARMED (DEFAULT_ADD_MODIFIERS) -- the user deselects them with
+  // cmd-click; a plain click never un-arms a lit modifier. Adding a slot
+  // and Esc both return to this default, not to empty. 'mine' is dropped
+  // from what's actually added (and shown unlit) while no username is set.
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
-  const [pendingAddModifiers, setPendingAddModifiers] = useState<DiscoverSlotModifier[]>([])
+  const [pendingAddModifiers, setPendingAddModifiers] =
+    useState<DiscoverSlotModifier[]>(DEFAULT_ADD_MODIFIERS)
+  const effectiveAddModifiers = hasUsername
+    ? pendingAddModifiers
+    : pendingAddModifiers.filter((m) => m !== 'mine')
 
   function clearPendingAdd(): void {
     setPendingAddKinds([])
-    setPendingAddModifiers([])
+    setPendingAddModifiers(DEFAULT_ADD_MODIFIERS)
   }
 
   function handleAddRowKindClick(kind: DiscoverSlotKind, arm: boolean): void {
@@ -1249,21 +1263,29 @@ export function DiscoverPanel({
       ? pendingAddKinds
       : toggleSlotKind(pendingAddKinds, kind, { allowEmpty: true })
     if (withClicked.length === 0) return
-    addSlot(withClicked, pendingAddModifiers)
+    addSlot(withClicked, effectiveAddModifiers)
     clearPendingAdd()
   }
 
   function handleAddRowModifierClick(modifier: DiscoverSlotModifier, arm: boolean): void {
     if (modifier === 'mine' && !hasUsername) return
-    if (arm || pendingAddKinds.length === 0) {
+    if (arm) {
       setPendingAddModifiers((prev) => toggleSlotModifier(prev, modifier))
       return
     }
-    addSlot(pendingAddKinds, normalizeSlotModifiers([...pendingAddModifiers, modifier]))
+    if (pendingAddKinds.length === 0) {
+      // No kind to apply it to yet: a plain click only ever ARMS (never
+      // un-arms -- that takes cmd-click).
+      setPendingAddModifiers((prev) => normalizeSlotModifiers([...prev, modifier]))
+      return
+    }
+    addSlot(pendingAddKinds, normalizeSlotModifiers([...effectiveAddModifiers, modifier]))
     clearPendingAdd()
   }
 
-  const hasPendingAdd = pendingAddKinds.length > 0 || pendingAddModifiers.length > 0
+  const hasPendingAdd =
+    pendingAddKinds.length > 0 ||
+    slotModifiersKey(pendingAddModifiers) !== slotModifiersKey(DEFAULT_ADD_MODIFIERS)
   useEffect(() => {
     if (!hasPendingAdd) return
     function handleKeyDown(e: KeyboardEvent): void {
@@ -1271,7 +1293,7 @@ export function DiscoverPanel({
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       setPendingAddKinds([])
-      setPendingAddModifiers([])
+      setPendingAddModifiers(DEFAULT_ADD_MODIFIERS)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -1296,7 +1318,7 @@ export function DiscoverPanel({
     pushUndoSnapshot()
     const id = freshSlotId()
     const kinds = [randomDiscoverSlotKind(DISCOVER_SLOT_KIND_OPTIONS)]
-    const modifiers = pendingAddModifiers
+    const modifiers = effectiveAddModifiers
     setSlots((prev) => [
       ...prev,
       { id, kinds, modifiers, locked: false, candidate: null, hasRerolled: false, gain: 1 }
@@ -2475,7 +2497,7 @@ export function DiscoverPanel({
               return (
                 <AddRowChip
                   key={modifier}
-                  selected={pendingAddModifiers.includes(modifier)}
+                  selected={effectiveAddModifiers.includes(modifier)}
                   disabled={disabled}
                   tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
                   onClick={(e) => handleAddRowModifierClick(modifier, e.metaKey)}
