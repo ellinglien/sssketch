@@ -157,6 +157,39 @@ namespace sssketch
                 project.reverb.preDelayMs = preDelay;
         }
 
+        // Placed noise risers (spec step 4). Absent for every project saved
+        // before they existed, and absent parses to an empty vector, which is
+        // exactly the fast path PlaybackEngine skips the whole riser stage
+        // on. Same lenient-parse convention as masterChain/channelChains/
+        // reverb above: a missing or wrong-typed value is a default, not an
+        // error. A riser with a non-finite or non-positive length is DROPPED
+        // rather than defaulted -- its length is a divisor in a per-sample
+        // loop on the audio thread, and silently substituting a plausible one
+        // would invent an element the user never placed.
+        auto risersVar = parsed.getProperty("risers", juce::var());
+        if (auto* risersArray = risersVar.getArray())
+        {
+            for (auto& riserVar : *risersArray)
+            {
+                if (riserVar.getDynamicObject() == nullptr)
+                    continue;
+                EngineRiser riser;
+                riser.id = riserVar.getProperty("id", "").toString();
+                riser.channelId = riserVar.getProperty("channelId", "").toString();
+                const double startBar = getDouble(riserVar, "startBar", 0.0);
+                const double lengthBars = getDouble(riserVar, "lengthBars", 0.0);
+                if (!std::isfinite(startBar) || !std::isfinite(lengthBars) || lengthBars <= 0.0)
+                    continue;
+                riser.startBar = startBar;
+                riser.lengthBars = lengthBars;
+                riser.startCutoffValue = getNormalised(riserVar, "startCutoffValue", 0.0);
+                riser.endCutoffValue = getNormalised(riserVar, "endCutoffValue", 1.0);
+                riser.level = getNormalised(riserVar, "level", 0.0);
+                riser.curve = parseAutomationCurve(riserVar, "curve");
+                project.risers.push_back(std::move(riser));
+            }
+        }
+
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())
         {

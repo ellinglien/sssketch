@@ -16,6 +16,7 @@ import {
   type StemAutomation,
   type StemFilterSettings
 } from './toolkit'
+import { normaliseRiser, type RiserClip } from './riser'
 
 export interface EngineStem {
   stemKey: string
@@ -100,6 +101,35 @@ export interface EngineRifff {
   stems: EngineStem[]
 }
 
+/** One placed noise riser on the wire. Twin of EngineRiser
+ * (native-engine/Source/EngineProject.h) -- the hand-synced pair CLAUDE.md
+ * warns about: change one side and you change the other and every test that
+ * builds either.
+ *
+ * Field-for-field identical to RiserClip (src/shared/riser.ts) rather than a
+ * renamed projection of it, deliberately: a riser is already exactly the set
+ * of numbers the engine's generator needs, so there is nothing to derive on
+ * the way out and therefore nothing that can silently disagree. The one thing
+ * that DOES happen here is normalisation (normaliseRiser), because this is the
+ * last point before a hand-editable `.sssketchproj`'s numbers reach a
+ * per-sample loop on a real-time callback. */
+export interface EngineRiser {
+  id: string
+  channelId: string
+  startBar: number
+  lengthBars: number
+  startCutoffValue: number
+  endCutoffValue: number
+  level: number
+  /** CLIP-RELATIVE bars, values being normalised cutoffs. Empty means "the
+   * plain startCutoffValue -> endCutoffValue ramp" -- the engine's
+   * riserCutoffAt owns that rule, exactly as @shared/riser's own does. Note
+   * that unlike a stem's automation, there is no originBar here: a riser has
+   * no crop and no re-one offset, so its left edge IS startBar and the engine
+   * subtracts that directly. */
+  curve: AutomationPoint[]
+}
+
 /* NOTE, 2026-09-22: this interface used to carry fadeInBars/fadeOutBars,
  * the per-rifff edge fades the old envelope drag wrote. A clip's fades are
  * part of its own automation lane's `volume` curve now (applyEdgeFade in
@@ -128,6 +158,12 @@ export interface EngineProject {
    * applied right at this wrap point. */
   loopLengthBars: number
   rifffs: EngineRifff[]
+  /** Every placed riser, earliest first. Always sent (as an empty array when
+   * there are none), the same way channelChains and reverb already are -- the
+   * engine's neutral fast path keys off the array being EMPTY, not off the
+   * key being absent, so there is nothing for an omitted key to buy. See
+   * buildEngineRisers. */
+  risers: EngineRiser[]
   /** pluginId "" (empty string) for an empty slot, matching the native
    * engine's own wire-format convention -- state.masterChain uses `null` on
    * the renderer side since that's this codebase's existing convention for
@@ -251,6 +287,39 @@ export function buildStemToolkit(
     originBar,
     automation: curves
   }
+}
+
+/**
+ * Projects the placed risers down to the wire, earliest first.
+ *
+ * The ordering is load-bearing in the same quiet way the stem loop's is: the
+ * engine sums risers into their channel in the order it receives them, and
+ * float addition is not associative, so an unstable order (which
+ * Object.values over a record is, across a save/load round trip) would make a
+ * project's render differ from itself by a few ULPs for no reason. Sorted by
+ * startBar with `id` as the tiebreak, so two risers stacked on the same bar
+ * still have exactly one answer.
+ *
+ * normaliseRiser runs here as well as in the reducer, on purpose: this is the
+ * last point before these numbers reach a per-sample loop on a real-time
+ * callback, and a `.sssketchproj` is plain JSON people can and do hand-edit
+ * (the engine's own parser clamps again on the way in -- belt, braces, and
+ * one more set of braces, the same treatment automation curves already get).
+ */
+export function buildEngineRisers(risers: Record<string, RiserClip>): EngineRiser[] {
+  return Object.values(risers)
+    .map(normaliseRiser)
+    .sort((a, b) => a.startBar - b.startBar || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((riser) => ({
+      id: riser.id,
+      channelId: riser.channelId,
+      startBar: riser.startBar,
+      lengthBars: riser.lengthBars,
+      startCutoffValue: riser.startCutoffValue,
+      endCutoffValue: riser.endCutoffValue,
+      level: riser.level,
+      curve: riser.curve
+    }))
 }
 
 /** Minimal shape buildEngineProject needs from the plugin catalog -- callers
@@ -543,6 +612,7 @@ export async function buildEngineProject(
     masterChain,
     channelChains,
     reverb: state.reverb ?? DEFAULT_REVERB,
+    risers: buildEngineRisers(state.risers ?? {}),
     rifffs
   }
 }

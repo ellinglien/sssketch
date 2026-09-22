@@ -525,6 +525,91 @@ namespace sssketch
                 // at NaN.
                 expectEquals(toolkit.originBar, 0.0);
             }
+
+            beginTest("a project with no risers parses to no risers");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(R"({"bpm":120.0})", project, error), error);
+                expect(project.risers.empty());
+            }
+
+            beginTest("parses a placed riser field for field");
+            {
+                const juce::String json = R"(
+                {
+                  "bpm": 120.0,
+                  "risers": [
+                    {
+                      "id": "riser-1",
+                      "channelId": "ch1",
+                      "startBar": 12.0,
+                      "lengthBars": 8.0,
+                      "startCutoffValue": 0.25,
+                      "endCutoffValue": 0.9,
+                      "level": 0.6,
+                      "curve": [
+                        { "bar": 8.0, "value": 0.9 },
+                        { "bar": 0.0, "value": 0.25 }
+                      ]
+                    }
+                  ]
+                }
+                )";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error), error);
+                expectEquals((int) project.risers.size(), 1);
+                const auto& riser = project.risers[0];
+                expect(riser.id == "riser-1");
+                expect(riser.channelId == "ch1");
+                expectEquals(riser.startBar, 12.0);
+                expectEquals(riser.lengthBars, 8.0);
+                expectEquals(riser.startCutoffValue, 0.25);
+                expectEquals(riser.endCutoffValue, 0.9);
+                expectEquals(riser.level, 0.6);
+                // Sorted ascending on the way in, exactly like every other
+                // curve -- evaluateAutomation's own precondition.
+                expectEquals((int) riser.curve.size(), 2);
+                expectEquals(riser.curve[0].bar, 0.0);
+                expectEquals(riser.curve[1].bar, 8.0);
+            }
+
+            beginTest("clamps a riser's normalised fields and drops an unplayable one");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"risers":[
+                         {"id":"ok","lengthBars":4.0,"startCutoffValue":-3.0,"endCutoffValue":7.0,"level":9.0,
+                          "curve":[{"bar":0.0,"value":-1.0},{"bar":4.0,"value":2.0}]},
+                         {"id":"zero-length","lengthBars":0.0},
+                         {"id":"nan-length","lengthBars":1e999},
+                         {"id":"nan-start","startBar":1e999,"lengthBars":4.0},
+                         "not-an-object"
+                       ]})",
+                    project, error), error);
+                expectEquals((int) project.risers.size(), 1);
+                const auto& riser = project.risers[0];
+                expect(riser.id == "ok");
+                expectEquals(riser.startCutoffValue, 0.0);
+                expectEquals(riser.endCutoffValue, 1.0);
+                expectEquals(riser.level, 1.0);
+                expectEquals(riser.curve[0].value, 0.0);
+                expectEquals(riser.curve[1].value, 1.0);
+            }
+
+            beginTest("a malformed risers key costs nothing but the risers");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm":99.0,"risers":"nope","rifffs":[{"groupId":"g","stems":[]}]})",
+                    project, error), error);
+                expect(project.risers.empty());
+                expectEquals(project.bpm, 99.0);
+                expectEquals((int) project.rifffs.size(), 1);
+            }
         }
     };
 

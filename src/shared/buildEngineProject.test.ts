@@ -4,6 +4,7 @@ import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
 import { DEFAULT_REVERB, defaultFilterSettings } from './toolkit'
+import { MIN_RISER_LENGTH_BARS, RISER_DEFAULTS, createRiser } from './riser'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -660,5 +661,88 @@ describe('buildEngineProject toolkit', () => {
     )
     expect(project.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
     expect(project.rifffs[0].stems[0].toolkit?.reverbSend).toBe(0.5)
+  })
+})
+
+describe('risers on the wire', () => {
+  const resolveNothing = async (path: string): Promise<{ path: string; durationSec: number }> => ({
+    path,
+    durationSec: 12.8
+  })
+
+  it('sends an empty array for a project that has none', async () => {
+    const project = await buildEngineProject(stateWith({ bpm: 150 }), resolveNothing, emptyCatalog)
+    expect(project.risers).toEqual([])
+  })
+
+  it('sends a riser field for field, with no geometry resolved on its behalf', async () => {
+    const riser = createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 12, lengthBars: 8 })
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, risers: { 'riser-1': riser } }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.risers).toEqual([
+      {
+        id: 'riser-1',
+        channelId: 'ch1',
+        startBar: 12,
+        lengthBars: 8,
+        startCutoffValue: RISER_DEFAULTS.startCutoffValue,
+        endCutoffValue: RISER_DEFAULTS.endCutoffValue,
+        level: RISER_DEFAULTS.level,
+        curve: [
+          { bar: 0, value: RISER_DEFAULTS.startCutoffValue },
+          { bar: 8, value: RISER_DEFAULTS.endCutoffValue }
+        ]
+      }
+    ])
+  })
+
+  it('orders risers earliest first, with the id as the tiebreak', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        risers: {
+          late: createRiser({ id: 'late', channelId: 'ch1', startBar: 32 }),
+          zz: createRiser({ id: 'zz', channelId: 'ch1', startBar: 0 }),
+          aa: createRiser({ id: 'aa', channelId: 'ch1', startBar: 0 })
+        }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.risers.map((r) => r.id)).toEqual(['aa', 'zz', 'late'])
+  })
+
+  it('normalises a hand-edited riser before it can reach the audio thread', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        risers: {
+          bad: {
+            ...createRiser({ id: 'bad', channelId: 'ch1', startBar: 0 }),
+            startBar: Number.NaN,
+            lengthBars: -4,
+            level: 12,
+            curve: [
+              { bar: 2, value: 5 },
+              { bar: 1, value: -5 }
+            ]
+          }
+        }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.risers[0]).toMatchObject({
+      startBar: 0,
+      lengthBars: MIN_RISER_LENGTH_BARS,
+      level: 1,
+      curve: [
+        { bar: 1, value: 0 },
+        { bar: 2, value: 1 }
+      ]
+    })
   })
 })

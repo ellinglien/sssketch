@@ -133,6 +133,42 @@ namespace sssketch
         EngineStemToolkit toolkit;
     };
 
+    /** One placed noise riser -- a GENERATED audio source on a channel, not
+     * an effect on one. Wire-format twin of EngineRiser in
+     * src/shared/buildEngineProject.ts (and of RiserClip in
+     * src/shared/riser.ts): a hand-synced trio, like everything else in this
+     * file (CLAUDE.md). See step 4 of
+     * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+     *
+     * Unlike EngineStemToolkit, there is no originBar here. A riser has no
+     * left crop and no re-one offset -- its left edge simply IS startBar --
+     * so the renderer has no geometry to resolve on its behalf and the engine
+     * subtracts startBar itself.
+     *
+     * A project with no risers sends an EMPTY array, and PlaybackEngine skips
+     * the whole riser stage on one bool test in that case, so an ordinary
+     * project's render stays bit-identical to its pre-riser self. */
+    struct EngineRiser
+    {
+        juce::String id;
+        juce::String channelId;
+        double startBar = 0.0;
+        double lengthBars = 1.0;
+        /** Normalised [0,1] bandpass centres at the two ends of the sweep.
+         * The engine owns the map to Hz (ChannelFilter.h's filterCutoffHz),
+         * the same rule every other toolkit control follows. */
+        double startCutoffValue = 0.0;
+        double endCutoffValue = 1.0;
+        /** Normalised [0,1] peak level the swell reaches at the very end. */
+        double level = 0.0;
+        /** The drawn sweep, in CLIP-RELATIVE bars. Sorted ascending and
+         * clamped into [0,1] at parse time, so evaluateAutomation's own
+         * precondition holds by construction. EMPTY means "use the plain
+         * startCutoffValue -> endCutoffValue ramp" -- riserCutoffAt
+         * (NoiseRiser.h) owns that rule for both sides. */
+        std::vector<AutomationPoint> curve;
+    };
+
     struct EngineRifff
     {
         juce::String groupId;
@@ -153,6 +189,10 @@ namespace sssketch
         // semantics for setLoopLengthBars.
         double loopLengthBars = 0.0;
         std::vector<EngineRifff> rifffs;
+        /** Placed noise risers, in the order the renderer sent them (earliest
+         * first -- see buildEngineRisers). Empty for every project saved
+         * before they existed, and empty is the fast path. */
+        std::vector<EngineRiser> risers;
         // pluginId is "" (empty) for an empty slot. path is only meaningful
         // when pluginId is non-empty -- the renderer resolves a scanned
         // catalog id to its real file path (native-engine has no access to
