@@ -65,7 +65,6 @@ import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
 import { installBackgroundScanInteractionListeners } from './audio/backgroundScanGate'
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
-import { YamnetZeroShotRetroactiveScan } from './audio/YamnetZeroShotRetroactiveScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StartupGate } from './components/StartupGate'
@@ -2205,13 +2204,10 @@ function Frame(): React.JSX.Element {
        * settings-menu toggle and DiscoverPanel's own consent prompt both
        * now share -- see DiscoverLibraryScan.tsx's own doc comment for
        * the full "why" (fixes the scan restarting on every Discover tab
-       * switch). */}
+       * switch). It also runs the YAMNet zero-shot step for stems embedded
+       * before that step existed (background efficiency B5 -- formerly a
+       * separate YamnetZeroShotRetroactiveScan). */}
       {discoverConsented && <DiscoverLibraryScan />}
-      {/* Same mount pattern/consent gate as DiscoverLibraryScan directly
-       * above -- a one-time migration pass for stems already embedded
-       * before zero-shot classification existed, see its own doc comment
-       * (YamnetZeroShotRetroactiveScan.tsx) for the real gap this closes. */}
-      {discoverConsented && <YamnetZeroShotRetroactiveScan />}
       <div className="ra-frame">
         <div
           style={{

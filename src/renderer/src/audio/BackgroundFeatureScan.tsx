@@ -52,9 +52,8 @@ export function BackgroundFeatureScan(): null {
     // re-decode each of them every session.
     let work: { path: string; needs: StemAnalysisNeeds }[] = []
 
-    // Real regression, found live 2026-09-18 -- see
-    // YamnetZeroShotRetroactiveScan.tsx's own matching fix for the full
-    // root-cause writeup. The batch is awaited before the next one is
+    // Real regression, found live 2026-09-18 -- see DiscoverLibraryScan.tsx's
+    // own matching fix for the root-cause writeup. The batch is awaited before the next one is
     // scheduled, capping real concurrency at BATCH_SIZE and making
     // BATCH_DELAY_MS a genuine gap after real work finishes.
     function runBatch(startIndex: number): void {

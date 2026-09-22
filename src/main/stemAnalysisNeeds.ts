@@ -50,6 +50,35 @@ function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): Set<
   return current
 }
 
+/** StemCIDs (of these) that still need the YAMNet zero-shot step
+ * (background efficiency B5): an embedding row exists, no attempt is
+ * recorded, the stem has its own Stems row here, and it isn't confirmed or
+ * auto-categorized by anything -- exactly the eligibility the old
+ * per-session retroactive scan (listYamnetZeroShotRetroactiveTargets)
+ * enumerated, now asked only for the paths being checked. A db missing one
+ * of these tables answers "none". */
+function zeroShotPendingStemCIDs(db: Database.Database, stemCIDs: string[]): Set<string> {
+  countWork('sql:stem-analysis-needs.zeroShot')
+  const placeholders = stemCIDs.map(() => '?').join(',')
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e
+         JOIN Stems s ON s.StemCID = e.StemCID
+         WHERE e.StemCID IN (${placeholders})
+         AND NOT EXISTS (SELECT 1 FROM StemYamnetZeroShotAttempted t WHERE t.StemCID = e.StemCID)
+         AND NOT EXISTS (
+           SELECT 1 FROM StemCategories c WHERE c.StemCID = e.StemCID AND c.ArrangeRole IS NOT NULL
+         )
+         AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = e.StemCID)`
+      )
+      .all(...stemCIDs) as { StemCID: string }[]
+    return new Set(rows.map((r) => r.StemCID))
+  } catch {
+    return new Set()
+  }
+}
+
 /**
  * Which persisted analyses each path still needs (background-efficiency
  * spec, A3) -- lets the ambient scans skip already-analysed stems without
@@ -74,12 +103,14 @@ export async function getStemAnalysisNeeds(
     const peaks = presentStemCIDs(db, 'StemPeaksCache', stemCIDs)
     const embeddings = presentStemCIDs(db, 'StemEmbeddingCache', stemCIDs)
     const features = currentFeatureStemCIDs(db, stemCIDs)
+    const zeroShot = zeroShotPendingStemCIDs(db, stemCIDs)
     for (const path of chunkPaths) {
       const stemCID = basename(path)
       out.push({
         peaks: !peaks.has(stemCID),
         features: !features.has(stemCID),
-        embedding: !embeddings.has(stemCID)
+        embedding: !embeddings.has(stemCID),
+        zeroShot: zeroShot.has(stemCID)
       })
     }
   }

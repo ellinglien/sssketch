@@ -16,7 +16,6 @@ import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
-import type { YamnetZeroShotRetroactiveTarget } from '../main/yamnetZeroShotRetroactiveScan'
 import type { PrewarmScanProgress } from '../main/discoverCandidates'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
@@ -311,8 +310,6 @@ const api = {
     ipcRenderer.invoke('set-yamnet-zeroshot-category', path, audiosetClassIndex),
   markYamnetZeroShotAttempted: (path: string): Promise<void> =>
     ipcRenderer.invoke('mark-yamnet-zeroshot-attempted', path),
-  getYamnetZeroShotRetroactiveTargets: (): Promise<YamnetZeroShotRetroactiveTarget[]> =>
-    ipcRenderer.invoke('get-yamnet-zeroshot-retroactive-targets'),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>

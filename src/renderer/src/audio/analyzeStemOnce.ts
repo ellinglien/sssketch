@@ -5,7 +5,12 @@ import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { adoptWaveformAnalysis, hasWaveformEntry, waveformFromBuffer } from './peakCache'
 import { adoptStemFeaturesFromBuffer, peekStemFeaturesEntry } from './stemFeaturesCache'
-import { adoptStemEmbeddingFromBuffer, hasStemEmbeddingEntry } from './stemEmbeddingCache'
+import {
+  adoptStemEmbeddingFromBuffer,
+  adoptZeroShotFromBuffer,
+  hasStemEmbeddingEntry,
+  hasZeroShotEntry
+} from './stemEmbeddingCache'
 
 export type StemAnalysisOutcome = 'done' | 'skipped' | 'failed'
 
@@ -13,12 +18,14 @@ export interface AnalyzeStemOnceResult {
   peaks: StemAnalysisOutcome
   features: StemAnalysisOutcome
   embedding: StemAnalysisOutcome
+  zeroShot: StemAnalysisOutcome
 }
 
 const ALL_SKIPPED: AnalyzeStemOnceResult = {
   peaks: 'skipped',
   features: 'skipped',
-  embedding: 'skipped'
+  embedding: 'skipped',
+  zeroShot: 'skipped'
 }
 
 /**
@@ -35,6 +42,12 @@ const ALL_SKIPPED: AnalyzeStemOnceResult = {
  * module's in-memory entry BEFORE the decode starts -- so an interactive
  * getPeaks/getStemFeatures/getOrExtractStemEmbedding for the same path,
  * mid-analysis, shares this work instead of decoding again.
+ *
+ * `needs.zeroShot` (background efficiency B5): the YAMNet zero-shot step
+ * for a stem whose embedding is already cached but predates that step --
+ * inference on the same decoded buffer (stemEmbeddingCache.ts's
+ * adoptZeroShotFromBuffer). A fresh embedding runs it as part of its own
+ * extraction.
  *
  * An output is skipped when its module already has an in-memory entry that
  * serves it (in flight, or settled -- for features, settled at the current
@@ -74,7 +87,8 @@ export async function analyzeStemOnce(
   // caller can slip in between these checks and the adopt* calls.
   const wantPeaks = needs.peaks && !hasWaveformEntry(path)
   const wantEmbedding = needs.embedding && !hasStemEmbeddingEntry(path)
-  if (!wantPeaks && !wantFeatures && !wantEmbedding) return ALL_SKIPPED
+  const wantZeroShot = needs.zeroShot && !wantEmbedding && !hasZeroShotEntry(path)
+  if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantZeroShot) return ALL_SKIPPED
 
   const decoded = decodeStemFile(path)
   // Rejections are handled by each consumer below; this only stops an
@@ -103,11 +117,13 @@ export async function analyzeStemOnce(
       : null
 
   const embeddingPromise = wantEmbedding ? adoptStemEmbeddingFromBuffer(path, decoded) : null
+  const zeroShotPromise = wantZeroShot ? adoptZeroShotFromBuffer(path, decoded) : null
 
-  const [peaks, features, embedding] = await Promise.allSettled([
+  const [peaks, features, embedding, zeroShot] = await Promise.allSettled([
     peaksPromise,
     featuresPromise,
-    embeddingPromise
+    embeddingPromise,
+    zeroShotPromise
   ])
 
   const logFailure = (what: string, reason: unknown): void => {
@@ -130,6 +146,13 @@ export async function analyzeStemOnce(
       embeddingPromise === null
         ? 'skipped'
         : embedding.status === 'fulfilled' && embedding.value !== null
+          ? 'done'
+          : 'failed',
+    // adoptZeroShotFromBuffer never rejects either -- false means it failed.
+    zeroShot:
+      zeroShotPromise === null
+        ? 'skipped'
+        : zeroShot.status === 'fulfilled' && zeroShot.value
           ? 'done'
           : 'failed'
   }

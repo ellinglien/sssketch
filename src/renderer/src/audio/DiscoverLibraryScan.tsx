@@ -126,8 +126,9 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
 
         // Real regression, found live 2026-09-18 (direct report: "very
         // sluggish buttons... click similar and loader running for about
-        // 3 minutes") -- see YamnetZeroShotRetroactiveScan.tsx's own
-        // matching fix for the full root-cause writeup. Each batch's real
+        // 3 minutes"): batches used to be fired without awaiting the
+        // previous one's work, so after a few seconds dozens of
+        // decode+inference jobs were in flight at once. Each batch's real
         // work (an IPC file read, a Web Audio decode, Worker round-trips
         // for analysis and embedding inference) is awaited before the next
         // step is scheduled, capping real concurrency at BATCH_SIZE and
@@ -161,7 +162,10 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
                 attemptedRef.current.add(target.key)
                 // Never rejects; logs its own failures. Features older than
                 // STEM_FEATURE_VERSION come back as needed (Phase 3
-                // re-extraction), alongside anything missing outright.
+                // re-extraction), alongside anything missing outright --
+                // and `zeroShot` for stems embedded before the YAMNet
+                // zero-shot step existed (B5: this used to be a second,
+                // separate scan that re-listed and decoded those stems).
                 return analyzeStemOnce(target.path, needs)
               })
             )

@@ -143,13 +143,13 @@ CREATE TABLE IF NOT EXISTS StemAutoCategory (
 
 -- One row per stem once a YAMNet zero-shot classification has been
 -- ATTEMPTED (see src/renderer/src/audio/stemEmbeddingCache.ts's own
--- ensureYamnetZeroShotClassified) -- regardless of whether that attempt
--- actually produced a StemAutoCategory row. getOrExtractStemEmbedding is
--- cache-hit-first (StemEmbeddingCache), so a stem embedded before the
--- zero-shot classification code existed would otherwise never get a
--- chance to run it (see yamnetZeroShotRetroactiveScan.ts's own doc
--- comment). Separately, most stems' own top AudioSet class will never map
--- to anything in audiosetClasses.ts's deliberately narrow table -- without
+-- adoptZeroShotFromBuffer / embedAndPersist) -- regardless of whether
+-- that attempt actually produced a StemAutoCategory row.
+-- getOrExtractStemEmbedding is cache-hit-first (StemEmbeddingCache), so a
+-- stem embedded before the zero-shot classification code existed would
+-- otherwise never get a chance to run it (see the zeroShot flag of
+-- stemAnalysisNeeds.ts's get-stem-analysis-needs). Separately, most
+-- stems' own top AudioSet class will never map to anything in audiosetClasses.ts's deliberately narrow table -- without
 -- a record of "already tried, regardless of outcome," those stems would
 -- get re-decoded and re-inferred on every future scan pass, forever, for
 -- no benefit. Direct report, 2026-09-17 ("in discover it wasn't really as

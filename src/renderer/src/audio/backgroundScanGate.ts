@@ -1,7 +1,7 @@
 // Direct report, 2026-09-21: "when the name this project modal shows it
 // takes a moment to be able to change the number or text." Root cause: the
-// ambient background scans (BackgroundFeatureScan, DiscoverLibraryScan,
-// YamnetZeroShotRetroactiveScan) start at app mount and run a batch every
+// ambient background scans (BackgroundFeatureScan, DiscoverLibraryScan;
+// then also YamnetZeroShotRetroactiveScan, since merged into the latter) start at app mount and run a batch every
 // BATCH_DELAY_MS for the whole session -- and getStemFeatures' decode +
 // MFCC/transient/pitch extraction runs synchronously on the renderer's own
 // main thread, so every batch briefly freezes typing and clicks. The

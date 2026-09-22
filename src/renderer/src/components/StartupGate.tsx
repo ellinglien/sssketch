@@ -29,8 +29,8 @@ const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
  * sits ABOVE them (zIndex 3000, both pills top out at 2000) and paints an
  * opaque background, so in practice a user never sees both at once.
  *
- * Deliberately does NOT wait on the three renderer-side background scans
- * (BackgroundFeatureScan/DiscoverLibraryScan/YamnetZeroShotRetroactiveScan)
+ * Deliberately does NOT wait on the renderer-side background scans
+ * (BackgroundFeatureScan/DiscoverLibraryScan)
  * -- those are open-ended (DiscoverLibraryScan's own doc comment: "order
  * of HOURS, not something that finishes in one sitting" for a real large
  * library) and blocking app usage for that long would trade one bad

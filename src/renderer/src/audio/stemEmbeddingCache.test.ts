@@ -76,24 +76,24 @@ describe('getOrExtractStemEmbedding', () => {
   })
 })
 
-describe('ensureYamnetZeroShotClassified', () => {
+describe('adoptZeroShotFromBuffer', () => {
   let setYamnetZeroShotCategoryMock: ReturnType<typeof vi.fn>
   let markYamnetZeroShotAttemptedMock: ReturnType<typeof vi.fn>
+  let setStemEmbeddingCacheMock: ReturnType<typeof vi.fn>
+  const buffer = Promise.resolve({} as AudioBuffer)
 
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
     setYamnetZeroShotCategoryMock = vi.fn().mockResolvedValue(undefined)
     markYamnetZeroShotAttemptedMock = vi.fn().mockResolvedValue(undefined)
+    setStemEmbeddingCacheMock = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', {
       rifffApi: {
         setYamnetZeroShotCategory: setYamnetZeroShotCategoryMock,
         markYamnetZeroShotAttempted: markYamnetZeroShotAttemptedMock,
-        readAudioFile: vi.fn().mockResolvedValue(new Uint8Array())
+        setStemEmbeddingCache: setStemEmbeddingCacheMock
       }
-    })
-    mockGetAudioContext.mockReturnValue({
-      decodeAudioData: vi.fn().mockResolvedValue({})
     })
   })
 
@@ -104,39 +104,52 @@ describe('ensureYamnetZeroShotClassified', () => {
   it('marks attempted and writes the category when classification succeeds with a mapped class', async () => {
     mockExtractEmbeddingAndTopClass.mockResolvedValue({ embedding: [1, 2, 3], topClassIndex: 157 })
 
-    const { ensureYamnetZeroShotClassified } = await import('./stemEmbeddingCache')
-    await ensureYamnetZeroShotClassified('/some/path.wav')
+    const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
+    expect(await adoptZeroShotFromBuffer('/some/path.wav', buffer)).toBe(true)
 
     expect(markYamnetZeroShotAttemptedMock).toHaveBeenCalledWith('/some/path.wav')
     expect(setYamnetZeroShotCategoryMock).toHaveBeenCalledWith('/some/path.wav', 157)
+    // The cached embedding is left alone.
+    expect(setStemEmbeddingCacheMock).not.toHaveBeenCalled()
   })
 
   it('marks attempted but does not write a category when topClassIndex is null', async () => {
     mockExtractEmbeddingAndTopClass.mockResolvedValue({ embedding: [1, 2, 3], topClassIndex: null })
 
-    const { ensureYamnetZeroShotClassified } = await import('./stemEmbeddingCache')
-    await ensureYamnetZeroShotClassified('/some/path.wav')
+    const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
+    await adoptZeroShotFromBuffer('/some/path.wav', buffer)
 
     expect(markYamnetZeroShotAttemptedMock).toHaveBeenCalledWith('/some/path.wav')
     expect(setYamnetZeroShotCategoryMock).not.toHaveBeenCalled()
   })
 
-  it('does not mark attempted when extraction fails outright', async () => {
+  it('does not mark attempted when extraction fails outright, and allows a retry', async () => {
     mockExtractEmbeddingAndTopClass.mockResolvedValue(null)
 
-    const { ensureYamnetZeroShotClassified } = await import('./stemEmbeddingCache')
-    await ensureYamnetZeroShotClassified('/some/path.wav')
+    const { adoptZeroShotFromBuffer, hasZeroShotEntry } = await import('./stemEmbeddingCache')
+    expect(await adoptZeroShotFromBuffer('/some/path.wav', buffer)).toBe(false)
 
     expect(markYamnetZeroShotAttemptedMock).not.toHaveBeenCalled()
     expect(setYamnetZeroShotCategoryMock).not.toHaveBeenCalled()
+    expect(hasZeroShotEntry('/some/path.wav')).toBe(false)
   })
 
-  it('does not throw when decoding itself throws', async () => {
-    mockGetAudioContext.mockReturnValue({
-      decodeAudioData: vi.fn().mockRejectedValue(new Error('decode failed'))
-    })
+  it('does not reject when decoding itself failed', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failed = Promise.reject(new Error('decode failed'))
+    failed.catch(() => {})
+    const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
+    await expect(adoptZeroShotFromBuffer('/some/path.wav', failed)).resolves.toBe(false)
+    errSpy.mockRestore()
+  })
 
-    const { ensureYamnetZeroShotClassified } = await import('./stemEmbeddingCache')
-    await expect(ensureYamnetZeroShotClassified('/some/path.wav')).resolves.toBeUndefined()
+  it('starts nothing for a path already in flight or done', async () => {
+    mockExtractEmbeddingAndTopClass.mockResolvedValue({ embedding: [1], topClassIndex: null })
+    const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
+    const first = adoptZeroShotFromBuffer('/p.wav', buffer)
+    expect(adoptZeroShotFromBuffer('/p.wav', buffer)).toBeNull()
+    await first
+    expect(adoptZeroShotFromBuffer('/p.wav', buffer)).toBeNull()
+    expect(mockExtractEmbeddingAndTopClass).toHaveBeenCalledTimes(1)
   })
 })
