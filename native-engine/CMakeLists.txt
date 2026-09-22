@@ -149,6 +149,8 @@ target_sources(sssketch_engine PRIVATE
   Source/AutomationCurveTests.cpp
   Source/ChannelFilter.cpp
   Source/ChannelFilterTests.cpp
+  Source/ReverbBus.cpp
+  Source/ReverbBusTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE
