@@ -8,6 +8,7 @@ import {
   getRiffIndexForDb
 } from './discoverCandidates'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
+import { upsertStemCategoryRole } from './stemCategoriesStore'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -1761,5 +1762,28 @@ describe('getDiscoverCandidates (kindSources)', () => {
 
     const [c] = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['bright'] })
     expect(c.kindSources).toEqual({})
+  })
+
+  // Phase 2 reclassify: Discover writes through Tidy Up's own role path
+  // (upsertStemCategoryRole, source 'discover') with the bare StemCID as the
+  // "path" -- stemCIDForPath resolves a path by its basename, and a
+  // StemCID is its own basename.
+  it("a Discover reclassify moves a guessed stem to the chosen kind as 'confirmed'", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedAutoCategory(own, 'mic', 'drums')
+
+    upsertStemCategoryRole(own, [{ path: 'mic', arrangeRole: 'bass' }], 'discover', null, 2000)
+
+    const row = own
+      .prepare(`SELECT ArrangeRole, Source FROM StemCategories WHERE StemCID = 'mic'`)
+      .get()
+    expect(row).toEqual({ ArrangeRole: 'bass', Source: 'discover' })
+    expect(
+      await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['drums'] })
+    ).toEqual([])
+    const [c] = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['bass'] })
+    expect(c.kindSources).toEqual({ bass: 'confirmed' })
   })
 })

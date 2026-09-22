@@ -8,6 +8,10 @@
 import type { DiscoverTraitKind } from './discoverSlotKind'
 import type { TraitPercentiles } from './traitQuantiles'
 
+/** The spec's bar (user choice: top 40%) -- a requested trait needs a
+ * library percentile >= this unless too few candidates pass. */
+export const DEFAULT_TRAIT_BAR = 0.6
+
 export interface TraitBarOptions {
   /** Starting bar: a requested trait needs percentile >= this. */
   bar?: number
@@ -45,7 +49,7 @@ function minPercentile(p: TraitPercentiles, traits: readonly DiscoverTraitKind[]
 export function applyTraitBar<T extends { traitPercentiles: TraitPercentiles }>(
   candidates: T[],
   targetTraits: readonly DiscoverTraitKind[],
-  { bar = 0.6, minPool = 12, step = 0.1 }: TraitBarOptions = {}
+  { bar = DEFAULT_TRAIT_BAR, minPool = 12, step = 0.1 }: TraitBarOptions = {}
 ): TraitBarResult<T> {
   if (targetTraits.length === 0) return { pool: candidates, barUsed: null }
 
