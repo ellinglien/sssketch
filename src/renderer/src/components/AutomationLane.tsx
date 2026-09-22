@@ -117,6 +117,28 @@ const clearButtonStyle: React.CSSProperties = {
 export type AutomationLaneTarget =
   | { kind: 'stem'; stemKey: string }
   | { kind: 'group'; groupId: string; representativeStemKey: string }
+  /** A placed noise riser (see @shared/riser), whose SWEEP is drawn here.
+   *
+   * The riser reuses this lane rather than getting one of its own because
+   * the shapes genuinely match: a riser's sweep is a list of normalised
+   * cutoff values over clip-relative bars, laid over the element's own
+   * rectangle -- which is precisely what this lane already edits. Three
+   * things are suppressed for it, each for a reason, and they are the only
+   * riser-shaped code in this file:
+   * - the parameter PICKER, because a riser has exactly one drawable
+   *   parameter. (Its level is a dial on the block itself, the same
+   *   treatment resonance gets, because a level is one stored number rather
+   *   than a shape; and its volume SHAPE is the generated swell, which is
+   *   what a riser IS and not something to draw over.)
+   * - the resonance dial, which belongs to a clip's filter and has no riser
+   *   equivalent -- the riser's bandpass Q is fixed (NoiseRiser.h).
+   * - the edge grabbers. They pull a curve to zero at its edges, which on a
+   *   volume curve is a fade and on a riser's CUTOFF would mean "start and
+   *   end fully closed" -- the opposite of what the element is for.
+   * Clearing still works and is still worth having: an empty riser curve
+   * means "play the plain declared ramp", so right-click is a real undo back
+   * to the shape it was dropped with. */
+  | { kind: 'riser'; riserId: string }
 
 /**
  * ONE placed clip's automation lane, laid over exactly that clip's waveform
@@ -184,8 +206,21 @@ export function AutomationLane({
   const param = useAppSelector(
     (s) => s.automationParamOf[laneId] ?? AUTOMATION_PARAMS[0]
   ) as AutomationParam
-  const sourceStemKey = target.kind === 'stem' ? target.stemKey : target.representativeStemKey
-  const committed = useAppSelector((s) => s.stemAutomation[sourceStemKey]?.[param]) ?? EMPTY_CURVE
+  const isRiser = target.kind === 'riser'
+  // Both selectors run unconditionally (hook rules), and exactly one of them
+  // is ever looking at a real key -- a riser lane's stem key is the empty
+  // string, which no clip has.
+  const sourceStemKey =
+    target.kind === 'stem'
+      ? target.stemKey
+      : target.kind === 'group'
+        ? target.representativeStemKey
+        : ''
+  const stemCurve = useAppSelector((s) => s.stemAutomation[sourceStemKey]?.[param])
+  const riserCurve = useAppSelector((s) =>
+    target.kind === 'riser' ? s.risers[target.riserId]?.curve : undefined
+  )
+  const committed = (isRiser ? riserCurve : stemCurve) ?? EMPTY_CURVE
 
   // The curve as it looks mid-gesture. null when no gesture is running, in
   // which case the committed curve is what's drawn.
@@ -202,7 +237,9 @@ export function AutomationLane({
   const clipBars = ppb > 0 ? widthPx / ppb : 0
 
   function commit(next: AutomationPoint[]): void {
-    if (target.kind === 'stem') {
+    if (target.kind === 'riser') {
+      dispatch({ type: 'SET_RISER_CURVE', id: target.riserId, points: next })
+    } else if (target.kind === 'stem') {
       dispatch({ type: 'SET_STEM_AUTOMATION', stemKey: target.stemKey, param, points: next })
     } else {
       dispatch({ type: 'SET_GROUP_AUTOMATION', groupId: target.groupId, param, points: next })
@@ -370,7 +407,17 @@ export function AutomationLane({
     .map((vertex) => `${vertex.x},${vertex.y}`)
     .join(' ')
 
-  const showPicker = widthPx >= PICKER_MIN_LANE_WIDTH_PX
+  // The corner cluster (picker, resonance dial, clear button) appears at the
+  // same width threshold regardless of which of the three it actually holds
+  // -- a riser lane has no picker but still wants its clear button, and
+  // letting that button appear on a lane too narrow to draw in would be
+  // pointless either way.
+  const showCorner = widthPx >= PICKER_MIN_LANE_WIDTH_PX
+  const showPicker = showCorner && !isRiser
+  // Narrowed off the union rather than re-tested inside the JSX, so the
+  // resonance dial (which takes its own stem/group-only target type) can be
+  // handed something TypeScript already knows is not a riser.
+  const resonanceTarget = target.kind === 'riser' ? null : target
 
   /** The filter lane -- and only the filter lane -- carries its resonance
    * in its corner. Resonance is a stored per-clip setting rather than a
@@ -380,7 +427,10 @@ export function AutomationLane({
    * way this lane's own curve does -- per stem on an expanded rifff, across
    * the whole rifff on a collapsed one -- by being handed the same target. */
   const showResonanceDial =
-    showPicker && param === 'filterCutoff' && widthPx >= RESONANCE_DIAL_MIN_LANE_WIDTH_PX
+    showPicker &&
+    resonanceTarget !== null &&
+    param === 'filterCutoff' &&
+    widthPx >= RESONANCE_DIAL_MIN_LANE_WIDTH_PX
 
   // Read directly off `points` (gesture-or-committed, same as the polyline
   // above), not off a separately-tracked drag value -- so a grabber's own
@@ -419,7 +469,7 @@ export function AutomationLane({
         background: 'color-mix(in srgb, var(--ra-bg-row-sub) 72%, transparent)'
       }}
     >
-      {showPicker && (
+      {showCorner && (
         // Pinned to the lane's own top-left corner, not the viewport's: the
         // lane IS the clip now, so there is nothing to scroll away from (the
         // old channel-wide lane needed a sticky anchor for exactly that
@@ -439,27 +489,29 @@ export function AutomationLane({
             transition: 'opacity 120ms linear'
           }}
         >
-          <select
-            value={param}
-            aria-label={`automation parameter for ${laneId}`}
-            title={`which parameter this lane edits (${AUTOMATION_PARAM_LABEL[param]})`}
-            onChange={(e) =>
-              dispatch({
-                type: 'SET_AUTOMATION_PARAM',
-                laneId,
-                param: e.target.value as AutomationParam
-              })
-            }
-            onMouseDown={(e) => e.stopPropagation()}
-            style={selectStyle}
-          >
-            {AUTOMATION_PARAMS.map((option) => (
-              <option key={option} value={option}>
-                {AUTOMATION_PARAM_SHORT_LABEL[option]}
-              </option>
-            ))}
-          </select>
-          {showResonanceDial && (
+          {showPicker && (
+            <select
+              value={param}
+              aria-label={`automation parameter for ${laneId}`}
+              title={`which parameter this lane edits (${AUTOMATION_PARAM_LABEL[param]})`}
+              onChange={(e) =>
+                dispatch({
+                  type: 'SET_AUTOMATION_PARAM',
+                  laneId,
+                  param: e.target.value as AutomationParam
+                })
+              }
+              onMouseDown={(e) => e.stopPropagation()}
+              style={selectStyle}
+            >
+              {AUTOMATION_PARAMS.map((option) => (
+                <option key={option} value={option}>
+                  {AUTOMATION_PARAM_SHORT_LABEL[option]}
+                </option>
+              ))}
+            </select>
+          )}
+          {showResonanceDial && resonanceTarget && (
             // The same three guards the picker and the clear button carry,
             // for the same reason: this corner sits ON the drawing surface,
             // so without them turning the knob would also scribble a curve
@@ -472,7 +524,10 @@ export function AutomationLane({
               onContextMenu={(e) => e.stopPropagation()}
               style={{ display: 'flex' }}
             >
-              <LaneResonanceDial target={target} ariaLabel={`filter resonance for ${laneId}`} />
+              <LaneResonanceDial
+                target={resonanceTarget}
+                ariaLabel={`filter resonance for ${laneId}`}
+              />
             </span>
           )}
           {committed.length > 0 && (
@@ -532,7 +587,11 @@ export function AutomationLane({
           }}
         />
       ))}
-      {/* Edge grabbers -- see handleEdgeGrabberStart's doc comment. Rendered
+      {/* Edge grabbers -- see handleEdgeGrabberStart's doc comment. NOT shown
+          on a riser lane: they pull the curve to zero at its edges, which on
+          a volume curve is a fade and on a riser's cutoff sweep would mean
+          "start and end fully closed" -- see AutomationLaneTarget's own
+          `riser` case. Rendered
           after (so stacked above) the plain breakpoints above, since a
           grabber sitting exactly at bar 0 or the clip's own end would
           otherwise compete with an ordinary point drawn at that same spot
@@ -540,62 +599,66 @@ export function AutomationLane({
           14x14 around a 7px dot -- identical to StemWaveformRow.tsx's own
           fade knee handles, and for the same reason its own comment gives:
           the visible dot alone is too easy to miss by a pixel. */}
-      <div
-        onMouseDown={(e) => handleEdgeGrabberStart('start', e)}
-        onContextMenu={(e) => e.stopPropagation()}
-        title={`fade in: ${startFade.bars.toFixed(2)} bars`}
-        style={{
-          position: 'absolute',
-          left: barToX(startFade.bars, ppb),
-          top: `${valueToY(startFade.level, VIEWBOX_HEIGHT)}%`,
-          transform: 'translate(-50%, -50%)',
-          width: EDGE_GRABBER_HIT_SIZE,
-          height: EDGE_GRABBER_HIT_SIZE,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          zIndex: 5
-        }}
-      >
-        <div
-          style={{
-            width: EDGE_GRABBER_DOT_SIZE,
-            height: EDGE_GRABBER_DOT_SIZE,
-            borderRadius: '50%',
-            background: 'var(--ra-text)',
-            pointerEvents: 'none'
-          }}
-        />
-      </div>
-      <div
-        onMouseDown={(e) => handleEdgeGrabberStart('end', e)}
-        onContextMenu={(e) => e.stopPropagation()}
-        title={`fade out: ${endFade.bars.toFixed(2)} bars`}
-        style={{
-          position: 'absolute',
-          left: barToX(endFadeBar, ppb),
-          top: `${valueToY(endFade.level, VIEWBOX_HEIGHT)}%`,
-          transform: 'translate(-50%, -50%)',
-          width: EDGE_GRABBER_HIT_SIZE,
-          height: EDGE_GRABBER_HIT_SIZE,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          zIndex: 5
-        }}
-      >
-        <div
-          style={{
-            width: EDGE_GRABBER_DOT_SIZE,
-            height: EDGE_GRABBER_DOT_SIZE,
-            borderRadius: '50%',
-            background: 'var(--ra-text)',
-            pointerEvents: 'none'
-          }}
-        />
-      </div>
+      {!isRiser && (
+        <>
+          <div
+            onMouseDown={(e) => handleEdgeGrabberStart('start', e)}
+            onContextMenu={(e) => e.stopPropagation()}
+            title={`fade in: ${startFade.bars.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: barToX(startFade.bars, ppb),
+              top: `${valueToY(startFade.level, VIEWBOX_HEIGHT)}%`,
+              transform: 'translate(-50%, -50%)',
+              width: EDGE_GRABBER_HIT_SIZE,
+              height: EDGE_GRABBER_HIT_SIZE,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 5
+            }}
+          >
+            <div
+              style={{
+                width: EDGE_GRABBER_DOT_SIZE,
+                height: EDGE_GRABBER_DOT_SIZE,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
+          <div
+            onMouseDown={(e) => handleEdgeGrabberStart('end', e)}
+            onContextMenu={(e) => e.stopPropagation()}
+            title={`fade out: ${endFade.bars.toFixed(2)} bars`}
+            style={{
+              position: 'absolute',
+              left: barToX(endFadeBar, ppb),
+              top: `${valueToY(endFade.level, VIEWBOX_HEIGHT)}%`,
+              transform: 'translate(-50%, -50%)',
+              width: EDGE_GRABBER_HIT_SIZE,
+              height: EDGE_GRABBER_HIT_SIZE,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 5
+            }}
+          >
+            <div
+              style={{
+                width: EDGE_GRABBER_DOT_SIZE,
+                height: EDGE_GRABBER_DOT_SIZE,
+                borderRadius: '50%',
+                background: 'var(--ra-text)',
+                pointerEvents: 'none'
+              }}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
