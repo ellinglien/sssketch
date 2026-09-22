@@ -145,6 +145,8 @@ target_sources(sssketch_engine PRIVATE
   Source/LinkSessionTests.cpp
   Source/LiveParamOverrides.cpp
   Source/LiveParamOverridesTests.cpp
+  Source/AutomationCurve.cpp
+  Source/AutomationCurveTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE
