@@ -2481,14 +2481,32 @@ export function DiscoverPanel({
           >
             {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
               const disabled = modifier === 'mine' && !hasUsername
+              // At least one sound source stays on -- with checkboxes,
+              // "both off" reads as "nothing", yet slotRollOptions treats it
+              // as "both". Blocking the last source's uncheck avoids that.
+              const isSource = modifier === 'endlesss' || modifier === 'other'
+              const otherSource = modifier === 'endlesss' ? 'other' : 'endlesss'
+              const isLastSource =
+                isSource &&
+                globalModifiers.includes(modifier) &&
+                !globalModifiers.includes(otherSource)
               return (
                 <BracketToggle
                   key={modifier}
                   checked={!disabled && globalModifiers.includes(modifier)}
-                  onChange={() => setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))}
+                  onChange={() => {
+                    if (isLastSource) return
+                    setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
+                  }}
                   label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
                   disabled={disabled}
-                  tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
+                  tooltip={
+                    disabled
+                      ? MY_SOUNDS_NEEDS_USERNAME
+                      : isLastSource
+                        ? 'at least one sound source stays on'
+                        : undefined
+                  }
                 />
               )
             })}
