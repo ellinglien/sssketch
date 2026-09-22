@@ -51,6 +51,7 @@ describe('riffLibrarySchema', () => {
       'StemFeatureCache',
       'StemLedger',
       'StemPeaksCache',
+      'StemUnavailable',
       'StemYamnetZeroShotAttempted',
       'Stems',
       'Tags'

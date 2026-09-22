@@ -172,6 +172,23 @@ CREATE TABLE IF NOT EXISTS StemFavourite (
   FavouritedAt INTEGER NOT NULL
 );
 
+-- Stems whose audio is known to be unfetchable -- see
+-- stemUnavailableStore.ts and @shared/stemAvailability for the full
+-- story. Short version, diagnosed 2026-09-22: Endlesss's stem blobs live
+-- across several DigitalOcean Spaces buckets and one of them
+-- (endlesss-dev.*) now answers anonymous GETs with 403 AccessDenied,
+-- while the ndls-att0/1/2/3.* buckets still answer 200 -- ~97,636 of
+-- 367,019 stems in Elling's external archive. No login fixes it (stem
+-- URLs were never authenticated). Written LAZILY, one row per stem, only
+-- after a real attempt came back permanently failed: deliberately NOT a
+-- bulk backfill of every stem on a dead host. sssketch-exclusive, own db
+-- only, same rule as StemFavourite above.
+CREATE TABLE IF NOT EXISTS StemUnavailable (
+  StemCID TEXT PRIMARY KEY,
+  Reason TEXT NOT NULL,
+  CheckedAt INTEGER NOT NULL
+);
+
 -- Persisted counterpart to discoverCandidates.ts's own in-memory
 -- riffIndexCache/instrumentRowsCache -- direct report, 2026-09-18: those
 -- caches are process-lifetime-only (a plain WeakMap keyed to the live db

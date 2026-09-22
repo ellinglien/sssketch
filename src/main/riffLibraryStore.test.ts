@@ -18,6 +18,7 @@ import {
   downloadMissingStems
 } from './riffLibraryStore'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
+import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
 
 let userDataDir: string
 
@@ -705,6 +706,19 @@ describe('downloadMissingStems', () => {
     vi.unstubAllGlobals()
   })
 
+  /** A pristine own-library db plus a pristine availability session, for
+   * the tests below that assert on what got REMEMBERED -- both the
+   * StemUnavailable table (a real file under userDataDir) and the learned-
+   * host/retry state (module-scope, session-lifetime by design) otherwise
+   * carry over from the test before. */
+  async function freshOwnLibrary(): Promise<void> {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-test-'))
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    const { resetStemAvailabilitySessionStateForTests } = await import('./stemAvailability')
+    resetStemAvailabilitySessionStateForTests()
+  }
+
   it('fetches every uncached stem and writes it to the path resolveStemPath expects', async () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
@@ -761,6 +775,92 @@ describe('downloadMissingStems', () => {
     createSeededFixtureWarehouse(root)
     setRiffLibraryRootForTests(root)
     expect(await downloadMissingStems('no-such-riff')).toBeNull()
+  })
+
+  // The real 2026-09-22 situation: one of Endlesss's storage buckets answers
+  // anonymous GETs with 403, forever. The reported symptom was the SAME stem
+  // ids being retried over and over, hundreds of identical failure lines.
+  it('remembers a 403 as permanent and never asks for that stem again', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+    await freshOwnLibrary()
+    const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const { isStemUnavailable } = await import('./stemUnavailableStore')
+
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 403 }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(isStemUnavailable(openOwnRiffLibraryDb(), 'stem-b')).toBe(true)
+
+    // Second attempt: skipped entirely, no request at all.
+    await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    closeOwnRiffLibraryDb()
+  })
+
+  it('does NOT remember a network failure -- a bad connection must not poison a stem', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+    await freshOwnLibrary()
+    const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const { isStemUnavailable } = await import('./stemUnavailableStore')
+
+    const fetchMock = vi.fn(async () => {
+      throw new Error('ECONNRESET')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await downloadMissingStems('riff-1')
+    expect(isStemUnavailable(openOwnRiffLibraryDb(), 'stem-b')).toBe(false)
+    // Still retryable -- a second call really does try again.
+    await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    closeOwnRiffLibraryDb()
+  })
+
+  it('stops retrying a stem that keeps failing softly, after a bounded number of attempts', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+    await freshOwnLibrary()
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 503 }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (let i = 0; i < 6; i++) await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(DEFAULT_SESSION_RETRY_ATTEMPTS)
+    closeOwnRiffLibraryDb()
+  })
+
+  it('a stem already on disk is never re-requested, whatever the availability list says', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+    await freshOwnLibrary()
+    const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const { markStemUnavailable } = await import('./stemUnavailableStore')
+    markStemUnavailable(openOwnRiffLibraryDb(), 'stem-b', 'http 403', 1000)
+
+    const stemPath = resolveStemPath('jam-techno', 'stem-b')
+    mkdirSync(join(stemPath, '..'), { recursive: true })
+    writeFileSync(stemPath, 'already here')
+
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 403 }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await downloadMissingStems('riff-1')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result!.stems.find((s) => s.stemCID === 'stem-b')!.path).toBe(stemPath)
+    closeOwnRiffLibraryDb()
   })
 
   it('returns null when the warehouse is unavailable, rather than throwing', async () => {

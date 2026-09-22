@@ -12,6 +12,12 @@ import type {
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
+import {
+  recordStemDownloadFailure,
+  recordStemDownloadSuccess,
+  shouldAttemptStemDownload
+} from './stemAvailability'
+import { countWork } from './workCounters'
 
 const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
@@ -619,27 +625,46 @@ export function resolveRiffWithContext(riffCID: string): RiffContextResult | nul
  * so a killed/failed download never leaves a corrupt partial file sitting at
  * the real path. Returns false (never throws) on any network or filesystem
  * failure — the caller treats a failed stem as "still missing," not fatal to
- * the rest of the riff's downloads. */
+ * the rest of the riff's downloads.
+ *
+ * Availability (2026-09-22, see @shared/stemAvailability): a stem already on
+ * disk is answered locally without any request at all; a stem already known
+ * unfetchable, or one on a host learned to be refusing anonymous downloads,
+ * is skipped before the fetch; a permanent failure (403/404/410) is
+ * remembered durably, a soft one only spends a small in-session retry
+ * budget. Per-failure console noise is gone on purpose — hundreds of
+ * identical `HTTP 403` lines was the reported symptom, not the diagnosis —
+ * replaced by one line per learned host plus the dev work counters' own
+ * once-a-minute summary. */
 async function downloadOneStem(
   jamCID: string,
   stemCID: string,
   downloadUrl: string
 ): Promise<boolean> {
+  const finalPath = resolveStemPath(jamCID, stemCID)
+  // Local presence always wins over anything the availability list says.
+  if (existsSync(finalPath)) return true
+  const ownDb = openOwnRiffLibraryDb()
+  if (!shouldAttemptStemDownload(ownDb, stemCID, downloadUrl)) return false
   try {
     const res = await fetch(downloadUrl)
     if (!res.ok) {
-      console.error(`downloadOneStem: download failed for stem ${stemCID}: HTTP ${res.status}`)
+      recordStemDownloadFailure(ownDb, stemCID, downloadUrl, { kind: 'http', status: res.status })
       return false
     }
     const bytes = Buffer.from(await res.arrayBuffer())
-    const finalPath = resolveStemPath(jamCID, stemCID)
     mkdirSync(dirname(finalPath), { recursive: true })
     const tmpPath = `${finalPath}.downloading`
     writeFileSync(tmpPath, bytes)
     renameSync(tmpPath, finalPath)
+    recordStemDownloadSuccess(ownDb, stemCID)
     return true
-  } catch (err) {
-    console.error(`downloadOneStem: failed to download stem ${stemCID}:`, err)
+  } catch {
+    // A filesystem failure lands here too, not just a network one -- both
+    // are genuinely retryable, and neither says anything about whether the
+    // stem still exists on Endlesss's side.
+    countWork('stem-download:threw')
+    recordStemDownloadFailure(ownDb, stemCID, downloadUrl, { kind: 'network' })
     return false
   }
 }
