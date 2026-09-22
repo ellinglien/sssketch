@@ -8,10 +8,19 @@ import {
   toggleSlotKind,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
+import {
+  DISCOVER_SLOT_MODIFIER_LABEL,
+  DISCOVER_SLOT_MODIFIER_OPTIONS,
+  toggleSlotModifier,
+  type DiscoverSlotModifier
+} from '@shared/discoverSlotModifier'
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
  * slot-kinds-design.md, mockup option B): opened from a slot's own kind
- * label. Two chip rows -- instrument (OR filter) and trait (AND ranking).
+ * label. Chip rows -- instrument (OR filter), trait (AND ranking), and
+ * (2026-09-22, per-slot modifiers) modifiers: prefer faves, endlesss /
+ * other sounds, my sounds. A slot needs at least one kind but may have no
+ * modifiers.
  * Every toggle calls onChange immediately (the panel rerolls the slot);
  * the picker stays open so several chips can be tried in a row. Position +
  * dismissal mirror DiscoverNearbyPopover.tsx / ContextMenu.tsx. */
@@ -19,14 +28,20 @@ export function DiscoverKindPicker({
   x,
   y,
   kinds,
+  modifiers,
+  hasUsername,
   onChange,
+  onChangeModifiers,
   onClose,
   ignoreRef
 }: {
   x: number
   y: number
   kinds: DiscoverSlotKind[]
+  modifiers: DiscoverSlotModifier[]
+  hasUsername: boolean
   onChange: (kinds: DiscoverSlotKind[]) => void
+  onChangeModifiers: (modifiers: DiscoverSlotModifier[]) => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
 }): React.JSX.Element {
@@ -63,17 +78,29 @@ export function DiscoverKindPicker({
     }
   }, [onClose, ignoreRef])
 
-  function chip(kind: DiscoverSlotKind): React.JSX.Element {
-    const on = kinds.includes(kind)
-    const isLastOn = on && kinds.length === 1
+  function chipButton({
+    key,
+    on,
+    label,
+    tooltip,
+    disabled = false,
+    onClick
+  }: {
+    key: string
+    on: boolean
+    label: string
+    tooltip?: string
+    disabled?: boolean
+    onClick: () => void
+  }): React.JSX.Element {
     return (
       <button
-        key={kind}
+        key={key}
         aria-pressed={on}
-        data-tooltip={isLastOn ? 'a slot needs at least one kind' : undefined}
+        aria-disabled={disabled}
+        data-tooltip={tooltip}
         onClick={() => {
-          const next = toggleSlotKind(kinds, kind)
-          if (slotKindsKey(next) !== slotKindsKey(kinds)) onChange(next)
+          if (!disabled) onClick()
         }}
         style={{
           fontFamily: 'inherit',
@@ -82,15 +109,45 @@ export function DiscoverKindPicker({
           background: on ? 'var(--ra-bg-row-active)' : 'transparent',
           border: `1px solid ${on ? 'var(--ra-text)' : 'var(--ra-border)'}`,
           color: on ? 'var(--ra-text)' : 'var(--ra-text-2)',
-          cursor: 'pointer'
+          opacity: disabled ? 0.3 : 1,
+          cursor: disabled ? 'not-allowed' : 'pointer'
         }}
       >
-        {DISCOVER_SLOT_KIND_LABEL[kind]}
+        {label}
       </button>
     )
   }
 
-  function row(label: string, list: DiscoverSlotKind[]): React.JSX.Element {
+  function chip(kind: DiscoverSlotKind): React.JSX.Element {
+    const on = kinds.includes(kind)
+    const isLastOn = on && kinds.length === 1
+    return chipButton({
+      key: kind,
+      on,
+      label: DISCOVER_SLOT_KIND_LABEL[kind],
+      tooltip: isLastOn ? 'a slot needs at least one kind' : undefined,
+      onClick: () => {
+        const next = toggleSlotKind(kinds, kind)
+        if (slotKindsKey(next) !== slotKindsKey(kinds)) onChange(next)
+      }
+    })
+  }
+
+  function modifierChip(modifier: DiscoverSlotModifier): React.JSX.Element {
+    const disabled = modifier === 'mine' && !hasUsername
+    return chipButton({
+      key: modifier,
+      on: modifiers.includes(modifier),
+      label: DISCOVER_SLOT_MODIFIER_LABEL[modifier],
+      disabled,
+      tooltip: disabled
+        ? 'set "your username" in the browse tab first -- an empty username can\'t filter to "my sounds"'
+        : undefined,
+      onClick: () => onChangeModifiers(toggleSlotModifier(modifiers, modifier))
+    })
+  }
+
+  function row(label: string, chips: React.JSX.Element[]): React.JSX.Element {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span
@@ -104,7 +161,7 @@ export function DiscoverKindPicker({
         >
           {label}
         </span>
-        {list.map(chip)}
+        {chips}
       </div>
     )
   }
@@ -128,11 +185,10 @@ export function DiscoverKindPicker({
         boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
       }}
     >
-      {row('instrument', DISCOVER_MASK_SLOT_KINDS)}
-      {row('trait', DISCOVER_TRAIT_SLOT_KINDS)}
-      <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-        changing kinds rerolls this slot
-      </span>
+      {row('instrument', DISCOVER_MASK_SLOT_KINDS.map(chip))}
+      {row('trait', DISCOVER_TRAIT_SLOT_KINDS.map(chip))}
+      {row('modifiers', DISCOVER_SLOT_MODIFIER_OPTIONS.map(modifierChip))}
+      <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>any change rerolls this slot</span>
     </div>
   )
 }

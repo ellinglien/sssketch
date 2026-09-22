@@ -165,8 +165,11 @@ export function DiscoverNearbyPopover({
    * round trip to reconstruct it. */
   startCandidate: DiscoverCandidate
   kinds: DiscoverSlotKind[]
-  /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
-   * checkboxes. Combination-slot rule (stemMatchesSlotKinds,
+  /** The slot's own sound-source modifiers (slotRollOptions,
+   * @shared/discoverSlotModifier; per-slot since 2026-09-22 -- resultKey
+   * below already encodes both values, and adjacency lookups take no
+   * ownership/favourite filter, so that key still covers everything that
+   * affects the result). Combination-slot rule (stemMatchesSlotKinds,
    * @shared/discoverTraits): applies to every kind set, by each stem's own
    * instrument mask -- endlesss = Endlesss instruments/effects, non-endlesss
    * = audio-in/mic. */
