@@ -4,6 +4,7 @@ import { stemKey } from '@shared/types'
 import type { LoopRegion } from '../state/store'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { ChannelChainPanel } from './ChannelChainPanel'
+import { AutomationLane } from './AutomationLane'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { busColorHex } from '../theme/typeColor'
 import { linearToMeterFraction, nextMeterValue } from '../audio/meterBallistics'
@@ -96,6 +97,8 @@ function ChannelRowImpl({
   channelId,
   rifffs,
   bus,
+  automationMode,
+  laneWidthPx,
   onOpenContextMenu,
   onDropOnChannel
 }: {
@@ -107,6 +110,13 @@ function ChannelRowImpl({
    * per-bus track coloring does. Undefined in the normal (untidied) view,
    * where channels aren't bus-partitioned at all. */
   bus?: BusId
+  /** True while the arranger is in 'automation' mode: this row's clips are
+   * dimmed and made inert, and an AutomationLane is laid over them. Purely
+   * a view/interaction change -- nothing about the arrangement moves. */
+  automationMode: boolean
+  /** The arranger's full timeline width in pixels, forwarded to the
+   * automation lane (see its own prop comment). Ignored otherwise. */
+  laneWidthPx: number
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
 }): React.JSX.Element {
@@ -616,13 +626,21 @@ function ChannelRowImpl({
           )}
         </div>
       </div>
-      {rifffs.map((rifff) => (
-        <RifffBlockRow
-          key={rifff.groupId}
-          groupId={rifff.groupId}
-          onOpenContextMenu={onOpenContextMenu}
-        />
-      ))}
+      {/* In automation mode the clips stay exactly where they are and just
+          recede: a plain (unpositioned) wrapper, so every RifffBlockRow's
+          own absolutely-positioned content still resolves against this row
+          the way it always did, and pointer events go to the lane above
+          instead of to a clip the user isn't editing right now. */}
+      <div style={automationMode ? { opacity: 0.22, pointerEvents: 'none' } : undefined}>
+        {rifffs.map((rifff) => (
+          <RifffBlockRow
+            key={rifff.groupId}
+            groupId={rifff.groupId}
+            onOpenContextMenu={onOpenContextMenu}
+          />
+        ))}
+      </div>
+      {automationMode && <AutomationLane channelId={channelId} widthPx={laneWidthPx} />}
       {isArmed && armedLoopRegion && (
         // Rendered AFTER rifffs.map above, not before -- both are plain
         // position:absolute siblings with no explicit z-index, so DOM
