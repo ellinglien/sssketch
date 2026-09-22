@@ -67,6 +67,12 @@ const EDGE_GRABBER_HIT_SIZE = 14
  * parameter it was last set to) -- zooming in brings the picker back. */
 const PICKER_MIN_LANE_WIDTH_PX = 54
 
+/** Below this the resonance hint (see `showResonanceHint`) is dropped
+ * rather than truncated -- it is a nicety, and half a sentence reads worse
+ * than none. Sized for the string at fontSize 9 plus the picker's own
+ * corner. */
+const RESONANCE_HINT_MIN_LANE_WIDTH_PX = 230
+
 /** A stable identity for "this lane has no curve", so the useAppSelector
  * below can compare with Object.is and not re-render every dispatch. */
 const EMPTY_CURVE: AutomationPoint[] = []
@@ -178,6 +184,12 @@ export function AutomationLane({
   ) as AutomationParam
   const sourceStemKey = target.kind === 'stem' ? target.stemKey : target.representativeStemKey
   const committed = useAppSelector((s) => s.stemAutomation[sourceStemKey]?.[param]) ?? EMPTY_CURVE
+  // Whether this clip has a cutoff curve at all -- a boolean, not the curve
+  // itself, so this selector can't re-render the lane on every point of
+  // someone else's drag.
+  const hasCutoffCurve = useAppSelector(
+    (s) => (s.stemAutomation[sourceStemKey]?.filterCutoff?.length ?? 0) > 0
+  )
 
   // The curve as it looks mid-gesture. null when no gesture is running, in
   // which case the committed curve is what's drawn.
@@ -364,6 +376,19 @@ export function AutomationLane({
 
   const showPicker = widthPx >= PICKER_MIN_LANE_WIDTH_PX
 
+  /** Resonance on its own sounds like nothing, and that reads as broken --
+   * Elling hit exactly this. It isn't: filterResonance maps Q 0.707 -> 8
+   * (native-engine's ChannelFilter.cpp, correct as it stands), but
+   * resonance is a peak AT the cutoff corner, and with cutoff sitting at
+   * its neutral, wide-open end there is no corner inside the audible range
+   * for it to sharpen. So drawing a resonance curve alone genuinely does
+   * nothing audible, and the fix is to say so rather than to change the
+   * mapping. Shown only when this clip has no cutoff curve at all, and
+   * always non-blocking (pointer-events: none) -- drawing resonance first
+   * and cutoff second is a perfectly reasonable order to work in. */
+  const showResonanceHint =
+    param === 'filterResonance' && !hasCutoffCurve && widthPx >= RESONANCE_HINT_MIN_LANE_WIDTH_PX
+
   // Read directly off `points` (gesture-or-committed, same as the polyline
   // above), not off a separately-tracked drag value -- so a grabber's own
   // dot slides live during ITS OWN drag (setGesture triggers this re-render
@@ -483,6 +508,26 @@ export function AutomationLane({
           />
         )}
       </svg>
+      {showResonanceHint && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 3,
+            textAlign: 'center',
+            fontSize: 9,
+            color: 'var(--ra-text-3)',
+            opacity: 0.7,
+            pointerEvents: 'none',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          resonance needs a cutoff sweep to hear
+        </div>
+      )}
       {points.map((point, i) => (
         <div
           key={`${point.bar}:${i}`}
