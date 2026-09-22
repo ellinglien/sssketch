@@ -1231,9 +1231,9 @@ export function DiscoverPanel({
 
   // Direct request, 2026-09-21 (combination slots), reworked twice on
   // 2026-09-22 -- final shape: a plain click adds a slot right away (single
-  // click stays the fast path); shift- or cmd-click ARMS a kind into this
+  // click stays the fast path); cmd-click ARMS a kind into this
   // pending set instead (again to disarm), and the next plain click adds ONE
-  // slot with every armed kind plus the one clicked ("shift-click drums,
+  // slot with every armed kind plus the one clicked ("cmd-click drums,
   // click bright = a drums · bright slot"). The row's order never changes,
   // so combining never needs the cursor to move. Esc disarms. Mask kinds are
   // dropped from what gets added while the "endlesss" source is off (they
@@ -2514,7 +2514,7 @@ export function DiscoverPanel({
               key={kind}
               disabled={disabled}
               aria-pressed={selected}
-              onClick={(e) => handleAddRowKindClick(kind, e.shiftKey || e.metaKey)}
+              onClick={(e) => handleAddRowKindClick(kind, e.metaKey)}
               data-tooltip={disabled ? 'needs endlesss on' : undefined}
               style={{
                 fontFamily: 'inherit',
@@ -2582,7 +2582,7 @@ export function DiscoverPanel({
       >
         {addableKinds.length > 0
           ? `${slotKindsLabel(addableKinds)} armed • click a kind to add • esc to clear`
-          : 'hold shift to combine'}
+          : 'hold cmd to combine'}
       </div>
     </div>
   )
