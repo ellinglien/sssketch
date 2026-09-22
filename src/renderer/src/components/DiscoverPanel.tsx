@@ -2435,6 +2435,18 @@ export function DiscoverPanel({
               justifyContent: 'center'
             }}
           >
+            {/* Direct request, 2026-09-22: a bright "add:" lead-in. Silkscreen
+                renders it in caps, like every other label here. */}
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: 'var(--ra-text)',
+                marginRight: 4
+              }}
+            >
+              add:
+            </span>
             {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
               const selected = pendingAddKinds.includes(kind)
               return (
