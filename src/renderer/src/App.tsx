@@ -87,6 +87,8 @@ import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import type { Rifff } from '@shared/types'
+import type { DiscoverSettings } from '../../main/discoverSettingsStore'
+import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1449,15 +1451,35 @@ function Frame(): React.JSX.Element {
   // open didn't affect the already-mounted scan until DiscoverPanel next
   // remounted). Loaded once here, same "fetch on mount" pattern as
   // endlesssLoggedIn just above.
-  const [discoverConsented, setDiscoverConsentedState] = useState(false)
+  // The whole DiscoverSettings object is mirrored (not just consent) so
+  // every save MERGES -- saving a partial object used to be fine with one
+  // field, but would silently wipe traitMatchBar (2026-09-22) otherwise.
+  const [discoverSettings, setDiscoverSettingsState] = useState<DiscoverSettings>({
+    consentedToLibraryScan: false,
+    traitMatchBar: DEFAULT_TRAIT_BAR
+  })
+  const discoverConsented = discoverSettings.consentedToLibraryScan
+  const traitMatchBar = discoverSettings.traitMatchBar
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
-      .then((s) => setDiscoverConsentedState(s.consentedToLibraryScan))
+      .then((s) => setDiscoverSettingsState(s))
       .catch((err) => {
         console.error('Frame: getDiscoverSettings() failed:', err)
       })
   }, [])
+
+  async function updateDiscoverSettings(patch: Partial<DiscoverSettings>): Promise<void> {
+    const next = { ...discoverSettings, ...patch }
+    setDiscoverSettingsState(next)
+    await window.rifffApi.setDiscoverSettings(next)
+  }
+
+  /** Settings menu's "trait match" entry -- steps loosest to strictest,
+   * then wraps (nextTraitMatchBar). */
+  async function cycleTraitMatchBar(): Promise<void> {
+    await updateDiscoverSettings({ traitMatchBar: nextTraitMatchBar(traitMatchBar) })
+  }
 
   /** The one real setter for discoverConsented -- updates the local mirror
    * AND persists, so every caller (TransportBar's toggle below, and
@@ -1465,8 +1487,7 @@ function Frame(): React.JSX.Element {
    * through LibraryBrowser) goes through the same path rather than each
    * keeping its own persistence logic. */
   async function setDiscoverConsented(value: boolean): Promise<void> {
-    setDiscoverConsentedState(value)
-    await window.rifffApi.setDiscoverSettings({ consentedToLibraryScan: value })
+    await updateDiscoverSettings({ consentedToLibraryScan: value })
   }
 
   async function toggleDiscoverConsent(): Promise<void> {
@@ -2243,6 +2264,8 @@ function Frame(): React.JSX.Element {
           onStartTour={replayTour}
           discoverConsented={discoverConsented}
           toggleDiscoverConsent={toggleDiscoverConsent}
+          traitMatchBar={traitMatchBar}
+          cycleTraitMatchBar={cycleTraitMatchBar}
         />
         {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
@@ -2354,6 +2377,7 @@ function Frame(): React.JSX.Element {
             onImported={handleLibraryImported}
             currentSketch={currentSketch}
             discoverConsented={discoverConsented}
+            traitMatchBar={traitMatchBar}
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}

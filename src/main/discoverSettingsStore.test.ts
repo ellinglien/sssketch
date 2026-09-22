@@ -21,21 +21,29 @@ describe('discoverSettingsStore', () => {
 
   it('defaults to not consented when no file exists yet', async () => {
     const { loadDiscoverSettings } = await import('./discoverSettingsStore')
-    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: false })
+    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: false, traitMatchBar: 0.75 })
   })
 
   it('persists consent across a save/load round trip', async () => {
     const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
-    saveDiscoverSettings({ consentedToLibraryScan: true })
-    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: true })
+    saveDiscoverSettings({ consentedToLibraryScan: true, traitMatchBar: 0.75 })
+    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: true, traitMatchBar: 0.75 })
   })
 
   it('defaults to not consented (not a thrown error) when the file is corrupted', async () => {
     const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
-    saveDiscoverSettings({ consentedToLibraryScan: true })
+    saveDiscoverSettings({ consentedToLibraryScan: true, traitMatchBar: 0.75 })
     const { writeFileSync } = await import('fs')
     writeFileSync(join(dir, 'discoverSettings.json'), 'not valid json{{{', 'utf-8')
     expect(() => loadDiscoverSettings()).not.toThrow()
-    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: false })
+    expect(loadDiscoverSettings()).toEqual({ consentedToLibraryScan: false, traitMatchBar: 0.75 })
+  })
+
+  it('persists the trait match bar, and falls back to the default for an unknown value', async () => {
+    const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
+    saveDiscoverSettings({ consentedToLibraryScan: true, traitMatchBar: 0.9 })
+    expect(loadDiscoverSettings().traitMatchBar).toBe(0.9)
+    saveDiscoverSettings({ consentedToLibraryScan: true, traitMatchBar: 0.33 })
+    expect(loadDiscoverSettings().traitMatchBar).toBe(0.75)
   })
 })

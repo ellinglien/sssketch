@@ -10,7 +10,29 @@ import type { TraitPercentiles } from './traitQuantiles'
 
 /** The spec's bar (user choice: top 40%) -- a requested trait needs a
  * library percentile >= this unless too few candidates pass. */
-export const DEFAULT_TRAIT_BAR = 0.6
+export const DEFAULT_TRAIT_BAR = 0.75
+
+/** The Settings menu's "trait match" choices, loosest to strictest
+ * (top 50% / 40% / 25% / 10% of the library). Direct request,
+ * 2026-09-22: default tightened from top 40% to top 25%, and made a
+ * setting. */
+export const TRAIT_MATCH_BAR_OPTIONS = [0.5, 0.6, 0.75, 0.9] as const
+
+export function normalizeTraitMatchBar(value: unknown): number {
+  return (TRAIT_MATCH_BAR_OPTIONS as readonly number[]).includes(value as number)
+    ? (value as number)
+    : DEFAULT_TRAIT_BAR
+}
+
+export function nextTraitMatchBar(current: number): number {
+  const options = TRAIT_MATCH_BAR_OPTIONS as readonly number[]
+  const index = options.indexOf(normalizeTraitMatchBar(current))
+  return options[(index + 1) % options.length]
+}
+
+export function traitMatchBarLabel(bar: number): string {
+  return `top ${Math.round((1 - bar) * 100)}%`
+}
 
 export interface TraitBarOptions {
   /** Starting bar: a requested trait needs percentile >= this. */

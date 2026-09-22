@@ -173,6 +173,7 @@ export function LibraryBrowser({
   onImported,
   currentSketch,
   discoverConsented,
+  traitMatchBar,
   setDiscoverConsented,
   discoverSlots,
   setDiscoverSlots,
@@ -204,6 +205,9 @@ export function LibraryBrowser({
    * itself doesn't read discoverConsented, it's purely a pass-through
    * here. */
   discoverConsented: boolean
+  /** Settings' "trait match" bar (App.tsx), passed straight to
+   * DiscoverPanel -- same pass-through as discoverConsented. */
+  traitMatchBar: number
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
    * comment for why it lives there now (survives the WHOLE LibraryBrowser
@@ -2277,6 +2281,7 @@ export function LibraryBrowser({
             setRedoStack={setDiscoverRedoStack}
             currentUsername={riffLibraryUsername}
             discoverConsented={discoverConsented}
+            traitMatchBar={traitMatchBar}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
           />

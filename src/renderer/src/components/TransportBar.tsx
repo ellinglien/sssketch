@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { traitMatchBarLabel } from '@shared/traitBar'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { loopLengthBars } from '../state/selectors'
@@ -225,7 +226,9 @@ export function TransportBar({
   onOpenEndlesss,
   onStartTour,
   discoverConsented,
-  toggleDiscoverConsent
+  toggleDiscoverConsent,
+  traitMatchBar,
+  cycleTraitMatchBar
 }: {
   onEnableGatedRecording: () => void
   onDisableGatedRecording: () => void
@@ -257,6 +260,10 @@ export function TransportBar({
   /** Settings menu's revoke/re-enable entry -- flips consentedToLibraryScan
    * and persists via `setDiscoverSettings`, mirrored in App.tsx. */
   toggleDiscoverConsent: () => Promise<void>
+  /** How strict Discover's trait kinds are (DiscoverSettings.traitMatchBar)
+   * and the menu entry that steps it -- direct request, 2026-09-22. */
+  traitMatchBar: number
+  cycleTraitMatchBar: () => Promise<void>
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -847,6 +854,12 @@ export function TransportBar({
                 ? 'turn off discover library scan'
                 : 'turn on discover library scan',
               onClick: () => void toggleDiscoverConsent()
+            },
+            {
+              label: `discover trait match: ${traitMatchBarLabel(traitMatchBar)}`,
+              onClick: () => void cycleTraitMatchBar(),
+              title:
+                'how strictly chonky / rhythmic / sparkly / buttery must match, as a share of your whole library -- click to step 50% → 40% → 25% → 10%'
             },
             // Disabled info row, visible only while the scan is actually
             // on -- direct request, 2026-09-15. `eligible` can very rarely

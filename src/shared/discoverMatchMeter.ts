@@ -89,7 +89,8 @@ function maskEntry(
 function traitEntry(
   kind: DiscoverTraitKind,
   percentile: number | null | undefined,
-  barUsed: number | null
+  barUsed: number | null,
+  barRequested: number
 ): MatchMeterTraitEntry {
   const label = DISCOVER_SLOT_KIND_LABEL[kind]
   const filled = traitBarsFilled(percentile)
@@ -107,7 +108,7 @@ function traitEntry(
   }
   const pct = Math.round(Math.min(1, Math.max(0, percentile)) * 100)
   let tooltip = `${label}: ${TRAIT_COMPARATIVE[kind]} than ${pct}% of your library`
-  if (barUsed !== null && barUsed < DEFAULT_TRAIT_BAR) {
+  if (barUsed !== null && barUsed < barRequested - 1e-9) {
     tooltip += ` · bar relaxed to top ${Math.round((1 - barUsed) * 100)}% because few stems matched`
   }
   return { type: 'trait', kind, label, filled, bars, text: `${label} ${bars}`, tooltip }
@@ -128,12 +129,16 @@ export function buildMatchMeter({
   kindSources,
   traitPercentiles,
   barUsed,
+  barRequested = DEFAULT_TRAIT_BAR,
   reclassified
 }: {
   kinds: readonly DiscoverSlotKind[]
   kindSources: DiscoverKindSources
   traitPercentiles: TraitPercentiles
   barUsed: number | null
+  /** The bar the roll ASKED for (the Settings "trait match" value) --
+   * "relaxed" is judged against this, not a fixed default. */
+  barRequested?: number
   reclassified?: { role: ArrangeRole; label: string }
 }): MatchMeterEntry[] {
   const normalized = normalizeSlotKinds(kinds)
@@ -150,7 +155,8 @@ export function buildMatchMeter({
     entries.push(maskEntry(null, reclassified.label, 'confirmed'))
   }
   for (const kind of normalized) {
-    if (isTraitSlotKind(kind)) entries.push(traitEntry(kind, traitPercentiles[kind], barUsed))
+    if (isTraitSlotKind(kind))
+      entries.push(traitEntry(kind, traitPercentiles[kind], barUsed, barRequested))
   }
   return entries
 }

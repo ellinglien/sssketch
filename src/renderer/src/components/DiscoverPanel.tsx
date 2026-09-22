@@ -159,7 +159,7 @@ export interface DiscoverSlot {
    * swaps the candidate (nearby, random, seeding, duplicate-then-reroll)
    * just leaves a stale pair, which DiscoverSlotRow ignores by identity
    * rather than every candidate setter having to remember to clear it. */
-  pickBar?: { candidate: DiscoverCandidate; barUsed: number | null }
+  pickBar?: { candidate: DiscoverCandidate; barUsed: number | null; barRequested: number }
   /** A reclassify from this slot's match meter (the user confirmed the
    * stem's role from Discover), paired with the candidate it applied to --
    * same identity rule as pickBar. Kept OFF the candidate object itself on
@@ -274,6 +274,7 @@ export function DiscoverPanel({
   setRedoStack,
   currentUsername,
   discoverConsented,
+  traitMatchBar,
   setDiscoverConsented,
   seedBpm
 }: {
@@ -326,6 +327,9 @@ export function DiscoverPanel({
    * from its own beginning every time). Read here only to decide whether
    * to show the one-time consent prompt below. */
   discoverConsented: boolean
+  /** Settings' "trait match" bar -- how strict trait kinds are
+   * (applyTraitBar's `bar`). */
+  traitMatchBar: number
   /** Persists + updates the shared consent value above (App.tsx's
    * setDiscoverConsented) -- the "yes, analyze" button below calls this
    * directly with `true` rather than maintaining its own independently
@@ -1588,7 +1592,7 @@ export function DiscoverPanel({
       // top-40% library percentile, relaxing quietly when too few pass;
       // unanalysed stems only when nothing else is left. barUsed rides
       // along with the pick (pickBar) for the slot's match meter.
-      const { pool: barred, barUsed } = applyTraitBar(pool, targetTraits)
+      const { pool: barred, barUsed } = applyTraitBar(pool, targetTraits, { bar: traitMatchBar })
       const ranked = rankCandidates(barred, {
         targetBpm: bpm,
         favouriteStemCIDs: rollOptions.preferFavourites ? stemFavourites : undefined,
@@ -1614,7 +1618,9 @@ export function DiscoverPanel({
             ? {
                 ...s,
                 candidate: picked,
-                pickBar: picked ? { candidate: picked, barUsed } : undefined,
+                pickBar: picked
+                  ? { candidate: picked, barUsed, barRequested: traitMatchBar }
+                  : undefined,
                 reclassified: undefined,
                 hasRerolled: true,
                 seedStem: undefined
@@ -3158,6 +3164,7 @@ function DiscoverSlotRow({
         : (candidate.kindSources ?? {}),
       traitPercentiles: candidate.traitPercentiles ?? {},
       barUsed: fromRoll ? (slot.pickBar?.barUsed ?? null) : null,
+      barRequested: slot.pickBar?.barRequested,
       reclassified: reclassified
         ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role, ROLE_LABELS) }
         : undefined

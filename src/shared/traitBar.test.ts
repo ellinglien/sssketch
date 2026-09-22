@@ -22,9 +22,9 @@ describe('applyTraitBar', () => {
     expect(applyTraitBar(pool, [])).toEqual({ pool, barUsed: null })
   })
 
-  it('keeps only analysed candidates at or above the default 0.6 bar', () => {
+  it('keeps only analysed candidates at or above a 0.6 bar', () => {
     const items = spread(100)
-    const { pool, barUsed } = applyTraitBar(items, ['bright'])
+    const { pool, barUsed } = applyTraitBar(items, ['bright'], { bar: 0.6 })
     expect(barUsed).toBe(0.6)
     expect(pool).toHaveLength(40)
     expect(pool.every((c) => c.traitPercentiles.bright! >= 0.6)).toBe(true)
@@ -32,7 +32,7 @@ describe('applyTraitBar', () => {
 
   it('preserves input order', () => {
     const items = [item('x', { bright: 0.9 }), ...spread(50), item('y', { bright: 0.7 })]
-    const { pool } = applyTraitBar(items, ['bright'], { minPool: 1 })
+    const { pool } = applyTraitBar(items, ['bright'], { bar: 0.6, minPool: 1 })
     expect(pool[0].id).toBe('x')
     expect(pool[pool.length - 1].id).toBe('y')
   })
@@ -43,7 +43,7 @@ describe('applyTraitBar', () => {
       item('onlyBright', { bright: 0.9, rhythmic: 0.1 }),
       item('onlyRhythmic', { bright: 0.1, rhythmic: 0.9 })
     ]
-    const { pool, barUsed } = applyTraitBar(items, ['bright', 'rhythmic'], { minPool: 1 })
+    const { pool, barUsed } = applyTraitBar(items, ['bright', 'rhythmic'], { bar: 0.6, minPool: 1 })
     expect(pool.map((c) => c.id)).toEqual(['both'])
     expect(barUsed).toBe(0.6)
   })
@@ -68,7 +68,7 @@ describe('applyTraitBar', () => {
   it('relaxes the bar in 0.1 steps until minPool pass', () => {
     // 20 analysed, percentiles 0, 0.05, ... 0.95. >=0.6: 8; >=0.5: 10; >=0.4: 12.
     const items = spread(20)
-    const { pool, barUsed } = applyTraitBar(items, ['bright'])
+    const { pool, barUsed } = applyTraitBar(items, ['bright'], { bar: 0.6 })
     expect(barUsed).toBeCloseTo(0.4)
     expect(pool).toHaveLength(12)
   })
@@ -108,5 +108,32 @@ describe('applyTraitBar', () => {
 
   it('empty input -> empty pool', () => {
     expect(applyTraitBar([], ['bright'])).toEqual({ pool: [], barUsed: 0 })
+  })
+})
+
+describe('trait match setting helpers', () => {
+  it('defaults to top 25% (0.75)', async () => {
+    const { DEFAULT_TRAIT_BAR } = await import('./traitBar')
+    expect(DEFAULT_TRAIT_BAR).toBe(0.75)
+    const items = spread(100)
+    expect(applyTraitBar(items, ['bright']).barUsed).toBe(0.75)
+  })
+
+  it('labels a bar as the share of the library it keeps', async () => {
+    const { traitMatchBarLabel } = await import('./traitBar')
+    expect(traitMatchBarLabel(0.75)).toBe('top 25%')
+    expect(traitMatchBarLabel(0.9)).toBe('top 10%')
+    expect(traitMatchBarLabel(0.5)).toBe('top 50%')
+  })
+
+  it('cycles loosest to strictest, then wraps; an unknown value starts at the default', async () => {
+    const { nextTraitMatchBar, normalizeTraitMatchBar } = await import('./traitBar')
+    expect(nextTraitMatchBar(0.5)).toBe(0.6)
+    expect(nextTraitMatchBar(0.6)).toBe(0.75)
+    expect(nextTraitMatchBar(0.75)).toBe(0.9)
+    expect(nextTraitMatchBar(0.9)).toBe(0.5)
+    expect(normalizeTraitMatchBar(0.33)).toBe(0.75)
+    expect(normalizeTraitMatchBar(undefined)).toBe(0.75)
+    expect(normalizeTraitMatchBar(0.9)).toBe(0.9)
   })
 })

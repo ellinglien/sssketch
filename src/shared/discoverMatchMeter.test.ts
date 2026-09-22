@@ -72,7 +72,8 @@ describe('buildMatchMeter', () => {
       kinds: ['bright'],
       kindSources: {},
       traitPercentiles: { bright: 0.83 },
-      barUsed: 0.6
+      barUsed: 0.6,
+      barRequested: 0.6
     })
     expect(entry).toEqual({
       type: 'trait',
@@ -90,7 +91,8 @@ describe('buildMatchMeter', () => {
       kinds: ['bassHeavy', 'rhythmic', 'warm'],
       kindSources: {},
       traitPercentiles: { bassHeavy: 0.5, rhythmic: 0.7, warm: 0.64 },
-      barUsed: 0.6
+      barUsed: 0.6,
+      barRequested: 0.6
     })
     expect(entries.map((e) => e.tooltip)).toEqual([
       'chonky: more bass-heavy than 50% of your library',
@@ -104,12 +106,13 @@ describe('buildMatchMeter', () => {
     ])
   })
 
-  it('notes a relaxed bar when barUsed < 0.6', () => {
+  it('notes a relaxed bar when barUsed < the requested bar', () => {
     const [entry] = buildMatchMeter({
       kinds: ['bright'],
       kindSources: {},
       traitPercentiles: { bright: 0.42 },
-      barUsed: 0.4
+      barUsed: 0.4,
+      barRequested: 0.6
     })
     expect(entry.tooltip).toBe(
       'sparkly: brighter than 42% of your library · bar relaxed to top 60% because few stems matched'
@@ -121,7 +124,8 @@ describe('buildMatchMeter', () => {
       kinds: ['bright'],
       kindSources: {},
       traitPercentiles: { bright: 0.1 },
-      barUsed: 0
+      barUsed: 0,
+      barRequested: 0.6
     })
     expect(entry.tooltip).toBe(
       'sparkly: brighter than 10% of your library · bar relaxed to top 100% because few stems matched'
@@ -147,7 +151,8 @@ describe('buildMatchMeter', () => {
       kinds: ['bright', 'drums'],
       kindSources: { drums: 'tag' },
       traitPercentiles: { bright: 0.9 },
-      barUsed: 0.6
+      barUsed: 0.6,
+      barRequested: 0.6
     })
     expect(entries.map((e) => e.text)).toEqual(['drummy: tag', 'sparkly ▮▮▮▮▮'])
   })
@@ -158,6 +163,7 @@ describe('buildMatchMeter', () => {
       kindSources: {},
       traitPercentiles: { bright: 0.9 },
       barUsed: 0.6,
+      barRequested: 0.6,
       reclassified: { role: 'textureFx', label: 'texture/fx' }
     })
     expect(entries[0]).toEqual({
@@ -225,5 +231,29 @@ describe('reclassify roles', () => {
     expect(discoverRoleLabel('lead', labels)).toBe('leadesque')
     expect(discoverRoleLabel('textureFx', labels)).toBe('texture/fx')
     expect(discoverRoleLabel('vocal', labels)).toBe('vocal')
+  })
+})
+
+describe('buildMatchMeter relaxed note follows the requested bar', () => {
+  it('no note when the pick met a strict requested bar', () => {
+    const [entry] = buildMatchMeter({
+      kinds: ['bright'],
+      kindSources: {},
+      traitPercentiles: { bright: 0.95 },
+      barUsed: 0.9,
+      barRequested: 0.9
+    })
+    expect(entry.tooltip).toBe('sparkly: brighter than 95% of your library')
+  })
+
+  it('notes relaxation from a strict requested bar', () => {
+    const [entry] = buildMatchMeter({
+      kinds: ['bright'],
+      kindSources: {},
+      traitPercentiles: { bright: 0.8 },
+      barUsed: 0.8,
+      barRequested: 0.9
+    })
+    expect(entry.tooltip).toContain('bar relaxed to top 20%')
   })
 })
