@@ -983,6 +983,7 @@ app.whenReady().then(async () => {
       soundSource?: DiscoverSoundSourceFilter
     ): Promise<DiscoverCandidate | null> =>
       getRandomLibraryCandidate({
+        ownDb: openOwnRiffLibraryDb(),
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         kinds,
         onlyOwnStems,

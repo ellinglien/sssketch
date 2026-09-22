@@ -58,8 +58,21 @@ function freshDb(): Database.Database {
     CREATE TABLE DiscoverInstrumentRowsCacheMeta (
       SourceDbKey TEXT PRIMARY KEY, StemCount INTEGER NOT NULL, ComputedAt INTEGER NOT NULL
     );
+    CREATE TABLE StemUnavailable (
+      StemCID TEXT PRIMARY KEY, Reason TEXT NOT NULL, CheckedAt INTEGER NOT NULL
+    );
   `)
   return db
+}
+
+/** Marks a stem as one whose audio can't be fetched any more -- the real
+ * 2026-09-22 situation (one of Endlesss's buckets 403s every anonymous
+ * GET). Discover must never offer one of these: the slot would resolve to
+ * nothing and read as a bare "no match". */
+function seedUnavailable(db: Database.Database, stemCID: string): void {
+  db.prepare(
+    `INSERT INTO StemUnavailable (StemCID, Reason, CheckedAt) VALUES (?, 'http 403', 1000)`
+  ).run(stemCID)
 }
 
 /** Writes directly to StemAutoCategory -- the background classify scan's
@@ -2286,5 +2299,125 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     seedRiff(own, 'r2', 'jam1', 128, ['s2'])
     advance(31_000)
     expect((await getRiffIndexForDb(own)).get('s2')?.riffCID).toBe('r2')
+  })
+})
+
+// Real, diagnosed 2026-09-22: one of Endlesss's storage buckets now 403s
+// every anonymous GET, so a large slice of a real library can no longer be
+// downloaded at all. Offering one of those stems produces a slot that
+// silently ends as "no match" -- so every pool filters them out. A stem
+// already on disk is unaffected: the list is about fetching, not about the
+// file (see @shared/stemAvailability's stemIsUsable).
+describe('stems that can no longer be downloaded are never offered', () => {
+  it('the mask pool skips an unavailable stem', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1', { instrument: 1 << 1 })
+    seedStem(own, 's2', 'jam1', { instrument: 1 << 1 })
+    seedUnavailable(own, 's1')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s2'])
+  })
+
+  it('a human-confirmed role does not rescue an unavailable stem -- there is no audio to place', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedCategory(own, 's1', { arrangeRole: 'drums', busId: 'drums' })
+    seedUnavailable(own, 's1')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('the trait pool skips an unavailable stem', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1')
+    seedStem(own, 's2', 'jam1')
+    seedFeatures(own, 's1', featuresJSON({ bassEnergyRatio: 0.9 }))
+    seedFeatures(own, 's2', featuresJSON({ bassEnergyRatio: 0.8 }))
+    seedUnavailable(own, 's1')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['bassHeavy']
+    })
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s2'])
+  })
+
+  it('a random roll never lands on an unavailable stem', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1')
+    seedStem(own, 's2', 'jam1')
+    seedUnavailable(own, 's1')
+
+    for (let i = 0; i < 20; i++) {
+      const candidate = await getRandomLibraryCandidate({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+      expect(candidate?.stemCID).toBe('s2')
+    }
+  })
+
+  it("a random roll returns null rather than an unplayable stem when that's all there is", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedUnavailable(own, 's1')
+
+    expect(
+      await getRandomLibraryCandidate({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+    ).toBeNull()
+  })
+
+  it('an own-stems random roll skips unavailable stems too', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1', { creatorUserName: 'elling' })
+    seedStem(own, 's2', 'jam1', { creatorUserName: 'elling' })
+    seedUnavailable(own, 's1')
+
+    for (let i = 0; i < 20; i++) {
+      const candidate = await getRandomLibraryCandidate({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        onlyOwnStems: true,
+        targetUser: 'elling'
+      })
+      expect(candidate?.stemCID).toBe('s2')
+    }
+  })
+
+  it('filters nothing when no stem has ever failed -- the common case pays no price', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1', 's2'])
+    seedStem(own, 's1', 'jam1', { instrument: 1 << 1 })
+    seedStem(own, 's2', 'jam1', { instrument: 1 << 1 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2'])
   })
 })

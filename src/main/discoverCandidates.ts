@@ -37,6 +37,28 @@ import {
   saveInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
+import { loadUnavailableStemCIDs } from './stemUnavailableStore'
+import { stemIsUsable } from '@shared/stemAvailability'
+
+/** Stems whose audio can no longer be fetched (see @shared/stemAvailability
+ * and stemUnavailableStore.ts -- one of Endlesss's storage buckets now 403s
+ * every anonymous GET). Every candidate pool in this file filters by this:
+ * a roll that offers one of them produces a slot that can never resolve and
+ * reads as a bare "no match."
+ *
+ * The check here is list-only, with no filesystem probe for an unavailable
+ * stem that might have arrived on disk by some other route (an external
+ * LORE archive sync, say) -- a pool at this stage has no resolved path to
+ * probe, and the real download path already prefers local audio over
+ * anything this list says (downloadOneStem) while a successful download
+ * clears the row. So the only cost is that a stem which failed once and was
+ * later acquired elsewhere stays out of rolls until something downloads it
+ * again -- out of hundreds of thousands, and self-healing. */
+function unavailableStems(ownDb: Database.Database | undefined): ReadonlySet<string> {
+  return ownDb ? loadUnavailableStemCIDs(ownDb) : EMPTY_UNAVAILABLE
+}
+
+const EMPTY_UNAVAILABLE: ReadonlySet<string> = new Set<string>()
 
 /** One library-wide candidate for a Discover slot.
  *
@@ -1241,8 +1263,15 @@ async function getMaskDiscoverCandidates({
   // The endlesss/non-endlesss checkboxes, applied by each stem's own mask
   // BEFORE sampling so the bounded sample isn't wasted on stems that would
   // be filtered out anyway.
-  const eligibleStemCIDs = [...categoryByStemCID.keys()].filter((stemCID) =>
-    soundSourceMatchesFilter(maskByStemCID.get(stemCID)?.instrument, soundSource)
+  // Both filters run BEFORE sampling, so the bounded sample isn't spent on
+  // stems that would be dropped anyway -- the endlesss/non-endlesss
+  // checkboxes by each stem's own mask, and the "can this even be
+  // downloaded" list (unavailableStems, above).
+  const unavailable = unavailableStems(ownDb)
+  const eligibleStemCIDs = [...categoryByStemCID.keys()].filter(
+    (stemCID) =>
+      soundSourceMatchesFilter(maskByStemCID.get(stemCID)?.instrument, soundSource) &&
+      stemIsUsable(stemCID, unavailable)
   )
   if (eligibleStemCIDs.length === 0) return []
 
@@ -1518,7 +1547,11 @@ async function getTraitPoolCandidates({
   targetUser?: string
   soundSource?: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
-  const sampled = await sampleTraitStems(ownDb, traitKinds)
+  const allSampled = await sampleTraitStems(ownDb, traitKinds)
+  // Dropped before the per-db Stems lookups below, not after, so the
+  // chunked IN (...) queries stay as small as the real pool.
+  const unavailable = unavailableStems(ownDb)
+  const sampled = allSampled.filter((s) => stemIsUsable(s.stemCID, unavailable))
   if (sampled.length === 0) return []
 
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
@@ -1602,6 +1635,12 @@ async function getTraitPoolCandidates({
 // instrument-row index before falling back to one filtered pass.
 const RANDOM_STEM_PROBES = 200
 
+// How many random own-stem rows getRandomOwnStemCandidate pulls per db
+// before picking the first usable one -- see its own doc comment. Small
+// enough to stay one cheap query, large enough that a handful of
+// unavailable or out-of-jam rows doesn't cost the whole roll.
+const RANDOM_OWN_STEM_PAGE = 50
+
 // The mic-bit condition SQL-side, tied directly to soundSourceMatchesFilter's
 // own semantics (@shared/riffLibraryTypes): a stem counts as "audioIn" only
 // when its Instrument mask has the mic bit (1<<4 = 16) set AND none of the
@@ -1666,12 +1705,18 @@ function soundSourceSqlFragment(soundSource: DiscoverSoundSourceFilter): string 
  * null immediately when `soundSource` disables both flags -- there's
  * nothing left to draw from. */
 export async function getRandomLibraryCandidate({
+  ownDb,
   jams,
   kinds,
   onlyOwnStems = false,
   targetUser,
   soundSource = { endlesss: true, audioIn: true }
 }: {
+  /** sssketch's own writable db -- read only for the unavailable-stem list
+   * (unavailableStems, above). Optional purely because this function's
+   * other jobs don't need it; the real IPC caller always passes it, and
+   * omitting it just means no availability filtering. */
+  ownDb?: Database.Database
   jams: JamDbPair[]
   kinds: readonly DiscoverSlotKind[]
   onlyOwnStems?: boolean
@@ -1680,8 +1725,9 @@ export async function getRandomLibraryCandidate({
 }): Promise<DiscoverCandidate | null> {
   if (!soundSource.endlesss && !soundSource.audioIn) return null
 
+  const unavailable = unavailableStems(ownDb)
   if (onlyOwnStems && targetUser) {
-    return getRandomOwnStemCandidate(jams, kinds, targetUser, soundSource)
+    return getRandomOwnStemCandidate(jams, kinds, targetUser, soundSource, unavailable)
   }
 
   // Real bug, 2026-09-22 ("deselecting my sounds turns up no results"):
@@ -1722,6 +1768,7 @@ export async function getRandomLibraryCandidate({
   ): boolean =>
     pool.allowed.has(row.OwnerJamCID) &&
     soundSourceMatchesFilter(row.Instrument, soundSource) &&
+    stemIsUsable(row.StemCID, unavailable) &&
     pool.riffIndex.has(row.StemCID)
 
   let hit: { pool: (typeof pools)[number]; stemCID: string } | null = null
@@ -1793,7 +1840,8 @@ async function getRandomOwnStemCandidate(
   jams: JamDbPair[],
   kinds: readonly DiscoverSlotKind[],
   targetUser: string,
-  soundSource: DiscoverSoundSourceFilter
+  soundSource: DiscoverSoundSourceFilter,
+  unavailable: ReadonlySet<string>
 ): Promise<DiscoverCandidate | null> {
   const soundSourceFragment = soundSourceSqlFragment(soundSource)
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
@@ -1805,26 +1853,30 @@ async function getRandomOwnStemCandidate(
   const shuffledDbs = [...jamCIDsByDb].sort(() => Math.random() - 0.5)
 
   for (const [db, allowedJamCIDs] of shuffledDbs) {
-    let stemRow:
-      | {
-          StemCID: string
-          OwnerJamCID: string
-          PresetName: string | null
-          CreatorUserName: string | null
-        }
-      | undefined
+    type OwnStemRow = {
+      StemCID: string
+      OwnerJamCID: string
+      PresetName: string | null
+      CreatorUserName: string | null
+    }
+    let stemRows: OwnStemRow[]
     try {
       // Real ids can, in principle, be shared across many rows for a given
-      // CreatorUserName -- ORDER BY RANDOM() LIMIT 1 here means a genuinely
-      // random pick among ALL of this user's own stems in this db, not
-      // just whichever happens to sort first.
-      stemRow = db
+      // CreatorUserName -- ORDER BY RANDOM() here means a genuinely random
+      // pick among ALL of this user's own stems in this db, not just
+      // whichever happens to sort first. A small PAGE of random rows
+      // rather than exactly one (2026-09-22): the first pick can now be
+      // rejected -- for a jam outside the caller's set, as always, and now
+      // also for a stem whose audio can no longer be downloaded -- and
+      // "one random row, take it or leave it" would turn every such
+      // rejection into a whole missed roll.
+      stemRows = db
         .prepare(
           `SELECT StemCID, OwnerJamCID, PresetName, CreatorUserName FROM Stems
            WHERE CreatorUserName = ?${soundSourceFragment ? ` AND ${soundSourceFragment}` : ''}
-           ORDER BY RANDOM() LIMIT 1`
+           ORDER BY RANDOM() LIMIT ${RANDOM_OWN_STEM_PAGE}`
         )
-        .get(targetUser) as typeof stemRow
+        .all(targetUser) as OwnStemRow[]
     } catch {
       // Same defensive handling as every other per-db query in this file --
       // an external db missing even a core table shouldn't abort the whole
@@ -1834,7 +1886,10 @@ async function getRandomOwnStemCandidate(
     // The matched row's own jam might not be in THIS caller's allowed set
     // (jams is caller-supplied, see this file's own module doc comment) --
     // skip rather than return a candidate the caller never asked to see.
-    if (!stemRow || !allowedJamCIDs.has(stemRow.OwnerJamCID)) continue
+    const stemRow = stemRows.find(
+      (row) => allowedJamCIDs.has(row.OwnerJamCID) && stemIsUsable(row.StemCID, unavailable)
+    )
+    if (!stemRow) continue
 
     let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
     try {

@@ -26,6 +26,8 @@ import {
   resolveStemPath
 } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { loadUnavailableStemCIDs } from './stemUnavailableStore'
+import { stemIsUsable } from '@shared/stemAvailability'
 import { getRiffIndexForDb, type DiscoverCandidate } from './discoverCandidates'
 
 /** Result of walking outward from a center index in both directions --
@@ -143,6 +145,11 @@ export async function getAdjacentDiscoverCandidates(
   // per stem -- openOwnRiffLibraryDb() caches its own connection, but
   // there's no reason to re-look-it-up on every call either.
   const ownDb = openOwnRiffLibraryDb()
+  // Stems whose audio can no longer be fetched (see @shared/
+  // stemAvailability) -- a nearby riff whose only matching stem is one of
+  // those would be offered and then fail to resolve. Read once per call,
+  // outside matchRole's own per-riff loop.
+  const unavailable = loadUnavailableStemCIDs(ownDb)
   const normalizedKinds = normalizeSlotKinds(kinds)
   const traitKinds = normalizedKinds.filter(isTraitSlotKind)
   const hasMaskKind = normalizedKinds.some(isMaskSlotKind)
@@ -161,6 +168,10 @@ export async function getAdjacentDiscoverCandidates(
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
+      // Local audio always wins over the unavailable list: resolveRiff has
+      // already turned `path` into null for anything not on disk, so a
+      // non-null path here IS a real existsSync result.
+      if (!stemIsUsable(stem.stemCID, unavailable, () => stem.path !== null)) continue
       const soundType = instrumentMaskToSoundType(stem.instrumentMask)
       // Only mask kinds consult a stem's role -- a trait-only set skips the
       // two lookups entirely.
