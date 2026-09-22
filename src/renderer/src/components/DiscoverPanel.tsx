@@ -2550,7 +2550,7 @@ export function DiscoverPanel({
               tooltip="drag, scroll, or arrow keys -- double-click to reset"
             />
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-              tight · loose
+              matching
             </span>
           </div>
         </div>
@@ -2573,7 +2573,7 @@ export function DiscoverPanel({
 }
 
 // Wide enough for the dial column's margin + divider + padding + the
-// "tight · loose" caption; the empty left track mirrors it.
+// "matching" caption; the empty left track mirrors it.
 const ADD_ROW_DIAL_COLUMN_WIDTH = 96
 
 const MY_SOUNDS_NEEDS_USERNAME =
