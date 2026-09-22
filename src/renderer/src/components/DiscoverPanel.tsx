@@ -1229,30 +1229,35 @@ export function DiscoverPanel({
     }
   }
 
-  // Direct request, 2026-09-21 (combination slots), reworked 2026-09-22 as
-  // ARM-then-fire so adding never needs the cursor to move: clicking an
-  // unlit kind arms it into this pending set; clicking ANY lit kind commits
-  // the whole set as ONE new slot and clears it ("click drums, then bright,
-  // then either one again = a drums · bright slot"). The row's order never
-  // changes, so the button you just clicked is always still under the
-  // cursor. Esc disarms without adding. Mask kinds are dropped from what
-  // gets added while the "endlesss" source is off (they can't match
-  // anything then), so a selection made before unticking it never produces
-  // a dead slot.
+  // Direct request, 2026-09-21 (combination slots), reworked twice on
+  // 2026-09-22 -- final shape: a plain click adds a slot right away (single
+  // click stays the fast path); shift- or cmd-click ARMS a kind into this
+  // pending set instead (again to disarm), and the next plain click adds ONE
+  // slot with every armed kind plus the one clicked ("shift-click drums,
+  // click bright = a drums · bright slot"). The row's order never changes,
+  // so combining never needs the cursor to move. Esc disarms. Mask kinds are
+  // dropped from what gets added while the "endlesss" source is off (they
+  // can't match anything then), so a selection made before unticking it
+  // never produces a dead slot.
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
   const addableKinds = soundSourceEndlesss
     ? pendingAddKinds
     : pendingAddKinds.filter((k) => !isMaskSlotKind(k))
 
-  function addPendingSlot(): void {
-    if (addableKinds.length === 0) return
-    addSlot(addableKinds)
+  function handleAddRowKindClick(kind: DiscoverSlotKind, arm: boolean): void {
+    if (arm) {
+      setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
+      return
+    }
+    // Armed kinds plus the clicked one (toggleSlotKind adds it and drops a
+    // bright/warm opposite; an already-armed kind is simply kept).
+    const withClicked = pendingAddKinds.includes(kind)
+      ? pendingAddKinds
+      : toggleSlotKind(pendingAddKinds, kind, { allowEmpty: true })
+    const kinds = soundSourceEndlesss ? withClicked : withClicked.filter((k) => !isMaskSlotKind(k))
+    if (kinds.length === 0) return
+    addSlot(kinds)
     setPendingAddKinds([])
-  }
-
-  function handleAddRowKindClick(kind: DiscoverSlotKind): void {
-    if (pendingAddKinds.includes(kind)) addPendingSlot()
-    else setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
   }
 
   const hasPendingAddKinds = pendingAddKinds.length > 0
@@ -2509,7 +2514,7 @@ export function DiscoverPanel({
               key={kind}
               disabled={disabled}
               aria-pressed={selected}
-              onClick={() => handleAddRowKindClick(kind)}
+              onClick={(e) => handleAddRowKindClick(kind, e.shiftKey || e.metaKey)}
               data-tooltip={disabled ? 'needs endlesss on' : undefined}
               style={{
                 fontFamily: 'inherit',
@@ -2575,7 +2580,9 @@ export function DiscoverPanel({
           color: 'var(--ra-text-3)'
         }}
       >
-        {addableKinds.length > 0 && 'click multiple or click again to add • esc to clear'}
+        {addableKinds.length > 0
+          ? `${slotKindsLabel(addableKinds)} armed • click a kind to add • esc to clear`
+          : 'shift-click to combine kinds'}
       </div>
     </div>
   )
