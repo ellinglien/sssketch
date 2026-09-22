@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
+import { sqrtGain } from '@shared/mixGain'
 import {
   busIfAssignedFromBusOf,
   clipGeometryFromFields,
@@ -10,6 +11,7 @@ import {
 } from '../state/selectors'
 import { stemDisplayColorVar } from '../theme/typeColor'
 import { AutomationLane } from './AutomationLane'
+import { RowGainDial } from './RowGainDial'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { muteRegionsClipPath } from './muteClipPath'
@@ -799,6 +801,20 @@ export function CollapsedRifffRow({
             />
           )}
         </div>
+
+        {/* The whole rifff's gain, pinned to the right edge of the row
+            beside the channel's m/s letters. One dial for the group, same
+            reason there's one mute button and one lane here: collapsing
+            already hides per-stem detail. It writes SET_GROUP_VOLUME, so
+            expanding afterwards shows per-stem dials that agree with it and
+            can then diverge. */}
+        {firstStemKey && (
+          <RowGainDial
+            target={{ kind: 'group', groupId, representativeStemKey: firstStemKey }}
+            defaultGain={sqrtGain(rifff.stems.length)}
+            ariaLabel={`gain for ${rifff.name}`}
+          />
+        )}
       </div>
     </div>
   )

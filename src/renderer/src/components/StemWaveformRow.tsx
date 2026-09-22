@@ -10,6 +10,7 @@ import {
 } from '../state/selectors'
 import { stemDisplayColorVar } from '../theme/typeColor'
 import { AutomationLane } from './AutomationLane'
+import { RowGainDial } from './RowGainDial'
 import { Waveform } from './Waveform'
 import { startPointerDrag } from './dragUtils'
 import { mouseBarFromDragEvent } from './dragGrabOffset'
@@ -480,7 +481,7 @@ export function StemWaveformRow({
           {/* Already-committed mute regions -- a translucent red wash plus
               border, same treatment as the live/pending region-selection
               div below (just mute-red instead of white) rather than relying
-              solely on combinedClipPath's gray-layer cutout underneath.
+              solely on muteRegionsClipPath's gray-layer cutout underneath.
               Per an Ableton reference screenshot: its own clip selection
               keeps the waveform peaks fully visible and instead tints the
               BACKGROUND behind them a distinct pale color -- this wash
@@ -537,6 +538,18 @@ export function StemWaveformRow({
             />
           )}
         </div>
+
+        {/* This stem's own gain, pinned to the right edge of the row beside
+            the channel's m/s letters -- the LEVEL the clip's drawn volume
+            curve (its shape) multiplies on top of. Outside the clip box on
+            purpose: it belongs to the stem wherever that clip happens to
+            sit, and it must stay reachable when the clip is scrolled off
+            screen. */}
+        <RowGainDial
+          target={{ kind: 'stem', stemKey: key }}
+          defaultGain={sqrtGain(rifff.stems.length)}
+          ariaLabel={`gain for ${stem.name}`}
+        />
       </div>
     </div>
   )

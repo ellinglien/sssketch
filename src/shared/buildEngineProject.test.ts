@@ -493,6 +493,67 @@ describe('buildEngineProject toolkit', () => {
     })
   })
 
+  it("multiplies the clip's gain dial through its volume curve, so the dial is the level and the curve the shape", async () => {
+    const stem = await firstStem(
+      stateWith({
+        bpm: 150,
+        vol: { 'r1:1': 0.5 },
+        stemAutomation: {
+          'r1:1': {
+            volume: [
+              { bar: 0, value: 0 },
+              { bar: 2, value: 1 },
+              { bar: 8, value: 0.4 }
+            ]
+          }
+        }
+      })
+    )
+
+    // The engine treats a non-empty volume curve as the clip's whole level
+    // and ignores EngineStem.volume (PlaybackEngine.cpp's volumeAutomated),
+    // so the gain has to arrive folded INTO the curve for the two to
+    // multiply. toolkit.volume stays 1: it is only the fallback the engine
+    // uses when the curve is empty, where EngineStem.volume already applies.
+    expect(stem.toolkit?.automation.volume).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 2, value: 0.5 },
+      { bar: 8, value: 0.2 }
+    ])
+    expect(stem.toolkit?.volume).toBe(1)
+    expect(stem.volume).toBe(0.5)
+  })
+
+  it('prefers an in-progress gain drag over the committed gain when scaling the curve', async () => {
+    const stem = await firstStem(
+      stateWith({
+        bpm: 150,
+        vol: { 'r1:1': 0.5 },
+        dragVol: { 'r1:1': 0.25 },
+        stemAutomation: { 'r1:1': { volume: [{ bar: 0, value: 1 }] } }
+      })
+    )
+    expect(stem.toolkit?.automation.volume).toEqual([{ bar: 0, value: 0.25 }])
+    expect(stem.volume).toBe(0.25)
+  })
+
+  it('leaves the other three curves alone -- only volume is a level', async () => {
+    const stem = await firstStem(
+      stateWith({
+        bpm: 150,
+        vol: { 'r1:1': 0.5 },
+        stemAutomation: {
+          'r1:1': {
+            filterCutoff: [{ bar: 0, value: 0.8 }],
+            reverbSend: [{ bar: 0, value: 0.6 }]
+          }
+        }
+      })
+    )
+    expect(stem.toolkit?.automation.filterCutoff).toEqual([{ bar: 0, value: 0.8 }])
+    expect(stem.toolkit?.automation.reverbSend).toEqual([{ bar: 0, value: 0.6 }])
+  })
+
   it('keeps two stems of one rifff independent -- the toolkit is per clip, not per row', async () => {
     const twoStem: Rifff = {
       ...rifff,

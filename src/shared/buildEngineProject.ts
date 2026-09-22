@@ -60,13 +60,20 @@ export interface EngineStemToolkit {
   filterCutoff: number
   filterResonance: number
   reverbSend: number
-  /** The static level the `volume` curve sits under -- 1.0 unless some future
-   * per-clip toolkit fader sets it. NOT the same number as EngineStem.volume
-   * (the existing per-stem gain the V-key envelope drag writes): when the
-   * volume curve is non-empty the engine uses the CURVE as the clip's level
-   * and ignores EngineStem.volume entirely, per the spec's "volume fully
-   * replaces the old per-clip volume envelope ... rather than multiplying
-   * with it". */
+  /** The static level the `volume` curve sits under. Always 1.0 -- see
+   * buildStemToolkit, which folds the clip's real gain into the CURVE's own
+   * values instead.
+   *
+   * Why: the engine treats a non-empty volume curve as the clip's whole
+   * level and ignores EngineStem.volume entirely (PlaybackEngine.cpp's
+   * `volumeAutomated`), a rule written when the curve was meant to REPLACE
+   * the old per-clip volume envelope. The gain dial makes that split
+   * explicit instead -- the dial is the level, the curve is the shape, and
+   * they multiply -- so this side sends a curve that already has the dial
+   * multiplied through it. Leaving this at 1.0 is load-bearing: when the
+   * curve is EMPTY the engine applies EngineStem.volume itself and then
+   * multiplies by evaluate(curve, toolkit.volume), so anything but 1.0 here
+   * would apply the gain twice. */
   volume: number
   /** The ABSOLUTE arrangement bar that clip-relative bar 0 sits on -- i.e.
    * this clip's own left edge, including its left crop and its re-one offset,
@@ -185,11 +192,31 @@ export function clipOriginBar(fields: {
  * asserting exactly that, sample for sample). isStemToolkitNeutral owns the
  * rule and is mirrored by stemToolkitIsNeutral() in PlaybackEngine.cpp.
  */
+/**
+ * Multiplies a drawn curve through by the clip's own static gain, so what
+ * reaches the engine is "the dial times the shape" -- see
+ * EngineStemToolkit.volume for why that has to happen HERE rather than on
+ * the engine side. Values stay in [0,1] because both factors are (state.vol
+ * is clamped into [0,1] by SET_VOLUME/SET_GROUP_VOLUME, curve values by
+ * normaliseAutomationCurve), so nothing can be clipped by the clamp on the
+ * other side of the wire.
+ */
+function scaleCurveByGain(points: AutomationPoint[], gain: number): AutomationPoint[] {
+  if (points.length === 0) return points
+  const safeGain = Number.isFinite(gain) ? Math.min(1, Math.max(0, gain)) : 1
+  if (safeGain === 1) return points
+  return points.map((point) => ({ bar: point.bar, value: point.value * safeGain }))
+}
+
 export function buildStemToolkit(
   filter: StemFilterSettings | undefined,
   reverbSend: number | undefined,
   automation: StemAutomation | undefined,
-  originBar: number
+  originBar: number,
+  /** This clip's static gain -- state.vol (or its in-progress drag
+   * preview), the number the row's gain dial writes. Folded into the volume
+   * curve rather than sent alongside it; see EngineStemToolkit.volume. */
+  gain = 1
 ): EngineStemToolkit | undefined {
   if (isStemToolkitNeutral(filter, reverbSend, automation)) return undefined
   const mode = filter?.mode ?? 'lowpass'
@@ -202,7 +229,7 @@ export function buildStemToolkit(
     filterCutoff: normaliseAutomationCurve(automation?.filterCutoff ?? []),
     filterResonance: normaliseAutomationCurve(automation?.filterResonance ?? []),
     reverbSend: normaliseAutomationCurve(automation?.reverbSend ?? []),
-    volume: normaliseAutomationCurve(automation?.volume ?? [])
+    volume: scaleCurveByGain(normaliseAutomationCurve(automation?.volume ?? []), gain)
   }
   return {
     filterMode: mode,
@@ -399,6 +426,11 @@ export async function buildEngineProject(
       }
       const offsetSteps = state.off[rifff.groupId] ?? 0
       const leftCropBars = state.leftCrop[rifff.groupId] ?? 0
+      // Same drag-preview-over-committed preference as EngineStem.volume
+      // below, and the same number -- the clip's gain has to reach the
+      // engine exactly once, either as EngineStem.volume (no curve) or
+      // multiplied through the curve (see buildStemToolkit).
+      const gain = state.dragVol[key] ?? state.vol[key] ?? 1
       // Built per stem, not per rifff: the toolkit is per CLIP now (spec
       // section 2b), and two stems of the same rifff can carry entirely
       // different curves. The origin they share is the rifff's own left edge,
@@ -412,7 +444,8 @@ export async function buildEngineProject(
           leftCropBars,
           offsetSteps,
           snapDiv: SNAP_DIVS[state.snapIdx]
-        })
+        }),
+        gain
       )
 
       stems.push({
@@ -444,7 +477,7 @@ export async function buildEngineProject(
         // change, undo, ...) while a drag is still in progress, the
         // reload's own snapshot reflects the live value too, rather than
         // momentarily reverting to the stale committed one.
-        volume: state.dragVol[key] ?? state.vol[key] ?? 1,
+        volume: gain,
         muted: state.mute[key] ?? false,
         muteRegions: state.muteRegions[key] ?? [],
         oneShot: stem.oneShot ?? false,
