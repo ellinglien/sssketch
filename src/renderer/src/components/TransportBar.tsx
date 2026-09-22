@@ -157,21 +157,17 @@ function ChainLinkIcon(): React.JSX.Element {
   )
 }
 
-function EnvelopeIcon(): React.JSX.Element {
+/** A drawn automation curve: a straight-segment polyline through square
+ * breakpoints -- deliberately the same shape AutomationLane.tsx actually
+ * draws (a polyline, 5px squares, sharp corners per tokens.css), rather
+ * than the smooth S-curve with round dots this icon used to show back when
+ * the button toggled the old fade/volume envelope. */
+function AutomationIcon(): React.JSX.Element {
   return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-    >
-      <path d="M2 12 C 5 12, 5 4, 8 4 S 11 12, 14 12" />
-      <circle cx="2" cy="12" r="1" fill="currentColor" stroke="none" />
-      <circle cx="8" cy="4" r="1" fill="currentColor" stroke="none" />
-      <circle cx="14" cy="12" r="1" fill="currentColor" stroke="none" />
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+      <path d="M1 12 L5 4 L10 4 L15 11" strokeWidth="1.3" />
+      <rect x="3.5" y="2.5" width="3" height="3" fill="currentColor" stroke="none" />
+      <rect x="8.5" y="2.5" width="3" height="3" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -267,6 +263,7 @@ export function TransportBar({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const automationMode = state.mode === 'automation'
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
@@ -764,21 +761,36 @@ export function TransportBar({
         {linkStatus.enabled && linkStatus.numPeers > 0 ? `· ${linkStatus.numPeers}` : ''}
       </button>
 
+      {/* Enters/leaves automation mode. This is the SAME control that used
+          to toggle the old envelope-drag mode (Elling, 2026-09-22: "we can
+          even replace the 'envelopes' button to be this automation
+          section") -- a clip's level is drawn in its own automation lane
+          now, so there is nothing else for an "envelopes" button to mean.
+          Deliberately a direct on/off rather than a second cycler: Tab
+          still cycles arrange -> sketch -> automation (App.tsx's
+          handleCycleArrangerMode/nextArrangerMode), and this button just
+          jumps straight in and back out again to whichever mode isn't
+          automation, so the two can't disagree about what's showing. */}
       <button
-        onClick={() => dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })}
-        aria-label="Toggle volume drag mode"
-        data-tooltip={state.volumeDragMode ? 'envelope drag: on (V)' : 'envelope drag: off (V)'}
+        onClick={() =>
+          dispatch({
+            type: 'SET_ARRANGER_MODE',
+            mode: automationMode ? 'normal' : 'automation'
+          })
+        }
+        aria-label="Toggle automation mode"
+        data-tooltip={automationMode ? 'automation: on (tab)' : 'automation: off (tab)'}
         style={{
           height: 22,
           borderRadius: 0,
           padding: '0 8px',
           fontSize: 10,
-          background: state.volumeDragMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: state.volumeDragMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          background: automationMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${automationMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: automationMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
         }}
       >
-        <EnvelopeIcon />
+        <AutomationIcon />
       </button>
 
       <button

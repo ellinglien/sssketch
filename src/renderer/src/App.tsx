@@ -1259,8 +1259,8 @@ function Frame(): React.JSX.Element {
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
   // last real edit. Depends on the SERIALIZED content (a string), not state
-  // itself, so a purely transient UI change (mode, volumeDragMode — both
-  // already excluded from serializeProject's own output) produces the exact
+  // itself, so a purely transient UI change (the arranger mode, say --
+  // excluded from serializeProject's own output) produces the exact
   // same string and doesn't reset the debounce timer for nothing. Also
   // writes currentSketch to its own sidecar file in lockstep (see
   // writeAutosaveSketchInfo), so a crash-recovery restore knows which
@@ -1818,70 +1818,6 @@ function Frame(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- confirmLockInIfRecording isn't memoized (fresh closure every render), but closes over nothing beyond state/dispatch, already covered by listing playing/pickerGroupId/dispatch -- listing it too would just re-bind the listener on every render instead of only when those actually change, with no safety benefit (same reasoning as the existing \\ key effect further down).
   }, [pickerGroupId, playing, dispatch])
-
-  // V toggles volumeDragMode — see StemWaveformRow.tsx's waveform-body drag
-  // handling and TransportBar's indicator button. Skipped while focus is in a
-  // text input, matching Delete/undo above (typing "v" in the tempo field
-  // shouldn't also flip the drag mode).
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key.toLowerCase() !== 'v') return
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      dispatch({ type: 'TOGGLE_VOLUME_DRAG_MODE' })
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [dispatch])
-
-  // Holding Option/Alt forces envelope drag mode on for as long as it's held,
-  // then restores whatever volumeDragMode was before the key went down —
-  // "restore" rather than "always turn off" so this composes correctly with
-  // the V-key toggle above (holding Option while V-mode is already on is a
-  // no-op either way; releasing it never fights an already-on V toggle).
-  // SET_VOLUME_DRAG_MODE (not the TOGGLE action) is used deliberately here —
-  // see its own doc comment in store.ts. e.repeat guards against the OS's
-  // own key-repeat re-firing keydown continuously while held, which would
-  // otherwise capture "true" as the previous value on the second repeat
-  // instead of the real pre-hold value. The window blur listener is a safety
-  // net for alt-tabbing (or any focus loss) away while Option is held, since
-  // that can lose the keyup event entirely and would otherwise leave
-  // envelope mode stuck on.
-  const volumeDragModeRef = useRef(state.volumeDragMode)
-  useEffect(() => {
-    volumeDragModeRef.current = state.volumeDragMode
-  }, [state.volumeDragMode])
-
-  useEffect(() => {
-    const holding = { current: false }
-    const previousValue = { current: false }
-
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key !== 'Alt' || e.repeat) return
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      holding.current = true
-      previousValue.current = volumeDragModeRef.current
-      dispatch({ type: 'SET_VOLUME_DRAG_MODE', enabled: true })
-    }
-    function release(): void {
-      if (!holding.current) return
-      holding.current = false
-      dispatch({ type: 'SET_VOLUME_DRAG_MODE', enabled: previousValue.current })
-    }
-    function handleKeyUp(e: KeyboardEvent): void {
-      if (e.key !== 'Alt') return
-      release()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    window.addEventListener('blur', release)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-      window.removeEventListener('blur', release)
-    }
-  }, [dispatch])
 
   // Shared by the Titlebar mode button and the Tab shortcut below.
   //

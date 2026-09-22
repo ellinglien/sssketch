@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useAppSelector, useDispatch, usePlaying, useZoom } from '../state/StoreContext'
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
-import { dbLabel } from '@shared/visuals'
 import {
   busIfAssignedFromBusOf,
   clipGeometryFromFields,
@@ -13,17 +12,8 @@ import { stemDisplayColorVar } from '../theme/typeColor'
 import { AutomationLane } from './AutomationLane'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
-import {
-  FADE_MAX,
-  FADE_DRAG_SLOWDOWN,
-  TOOLTIP_HEIGHT,
-  TOOLTIP_GAP,
-  envelopeKnees,
-  envelopeCurveD,
-  combinedClipPath
-} from './envelope'
+import { muteRegionsClipPath } from './muteClipPath'
 import { startPointerDrag } from './dragUtils'
-import { scheduleLiveParamSync } from './liveParamSync'
 import { markManualSeek } from '../state/manualSeek'
 import {
   trimRightEdge,
@@ -122,7 +112,6 @@ export function CollapsedRifffRow({
   // already treat as the rifff's stand-in.
   const firstStemKey = rifff.stems[0] ? stemKey(groupId, rifff.stems[0].slot) : null
   const bpm = useAppSelector((s) => s.bpm)
-  const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const mute = useAppSelector((s) => s.mute)
   const automationMode = useAppSelector((s) => s.mode === 'automation')
   const busOf = useAppSelector((s) => s.busOf)
@@ -162,12 +151,6 @@ export function CollapsedRifffRow({
   // already muted (clicking unmutes everything) — same filled-means-active
   // convention as every other mute dot in this app.
   const allMuted = rifff.stems.every((stem) => mute[stemKey(groupId, stem.slot)])
-  // Representative volume for the envelope's own drag-start/display value —
-  // same "first stem stands in for the group" convention as the geometry
-  // below. Actually adjusting the envelope dispatches SET_GROUP_VOLUME,
-  // which sets every stem to the same value in one atomic edit, so this
-  // representative value becomes exactly correct the moment it's touched.
-  const volume = useAppSelector((s) => s.vol[stemKey(groupId, firstStem.slot)] ?? 1)
 
   // Shared, store-backed live preview, not local useState -- this row is
   // the one place a live volume/fade/length/crop preview needs to be
@@ -177,9 +160,6 @@ export function CollapsedRifffRow({
   // state. See docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
   const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
   const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
-  const dragFadeIn = useAppSelector((s) => s.dragFadeIn[groupId] ?? null)
-  const dragFadeOut = useAppSelector((s) => s.dragFadeOut[groupId] ?? null)
-  const dragVolume = useAppSelector((s) => s.dragVol[stemKey(groupId, firstStem.slot)] ?? null)
   // One-shot-only live drag preview -- separate from dragPlayedBars/
   // dragLeftCropBars above, which a one-shot never uses (its resize handles
   // are unsnapped seconds-based trim/stretch, not bar-snapped playedBars).
@@ -291,32 +271,7 @@ export function CollapsedRifffRow({
     : (oneShotDragPreview?.trimStartSec ?? oneShotStem?.trimStartSec ?? 0)
   const oneShotWaveformTrimStartPx = oneShotWidthBars(oneShotWaveformTrimStartSec, bpm) * PPB
 
-  const fadeIn = useAppSelector((s) => s.fadeIn[groupId] ?? 0)
-  const fadeOut = useAppSelector((s) => s.fadeOut[groupId] ?? 0)
-  const displayedFadeIn = dragFadeIn ?? fadeIn
-  const displayedFadeOut = dragFadeOut ?? fadeOut
-  const displayedVolume = dragVolume ?? volume
-
-  const fadeInPx = displayedFadeIn * PPB
-  const fadeOutPx = displayedFadeOut * PPB
-  const plateauY = ROW_HEIGHT * (1 - displayedVolume)
-  const colorClipPath = combinedClipPath(
-    widthPx,
-    ROW_HEIGHT,
-    volumeDragMode,
-    fadeInPx,
-    fadeOutPx,
-    plateauY,
-    muteRegions,
-    PPB,
-    leftPx
-  )
-  const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
-  const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
-  const tooltipTop = Math.max(
-    0,
-    Math.min(ROW_HEIGHT - TOOLTIP_HEIGHT, plateauY - TOOLTIP_HEIGHT - TOOLTIP_GAP)
-  )
+  const colorClipPath = muteRegionsClipPath(widthPx, ROW_HEIGHT, muteRegions, PPB, leftPx)
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
@@ -530,56 +485,6 @@ export function CollapsedRifffRow({
     )
   }
 
-  function handleFadeInStart(e: React.MouseEvent): void {
-    const startFadeIn = fadeIn
-    let finalFadeIn = startFadeIn
-    startPointerDrag(
-      e,
-      (deltaX) => {
-        finalFadeIn = Math.max(
-          0,
-          Math.min(FADE_MAX, startFadeIn + deltaX / (PPB * FADE_DRAG_SLOWDOWN))
-        )
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
-        scheduleLiveParamSync('fadeIn', groupId, finalFadeIn)
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- also
-        // indirectly clears the native live override this drag set via
-        // scheduleLiveParamSync above (SET_FADE_IN triggers the full-reload
-        // effect, whose native load-project handler clears every live
-        // override once it lands). See docs/superpowers/specs/
-        // 2026-08-04-live-param-fast-path-design.md's "Handoff at
-        // drag-end" section.
-        if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
-      }
-    )
-  }
-
-  function handleFadeOutStart(e: React.MouseEvent): void {
-    const startFadeOut = fadeOut
-    let finalFadeOut = startFadeOut
-    startPointerDrag(
-      e,
-      (deltaX) => {
-        finalFadeOut = Math.max(
-          0,
-          Math.min(FADE_MAX, startFadeOut - deltaX / (PPB * FADE_DRAG_SLOWDOWN))
-        )
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
-        scheduleLiveParamSync('fadeOut', groupId, finalFadeOut)
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- see
-        // handleFadeInStart's identical comment above (indirectly clears
-        // the native live override this drag set via scheduleLiveParamSync).
-        if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
-      }
-    )
-  }
-
   // Mousedown anywhere on the waveform body (that isn't a resize handle or
   // fade dot): if it lands inside an already-muted region, immediately
   // selects that region's exact bounds (mode 'unmute') -- no drag needed,
@@ -589,9 +494,7 @@ export function CollapsedRifffRow({
   // scope) -- collapsing hides per-stem detail, so muting here mutes the
   // whole group. If the drag never actually moved (a plain click), falls
   // back to the original click-to-scrub behavior instead of leaving a
-  // zero-width selection behind. Skipped while volumeDragMode is on, which
-  // repurposes this same surface for volume dragging instead (unchanged from
-  // before).
+  // zero-width selection behind.
   function handleRegionMouseDown(e: React.MouseEvent): void {
     // Right-click (button 2) is handled entirely by onContextMenu above
     // (handleBlockContextMenu, toggling whole-group mute) -- see
@@ -600,10 +503,6 @@ export function CollapsedRifffRow({
     // click-to-scrub branch below and seeked the playhead as an unwanted
     // side effect of what should have been a mute-only action.
     if (e.button !== 0) return
-    if (volumeDragMode) {
-      handleVolumeStart(e)
-      return
-    }
     const rect = e.currentTarget.getBoundingClientRect()
     const startBar = Math.max(0, leftPx / PPB + (e.clientX - rect.left) / PPB)
 
@@ -651,38 +550,6 @@ export function CollapsedRifffRow({
     )
   }
 
-  function handleVolumeStart(e: React.MouseEvent): void {
-    const startVolume = volume
-    let finalVolume = startVolume
-    startPointerDrag(
-      e,
-      (_dx, deltaY) => {
-        finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
-        dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: finalVolume })
-        // Fans out to every stem in the rifff, matching
-        // SET_DRAG_PREVIEW_GROUP_VOLUME's own fan-out -- this drag
-        // controls the whole rifff's volume together, so every stem's own
-        // live override needs updating, not just one.
-        for (const stem of rifff.stems) {
-          scheduleLiveParamSync('volume', stemKey(groupId, stem.slot), finalVolume)
-        }
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- also
-        // indirectly clears every stem's native live override this drag
-        // fanned out to above (SET_GROUP_VOLUME triggers the full-reload
-        // effect, and IpcServer.cpp's load-project handler clears the
-        // ENTIRE live-override map once that reload lands -- not just one
-        // key -- so this single dispatch correctly clears all of them, not
-        // just the first). See docs/superpowers/specs/
-        // 2026-08-04-live-param-fast-path-design.md's "Handoff at
-        // drag-end" section.
-        if (moved) dispatch({ type: 'SET_GROUP_VOLUME', groupId, volume: finalVolume })
-        dispatch({ type: 'SET_DRAG_PREVIEW_GROUP_VOLUME', groupId, value: undefined })
-      }
-    )
-  }
-
   return (
     <div style={{ display: 'flex', height: ROW_HEIGHT, borderTop: '1px solid var(--ra-bg-row)' }}>
       <div style={{ flex: 1, position: 'relative' }}>
@@ -721,13 +588,10 @@ export function CollapsedRifffRow({
               rather than just one representative one. Each stem's own mute
               state (independent of the single group-mute button, which just
               sets all of them at once) still suppresses that one stem's own
-              layer. Clipped by the shared group envelope, same "full color
-              under the curve" idea as StemWaveformRow's own color layer —
-              only while envelope drag mode is engaged for that part -- plus
-              a hole for any muted region regardless of drag mode, same "gray
-              means quieter/off" language as the envelope itself (see
-              combinedClipPath). Otherwise unclipped, so the waveform reads
-              normally instead of looking dimmed whenever volume is below
+              layer. Punched through wherever a muted span sits, this app's
+              "gray means quieter/off" language (see muteRegionsClipPath),
+              and otherwise unclipped, so the waveform reads normally
+              instead of looking dimmed whenever the group's gain is below
               unity. */}
           <div
             style={{
@@ -775,26 +639,6 @@ export function CollapsedRifffRow({
                     />
                   ))}
           </div>
-
-          {/* Thin white line tracing the envelope curve itself — only shown
-              alongside the clipping above, while envelope drag mode is
-              engaged (the saturation split it traces isn't happening
-              otherwise). */}
-          {volumeDragMode && (
-            <svg
-              width={widthPx}
-              height={ROW_HEIGHT}
-              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-            >
-              <path
-                d={envelopeCurve}
-                fill="none"
-                stroke="var(--ra-text)"
-                strokeWidth={1}
-                opacity={0.5}
-              />
-            </svg>
-          )}
 
           {/* Resize handles, both edges — same behavior as StemWaveformRow's
               own (right grows the loop forward from a fixed start, left
@@ -869,106 +713,18 @@ export function CollapsedRifffRow({
             />
           </div>
 
-          {/* Fade-in/fade-out knee handles. onContextMenu stopPropagation so
-              right-clicking here doesn't also bubble up and toggle the
-              group mute.
-
-              The actual mousedown-catching box (14x14) is deliberately much
-              bigger than the visible 7x7 dot -- see StemWaveformRow's own
-              identical fix for why (at default settings these sit almost
-              exactly on top of the resize handles' own corner, and a hit
-              target the same size as the dot was too easy to miss by a
-              pixel and grab the resize handle instead). Centered the same
-              way via translate(-50%,-50%), so it only grows the invisible
-              margin around the dot, never shifting its visual position.
-
-              Not rendered at all outside envelope mode (volumeDragMode) --
-              see StemWaveformRow's own identical fix for why (they aren't
-              clickable there, so showing them was just visual noise with no
-              affordance behind it). */}
-          {volumeDragMode && (
-            <>
-              <div
-                onMouseDown={handleFadeInStart}
-                onContextMenu={(e) => e.stopPropagation()}
-                title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
-                style={{
-                  position: 'absolute',
-                  left: fiEnd,
-                  top: plateauY,
-                  transform: 'translate(-50%, -50%)',
-                  width: 14,
-                  height: 14,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  zIndex: 4
-                }}
-              >
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: 'var(--ra-text)',
-                    pointerEvents: 'none'
-                  }}
-                />
-              </div>
-              <div
-                onMouseDown={handleFadeOutStart}
-                onContextMenu={(e) => e.stopPropagation()}
-                title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
-                style={{
-                  position: 'absolute',
-                  left: foStart,
-                  top: plateauY,
-                  transform: 'translate(-50%, -50%)',
-                  width: 14,
-                  height: 14,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  zIndex: 4
-                }}
-              >
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: 'var(--ra-text)',
-                    pointerEvents: 'none'
-                  }}
-                />
-              </div>
-            </>
-          )}
-
-          {/* Volume drag surface: spans the whole waveform body while
-              volumeDragMode is on, repurposing the same open area that
-              otherwise right-clicks to mute the group or drags to select a
-              mute region. While off, this does nothing on mousedown — the
-              event is left alone so the outer container's own drag handling
-              proceeds normally instead. zIndex stays below the resize
-              handles (3) and fade dots (4) in both modes — see
-              StemWaveformRow's identical fix (a full-coverage div at the
-              same z-index as those small edge targets would otherwise
+          {/* The region-select / click-to-scrub surface: spans the whole
+              collapsed block. zIndex stays below the resize handles (3) --
+              see StemWaveformRow's identical note (a full-coverage div at
+              the same z-index as those small edge targets would otherwise
               physically sit on top of them and swallow their mousedown
               before it ever reaches them). */}
           <div
             onMouseDown={handleRegionMouseDown}
-            title={
-              volumeDragMode
-                ? 'drag to adjust group volume · right-click to mute'
-                : 'click to scrub playhead · drag to select a region (delete to mute) · right-click to mute'
-            }
+            title="click to scrub playhead · drag to select a region (delete to mute) · right-click to mute"
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'default',
               zIndex: 2
             }}
           />
@@ -1021,28 +777,6 @@ export function CollapsedRifffRow({
                 }}
               />
             )}
-
-          {dragVolume !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: '50%',
-                top: tooltipTop,
-                transform: 'translateX(-50%)',
-                padding: '2px 6px',
-                background: 'var(--ra-mute-on)',
-                color: 'var(--ra-mute-on-ink)',
-                fontSize: 10,
-                fontWeight: 700,
-                borderRadius: 0,
-                zIndex: 5,
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none'
-              }}
-            >
-              {dbLabel(displayedVolume)}
-            </div>
-          )}
 
           {/* The clip's own automation lane -- LAST child of the collapsed
               block, so it covers exactly the wave area (not the row, not the

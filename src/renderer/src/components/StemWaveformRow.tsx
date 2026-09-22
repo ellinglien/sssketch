@@ -1,7 +1,6 @@
 import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
 import { MIN_PLAYED_BARS, SNAP_DIVS } from '../state/store'
 import { stemKey } from '@shared/types'
-import { dbLabel } from '@shared/visuals'
 import { sqrtGain } from '@shared/mixGain'
 import {
   busIfAssignedFromBusOf,
@@ -13,18 +12,9 @@ import { stemDisplayColorVar } from '../theme/typeColor'
 import { AutomationLane } from './AutomationLane'
 import { Waveform } from './Waveform'
 import { startPointerDrag } from './dragUtils'
-import { scheduleLiveParamSync } from './liveParamSync'
 import { mouseBarFromDragEvent } from './dragGrabOffset'
 import { markManualSeek } from '../state/manualSeek'
-import {
-  FADE_MAX,
-  FADE_DRAG_SLOWDOWN,
-  TOOLTIP_HEIGHT,
-  TOOLTIP_GAP,
-  envelopeKnees,
-  envelopeCurveD,
-  combinedClipPath
-} from './envelope'
+import { muteRegionsClipPath } from './muteClipPath'
 
 export const ROW_HEIGHT = 44
 
@@ -49,10 +39,7 @@ export function StemWaveformRow({
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
   const muted = useAppSelector((s) => !!s.mute[key])
-  const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const volume = useAppSelector((s) => s.vol[key] ?? 1)
-  const fadeIn = useAppSelector((s) => s.fadeIn[groupId] ?? 0)
-  const fadeOut = useAppSelector((s) => s.fadeOut[groupId] ?? 0)
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
   const leftCropBars = useAppSelector((s) => s.leftCrop[groupId] ?? 0)
@@ -74,9 +61,6 @@ export function StemWaveformRow({
   // docs/superpowers/specs/2026-08-04-live-drag-preview-design.md.
   const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
   const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
-  const dragFadeIn = useAppSelector((s) => s.dragFadeIn[groupId] ?? null)
-  const dragFadeOut = useAppSelector((s) => s.dragFadeOut[groupId] ?? null)
-  const dragVolume = useAppSelector((s) => s.dragVol[key] ?? null)
 
   // Right-click anywhere on the waveform toggles mute — moved off plain
   // click (which now does nothing at this level) since an accidental click
@@ -97,9 +81,6 @@ export function StemWaveformRow({
 
   const resolvedPlayedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifff.barLength)
   const displayedPlayedBars = dragPlayedBars ?? resolvedPlayedBars
-  const displayedFadeIn = dragFadeIn ?? fadeIn
-  const displayedFadeOut = dragFadeOut ?? fadeOut
-  const displayedVolume = dragVolume ?? volume
 
   const baseStartBar = rifff.startBar ?? 0
   const displayedLeftCropBars = dragLeftCropBars ?? leftCropBars
@@ -143,32 +124,7 @@ export function StemWaveformRow({
   )
   const tileWidthPx = widthPx * (stem.barLength / (displayedPlayedBars - displayedLeftCropBars))
 
-  const fadeInPx = displayedFadeIn * ppb
-  const fadeOutPx = displayedFadeOut * ppb
-  const plateauY = ROW_HEIGHT * (1 - displayedVolume)
-  const colorClipPath = combinedClipPath(
-    widthPx,
-    ROW_HEIGHT,
-    volumeDragMode,
-    fadeInPx,
-    fadeOutPx,
-    plateauY,
-    muteRegions,
-    ppb,
-    leftPx
-  )
-  const envelopeCurve = envelopeCurveD(widthPx, ROW_HEIGHT, fadeInPx, fadeOutPx, plateauY)
-  const { fiEnd, foStart } = envelopeKnees(widthPx, fadeInPx, fadeOutPx)
-  // Volume tooltip's vertical position, clamped directly into the row's
-  // bounds — correct for every plateauY value by construction (top is always
-  // in [0, ROW_HEIGHT - TOOLTIP_HEIGHT]), rather than an above/below flip
-  // threshold, which turned out to have no valid single value: for this
-  // ROW_HEIGHT relative to the tooltip's own height, the "safe while above"
-  // and "safe while below" zones don't overlap.
-  const tooltipTop = Math.max(
-    0,
-    Math.min(ROW_HEIGHT - TOOLTIP_HEIGHT, plateauY - TOOLTIP_HEIGHT - TOOLTIP_GAP)
-  )
+  const colorClipPath = muteRegionsClipPath(widthPx, ROW_HEIGHT, muteRegions, ppb, leftPx)
 
   function handleResizeStart(e: React.MouseEvent): void {
     const startPlayedBars = resolvedPlayedBars
@@ -250,65 +206,6 @@ export function StemWaveformRow({
     )
   }
 
-  function handleFadeInStart(e: React.MouseEvent): void {
-    const startFadeIn = fadeIn
-    let finalFadeIn = startFadeIn
-    startPointerDrag(
-      e,
-      (deltaX) => {
-        finalFadeIn = Math.max(
-          0,
-          Math.min(FADE_MAX, startFadeIn + deltaX / (ppb * FADE_DRAG_SLOWDOWN))
-        )
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: finalFadeIn })
-        scheduleLiveParamSync('fadeIn', groupId, finalFadeIn)
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit": this is
-        // also what indirectly clears the native live override this drag
-        // set via scheduleLiveParamSync above -- SET_FADE_IN triggers
-        // StoreContext.tsx's full-reload effect, and IpcServer.cpp's
-        // load-project handler clears every live override right after
-        // that reload lands. Removing this dispatch (e.g. thinking
-        // scheduleLiveParamSync alone now covers it) would leave the
-        // engine stuck on this drag's last live value forever. See
-        // docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md's
-        // "Handoff at drag-end" section.
-        if (moved) dispatch({ type: 'SET_FADE_IN', groupId, bars: finalFadeIn })
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeIn', key: groupId, value: undefined })
-      }
-    )
-  }
-
-  function handleFadeOutStart(e: React.MouseEvent): void {
-    const startFadeOut = fadeOut
-    let finalFadeOut = startFadeOut
-    startPointerDrag(
-      e,
-      // foStart = width - fadeOutPx, so a LONGER fade-out means a SMALLER
-      // foStart, which means the knee needs to move LEFT. deltaX moving left
-      // is negative, so subtracting it (startFadeOut - deltaX) is what makes
-      // "drag left" translate to "fadeOutPx grows" — the mirror image of
-      // fade-in's `startFadeIn + deltaX`, where dragging right grows fadeIn.
-      (deltaX) => {
-        finalFadeOut = Math.max(
-          0,
-          Math.min(FADE_MAX, startFadeOut - deltaX / (ppb * FADE_DRAG_SLOWDOWN))
-        )
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: finalFadeOut })
-        scheduleLiveParamSync('fadeOut', groupId, finalFadeOut)
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- see
-        // handleFadeInStart's identical comment above for why (indirectly
-        // clears the native live override this drag set via
-        // scheduleLiveParamSync).
-        if (moved) dispatch({ type: 'SET_FADE_OUT', groupId, bars: finalFadeOut })
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'fadeOut', key: groupId, value: undefined })
-      }
-    )
-  }
-
   // Mousedown anywhere on the waveform body (that isn't a resize handle or
   // fade dot): if it lands inside an already-muted region, immediately
   // selects that region's exact bounds (mode 'unmute') -- no drag needed,
@@ -316,8 +213,7 @@ export function StemWaveformRow({
   // Otherwise starts an Ableton-style drag-to-select (mode 'mute'); if the
   // drag never actually moved (a plain click), falls back to the original
   // click-to-scrub behavior instead of leaving a zero-width selection
-  // behind. Skipped while volumeDragMode is on, which repurposes this same
-  // surface for volume dragging instead (unchanged from before).
+  // behind.
   function handleRegionMouseDown(e: React.MouseEvent): void {
     // Right-click (button 2) is handled entirely by onContextMenu above
     // (handleWaveformContextMenu, toggling whole-stem mute) -- left
@@ -326,10 +222,6 @@ export function StemWaveformRow({
     // mouse, `moved` stayed false), seeking the playhead as an unwanted
     // side effect of what should have been a mute-only action.
     if (e.button !== 0) return
-    if (volumeDragMode) {
-      handleVolumeStart(e)
-      return
-    }
     const mouseBar = mouseBarFromDragEvent(e, ppb)
     if (mouseBar === null) return
 
@@ -377,28 +269,6 @@ export function StemWaveformRow({
           markManualSeek()
           void window.rifffApi.engineSetPosition(startBar)
         }
-      }
-    )
-  }
-
-  function handleVolumeStart(e: React.MouseEvent): void {
-    const startVolume = volume
-    let finalVolume = startVolume
-    startPointerDrag(
-      e,
-      // Up (negative deltaY) increases volume — hence the subtraction.
-      (_dx, deltaY) => {
-        finalVolume = Math.max(0, Math.min(1, startVolume - deltaY / ROW_HEIGHT))
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: finalVolume })
-        scheduleLiveParamSync('volume', key, finalVolume)
-      },
-      (moved) => {
-        // Load-bearing beyond the obvious "commit the real edit" -- see
-        // handleFadeInStart's identical comment above for why (indirectly
-        // clears the native live override this drag set via
-        // scheduleLiveParamSync).
-        if (moved) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: finalVolume })
-        dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: undefined })
       }
     )
   }
@@ -464,17 +334,14 @@ export function StemWaveformRow({
           ))}
 
           {/* Full-color layer on top — suppressed entirely while muted, since
-              mute always wins over the envelope. Clipped to the envelope
-              (showing the gray layer above the volume line) only while
-              envelope drag mode is engaged, and additionally punched through
-              wherever a mute region sits (regardless of envelope drag mode) --
-              see combinedClipPath's own doc comment for why holing out the
-              color layer, rather than drawing a separate hatch on top, is the
-              same "gray means quieter/off" visual language the envelope
-              clipping already uses. Otherwise unclipped/full height, so the
-              waveform reads normally instead of looking dimmed whenever
-              volume is below unity. Same tiling as the gray layer underneath,
-              so the two stay in visual sync at every tile boundary. */}
+              mute always wins. Punched through wherever a mute region sits
+              (see muteRegionsClipPath's own doc comment for why holing out
+              the color layer, rather than drawing a separate hatch on top,
+              is this app's "gray means quieter/off" visual language), and
+              otherwise unclipped/full height, so the waveform reads normally
+              instead of looking dimmed whenever the clip's gain is below
+              unity. Same tiling as the gray layer underneath, so the two stay
+              in visual sync at every tile boundary. */}
           {!muted && (
             <div
               style={{
@@ -492,26 +359,6 @@ export function StemWaveformRow({
                 </div>
               ))}
             </div>
-          )}
-
-          {/* Thin white line tracing the envelope curve itself — only shown
-              alongside the clipping above, while envelope drag mode is
-              engaged (the saturation split it traces isn't happening
-              otherwise). */}
-          {volumeDragMode && (
-            <svg
-              width={widthPx}
-              height={ROW_HEIGHT}
-              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-            >
-              <path
-                d={envelopeCurve}
-                fill="none"
-                stroke="var(--ra-text)"
-                strokeWidth={1}
-                opacity={0.5}
-              />
-            </svg>
           )}
 
           {/* One thin line at every point the underlying loop restarts (i.e.
@@ -614,113 +461,18 @@ export function StemWaveformRow({
             />
           </div>
 
-          {/* Fade-in/fade-out knee handles: small dots at the envelope curve's
-              plateau corners, draggable to adjust fadeIn/fadeOut. Positioned
-              via the same envelopeKnees() helper buildEnvelopePath itself
-              uses, so the dots can never visually drift off the curve they
-              sit on. onContextMenu stopPropagation, same reason as the
-              resize handles above.
-
-              The actual mousedown-catching box (14x14) is deliberately much
-              bigger than the visible 7x7 dot -- at default settings (no
-              fade, near-full volume) these sit almost exactly on top of the
-              resize handles' own corner, which span the full row height; a
-              hit target the same size as the dot itself was too easy to
-              miss by a pixel and grab the resize handle underneath instead
-              (reported as "can't grab the fade dots, it just resizes the
-              clip"). Centered the same way via translate(-50%,-50%), so it
-              only grows the invisible margin around the dot, never shifting
-              the dot's own visual position.
-
-              Not rendered at all outside envelope mode (volumeDragMode) --
-              they aren't clickable there (fadeIn/fadeOut are only meant to
-              be adjusted in that mode), so showing them was just visual
-              noise with no affordance behind it (reported as confusing --
-              looked draggable everywhere, wasn't). */}
-          {volumeDragMode && (
-            <>
-              <div
-                onMouseDown={handleFadeInStart}
-                onContextMenu={(e) => e.stopPropagation()}
-                title={`fade in: ${displayedFadeIn.toFixed(2)} bars`}
-                style={{
-                  position: 'absolute',
-                  left: fiEnd,
-                  top: plateauY,
-                  transform: 'translate(-50%, -50%)',
-                  width: 14,
-                  height: 14,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  zIndex: 4
-                }}
-              >
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: 'var(--ra-text)',
-                    pointerEvents: 'none'
-                  }}
-                />
-              </div>
-              <div
-                onMouseDown={handleFadeOutStart}
-                onContextMenu={(e) => e.stopPropagation()}
-                title={`fade out: ${displayedFadeOut.toFixed(2)} bars`}
-                style={{
-                  position: 'absolute',
-                  left: foStart,
-                  top: plateauY,
-                  transform: 'translate(-50%, -50%)',
-                  width: 14,
-                  height: 14,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  zIndex: 4
-                }}
-              >
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: 'var(--ra-text)',
-                    pointerEvents: 'none'
-                  }}
-                />
-              </div>
-            </>
-          )}
-
-          {/* Volume drag surface: spans the whole waveform body while
-              volumeDragMode is on (see the V-key toggle in App.tsx/TransportBar),
-              repurposing the same open area that otherwise right-clicks to
-              mute or drags to move the clip. While off, this does nothing on
-              mousedown — the event is left alone so the outer container's
-              own drag handling proceeds normally instead.
-              zIndex stays below the resize handles (3) and fade dots (4) in
-              BOTH modes — this covers the entire row, so at equal z-index
-              its own later DOM position would otherwise let it physically
-              sit on top of those small edge targets and swallow their
-              mousedown before it ever reaches them, not just visually
-              overlap them. */}
+          {/* The region-select / click-to-scrub surface: spans the whole
+              waveform body. zIndex stays below the resize handles (3) --
+              this covers the entire row, so at equal z-index its own later
+              DOM position would otherwise let it physically sit on top of
+              those small edge targets and swallow their mousedown before it
+              ever reaches them, not just visually overlap them. */}
           <div
             onMouseDown={handleRegionMouseDown}
-            title={
-              volumeDragMode
-                ? 'drag to adjust volume · right-click to mute'
-                : 'click to scrub playhead · drag to select a region (delete to mute) · right-click to mute'
-            }
+            title="click to scrub playhead · drag to select a region (delete to mute) · right-click to mute"
             style={{
               position: 'absolute',
               inset: 0,
-              cursor: volumeDragMode ? 'ns-resize' : 'default',
               zIndex: 2
             }}
           />
@@ -769,28 +521,6 @@ export function StemWaveformRow({
                 pointerEvents: 'none'
               }}
             />
-          )}
-
-          {dragVolume !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: '50%',
-                top: tooltipTop,
-                transform: 'translateX(-50%)',
-                padding: '2px 6px',
-                background: 'var(--ra-mute-on)',
-                color: 'var(--ra-mute-on-ink)',
-                fontSize: 10,
-                fontWeight: 700,
-                borderRadius: 0,
-                zIndex: 5,
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none'
-              }}
-            >
-              {muted ? 'mute' : dbLabel(displayedVolume)}
-            </div>
           )}
 
           {/* The clip's own automation lane -- LAST child of the waveform
