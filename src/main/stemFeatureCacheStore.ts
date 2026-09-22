@@ -69,6 +69,7 @@ export function setStemFeatureCache(
        ExtractedAt = excluded.ExtractedAt`
   ).run({ stemCID, featuresJson: JSON.stringify(features), extractedAt })
   // Lets the Discover trait quantile tables rebuild as the Phase 3
-  // re-extraction replaces old rows (traitQuantileCache.ts) -- O(1).
-  noteStemFeatureRowWritten(db, features)
+  // re-extraction replaces old rows (traitQuantileCache.ts), and keeps its
+  // in-memory trait value table current for Discover rolls -- O(1).
+  noteStemFeatureRowWritten(db, features, stemCID)
 }

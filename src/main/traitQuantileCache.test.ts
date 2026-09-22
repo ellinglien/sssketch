@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { percentileOf } from '@shared/traitQuantiles'
+import { traitFieldValuesFromFeatures, traitValuesFromFeatures } from '@shared/discoverTraits'
+import type { DiscoverTraitKind } from '@shared/discoverSlotKind'
+import type { StemFeatures } from '@shared/stemFeatures'
 import {
   getTraitQuantileTables,
+  getTraitValueTable,
   noteStemFeatureRowWritten,
   PREFERRED_TABLE_MIN_ROWS,
   TRAIT_QUANTILE_PAGE_SIZE
@@ -187,5 +191,135 @@ describe('getTraitQuantileTables', () => {
       }
       expect(await getTraitQuantileTables(db)).toBe(first)
     })
+  })
+})
+
+describe('trait value table (B1)', () => {
+  const ALL_KINDS: DiscoverTraitKind[] = ['bassHeavy', 'rhythmic', 'bright', 'warm']
+
+  function seedMixed(db: Database.Database): Record<string, string> {
+    const rows: Record<string, string> = {
+      old: JSON.stringify({ transientDensity: 3, bassEnergyRatio: 0.2, spectralCentroidHz: 900 }),
+      v2: JSON.stringify({
+        transientDensity: 4,
+        bassEnergyRatio: 0.7,
+        spectralCentroidHz: 1500,
+        rhythmicStrength: 0.4,
+        spectralCentroidFftHz: 1700,
+        featureVersion: 2
+      }),
+      partial: '{"transientDensity":"x","bassEnergyRatio":null}',
+      bad: 'not json',
+      nulljson: 'null'
+    }
+    const stmt = db.prepare(`INSERT INTO StemFeatureCache VALUES (?, ?, 0)`)
+    for (const [cid, json] of Object.entries(rows)) stmt.run(cid, json)
+    return rows
+  }
+
+  it('is null until the quantile build has run', () => {
+    const db = freshDb()
+    insert(db, 0, 5)
+    expect(getTraitValueTable(db)).toBeNull()
+  })
+
+  it('holds exactly the JSON-parsed trait values for every parseable row', async () => {
+    const db = freshDb()
+    insert(db, 0, TRAIT_QUANTILE_PAGE_SIZE + 3)
+    const rows = seedMixed(db)
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    expect(table).not.toBeNull()
+
+    const all = db.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all() as {
+      StemCID: string
+      FeaturesJSON: string
+    }[]
+    for (const { StemCID, FeaturesJSON } of all) {
+      let parsed: StemFeatures | null = null
+      try {
+        parsed = JSON.parse(FeaturesJSON) as StemFeatures
+      } catch {
+        parsed = null
+      }
+      const row = table.rowOf(StemCID)
+      if (!parsed) {
+        expect(row).toBeUndefined()
+        continue
+      }
+      expect(row).toBeDefined()
+      const fromTable = table.features(row!)
+      for (const kinds of [...ALL_KINDS.map((k) => [k]), ALL_KINDS]) {
+        expect(traitValuesFromFeatures(fromTable, kinds)).toEqual(
+          traitValuesFromFeatures(parsed, kinds)
+        )
+        expect(traitFieldValuesFromFeatures(fromTable, kinds)).toEqual(
+          traitFieldValuesFromFeatures(parsed, kinds)
+        )
+      }
+    }
+    expect(Object.keys(rows)).toContain('bad')
+  })
+
+  it('stays current through noteStemFeatureRowWritten (new and rewritten rows)', async () => {
+    const db = freshDb()
+    insert(db, 0, 10)
+    await getTraitQuantileTables(db)
+    const upsert = db.prepare(
+      `INSERT INTO StemFeatureCache VALUES (?, ?, 0)
+       ON CONFLICT(StemCID) DO UPDATE SET FeaturesJSON = excluded.FeaturesJSON`
+    )
+    const write = (cid: string, features: Record<string, unknown>): void => {
+      upsert.run(cid, JSON.stringify(features))
+      noteStemFeatureRowWritten(db, features as unknown as StemFeatures, cid)
+    }
+    write('fresh', { transientDensity: 42, bassEnergyRatio: 0.5, spectralCentroidHz: 10 })
+    write('stem000003', { transientDensity: 7, rhythmicStrength: 0.9, featureVersion: 2 })
+
+    const table = getTraitValueTable(db)!
+    expect(table).not.toBeNull()
+    expect(traitValuesFromFeatures(table.features(table.rowOf('fresh')!), ['rhythmic'])).toEqual({
+      rhythmic: 42
+    })
+    expect(
+      traitValuesFromFeatures(table.features(table.rowOf('stem000003')!), ['rhythmic', 'bassHeavy'])
+    ).toEqual({ rhythmic: 0.9, bassHeavy: null })
+  })
+
+  it('a row written behind its back (count moved, no note) makes the table unusable, not wrong', async () => {
+    const db = freshDb()
+    insert(db, 0, 10)
+    await getTraitQuantileTables(db)
+    insert(db, 10, 11)
+    expect(getTraitValueTable(db)).toBeNull()
+  })
+
+  it('a write noted without a StemCID drops the table (callers fall back)', async () => {
+    const db = freshDb()
+    insert(db, 0, 10)
+    await getTraitQuantileTables(db)
+    noteStemFeatureRowWritten(db, { transientDensity: 1 } as unknown as StemFeatures)
+    expect(getTraitValueTable(db)).toBeNull()
+  })
+
+  it('a write that lands while the build is in flight is applied once the build finishes', async () => {
+    const db = freshDb()
+    insert(db, 0, TRAIT_QUANTILE_PAGE_SIZE + 5)
+    const building = getTraitQuantileTables(db)
+    // The build yields after its first page -- this write lands mid-build,
+    // on a StemCID the build has already read past.
+    await new Promise((resolve) => setImmediate(resolve))
+    const features = { transientDensity: 999, bassEnergyRatio: 0.1, spectralCentroidHz: 1 }
+    db.prepare(`UPDATE StemFeatureCache SET FeaturesJSON = ? WHERE StemCID = ?`).run(
+      JSON.stringify(features),
+      'stem000000'
+    )
+    noteStemFeatureRowWritten(db, features as unknown as StemFeatures, 'stem000000')
+    await building
+    const table = getTraitValueTable(db)!
+    expect(table).not.toBeNull()
+    expect(
+      traitValuesFromFeatures(table.features(table.rowOf('stem000000')!), ['rhythmic'])
+    ).toEqual({ rhythmic: 999 })
   })
 })

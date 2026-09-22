@@ -1848,3 +1848,114 @@ describe('getDiscoverCandidates (kindSources)', () => {
     expect(c.kindSources).toEqual({ bass: 'confirmed' })
   })
 })
+
+describe('background efficiency B1: trait values from the in-memory table', () => {
+  const DRUM = 1 << 1
+  const jams = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
+    { jamCID: 'jam1', dbForJam: db }
+  ]
+  const byStem = (cs: { stemCID: string }[]): string[] => cs.map((c) => c.stemCID).sort()
+  const traitShape = (
+    cs: Awaited<ReturnType<typeof getDiscoverCandidates>>
+  ): Record<string, unknown> =>
+    Object.fromEntries(
+      cs.map((c) => [
+        c.stemCID,
+        {
+          traitValues: c.traitValues,
+          traitFieldValues: c.traitFieldValues,
+          traitPercentiles: c.traitPercentiles,
+          kindSources: c.kindSources,
+          riffCID: c.riffCID,
+          presetName: c.presetName
+        }
+      ])
+    )
+
+  function seedLibrary(own: Database.Database): void {
+    const stems = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    seedRiff(own, 'r1', 'jam1', 120, stems)
+    stems.forEach((cid, i) => {
+      seedStem(own, cid, 'jam1', { instrument: i % 2 === 0 ? DRUM : undefined })
+      seedFeatures(
+        own,
+        cid,
+        featuresJSON({
+          transientDensity: i,
+          bassEnergyRatio: i / 10,
+          spectralCentroidHz: 500 + i * 100,
+          ...(i % 3 === 0 ? { rhythmicStrength: i / 7, spectralCentroidFftHz: 900 + i } : {})
+        })
+      )
+    })
+    // No cached features for this one.
+    seedRiff(own, 'r2', 'jam1', 120, ['nofeat'])
+    seedStem(own, 'nofeat', 'jam1', { instrument: DRUM })
+  }
+
+  it('trait-only: once the table is built, a roll reads no FeaturesJSON and yields the same values', async () => {
+    const own = freshDb()
+    seedLibrary(own)
+    const kinds = ['warm', 'rhythmic'] as const
+    // First roll: no table yet -> SQL path (and its percentile step builds the table).
+    const first = await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: [...kinds] })
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    const second = await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: [...kinds] })
+    expect(prepareSpy.mock.calls.filter(([sql]) => sql.includes('FeaturesJSON'))).toEqual([])
+
+    expect(byStem(second)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
+    expect(traitShape(second)).toEqual(traitShape(first))
+  })
+
+  it('mask + trait: once the table is built, trait values come from memory, identical to the SQL path', async () => {
+    const own = freshDb()
+    seedLibrary(own)
+    const first = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jams(own),
+      kinds: ['drums', 'warm']
+    })
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    const second = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jams(own),
+      kinds: ['drums', 'warm']
+    })
+    expect(prepareSpy.mock.calls.filter(([sql]) => sql.includes('FeaturesJSON'))).toEqual([])
+    expect(byStem(second)).toEqual(['a', 'c', 'e', 'g', 'nofeat'])
+    expect(traitShape(second)).toEqual(traitShape(first))
+    expect(second.find((c) => c.stemCID === 'nofeat')!.traitValues).toEqual({})
+  })
+
+  it('trait-only: the table-sampled pool stays bounded by MAX_CANDIDATE_RESOLUTION_POOL', async () => {
+    const own = freshDb()
+    const n = 1203
+    const insertMany = own.transaction(() => {
+      for (let r = 0; r * 8 < n; r++) {
+        const cids = Array.from({ length: 8 }, (_, i) => `s${r * 8 + i}`).filter(
+          (_, i) => r * 8 + i < n
+        )
+        seedRiff(own, `r${r}`, 'jam1', 120, cids)
+        for (const cid of cids) {
+          seedStem(own, cid, 'jam1')
+          seedFeatures(own, cid, featuresJSON({ bassEnergyRatio: 0.5 }))
+        }
+      }
+    })
+    insertMany()
+    await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: ['bassHeavy'] })
+    const pool = await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: ['bassHeavy'] })
+    expect(pool.length).toBe(1000)
+    expect(new Set(pool.map((c) => c.stemCID)).size).toBe(1000)
+  })
+
+  it('a feature row written behind the table (count moved) sends the roll back to SQL, so it is still seen', async () => {
+    const own = freshDb()
+    seedLibrary(own)
+    await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: ['bassHeavy'] })
+    seedFeatures(own, 'nofeat', featuresJSON({ bassEnergyRatio: 0.33 }))
+    const pool = await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: ['bassHeavy'] })
+    expect(pool.find((c) => c.stemCID === 'nofeat')?.traitValues).toEqual({ bassHeavy: 0.33 })
+  })
+})
