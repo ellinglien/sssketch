@@ -75,6 +75,32 @@ per-stem volume envelope:
 - Channel-level filter/send settings from the first pass are dropped; there is no channel
   scope for the toolkit any more.
 
+**Built, 2026-09-22 (same day).** Data + wire, lane, engine: three commits. Notes worth
+keeping:
+- Curves live in `state.stemAutomation`, keyed by `stemKey(groupId, slot)` -- the same key
+  `vol`/`mute`/`muteRegions`/`busOf` use, so cleanup on delete, carry-over on ungroup and
+  copy-on-duplicate all reuse machinery that already existed.
+- The absolute bar a curve lands on is resolved in exactly one place,
+  `buildEngineProject.ts`'s `clipOriginBar` (`startBar + leftCropBars + offsetSteps/snapDiv`
+  -- the same three terms `clipGeometryFromFields` uses to DRAW the clip), and sent as
+  `EngineStemToolkit.originBar`. The engine subtracts it and never re-derives the geometry.
+- An expanded rifff shows one lane per stem; a COLLAPSED one shows a single lane that writes
+  the same curve to every stem in the rifff (the whole-rifff treatment `SET_GROUP_VOLUME`/
+  `SET_GROUP_MUTE` already give the collapsed view). Curves are stored per stem either way,
+  so expanding afterwards lets them diverge.
+- The per-clip DSP state in the engine is keyed by stemKey, so a moved/re-channelled/renamed
+  clip keeps one continuous filter while a duplicate or re-import starts clean.
+- The reported "filter cutoff is audible, reverb send and volume are not" turned out NOT to
+  be an engine or wire-format problem. Two offline-render assertions added in the engine's
+  own test suite pin that directly -- a volume curve to zero really silences a clip, and a
+  full send really leaves a tail past the end of the dry audio -- and both pass. The cause
+  was above the wire, in the channel-wide lane's own geometry (see the UI commit), and the
+  rescope removes it; worth re-checking by ear in the next walkthrough rather than assuming.
+- A `.sssketchproj` saved during the one day the toolkit was per channel has its
+  `channelFilters`/`channelSends`/`channelAutomation` DROPPED on load. No honest migration
+  exists (a channel's curve belonged to every clip on that row at once, in absolute bars), so
+  such a project loads with no automation rather than with wrong automation.
+
 ## 3. Automation mode (renderer)
 
 - A new arranger mode alongside the existing ones (SET_ARRANGER_MODE), reached from the
