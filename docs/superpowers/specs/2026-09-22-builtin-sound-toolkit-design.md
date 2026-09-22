@@ -131,6 +131,24 @@ Export dialog gains a choice when a project uses the toolkit:
   attach their own filter/reverb device. Document per-format limits honestly in the dialog.
 - The riser always exports as rendered audio in both modes.
 
+### Mapping automation onto the target DAW's own stock devices (Elling, 2026-09-22)
+
+"maybe in ableton we could map them to ableton specific plugins ... so they would load without
+any tech headache". The toolkit deliberately mirrors a DAW channel strip, so each parameter has
+an obvious stock-device home. "Export the automation" writes these, so the project opens and
+plays with no plugin installs:
+
+| toolkit | Ableton (.als) | REAPER (.rpp) |
+|---|---|---|
+| per-stem gain (the dial) | track **Volume** (mixer) | track **volume** |
+| `volume` curve | automation on track Volume | track **volume envelope** |
+| `reverbSend` curve | ONE **Return track with a stock Reverb**; per-track **Send A** automation (mirrors our single shared bus exactly) | one **reverb bus track** (stock ReaVerbate) + per-track **send volume envelope** |
+| `filterCutoff` / `filterResonance` | stock **Auto Filter** on the track; automation on Frequency / Resonance | stock filter JSFX/ReaEQ band; automation on its cutoff / Q |
+| riser | rendered audio clip (always) | rendered audio clip (always) |
+
+Device parameter ids/versions must be verified against a real exported project from the target
+DAW version before shipping — a wrong id silently produces a device with a dead envelope.
+
 ## 5. Build order
 
 1. Engine: filter + zita-rev1 send + automation evaluation (+ JUCE unit tests via `--test`).
