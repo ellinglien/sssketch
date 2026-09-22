@@ -2707,7 +2707,11 @@ function DiceIcon({
       strokeLinejoin="round"
       style={{
         flexShrink: 0,
-        animation: spinning ? 'discover-dice-spin 1200ms ease-in-out infinite' : undefined
+        animation: spinning ? 'discover-dice-spin 1200ms ease-in-out infinite' : undefined,
+        // Direct request, 2026-09-22: "when dice are animated, turn them
+        // white to show they are active" -- overrides whatever dim color the
+        // surrounding button inherits (stroke/fill use currentColor).
+        color: spinning ? 'var(--ra-text)' : undefined
       }}
     >
       <rect x="2" y="2" width="12" height="12" rx="2.5" />
