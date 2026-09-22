@@ -2435,7 +2435,7 @@ export function DiscoverPanel({
               justifyContent: 'center'
             }}
           >
-            {/* Direct request, 2026-09-22: a bright "add:" lead-in. Silkscreen
+            {/* Direct request, 2026-09-22: a bright "add a stem that is:" lead-in. Silkscreen
                 renders it in caps, like every other label here. */}
             <span
               style={{
@@ -2445,7 +2445,7 @@ export function DiscoverPanel({
                 marginRight: 4
               }}
             >
-              add:
+              add a stem that is:
             </span>
             {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
               const selected = pendingAddKinds.includes(kind)
