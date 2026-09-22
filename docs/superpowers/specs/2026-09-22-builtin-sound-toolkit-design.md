@@ -101,6 +101,17 @@ keeping:
   exists (a channel's curve belonged to every clip on that row at once, in absolute bars), so
   such a project loads with no automation rather than with wrong automation.
 
+## 2c. REVISION, 2026-09-22 (second walkthrough): resonance is a DIAL, not a lane
+
+Elling: "that's confusing to have it separate from cut though isn't it?" -- a resonance LANE
+reads as broken, because resonance is inaudible unless a cutoff curve is moving. So:
+- drawable parameters are `filterCutoff` | `reverbSend` | `volume` (picker label for the first is
+  just "filter");
+- resonance is a small DIAL in the filter lane's corner, stored per clip in `stemFilters`;
+- a resonance curve saved before this loads as its bar-weighted average on that dial;
+- on EXPORT, resonance is therefore a static device value (Auto Filter Resonance / ReaEQ band Q),
+  not an envelope -- section 4's table predates this.
+
 ## 3. Automation mode (renderer)
 
 - A new arranger mode alongside the existing ones (SET_ARRANGER_MODE), reached from the
