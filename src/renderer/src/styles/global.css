@@ -146,7 +146,8 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-[role='button']:focus-visible {
+[role='button']:focus-visible,
+[role='slider']:focus-visible {
   outline: 1px solid var(--ra-border-strong);
   outline-offset: -1px;
 }

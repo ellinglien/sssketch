@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
+import { Dial } from './Dial'
+import { BracketToggle } from './BracketToggle'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -2126,12 +2128,11 @@ export function DiscoverPanel({
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tight</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
+        <Dial
           value={chaos}
-          onChange={(e) => setChaos(Number(e.target.value))}
+          onChange={setChaos}
+          ariaLabel="tight to loose"
+          tooltip="drag, scroll, or arrow keys -- double-click to reset"
         />
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>loose</span>
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
@@ -2218,45 +2219,23 @@ export function DiscoverPanel({
           </button>
         )}
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 10,
-            color: hasUsername ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={onlyOwnStems}
-            disabled={!hasUsername}
-            title={
-              hasUsername
-                ? undefined
-                : 'set "your username" in the browse tab first -- an empty username can\'t filter to "only mine"'
-            }
-            onChange={(e) => setOnlyOwnStems(e.target.checked)}
-          />
-          only my stems
-        </label>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 10,
-            color: 'var(--ra-text-2)'
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={preferFavourites}
-            title="favourited stems (star icon on a resolved slot) are weighted more likely to come up on roll/reroll -- never the only ones that can, just more often"
-            onChange={(e) => setPreferFavourites(e.target.checked)}
-          />
-          prefer favourites
-        </label>
+        <BracketToggle
+          checked={onlyOwnStems}
+          onChange={setOnlyOwnStems}
+          disabled={!hasUsername}
+          label="only my stems"
+          tooltip={
+            hasUsername
+              ? undefined
+              : 'set "your username" in the browse tab first -- an empty username can\'t filter to "only mine"'
+          }
+        />
+        <BracketToggle
+          checked={preferFavourites}
+          onChange={setPreferFavourites}
+          label="prefer favourites"
+          tooltip="favourited stems (star icon on a resolved slot) are weighted more likely to come up on roll/reroll -- never the only ones that can, just more often"
+        />
         {/* Sound-source filters -- direct request, 2026-09-21 ("a way to only
             enable audio in or microphone stems"); moved onto this row beside
             the other filter checkboxes, with undo/redo, 2026-09-22. Both apply
@@ -2264,40 +2243,18 @@ export function DiscoverPanel({
             sounds made with Endlesss instruments/effects, "other" =
             audio-in/mic -- see getDiscoverCandidates' own doc comment
             (discoverCandidates.ts). */}
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 10,
-            color: 'var(--ra-text-2)'
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={soundSourceEndlesss}
-            title="stems made with Endlesss instruments or effects -- applies to every kind"
-            onChange={(e) => setSoundSourceEndlesss(e.target.checked)}
-          />
-          endlesss
-        </label>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 10,
-            color: 'var(--ra-text-2)'
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={soundSourceAudioIn}
-            title="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect) -- applies to every kind, drums/bass/lead included"
-            onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
-          />
-          other
-        </label>
+        <BracketToggle
+          checked={soundSourceEndlesss}
+          onChange={setSoundSourceEndlesss}
+          label="endlesss"
+          tooltip="stems made with Endlesss instruments or effects -- applies to every kind"
+        />
+        <BracketToggle
+          checked={soundSourceAudioIn}
+          onChange={setSoundSourceAudioIn}
+          label="other"
+          tooltip="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect) -- applies to every kind, drums/bass/lead included"
+        />
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
         {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
             random-reroll one, reroll all) -- direct request, 2026-09-15,
