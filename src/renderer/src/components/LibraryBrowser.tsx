@@ -111,8 +111,15 @@ interface RiffDateGroup {
  * floating-point noise (see formatBpm's own doc comment), so two riffs that
  * are really "the same tempo" rarely match exactly. Each date's tempo
  * groups are then sorted numerically ascending, for easy scanning rather
- * than whatever order they happened to occur in that day. */
-function groupRiffsByDateAndTempo(riffs: RiffLibraryRiffSummary[]): RiffDateGroup[] {
+ * than whatever order they happened to occur in that day. Within a tempo
+ * group the riffs are flipped back to OLDEST FIRST -- direct report,
+ * 2026-09-22: "the rifff dots are kind of in the reverse order of what
+ * you'd expect... I would expect the top first left to be the first under
+ * that date." The incoming CreationTime DESC order made the top-left dot
+ * the LAST riff of that day and the bottom-right the first; reading order
+ * now runs forward through the session. Date groups themselves stay
+ * newest-first, so the most recent day is still at the top. */
+export function groupRiffsByDateAndTempo(riffs: RiffLibraryRiffSummary[]): RiffDateGroup[] {
   const dateGroups: RiffDateGroup[] = []
   for (const riff of riffs) {
     const label = new Date(riff.creationTime * 1000).toLocaleDateString(undefined, {
@@ -135,6 +142,7 @@ function groupRiffsByDateAndTempo(riffs: RiffLibraryRiffSummary[]): RiffDateGrou
   }
   for (const dateGroup of dateGroups) {
     dateGroup.tempoGroups.sort((a, b) => a.bpm - b.bpm)
+    for (const tempoGroup of dateGroup.tempoGroups) tempoGroup.riffs.reverse()
   }
   return dateGroups
 }
