@@ -1055,7 +1055,12 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('get-discover-library-scan-targets', (): Promise<LibraryScanTarget[]> =>
-    listLibraryScanTargets(listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })))
+    listLibraryScanTargets(
+      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+      undefined,
+      // Persisted, incrementally extended stem/jam pairs (B6).
+      openOwnRiffLibraryDb()
+    )
   )
 
   ipcMain.handle(

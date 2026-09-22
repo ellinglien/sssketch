@@ -3,6 +3,8 @@ import { readdirSync } from 'fs'
 import { basename, dirname } from 'path'
 import type Database from 'better-sqlite3'
 import { resolveStemPath } from './riffLibraryStore'
+import { getCachedStemJamPairs, type StemJamPair } from './scanTargetCache'
+import { countWork } from './workCounters'
 
 interface JamDbPair {
   jamCID: string
@@ -98,11 +100,30 @@ export function createDirListingExists(): (path: string) => boolean {
  * suite free of any real filesystem dependency. */
 export async function listLibraryScanTargets(
   jams: JamDbPair[],
-  existsFn: (path: string) => boolean = createDirListingExists()
+  existsFn: (path: string) => boolean = createDirListingExists(),
+  // Background efficiency B6: sssketch's own writable db, holding the
+  // persisted per-source-db stem/jam pairs (scanTargetCache.ts) -- a launch
+  // then reads only riffs added since last time instead of walking every
+  // Riffs table in full. Omitted (tests, or no cache wanted): walk as before.
+  cacheDb?: Database.Database
 ): Promise<LibraryScanTarget[]> {
   const seen = new Set<string>()
   const out: LibraryScanTarget[] = []
   let sinceYield = 0
+
+  // Existence check per stem, in the order the pairs are met -- the first
+  // allowed pair for a StemCID decides its path (seen before exists, as
+  // always). True every YIELD_EVERY stems: the caller yields then.
+  function consider(stemCID: string, jamCID: string): boolean {
+    if (seen.has(stemCID)) return false
+    seen.add(stemCID)
+    const path = resolveStemPath(jamCID, stemCID)
+    if (existsFn(path)) out.push({ key: stemCID, path })
+    sinceYield += 1
+    if (sinceYield < YIELD_EVERY) return false
+    sinceYield = 0
+    return true
+  }
 
   // One ordered, paged pass over each DB's Riffs table, filtering to the
   // caller's jams in memory -- real live freeze, profiled 2026-09-21: jams
@@ -119,6 +140,27 @@ export async function listLibraryScanTargets(
   }
 
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
+    // Cached pairs come back in the same order this walk meets them, so the
+    // result is identical either way.
+    let cached: StemJamPair[] | null = null
+    if (cacheDb) {
+      try {
+        cached = await getCachedStemJamPairs(cacheDb, db)
+      } catch (err) {
+        console.error('listLibraryScanTargets: scan-target cache failed, walking instead:', err)
+        cached = null
+      }
+    }
+    if (cached) {
+      countWork('scan-targets.cached-pairs', cached.length)
+      for (const pair of cached) {
+        if (!allowedJamCIDs.has(pair.jamCID)) continue
+        if (consider(pair.stemCID, pair.jamCID)) await yieldToEventLoop()
+      }
+      continue
+    }
+
+    countWork('sql:scan-targets.walk')
     let page: RiffPageRow[]
     let afterRiffCID = ''
     let statement: Database.Statement
@@ -143,15 +185,8 @@ export async function listLibraryScanTargets(
         if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue
         for (let slot = 1; slot <= 8; slot++) {
           const stemCID = riff[`StemCID_${slot}` as keyof RiffStemColumnsRow]
-          if (!stemCID || seen.has(stemCID)) continue
-          seen.add(stemCID)
-          const path = resolveStemPath(riff.OwnerJamCID, stemCID)
-          if (existsFn(path)) out.push({ key: stemCID, path })
-          sinceYield += 1
-          if (sinceYield >= YIELD_EVERY) {
-            sinceYield = 0
-            await yieldToEventLoop()
-          }
+          if (!stemCID) continue
+          if (consider(stemCID, riff.OwnerJamCID)) await yieldToEventLoop()
         }
       }
       await yieldToEventLoop()
