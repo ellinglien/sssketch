@@ -50,6 +50,13 @@ export interface EngineStem {
  * because the engine's parser reads fixed keys. */
 export interface EngineStemAutomation {
   filterCutoff: AutomationPoint[]
+  /** ALWAYS EMPTY, and kept on the wire only because the engine's parser
+   * reads four fixed keys (EngineProject.cpp) and this side is its
+   * hand-synced twin. Resonance stopped being drawable and became a per-clip
+   * dial (see AUTOMATION_PARAMS in toolkit.ts); its value now travels as the
+   * STATIC EngineStemToolkit.filterResonance below, which the engine already
+   * applies whenever this curve is empty. Nothing native needed changing for
+   * that -- an empty curve was always a supported case. */
   filterResonance: AutomationPoint[]
   reverbSend: AutomationPoint[]
   volume: AutomationPoint[]
@@ -227,7 +234,8 @@ export function buildStemToolkit(
   // at runtime.
   const curves: EngineStemAutomation = {
     filterCutoff: normaliseAutomationCurve(automation?.filterCutoff ?? []),
-    filterResonance: normaliseAutomationCurve(automation?.filterResonance ?? []),
+    // Never populated -- see EngineStemAutomation.filterResonance.
+    filterResonance: [],
     reverbSend: normaliseAutomationCurve(automation?.reverbSend ?? []),
     volume: scaleCurveByGain(normaliseAutomationCurve(automation?.volume ?? []), gain)
   }

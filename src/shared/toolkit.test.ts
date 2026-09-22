@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTOMATION_PARAM_LABEL,
   AUTOMATION_PARAMS,
+  averageAutomationValue,
   DEFAULT_REVERB,
   defaultFilterSettings,
   evaluateAutomation,
@@ -19,13 +20,16 @@ describe('neutral defaults', () => {
     expect(defaultFilterSettings('highpass')).toEqual({ mode: 'highpass', cutoff: 0, resonance: 0 })
   })
 
-  it('exposes exactly the four automatable parameters the design limits us to', () => {
-    expect([...AUTOMATION_PARAMS]).toEqual([
-      'filterCutoff',
-      'filterResonance',
-      'reverbSend',
-      'volume'
-    ])
+  it('exposes exactly the three DRAWABLE parameters the design limits us to', () => {
+    expect([...AUTOMATION_PARAMS]).toEqual(['filterCutoff', 'reverbSend', 'volume'])
+  })
+
+  it('does not offer resonance as something to draw -- it is a per-clip dial', () => {
+    // The whole point of the rescope: a resonance curve is inaudible unless
+    // a cutoff curve is moving, so there is ONE filter lane with a
+    // resonance knob in its corner rather than two lanes.
+    expect([...AUTOMATION_PARAMS]).not.toContain('filterResonance')
+    expect(AUTOMATION_PARAM_LABEL.filterCutoff).toBe('filter')
   })
 
   it('labels every automatable parameter, in this app lowercase UI copy', () => {
@@ -73,6 +77,20 @@ describe('isStemToolkitNeutral', () => {
         })
       ).toBe(false)
     }
+  })
+
+  it('stays neutral for a clip whose only setting is a raised resonance dial', () => {
+    // Not an oversight: resonance is a peak AT the cutoff corner, so with
+    // the cutoff parked wide open there is no corner in the audible range
+    // for it to sharpen and the clip sounds exactly as it would untouched.
+    // The value is still stored and saved -- it starts mattering the moment
+    // a cutoff curve exists.
+    expect(isStemToolkitNeutral({ mode: 'lowpass', cutoff: 1, resonance: 0.8 }, 0, {})).toBe(true)
+    expect(
+      isStemToolkitNeutral({ mode: 'lowpass', cutoff: 1, resonance: 0.8 }, 0, {
+        filterCutoff: [{ bar: 0, value: 0.2 }]
+      })
+    ).toBe(false)
   })
 
   it('never calls a non-finite cutoff neutral', () => {
@@ -179,5 +197,57 @@ describe('evaluateAutomation', () => {
   it('treats a single point as a constant', () => {
     expect(evaluateAutomation([{ bar: 4, value: 0.3 }], 0, -1)).toBe(0.3)
     expect(evaluateAutomation([{ bar: 4, value: 0.3 }], 99, -1)).toBe(0.3)
+  })
+})
+
+describe('averageAutomationValue', () => {
+  it('returns the fallback for an empty curve', () => {
+    expect(averageAutomationValue([])).toBe(0)
+    expect(averageAutomationValue([], 0.4)).toBe(0.4)
+  })
+
+  it('weights by BARS, not by how many points a stroke happened to leave', () => {
+    // 0.9 for one bar, then 0.1 held for nine -- crowded points at the
+    // start must not outvote the long plateau. A plain mean of the four
+    // values would say 0.4; the honest answer is much nearer 0.1.
+    const value = averageAutomationValue([
+      { bar: 0, value: 0.9 },
+      { bar: 0.5, value: 0.9 },
+      { bar: 1, value: 0.1 },
+      { bar: 10, value: 0.1 }
+    ])
+    // 0.9 held for half a bar, the ramp down over the next half, then the
+    // 0.1 plateau for nine -- trapezoids, over the curve's own 10-bar span.
+    expect(value).toBeCloseTo((0.45 + 0.25 + 0.9) / 10, 10)
+    expect(value).toBeLessThan(0.25)
+  })
+
+  it('averages a straight ramp to its midpoint', () => {
+    expect(
+      averageAutomationValue([
+        { bar: 0, value: 0 },
+        { bar: 8, value: 1 }
+      ])
+    ).toBeCloseTo(0.5, 10)
+  })
+
+  it('falls back to a plain mean when the curve has no span to weight by', () => {
+    expect(averageAutomationValue([{ bar: 3, value: 0.7 }])).toBeCloseTo(0.7, 10)
+    expect(
+      averageAutomationValue([
+        { bar: 3, value: 0.2 },
+        { bar: 3, value: 0.8 }
+      ])
+    ).toBeCloseTo(0.5, 10)
+  })
+
+  it('survives the kind of curve only a hand-edited project file has', () => {
+    expect(
+      averageAutomationValue([
+        { bar: NaN, value: 0.5 },
+        { bar: 4, value: 5 },
+        { bar: 0, value: -3 }
+      ])
+    ).toBeCloseTo(0.5, 10)
   })
 })

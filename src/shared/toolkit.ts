@@ -27,14 +27,26 @@
 
 export type FilterMode = 'lowpass' | 'highpass'
 
-/** The whole automatable set. Deliberately small -- "a limited set of tools"
+/** The whole DRAWABLE set. Deliberately small -- "a limited set of tools"
  * (Elling, 2026-09-22) -- so the automation lane's parameter picker stays a
- * short list rather than an inspector of everything. */
-export type AutomationParam = 'filterCutoff' | 'filterResonance' | 'reverbSend' | 'volume'
+ * short list rather than an inspector of everything.
+ *
+ * `filterResonance` used to be a fourth entry here and is deliberately NOT
+ * one any more (Elling, after using it: "that's confusing to have it
+ * separate from cut though isn't it?"). Resonance is a peak AT the cutoff
+ * corner, so a resonance curve on a clip whose cutoff isn't moving does
+ * nothing audible at all -- which read as a broken lane rather than as a
+ * parameter that needs a partner. It is now a STORED PER-CLIP setting
+ * (StemFilterSettings.resonance) written by a small dial in the filter
+ * lane's own corner: one filter lane you draw, with its resonance as a knob
+ * beside it. That is also how Ableton's Auto Filter works (you automate
+ * Frequency; Resonance is a knob) and how both export mappings already
+ * describe it (docs/superpowers/references/ableton12-automation-mapping.md,
+ * reaper-automation-mapping.md). */
+export type AutomationParam = 'filterCutoff' | 'reverbSend' | 'volume'
 
 export const AUTOMATION_PARAMS: readonly AutomationParam[] = [
   'filterCutoff',
-  'filterResonance',
   'reverbSend',
   'volume'
 ]
@@ -45,21 +57,23 @@ export const AUTOMATION_PARAMS: readonly AutomationParam[] = [
  * DISCOVER_SLOT_KIND_LABEL does: one table, next to the union it labels, so
  * adding a parameter can't leave a lane showing a raw identifier. */
 export const AUTOMATION_PARAM_LABEL: Record<AutomationParam, string> = {
-  filterCutoff: 'filter cutoff',
-  filterResonance: 'filter resonance',
+  // Just "filter", not "filter cutoff": there is only ONE filter lane now,
+  // and it carries its own resonance dial in its corner, so the picker is
+  // naming the whole filter rather than distinguishing one of its two
+  // parameters from the other.
+  filterCutoff: 'filter',
   reverbSend: 'reverb send',
   volume: 'volume'
 }
 
-/** The same four, short enough to fit inside a narrow clip's own lane -- the
- * picker now lives ON the clip (spec section 2b), and a two-bar clip at the
- * default zoom is barely wider than the words "filter resonance". Lowercase,
- * no punctuation, same rules as the full labels above; the full label is
- * still what the picker's tooltip/aria-label says, so nothing is only ever
+/** The same three, short enough to fit inside a narrow clip's own lane --
+ * the picker lives ON the clip (spec section 2b), and a two-bar clip at the
+ * default zoom is barely wider than the words "reverb send". Lowercase, no
+ * punctuation, same rules as the full labels above; the full label is still
+ * what the picker's tooltip/aria-label says, so nothing is only ever
  * expressed as an abbreviation. */
 export const AUTOMATION_PARAM_SHORT_LABEL: Record<AutomationParam, string> = {
-  filterCutoff: 'cut',
-  filterResonance: 'res',
+  filterCutoff: 'filt',
   reverbSend: 'verb',
   volume: 'vol'
 }
@@ -87,7 +101,9 @@ export interface StemFilterSettings {
   mode: FilterMode
   /** [0,1]; the engine maps this logarithmically onto 20Hz..20kHz. */
   cutoff: number
-  /** [0,1]; the engine maps this onto Q 0.707..8.0. */
+  /** [0,1]; the engine maps this onto Q 0.707..8.0. Never a drawn curve --
+   * see AUTOMATION_PARAMS above for why resonance is a per-clip dial rather
+   * than a lane. This is the only place a clip's resonance lives. */
   resonance: number
 }
 
@@ -119,6 +135,13 @@ export function defaultFilterSettings(mode: FilterMode = 'lowpass'): StemFilterS
   return { mode, cutoff: neutralCutoff(mode), resonance: 0 }
 }
 
+// Reads the CUTOFF only, deliberately: resonance is a peak at the cutoff
+// corner, so a clip whose cutoff is parked at its neutral end and has no
+// cutoff curve sounds identical whatever its resonance dial says. Leaving a
+// resonance-only clip "neutral" is therefore not a rounding error -- it is
+// what keeps such a project's render bit-identical to its pre-toolkit self
+// (see isStemToolkitNeutral below). The dial's value is still stored and
+// still saved; it simply starts mattering the moment a cutoff curve exists.
 function isNeutralFilter(filter: StemFilterSettings | undefined): boolean {
   if (!filter) return true
   if (!Number.isFinite(filter.cutoff)) return false
@@ -151,7 +174,7 @@ export function isStemToolkitNeutral(
   automation: StemAutomation | undefined
 ): boolean {
   if (!isNeutralFilter(filter)) return false
-  if (hasCurve(automation, 'filterCutoff') || hasCurve(automation, 'filterResonance')) return false
+  if (hasCurve(automation, 'filterCutoff')) return false
   if (reverbSend !== undefined && reverbSend > 0) return false
   if (hasCurve(automation, 'reverbSend')) return false
   if (hasCurve(automation, 'volume')) return false
@@ -213,4 +236,42 @@ export function evaluateAutomation(
     return a.value + (b.value - a.value) * ((bar - a.bar) / span)
   }
   return last.value
+}
+
+/**
+ * A whole curve reduced to ONE number: the value it spends its time at, on
+ * average, over its own span.
+ *
+ * Written for exactly one job -- turning a `filterResonance` curve drawn
+ * during the day resonance was a lane into the clip's static resonance
+ * dial, at load time (see deserializeProject's own migration step). Time-
+ * weighted (trapezoidal over the bars between consecutive points) rather
+ * than a plain mean of the point values, because a free-draw stroke leaves
+ * points wherever the hand moved and simplification then thins the flat
+ * stretches hardest: a plain mean would let three points crowded into one
+ * busy bar outvote a long plateau. Weighting by bars asks the only question
+ * that matters for a knob -- "where was this parameter, most of the time?"
+ *
+ * The span is the curve's own first-to-last bar; the flat holds outside it
+ * are ignored, since their length depends on the clip and the answer
+ * shouldn't. A curve whose points all sit on one bar (or a single point) has
+ * no span to weight by, so it falls back to a plain mean. An empty curve
+ * returns `fallback`. Points need not be normalised -- they are normalised
+ * here, so a hand-edited project file can't produce a NaN dial.
+ */
+export function averageAutomationValue(points: AutomationPoint[], fallback = 0): number {
+  const curve = normaliseAutomationCurve(points)
+  if (curve.length === 0) return fallback
+  const span = curve[curve.length - 1].bar - curve[0].bar
+  if (!(span > 0)) {
+    const total = curve.reduce((sum, point) => sum + point.value, 0)
+    return clamp01(total / curve.length)
+  }
+  let area = 0
+  for (let i = 1; i < curve.length; i += 1) {
+    const a = curve[i - 1]
+    const b = curve[i]
+    area += ((a.value + b.value) / 2) * (b.bar - a.bar)
+  }
+  return clamp01(area / span)
 }
