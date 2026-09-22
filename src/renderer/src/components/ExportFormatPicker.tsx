@@ -100,7 +100,7 @@ export function ExportFormatPicker({
               >
                 export it as automation
                 <span style={noteStyle}>
-                  dry audio with editable envelopes on stock devices, one track per clip
+                  dry audio with editable envelopes on stock devices, one track per stem
                 </span>
               </button>
             </div>
