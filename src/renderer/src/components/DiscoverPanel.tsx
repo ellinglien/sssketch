@@ -2615,12 +2615,17 @@ export function DiscoverPanel({
               gap: 3
             }}
           >
+            {/* Captioned "matching", so clockwise = MORE matching: the dial
+                shows 100 - chaos (chaos itself stays "0 = strictest" for
+                pickReroll). Direct request, 2026-09-22: default all the way
+                up (App.tsx's discoverChaos starts at 0). */}
             <Dial
-              value={chaos}
-              onChange={setChaos}
+              value={100 - chaos}
+              onChange={(matching) => setChaos(100 - matching)}
+              defaultValue={100}
               size={30}
-              ariaLabel="tight to loose"
-              tooltip="drag, scroll, or arrow keys -- double-click to reset"
+              ariaLabel="matching"
+              tooltip="more matching clockwise -- drag, scroll, or arrow keys; double-click resets to full"
             />
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
               matching

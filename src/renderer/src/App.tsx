@@ -1307,7 +1307,9 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
-  const [discoverChaos, setDiscoverChaos] = useState(35)
+  // 0 = strictest (the Discover "matching" dial all the way up) -- direct
+  // request, 2026-09-22.
+  const [discoverChaos, setDiscoverChaos] = useState(0)
   const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
