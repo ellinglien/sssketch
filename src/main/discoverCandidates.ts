@@ -220,7 +220,97 @@ const RIFF_QUERY_YIELD_EVERY = 20
 // and building an in-memory index ONCE, cached for a while, turns every
 // SUBSEQUENT roll's own lookup into a plain JS Map.get() -- see
 // getRiffIndexForDb, below.
+//
+// Background efficiency B3 (2026-09-22): these caches used to expire after
+// this TTL even when nothing had changed, forcing a full rescan every 5
+// minutes. Now they're kept until a cheap change check (readTableSignal,
+// at most once per CACHE_CHANGE_CHECK_INTERVAL_MS) says the table moved.
+// This TTL survives only as the upper bound for changes a row count can't
+// see (an in-place UPDATE, e.g. a skeleton riff filled in by the sync) --
+// exactly as stale as before for those, never rescanned for an idle db.
 const RIFF_INDEX_CACHE_TTL_MS = 5 * 60_000
+
+/** How often a cached riff index / instrument-row list re-checks its source
+ * table -- a roll pays for readTableSignal at most this often per db. */
+const CACHE_CHANGE_CHECK_INTERVAL_MS = 30_000
+
+/** A table's cheap change signal: row count + MAX(rowid) (inserts,
+ * deletes) and, for in-place updates, the connection's own write count
+ * (total_changes) and whether another connection committed (data_version).
+ * Measured on Elling's real external archive (2026-09-22, 372k riffs /
+ * 367k stems, read-only, rowid tables): MAX(rowid) ~1 ms, the combined
+ * query ~7 ms warm. maxRowid/changes/dataVersion are null when the table
+ * has no rowid (count alone then). */
+interface TableSignal {
+  count: number
+  maxRowid: number | null
+  changes: number | null
+  dataVersion: number | null
+}
+
+/** When a scan cache was built, when it was last change-checked, and the
+ * signal it was built against (null for a db missing the table). */
+interface ScanCacheState {
+  builtAt: number
+  checkedAt: number
+  signal: TableSignal | null
+}
+
+/** The live TableSignal for `table`, or null when it can't be read (a
+ * broken/foreign db missing the table -- same "not an error" convention as
+ * every other query here). Its text keeps `COUNT(*) AS n FROM <table>` so
+ * it reads as the count it mostly is. */
+function readTableSignal(db: Database.Database, table: 'Riffs' | 'Stems'): TableSignal | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT MAX(rowid) AS maxRowid, total_changes() AS changes,
+                (SELECT data_version FROM pragma_data_version) AS dataVersion,
+                COUNT(*) AS n FROM ${table}`
+      )
+      .get() as { maxRowid: number | null; changes: number; dataVersion: number; n: number }
+    return {
+      count: row.n,
+      maxRowid: row.maxRowid,
+      changes: row.changes,
+      dataVersion: row.dataVersion
+    }
+  } catch {
+    try {
+      const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
+      return { count: row.n, maxRowid: null, changes: null, dataVersion: null }
+    } catch {
+      return null
+    }
+  }
+}
+
+function newScanCacheState(signal: TableSignal | null): ScanCacheState {
+  const now = Date.now()
+  return { builtAt: now, checkedAt: now, signal }
+}
+
+/** Whether a cached scan of `table` is still current -- true without any
+ * query inside the check interval; otherwise one readTableSignal. Stale
+ * when rows were added/removed (count or MAX(rowid) moved), or when the
+ * table was written in place (write counters moved) and the cache is older
+ * than RIFF_INDEX_CACHE_TTL_MS. */
+function isScanCacheCurrent(
+  db: Database.Database,
+  table: 'Riffs' | 'Stems',
+  state: ScanCacheState
+): boolean {
+  const now = Date.now()
+  if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
+  state.checkedAt = now
+  countWork(`sql:discover.cache-check.${table}`)
+  const live = readTableSignal(db, table)
+  const built = state.signal
+  if (!live || !built) return !live && !built
+  if (live.count !== built.count || live.maxRowid !== built.maxRowid) return false
+  const writtenInPlace = live.changes !== built.changes || live.dataVersion !== built.dataVersion
+  return !(writtenInPlace && now - state.builtAt >= RIFF_INDEX_CACHE_TTL_MS)
+}
 
 export interface RiffIndexEntry {
   riffCID: string
@@ -231,7 +321,7 @@ export interface RiffIndexEntry {
 
 const riffIndexCache = new WeakMap<
   Database.Database,
-  { index: Map<string, RiffIndexEntry>; computedAt: number }
+  { index: Map<string, RiffIndexEntry>; state: ScanCacheState }
 >()
 
 // In-flight de-duplication -- direct request, 2026-09-16 ("can we take a
@@ -244,14 +334,15 @@ const riffIndexCache = new WeakMap<
 // independently kick off the SAME expensive full table scan -- up to 8x
 // the real work, right at the exact moment (just after seeding) the app
 // most needs to stay responsive. Cleared once the scan settles (success
-// or failure) so a later call, after the TTL has expired, starts a fresh
+// or failure) so a later call, once the cache is stale, starts a fresh
 // scan rather than reusing a long-finished promise forever.
 const riffIndexInFlight = new WeakMap<Database.Database, Promise<Map<string, RiffIndexEntry>>>()
 
 /** Every StemCID in `db`'s own Riffs table, mapped to its owning riff's
  * {RiffCID, OwnerJamCID, BPMrnd} -- built via ONE unfiltered `SELECT *`
  * (no per-row WHERE-clause evaluation at all, the cheapest possible shape
- * for a full scan), then cached in memory for RIFF_INDEX_CACHE_TTL_MS.
+ * for a full scan), then cached in memory until its Riffs table changes
+ * (isScanCacheCurrent -- background efficiency B3).
  * `db` may be the EXTERNAL, READ-ONLY LORE archive connection
  * (riffLibraryStore.ts's own getRiffLibraryDb, opened `readonly: true` by
  * deliberate design) -- no index can be added there, so this in-memory
@@ -263,11 +354,11 @@ export async function getRiffIndexForDb(
   db: Database.Database,
   onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
-  const cached = riffIndexCache.get(db)
-  if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.index
-
   const inFlight = riffIndexInFlight.get(db)
   if (inFlight) return inFlight
+
+  const cached = riffIndexCache.get(db)
+  if (cached && isScanCacheCurrent(db, 'Riffs', cached.state)) return cached.index
 
   const promise = buildRiffIndex(db, onProgress).finally(() => {
     riffIndexInFlight.delete(db)
@@ -311,17 +402,18 @@ async function buildRiffIndex(
   onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
   const index = new Map<string, RiffIndexEntry>()
-  let total: number
-  try {
-    total = (db.prepare(`SELECT COUNT(*) AS n FROM Riffs`).get() as { n: number }).n
-  } catch {
+  // The change signal doubles as the page loop's `total` (its COUNT(*)).
+  const signal = readTableSignal(db, 'Riffs')
+  const state = newScanCacheState(signal)
+  if (!signal) {
     // Same defensive handling as the page-fetch loop below -- `db` may be
     // an external file missing even a core table. Cache the empty result
     // so a broken db doesn't retry this same expensive-to-fail scan on
-    // every call within the TTL window.
-    riffIndexCache.set(db, { index, computedAt: Date.now() })
+    // every call.
+    riffIndexCache.set(db, { index, state })
     return index
   }
+  const total = signal.count
 
   let offset = 0
   while (offset < total) {
@@ -365,22 +457,8 @@ async function buildRiffIndex(
     await yieldToEventLoop()
   }
 
-  riffIndexCache.set(db, { index, computedAt: Date.now() })
+  riffIndexCache.set(db, { index, state })
   return index
-}
-
-/** Cheap, defensive `SELECT COUNT(*)` against `table` -- same "missing
- * table on a broken/foreign db is not an error" convention as every other
- * query in this file. Used only to decide cache freshness below (a real
- * scan still re-measures its own count via buildRiffIndex/
- * getInstrumentRowsForDb's own COUNT(*), redundant but cheap -- an index
- * scan of the count, not a full row read). */
-function tryCountRows(db: Database.Database, table: 'Riffs' | 'Stems'): number | null {
-  try {
-    return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
-  } catch {
-    return null
-  }
 }
 
 /** Kicks off getRiffIndexForDb (above) for every unique db connection in
@@ -406,7 +484,7 @@ function tryCountRows(db: Database.Database, table: 'Riffs' | 'Stems'): number |
  * writable warehouse -- see discoverIndexCache.ts's own doc comment for
  * why the cache lives there even for an external archive's own data) is
  * now checked FIRST for each db+phase: a cheap `SELECT COUNT(*)`
- * (tryCountRows above) against the row count the cache was last saved
+ * (readTableSignal above) against the row count the cache was last saved
  * with tells us whether the archive has actually changed since. An
  * unchanged archive loads straight from `ownDb` (fast -- same disk as
  * everything else this app already reads/writes, and for the riff index
@@ -436,10 +514,11 @@ export async function prewarmDiscoverCandidateCaches(
       })
 
     try {
-      const liveRiffCount = tryCountRows(db, 'Riffs')
+      const riffSignal = readTableSignal(db, 'Riffs')
+      const liveRiffCount = riffSignal?.count ?? null
       if (liveRiffCount !== null && getCachedRiffCount(ownDb, sourceDbKey) === liveRiffCount) {
         const index = await loadCachedRiffIndex(ownDb, sourceDbKey, reportRiffIndexProgress)
-        riffIndexCache.set(db, { index, computedAt: Date.now() })
+        riffIndexCache.set(db, { index, state: newScanCacheState(riffSignal) })
       } else {
         const index = await getRiffIndexForDb(db, reportRiffIndexProgress)
         if (liveRiffCount !== null) saveRiffIndexCache(ownDb, sourceDbKey, index, liveRiffCount)
@@ -459,10 +538,11 @@ export async function prewarmDiscoverCandidateCaches(
     // try/catch needed, getInstrumentRowsForDb already swallows its own
     // errors internally (an empty cached result, never a throw). Same
     // own-db cache check as the riff index above.
-    const liveStemCount = tryCountRows(db, 'Stems')
+    const stemSignal = readTableSignal(db, 'Stems')
+    const liveStemCount = stemSignal?.count ?? null
     if (liveStemCount !== null && getCachedStemCount(ownDb, sourceDbKey) === liveStemCount) {
       const rows = await loadCachedInstrumentRows(ownDb, sourceDbKey, reportInstrumentRowsProgress)
-      instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+      instrumentRowsCache.set(db, { rows, state: newScanCacheState(stemSignal) })
     } else {
       const rows = await getInstrumentRowsForDb(db, reportInstrumentRowsProgress)
       if (liveStemCount !== null) saveInstrumentRowsCache(ownDb, sourceDbKey, rows, liveStemCount)
@@ -506,21 +586,20 @@ function pickRandomSample<T>(items: T[], size: number): T[] {
   return picked
 }
 
-// TTL cache for getInstrumentRowsForDb, below -- a real library's worth of
+// Cache for getInstrumentRowsForDb, below -- a real library's worth of
 // jams x stems walked fresh on EVERY roll click with no cache at all took
 // minutes (confirmed live). Keyed by db INSTANCE (WeakMap, not a flat
 // cache) specifically so tests using fresh in-memory dbs don't pollute
 // each other -- same pattern this file used for the now-retired embedding/
-// centroid caches before they moved to the background scan. Shares
-// RIFF_INDEX_CACHE_TTL_MS's own 5-minute window (not the original 60s this
-// used to carry) now that the cached unit is the raw table scan rather
-// than one role's already-filtered result -- see this cache's own real
-// perf bug, fixed 2026-09-15 below.
+// centroid caches before they moved to the background scan. Same
+// change-detection rule as the riff index (isScanCacheCurrent, against
+// the Stems table -- background efficiency B3; it used to share the riff
+// index's 5-minute TTL).
 const instrumentRowsCache = new WeakMap<
   Database.Database,
   {
     rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
-    computedAt: number
+    state: ScanCacheState
   }
 >()
 
@@ -556,21 +635,22 @@ async function getInstrumentRowsForDb(
   onProgress?: ScanProgressCallback
 ): Promise<{ StemCID: string; Instrument: number | null; OwnerJamCID: string }[]> {
   const cached = instrumentRowsCache.get(db)
-  if (cached && Date.now() - cached.computedAt < RIFF_INDEX_CACHE_TTL_MS) return cached.rows
+  if (cached && isScanCacheCurrent(db, 'Stems', cached.state)) return cached.rows
 
   type Row = { StemCID: string; Instrument: number | null; OwnerJamCID: string }
   const rows: Row[] = []
-  let total: number
-  try {
-    total = (db.prepare(`SELECT COUNT(*) AS n FROM Stems`).get() as { n: number }).n
-  } catch {
+  // The change signal doubles as the page loop's `total` (its COUNT(*)).
+  const signal = readTableSignal(db, 'Stems')
+  const state = newScanCacheState(signal)
+  if (!signal) {
     // Same defensive handling as every other per-db query in this file --
     // an external db missing even a core table shouldn't abort the whole
     // multi-db scan. Cache the empty result so a broken db doesn't retry
-    // this same expensive-to-fail scan on every call within the TTL.
-    instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+    // this same expensive-to-fail scan on every call.
+    instrumentRowsCache.set(db, { rows, state })
     return rows
   }
+  const total = signal.count
 
   // Same PREWARM_CHUNK_SIZE/LIMIT-OFFSET pagination as buildRiffIndex, and
   // for the identical reason -- see PREWARM_CHUNK_SIZE's own doc comment.
@@ -595,7 +675,7 @@ async function getInstrumentRowsForDb(
     await yieldToEventLoop()
   }
 
-  instrumentRowsCache.set(db, { rows, computedAt: Date.now() })
+  instrumentRowsCache.set(db, { rows, state })
   return rows
 }
 
@@ -1131,6 +1211,7 @@ async function getMaskDiscoverCandidates({
   // throw, not silently produce an empty Discover pool with no diagnostic
   // trail.
   const arrangeRole = discoverSlotKindToArrangeRole(kind)
+  countWork('sql:discover.confirmed-role')
   const confirmedRows = ownDb
     .prepare(`SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories WHERE ArrangeRole = ?`)
     .all(arrangeRole) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
@@ -1228,6 +1309,7 @@ async function getMaskDiscoverCandidates({
 
       let stemRows: { StemCID: string; PresetName: string | null; CreatorUserName: string | null }[]
       try {
+        countWork('sql:discover.mask-pool-stems')
         stemRows = db
           .prepare(
             `SELECT StemCID, PresetName, CreatorUserName FROM Stems WHERE StemCID IN (${stemPlaceholders})`

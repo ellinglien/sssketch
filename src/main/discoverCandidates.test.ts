@@ -1,5 +1,5 @@
 // src/main/discoverCandidates.test.ts
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import {
   getDiscoverCandidates,
@@ -2160,5 +2160,131 @@ describe('background efficiency B2: per-kind stem lists', () => {
     seedAutoCategory(own, 'mic', 'lead')
     const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })
     expect(lead.map((c) => [c.stemCID, c.kindSources.lead])).toEqual([['mic', 'guess']])
+  })
+})
+
+describe('background efficiency B3: change detection instead of a TTL', () => {
+  const T0 = 1_000_000_000
+  let now = T0
+  const advance = (ms: number): void => {
+    now += ms
+  }
+  const pageQueries = (spy: { mock: { calls: unknown[][] } }, table: string): unknown[] =>
+    spy.mock.calls.filter(
+      ([sql]) => typeof sql === 'string' && sql.includes(`FROM ${table}`) && sql.includes('LIMIT')
+    )
+
+  beforeEach(() => {
+    now = T0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('an unchanged Riffs table is never rescanned, however long it has been', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    const first = await getRiffIndexForDb(own)
+    const spy = vi.spyOn(own, 'prepare')
+    for (let i = 0; i < 5; i++) {
+      advance(10 * 60_000)
+      expect(await getRiffIndexForDb(own)).toBe(first)
+    }
+    expect(pageQueries(spy, 'Riffs')).toEqual([])
+  })
+
+  it('checks at most once per interval: an insert inside it is not looked for yet', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    const first = await getRiffIndexForDb(own)
+    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
+    const spy = vi.spyOn(own, 'prepare')
+    advance(5_000)
+    expect(await getRiffIndexForDb(own)).toBe(first)
+    expect(spy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))).toEqual([])
+  })
+
+  it('rebuilds the riff index after an insert, on the next check', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    const first = await getRiffIndexForDb(own)
+    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
+    advance(31_000)
+    const second = await getRiffIndexForDb(own)
+    expect(second).not.toBe(first)
+    expect(second.get('s2')?.riffCID).toBe('r2')
+  })
+
+  it('rebuilds after a delete (count moved, max rowid did not)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
+    const first = await getRiffIndexForDb(own)
+    own.prepare(`DELETE FROM Riffs WHERE RiffCID = 'r1'`).run()
+    advance(31_000)
+    const second = await getRiffIndexForDb(own)
+    expect(second.has('s1')).toBe(false)
+    expect(second.has('s2')).toBe(true)
+    expect(first.has('s1')).toBe(true)
+  })
+
+  it("an in-place UPDATE (skeleton riff filled in) is picked up no later than the old TTL's 5 minutes", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, [])
+    const first = await getRiffIndexForDb(own)
+    expect(first.size).toBe(0)
+    own.prepare(`UPDATE Riffs SET StemCID_1 = 's1' WHERE RiffCID = 'r1'`).run()
+    advance(31_000)
+    expect(await getRiffIndexForDb(own)).toBe(first)
+    advance(5 * 60_000)
+    const later = await getRiffIndexForDb(own)
+    expect(later.get('s1')?.riffCID).toBe('r1')
+  })
+
+  it('the instrument rows follow the same rule: a new drum stem appears after the next check, and an unchanged table is not rescanned', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 1 << 1 })
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+    await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+
+    const spy = vi.spyOn(own, 'prepare')
+    advance(10 * 60_000)
+    const unchanged = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(unchanged.map((c) => c.stemCID)).toEqual(['d1'])
+    expect(pageQueries(spy, 'Stems')).toEqual([])
+    expect(pageQueries(spy, 'Riffs')).toEqual([])
+
+    seedRiff(own, 'r2', 'jam1', 128, ['d2'])
+    seedStem(own, 'd2', 'jam1', { instrument: 1 << 1 })
+    advance(31_000)
+    const after = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(after.map((c) => c.stemCID).sort()).toEqual(['d1', 'd2'])
+  })
+
+  it('a cache loaded from disk by the prewarm is change-checked the same way', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    saveRiffIndexCache(
+      own,
+      own.name,
+      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
+      1
+    )
+    saveInstrumentRowsCache(
+      own,
+      own.name,
+      [{ StemCID: 's1', Instrument: null, OwnerJamCID: 'jam1' }],
+      1
+    )
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
+    const loaded = await getRiffIndexForDb(own)
+    advance(10 * 60_000)
+    expect(await getRiffIndexForDb(own)).toBe(loaded)
+    seedRiff(own, 'r2', 'jam1', 128, ['s2'])
+    advance(31_000)
+    expect((await getRiffIndexForDb(own)).get('s2')?.riffCID).toBe('r2')
   })
 })

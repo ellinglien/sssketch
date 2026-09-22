@@ -317,6 +317,7 @@ function needsRebuild(
  * field). {} when the table is missing/empty or a build fails -- callers
  * then just get null percentiles (unanalysed), never an error. */
 export async function getTraitQuantileTables(db: Database.Database): Promise<TraitQuantileTables> {
+  countWork('sql:trait-quantile.count')
   const count = countRows(db)
   if (count === null) return {}
   const entry = cache.get(db)
