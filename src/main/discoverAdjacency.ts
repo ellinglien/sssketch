@@ -2,6 +2,7 @@
 import { basename } from 'node:path'
 import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
+import type { ArrangeRole } from '@shared/stemRole'
 import {
   isMaskSlotKind,
   isTraitSlotKind,
@@ -111,10 +112,10 @@ export async function getAdjacentDiscoverCandidates(
   kinds: readonly DiscoverSlotKind[],
   // Direct request, 2026-09-21: "a way to only enable audio in or
   // microphone stems." Combination-slot rule (stemMatchesSlotKinds,
-  // @shared/discoverTraits): mask kinds (drums/bass/lead) are always real
-  // Endlesss content by construction, so a mask-kind set matches nothing
-  // while "endlesss" is off; a trait-only set is filtered by this instead.
-  // Defaults to no filtering.
+  // @shared/discoverTraits): applies to every kind set, by each stem's own
+  // instrument mask (2026-09-22 -- mask kinds no longer go empty while
+  // "endlesss" is off; an audio-in stem the overnight classifier placed
+  // can match drums/bass/lead). Defaults to no filtering.
   soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true }
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
@@ -143,6 +144,14 @@ export async function getAdjacentDiscoverCandidates(
   const normalizedKinds = normalizeSlotKinds(kinds)
   const traitKinds = normalizedKinds.filter(isTraitSlotKind)
   const hasMaskKind = normalizedKinds.some(isMaskSlotKind)
+  // Prepared once per call, not per stem -- the window is small, but
+  // matchRole runs for up to 8 stems x every riff walked. Both tables live
+  // only on ownDb, whichever db the stem itself resolved from.
+  const confirmedRoleStmt = ownDb.prepare(
+    `SELECT ArrangeRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL`
+  )
+  const autoRoleStmt = ownDb.prepare(`SELECT ArrangeRole FROM StemAutoCategory WHERE StemCID = ?`)
+  const featureStmt = ownDb.prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
 
   async function matchRole(summary: {
     riffCID: string
@@ -151,7 +160,20 @@ export async function getAdjacentDiscoverCandidates(
     if (!resolved) return null
     for (const stem of resolved.stems) {
       const soundType = instrumentMaskToSoundType(stem.instrumentMask)
-      if (!stemMatchesSlotKinds(stem.instrumentMask, normalizedKinds, soundSource)) continue
+      // Only mask kinds consult a stem's role -- a trait-only set skips the
+      // two lookups entirely.
+      const classification = hasMaskKind
+        ? {
+            confirmedRole:
+              (confirmedRoleStmt.get(stem.stemCID) as { ArrangeRole: ArrangeRole } | undefined)
+                ?.ArrangeRole ?? null,
+            autoRole:
+              (autoRoleStmt.get(stem.stemCID) as { ArrangeRole: ArrangeRole } | undefined)
+                ?.ArrangeRole ?? null
+          }
+        : {}
+      if (!stemMatchesSlotKinds(stem.instrumentMask, normalizedKinds, soundSource, classification))
+        continue
 
       // Trait kinds rank, never filter -- but a TRAIT-ONLY set has nothing
       // to rank by without a cached feature row, so it still requires one
@@ -159,9 +181,7 @@ export async function getAdjacentDiscoverCandidates(
       // mask-matched stem either way.
       let traitValues: TraitValues = {}
       if (traitKinds.length > 0) {
-        const featureRow = ownDb
-          .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
-          .get(stem.stemCID) as { FeaturesJSON: string } | undefined
+        const featureRow = featureStmt.get(stem.stemCID) as { FeaturesJSON: string } | undefined
         let features: StemFeatures | null = null
         if (featureRow) {
           try {

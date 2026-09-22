@@ -19,7 +19,6 @@ export function DiscoverKindPicker({
   x,
   y,
   kinds,
-  maskKindsDisabled,
   onChange,
   onClose,
   ignoreRef
@@ -27,9 +26,6 @@ export function DiscoverKindPicker({
   x: number
   y: number
   kinds: DiscoverSlotKind[]
-  /** DiscoverPanel's "endlesss" checkbox is off -- instrument kinds are
-   * Endlesss content by definition, so they can't be picked. */
-  maskKindsDisabled: boolean
   onChange: (kinds: DiscoverSlotKind[]) => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
@@ -69,21 +65,12 @@ export function DiscoverKindPicker({
 
   function chip(kind: DiscoverSlotKind): React.JSX.Element {
     const on = kinds.includes(kind)
-    // maskKindsDisabled only blocks turning a mask chip ON -- an already-ON
-    // one (e.g. a 'drums' slot after "endlesss" gets unticked) must stay
-    // toggleable OFF, or the picker becomes a dead end: no way to remove
-    // the one kind that's no longer selectable at all (the last-chip guard
-    // below still stops it being the very last kind on the slot).
-    const disabled = maskKindsDisabled && !on && DISCOVER_MASK_SLOT_KINDS.includes(kind)
     const isLastOn = on && kinds.length === 1
     return (
       <button
         key={kind}
-        disabled={disabled}
         aria-pressed={on}
-        data-tooltip={
-          disabled ? 'needs endlesss on' : isLastOn ? 'a slot needs at least one kind' : undefined
-        }
+        data-tooltip={isLastOn ? 'a slot needs at least one kind' : undefined}
         onClick={() => {
           const next = toggleSlotKind(kinds, kind)
           if (slotKindsKey(next) !== slotKindsKey(kinds)) onChange(next)
@@ -95,8 +82,7 @@ export function DiscoverKindPicker({
           background: on ? 'var(--ra-bg-row-active)' : 'transparent',
           border: `1px solid ${on ? 'var(--ra-text)' : 'var(--ra-border)'}`,
           color: on ? 'var(--ra-text)' : 'var(--ra-text-2)',
-          opacity: disabled ? 0.3 : 1,
-          cursor: disabled ? 'not-allowed' : 'pointer'
+          cursor: 'pointer'
         }}
       >
         {DISCOVER_SLOT_KIND_LABEL[kind]}

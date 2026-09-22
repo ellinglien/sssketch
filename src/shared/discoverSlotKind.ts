@@ -5,11 +5,14 @@ import type { ArrangeRole } from './stemRole'
  * docs/superpowers/specs/2026-09-18-discover-trait-based-matching-design.md),
  * then extended to combination slots (docs/superpowers/specs/2026-09-21-
  * discover-combo-slot-kinds-design.md): a slot carries a SET of these, not
- * one. The 3 mask kinds (drums/bass/lead) are an OR filter directly on
- * Endlesss's own reliable instrument bitmask (instrumentMaskToSoundType,
- * @shared/riffLibraryTypes) -- Endlesss content only, by definition, so
- * they match nothing while the "endlesss" sound-source checkbox is off
- * (soundSourceMatchesFilter, riffLibraryTypes.ts). The 4 trait kinds are
+ * one. The 3 mask kinds (drums/bass/lead) are an OR filter on a stem's
+ * role: human confirmation first, else Endlesss's own reliable instrument
+ * bitmask (instrumentMaskToSoundType, @shared/riffLibraryTypes), else --
+ * only for stems that mask can't place (no mask, or audio-in) -- the
+ * overnight classifier's guess (stemMatchesSlotKinds, discoverTraits.ts;
+ * 2026-09-22). The endlesss/non-endlesss sound-source checkboxes apply to
+ * every kind, by each stem's own mask (soundSourceMatchesFilter,
+ * riffLibraryTypes.ts). The 4 trait kinds are
  * rankings, not a filter -- they score any stem with a cached
  * StemFeatureCache row (tagged or not) by cheap numeric fields; a set
  * combining a mask kind with a trait kind (e.g. {drums, bright}) filters by

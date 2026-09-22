@@ -167,9 +167,9 @@ export function DiscoverNearbyPopover({
   kinds: DiscoverSlotKind[]
   /** DiscoverPanel's own soundSourceEndlesss/soundSourceAudioIn toolbar
    * checkboxes. Combination-slot rule (stemMatchesSlotKinds,
-   * @shared/discoverTraits): mask kinds match nothing while "endlesss" is
-   * off (they're Endlesss content by construction); trait kinds only ever
-   * rank, so this filters a trait-only set instead. */
+   * @shared/discoverTraits): applies to every kind set, by each stem's own
+   * instrument mask -- endlesss = Endlesss instruments/effects, non-endlesss
+   * = audio-in/mic. */
   soundSource: DiscoverSoundSourceFilter
   /** DiscoverSlotRow's own onSwapFromNearby -- fires on every pick, INCLUDING
    * a step-button pick or "back to start." This popover recenters its own

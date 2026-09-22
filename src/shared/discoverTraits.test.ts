@@ -52,8 +52,76 @@ describe('stemMatchesSlotKinds', () => {
     expect(stemMatchesSlotKinds(MIC, ['drums', 'bass'], both)).toBe(false)
   })
 
-  it('a mask kind in the set means nothing matches while endlesss is off', () => {
+  it('an Endlesss drum stem does NOT match drums while endlesss is off', () => {
     expect(stemMatchesSlotKinds(DRUM, ['drums'], { endlesss: false, audioIn: true })).toBe(false)
+  })
+
+  // Direct request, 2026-09-22: audio-in/mic stems must be able to show up
+  // under drums/bass/lead, via the overnight classifier's guess.
+  it('a mic stem auto-classified drums matches drums, even with endlesss off', () => {
+    const micOnly = { endlesss: false, audioIn: true }
+    expect(stemMatchesSlotKinds(MIC, ['drums'], micOnly, { autoRole: 'drums' })).toBe(true)
+    expect(stemMatchesSlotKinds(MIC, ['drums'], both, { autoRole: 'drums' })).toBe(true)
+    expect(stemMatchesSlotKinds(MIC, ['bass'], both, { autoRole: 'drums' })).toBe(false)
+  })
+
+  it('a mic stem auto-classified drums is dropped by an endlesss-only filter', () => {
+    expect(
+      stemMatchesSlotKinds(
+        MIC,
+        ['drums'],
+        { endlesss: true, audioIn: false },
+        { autoRole: 'drums' }
+      )
+    ).toBe(false)
+  })
+
+  it('an unmasked stem auto-classified drums counts as Endlesss for the sound-source filter', () => {
+    expect(stemMatchesSlotKinds(null, ['drums'], both, { autoRole: 'drums' })).toBe(true)
+    expect(
+      stemMatchesSlotKinds(
+        null,
+        ['drums'],
+        { endlesss: false, audioIn: true },
+        { autoRole: 'drums' }
+      )
+    ).toBe(false)
+  })
+
+  it('an Endlesss-placed mask is ground truth: an auto guess never moves it to another kind', () => {
+    expect(stemMatchesSlotKinds(DRUM, ['drums'], both, { autoRole: 'bass' })).toBe(true)
+    expect(stemMatchesSlotKinds(DRUM, ['bass'], both, { autoRole: 'bass' })).toBe(false)
+  })
+
+  it('a confirmed role overrides the mask, any mask', () => {
+    expect(stemMatchesSlotKinds(DRUM, ['bass'], both, { confirmedRole: 'bass' })).toBe(true)
+    expect(stemMatchesSlotKinds(MIC, ['lead'], both, { confirmedRole: 'lead' })).toBe(true)
+  })
+
+  it('a stem confirmed for another role is excluded, even if its mask or auto guess match', () => {
+    expect(stemMatchesSlotKinds(DRUM, ['drums'], both, { confirmedRole: 'bass' })).toBe(false)
+    expect(
+      stemMatchesSlotKinds(MIC, ['drums'], both, { confirmedRole: 'aux', autoRole: 'drums' })
+    ).toBe(false)
+  })
+
+  it('a confirmed stem still obeys the sound-source filter', () => {
+    expect(
+      stemMatchesSlotKinds(
+        DRUM,
+        ['drums'],
+        { endlesss: false, audioIn: true },
+        {
+          confirmedRole: 'drums'
+        }
+      )
+    ).toBe(false)
+  })
+
+  it('both sources off matches nothing', () => {
+    const none = { endlesss: false, audioIn: false }
+    expect(stemMatchesSlotKinds(MIC, ['drums'], none, { autoRole: 'drums' })).toBe(false)
+    expect(stemMatchesSlotKinds(DRUM, ['warm'], none)).toBe(false)
   })
 
   it('trait-only sets accept any stem the sound-source filter allows, tagged or not', () => {

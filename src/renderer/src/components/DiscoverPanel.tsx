@@ -12,7 +12,6 @@ import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
   DISCOVER_TRAIT_SLOT_KINDS,
-  isMaskSlotKind,
   isTraitSlotKind,
   slotKindsKey,
   slotKindsLabel,
@@ -208,11 +207,7 @@ export function freshSlotId(): string {
 // trips this codebase's react-hooks purity lint rule) -- so this lives at
 // module scope, like freshSlotId above, and uses the Web Crypto API
 // instead, the same non-Math.random() convention freshSlotId itself
-// already established. Takes the allowed option list rather than always
-// picking from all 7 (DISCOVER_SLOT_KIND_OPTIONS) -- mask kinds (drums/
-// bass/lead) are Endlesss-only and must never be handed out while the
-// "endlesss" sound-source checkbox is off (see addRandomSlot's own call
-// site, which passes DISCOVER_TRAIT_SLOT_KINDS in that case).
+// already established.
 function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverSlotKind {
   const index = crypto.getRandomValues(new Uint32Array(1))[0] % options.length
   return options[index]
@@ -1236,14 +1231,8 @@ export function DiscoverPanel({
   // pending set instead (again to disarm), and the next plain click adds ONE
   // slot with every armed kind plus the one clicked ("cmd-click drums,
   // click bright = a drums · bright slot"). The row's order never changes,
-  // so combining never needs the cursor to move. Esc disarms. Mask kinds are
-  // dropped from what gets added while the "endlesss" source is off (they
-  // can't match anything then), so a selection made before unticking it
-  // never produces a dead slot.
+  // so combining never needs the cursor to move. Esc disarms.
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
-  const addableKinds = soundSourceEndlesss
-    ? pendingAddKinds
-    : pendingAddKinds.filter((k) => !isMaskSlotKind(k))
 
   function handleAddRowKindClick(kind: DiscoverSlotKind, arm: boolean): void {
     if (arm) {
@@ -1255,9 +1244,8 @@ export function DiscoverPanel({
     const withClicked = pendingAddKinds.includes(kind)
       ? pendingAddKinds
       : toggleSlotKind(pendingAddKinds, kind, { allowEmpty: true })
-    const kinds = soundSourceEndlesss ? withClicked : withClicked.filter((k) => !isMaskSlotKind(k))
-    if (kinds.length === 0) return
-    addSlot(kinds)
+    if (withClicked.length === 0) return
+    addSlot(withClicked)
     setPendingAddKinds([])
   }
 
@@ -1285,17 +1273,13 @@ export function DiscoverPanel({
   // randomDiscoverSlotKind (module scope, near freshSlotId above) picks
   // which kind label to show/map to a bus with, matching
   // getRandomLibraryCandidate's own "labeled with the caller's kind, not a
-  // claim it IS that role" convention. Only offers trait kinds while
-  // "endlesss" is off -- a mask-kind label (drums/bass/lead) would be a lie
-  // for a slot that can't actually draw Endlesss content.
+  // claim it IS that role" convention. Picks from every kind -- since
+  // 2026-09-22 every kind can draw audio-in/mic stems too, and the roll
+  // itself still honours the endlesss/non-endlesss checkboxes.
   function addRandomSlot(): void {
     pushUndoSnapshot()
     const id = freshSlotId()
-    const kinds = [
-      randomDiscoverSlotKind(
-        soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS : DISCOVER_TRAIT_SLOT_KINDS
-      )
-    ]
+    const kinds = [randomDiscoverSlotKind(DISCOVER_SLOT_KIND_OPTIONS)]
     setSlots((prev) => [
       ...prev,
       { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
@@ -1701,7 +1685,7 @@ export function DiscoverPanel({
     // purity lint rule, and a random FIRST kind isn't something the direct
     // report actually asked for.
     if (slots.length === 0) {
-      addSlot([soundSourceEndlesss ? DISCOVER_SLOT_KIND_OPTIONS[0] : DISCOVER_TRAIT_SLOT_KINDS[0]])
+      addSlot([DISCOVER_SLOT_KIND_OPTIONS[0]])
       return
     }
     // One undo snapshot for the WHOLE batch, taken up front -- calls
@@ -2273,12 +2257,12 @@ export function DiscoverPanel({
           split once for being "cluttered"; adding two more checkboxes to
           the SAME already-tuned row risks the exact same complaint again.
           Direct request, 2026-09-21: "a way to only enable audio in or
-          microphone stems." Turning "endlesss" off also disables the 3
-          mask kinds (drums/bass/lead) -- they're Endlesss content by
-          definition, so with the source off they can't match anything;
-          see getDiscoverCandidates' own soundSource doc comment
-          (discoverCandidates.ts). "non-endlesss" only ever affects the 4
-          trait kinds (bassHeavy/rhythmic/bright/warm). */}
+          microphone stems." Both checkboxes apply to EVERY kind, by each
+          stem's own instrument mask: "endlesss" = sounds made with Endlesss
+          instruments/effects, "non-endlesss" = audio-in/mic. Since
+          2026-09-22 drums/bass/lead can draw audio-in/mic stems too (via
+          the overnight classifier) -- see getDiscoverCandidates' own doc
+          comment (discoverCandidates.ts). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <label
           style={{
@@ -2292,7 +2276,7 @@ export function DiscoverPanel({
           <input
             type="checkbox"
             checked={soundSourceEndlesss}
-            title="stems made with Endlesss instruments or effects -- turning this off also turns off drums/bass/lead, which are Endlesss-only"
+            title="stems made with Endlesss instruments or effects -- applies to every kind"
             onChange={(e) => setSoundSourceEndlesss(e.target.checked)}
           />
           endlesss
@@ -2309,7 +2293,7 @@ export function DiscoverPanel({
           <input
             type="checkbox"
             checked={soundSourceAudioIn}
-            title="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect)"
+            title="audio-in / microphone stems (real recorded input, not an Endlesss instrument or effect) -- applies to every kind, drums/bass/lead included"
             onChange={(e) => setSoundSourceAudioIn(e.target.checked)}
           />
           non-endlesss
@@ -2509,17 +2493,12 @@ export function DiscoverPanel({
             after warm. Display order only -- DISCOVER_SLOT_KIND_OPTIONS (and
             so combo labels like "drums · warm") keeps its canonical order. */}
         {[...DISCOVER_TRAIT_SLOT_KINDS, ...DISCOVER_MASK_SLOT_KINDS].map((kind) => {
-          // Instrument kinds are Endlesss content by definition -- with the
-          // "endlesss" source off they can't match anything (spec, 2026-09-21).
-          const disabled = !soundSourceEndlesss && isMaskSlotKind(kind)
-          const selected = !disabled && pendingAddKinds.includes(kind)
+          const selected = pendingAddKinds.includes(kind)
           return (
             <button
               key={kind}
-              disabled={disabled}
               aria-pressed={selected}
               onClick={(e) => handleAddRowKindClick(kind, e.metaKey)}
-              data-tooltip={disabled ? 'needs endlesss on' : undefined}
               style={{
                 fontFamily: 'inherit',
                 fontSize: 9,
@@ -2527,8 +2506,7 @@ export function DiscoverPanel({
                 background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
                 border: `1px solid ${selected ? 'var(--ra-text)' : 'transparent'}`,
                 color: selected ? 'var(--ra-text)' : 'var(--ra-text-2)',
-                opacity: disabled ? 0.3 : 1,
-                cursor: disabled ? 'not-allowed' : 'pointer'
+                cursor: 'pointer'
               }}
             >
               {DISCOVER_SLOT_KIND_LABEL[kind]}
@@ -2584,8 +2562,8 @@ export function DiscoverPanel({
           color: 'var(--ra-text-3)'
         }}
       >
-        {addableKinds.length > 0
-          ? `${slotKindsLabel(addableKinds)} armed • click a kind to add • esc to clear`
+        {pendingAddKinds.length > 0
+          ? `${slotKindsLabel(pendingAddKinds)} armed • click a kind to add • esc to clear`
           : 'hold cmd to combine'}
       </div>
     </div>
@@ -3899,7 +3877,6 @@ function DiscoverSlotRow({
           x={kindMenu.x}
           y={kindMenu.y}
           kinds={slot.kinds}
-          maskKindsDisabled={!soundSourceEndlesss}
           onChange={onChangeKinds}
           onClose={closeKindMenu}
           ignoreRef={kindButtonRef}

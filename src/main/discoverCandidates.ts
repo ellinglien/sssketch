@@ -24,22 +24,21 @@ import {
   loadCachedInstrumentRows,
   saveInstrumentRowsCache
 } from './discoverIndexCache'
+import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 
 /** One library-wide candidate for a Discover slot.
  *
  * For a MASK slot kind (drums/bass/lead -- DISCOVER_MASK_SLOT_KINDS), a
- * candidate is EITHER human-confirmed (StemCategories) for the requested
- * kind's own ArrangeRole, or whose own Endlesss instrument category maps
- * to that kind (getInstrumentMatchedStemCIDs, below -- real ground truth
- * requiring no prior confirmation at all). The background "categorize the
- * whole library overnight" scan's own precomputed results (StemAutoCategory
- * -- stemAutoClassify.ts) used to widen this pool too (direct request
- * 2026-09-15, "why not just do a prelim scan that pre-categorizes the
- * stems") but that layer is REMOVED for mask kinds as of the 2026-09-18
- * Discover trait-based matching redesign -- this codebase no longer trusts
- * the fallible embedding/centroid classifier for a kind Endlesss's own mask
- * can answer directly; only a real human confirmation or the mask bit
- * itself populate a mask kind's pool now.
+ * candidate comes from one of three sources (getMaskKindStemMasks, below):
+ * human-confirmed (StemCategories) for the requested kind's own
+ * ArrangeRole, any mask; its own Endlesss instrument category maps to that
+ * kind (real ground truth, no confirmation needed); or -- ONLY for a stem
+ * the mask can't place (no mask, or audio-in) -- the overnight classify
+ * scan's own guess (StemAutoCategory, stemAutoClassify.ts). That last
+ * source was dropped for mask kinds on 2026-09-18 and restored, scoped to
+ * unplaceable stems, on 2026-09-22 (direct request: audio-in/mic stems
+ * never appeared under drums/bass/lead). The endlesss/non-endlesss
+ * checkboxes then filter the whole pool by each stem's own mask.
  *
  * For a TRAIT-ONLY slot kind set (bassHeavy/rhythmic/bright/warm), see
  * getTraitPoolCandidates -- any stem with a cached StemFeatureCache row,
@@ -496,7 +495,7 @@ const instrumentRowsCache = new WeakMap<
 
 /** The whole `Stems` table's own StemCID/Instrument/OwnerJamCID columns for
  * `db`, cached in memory -- the expensive, disk-bound part of
- * getInstrumentMatchedStemCIDs (below), split out on its own so it can be
+ * getMaskKindStemMasks (below), split out on its own so it can be
  * cached ONCE PER DB rather than once per (db, ArrangeRole).
  *
  * Real perf bug, found live 2026-09-15 via Elling's own question ("if
@@ -511,7 +510,7 @@ const instrumentRowsCache = new WeakMap<
  * session each independently paid a real ~6.5s cold scan against the
  * external archive for identical data. Caching the raw rows here (fast
  * per-role JS filtering happens fresh every call in
- * getInstrumentMatchedStemCIDs, measured at ~50ms even for 367k rows) means
+ * getMaskKindStemMasks, measured at ~50ms even for 367k rows) means
  * only the FIRST role rolled in a session pays this cost; every other role
  * after it becomes a plain in-memory filter.
  *
@@ -579,71 +578,69 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** Every StemCID, across the given jams, that isn't confirmed
- * (StemCategories) for ANY ArrangeRole -- not just the one being queried,
- * so a real human confirmation always wins over a raw instrument-bit
- * match -- but whose own Endlesss instrument category (Stems.Instrument, a
- * bitmask -- instrumentMaskToSoundType) directly identifies it as `kind`.
- * Only ever called for one of the 3 MASK kinds (drums/bass/lead) -- an
- * audioIn-masked or unmasked stem never matches here, by design (see this
- * codebase's own real finding, 2026-09-18: audioIn is not a reliable
- * signal, "can indeed be drums though"). Direct request, 2026-09-15: "can't
- * we train it with some basic data before handing it to someone?" -- this
- * needs NO prior confirmation and no background scan at all: instrument
- * category is real ground truth Endlesss itself recorded at jam time (see
- * instrumentMaskToSoundType's own doc comment -- "traced directly from
- * OUROVEON's own source, not guessed"), present on every synced stem the
- * moment it syncs. Stays a LIVE query (unlike the embedding/centroid
- * classifiers, moved out to a background scan the same day, then dropped
- * entirely for mask kinds -- see DiscoverCandidate's own doc comment)
- * since it's already cheap: a bitmask check, no classifier math, no
- * external store to load.
+/** Every StemCID, across the given jams, admitted to MASK kind `kind`'s
+ * pool by the Endlesss mask or the overnight classifier -- mapped to its
+ * own raw instrument mask (Stems.Instrument, null when unset) so the
+ * caller can apply the endlesss/non-endlesss sound-source filter. Also
+ * records the mask of every stem confirmed (StemCategories) for `kind`'s
+ * own role that the walk passes, for the same reason -- the caller adds
+ * those stems to the pool itself.
  *
- * Reads each jam's own `Stems` table directly (not ownDb) for the
- * Instrument values themselves -- a stem's Instrument lives wherever its
- * Riffs/Stems rows do, same as the main per-jam loop below. `.all()`, not
- * `.iterate()`, for the "never leave a statement open across an await"
- * discipline this whole file follows after a real live crash (a
- * `.iterate()`-across-an-await once threw "This database connection is
- * busy executing a query" against a concurrent background-sync
- * transaction). Yields periodically since many-rows-is-real-synchronous-
- * work regardless of how cheap each individual check is.
+ * A stem confirmed for ANY ArrangeRole is never admitted here -- a real
+ * human confirmation always wins (confirmed for a different role excludes
+ * it, confirmed for this role is the caller's own source). Otherwise:
  *
- * The raw per-db table scan is cached (getInstrumentRowsForDb, above) --
- * this function itself does NO SQL of its own beyond that and the small
- * ownDb StemCategories exclusion query, just an in-memory filter, so it's
- * cheap enough to run fresh on every call regardless of role or TTL. Real
- * perf bug, fixed 2026-09-15 (see getInstrumentRowsForDb's own doc comment
- * for the full story, found live via Elling's own question: "if 15,054
- * drum stems have been analyzed, why does it take 38 seconds on first
- * load?"): this used to cache its OWN already-filtered per-role result,
- * which meant the expensive raw scan above was re-run in full for every
- * role not yet individually cached -- rolling 'drums' then 'bass' paid the
- * same multi-second external-archive scan twice for identical rows.
+ * - Endlesss instrument mask (instrumentMaskToSoundType) resolving to
+ *   drums/bass/notes: ground truth Endlesss itself recorded at jam time
+ *   ("traced directly from OUROVEON's own source, not guessed"), present on
+ *   every synced stem the moment it syncs -- direct request 2026-09-15:
+ *   "can't we train it with some basic data before handing it to someone?"
+ *   The mask decides alone; an auto guess never moves such a stem to
+ *   another kind.
+ * - A stem the mask CAN'T place (Instrument null, no recognised bit, or
+ *   audio-in): admitted if the overnight classify scan's own precomputed
+ *   guess (StemAutoCategory, on ownDb) is `kind`'s role. That classifier
+ *   was dropped for mask kinds on 2026-09-18 (the Discover trait-based
+ *   matching redesign stopped trusting it for anything the mask answers
+ *   directly), and is back as of 2026-09-22 -- direct request: audio-in/mic
+ *   stems never appeared under drums/bass/lead, since the mask has no
+ *   answer for them at all. Scoped to exactly those stems, so the mask
+ *   stays authoritative wherever it has something to say.
  *
- * Also fixed the same day as a second, earlier perf bug (root cause of
- * "still slow, 10-12 seconds" on every role change or TTL expiry,
- * confirmed live on Elling's own 5,057-jam library): this function used to
- * query each jam's own Stems table separately (`WHERE OwnerJamCID = ?`),
- * one query PER JAM -- 5,057 separate round trips. Fixed the SAME way the
- * main candidate-resolution loop already was: group jams by db CONNECTION
- * (most share one, riffLibraryStore.ts's own dbForJam) and read each db's
- * Stems table ONCE (now via the shared getInstrumentRowsForDb cache),
- * filtering "is this jam one we're allowed to include" in JS
- * (allowedJamCIDs, below) instead of in SQL -- collapses O(jams) round
- * trips to O(uniqueDbs). */
-async function getInstrumentMatchedStemCIDs(
+ * The StemAutoCategory stems for the role are loaded ONCE up front (one
+ * query on ownDb), then the walk is a single pass over each db's cached
+ * instrument rows (getInstrumentRowsForDb, above) -- no SQL of its own
+ * beyond that and the two small ownDb queries. Reads each jam's own
+ * `Stems` table (not ownDb) for the Instrument values, via that cache;
+ * `.all()`, never `.iterate()`, per this file's own "never leave a
+ * statement open across an await" rule (a real live crash). Yields every
+ * CLASSIFY_YIELD_EVERY rows -- cheap per row, but real synchronous work at
+ * library scale.
+ *
+ * Real perf bugs fixed here 2026-09-15 (found live via Elling's own
+ * question: "if 15,054 drum stems have been analyzed, why does it take 38
+ * seconds on first load?"): this used to cache its OWN already-filtered
+ * per-role result, re-running the raw scan for every role not yet cached;
+ * and before that it queried each jam's own Stems table separately (5,057
+ * round trips). Jams are grouped by db CONNECTION (most share one --
+ * riffLibraryStore.ts's own dbForJam), each db's Stems table is read ONCE
+ * (the shared getInstrumentRowsForDb cache), and "is this jam one we're
+ * allowed to include" is filtered in JS (allowedJamCIDs) -- O(uniqueDbs),
+ * not O(jams). */
+async function getMaskKindStemMasks(
   ownDb: Database.Database,
   jams: JamDbPair[],
   kind: DiscoverSlotKind
-): Promise<Set<string>> {
-  const confirmedAnyRole = new Set(
+): Promise<Map<string, number | null>> {
+  const arrangeRole = discoverSlotKindToArrangeRole(kind)
+  const confirmedRoleByStemCID = new Map(
     (
-      ownDb.prepare(`SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL`).all() as {
-        StemCID: string
-      }[]
-    ).map((r) => r.StemCID)
+      ownDb
+        .prepare(`SELECT StemCID, ArrangeRole FROM StemCategories WHERE ArrangeRole IS NOT NULL`)
+        .all() as { StemCID: string; ArrangeRole: string }[]
+    ).map((r) => [r.StemCID, r.ArrangeRole])
   )
+  const autoForRole = getAutoCategorizedStemCIDs(ownDb, arrangeRole)
 
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
@@ -652,24 +649,27 @@ async function getInstrumentMatchedStemCIDs(
     else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
   }
 
-  const matched = new Set<string>()
+  const maskByStemCID = new Map<string, number | null>()
   let sinceYield = 0
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const rows = await getInstrumentRowsForDb(db)
     for (const row of rows) {
-      if (
-        allowedJamCIDs.has(row.OwnerJamCID) &&
-        row.Instrument !== null &&
-        !confirmedAnyRole.has(row.StemCID) &&
-        !matched.has(row.StemCID)
-      ) {
-        const soundType = instrumentMaskToSoundType(row.Instrument)
-        if (
-          (soundType === 'drums' && kind === 'drums') ||
-          (soundType === 'bass' && kind === 'bass') ||
-          (soundType === 'notes' && kind === 'lead')
-        ) {
-          matched.add(row.StemCID)
+      if (allowedJamCIDs.has(row.OwnerJamCID) && !maskByStemCID.has(row.StemCID)) {
+        const confirmedRole = confirmedRoleByStemCID.get(row.StemCID)
+        if (confirmedRole !== undefined) {
+          // Confirmed for this role: record its mask for the caller's
+          // sound-source filter. Confirmed for another role: excluded.
+          if (confirmedRole === arrangeRole) maskByStemCID.set(row.StemCID, row.Instrument)
+        } else {
+          const soundType =
+            row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
+          const maskPlaced = soundType === 'drums' || soundType === 'bass' || soundType === 'notes'
+          const admitted = maskPlaced
+            ? (soundType === 'drums' && kind === 'drums') ||
+              (soundType === 'bass' && kind === 'bass') ||
+              (soundType === 'notes' && kind === 'lead')
+            : autoForRole.has(row.StemCID)
+          if (admitted) maskByStemCID.set(row.StemCID, row.Instrument)
         }
       }
       sinceYield += 1
@@ -679,18 +679,24 @@ async function getInstrumentMatchedStemCIDs(
       }
     }
   }
-  return matched
+  return maskByStemCID
 }
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
  * slot-kinds-design.md) -- ONE rule for every kind set: mask kinds
- * (drums/bass/lead) OR together as a filter on Endlesss's own instrument
- * mask, and yield nothing while the "endlesss" source is off (they are
- * Endlesss content by definition -- this is the fix for "unticked endlesss,
- * still got Endlesss drums"); a trait-only set draws from every stem with
- * cached features (tagged or not) and the sound-source filter. Trait kinds
- * never filter -- they only attach traitValues for rankCandidates to rank
- * by, in the renderer. */
+ * (drums/bass/lead) OR together, each drawing from human confirmation, the
+ * Endlesss instrument mask, and -- for stems the mask can't place -- the
+ * overnight classifier (getMaskKindStemMasks); a trait-only set draws from
+ * every stem with cached features (tagged or not). The endlesss/
+ * non-endlesss sound-source checkboxes then apply to EVERY candidate, of
+ * any kind set, by its own instrument mask (soundSourceMatchesFilter):
+ * endlesss = sounds made with Endlesss instruments/effects (an unmasked
+ * stem counts here), non-endlesss = audio-in/mic. Direct request,
+ * 2026-09-22: mask kinds used to return nothing while "endlesss" was off,
+ * so audio-in/mic stems could never appear under drums/bass/lead. Trait
+ * kinds never filter -- they only attach traitValues for rankCandidates to
+ * rank by, in the renderer. The per-stem twin of this rule is
+ * stemMatchesSlotKinds (@shared/discoverTraits). */
 export async function getDiscoverCandidates({
   ownDb,
   jams,
@@ -724,11 +730,19 @@ export async function getDiscoverCandidates({
     })
   }
 
-  if (!soundSource.endlesss) return []
+  // Nothing can pass the sound-source filter -- skip the walk entirely.
+  if (!soundSource.endlesss && !soundSource.audioIn) return []
   const seen = new Set<string>()
   const pool: DiscoverCandidate[] = []
   for (const kind of maskKinds) {
-    const perKind = await getMaskDiscoverCandidates({ ownDb, jams, kind, onlyOwnStems, targetUser })
+    const perKind = await getMaskDiscoverCandidates({
+      ownDb,
+      jams,
+      kind,
+      onlyOwnStems,
+      targetUser,
+      soundSource
+    })
     for (const candidate of perKind) {
       if (seen.has(candidate.stemCID)) continue
       seen.add(candidate.stemCID)
@@ -814,32 +828,36 @@ function attachTraitValues(
  * only pools for a role Elling hasn't tagged much yet (e.g. only 1-2
  * confirmed "drums" stems) meant reroll kept landing the exact same stem
  * regardless of the chaos/safe slider -- there was nothing else to pick.
- * getInstrumentMatchedStemCIDs widens the pool with Endlesss's own recorded
+ * getMaskKindStemMasks widens the pool with Endlesss's own recorded
  * instrument category for each stem (a real bit traced from OUROVEON's own
  * source, not a guess -- instrumentMaskToSoundType's own doc comment) --
  * needs zero classifier math at query time.
  *
- * NARROWED (2026-09-18, Discover trait-based matching redesign, Task 2): a
- * SECOND widening source used to exist here too -- getAutoCategorizedStemCIDs,
- * reading the background classify scan's own PRECOMPUTED results
- * (StemAutoCategory, embedding/centroid classification). That source is
- * REMOVED for mask kinds -- this codebase no longer trusts that fallible
- * classifier layer for a kind Endlesss's own reliable instrument mask can
- * answer directly. Only human confirmation (StemCategories) and the mask
- * bit itself (getInstrumentMatchedStemCIDs) populate a mask kind's pool
- * now -- see DiscoverCandidate's own doc comment for the full rationale. */
+ * NARROWED (2026-09-18), then RE-WIDENED (2026-09-22): the background
+ * classify scan's own precomputed guesses (StemAutoCategory) were dropped
+ * for mask kinds in the Discover trait-based matching redesign, and are
+ * back -- but ONLY for stems the Endlesss mask can't place (no mask, or
+ * audio-in), per direct request (audio-in/mic stems never appeared under
+ * drums/bass/lead). See getMaskKindStemMasks's own doc comment.
+ *
+ * SOUND SOURCE (2026-09-22): every pooled stem is filtered by its own
+ * instrument mask (soundSourceMatchesFilter) before sampling -- a
+ * confirmed stem the walk never passed has no known mask (undefined),
+ * which counts as Endlesss, same semantics as everywhere else. */
 async function getMaskDiscoverCandidates({
   ownDb,
   jams,
   kind,
   onlyOwnStems = false,
-  targetUser
+  targetUser,
+  soundSource
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
   kind: DiscoverSlotKind
   onlyOwnStems?: boolean
   targetUser?: string
+  soundSource: DiscoverSoundSourceFilter
 }): Promise<DiscoverCandidate[]> {
   // Human-confirmed StemCategories rows for this exact ArrangeRole still
   // win outright -- a real confirmation is trusted even over an ambiguous
@@ -860,13 +878,14 @@ async function getMaskDiscoverCandidates({
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
 
-  // Live mask match, no StemAutoCategory/embedding widening at all -- see
-  // this function's own doc comment for why.
-  const instrumentMatchedStemCIDs = await getInstrumentMatchedStemCIDs(ownDb, jams, kind)
-  for (const stemCID of instrumentMatchedStemCIDs) {
-    // getInstrumentMatchedStemCIDs already excludes anything confirmed for
-    // ANY role (its own doc comment), so this can never overwrite a real
-    // human confirmation.
+  // Live mask match plus, for stems the mask can't place, the overnight
+  // classifier's guess -- see getMaskKindStemMasks's own doc comment.
+  const maskByStemCID = await getMaskKindStemMasks(ownDb, jams, kind)
+  for (const stemCID of maskByStemCID.keys()) {
+    // getMaskKindStemMasks only admits stems NOT confirmed for any role
+    // (plus records masks for ones confirmed for THIS role, already
+    // present), so this never overwrites a real human confirmation.
+    if (categoryByStemCID.has(stemCID)) continue
     categoryByStemCID.set(stemCID, {
       StemCID: stemCID,
       ArrangeRole: arrangeRole,
@@ -874,12 +893,15 @@ async function getMaskDiscoverCandidates({
     })
   }
 
-  if (categoryByStemCID.size === 0) return []
-
-  const confirmedStemCIDs = pickRandomSample(
-    [...categoryByStemCID.keys()],
-    MAX_CANDIDATE_RESOLUTION_POOL
+  // The endlesss/non-endlesss checkboxes, applied by each stem's own mask
+  // BEFORE sampling so the bounded sample isn't wasted on stems that would
+  // be filtered out anyway.
+  const eligibleStemCIDs = [...categoryByStemCID.keys()].filter((stemCID) =>
+    soundSourceMatchesFilter(maskByStemCID.get(stemCID), soundSource)
   )
+  if (eligibleStemCIDs.length === 0) return []
+
+  const confirmedStemCIDs = pickRandomSample(eligibleStemCIDs, MAX_CANDIDATE_RESOLUTION_POOL)
   const out: DiscoverCandidate[] = []
 
   // Real crash, found live via a full macOS crash report (EXC_BREAKPOINT in
@@ -1154,7 +1176,7 @@ async function getTraitPoolCandidates({
   // survived filtering above -- grouped by DB CONNECTION (dbByStemCID,
   // captured above), NOT by jamCID (code review, 2026-09-18): grouping by
   // jamCID here would reintroduce the exact "one query per jam" bug
-  // getInstrumentMatchedStemCIDs's own doc comment already documents as a
+  // getMaskKindStemMasks's own doc comment already documents as a
   // real, previously-fixed live incident (5,057 separate round trips on a
   // real library) -- survivors drawn from a random slice of the whole
   // library will typically span many jams sharing one db connection.

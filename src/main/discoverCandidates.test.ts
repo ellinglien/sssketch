@@ -65,11 +65,10 @@ function freshDb(): Database.Database {
  * seeding embeddings/features and letting a live classifier run. The
  * classification logic itself (embedding vs. centroid, confidence
  * thresholds) is stemAutoClassify's own concern and is tested there.
- * Updated 2026-09-18 (Discover trait-based matching redesign, Task 2):
- * getDiscoverCandidates no longer widens a MASK kind's pool (drums/bass/
- * lead) from this table at all -- this helper is now used by this file's
- * own mask-kind tests specifically to prove that removal (a stem seeded
- * ONLY here must NOT surface), not to prove the rows ARE read. */
+ * Since 2026-09-22 (direct request: audio-in/mic stems never appeared
+ * under drums/bass/lead), a MASK kind's pool reads this table again -- but
+ * only for stems the Endlesss instrument mask can't place (no mask, or
+ * audio-in); an Endlesss drums/bass/notes mask stays ground truth. */
 function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
@@ -517,23 +516,14 @@ describe('getDiscoverCandidates', () => {
     expect(riffsQueries.length).toBe(2)
   })
 
-  // REMOVED (2026-09-18, Discover trait-based matching redesign, Task 2):
-  // this used to prove a too-small confirmed pool still surfaced stems the
-  // background classify scan (stemAutoClassify.ts) had precomputed
-  // (StemAutoCategory). That widening is dropped for the 3 MASK kinds
-  // (drums/bass/lead) -- this redesign no longer trusts the fallible
-  // embedding/centroid classifier layer for them, only a real human
-  // confirmation (StemCategories) or Endlesss's own instrument-mask bit
-  // (see getInstrumentMatchedStemCIDs). This test now proves the opposite:
-  // an UNCONFIRMED stem that's ONLY in StemAutoCategory no longer appears
-  // in a mask kind's own pool at all.
-  it('does NOT include an unconfirmed stem whose only signal is a StemAutoCategory row (background-scan widening removed for mask kinds)', async () => {
+  // Direct request, 2026-09-22: audio-in/mic stems never appeared under
+  // drums/bass/lead. The overnight classifier's guess (StemAutoCategory) is
+  // back as a mask-kind source -- scoped to stems the Endlesss mask can't
+  // place (no mask, or audio-in).
+  it('includes an unmasked, unconfirmed stem whose only signal is a StemAutoCategory row for the role', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     seedStem(own, 's1', 'jam1', { presetName: 'maybe a kick' })
-    // No StemCategories row at all -- this stem was never human-confirmed,
-    // only auto-classified by the background scan -- and no Instrument
-    // bitmask set either, so nothing else could surface it.
     seedAutoCategory(own, 's1', 'drums')
 
     const candidates = await getDiscoverCandidates({
@@ -541,7 +531,8 @@ describe('getDiscoverCandidates', () => {
       jams: [{ jamCID: 'jam1', dbForJam: own }],
       kinds: ['drums']
     })
-    expect(candidates).toEqual([])
+    expect(candidates.map((c) => c.stemCID)).toEqual(['s1'])
+    expect(candidates[0]).toMatchObject({ slotKinds: ['drums'], drumSubRole: null })
   })
 
   it('excludes a StemAutoCategory row for a stem confirmed to a DIFFERENT role (cross-role leakage guard)', async () => {
@@ -626,22 +617,16 @@ describe('getDiscoverCandidates', () => {
     expect(candidates).toEqual([])
   })
 
-  // Updated (2026-09-18, Discover trait-based matching redesign, Task 2):
-  // a mask kind's pool now combines only TWO sources (confirmed,
-  // instrument-matched) -- the third, StemAutoCategory-precomputed, is
-  // removed for mask kinds (see the "does NOT include an unconfirmed
-  // stem..." test above). `guessed-1` here is seeded with ONLY a
-  // StemAutoCategory row, same as before, specifically to prove it's now
-  // excluded even while sitting alongside real confirmed/instrument-matched
-  // candidates in the same pool.
-  it('combines both remaining sources (confirmed, instrument-matched) in one pool, excluding a StemAutoCategory-only stem', async () => {
+  // A mask kind's pool combines all THREE sources (2026-09-22): confirmed,
+  // instrument-matched, and -- for stems the mask can't place -- the
+  // overnight classifier's guess.
+  it('combines all three sources (confirmed, instrument-matched, auto-classified unmasked) in one pool', async () => {
     const own = freshDb()
     // Confirmed 'drums'.
     seedRiff(own, 'rd1', 'jam1', 128, ['d1'])
     seedStem(own, 'd1', 'jam1')
     seedCategory(own, 'd1', { arrangeRole: 'drums', busId: 'drums' })
-    // StemAutoCategory-only, no confirmation and no instrument bit -- must
-    // NOT appear now that background-scan widening is removed for mask kinds.
+    // StemAutoCategory-only, no confirmation and no instrument bit.
     seedRiff(own, 'rg', 'jam1', 128, ['guessed-1'])
     seedStem(own, 'guessed-1', 'jam1')
     seedAutoCategory(own, 'guessed-1', 'drums')
@@ -654,7 +639,7 @@ describe('getDiscoverCandidates', () => {
       jams: [{ jamCID: 'jam1', dbForJam: own }],
       kinds: ['drums']
     })
-    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'instrument-1'])
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['d1', 'guessed-1', 'instrument-1'])
   })
 
   // Real crash, found live via a full macOS crash report: SQLite trapped
@@ -712,7 +697,7 @@ describe('getDiscoverCandidates', () => {
   })
 
   // Speed fix, real user report: rolling took ~2 minutes with no
-  // improvement, because getInstrumentMatchedStemCIDs (unlike the
+  // improvement, because getMaskKindStemMasks (unlike the
   // embedding-guessed path) had no cache at all -- every roll re-walked
   // every jam's own Stems table from scratch. Same TTL-cache pattern as
   // the embedding path's own equivalent test above.
@@ -1463,7 +1448,14 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(candidates.every((c) => c.slotKinds.join('+') === 'drums+bass')).toBe(true)
   })
 
-  it('mask kinds return nothing while the endlesss source is off', async () => {
+  // Direct request, 2026-09-22: the sound-source checkboxes alone decide
+  // which side the user gets, applied to every mask-kind candidate by its
+  // own instrument mask.
+  const MIC = 1 << 4
+  const endlesssOff = { endlesss: false, audioIn: true }
+  const audioInOff = { endlesss: true, audioIn: false }
+
+  it('an Endlesss drum-masked stem disappears from drums with endlesss off', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['d'])
     seedStem(own, 'd', 'jam1', { instrument: DRUM })
@@ -1473,7 +1465,116 @@ describe('getDiscoverCandidates (kind sets)', () => {
         ownDb: own,
         jams: [{ jamCID: 'jam1', dbForJam: own }],
         kinds: ['drums'],
-        soundSource: { endlesss: false, audioIn: true }
+        soundSource: endlesssOff
+      })
+    ).toEqual([])
+  })
+
+  it('a mic-masked stem auto-classified drums appears in drums, and survives endlesss off', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic', 'd'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedAutoCategory(own, 'mic', 'drums')
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+
+    const all = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(all.map((c) => c.stemCID).sort()).toEqual(['d', 'mic'])
+
+    const micOnly = await getDiscoverCandidates({
+      ownDb: own,
+      jams,
+      kinds: ['drums'],
+      soundSource: endlesssOff
+    })
+    expect(micOnly.map((c) => c.stemCID)).toEqual(['mic'])
+
+    const endlesssOnly = await getDiscoverCandidates({
+      ownDb: own,
+      jams,
+      kinds: ['drums'],
+      soundSource: audioInOff
+    })
+    expect(endlesssOnly.map((c) => c.stemCID)).toEqual(['d'])
+  })
+
+  it('an unmasked auto-drums stem appears with endlesss on and disappears with audioIn-only', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['u'])
+    seedStem(own, 'u', 'jam1')
+    seedAutoCategory(own, 'u', 'drums')
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+
+    const onlyEndlesss = await getDiscoverCandidates({
+      ownDb: own,
+      jams,
+      kinds: ['drums'],
+      soundSource: audioInOff
+    })
+    expect(onlyEndlesss.map((c) => c.stemCID)).toEqual(['u'])
+    expect(
+      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'], soundSource: endlesssOff })
+    ).toEqual([])
+  })
+
+  it('an Endlesss drum-masked stem auto-guessed bass does not appear in bass', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedAutoCategory(own, 'd', 'bass')
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+
+    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['bass'] })).toEqual([])
+    const drums = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(drums.map((c) => c.stemCID)).toEqual(['d'])
+  })
+
+  it('a mic stem confirmed for another role is excluded even if auto-guessed for this one', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedCategory(own, 'mic', { arrangeRole: 'vocal' })
+    seedAutoCategory(own, 'mic', 'drums')
+
+    expect(
+      await getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+    ).toEqual([])
+  })
+
+  it('a confirmed mic stem obeys the sound-source filter by its own mask', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedCategory(own, 'mic', { arrangeRole: 'lead' })
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+
+    const micOnly = await getDiscoverCandidates({
+      ownDb: own,
+      jams,
+      kinds: ['lead'],
+      soundSource: endlesssOff
+    })
+    expect(micOnly.map((c) => c.stemCID)).toEqual(['mic'])
+    expect(
+      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'], soundSource: audioInOff })
+    ).toEqual([])
+  })
+
+  it('mask kinds return nothing when both sources are off', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+
+    expect(
+      await getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        soundSource: { endlesss: false, audioIn: false }
       })
     ).toEqual([])
   })
