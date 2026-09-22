@@ -3,8 +3,8 @@
  * since BeatPicker previews audio through Web Audio and never touches the
  * native engine at all. Kept as a deliberate twin anyway: same click
  * synthesis (short decaying sine burst, higher pitch on the downbeat), same
- * pure-function-of-absolute-time shape, for the same reason FadeGain.cpp and
- * fadeGain.ts are kept in lockstep — consistent behavior, and a familiar
+ * pure-function-of-absolute-time shape, for the same reason microFade.ts and
+ * LoopSewing.cpp are kept in lockstep — consistent behavior, and a familiar
  * shape to maintain.
  *
  * metronomeSampleAt is a pure function over sample time (no AudioContext/

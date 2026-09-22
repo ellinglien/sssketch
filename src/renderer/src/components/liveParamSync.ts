@@ -1,4 +1,4 @@
-/** Pushes a live volume/fade value straight to the native engine, bypassing
+/** Pushes a live volume value straight to the native engine, bypassing
  * the full buildEngineProject/engineLoadProject reload path entirely -- see
  * docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md. Call
  * this directly from a drag handler's onMove callback, alongside (not
@@ -20,7 +20,12 @@
  * itself; there's nothing to guard against by the time the next frame's
  * flush would run. */
 
-type LiveParamField = 'volume' | 'fadeIn' | 'fadeOut'
+/** Only 'volume' now: the per-clip fade this once also carried is gone (a
+ * clip's fades are part of its automation lane's own volume curve -- see
+ * applyEdgeFade in src/shared/automationEdit.ts), and a curve edit is a
+ * committed edit, not a live-dragged scalar. The engine's own set-live-param
+ * handler still understands the old field names; nothing sends them. */
+type LiveParamField = 'volume'
 
 const pending = new Map<string, { field: LiveParamField; key: string; value: number }>()
 let flushScheduled = false

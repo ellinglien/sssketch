@@ -12,15 +12,11 @@ function emptyAppState(overrides: Partial<AppState> = {}): AppState {
     mute: {},
     off: {},
     stretch: {},
-    fadeIn: {},
-    fadeOut: {},
     playedBars: {},
     leftCrop: {},
     muteRegions: {},
     busOf: {},
     dragVol: {},
-    dragFadeIn: {},
-    dragFadeOut: {},
     dragPlayedBars: {},
     dragLeftCropBars: {},
     sel: null,
@@ -216,8 +212,20 @@ describe('buildRppProject', () => {
       rifffs: { 'rifff-1': rifff },
       busOf: { 'rifff-1:0': 'drums' },
       muteRegions: { 'rifff-1:0': [{ startBar: 9, endBar: 9.5 }] },
-      fadeIn: { 'rifff-1': 1 },
-      fadeOut: { 'rifff-1': 1 }
+      // A 1-bar fade in and out, drawn on this stem's own volume curve --
+      // the only place a clip's fades live now. The clip is 4 bars long
+      // (drumsRifff's barLength, no playedBars override), so the curve's
+      // last point sits at bar 4.
+      stemAutomation: {
+        'rifff-1:0': {
+          volume: [
+            { bar: 0, value: 0 },
+            { bar: 1, value: 1 },
+            { bar: 3, value: 1 },
+            { bar: 4, value: 0 }
+          ]
+        }
+      }
     })
     const rppText = buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]))
     const items = findAllChildren(tracksOf(rppText).tracks[0], 'ITEM')

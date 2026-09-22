@@ -32,8 +32,6 @@ const MAX_HISTORY = 100
 // toggles that still go through this reducer (so useAppState() consumers
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
-  'TOGGLE_VOLUME_DRAG_MODE',
-  'SET_VOLUME_DRAG_MODE',
   'SET_ARRANGER_MODE',
   // Which parameter a clip's automation lane is currently showing --
   // "what am I looking at," not an edit, same category as
@@ -65,13 +63,13 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // A pure IPC-fetch side effect (App.tsx's input-device dropdown re-fetches
   // on every focus while the list is still empty), not a user edit worth an
   // undo checkpoint -- same "how I'm currently working" category as
-  // volumeDragMode/metronomeEnabled above, not the arrangement itself.
+  // SET_ARRANGER_MODE/metronomeEnabled above, not the arrangement itself.
   'SET_AVAILABLE_INPUT_DEVICES',
-  // Fired on every mousemove of a volume/fade/length/crop drag (see
-  // AppState's own dragVol/etc. field comments) -- an undo checkpoint per
-  // mousemove would flood the undo stack meaninglessly; the REAL edit is
-  // whatever commit action (SET_VOLUME, SET_FADE_IN, ...) fires once on
-  // release, which is NOT in this set.
+  // Fired on every mousemove of a volume/length/crop drag (see AppState's
+  // own dragVol/etc. field comments) -- an undo checkpoint per mousemove
+  // would flood the undo stack meaninglessly; the REAL edit is whatever
+  // commit action (SET_VOLUME, SET_PLAYED_BARS, ...) fires once on release,
+  // which is NOT in this set.
   'SET_DRAG_PREVIEW',
   'SET_DRAG_PREVIEW_GROUP_VOLUME',
   // The in-progress/pending region selection -- same "not a real edit"

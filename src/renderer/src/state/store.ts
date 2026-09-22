@@ -110,11 +110,6 @@ export interface AppState {
   mute: Record<string, boolean>
   off: Record<string, number>
   stretch: Record<string, boolean>
-  /** Fade in/out length, in bars, keyed by groupId. Applies at the clip's overall
-   * start/end (not at each internal tiling repetition) during both live playback
-   * and export. */
-  fadeIn: Record<string, number>
-  fadeOut: Record<string, number>
   /** A rifff's own played length, in bars — the tiling loop's bound, keyed by
    * groupId. Unset means "use rifff.barLength" — today's implicit behavior,
    * unchanged for a project with no resize edits. */
@@ -134,7 +129,7 @@ export interface AppState {
   muteRegions: Record<string, { startBar: number; endBar: number }[]>
   /** In-progress preview values for an active drag, keyed the same way as
    * their committed counterpart (dragVol/stemKey, the rest/groupId) --
-   * populated on every mousemove of a volume/fade/length/crop drag,
+   * populated on every mousemove of a volume/length/crop drag,
    * cleared on release. Transient (see history.ts's TRANSIENT_ACTION_TYPES)
    * -- these are UI/audio previews, never real edits worth an undo
    * checkpoint. Shared store state (not per-component useState) so every
@@ -143,8 +138,6 @@ export interface AppState {
    * one row actually being dragged. See
    * docs/superpowers/specs/2026-08-04-live-drag-preview-design.md. */
   dragVol: Record<string, number>
-  dragFadeIn: Record<string, number>
-  dragFadeOut: Record<string, number>
   dragPlayedBars: Record<string, number>
   dragLeftCropBars: Record<string, number>
   sel: string | null
@@ -181,10 +174,6 @@ export interface AppState {
    * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md. */
   busOf: Record<string, BusId>
   exp: Record<string, boolean>
-  /** Global interaction mode for the expanded waveform's open body: false (default)
-   * drags the clip, true repurposes the same drag to adjust volume instead. Toggled
-   * by the V key — see App.tsx's Frame component. Not persisted (see serialize.ts). */
-  volumeDragMode: boolean
   /** Global arrangement-wide view mode. 'normal' is today's per-rifff
    * collapsed/expanded rendering. 'sketch' replaces the whole Timeline with
    * a single gapless sequence strip (SketchStrip) — only reachable when
@@ -223,7 +212,7 @@ export interface AppState {
    * this span (it was dragged over raw/unmuted audio); `mode: 'unmute'`
    * means it exactly matches an existing muted region and Delete/Backspace
    * should remove that mute instead. Not persisted (see serialize.ts) --
-   * same "how I'm currently working" treatment as volumeDragMode. */
+   * "how I'm currently working" state, not part of the arrangement. */
   regionSelection: {
     stemKeys: string[]
     startBar: number
@@ -291,8 +280,8 @@ export interface AppState {
   recordingChannelIds: Record<string, true>
   /** Which recording channel, if any, is currently armed and capturing.
    * At most one at a time. Not persisted -- armed state shouldn't survive
-   * a save/reload, matching volumeDragMode's own "how I'm currently
-   * working" convention. */
+   * a save/reload, the same "how I'm currently working" convention the
+   * arranger mode itself follows. */
   armedChannelId: string | null
   /** Which recording channel, if any, should currently show a brief "arm
    * me" nudge -- set when the user presses "/" (App.tsx's keydown handler)
@@ -377,14 +366,10 @@ export const initialState: AppState = {
   mute: {},
   off: {},
   stretch: {},
-  fadeIn: {},
-  fadeOut: {},
   playedBars: {},
   leftCrop: {},
   muteRegions: {},
   dragVol: {},
-  dragFadeIn: {},
-  dragFadeOut: {},
   dragPlayedBars: {},
   dragLeftCropBars: {},
   sel: null,
@@ -402,7 +387,6 @@ export const initialState: AppState = {
   gatedRecordingChannelId: null,
   gatedRecordingTargetGroupId: null,
   pendingLockInConfirm: false,
-  volumeDragMode: false,
   mode: 'sketch',
   automationParamOf: {},
   inspectorCollapsed: false,
@@ -485,7 +469,7 @@ export type Action =
     }
   | {
       type: 'SET_DRAG_PREVIEW'
-      field: 'volume' | 'fadeIn' | 'fadeOut' | 'playedBars' | 'leftCropBars'
+      field: 'volume' | 'playedBars' | 'leftCropBars'
       key: string
       value: number | undefined
     }
@@ -504,8 +488,6 @@ export type Action =
       durationSec: number
       startBar: number
     }
-  | { type: 'SET_FADE_IN'; groupId: string; bars: number }
-  | { type: 'SET_FADE_OUT'; groupId: string; bars: number }
   | {
       type: 'APPLY_BAKE'
       groupId: string
@@ -542,8 +524,6 @@ export type Action =
   | { type: 'RENAME_RIFFF'; groupId: string; name: string }
   | { type: 'RENAME_STEM'; groupId: string; slot: number; name: string }
   | { type: 'TOGGLE_EXPAND'; groupId: string }
-  | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
-  | { type: 'SET_VOLUME_DRAG_MODE'; enabled: boolean }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
   | { type: 'SET_AUTOMATION_PARAM'; laneId: string; param: AutomationParam }
   /** One whole free-draw gesture's result on ONE clip -- a stroke, a ramp,
@@ -919,8 +899,6 @@ export function reducer(state: AppState, action: Action): AppState {
       const sliceKey = (
         {
           volume: 'dragVol',
-          fadeIn: 'dragFadeIn',
-          fadeOut: 'dragFadeOut',
           playedBars: 'dragPlayedBars',
           leftCropBars: 'dragLeftCropBars'
         } as const
@@ -990,16 +968,6 @@ export function reducer(state: AppState, action: Action): AppState {
         }
       }
     }
-
-    // Upper-bounded loosely here (a sane ceiling, not the real constraint) —
-    // the actual "can't exceed half the clip's own duration" clamp happens where
-    // the fade is applied (the native engine), since that's the only place
-    // that knows the clip's actual length in seconds.
-    case 'SET_FADE_IN':
-      return { ...state, fadeIn: { ...state.fadeIn, [action.groupId]: Math.max(0, action.bars) } }
-
-    case 'SET_FADE_OUT':
-      return { ...state, fadeOut: { ...state.fadeOut, [action.groupId]: Math.max(0, action.bars) } }
 
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
@@ -1082,8 +1050,6 @@ export function reducer(state: AppState, action: Action): AppState {
         off: omitGroups(state.off),
         playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),
-        fadeIn: omitGroups(state.fadeIn),
-        fadeOut: omitGroups(state.fadeOut),
         exp: omitGroups(state.exp),
         channelOf,
         channelOrder,
@@ -1379,8 +1345,6 @@ export function reducer(state: AppState, action: Action): AppState {
       const channelId = state.channelOf[action.groupId]
       const groupOff = state.off[action.groupId] ?? 0
       const groupPlayedBars = state.playedBars[action.groupId] ?? rifff.barLength
-      const groupFadeIn = state.fadeIn[action.groupId] ?? 0
-      const groupFadeOut = state.fadeOut[action.groupId] ?? 0
       const groupStretch = state.stretch[action.groupId] ?? true
 
       const rifffs = { ...state.rifffs }
@@ -1397,16 +1361,12 @@ export function reducer(state: AppState, action: Action): AppState {
       const stemAutomation = { ...state.stemAutomation }
       const off = { ...state.off }
       const playedBars = { ...state.playedBars }
-      const fadeIn = { ...state.fadeIn }
-      const fadeOut = { ...state.fadeOut }
       const stretch = { ...state.stretch }
       const channelOf = { ...state.channelOf }
       // The parent's own group-level entries are gone once it's deleted below
       // — nothing left to reference them.
       delete off[action.groupId]
       delete playedBars[action.groupId]
-      delete fadeIn[action.groupId]
-      delete fadeOut[action.groupId]
       delete stretch[action.groupId]
       delete channelOf[action.groupId]
 
@@ -1467,8 +1427,6 @@ export function reducer(state: AppState, action: Action): AppState {
         delete stemSends[oldKey]
         delete stemAutomation[oldKey]
         off[newGroupId] = groupOff
-        fadeIn[newGroupId] = groupFadeIn
-        fadeOut[newGroupId] = groupFadeOut
         stretch[newGroupId] = groupStretch
         channelOf[newGroupId] = channelId
       }
@@ -1484,8 +1442,6 @@ export function reducer(state: AppState, action: Action): AppState {
         stemAutomation,
         off,
         playedBars,
-        fadeIn,
-        fadeOut,
         stretch,
         channelOf,
         sel: newGroupIds[0] ?? null,
@@ -1545,18 +1501,6 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_EXPAND':
       return { ...state, exp: { ...state.exp, [action.groupId]: !state.exp[action.groupId] } }
-
-    case 'TOGGLE_VOLUME_DRAG_MODE':
-      return { ...state, volumeDragMode: !state.volumeDragMode }
-
-    // Explicit-set counterpart to TOGGLE_VOLUME_DRAG_MODE above — used by
-    // the Option-key hold gesture (App.tsx), which needs to force a known
-    // value (true while held, then restore to whatever it was before the
-    // key went down) rather than blindly toggle, since a toggle-based
-    // approach can't correctly "restore to normal" if a hold's keydown/keyup
-    // pair races with the V-key's own toggle.
-    case 'SET_VOLUME_DRAG_MODE':
-      return { ...state, volumeDragMode: action.enabled }
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }

@@ -181,15 +181,16 @@ function findDataChunkOffset(buf: Buffer): number {
   throw new Error(`no "data" chunk found in WAV (${buf.length} bytes)`)
 }
 
-// Mirrors FadeGain.cpp/fadeGain.ts's always-on ~3ms anti-click floor (see
-// either file's own doc comment) — this reference is computed independently
-// by hand, so the floor has to be reproduced here too or every unfaded
-// (fadeInBars/fadeOutBars = 0, the default) segment in this fixture would
-// diverge from the native engine's real output right at its start/end.
+// Mirrors FadeGain.cpp's always-on ~3ms anti-click floor (see its own doc
+// comment) — this reference is computed independently by hand, so the floor
+// has to be reproduced here too or every segment in this fixture would
+// diverge from the native engine's real output right at its start/end. The
+// floor is applied unconditionally by buildFadePoints, which is why the
+// engine still runs that code even though nothing sends it a fade length
+// any more.
 const MICRO_FADE_SEC = 0.003
 
-// Simpler than render-parity.test.ts's own version of this helper: this
-// fixture never sets fadeInBars/fadeOutBars (both default to 0), so only the
+// Simpler than render-parity.test.ts's own version of this helper: only the
 // flat MICRO_FADE_SEC floor ever applies — no need to also take secPerBar.
 function microFadeGain(tSec: number, segmentDurationSec: number): number {
   const fadeSec = Math.min(MICRO_FADE_SEC, segmentDurationSec / 2)
@@ -268,8 +269,7 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
       const nativeBytes = await nativeExport(state, null)
 
       // Reference: both stems are unstretched (project bpm === rifff bpm),
-      // unmuted, unfaded (state.fadeIn/fadeOut have no entries -> default 0),
-      // at volume 1 (state.vol has no entries -> default 1, per
+      // unmuted, with no drawn automation at all, at volume 1 (state.vol has no entries -> default 1, per
       // buildEngineProject.ts), both starting at bar 0 and both exactly 1
       // bar long matching their rifff's own length. So the expected output
       // is the sample-wise sum of the two constant-value fixtures (each

@@ -644,15 +644,11 @@ describe('isSketchEligible', () => {
     expect(isSketchEligible(state)).toBe(false)
   })
 
-  it('is false if a rifff has a fade', () => {
-    let state = reducer(initialState, {
-      type: 'ADD_TO_SHELF',
-      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
-    })
-    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 })
-    expect(isSketchEligible(state)).toBe(false)
-  })
+  // There used to be an "is false if a rifff has a fade" case here. Fades
+  // are no longer a group-level field at all -- they're part of a clip's own
+  // volume automation curve, which is clip-relative and travels with the
+  // clip, so it can't misrepresent a gapless sketch sequence the way a
+  // group-level fade or an unbaked offset can.
 
   it("a playedBars trim/extend does not disqualify by itself — sketch mode's own beat-count menu sets this same field", () => {
     let state = reducer(initialState, {
@@ -719,7 +715,7 @@ describe('nextArrangerMode', () => {
       rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
+    state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 }) // disqualifies sketch
     expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('automation')
     // ...and automation still hands back to arrange, so the cycle always
     // advances rather than parking on a mode it can't show.
@@ -1214,12 +1210,24 @@ describe('buildArrangeReplaceActions', () => {
     }
   })
 
-  it('carries over busOf and fadeIn/fadeOut onto every copy of every stem -- moved windows and the untouched sibling alike -- so a Tidy Up bus color/name and any edge fade survive the replace instead of silently going grey (the same bug class fixed for UNGROUP)', () => {
+  it("carries over busOf and each stem's drawn curves onto every copy of every stem -- moved windows and the untouched sibling alike -- so a Tidy Up bus color/name and any drawn fade survive the replace instead of silently going grey (the same bug class fixed for UNGROUP)", () => {
     let state = setup()
     state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:1', busId: 'drums' })
     state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: 'r1:2', busId: 'bass' })
-    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 })
-    state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })
+    // A drawn fade-in: where a clip's edge fades live now, per stem, in
+    // clip-relative bars -- so a copy needs no re-timing, just the points.
+    const fadeInCurve = [
+      { bar: 0, value: 0 },
+      { bar: 1, value: 1 }
+    ]
+    for (const key of ['r1:1', 'r1:2']) {
+      state = reducer(state, {
+        type: 'SET_STEM_AUTOMATION',
+        stemKey: key,
+        param: 'volume',
+        points: fadeInCurve
+      })
+    }
 
     const moves: ArrangeMoveRecord[] = [
       { stepIndex: 0, stemKey: 'r1:1', moveType: 'enter' },
@@ -1234,15 +1242,17 @@ describe('buildArrangeReplaceActions', () => {
     expect(kickCopies).toHaveLength(2)
     for (const copy of kickCopies) {
       expect(state.busOf[stemKey(copy.groupId, copy.stems[0].slot)]).toBe('drums')
-      expect(state.fadeIn[copy.groupId]).toBe(1)
-      expect(state.fadeOut[copy.groupId]).toBe(2)
+      expect(state.stemAutomation[stemKey(copy.groupId, copy.stems[0].slot)]?.volume).toEqual(
+        fadeInCurve
+      )
     }
 
     const bassCopy = Object.values(state.rifffs).find((r) => r.stems[0]?.path === '/b.wav')
     if (!bassCopy) throw new Error('expected the untouched sibling copy')
     expect(state.busOf[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)]).toBe('bass')
-    expect(state.fadeIn[bassCopy.groupId]).toBe(1)
-    expect(state.fadeOut[bassCopy.groupId]).toBe(2)
+    expect(state.stemAutomation[stemKey(bassCopy.groupId, bassCopy.stems[0].slot)]?.volume).toEqual(
+      fadeInCurve
+    )
   })
 
   it('never carries leftCrop or muteRegions onto ANY copy -- moved window-copies or the untouched sibling alike -- since neither keeps the sources old position/length', () => {

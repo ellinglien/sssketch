@@ -611,8 +611,6 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.snapIdx,
     state.stretch,
     state.rifffs,
-    state.fadeIn,
-    state.fadeOut,
     state.vol,
     state.mute,
     // Missing here meant a resize-handle drag (SET_PLAYED_BARS) never
@@ -630,14 +628,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // simply never added here despite buildEngineProject.ts already reading
     // it.
     state.leftCrop,
-    // dragVol/dragFadeIn/dragFadeOut deliberately NOT here -- they used to
-    // be, triggering a full project reload on every drag step, which
-    // turned out to cause real, audible glitching at drag frequency (see
+    // dragVol deliberately NOT here -- it used to be, triggering a full
+    // project reload on every drag step, which turned out to cause real,
+    // audible glitching at drag frequency (see
     // docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md).
-    // Live volume/fade updates now go through a separate, much lighter
-    // path (liveParamSync.ts's scheduleLiveParamSync, called directly from
-    // the drag handlers) that bypasses this whole effect entirely. The
-    // COMMITTED fields (state.vol/fadeIn/fadeOut, above) stay here
+    // Live volume updates now go through a separate, much lighter path
+    // (liveParamSync.ts's scheduleLiveParamSync, called directly from the
+    // drag handlers) that bypasses this whole effect entirely. The
+    // COMMITTED field (state.vol, above) stays here
     // unchanged -- a drag's final commit still triggers exactly one full
     // reload, same as any other edit, and that reload is what eventually
     // clears the live override on the native side (see IpcServer.cpp's

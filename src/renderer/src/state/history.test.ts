@@ -56,17 +56,17 @@ describe('historyReducer', () => {
   // part of Action at all (see store.ts's own comment on Action), having
   // moved to StoreContext.tsx's own transport state entirely outside this
   // reducer, so there's nothing for historyReducer to filter for them
-  // anymore. TOGGLE_VOLUME_DRAG_MODE/SET_ARRANGER_MODE are what's left in
+  // anymore. SET_ARRANGER_MODE/SET_AUTOMATION_PARAM are what's left in
   // TRANSIENT_ACTION_TYPES, covered below.
   it('does not push history for transient UI-mode actions', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
     const pastLengthAfterRealEdit = h.past.length
-    h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
     h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'sketch' })
+    h = historyReducer(h, { type: 'SET_AUTOMATION_PARAM', laneId: 'r1:1', param: 'volume' })
     expect(h.past).toHaveLength(pastLengthAfterRealEdit)
-    expect(h.present.volumeDragMode).toBe(true)
     expect(h.present.mode).toBe('sketch')
+    expect(h.present.automationParamOf['r1:1']).toBe('volume')
   })
 
   it('does not push history for SET_AVAILABLE_INPUT_DEVICES', () => {
@@ -86,8 +86,8 @@ describe('historyReducer', () => {
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
-    h = historyReducer(h, { type: 'TOGGLE_VOLUME_DRAG_MODE' }) // transient, no new checkpoint
-    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the volumeDragMode=true state
+    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'automation' }) // transient, no new checkpoint
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the mode='automation' state
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.bpm).toBe(80) // back before the tempo change
     expect(h.present.rifffs.r1).toBeDefined() // the shelf add is still there

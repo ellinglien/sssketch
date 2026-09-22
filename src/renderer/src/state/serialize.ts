@@ -11,7 +11,6 @@ import type { PluginStatesMap } from '@shared/pluginStates'
  * there used to be. */
 export type PersistedProject = Omit<
   AppState,
-  | 'volumeDragMode'
   | 'mode'
   | 'automationParamOf'
   | 'inspectorCollapsed'
@@ -45,7 +44,6 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
   // bindings need an explicit disable.
   /* eslint-disable @typescript-eslint/no-unused-vars */
   const {
-    volumeDragMode,
     mode,
     automationParamOf,
     inspectorCollapsed,

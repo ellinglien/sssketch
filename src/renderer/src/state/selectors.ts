@@ -7,6 +7,7 @@ import {
   type ArrangeMoveRecord
 } from '@shared/autoArrangeApply'
 import type { StemAutomation } from '@shared/toolkit'
+import { clipLengthBars } from '@shared/automationEdit'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
 /** The played-bars override/fallback logic on its own, so a caller that
@@ -236,8 +237,6 @@ export function placedRifffsInOrder(state: AppState): Rifff[] {
 export function isSketchEligible(state: AppState): boolean {
   const placed = placedRifffsInOrder(state)
   for (const rifff of placed) {
-    if (state.fadeIn[rifff.groupId]) return false
-    if (state.fadeOut[rifff.groupId]) return false
     if ((state.off[rifff.groupId] ?? 0) !== 0) return false
   }
   const sorted = [...placed].sort((a, b) => (a.startBar ?? 0) - (b.startBar ?? 0))
@@ -332,8 +331,10 @@ export function clipGeometryFromFields(fields: ClipGeometryFields): ClipGeometry
   } = fields
   const offsetPx = (offsetSteps * ppb) / snapDiv
   const playedBars = resolvedPlayedBarsFromFields(playedBarsOverride, rifffBarLength)
-  const visibleBars = playedBars - leftCropBars
-  const shownBars = stretchOn ? visibleBars : visibleBars * (rifffBpm / stateBpm)
+  // The clip's own length in bars comes from clipLengthBars (shared) rather
+  // than being restated here, so a drawn clip's width and the bar span its
+  // automation lane is measured in can't drift apart.
+  const shownBars = clipLengthBars({ playedBars, leftCropBars, stretchOn, rifffBpm, stateBpm })
   return {
     leftPx: (startBar + leftCropBars) * ppb + offsetPx,
     widthPx: shownBars * ppb
@@ -694,36 +695,29 @@ function pasteStemWindowAction(
 }
 
 /**
- * Appends the group-level (fadeIn/fadeOut) and stem-level (Tidy Up bus)
- * metadata a fresh PASTE_RIFFF copy doesn't itself carry -- PASTE_RIFFF's
- * reducer only ever applies vol/mute/off/stretch (see its own case in
- * store.ts), never busOf/fadeIn/fadeOut, so without this every copy
- * buildArrangeReplaceActions below produces would silently go grey (lose
- * its Tidy Up bus color/name prefix) and lose any fade the user had set --
- * the same bug class already found and fixed for UNGROUP (store.ts's
+ * Appends the stem-level (Tidy Up bus) metadata a fresh PASTE_RIFFF copy
+ * doesn't itself carry -- PASTE_RIFFF's reducer only ever applies
+ * vol/mute/stemAutomation/off/stretch (see its own case in store.ts), never
+ * busOf, so without this every copy buildArrangeReplaceActions below
+ * produces would silently go grey (lose its Tidy Up bus color/name prefix)
+ * -- the same bug class already found and fixed for UNGROUP (store.ts's
  * UNGROUP case, "when i tidy... and then ungroup, they appear grey").
- * fadeIn/fadeOut are GROUP-level fields, so every window-copy of a moved
- * stem gets the same parent value duplicated onto it (mirroring UNGROUP's
- * own groupFadeIn/groupFadeOut broadcast to every split-off child) --
- * they're now independent clips, each getting its own copy of the edge
- * fade the parent had. ASSIGN_TO_BUS's own reducer renames only the
- * newly-affected rifff (renameRifffsForBusAssignment scopes to the
- * groupIds touched by the given stemKey), so it's safe to fire once per
- * pasted single-stem rifff without touching any unrelated clip.
+ * ASSIGN_TO_BUS's own reducer renames only the newly-affected rifff
+ * (renameRifffsForBusAssignment scopes to the groupIds touched by the given
+ * stemKey), so it's safe to fire once per pasted single-stem rifff without
+ * touching any unrelated clip.
+ *
+ * The group-level edge fades this also used to carry are gone: a clip's
+ * fades live in its own automation lane's volume curve now, which is
+ * clip-relative and which PASTE_RIFFF already copies itself.
  */
 function pushCarryoverActions(
   actions: Action[],
   state: AppState,
   sourceGroupId: string,
   slot: number,
-  newGroupId: string,
-  sourceFadeIn: number,
-  sourceFadeOut: number
+  newGroupId: string
 ): void {
-  if (sourceFadeIn > 0)
-    actions.push({ type: 'SET_FADE_IN', groupId: newGroupId, bars: sourceFadeIn })
-  if (sourceFadeOut > 0)
-    actions.push({ type: 'SET_FADE_OUT', groupId: newGroupId, bars: sourceFadeOut })
   const bus = state.busOf[stemKey(sourceGroupId, slot)]
   if (bus !== undefined) {
     actions.push({ type: 'ASSIGN_TO_BUS', stemKey: stemKey(newGroupId, slot), busId: bus })
@@ -775,8 +769,8 @@ function pushCarryoverActions(
  *    relative to the source's OLD position/length, which this copy no
  *    longer shares, the same reasoning that already excluded a moved stem's
  *    window-copies from that carryover.
- *  - every copy of every stem (moved or untouched) gets its bus/fade
- *    metadata carried over via pushCarryoverActions above.
+ *  - every copy of every stem (moved or untouched) gets its bus metadata
+ *    carried over via pushCarryoverActions above.
  * Then ONE DELETE_RIFFFS removes every touched groupId.
  *
  * A rifff with zero moved stems never enters touchedGroupIds, so it's left
@@ -813,8 +807,6 @@ export function buildArrangeReplaceActions(
     if (!source) continue // source already gone -- nothing left to replace
 
     const sourceStretch = state.stretch[groupId] ?? true
-    const sourceFadeIn = state.fadeIn[groupId] ?? 0
-    const sourceFadeOut = state.fadeOut[groupId] ?? 0
 
     for (const stem of source.stems) {
       const key = stemKey(groupId, stem.slot)
@@ -844,15 +836,7 @@ export function buildArrangeReplaceActions(
           if (!action || action.type !== 'PASTE_RIFFF') continue
           actions.push(action)
           const newGroupId = action.rifff.groupId
-          pushCarryoverActions(
-            actions,
-            state,
-            groupId,
-            stem.slot,
-            newGroupId,
-            sourceFadeIn,
-            sourceFadeOut
-          )
+          pushCarryoverActions(actions, state, groupId, stem.slot, newGroupId)
           if (firstCopyChannelId === null) {
             firstCopyChannelId = newGroupId
           } else {
@@ -900,15 +884,7 @@ export function buildArrangeReplaceActions(
         const action = pasteStemWindowAction(state, groupId, stem.slot, 0, totalBars)
         if (action && action.type === 'PASTE_RIFFF') {
           actions.push(action)
-          pushCarryoverActions(
-            actions,
-            state,
-            groupId,
-            stem.slot,
-            action.rifff.groupId,
-            sourceFadeIn,
-            sourceFadeOut
-          )
+          pushCarryoverActions(actions, state, groupId, stem.slot, action.rifff.groupId)
         }
       }
     }

@@ -83,10 +83,21 @@ export interface EngineRifff {
   channelId: string
   startBar: number
   barLength: number
-  fadeInBars: number
-  fadeOutBars: number
   stems: EngineStem[]
 }
+
+/* NOTE, 2026-09-22: this interface used to carry fadeInBars/fadeOutBars,
+ * the per-rifff edge fades the old envelope drag wrote. A clip's fades are
+ * part of its own automation lane's `volume` curve now (applyEdgeFade in
+ * src/shared/automationEdit.ts), so nothing produces those numbers any
+ * more and they are gone from the wire. EngineRifff's twin in the engine
+ * (native-engine/Source/EngineProject.h) still DECLARES them and still
+ * parses them with a default of 0.0, which is exactly what an absent key
+ * gives it -- so this is a compatible removal that needs no engine rebuild.
+ * They can't simply be deleted over there: buildFadePoints is also what
+ * applies the always-on ~3ms anti-click micro-fade at every clip edge (see
+ * FadeGain.h), so removing the engine's fade path is a separate, careful
+ * piece of work. */
 
 export interface EngineProject {
   bpm: number
@@ -234,7 +245,7 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
 // at a time -- meaning this whole function's wall-clock cost scaled
 // linearly with placed-stem count, and re-ran on EVERY tracked state field
 // change (StoreContext.tsx's own engine-sync effect -- bpm, vol, mute,
-// fadeIn/Out, playedBars, leftCrop, ...), not just an actual tempo change.
+// vol, playedBars, leftCrop, ...), not just an actual tempo change.
 // Even a cache HIT still round-trips through IPC and re-reads the whole
 // resolved file from disk just to measure its duration (rubberband.ts's
 // own renderStretched) -- 409 sequential round trips for that alone is a
@@ -455,10 +466,6 @@ export async function buildEngineProject(
       channelId: state.channelOf[rifff.groupId] ?? rifff.groupId,
       startBar: rifff.startBar ?? 0,
       barLength: rifff.barLength,
-      // Same drag-preview preference (and the same "harmless fallback,
-      // not what makes it live" caveat) as volume above.
-      fadeInBars: state.dragFadeIn[rifff.groupId] ?? state.fadeIn[rifff.groupId] ?? 0,
-      fadeOutBars: state.dragFadeOut[rifff.groupId] ?? state.fadeOut[rifff.groupId] ?? 0,
       stems
     })
   }

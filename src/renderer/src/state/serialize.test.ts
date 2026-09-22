@@ -32,16 +32,18 @@ describe('project serialization', () => {
     // — nothing to assert here now the way there used to be.
   })
 
-  it('does not persist volumeDragMode — always reopens with it off', () => {
+  it('does not persist the arranger mode — always reopens in the normal arranger', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = reducer(state, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
-    expect(state.volumeDragMode).toBe(true)
+    state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'automation' })
+    expect(state.mode).toBe('automation')
 
     const json = serializeProject(state)
-    expect(JSON.parse(json).volumeDragMode).toBeUndefined()
+    expect(JSON.parse(json).mode).toBeUndefined()
 
+    // Which mode a load lands in is decided by the load rules (see
+    // deserializeProject), never by what was showing when it was saved.
     const { state: restored } = deserializeProject(JSON.parse(json))
-    expect(restored.volumeDragMode).toBe(false)
+    expect(restored.mode).not.toBe('automation')
   })
 
   it('does not persist inspectorCollapsed — always reopens with it expanded', () => {
@@ -138,7 +140,7 @@ describe('deserializeProject mode fallback', () => {
       rifff: { ...rifff, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
+    state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 }) // disqualifies sketch
     const persisted = JSON.parse(serializeProject(state))
     expect(deserializeProject(persisted).state.mode).toBe('normal')
   })

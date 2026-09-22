@@ -757,26 +757,26 @@ describe('reducer', () => {
     it('clears a preview when value is undefined', () => {
       let state = reducer(initialState, {
         type: 'SET_DRAG_PREVIEW',
-        field: 'fadeIn',
-        key: 'r1',
-        value: 1.5
+        field: 'volume',
+        key: 'r1:1',
+        value: 0.5
       })
-      expect(state.dragFadeIn.r1).toBe(1.5)
+      expect(state.dragVol['r1:1']).toBe(0.5)
       state = reducer(state, {
         type: 'SET_DRAG_PREVIEW',
-        field: 'fadeIn',
-        key: 'r1',
+        field: 'volume',
+        key: 'r1:1',
         value: undefined
       })
-      expect(state.dragFadeIn.r1).toBeUndefined()
+      expect(state.dragVol['r1:1']).toBeUndefined()
     })
 
-    it('supports each of the five fields independently', () => {
+    it('supports each of the three fields independently', () => {
       let state = reducer(initialState, {
         type: 'SET_DRAG_PREVIEW',
-        field: 'fadeOut',
-        key: 'r1',
-        value: 2
+        field: 'volume',
+        key: 'r1:1',
+        value: 0.25
       })
       state = reducer(state, {
         type: 'SET_DRAG_PREVIEW',
@@ -790,7 +790,7 @@ describe('reducer', () => {
         key: 'r1',
         value: -1
       })
-      expect(state.dragFadeOut.r1).toBe(2)
+      expect(state.dragVol['r1:1']).toBe(0.25)
       expect(state.dragPlayedBars.r1).toBe(8)
       expect(state.dragLeftCropBars.r1).toBe(-1)
     })
@@ -904,16 +904,12 @@ describe('reducer', () => {
       expect(slot6Rifff.name).toBe('Freezer') // never tidied -- keeps its plain stem name
     })
 
-    it('copies group-level fade/stretch identically to every new clip', () => {
+    it('copies group-level stretch identically to every new clip', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-      state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 2 })
-      state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 1 })
       state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
 
       for (const groupId of Object.keys(state.rifffs)) {
-        expect(state.fadeIn[groupId]).toBe(2)
-        expect(state.fadeOut[groupId]).toBe(1)
         expect(state.stretch[groupId]).toBe(true)
       }
     })
@@ -931,9 +927,8 @@ describe('reducer', () => {
     it('deletes the parent rifff’s own now-orphaned per-group state', () => {
       let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
-      state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 2 })
+      state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 })
       state = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
-      expect(state.fadeIn.r1).toBeUndefined()
       expect(state.off.r1).toBeUndefined()
       expect(state.stretch.r1).toBeUndefined()
       expect(state.channelOf.r1).toBeUndefined()
@@ -956,15 +951,6 @@ describe('reducer', () => {
       state = reducer(state, { type: 'UNGROUP', groupId: 'r2' })
       expect(state.gatedRecordingTargetGroupId).toBe('r1')
     })
-  })
-
-  it('sets fade in/out bars, clamped to 0', () => {
-    let state = reducer(initialState, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1.5 })
-    state = reducer(state, { type: 'SET_FADE_OUT', groupId: 'r1', bars: 2 })
-    expect(state.fadeIn.r1).toBe(1.5)
-    expect(state.fadeOut.r1).toBe(2)
-    state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: -1 })
-    expect(state.fadeIn.r1).toBe(0)
   })
 
   it('cycles a stem sound-type through all 8 types and back to the start', () => {
@@ -1014,16 +1000,6 @@ describe('reducer', () => {
       expect(state.exp.r1).toBe(true)
       state = reducer(state, { type: 'TOGGLE_EXPAND', groupId: 'r1' })
       expect(state.exp.r1).toBe(false)
-    })
-  })
-
-  describe('TOGGLE_VOLUME_DRAG_MODE', () => {
-    it('starts false and toggles true/false', () => {
-      expect(initialState.volumeDragMode).toBe(false)
-      let state = reducer(initialState, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
-      expect(state.volumeDragMode).toBe(true)
-      state = reducer(state, { type: 'TOGGLE_VOLUME_DRAG_MODE' })
-      expect(state.volumeDragMode).toBe(false)
     })
   })
 

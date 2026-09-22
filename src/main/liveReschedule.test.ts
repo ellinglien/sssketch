@@ -47,8 +47,6 @@ describe('live reschedule: load-project while already playing', () => {
           groupId: 'r1',
           startBar: 0,
           barLength: 4,
-          fadeInBars: 0,
-          fadeOutBars: 0,
           stems: [
             {
               // No real stem file needed — PlaybackEngine.setProject skips stems

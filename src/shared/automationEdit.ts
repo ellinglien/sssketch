@@ -46,6 +46,37 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
+/**
+ * A placed clip's own length in BARS: the lane's right edge, and therefore
+ * the span every curve stored on that clip is measured against --
+ * `snapBar`'s `maxBar`, and the `lengthBars` applyEdgeFade/edgeFadeState
+ * below take.
+ *
+ * `playedBars - leftCropBars` is the window of the loop that is actually
+ * audible; a clip with stretch OFF plays at its own native tempo and so
+ * occupies a different number of the PROJECT's bars, which is what the
+ * ratio accounts for. This is the same formula selectors.ts's
+ * clipGeometryFromFields uses for a clip's drawn width (it calls this, so
+ * the two cannot drift), just in bars rather than pixels -- which is
+ * exactly AutomationLane.tsx's own `clipBars` (widthPx / ppb).
+ *
+ * Lives here, in the pure shared layer, because three different callers
+ * outside the renderer need it and each would otherwise re-derive it: the
+ * .als and .rpp exporters (reading a clip's edge fades back out of its
+ * volume curve) and the load-time migration of old saved fades.
+ */
+export function clipLengthBars(fields: {
+  playedBars: number
+  leftCropBars: number
+  stretchOn: boolean
+  rifffBpm: number
+  stateBpm: number
+}): number {
+  const visibleBars = fields.playedBars - fields.leftCropBars
+  if (fields.stretchOn) return visibleBars
+  return fields.stateBpm > 0 ? visibleBars * (fields.rifffBpm / fields.stateBpm) : visibleBars
+}
+
 export function barToX(bar: number, ppb: number): number {
   return bar * ppb
 }

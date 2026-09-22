@@ -29,15 +29,11 @@ function emptyAppState(overrides: Partial<AppState> = {}): AppState {
     mute: {},
     off: {},
     stretch: {},
-    fadeIn: {},
-    fadeOut: {},
     playedBars: {},
     leftCrop: {},
     muteRegions: {},
     busOf: {},
     dragVol: {},
-    dragFadeIn: {},
-    dragFadeOut: {},
     dragPlayedBars: {},
     dragLeftCropBars: {},
     sel: null,
@@ -854,17 +850,25 @@ describe('buildAlsXml', () => {
       expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('0')
     })
 
-    it('writes Fade + FadeInLength on the (only) segment when fadeInBars is set, as a sample count at the given sample rate', () => {
+    it("writes Fade + FadeInLength from the stem's own volume curve, as a sample count at the given sample rate", () => {
       const rifff = drumsRifff() // bpm irrelevant here -- project bpm (120, from emptyAppState) drives the conversion
       const state = emptyAppState({
         rifffs: { 'rifff-1': rifff },
         channelOrder: ['rifff-1'],
         channelOf: { 'rifff-1': 'rifff-1' },
-        fadeIn: { 'rifff-1': 0.5 } // 0.5 bar (2 beats) at 120bpm = 1s -- 1 bar = 4 beats,
-        // matching this field's own established semantics elsewhere (see
-        // PlaybackEngineTests.cpp's "rifff.fadeInBars = 0.5; // fadeInSec =
-        // 0.5 * 4.0 = 2.0s" at bpm=60/secPerBar=4.0, and envelope.ts's
-        // "FADE_MAX = 4 // bars") -- NOT reinterpreted for this export.
+        // A half-bar fade-in drawn on this clip's own volume automation
+        // curve -- where a clip's fades live now (edgeFadeState reads the
+        // length back out of the points). 0.5 bar (2 beats) at 120bpm = 1s;
+        // 1 bar = 4 beats, the same bar semantics everything else in the
+        // toolkit uses, NOT reinterpreted for this export.
+        stemAutomation: {
+          'rifff-1:0': {
+            volume: [
+              { bar: 0, value: 0 },
+              { bar: 0.5, value: 1 }
+            ]
+          }
+        }
       })
       const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
       const stemSampleRates = new Map([['rifff-1:0', 48000]])
@@ -881,7 +885,7 @@ describe('buildAlsXml', () => {
       expect(attrs(findChild(fadesBody, 'FadeOutLength')!)['@_Value']).toBe('0')
     })
 
-    it('leaves Fade/FadeInLength/FadeOutLength at template defaults when no fade or sample rate is set', () => {
+    it('leaves Fade/FadeInLength/FadeOutLength at template defaults when no curve or sample rate is set', () => {
       const state = emptyAppState({
         rifffs: { 'rifff-1': drumsRifff() },
         channelOrder: ['rifff-1'],
@@ -914,8 +918,18 @@ describe('buildAlsXml', () => {
             { startBar: 12, endBar: 13 } // beats [48,52)
           ]
         }, // 3 audible segments: [8,9) [10,12) [13,16) bars
-        fadeIn: { 'rifff-1': 1 },
-        fadeOut: { 'rifff-1': 1 }
+        // A 1-bar fade at each end of the clip's own 8-bar span, drawn on
+        // the stem's volume curve.
+        stemAutomation: {
+          'rifff-1:0': {
+            volume: [
+              { bar: 0, value: 0 },
+              { bar: 1, value: 1 },
+              { bar: 7, value: 1 },
+              { bar: 8, value: 0 }
+            ]
+          }
+        }
       })
       const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
       const stemSampleRates = new Map([['rifff-1:0', 48000]])
@@ -963,20 +977,27 @@ describe('buildAlsXml', () => {
       expect(last.fadeOut).toBe('96000') // 1 bar (4 beats) at 120bpm = 2s * 48000
     })
 
-    it('clamps an oversized fadeInBars to half the audible segment duration, matching FadeGain.cpp playback', () => {
+    it('clamps an oversized fade-in to half the audible segment duration, matching FadeGain.cpp playback', () => {
       // A single, unmuted 1-bar segment (playedBars overridden down to 1,
       // well under rifff.barLength(4) -- the clip's own audible span is
       // exactly this 1 bar, no mute regions to split it further) at
-      // 120bpm = 2s duration, half = 1s. fadeInBars: 10 is deliberately
-      // absurd (20s raw) to prove the clamp actually fires, not just
-      // happens to land under it by coincidence.
+      // 120bpm = 2s duration, half = 1s. The drawn fade-in covers the
+      // clip's WHOLE 1-bar length (2s raw), so the export's own clamp has
+      // to fire for this to come out at 1s.
       const rifff = drumsRifff() // startBar: 8, barLength: 4
       const state = emptyAppState({
         rifffs: { 'rifff-1': rifff },
         channelOrder: ['rifff-1'],
         channelOf: { 'rifff-1': 'rifff-1' },
         playedBars: { 'rifff-1': 1 }, // segment span = 1 bar = 2s at 120bpm
-        fadeIn: { 'rifff-1': 10 }
+        stemAutomation: {
+          'rifff-1:0': {
+            volume: [
+              { bar: 0, value: 0 },
+              { bar: 1, value: 1 }
+            ]
+          }
+        }
       })
       const stemFileNames = new Map([['rifff-1:0', 'my-rifff-kick.wav']])
       const stemSampleRates = new Map([['rifff-1:0', 44100]])
@@ -987,10 +1008,10 @@ describe('buildAlsXml', () => {
       const clipBody = childArray(clip, 'AudioClip')
       const fadesBody = childArray(findChild(clipBody, 'Fades')!, 'Fades')
 
-      // Naive (unclamped) would be 20s * 44100 = 882000 -- must NOT be that.
+      // Naive (unclamped) would be 2s * 44100 = 88200 -- must NOT be that.
       const fadeInLength = attrs(findChild(fadesBody, 'FadeInLength')!)['@_Value']
       expect(fadeInLength).toBe('44100') // half of the 2s segment (1s) * 44100
-      expect(fadeInLength).not.toBe('882000')
+      expect(fadeInLength).not.toBe('88200')
     })
   })
 

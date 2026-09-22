@@ -5,6 +5,7 @@ import type { BusId, Rifff, Stem, SoundType } from '@shared/types'
 import { stemKey } from '@shared/types'
 import { parseKeyToAbletonScale } from './scaleMapping'
 import { packIntoTracks } from '@shared/packIntoTracks'
+import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName, summarizeSoundTypes } from '@shared/busNaming'
 import {
   parseAls,
@@ -124,6 +125,49 @@ const ABLETON_BUS_COLORS: Record<BusId, number> = {
 function resolvePlayedBarsFor(state: AppState, groupId: string): number {
   const rifff = state.rifffs[groupId]
   return state.playedBars[groupId] ?? rifff.barLength
+}
+
+/**
+ * A clip's edge fades, in bars, read back out of that stem's own drawn
+ * `volume` automation curve -- the one place a clip's fades live now (see
+ * applyEdgeFade/edgeFadeState in src/shared/automationEdit.ts). This used
+ * to be state.fadeIn/state.fadeOut, a per-RIFFF pair the old envelope drag
+ * wrote; curves are per STEM, so two stems of the same rifff can now export
+ * different fades, which is simply what the user drew.
+ *
+ * Only the fade's LENGTH survives into the exported project: a DAW clip
+ * fade always ramps between silence and the clip's own level, so a curve
+ * that isn't an edge fade -- a mid-clip dip, a slow rise across the whole
+ * clip -- exports as no fade at all and is silently lost here. That is the
+ * honest limit of "translate automation into clip fades"; writing real
+ * automation envelopes into the target project is section 4 of
+ * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md and has
+ * not been built. Exported AUDIO is unaffected either way -- the engine
+ * bakes the whole curve when it renders the stems.
+ */
+function edgeFadesFor(
+  state: AppState,
+  rifff: Rifff,
+  stem: Stem,
+  playedBars: number,
+  leftCropBars: number
+): { fadeInBars: number; fadeOutBars: number } {
+  // Optional-chained on the map itself, matching buildEngineProject.ts's own
+  // `state.stemAutomation?.[key]`: an AppState that predates the toolkit (or
+  // a hand-built one) simply has no such record.
+  const curve = state.stemAutomation?.[stemKey(rifff.groupId, stem.slot)]?.volume ?? []
+  if (curve.length === 0) return { fadeInBars: 0, fadeOutBars: 0 }
+  const lengthBars = clipLengthBars({
+    playedBars,
+    leftCropBars,
+    stretchOn: state.stretch[rifff.groupId] ?? true,
+    rifffBpm: rifff.bpm,
+    stateBpm: state.bpm
+  })
+  return {
+    fadeInBars: edgeFadeState(curve, 'start', lengthBars).bars,
+    fadeOutBars: edgeFadeState(curve, 'end', lengthBars).bars
+  }
 }
 
 // A stem's own native tempo, derived the same way buildEngineProject.ts
@@ -680,6 +724,7 @@ export function buildAlsXml(
       // did) so its own colorIndex can be threaded straight into the call
       // below -- see ABLETON_BUS_COLORS.
       const busId = state.busOf[key] ?? DEFAULT_BUS
+      const edgeFades = edgeFadesFor(state, rifff, stem, playedBars, leftCropBars)
       const result = buildStemClips(
         canonicalClipTemplate,
         nextId,
@@ -699,8 +744,8 @@ export function buildAlsXml(
         // re-enabled with a single fader move directly in Ableton, which
         // isn't possible for a clip that was never exported.
         state.mute[key] ? 0 : (state.vol[key] ?? 1),
-        state.fadeIn[rifff.groupId] ?? 0,
-        state.fadeOut[rifff.groupId] ?? 0,
+        edgeFades.fadeInBars,
+        edgeFades.fadeOutBars,
         stemSampleRates.get(key)
       )
       if (result.clips.length === 0) continue // fully muted -- nothing to place

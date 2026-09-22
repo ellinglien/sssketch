@@ -5,6 +5,7 @@ import {
   applyEdgeFade,
   applyStroke,
   barToX,
+  clipLengthBars,
   curvePolyline,
   edgeFadeState,
   hitTestPoint,
@@ -574,5 +575,47 @@ describe('edgeFadeState', () => {
   it('is unfooled by a plain drawn point that merely happens to sit at 0 with value 0', () => {
     // A single point at (0,0) has no "top" to report a fade length from.
     expect(edgeFadeState([{ bar: 0, value: 0 }], 'start', LENGTH)).toEqual({ bars: 0, level: 0 })
+  })
+})
+
+describe('clipLengthBars', () => {
+  it('is the audible window of the loop when the clip is tempo-stretched', () => {
+    expect(
+      clipLengthBars({
+        playedBars: 8,
+        leftCropBars: 2,
+        stretchOn: true,
+        rifffBpm: 90,
+        stateBpm: 120
+      })
+    ).toBe(6)
+  })
+
+  it('scales by rifffBpm/stateBpm when stretch is off, exactly as the clip is drawn', () => {
+    // Deliberately the same ratio, in the same direction, as
+    // selectors.ts's clipGeometryFromFields (which calls this) -- the lane
+    // has to agree with the pixels it sits on, so this reproduces that
+    // formula rather than re-deriving one.
+    expect(
+      clipLengthBars({
+        playedBars: 8,
+        leftCropBars: 2,
+        stretchOn: false,
+        rifffBpm: 90,
+        stateBpm: 120
+      })
+    ).toBe(4.5)
+  })
+
+  it('does not divide by a zero project tempo', () => {
+    expect(
+      clipLengthBars({
+        playedBars: 4,
+        leftCropBars: 0,
+        stretchOn: false,
+        rifffBpm: 120,
+        stateBpm: 0
+      })
+    ).toBe(4)
   })
 })
