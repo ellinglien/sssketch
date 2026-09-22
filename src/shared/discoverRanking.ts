@@ -1,6 +1,10 @@
 // src/shared/discoverRanking.ts
 import type { DiscoverCandidate } from '../main/discoverCandidates'
-import { DISCOVER_TRAIT_DIRECTION } from './discoverTraits'
+import {
+  DISCOVER_TRAIT_DIRECTION,
+  DISCOVER_TRAIT_FIELD,
+  DISCOVER_TRAIT_PREFERRED_FIELD
+} from './discoverTraits'
 import type { DiscoverTraitKind } from './discoverSlotKind'
 
 export interface RankedCandidate {
@@ -77,13 +81,38 @@ export function rankCandidates(
     targetTraits?: readonly DiscoverTraitKind[]
   }
 ): RankedCandidate[] {
+  // Pool-relative values per kind, for candidates without a library
+  // percentile. Phase 3: a pool can mix re-extracted rows (preferred field)
+  // and old ones (fallback field only) -- different scales, so min-max
+  // across both would be meaningless. The preferred field is used only when
+  // every candidate with field values has it; otherwise everyone is ranked
+  // on the fallback field, which every analysed row carries. Candidates
+  // without field values (legacy constructors) use traitValues as-is.
+  const poolValues = new Map<DiscoverTraitKind, (c: DiscoverCandidate) => number | null>()
+  for (const kind of targetTraits) {
+    const preferred = DISCOVER_TRAIT_PREFERRED_FIELD[kind]
+    const fallback = DISCOVER_TRAIT_FIELD[kind]
+    const allHavePreferred = candidates.every((c) => {
+      if (!c.traitFieldValues) return true
+      const fb = c.traitFieldValues[fallback]
+      const pv = c.traitFieldValues[preferred]
+      const hasFallback = typeof fb === 'number' && Number.isFinite(fb)
+      return !hasFallback || (typeof pv === 'number' && Number.isFinite(pv))
+    })
+    const field = allHavePreferred ? preferred : fallback
+    poolValues.set(kind, (c) =>
+      c.traitFieldValues ? (c.traitFieldValues[field] ?? null) : (c.traitValues[kind] ?? null)
+    )
+  }
+
   const ranges = new Map<DiscoverTraitKind, { min: number; max: number }>()
   for (const kind of targetTraits) {
+    const valueOf = poolValues.get(kind)!
     let min = Infinity
     let max = -Infinity
     for (const c of candidates) {
-      const v = c.traitValues[kind]
-      if (v === null || v === undefined || !Number.isFinite(v)) continue
+      const v = valueOf(c)
+      if (v === null || !Number.isFinite(v)) continue
       if (v < min) min = v
       if (v > max) max = v
     }
@@ -104,7 +133,7 @@ export function rankCandidates(
           typeof percentile === 'number' && Number.isFinite(percentile)
             ? percentile
             : traitScore(
-                candidate.traitValues[kind],
+                poolValues.get(kind)!(candidate),
                 DISCOVER_TRAIT_DIRECTION[kind],
                 ranges.get(kind)
               )

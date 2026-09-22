@@ -119,6 +119,47 @@ describe('rankCandidates (trait scoring)', () => {
     expect(ranked[0].candidate.stemCID).toBe('top')
   })
 
+  it('pool fallback: a pool mixing rescanned and old rows ranks everyone on the shared fallback field', () => {
+    // 'fresh' has rhythmicStrength (a 0..1 scale); the others only have
+    // transientDensity (hits/sec). Mixing the two scales in one min-max
+    // would rank 'fresh' (0.9) below 'sparse' (1 hit/sec).
+    const fresh = candidate({
+      stemCID: 'fresh',
+      traitValues: { rhythmic: 0.9 },
+      traitFieldValues: { rhythmicStrength: 0.9, transientDensity: 6 }
+    })
+    const sparse = candidate({
+      stemCID: 'sparse',
+      traitValues: { rhythmic: 1 },
+      traitFieldValues: { rhythmicStrength: null, transientDensity: 1 }
+    })
+    const busy = candidate({
+      stemCID: 'busy',
+      traitValues: { rhythmic: 4 },
+      traitFieldValues: { rhythmicStrength: null, transientDensity: 4 }
+    })
+    const ranked = rankCandidates([sparse, busy, fresh], {
+      targetBpm: 128,
+      targetTraits: ['rhythmic']
+    })
+    expect(ranked.map((r) => r.candidate.stemCID)).toEqual(['fresh', 'busy', 'sparse'])
+  })
+
+  it('pool fallback: a fully rescanned pool ranks on the preferred field', () => {
+    const steady = candidate({
+      stemCID: 'steady',
+      traitValues: { rhythmic: 0.9 },
+      traitFieldValues: { rhythmicStrength: 0.9, transientDensity: 2 }
+    })
+    const noisy = candidate({
+      stemCID: 'noisy',
+      traitValues: { rhythmic: 0.1 },
+      traitFieldValues: { rhythmicStrength: 0.1, transientDensity: 8 }
+    })
+    const ranked = rankCandidates([noisy, steady], { targetBpm: 128, targetTraits: ['rhythmic'] })
+    expect(ranked[0].candidate.stemCID).toBe('steady')
+  })
+
   it('a trait with no spread across the pool adds nothing', () => {
     const a = candidate({ stemCID: 'a', traitValues: { rhythmic: 0.5 } })
     const b = candidate({ stemCID: 'b', traitValues: { rhythmic: 0.5 } })

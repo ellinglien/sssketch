@@ -17,7 +17,12 @@ import {
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
-import { traitValuesFromFeatures, type TraitValues } from '@shared/discoverTraits'
+import {
+  traitFieldValuesFromFeatures,
+  traitValuesFromFeatures,
+  type TraitFieldValues,
+  type TraitValues
+} from '@shared/discoverTraits'
 import { traitPercentilesFromValues, type TraitPercentiles } from '@shared/traitQuantiles'
 import { getTraitQuantileTables } from './traitQuantileCache'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -71,6 +76,12 @@ export interface DiscoverCandidate {
    * rankCandidates' trait terms. {} when the slot has no trait kinds or the
    * stem has no cached features. */
   traitValues: TraitValues
+  /** Raw values of each requested trait kind's preferred AND fallback
+   * StemFeatureCache fields (Phase 3 of the 2026-09-22 spec) -- what
+   * library percentiles are looked up from, and what rankCandidates'
+   * pool-relative fallback uses so a pool mixing re-extracted and old rows
+   * stays on one scale. Absent wherever traitValues is {}. */
+  traitFieldValues?: TraitFieldValues
   /** Library-wide percentile per requested TRAIT kind, [0, 1], already
    * direction-adjusted (@shared/traitQuantiles) -- what applyTraitBar and
    * rankCandidates actually use. {} when the slot has no trait kinds or
@@ -816,7 +827,10 @@ async function attachTraitPercentiles(
   const out: DiscoverCandidate[] = []
   let sinceYield = 0
   for (const c of pool) {
-    out.push({ ...c, traitPercentiles: traitPercentilesFromValues(c.traitValues, tables) })
+    out.push({
+      ...c,
+      traitPercentiles: traitPercentilesFromValues(c.traitValues, tables, c.traitFieldValues)
+    })
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
@@ -862,7 +876,13 @@ function attachTraitValues(
   }
   return pool.map((c) => {
     const features = featuresByStemCID.get(c.stemCID)
-    return features ? { ...c, traitValues: traitValuesFromFeatures(features, traitKinds) } : c
+    return features
+      ? {
+          ...c,
+          traitValues: traitValuesFromFeatures(features, traitKinds),
+          traitFieldValues: traitFieldValuesFromFeatures(features, traitKinds)
+        }
+      : c
   })
 }
 
@@ -1112,6 +1132,7 @@ interface TraitMatchedStem {
   stemCID: string
   jamCID: string
   traitValues: TraitValues
+  traitFieldValues: TraitFieldValues
 }
 
 /** Candidate pool for a TRAIT-ONLY kind set -- any stem with a cached
@@ -1239,7 +1260,8 @@ async function getTraitPoolCandidates({
       matched.push({
         stemCID: row.StemCID,
         jamCID,
-        traitValues: traitValuesFromFeatures(features, traitKinds)
+        traitValues: traitValuesFromFeatures(features, traitKinds),
+        traitFieldValues: traitFieldValuesFromFeatures(features, traitKinds)
       })
       // Deliberate do/while(false), see comment above the `do {` for why.
       // eslint-disable-next-line no-constant-condition
@@ -1307,6 +1329,7 @@ async function getTraitPoolCandidates({
           drumSubRole: null,
           riffBpm: riffInfo.bpmRnd,
           traitValues: entry.traitValues,
+          traitFieldValues: entry.traitFieldValues,
           traitPercentiles: {},
           kindSources: {},
           riffCreationTime: riffInfo.creationTime

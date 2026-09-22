@@ -159,6 +159,9 @@ function featuresJSON(
     bassEnergyRatio: number
     spectralCentroidHz: number
     zcrBrightness: number
+    rhythmicStrength: number
+    spectralCentroidFftHz: number
+    featureVersion: number
   }> = {}
 ): string {
   return JSON.stringify({
@@ -1654,6 +1657,49 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(c.traitPercentiles.rhythmic).toBeCloseTo(0.5)
     // Highest centroid in the library -> least warm.
     expect(c.traitPercentiles.warm).toBeCloseTo(0)
+  })
+
+  it('Phase 3: a re-extracted stem is placed by the preferred field, an old row by its fallback field', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['fresh', 'old'])
+    seedStem(own, 'fresh', 'jam1')
+    seedStem(own, 'old', 'jam1')
+    // fresh: median rhythmicStrength among re-extracted rows, but the
+    // HIGHEST transientDensity of all -- so a transientDensity lookup would
+    // wrongly put it at the top.
+    seedFeatures(
+      own,
+      'fresh',
+      featuresJSON({ transientDensity: 100, rhythmicStrength: 0.5, featureVersion: 2 })
+    )
+    // old: no rhythmicStrength -- median of transientDensity.
+    seedFeatures(own, 'old', featuresJSON({ transientDensity: 2 }))
+    for (const [cid, density, strength] of [
+      ['lib0', 0, 0],
+      ['lib1', 1, 0.25],
+      ['lib2', 3, 0.75],
+      ['lib3', 4, 1]
+    ] as const) {
+      seedFeatures(
+        own,
+        cid,
+        featuresJSON({ transientDensity: density, rhythmicStrength: strength, featureVersion: 2 })
+      )
+    }
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['rhythmic']
+    })
+    const fresh = candidates.find((c) => c.stemCID === 'fresh')!
+    const old = candidates.find((c) => c.stemCID === 'old')!
+    expect(fresh.traitValues).toEqual({ rhythmic: 0.5 })
+    expect(fresh.traitFieldValues).toEqual({ rhythmicStrength: 0.5, transientDensity: 100 })
+    expect(fresh.traitPercentiles.rhythmic).toBeCloseTo(0.5)
+    expect(old.traitValues).toEqual({ rhythmic: 2 })
+    // transientDensity over all 6 rows: 0,1,2,3,4,100 -> 2 sits at 0.4.
+    expect(old.traitPercentiles.rhythmic).toBeCloseTo(0.4)
   })
 
   it('mask + trait: percentiles for cached stems, {} for uncached', async () => {

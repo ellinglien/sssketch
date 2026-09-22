@@ -96,7 +96,7 @@ describe('buildMatchMeter', () => {
     })
     expect(entries.map((e) => e.tooltip)).toEqual([
       'chonky: more bass-heavy than 50% of your library',
-      'rhythmic: busier than 70% of your library',
+      'rhythmic: more rhythmic than 70% of your library',
       'buttery: warmer than 64% of your library'
     ])
     expect(entries.map((e) => (e.type === 'trait' ? e.bars : ''))).toEqual([

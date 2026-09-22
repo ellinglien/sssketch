@@ -14,9 +14,18 @@ import {
   type DiscoverTraitKind
 } from './discoverSlotKind'
 
-/** Which StemFeatures field each trait kind reads -- the ONE copy, shared
- * by discoverCandidates.ts and discoverAdjacency.ts (each used to keep its
- * own duplicate). bright/warm share spectralCentroidHz as opposite ends. */
+/** Every StemFeatures field a trait kind can read. */
+export type TraitField =
+  | 'bassEnergyRatio'
+  | 'transientDensity'
+  | 'spectralCentroidHz'
+  | 'rhythmicStrength'
+  | 'spectralCentroidFftHz'
+
+/** Each trait kind's FALLBACK field -- present on every analysed row, of
+ * every feature version -- the ONE copy, shared by discoverCandidates.ts
+ * and discoverAdjacency.ts. bright/warm share spectralCentroidHz as
+ * opposite ends. */
 export const DISCOVER_TRAIT_FIELD: Record<
   DiscoverTraitKind,
   'bassEnergyRatio' | 'transientDensity' | 'spectralCentroidHz'
@@ -25,6 +34,17 @@ export const DISCOVER_TRAIT_FIELD: Record<
   rhythmic: 'transientDensity',
   bright: 'spectralCentroidHz',
   warm: 'spectralCentroidHz'
+}
+
+/** Each trait kind's PREFERRED field (docs/superpowers/specs/2026-09-22-
+ * discover-promise-vs-delivery-design.md, Phase 3): the better measurement
+ * a feature-version-2 row carries. A row without it (not re-extracted yet)
+ * is judged by DISCOVER_TRAIT_FIELD instead. bassHeavy has no new field. */
+export const DISCOVER_TRAIT_PREFERRED_FIELD: Record<DiscoverTraitKind, TraitField> = {
+  bassHeavy: 'bassEnergyRatio',
+  rhythmic: 'rhythmicStrength',
+  bright: 'spectralCentroidFftHz',
+  warm: 'spectralCentroidFftHz'
 }
 
 /** Which end of its field a trait kind wants -- rankCandidates scores
@@ -36,9 +56,33 @@ export const DISCOVER_TRAIT_DIRECTION: Record<DiscoverTraitKind, 'high' | 'low'>
   warm: 'low'
 }
 
-/** Raw field value per requested trait kind (null = unknown). Only the
+/** The value a stem is judged by per requested trait kind (null = unknown):
+ * its preferred field when it has one, else its fallback field. Only the
  * requested kinds are present. */
 export type TraitValues = Partial<Record<DiscoverTraitKind, number | null>>
+
+/** Raw per-FIELD values (null = absent/invalid) for the preferred AND
+ * fallback fields of each requested kind -- what library percentiles are
+ * looked up from, so a stem can fall back to its old field's table while
+ * the new field's table doesn't exist yet. */
+export type TraitFieldValues = Partial<Record<TraitField, number | null>>
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+export function traitFieldValuesFromFeatures(
+  features: StemFeatures,
+  kinds: readonly DiscoverTraitKind[]
+): TraitFieldValues {
+  const out: TraitFieldValues = {}
+  for (const kind of kinds) {
+    for (const field of [DISCOVER_TRAIT_PREFERRED_FIELD[kind], DISCOVER_TRAIT_FIELD[kind]]) {
+      out[field] = finiteOrNull(features[field])
+    }
+  }
+  return out
+}
 
 export function traitValuesFromFeatures(
   features: StemFeatures,
@@ -46,8 +90,9 @@ export function traitValuesFromFeatures(
 ): TraitValues {
   const out: TraitValues = {}
   for (const kind of kinds) {
-    const value = features[DISCOVER_TRAIT_FIELD[kind]]
-    out[kind] = typeof value === 'number' && Number.isFinite(value) ? value : null
+    out[kind] =
+      finiteOrNull(features[DISCOVER_TRAIT_PREFERRED_FIELD[kind]]) ??
+      finiteOrNull(features[DISCOVER_TRAIT_FIELD[kind]])
   }
   return out
 }

@@ -7,7 +7,14 @@
 // winner. A quantile table per StemFeatures field, built over EVERY cached
 // feature row (src/main/traitQuantileCache.ts), turns a raw value into
 // "where this stem sits in the whole library" instead.
-import { DISCOVER_TRAIT_DIRECTION, DISCOVER_TRAIT_FIELD, type TraitValues } from './discoverTraits'
+import {
+  DISCOVER_TRAIT_DIRECTION,
+  DISCOVER_TRAIT_FIELD,
+  DISCOVER_TRAIT_PREFERRED_FIELD,
+  type TraitField,
+  type TraitFieldValues,
+  type TraitValues
+} from './discoverTraits'
 import type { DiscoverTraitKind } from './discoverSlotKind'
 
 /** 0th..100th percentile, inclusive. */
@@ -16,10 +23,16 @@ export const QUANTILE_BREAKPOINTS = 101
 /** Index i = the value at the i-th percentile (non-decreasing). */
 export type QuantileTable = readonly number[]
 
-/** The StemFeatures fields trait kinds read -- bright/warm share one. */
-export type TraitField = (typeof DISCOVER_TRAIT_FIELD)[DiscoverTraitKind]
+export type { TraitField }
 
-export const TRAIT_FIELDS: readonly TraitField[] = [...new Set(Object.values(DISCOVER_TRAIT_FIELD))]
+/** Every StemFeatures field trait kinds read, preferred and fallback (five:
+ * bright/warm share theirs, bassHeavy's are the same field). */
+export const TRAIT_FIELDS: readonly TraitField[] = [
+  ...new Set([
+    ...Object.values(DISCOVER_TRAIT_FIELD),
+    ...Object.values(DISCOVER_TRAIT_PREFERRED_FIELD)
+  ])
+]
 
 /** One table per field (keyed by FIELD, not kind, so bright/warm share). */
 export type TraitQuantileTables = Partial<Record<TraitField, QuantileTable>>
@@ -89,14 +102,37 @@ export function percentileOf(
 
 /** Turns a stem's TraitValues into TraitPercentiles for exactly the kinds
  * present in `values` (the requested ones -- traitValuesFromFeatures only
- * sets those). {} for {}. */
+ * sets those). {} for {}.
+ *
+ * Phase 3 (preferred fields): with `fieldValues`, a kind is placed by its
+ * PREFERRED field's table when the stem has that field AND the table
+ * exists; otherwise by its FALLBACK field's value and table. So during the
+ * re-extraction scan every stem gets a percentile from a table built over
+ * the same field it's measured by -- a rescanned stem is compared with
+ * other rescanned stems, an old row with every row's old field. Without
+ * `fieldValues`, `values` are read as fallback-field values. */
 export function traitPercentilesFromValues(
   values: TraitValues,
-  tables: TraitQuantileTables
+  tables: TraitQuantileTables,
+  fieldValues?: TraitFieldValues
 ): TraitPercentiles {
   const out: TraitPercentiles = {}
   for (const kind of Object.keys(values) as DiscoverTraitKind[]) {
-    const p = percentileOf(tables[DISCOVER_TRAIT_FIELD[kind]], values[kind])
+    const preferred = DISCOVER_TRAIT_PREFERRED_FIELD[kind]
+    const fallback = DISCOVER_TRAIT_FIELD[kind]
+    const preferredValue = fieldValues?.[preferred]
+    let p: number | null
+    if (
+      typeof preferredValue === 'number' &&
+      Number.isFinite(preferredValue) &&
+      tables[preferred]
+    ) {
+      p = percentileOf(tables[preferred], preferredValue)
+    } else {
+      const fallbackValue =
+        fieldValues && fallback in fieldValues ? fieldValues[fallback] : values[kind]
+      p = percentileOf(tables[fallback], fallbackValue)
+    }
     out[kind] = p === null ? null : DISCOVER_TRAIT_DIRECTION[kind] === 'low' ? 1 - p : p
   }
   return out

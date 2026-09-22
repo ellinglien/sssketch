@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { traitValuesFromFeatures, stemMatchesSlotKinds } from './discoverTraits'
+import {
+  traitValuesFromFeatures,
+  traitFieldValuesFromFeatures,
+  stemMatchesSlotKinds
+} from './discoverTraits'
 import type { StemFeatures } from './stemFeatures'
 
 function features(overrides: Partial<StemFeatures> = {}): StemFeatures {
@@ -37,6 +41,41 @@ describe('traitValuesFromFeatures', () => {
 
   it('returns {} for no kinds', () => {
     expect(traitValuesFromFeatures(features(), [])).toEqual({})
+  })
+})
+
+describe('traitValuesFromFeatures -- Phase 3 preferred fields', () => {
+  it('rhythmic prefers rhythmicStrength, bright/warm prefer spectralCentroidFftHz', () => {
+    const f = features({ rhythmicStrength: 0.8, spectralCentroidFftHz: 3000 })
+    expect(traitValuesFromFeatures(f, ['rhythmic', 'bright', 'warm', 'bassHeavy'])).toEqual({
+      rhythmic: 0.8,
+      bright: 3000,
+      warm: 3000,
+      bassHeavy: 0.7
+    })
+  })
+
+  it('falls back to transientDensity / spectralCentroidHz when the new field is absent or bad', () => {
+    expect(
+      traitValuesFromFeatures(features({ spectralCentroidFftHz: Number.NaN }), ['rhythmic', 'warm'])
+    ).toEqual({ rhythmic: 0.4, warm: 1200 })
+  })
+})
+
+describe('traitFieldValuesFromFeatures', () => {
+  it('carries both the preferred and the fallback field of each requested kind', () => {
+    const f = features({ rhythmicStrength: 0.8 })
+    expect(traitFieldValuesFromFeatures(f, ['rhythmic', 'warm', 'bassHeavy'])).toEqual({
+      rhythmicStrength: 0.8,
+      transientDensity: 0.4,
+      spectralCentroidFftHz: null,
+      spectralCentroidHz: 1200,
+      bassEnergyRatio: 0.7
+    })
+  })
+
+  it('returns {} for no kinds', () => {
+    expect(traitFieldValuesFromFeatures(features(), [])).toEqual({})
   })
 })
 

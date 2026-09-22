@@ -11,7 +11,9 @@ import {
 } from '@shared/discoverSlotKind'
 import {
   stemMatchesSlotKinds,
+  traitFieldValuesFromFeatures,
   traitValuesFromFeatures,
+  type TraitFieldValues,
   type TraitValues
 } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -180,6 +182,7 @@ export async function getAdjacentDiscoverCandidates(
       // (same as before combination slots). A mask + trait set keeps a
       // mask-matched stem either way.
       let traitValues: TraitValues = {}
+      let traitFieldValues: TraitFieldValues | undefined
       if (traitKinds.length > 0) {
         const featureRow = featureStmt.get(stem.stemCID) as { FeaturesJSON: string } | undefined
         let features: StemFeatures | null = null
@@ -190,8 +193,10 @@ export async function getAdjacentDiscoverCandidates(
             features = null
           }
         }
-        if (features) traitValues = traitValuesFromFeatures(features, traitKinds)
-        else if (!hasMaskKind) continue
+        if (features) {
+          traitValues = traitValuesFromFeatures(features, traitKinds)
+          traitFieldValues = traitFieldValuesFromFeatures(features, traitKinds)
+        } else if (!hasMaskKind) continue
       }
 
       return {
@@ -204,6 +209,7 @@ export async function getAdjacentDiscoverCandidates(
         drumSubRole: null,
         riffBpm: resolved.bpm,
         traitValues,
+        traitFieldValues,
         // Adjacency stays on pool-relative trait ranking for now (the
         // library-percentile bar is the main roll path only, Phase 1).
         traitPercentiles: {},

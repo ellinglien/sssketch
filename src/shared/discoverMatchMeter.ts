@@ -52,9 +52,13 @@ const SOURCE_DESCRIPTION: Record<DiscoverKindSource, string> = {
   guess: "the overnight classifier's guess"
 }
 
+// rhythmic says "more rhythmic" whichever field placed the stem: its
+// percentile now usually comes from rhythmicStrength (a steady groove), and
+// "busier" would only be accurate for old rows still ranked by raw
+// transientDensity -- a transitional case not worth a second phrase.
 const TRAIT_COMPARATIVE: Record<DiscoverTraitKind, string> = {
   bassHeavy: 'more bass-heavy',
-  rhythmic: 'busier',
+  rhythmic: 'more rhythmic',
   bright: 'brighter',
   warm: 'warmer'
 }

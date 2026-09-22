@@ -2,6 +2,7 @@
 import type Database from 'better-sqlite3'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { stemCIDForPath } from './stemCategoriesStore'
+import { noteStemFeatureRowWritten } from './traitQuantileCache'
 
 /** Reads a stem's persisted StemFeatures by its on-disk path -- resolves
  * the same content-addressed StemCID convention stemCategoriesStore.ts
@@ -64,4 +65,7 @@ export function setStemFeatureCache(
        FeaturesJSON = excluded.FeaturesJSON,
        ExtractedAt = excluded.ExtractedAt`
   ).run({ stemCID, featuresJson: JSON.stringify(features), extractedAt })
+  // Lets the Discover trait quantile tables rebuild as the Phase 3
+  // re-extraction replaces old rows (traitQuantileCache.ts) -- O(1).
+  noteStemFeatureRowWritten(db, features)
 }

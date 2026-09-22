@@ -14,7 +14,16 @@
 // - built once and cached per db (WeakMap), rebuilt only when the row count
 //   has moved >= 5% since the last build -- a roll never re-parses the
 //   table. Concurrent callers share one in-flight build.
+//
+// Phase 3 (feature versions): tables exist per FIELD, fallback and
+// preferred (five). While the background scan re-extracts old rows, the
+// tables also rebuild once rows carrying the new fields have grown >= 5%
+// -- tracked with an in-memory counter bumped by every feature-row write
+// (noteStemFeatureRowWritten, called from stemFeatureCacheStore.ts), never
+// by re-parsing or re-counting the table per roll.
 import type Database from 'better-sqlite3'
+import { DISCOVER_TRAIT_FIELD } from '@shared/discoverTraits'
+import type { StemFeatures } from '@shared/stemFeatures'
 import {
   TRAIT_FIELDS,
   buildQuantileTable,
@@ -27,16 +36,51 @@ import {
  * between yields. */
 export const TRAIT_QUANTILE_PAGE_SIZE = 2000
 
-/** Rebuild once the row count has moved by at least this fraction. */
+/** Rebuild once the row count has moved by at least this fraction -- and,
+ * separately, once rows with the Phase 3 fields have grown by it. */
 const REBUILD_GROWTH = 0.05
+
+/** A preferred-only field (rhythmicStrength, spectralCentroidFftHz) gets a
+ * table only once at least min(this, half the parsed rows) rows carry it
+ * -- a table from a handful of re-extracted stems would be noise. Until then its
+ * stems are placed by their fallback field (traitPercentilesFromValues). */
+export const PREFERRED_TABLE_MIN_ROWS = 200
+
+/** Floor for the new-field growth base, so the first few re-extracted rows
+ * don't each trigger a rebuild: growth is measured against
+ * max(rows with new fields at the last build, min(this, row count)). */
+const NEW_FIELD_GROWTH_FLOOR = 1000
+
+const FALLBACK_FIELDS = new Set<TraitField>(Object.values(DISCOVER_TRAIT_FIELD))
+const NEW_FIELDS = TRAIT_FIELDS.filter((f) => !FALLBACK_FIELDS.has(f))
 
 interface CacheEntry {
   tables: TraitQuantileTables
   rowCount: number
+  /** Rows carrying at least one Phase 3 field, at build time. */
+  newFieldRows: number
 }
 
 const cache = new WeakMap<Database.Database, CacheEntry>()
 const inFlight = new WeakMap<Database.Database, Promise<CacheEntry>>()
+/** Feature-row writes carrying a Phase 3 field since the last build began.
+ * Approximate on purpose (a rewrite of an already-new row counts too) --
+ * it only decides WHEN to rebuild; the build itself recounts exactly. */
+const newFieldWrites = new WeakMap<Database.Database, number>()
+
+function hasNewField(features: Record<string, unknown>): boolean {
+  return NEW_FIELDS.some((f) => {
+    const v = features[f]
+    return typeof v === 'number' && Number.isFinite(v)
+  })
+}
+
+/** Called after every StemFeatureCache write (stemFeatureCacheStore.ts):
+ * counts writes of rows carrying the Phase 3 fields, O(1). */
+export function noteStemFeatureRowWritten(db: Database.Database, features: StemFeatures): void {
+  if (!hasNewField(features as unknown as Record<string, unknown>)) return
+  newFieldWrites.set(db, (newFieldWrites.get(db) ?? 0) + 1)
+}
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
@@ -51,7 +95,12 @@ function countRows(db: Database.Database): number | null {
 }
 
 async function buildTables(db: Database.Database, rowCount: number): Promise<CacheEntry> {
+  // Writes from here on count toward the NEXT rebuild (a row written mid-
+  // build may land on a page already read).
+  newFieldWrites.set(db, 0)
   const valuesByField = new Map<TraitField, number[]>(TRAIT_FIELDS.map((f) => [f, []]))
+  let parsedRows = 0
+  let newFieldRows = 0
   const page = db.prepare(
     `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID > ? ORDER BY StemCID LIMIT ?`
   )
@@ -69,6 +118,8 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Cac
         continue // malformed row -- contributes nothing
       }
       if (!features || typeof features !== 'object') continue
+      parsedRows += 1
+      if (hasNewField(features)) newFieldRows += 1
       for (const field of TRAIT_FIELDS) {
         const v = features[field]
         if (typeof v === 'number' && Number.isFinite(v)) valuesByField.get(field)!.push(v)
@@ -80,18 +131,35 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Cac
   }
 
   const tables: TraitQuantileTables = {}
+  const preferredMinRows = Math.min(PREFERRED_TABLE_MIN_ROWS, Math.ceil(parsedRows / 2))
   for (const field of TRAIT_FIELDS) {
+    const values = valuesByField.get(field)!
+    if (!FALLBACK_FIELDS.has(field) && values.length < preferredMinRows) continue
     await yieldToEventLoop()
-    const table = buildQuantileTable(valuesByField.get(field)!)
+    const table = buildQuantileTable(values)
     if (table) tables[field] = table
   }
-  return { tables, rowCount }
+  return { tables, rowCount, newFieldRows }
 }
 
-function needsRebuild(entry: CacheEntry | undefined, count: number): boolean {
+function needsRebuild(
+  db: Database.Database,
+  entry: CacheEntry | undefined,
+  count: number
+): boolean {
   if (!entry) return true
-  if (count === entry.rowCount) return false
-  return Math.abs(count - entry.rowCount) >= REBUILD_GROWTH * entry.rowCount
+  if (
+    count !== entry.rowCount &&
+    Math.abs(count - entry.rowCount) >= REBUILD_GROWTH * entry.rowCount
+  ) {
+    return true
+  }
+  const growthBase = Math.max(
+    entry.newFieldRows,
+    Math.min(NEW_FIELD_GROWTH_FLOOR, entry.rowCount),
+    1
+  )
+  return (newFieldWrites.get(db) ?? 0) >= REBUILD_GROWTH * growthBase
 }
 
 /** The current quantile tables for `db`'s StemFeatureCache (keyed by
@@ -101,7 +169,7 @@ export async function getTraitQuantileTables(db: Database.Database): Promise<Tra
   const count = countRows(db)
   if (count === null) return {}
   const entry = cache.get(db)
-  if (!needsRebuild(entry, count)) return entry!.tables
+  if (!needsRebuild(db, entry, count)) return entry!.tables
 
   let build = inFlight.get(db)
   if (!build) {

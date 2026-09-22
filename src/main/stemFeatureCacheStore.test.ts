@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
+import { getTraitQuantileTables } from './traitQuantileCache'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -71,5 +72,31 @@ describe('stemFeatureCacheStore', () => {
       .prepare(`SELECT COUNT(*) as n FROM StemFeatureCache WHERE StemCID = ?`)
       .get('cid-external') as { n: number }
     expect(ownRow.n).toBe(1)
+  })
+
+  it('re-extracted (version 2) writes let the trait quantile tables rebuild', async () => {
+    const db = freshDb()
+    for (let i = 0; i < 20; i++) {
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(`cid-${i}`)
+      setStemFeatureCache(db, `/lib/cid-${i}`, fakeFeatures(), 1000)
+    }
+    const first = await getTraitQuantileTables(db)
+    expect(first.rhythmicStrength).toBeUndefined()
+    for (let i = 0; i < 20; i++) {
+      setStemFeatureCache(
+        db,
+        `/lib/cid-${i}`,
+        {
+          ...fakeFeatures(),
+          rhythmicStrength: i / 20,
+          spectralCentroidFftHz: 2000,
+          featureVersion: 2
+        },
+        2000
+      )
+    }
+    const rebuilt = await getTraitQuantileTables(db)
+    expect(rebuilt).not.toBe(first)
+    expect(rebuilt.rhythmicStrength).toBeDefined()
   })
 })

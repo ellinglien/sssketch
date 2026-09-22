@@ -3,7 +3,8 @@ import {
   QUANTILE_BREAKPOINTS,
   buildQuantileTable,
   percentileOf,
-  traitPercentilesFromValues
+  traitPercentilesFromValues,
+  TRAIT_FIELDS
 } from './traitQuantiles'
 
 function range(n: number): number[] {
@@ -124,5 +125,59 @@ describe('traitPercentilesFromValues', () => {
 
   it('empty values -> {}', () => {
     expect(traitPercentilesFromValues({}, tables)).toEqual({})
+  })
+})
+
+describe('traitPercentilesFromValues -- preferred field with fallback (Phase 3)', () => {
+  // Deliberately different scales per field, so a lookup in the wrong
+  // table would give a visibly wrong percentile.
+  const tables = {
+    transientDensity: buildQuantileTable(range(101).map((i) => i / 10))!, // 0..10
+    rhythmicStrength: buildQuantileTable(range(101).map((i) => i / 100))!, // 0..1
+    spectralCentroidHz: buildQuantileTable(range(101).map((i) => i * 100))!, // 0..10000
+    spectralCentroidFftHz: buildQuantileTable(range(101).map((i) => i * 200))! // 0..20000
+  }
+
+  it('TRAIT_FIELDS lists all five fields', () => {
+    expect([...TRAIT_FIELDS].sort()).toEqual([
+      'bassEnergyRatio',
+      'rhythmicStrength',
+      'spectralCentroidFftHz',
+      'spectralCentroidHz',
+      'transientDensity'
+    ])
+  })
+
+  it("a stem with the preferred field is placed by the preferred field's table", () => {
+    const p = traitPercentilesFromValues({ rhythmic: 0.9, warm: 4000 }, tables, {
+      rhythmicStrength: 0.9,
+      transientDensity: 1,
+      spectralCentroidFftHz: 4000,
+      spectralCentroidHz: 9000
+    })
+    expect(p.rhythmic).toBeCloseTo(0.9)
+    expect(p.warm).toBeCloseTo(0.8) // 1 - 0.2
+  })
+
+  it("a stem without it is placed by the fallback field's table", () => {
+    const p = traitPercentilesFromValues({ rhythmic: 3 }, tables, {
+      rhythmicStrength: null,
+      transientDensity: 3
+    })
+    expect(p.rhythmic).toBeCloseTo(0.3)
+  })
+
+  it('mid-rescan, before the preferred field has a table, the fallback table is used', () => {
+    const { rhythmicStrength: _omit, ...noPreferred } = tables
+    void _omit
+    const p = traitPercentilesFromValues({ rhythmic: 0.9 }, noPreferred, {
+      rhythmicStrength: 0.9,
+      transientDensity: 3
+    })
+    expect(p.rhythmic).toBeCloseTo(0.3)
+  })
+
+  it('without field values, the value is read against the fallback table (legacy callers)', () => {
+    expect(traitPercentilesFromValues({ rhythmic: 3 }, tables).rhythmic).toBeCloseTo(0.3)
   })
 })
