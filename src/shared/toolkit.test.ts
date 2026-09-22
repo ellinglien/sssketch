@@ -9,6 +9,13 @@ import {
   isStemToolkitNeutral,
   neutralCutoff,
   normaliseAutomationCurve,
+  filterCutoffHz,
+  filterResonanceQ,
+  FILTER_CUTOFF_MAX_HZ,
+  FILTER_CUTOFF_MIN_HZ,
+  FILTER_MAX_Q,
+  FILTER_MIN_Q,
+  projectUsesToolkit,
   type StemFilterSettings
 } from './toolkit'
 
@@ -249,5 +256,77 @@ describe('averageAutomationValue', () => {
         { bar: 0, value: -3 }
       ])
     ).toBeCloseTo(0.5, 10)
+  })
+})
+
+// The same three properties native-engine/Source/ChannelFilterTests.cpp pins
+// on the engine's own filterCutoffHz -- this is a hand-synced port (see its
+// doc comment), so the two test suites are deliberately asking the same
+// questions of the two copies.
+describe("real-unit maps (ports of the engine's own)", () => {
+  it("puts the cutoff dial's ends exactly on 20Hz and 20kHz", () => {
+    expect(filterCutoffHz(0)).toBeCloseTo(FILTER_CUTOFF_MIN_HZ, 9)
+    expect(filterCutoffHz(1)).toBeCloseTo(FILTER_CUTOFF_MAX_HZ, 6)
+  })
+
+  it('is log-uniform: the middle of the dial is the geometric mean', () => {
+    expect(filterCutoffHz(0.5)).toBeCloseTo(
+      Math.sqrt(FILTER_CUTOFF_MIN_HZ * FILTER_CUTOFF_MAX_HZ),
+      6
+    )
+    // Equal dial movements are equal intervals, anywhere on the dial.
+    expect(filterCutoffHz(0.5) / filterCutoffHz(0.25)).toBeCloseTo(
+      filterCutoffHz(0.75) / filterCutoffHz(0.5),
+      6
+    )
+  })
+
+  it('clamps anything a hand-edited project file could contain', () => {
+    expect(filterCutoffHz(-3)).toBeCloseTo(FILTER_CUTOFF_MIN_HZ, 9)
+    expect(filterCutoffHz(9)).toBeCloseTo(FILTER_CUTOFF_MAX_HZ, 6)
+    expect(filterCutoffHz(NaN)).toBeCloseTo(FILTER_CUTOFF_MIN_HZ, 9)
+  })
+
+  it('maps the resonance dial onto Q, Butterworth at zero', () => {
+    expect(filterResonanceQ(0)).toBeCloseTo(FILTER_MIN_Q, 9)
+    expect(filterResonanceQ(1)).toBeCloseTo(FILTER_MAX_Q, 9)
+    expect(filterResonanceQ(0.5)).toBeCloseTo(Math.sqrt(FILTER_MIN_Q * FILTER_MAX_Q), 9)
+  })
+})
+
+describe('projectUsesToolkit', () => {
+  it('is false for a project that has never touched any of it', () => {
+    expect(projectUsesToolkit({})).toBe(false)
+    expect(
+      projectUsesToolkit({
+        stemFilters: { 'g:1': defaultFilterSettings() },
+        stemSends: { 'g:1': 0 },
+        stemAutomation: { 'g:1': { volume: [] } },
+        risers: {}
+      })
+    ).toBe(false)
+  })
+
+  it('is true for a drawn curve, a raised send, or a moved cutoff', () => {
+    expect(
+      projectUsesToolkit({ stemAutomation: { 'g:1': { volume: [{ bar: 0, value: 0.5 }] } } })
+    ).toBe(true)
+    expect(projectUsesToolkit({ stemSends: { 'g:1': 0.3 } })).toBe(true)
+    expect(
+      projectUsesToolkit({ stemFilters: { 'g:1': { mode: 'lowpass', cutoff: 0.4, resonance: 0 } } })
+    ).toBe(true)
+  })
+
+  it('is true when a riser is placed, even with nothing drawn anywhere', () => {
+    expect(projectUsesToolkit({ risers: { r1: {} } })).toBe(true)
+  })
+
+  it('is false for a resonance dial with nothing moving the cutoff', () => {
+    // Deliberate, and the same rule isStemToolkitNeutral already applies to
+    // the wire: resonance alone is inaudible, so there is nothing to offer a
+    // choice about.
+    expect(
+      projectUsesToolkit({ stemFilters: { 'g:1': { mode: 'lowpass', cutoff: 1, resonance: 0.9 } } })
+    ).toBe(false)
   })
 })

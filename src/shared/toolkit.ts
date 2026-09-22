@@ -186,6 +186,99 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
+/** The two ends of the filter's own cutoff range, in real Hz. Twins of
+ * kFilterCutoffMinHz/kFilterCutoffMaxHz in
+ * native-engine/Source/ChannelFilter.h. */
+export const FILTER_CUTOFF_MIN_HZ = 20
+export const FILTER_CUTOFF_MAX_HZ = 20000
+
+/** The two ends of the resonance dial, as a filter Q. Twins of kMinQ/kMaxQ in
+ * native-engine/Source/ChannelFilter.cpp (the low end is Butterworth -- no
+ * resonant peak at all). */
+export const FILTER_MIN_Q = 0.7071067811865476
+export const FILTER_MAX_Q = 8
+
+/**
+ * A normalised cutoff dial position as REAL Hz -- log-uniform between 20Hz and
+ * 20kHz, so equal movements of the dial are equal musical intervals.
+ *
+ * A deliberate port of filterCutoffHz() in
+ * native-engine/Source/ChannelFilter.cpp, not a second opinion: toolkit.ts's
+ * own header says mapping [0,1] onto real units is the ENGINE's job and lives
+ * in one place there, and that stays true for anything that is going to be
+ * HEARD. This copy exists for one job the engine can't do -- writing a cutoff
+ * curve into another DAW's project file, where the envelope has to be in that
+ * device's own units (Ableton's Auto Filter takes real Hz; see
+ * docs/superpowers/references/ableton12-automation-mapping.md). Exporting
+ * through a differently-shaped curve than the one being listened to would put
+ * the sweep in the wrong place, which is exactly the failure this port
+ * prevents. Its tests pin the same three properties ChannelFilterTests.cpp
+ * pins, so the two can't drift apart silently.
+ */
+export function filterCutoffHz(value01: number): number {
+  const v = clamp01(value01)
+  return FILTER_CUTOFF_MIN_HZ * Math.pow(FILTER_CUTOFF_MAX_HZ / FILTER_CUTOFF_MIN_HZ, v)
+}
+
+/** The resonance dial as a filter Q. Port of filterResonanceQ() in
+ * native-engine/Source/ChannelFilter.cpp, for the same export-only reason
+ * filterCutoffHz above is -- REAPER's ReaEQ band takes a bandwidth/Q, not a
+ * 0..1 dial (docs/superpowers/references/reaper-automation-mapping.md). */
+export function filterResonanceQ(value01: number): number {
+  const v = clamp01(value01)
+  return FILTER_MIN_Q * Math.pow(FILTER_MAX_Q / FILTER_MIN_Q, v)
+}
+
+/** What an export does with the toolkit: bake it into the rendered audio, or
+ * leave the audio dry and write the curves as the target DAW's own
+ * automation. See section 4 of
+ * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md. */
+export type ToolkitExportMode = 'bake' | 'automation'
+
+export const DEFAULT_TOOLKIT_EXPORT_MODE: ToolkitExportMode = 'bake'
+
+/**
+ * Whether this project uses the built-in toolkit at all -- i.e. whether the
+ * export dialog should offer the bake/automation choice, or just get on with
+ * the export the way it always did.
+ *
+ * Structurally typed rather than taking AppState, so src/shared stays
+ * importable without the renderer store; AppState satisfies it as-is.
+ *
+ * A clip counts exactly when isStemToolkitNeutral says it isn't neutral --
+ * one rule, the same one the wire format and the engine already use. The
+ * consequence worth knowing: a clip with ONLY a resonance dial turned up (no
+ * cutoff curve, cutoff parked at its neutral end) does NOT count, because it
+ * makes no sound -- resonance is a peak AT the corner frequency, so with
+ * nothing moving the corner there is nothing to export and nothing to bake.
+ * Risers count on their own: a riser is audible by existing.
+ */
+export function projectUsesToolkit(project: {
+  stemFilters?: Record<string, StemFilterSettings>
+  stemSends?: Record<string, number>
+  stemAutomation?: Record<string, StemAutomation>
+  risers?: Record<string, unknown>
+}): boolean {
+  if (Object.keys(project.risers ?? {}).length > 0) return true
+  const keys = new Set([
+    ...Object.keys(project.stemFilters ?? {}),
+    ...Object.keys(project.stemSends ?? {}),
+    ...Object.keys(project.stemAutomation ?? {})
+  ])
+  for (const key of keys) {
+    if (
+      !isStemToolkitNeutral(
+        project.stemFilters?.[key],
+        project.stemSends?.[key],
+        project.stemAutomation?.[key]
+      )
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * Puts a drawn curve into the shape everything downstream assumes: sorted
  * ascending by bar, values clamped into [0,1], non-finite points dropped.
