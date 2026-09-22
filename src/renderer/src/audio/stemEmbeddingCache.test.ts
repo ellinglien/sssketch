@@ -80,6 +80,7 @@ describe('adoptZeroShotFromBuffer', () => {
   let setYamnetZeroShotCategoryMock: ReturnType<typeof vi.fn>
   let markYamnetZeroShotAttemptedMock: ReturnType<typeof vi.fn>
   let setStemEmbeddingCacheMock: ReturnType<typeof vi.fn>
+  let setStemAnalysisResultsMock: ReturnType<typeof vi.fn>
   const buffer = Promise.resolve({} as AudioBuffer)
 
   beforeEach(() => {
@@ -88,11 +89,13 @@ describe('adoptZeroShotFromBuffer', () => {
     setYamnetZeroShotCategoryMock = vi.fn().mockResolvedValue(undefined)
     markYamnetZeroShotAttemptedMock = vi.fn().mockResolvedValue(undefined)
     setStemEmbeddingCacheMock = vi.fn().mockResolvedValue(undefined)
+    setStemAnalysisResultsMock = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', {
       rifffApi: {
         setYamnetZeroShotCategory: setYamnetZeroShotCategoryMock,
         markYamnetZeroShotAttempted: markYamnetZeroShotAttemptedMock,
-        setStemEmbeddingCache: setStemEmbeddingCacheMock
+        setStemEmbeddingCache: setStemEmbeddingCacheMock,
+        setStemAnalysisResults: setStemAnalysisResultsMock
       }
     })
   })
@@ -101,15 +104,22 @@ describe('adoptZeroShotFromBuffer', () => {
     vi.unstubAllGlobals()
   })
 
+  /** The batched writes (B7) the queue sent, after flushing it. */
+  async function flushed(): Promise<unknown[]> {
+    await (await import('./analysisWriteQueue')).flushStemAnalysisWrites()
+    return setStemAnalysisResultsMock.mock.calls.flatMap(([batch]) => batch as unknown[])
+  }
+
   it('marks attempted and writes the category when classification succeeds with a mapped class', async () => {
     mockExtractEmbeddingAndTopClass.mockResolvedValue({ embedding: [1, 2, 3], topClassIndex: 157 })
 
     const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
     expect(await adoptZeroShotFromBuffer('/some/path.wav', buffer)).toBe(true)
 
-    expect(markYamnetZeroShotAttemptedMock).toHaveBeenCalledWith('/some/path.wav')
-    expect(setYamnetZeroShotCategoryMock).toHaveBeenCalledWith('/some/path.wav', 157)
     // The cached embedding is left alone.
+    expect(await flushed()).toEqual([
+      { path: '/some/path.wav', zeroShotAttempted: true, zeroShotClassIndex: 157 }
+    ])
     expect(setStemEmbeddingCacheMock).not.toHaveBeenCalled()
   })
 
@@ -119,7 +129,7 @@ describe('adoptZeroShotFromBuffer', () => {
     const { adoptZeroShotFromBuffer } = await import('./stemEmbeddingCache')
     await adoptZeroShotFromBuffer('/some/path.wav', buffer)
 
-    expect(markYamnetZeroShotAttemptedMock).toHaveBeenCalledWith('/some/path.wav')
+    expect(await flushed()).toEqual([{ path: '/some/path.wav', zeroShotAttempted: true }])
     expect(setYamnetZeroShotCategoryMock).not.toHaveBeenCalled()
   })
 
@@ -129,8 +139,7 @@ describe('adoptZeroShotFromBuffer', () => {
     const { adoptZeroShotFromBuffer, hasZeroShotEntry } = await import('./stemEmbeddingCache')
     expect(await adoptZeroShotFromBuffer('/some/path.wav', buffer)).toBe(false)
 
-    expect(markYamnetZeroShotAttemptedMock).not.toHaveBeenCalled()
-    expect(setYamnetZeroShotCategoryMock).not.toHaveBeenCalled()
+    expect(await flushed()).toEqual([])
     expect(hasZeroShotEntry('/some/path.wav')).toBe(false)
   })
 

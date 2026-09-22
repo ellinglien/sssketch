@@ -50,6 +50,17 @@ export function setStemPeaksCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  writeStemPeaksRow(db, stemCID, peaks, extractedAt)
+}
+
+/** The StemPeaksCache upsert for an already-resolved StemCID -- shared with
+ * the batched writer (stemAnalysisResultsWriter.ts). */
+export function writeStemPeaksRow(
+  db: Database.Database,
+  stemCID: string,
+  peaks: StemPeaks,
+  extractedAt: number
+): void {
   countWork('sql:stem-peaks-cache.set')
   db.prepare(
     `INSERT INTO StemPeaksCache (StemCID, PeaksJSON, BrightnessJSON, ExtractedAt)

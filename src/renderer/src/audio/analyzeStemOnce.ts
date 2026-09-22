@@ -38,7 +38,9 @@ const ALL_SKIPPED: AnalyzeStemOnceResult = {
  * read and decoded the file separately.
  *
  * Every value comes from the same function each module uses on its own
- * path, is persisted with the same set-* IPC call, and is installed as that
+ * path, is persisted to the same rows (batched per several stems through
+ * analysisWriteQueue.ts -- background efficiency B7 -- instead of one IPC
+ * per output), and is installed as that
  * module's in-memory entry BEFORE the decode starts -- so an interactive
  * getPeaks/getStemFeatures/getOrExtractStemEmbedding for the same path,
  * mid-analysis, shares this work instead of decoding again.

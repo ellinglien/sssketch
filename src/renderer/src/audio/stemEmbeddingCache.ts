@@ -3,6 +3,7 @@ import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { resampleTo16kMono } from './resampleTo16kMono'
 import { extractEmbeddingAndTopClass } from './yamnetClient'
+import { queueStemAnalysisWrite } from './analysisWriteQueue'
 
 const cache = new Map<string, Promise<number[] | null>>()
 
@@ -71,10 +72,26 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
 /** YAMNet inference on already-resampled 16 kHz mono PCM, then the same
  * persistence + zero-shot side effects for every fresh extraction (shared
  * by getOrExtractStemEmbedding and adoptStemEmbeddingFromBuffer). Null for
- * no result or an all-zero embedding -- see getOrExtractStemEmbedding. */
-async function embedAndPersist(path: string, pcm: Float32Array): Promise<number[] | null> {
+ * no result or an all-zero embedding -- see getOrExtractStemEmbedding.
+ * `queued` (the ambient scans, via adoptStemEmbeddingFromBuffer): the same
+ * three writes go through the batched write queue (analysisWriteQueue.ts,
+ * background efficiency B7) instead of three immediate IPCs. */
+async function embedAndPersist(
+  path: string,
+  pcm: Float32Array,
+  queued = false
+): Promise<number[] | null> {
   const result = await extractEmbeddingAndTopClass(pcm)
   if (!result || result.embedding.every((v) => v === 0)) return null
+
+  if (queued) {
+    queueStemAnalysisWrite(path, {
+      embedding: result.embedding,
+      zeroShotAttempted: true,
+      ...(result.topClassIndex !== null ? { zeroShotClassIndex: result.topClassIndex } : {})
+    })
+    return result.embedding
+  }
 
   // Fire-and-forget, matching getStemFeatures' own setStemFeatureCache
   // call -- a real library stem's path persists for next time; a
@@ -112,7 +129,7 @@ export function adoptStemEmbeddingFromBuffer(
   if (cache.has(path)) return null
   const promise = (async (): Promise<number[] | null> => {
     try {
-      return await embedAndPersist(path, await resampleTo16kMono(await audioBuffer))
+      return await embedAndPersist(path, await resampleTo16kMono(await audioBuffer), true)
     } catch (err) {
       console.error('adoptStemEmbeddingFromBuffer: extraction failed for stem', path, err)
       // Unguarded, same as getOrExtractStemEmbedding: only this entry can be
@@ -164,12 +181,11 @@ export function adoptZeroShotFromBuffer(
         zeroShotEntries.delete(path)
         return false
       }
-      countWork('ipc:mark-yamnet-zeroshot-attempted')
-      void window.rifffApi.markYamnetZeroShotAttempted(path)
-      if (result.topClassIndex !== null) {
-        countWork('ipc:set-yamnet-zeroshot-category')
-        void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
-      }
+      // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
+      queueStemAnalysisWrite(path, {
+        zeroShotAttempted: true,
+        ...(result.topClassIndex !== null ? { zeroShotClassIndex: result.topClassIndex } : {})
+      })
       return true
     } catch (err) {
       console.error('adoptZeroShotFromBuffer: failed for stem', path, err)

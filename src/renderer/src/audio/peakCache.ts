@@ -1,5 +1,6 @@
 import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
 import { countWork } from '../perf/workCounters'
+import { queueStemAnalysisWrite } from './analysisWriteQueue'
 
 export interface WaveformAnalysis {
   peaks: number[]
@@ -108,8 +109,8 @@ export function waveformFromBuffer(audioBuffer: AudioBuffer): WaveformAnalysis {
  * starts a second decode. Returns the installed promise, or null (nothing
  * installed) when the path already has an entry. Same eviction-on-
  * rejection as getAnalysis; `persist` also writes the result to the
- * persisted cache on success (set-stem-peaks-cache, same as a fresh decode
- * here). */
+ * persisted cache on success (same row as a fresh decode here, via the
+ * ambient scans' batched write queue). */
 export function adoptWaveformAnalysis(
   path: string,
   analysis: Promise<WaveformAnalysis>,
@@ -119,9 +120,11 @@ export function adoptWaveformAnalysis(
   const promise = analysis.then(
     (result) => {
       settled.set(path, result)
+      // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
       if (persist) {
-        countWork('ipc:set-stem-peaks-cache')
-        void window.rifffApi.setStemPeaksCache(path, result)
+        queueStemAnalysisWrite(path, {
+          peaks: { peaks: result.peaks, brightness: result.brightness }
+        })
       }
       return result
     },

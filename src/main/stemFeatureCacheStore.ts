@@ -61,6 +61,20 @@ export function setStemFeatureCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  writeStemFeatureRow(db, stemCID, features, extractedAt)
+  afterStemFeatureRowWritten(db, stemCID, features)
+}
+
+/** The StemFeatureCache upsert itself, for an already-resolved StemCID --
+ * shared by setStemFeatureCache and the batched writer
+ * (stemAnalysisResultsWriter.ts), which runs it inside its own
+ * transaction. Pair with afterStemFeatureRowWritten once committed. */
+export function writeStemFeatureRow(
+  db: Database.Database,
+  stemCID: string,
+  features: StemFeatures,
+  extractedAt: number
+): void {
   countWork('sql:stem-feature-cache.set')
   db.prepare(
     `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt)
@@ -69,6 +83,15 @@ export function setStemFeatureCache(
        FeaturesJSON = excluded.FeaturesJSON,
        ExtractedAt = excluded.ExtractedAt`
   ).run({ stemCID, featuresJson: JSON.stringify(features), extractedAt })
+}
+
+/** In-memory follow-ups to a written feature row -- every writer calls
+ * this, single or batched. */
+export function afterStemFeatureRowWritten(
+  db: Database.Database,
+  stemCID: string,
+  features: StemFeatures
+): void {
   // Lets the Discover trait quantile tables rebuild as the Phase 3
   // re-extraction replaces old rows (traitQuantileCache.ts), and keeps its
   // in-memory trait value table current for Discover rolls -- O(1).

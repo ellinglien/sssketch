@@ -23,6 +23,7 @@ import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { StemPeaks } from '../main/stemPeaksCacheStore'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
+import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 const api = {
@@ -310,6 +311,8 @@ const api = {
     ipcRenderer.invoke('set-yamnet-zeroshot-category', path, audiosetClassIndex),
   markYamnetZeroShotAttempted: (path: string): Promise<void> =>
     ipcRenderer.invoke('mark-yamnet-zeroshot-attempted', path),
+  setStemAnalysisResults: (results: StemAnalysisWrite[]): Promise<void> =>
+    ipcRenderer.invoke('set-stem-analysis-results', results),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>

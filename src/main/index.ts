@@ -87,9 +87,8 @@ import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsSt
 import type { DiscoverSettings } from './discoverSettingsStore'
 import {
   getStemAutoClassifyProgress,
-  isStemEligibleForAutoCategory,
+  applyYamnetZeroShotCategory,
   markYamnetZeroShotAttempted,
-  upsertStemAutoCategory,
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
@@ -132,6 +131,8 @@ import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCac
 import { readYamnetModelBytes } from './yamnetModel'
 import { enableWorkCounters } from './workCounters'
 import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
+import { writeStemAnalysisResults } from './stemAnalysisResultsWriter'
+import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
@@ -1171,25 +1172,13 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'set-yamnet-zeroshot-category',
     (_event, path: string, audiosetClassIndex: number) => {
-      const arrangeRole = arrangeRoleForAudiosetClass(audiosetClassIndex)
-      if (!arrangeRole) return
+      // Unmapped class: nothing to write, skip the StemCID lookup too.
+      if (!arrangeRoleForAudiosetClass(audiosetClassIndex)) return
       const db = openOwnRiffLibraryDb()
-      const extraCandidateDbs = candidateDbsForRiff()
-      const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
+      const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())
       if (!stemCID) return
-      if (!isStemEligibleForAutoCategory(db, stemCID)) return
-      // Floored, same reasoning as set-stem-feature-cache/set-stem-embedding-cache
-      // two handlers above: StemAutoCategory's own upsert (upsertStemAutoCategory)
-      // has no WHERE-guarded comparison against a prior write's timestamp, unlike
-      // upsertStemCategoryRole's, so there's no cross-writer ordering for extra
-      // precision to protect here.
-      upsertStemAutoCategory(
-        db,
-        stemCID,
-        arrangeRole,
-        'yamnet-zeroshot',
-        Math.floor(Date.now() / 1000)
-      )
+      // Floored -- see applyYamnetZeroShotCategory.
+      applyYamnetZeroShotCategory(db, stemCID, audiosetClassIndex, Math.floor(Date.now() / 1000))
     }
   )
 
@@ -1202,6 +1191,22 @@ app.whenReady().then(async () => {
   // answer for a given audio file -- without recording that the attempt
   // happened at all, get-stem-analysis-needs' zeroShot flag would keep
   // re-selecting the same never-classifiable stems forever.
+  // Batched counterpart to the set-stem-*-cache / zero-shot handlers above
+  // for the ambient scans (background efficiency B7): every output of
+  // several analysed stems in one IPC and one (time-budgeted) transaction,
+  // with the StemCIDs resolved in one query per db instead of per write.
+  // The single-write handlers stay for interactive callers.
+  ipcMain.handle(
+    'set-stem-analysis-results',
+    (_event, results: StemAnalysisWrite[]): Promise<void> =>
+      writeStemAnalysisResults(
+        openOwnRiffLibraryDb(),
+        results,
+        Math.floor(Date.now() / 1000),
+        candidateDbsForRiff()
+      )
+  )
+
   ipcMain.handle('mark-yamnet-zeroshot-attempted', (_event, path: string) => {
     const db = openOwnRiffLibraryDb()
     const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())

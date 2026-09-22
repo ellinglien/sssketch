@@ -5,6 +5,7 @@ import { decodeStemFile } from './decodeStemFile'
 import { getBrightness } from './peakCache'
 import { primePitchContour } from './pitchCache'
 import { analyzeStemSamplesOffThread } from './stemAnalysisClient'
+import { queueStemAnalysisWrite } from './analysisWriteQueue'
 
 const cache = new Map<string, Promise<StemFeatures>>()
 
@@ -112,22 +113,16 @@ export function adoptStemFeaturesFromBuffer(
   return remember(
     path,
     Promise.all([audioBuffer, brightness]).then(([buffer, b]) =>
-      featuresFromDecoded(path, buffer, b)
+      featuresFromDecoded(path, buffer, b, (features) =>
+        // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
+        queueStemAnalysisWrite(path, { features })
+      )
     )
   )
 }
 
-async function featuresFromDecoded(
-  path: string,
-  audioBuffer: AudioBuffer,
-  brightness: number[]
-): Promise<StemFeatures> {
-  const analysis = await analyzeStemSamplesOffThread(
-    audioBuffer.getChannelData(0),
-    audioBuffer.sampleRate
-  )
-  primePitchContour(path, analysis.pitchContour)
-  const features = assembleStemFeatures(analysis, brightness)
+/** Direct single-write persistence (interactive callers). */
+function persistFeaturesNow(path: string, features: StemFeatures): void {
   // Fire-and-forget -- a real library stem's path persists for next
   // time (this session's own renderer-memory `cache` above already
   // covers repeat calls within THIS session regardless of whether this
@@ -135,5 +130,20 @@ async function featuresFromDecoded(
   // main-process side (see stemFeatureCacheStore.ts).
   countWork('ipc:set-stem-feature-cache')
   void window.rifffApi.setStemFeatureCache(path, features)
+}
+
+async function featuresFromDecoded(
+  path: string,
+  audioBuffer: AudioBuffer,
+  brightness: number[],
+  persist: (features: StemFeatures) => void = (features) => persistFeaturesNow(path, features)
+): Promise<StemFeatures> {
+  const analysis = await analyzeStemSamplesOffThread(
+    audioBuffer.getChannelData(0),
+    audioBuffer.sampleRate
+  )
+  primePitchContour(path, analysis.pitchContour)
+  const features = assembleStemFeatures(analysis, brightness)
+  persist(features)
   return features
 }

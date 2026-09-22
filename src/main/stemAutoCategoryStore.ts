@@ -1,6 +1,7 @@
 // src/main/stemAutoCategoryStore.ts
 import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
+import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
 export type StemAutoCategorySource = 'embedding' | 'centroid' | 'yamnet-zeroshot' | 'instrumentMask'
@@ -118,6 +119,26 @@ export function markYamnetZeroShotAttempted(
        ON CONFLICT(StemCID) DO NOTHING`
     )
     .run({ stemCID, attemptedAt })
+}
+
+/** Writes a YAMNet zero-shot guess for an already-resolved StemCID -- the
+ * body of the set-yamnet-zeroshot-category IPC, shared with the batched
+ * writer (stemAnalysisResultsWriter.ts). A class that maps to no
+ * ArrangeRole writes nothing; neither does a stem that's already confirmed
+ * or auto-categorized by any source (first classifier to claim a stem
+ * wins, same convention as stemAutoClassify.ts's BASE_ELIGIBILITY_WHERE).
+ * `computedAt` is floored seconds: StemAutoCategory's upsert has no
+ * WHERE-guarded timestamp comparison, so no extra precision is needed. */
+export function applyYamnetZeroShotCategory(
+  ownDb: Database.Database,
+  stemCID: string,
+  audiosetClassIndex: number,
+  computedAt: number
+): void {
+  const arrangeRole = arrangeRoleForAudiosetClass(audiosetClassIndex)
+  if (!arrangeRole) return
+  if (!isStemEligibleForAutoCategory(ownDb, stemCID)) return
+  upsertStemAutoCategory(ownDb, stemCID, arrangeRole, 'yamnet-zeroshot', computedAt)
 }
 
 export function upsertStemAutoCategory(

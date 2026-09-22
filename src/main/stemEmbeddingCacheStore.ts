@@ -49,6 +49,19 @@ export function setStemEmbeddingCache(
 ): void {
   const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
   if (!stemCID) return
+  writeStemEmbeddingRow(db, stemCID, embedding, extractedAt)
+  afterStemEmbeddingRowWritten(db, stemCID)
+}
+
+/** The StemEmbeddingCache upsert for an already-resolved StemCID -- shared
+ * with the batched writer (stemAnalysisResultsWriter.ts). Pair with
+ * afterStemEmbeddingRowWritten once committed. */
+export function writeStemEmbeddingRow(
+  db: Database.Database,
+  stemCID: string,
+  embedding: number[],
+  extractedAt: number
+): void {
   countWork('sql:stem-embedding-cache.set')
   db.prepare(
     `INSERT INTO StemEmbeddingCache (StemCID, EmbeddingJSON, ExtractedAt)
@@ -57,6 +70,9 @@ export function setStemEmbeddingCache(
        EmbeddingJSON = excluded.EmbeddingJSON,
        ExtractedAt = excluded.ExtractedAt`
   ).run({ stemCID, embeddingJson: JSON.stringify(embedding), extractedAt })
+}
+
+export function afterStemEmbeddingRowWritten(db: Database.Database, stemCID: string): void {
   // Wakes the overnight classifier with this stem (background efficiency B4).
   noteAutoClassifyInputRow(db, 'embedding', stemCID)
 }
