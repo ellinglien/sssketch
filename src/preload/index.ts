@@ -23,6 +23,7 @@ import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { StemPeaks } from '../main/stemPeaksCacheStore'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
+import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
@@ -261,6 +262,13 @@ const api = {
     const listener = (_event: unknown, progress: PrewarmScanProgress): void => callback(progress)
     ipcRenderer.on('library-warmup-progress', listener)
     return () => ipcRenderer.removeListener('library-warmup-progress', listener)
+  },
+  getStemAvailabilityReport: (): Promise<StemAvailabilityNotice> =>
+    ipcRenderer.invoke('get-stem-availability-report'),
+  onStemAvailabilityNotice: (callback: (notice: StemAvailabilityNotice) => void): (() => void) => {
+    const listener = (_event: unknown, notice: StemAvailabilityNotice): void => callback(notice)
+    ipcRenderer.on('stem-availability-notice', listener)
+    return () => ipcRenderer.removeListener('stem-availability-notice', listener)
   },
   getEngineStartupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-engine-startup-status'),
   onEngineStartupComplete: (callback: () => void): (() => void) => {

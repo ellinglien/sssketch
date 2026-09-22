@@ -67,6 +67,7 @@ import { installBackgroundScanInteractionListeners } from './audio/backgroundSca
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
+import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { StartupGate } from './components/StartupGate'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
@@ -2133,6 +2134,7 @@ function Frame(): React.JSX.Element {
       <BackgroundFeatureScan />
       <LibraryWarmupIndicator />
       <EngineStartupIndicator />
+      <StemsUnavailableIndicator />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the

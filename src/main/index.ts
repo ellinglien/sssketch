@@ -93,6 +93,8 @@ import {
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanTargets } from './discoverLibraryStems'
+import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
+import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { LibraryScanTarget } from './discoverLibraryStems'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
@@ -1043,6 +1045,19 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
 
   ipcMain.handle('get-engine-startup-status', (): boolean => engineStartupDone)
+
+  // Stems that can no longer be downloaded (see @shared/stemAvailability):
+  // queried once on mount for skips that happened before the renderer was
+  // listening, plus a push for the first skip of a session and for each
+  // newly-learned refusing host. StemsUnavailableIndicator.tsx is the one
+  // surface for both -- a Discover roll and a library import go through the
+  // same main-process download path, so neither screen needs to know.
+  ipcMain.handle('get-stem-availability-report', (): StemAvailabilityNotice =>
+    getStemAvailabilityReport()
+  )
+  onStemAvailabilityNotice((availability) => {
+    mainWindow?.webContents.send('stem-availability-notice', availability)
+  })
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
