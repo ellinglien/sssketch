@@ -1613,6 +1613,66 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(c.slotKinds).toEqual(['rhythmic', 'warm'])
   })
 
+  it('trait-only: attaches library-wide, direction-adjusted percentiles', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedFeatures(own, 's1', featuresJSON({ transientDensity: 0.5, spectralCentroidHz: 1000 }))
+    // Library rows outside the pool (no Stems row) still shape the table:
+    // s1 sits at the median of transientDensity and the top of centroid.
+    for (const [cid, density, hz] of [
+      ['lib0', 0, 0],
+      ['lib1', 0.25, 250],
+      ['lib2', 0.75, 500],
+      ['lib3', 1, 750]
+    ] as const) {
+      seedFeatures(own, cid, featuresJSON({ transientDensity: density, spectralCentroidHz: hz }))
+    }
+
+    const [c] = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['rhythmic', 'warm']
+    })
+    expect(c.stemCID).toBe('s1')
+    expect(c.traitPercentiles.rhythmic).toBeCloseTo(0.5)
+    // Highest centroid in the library -> least warm.
+    expect(c.traitPercentiles.warm).toBeCloseTo(0)
+  })
+
+  it('mask + trait: percentiles for cached stems, {} for uncached', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['cached', 'uncached'])
+    seedStem(own, 'cached', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'cached', featuresJSON({ spectralCentroidHz: 400 }))
+    seedFeatures(own, 'lib', featuresJSON({ spectralCentroidHz: 4000 }))
+    seedStem(own, 'uncached', 'jam1', { instrument: DRUM })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['bright', 'drums']
+    })
+    expect(candidates.find((c) => c.stemCID === 'cached')!.traitPercentiles).toEqual({
+      bright: 0
+    })
+    expect(candidates.find((c) => c.stemCID === 'uncached')!.traitPercentiles).toEqual({})
+  })
+
+  it('mask-only: traitPercentiles is {}', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'd', featuresJSON({ spectralCentroidHz: 400 }))
+
+    const [c] = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(c.traitPercentiles).toEqual({})
+  })
+
   it('an empty kind set returns []', async () => {
     const own = freshDb()
     expect(

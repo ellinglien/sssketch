@@ -15,6 +15,8 @@ import {
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
 import { traitValuesFromFeatures, type TraitValues } from '@shared/discoverTraits'
+import { traitPercentilesFromValues, type TraitPercentiles } from '@shared/traitQuantiles'
+import { getTraitQuantileTables } from './traitQuantileCache'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   getCachedRiffCount,
@@ -66,6 +68,11 @@ export interface DiscoverCandidate {
    * rankCandidates' trait terms. {} when the slot has no trait kinds or the
    * stem has no cached features. */
   traitValues: TraitValues
+  /** Library-wide percentile per requested TRAIT kind, [0, 1], already
+   * direction-adjusted (@shared/traitQuantiles) -- what applyTraitBar and
+   * rankCandidates actually use. {} when the slot has no trait kinds or
+   * the stem has no values; null per kind when unknown. */
+  traitPercentiles: TraitPercentiles
   /** The OWNING RIFF's own creation time (Riffs.CreationTime, Unix
    * seconds) -- same "riff-level, not stem-level, since it's always
    * populated" rationale as riffBpm above. Copied onto the eventual placed
@@ -720,14 +727,17 @@ export async function getDiscoverCandidates({
     if (traitKinds.length === 0) return []
     // traitKinds IS the whole normalized set here (no mask kinds), so the
     // pool's own slotKinds already match it.
-    return getTraitPoolCandidates({
+    return attachTraitPercentiles(
       ownDb,
-      jams,
-      traitKinds,
-      onlyOwnStems,
-      targetUser,
-      soundSource
-    })
+      await getTraitPoolCandidates({
+        ownDb,
+        jams,
+        traitKinds,
+        onlyOwnStems,
+        targetUser,
+        soundSource
+      })
+    )
   }
 
   // Nothing can pass the sound-source filter -- skip the walk entirely.
@@ -749,7 +759,35 @@ export async function getDiscoverCandidates({
       pool.push({ ...candidate, slotKinds: normalized })
     }
   }
-  return traitKinds.length > 0 ? attachTraitValues(ownDb, pool, traitKinds) : pool
+  return traitKinds.length > 0
+    ? attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, traitKinds))
+    : pool
+}
+
+/** Library-wide trait percentiles (docs/superpowers/specs/2026-09-22-
+ * discover-promise-vs-delivery-design.md, Phase 1) for every candidate
+ * that has trait values, from the cached quantile tables
+ * (traitQuantileCache.ts -- built once, never per roll). A binary search
+ * per requested trait per candidate; the pool is capped at
+ * MAX_CANDIDATE_RESOLUTION_POOL per kind, but yields every
+ * CLASSIFY_YIELD_EVERY anyway like every other per-row loop here. */
+async function attachTraitPercentiles(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[]
+): Promise<DiscoverCandidate[]> {
+  if (pool.length === 0) return pool
+  const tables = await getTraitQuantileTables(ownDb)
+  const out: DiscoverCandidate[] = []
+  let sinceYield = 0
+  for (const c of pool) {
+    out.push({ ...c, traitPercentiles: traitPercentilesFromValues(c.traitValues, tables) })
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  return out
 }
 
 /** Mask + trait sets: looks up each pooled stem's cached features (ownDb's
@@ -1003,6 +1041,7 @@ async function getMaskDiscoverCandidates({
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
           riffBpm: riffInfo.bpmRnd,
           traitValues: {},
+          traitPercentiles: {},
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1226,6 +1265,7 @@ async function getTraitPoolCandidates({
           drumSubRole: null,
           riffBpm: riffInfo.bpmRnd,
           traitValues: entry.traitValues,
+          traitPercentiles: {},
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1388,6 +1428,7 @@ export async function getRandomLibraryCandidate({
       creatorUserName: stemRow.CreatorUserName ?? '',
       slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
+      traitPercentiles: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime
@@ -1484,6 +1525,7 @@ async function getRandomOwnStemCandidate(
       creatorUserName: stemRow.CreatorUserName ?? '',
       slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
+      traitPercentiles: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime

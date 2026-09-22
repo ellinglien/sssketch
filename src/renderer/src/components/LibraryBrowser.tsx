@@ -1367,6 +1367,7 @@ export function LibraryBrowser({
         drumSubRole: null,
         riffBpm: resolvedRiff.bpm,
         traitValues: {},
+        traitPercentiles: {},
         riffCreationTime: resolvedRiff.creationTime ?? null
       }))
       // Same "push a snapshot before mutating" convention every other

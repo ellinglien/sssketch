@@ -204,6 +204,9 @@ export async function getAdjacentDiscoverCandidates(
         drumSubRole: null,
         riffBpm: resolved.bpm,
         traitValues,
+        // Adjacency stays on pool-relative trait ranking for now (the
+        // library-percentile bar is the main roll path only, Phase 1).
+        traitPercentiles: {},
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --

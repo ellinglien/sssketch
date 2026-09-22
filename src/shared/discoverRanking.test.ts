@@ -12,6 +12,7 @@ function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
     creatorUserName: 'elling',
     slotKinds: ['drums'],
     traitValues: {},
+    traitPercentiles: {},
     riffCreationTime: null,
     drumSubRole: null,
     riffBpm: 128,
@@ -129,6 +130,68 @@ describe('rankCandidates (trait scoring)', () => {
     const far = candidate({ stemCID: 'far', riffBpm: 90, traitValues: { bright: 0.99 } })
     const ranked = rankCandidates([far, close], { targetBpm: 128 })
     expect(ranked[0].candidate.stemCID).toBe('close')
+  })
+})
+
+describe('rankCandidates (library-percentile trait scoring)', () => {
+  it('uses the library percentile as the trait score, not the pool range', () => {
+    // Pool-relative, 0.31 would be the pool's max and score a full 1; in
+    // library terms it's only the 45th percentile.
+    const a = candidate({
+      stemCID: 'a',
+      traitValues: { bright: 0.31 },
+      traitPercentiles: { bright: 0.45 }
+    })
+    const b = candidate({
+      stemCID: 'b',
+      traitValues: { bright: 0.3 },
+      traitPercentiles: { bright: 0.4 }
+    })
+    const ranked = rankCandidates([b, a], { targetBpm: 128, targetTraits: ['bright'] })
+    const scoreOf = (id: string): number => ranked.find((r) => r.candidate.stemCID === id)!.score
+    expect(scoreOf('a')).toBeCloseTo(1 + 0.45)
+    expect(scoreOf('b')).toBeCloseTo(1 + 0.4)
+  })
+
+  it('percentiles are already direction-adjusted -- warm is not flipped again', () => {
+    const warm = candidate({
+      stemCID: 'warm',
+      traitValues: { warm: 300 },
+      traitPercentiles: { warm: 0.9 }
+    })
+    const ranked = rankCandidates([warm], { targetBpm: 128, targetTraits: ['warm'] })
+    expect(ranked[0].score).toBeCloseTo(1 + 0.9)
+  })
+
+  it('sums percentiles across requested traits', () => {
+    const c = candidate({
+      traitValues: { bright: 1, rhythmic: 1 },
+      traitPercentiles: { bright: 0.7, rhythmic: 0.8 }
+    })
+    const ranked = rankCandidates([c], { targetBpm: 128, targetTraits: ['bright', 'rhythmic'] })
+    expect(ranked[0].score).toBeCloseTo(1 + 0.7 + 0.8)
+  })
+
+  it('falls back to pool-relative min-max only for a candidate lacking a percentile', () => {
+    const withP = candidate({
+      stemCID: 'withP',
+      traitValues: { bright: 0.2 },
+      traitPercentiles: { bright: 0.65 }
+    })
+    const noP = candidate({
+      stemCID: 'noP',
+      traitValues: { bright: 0.8 },
+      traitPercentiles: { bright: null }
+    })
+    const low = candidate({ stemCID: 'low', traitValues: { bright: 0.2 } })
+    const ranked = rankCandidates([withP, noP, low], {
+      targetBpm: 128,
+      targetTraits: ['bright']
+    })
+    const scoreOf = (id: string): number => ranked.find((r) => r.candidate.stemCID === id)!.score
+    expect(scoreOf('withP')).toBeCloseTo(1.65)
+    expect(scoreOf('noP')).toBeCloseTo(2) // max of the pool's raw range
+    expect(scoreOf('low')).toBeCloseTo(1) // min of the pool's raw range
   })
 })
 

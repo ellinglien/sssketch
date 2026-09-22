@@ -60,8 +60,10 @@ function traitScore(
 }
 
 /** Scores every candidate by BPM closeness, plus an optional favourites
- * boost, plus one pool-relative score per requested trait kind, summed
- * (combination slots: trait kinds AND together). Descending score order.
+ * boost, plus one score per requested trait kind, summed (combination
+ * slots: trait kinds AND together). A trait's score is the candidate's own
+ * library percentile (traitPercentiles, [0, 1]) when it has one; only a
+ * candidate lacking it falls back to pool-relative min-max (traitScore). Descending score order.
  * Never throws; an empty input returns an empty ranking. */
 export function rankCandidates(
   candidates: DiscoverCandidate[],
@@ -94,12 +96,19 @@ export function rankCandidates(
       let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
       if (favouriteStemCIDs?.has(candidate.stemCID)) score += FAVOURITE_BOOST
       for (const kind of targetTraits) {
-        score +=
-          traitScore(
-            candidate.traitValues[kind],
-            DISCOVER_TRAIT_DIRECTION[kind],
-            ranges.get(kind)
-          ) * TRAIT_SCORE_WEIGHT
+        // Library percentile (Phase 1 of the 2026-09-22 promise-vs-delivery
+        // spec) when main attached one -- already direction-adjusted, and
+        // comparable across rolls, unlike the pool's own min-max range.
+        const percentile = candidate.traitPercentiles?.[kind]
+        const trait =
+          typeof percentile === 'number' && Number.isFinite(percentile)
+            ? percentile
+            : traitScore(
+                candidate.traitValues[kind],
+                DISCOVER_TRAIT_DIRECTION[kind],
+                ranges.get(kind)
+              )
+        score += trait * TRAIT_SCORE_WEIGHT
       }
       return { candidate, score }
     })

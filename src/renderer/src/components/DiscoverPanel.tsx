@@ -3111,6 +3111,7 @@ function DiscoverSlotRow({
                 creatorUserName: seedStem.author,
                 slotKinds: slot.kinds,
                 traitValues: {},
+                traitPercentiles: {},
                 drumSubRole: null,
                 riffBpm: result.bpm,
                 riffCreationTime: result.creationTime

@@ -80,6 +80,7 @@ import {
   type PrewarmScanProgress
 } from './discoverCandidates'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
+import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
@@ -313,6 +314,10 @@ function createWindow(): BrowserWindow {
     ).finally(() => {
       libraryWarmupDone = true
       mainWindow?.webContents.send('library-warmup-complete')
+      // Library-wide trait percentiles (Discover promise-vs-delivery spec,
+      // Phase 1): build the quantile tables now, after the warmup, so the
+      // first trait roll doesn't pay for it. Paginated + yielding.
+      void prewarmTraitQuantileTables(openOwnRiffLibraryDb())
     })
   })
 
