@@ -31,6 +31,18 @@ export const AUTOMATION_PARAMS: readonly AutomationParam[] = [
   'volume'
 ]
 
+/** How each parameter reads in the automation lane's own picker. Lowercase,
+ * no punctuation, matching this app's UI copy rules (tokens.css). Lives
+ * here rather than in the component for the same reason
+ * DISCOVER_SLOT_KIND_LABEL does: one table, next to the union it labels, so
+ * adding a parameter can't leave a lane showing a raw identifier. */
+export const AUTOMATION_PARAM_LABEL: Record<AutomationParam, string> = {
+  filterCutoff: 'filter cutoff',
+  filterResonance: 'filter resonance',
+  reverbSend: 'reverb send',
+  volume: 'volume'
+}
+
 /** One drawn breakpoint: a normalised value at an absolute arrangement bar --
  * the same coordinate space Rifff.startBar and muteRegions already use, so a
  * bpm change re-times every curve for free. */

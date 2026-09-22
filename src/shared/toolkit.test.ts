@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AUTOMATION_PARAM_LABEL,
   AUTOMATION_PARAMS,
   DEFAULT_REVERB,
   defaultFilterSettings,
@@ -25,6 +26,14 @@ describe('neutral defaults', () => {
       'reverbSend',
       'volume'
     ])
+  })
+
+  it('labels every automatable parameter, in this app lowercase UI copy', () => {
+    for (const param of AUTOMATION_PARAMS) {
+      const label = AUTOMATION_PARAM_LABEL[param]
+      expect(label).toBeTruthy()
+      expect(label).toBe(label.toLowerCase())
+    }
   })
 
   it('has reverb defaults matching the engine-side ReverbSettings defaults', () => {
