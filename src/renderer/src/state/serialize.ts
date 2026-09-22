@@ -3,7 +3,13 @@ import { isSketchEligible } from './selectors'
 import { snapToWholeBarIfNearlyExact } from '@shared/barLengthSnap'
 import { applyEdgeFade, clipLengthBars } from '@shared/automationEdit'
 import { stemKey } from '@shared/types'
-import type { StemAutomation } from '@shared/toolkit'
+import {
+  averageAutomationValue,
+  defaultFilterSettings,
+  type AutomationPoint,
+  type StemAutomation,
+  type StemFilterSettings
+} from '@shared/toolkit'
 import type { PluginStatesMap } from '@shared/pluginStates'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
@@ -157,6 +163,91 @@ function dropChannelScopedToolkit<T extends ChannelScopedToolkitKeys>(
   return rest
 }
 
+/** A curve drawn while `filterResonance` was still a drawable parameter.
+ * The saved JSON can carry one on any clip; today's StemAutomation type
+ * can't express it, so it is read off the loose shape below and never
+ * assigned back. */
+interface LegacyResonanceCurves {
+  filterResonance?: unknown
+}
+
+/** One saved curve, or null for anything that isn't a usable list of
+ * breakpoints -- a `.sssketchproj` is plain JSON people can and do
+ * hand-edit, and a load must never throw over one. Points themselves are
+ * left exactly as found: averageAutomationValue normalises them itself. */
+function legacyCurve(value: unknown): AutomationPoint[] | null {
+  if (!Array.isArray(value)) return null
+  const points = value.filter(
+    (point): point is AutomationPoint =>
+      typeof point === 'object' &&
+      point !== null &&
+      typeof (point as AutomationPoint).bar === 'number' &&
+      typeof (point as AutomationPoint).value === 'number'
+  )
+  return points.length > 0 ? points : null
+}
+
+/**
+ * Turns a project's drawn `filterResonance` curves into the per-clip
+ * resonance DIAL that replaced them, and drops the curves.
+ *
+ * Resonance was a drawable lane for one day (2026-09-22) before Elling used
+ * it -- "that's confusing to have it separate from cut though isn't it?" --
+ * and it became a knob in the filter lane's own corner instead (see
+ * AUTOMATION_PARAMS in @shared/toolkit for the full why). Unlike the
+ * channel-scoped toolkit above, this one HAS an honest migration: the curve
+ * and the dial are the same parameter in the same [0,1] units on the same
+ * clip, so nothing has to be invented or re-keyed.
+ *
+ * **The rule, stated once: a curve becomes its own TIME-WEIGHTED AVERAGE.**
+ * Not its value at bar 0, which a free-draw stroke often leaves at wherever
+ * the hand happened to press, and not its peak, which would make every
+ * migrated clip louder and sharper than it was. The average is "where this
+ * parameter sat, most of the time" -- the one question a knob can answer.
+ * averageAutomationValue weights by bars rather than by point count for the
+ * same reason (see its own doc comment).
+ *
+ * The curve wins over any resonance already stored on the clip: there was
+ * never a UI that could write that field, so in practice it is always 0,
+ * and where a hand-edited file has both, the drawn one is the one somebody
+ * actually made.
+ *
+ * An empty or malformed curve migrates to nothing at all -- the key is
+ * simply dropped, leaving the clip's dial at whatever it already was, so a
+ * lane someone opened and never drew in can't nudge a knob.
+ */
+function migrateResonanceCurvesToFilterDials(state: AppState): AppState {
+  let changed = false
+  const stemFilters: Record<string, StemFilterSettings> = { ...state.stemFilters }
+  const stemAutomation: Record<string, StemAutomation> = { ...state.stemAutomation }
+
+  for (const [key, automation] of Object.entries(stemAutomation)) {
+    if (typeof automation !== 'object' || automation === null) continue
+    const legacy = automation as StemAutomation & LegacyResonanceCurves
+    if (!('filterResonance' in legacy)) continue
+    changed = true
+
+    const { filterResonance, ...rest } = legacy
+
+    // An automation record with nothing left in it is deleted rather than
+    // kept as {} -- the same shape writeCurve (store.ts) leaves behind when
+    // a lane is cleared, so a migrated project is indistinguishable from
+    // one edited today.
+    if (Object.keys(rest).length === 0) delete stemAutomation[key]
+    else stemAutomation[key] = rest
+
+    const points = legacyCurve(filterResonance)
+    if (!points) continue
+    const existing = stemFilters[key]
+    stemFilters[key] = {
+      ...(existing ?? defaultFilterSettings()),
+      resonance: averageAutomationValue(points)
+    }
+  }
+
+  return changed ? { ...state, stemFilters, stemAutomation } : state
+}
+
 /** A `.sssketchproj` saved before 2026-09-22 carries the per-RIFFF edge
  * fades the old envelope drag wrote, in bars, keyed by groupId. Both keys
  * are optional: a project that never had a fade simply doesn't have them,
@@ -272,6 +363,9 @@ export function deserializeProject(
   // After snapBarLengthNoise, deliberately: a clip's length in bars is what
   // a migrated fade is measured against, so it has to be the repaired one.
   const withMigratedFades = migrateEdgeFadesToVolumeCurves(state, { fadeIn, fadeOut })
+  // Last, and independent of everything above: it only ever reads and
+  // removes filterResonance curves, which nothing else here touches.
+  const migratedState = migrateResonanceCurvesToFilterDials(withMigratedFades)
   return {
     // Only SKETCH mode has an eligibility requirement -- normal and
     // automation are always showable, so a project that can't be sketched
@@ -279,9 +373,9 @@ export function deserializeProject(
     // (mode isn't persisted at all, so in practice this is defence against
     // a hand-edited file, not a path a save/load round trip takes).
     state:
-      withMigratedFades.mode !== 'sketch' || isSketchEligible(withMigratedFades)
-        ? withMigratedFades
-        : { ...withMigratedFades, mode: 'normal' },
+      migratedState.mode !== 'sketch' || isSketchEligible(migratedState)
+        ? migratedState
+        : { ...migratedState, mode: 'normal' },
     pluginStates: pluginStates ?? {}
   }
 }

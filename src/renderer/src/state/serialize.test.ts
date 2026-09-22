@@ -447,3 +447,87 @@ describe('loading a project saved with the old per-rifff edge fades', () => {
     expect(state.rifffs.r1).toBeDefined()
   })
 })
+
+describe('loading a project whose resonance was still a drawn curve', () => {
+  // Resonance was a drawable lane for exactly one day (2026-09-22) before
+  // Elling used it -- "that's confusing to have it separate from cut though
+  // isn't it?" -- and became a dial in the filter lane's corner instead.
+  // Unlike the channel-scoped toolkit above, this DOES have an honest
+  // migration: same parameter, same [0,1] units, same clip. The rule is the
+  // curve's TIME-WEIGHTED AVERAGE -- see migrateResonanceCurvesToFilterDials.
+  function savedWithResonanceCurve(
+    automation: Record<string, unknown>
+  ): Parameters<typeof deserializeProject>[0] {
+    const placed = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    return {
+      ...JSON.parse(serializeProject(placed)),
+      stemAutomation: automation
+    }
+  }
+
+  it("moves a drawn curve's average onto the clip's resonance dial and drops the curve", () => {
+    const { state } = deserializeProject(
+      savedWithResonanceCurve({
+        'r1:1': {
+          filterResonance: [
+            { bar: 0, value: 0 },
+            { bar: 8, value: 1 }
+          ]
+        }
+      })
+    )
+    // A straight ramp averages to its midpoint.
+    expect(state.stemFilters['r1:1']).toEqual({ mode: 'lowpass', cutoff: 1, resonance: 0.5 })
+    // Nothing else was on this clip, so its automation entry goes entirely
+    // -- the same shape clearing a lane leaves behind today.
+    expect(state.stemAutomation).toEqual({})
+  })
+
+  it('leaves every other curve on the clip exactly as drawn', () => {
+    const cutoff = [
+      { bar: 0, value: 0.2 },
+      { bar: 4, value: 0.9 }
+    ]
+    const { state } = deserializeProject(
+      savedWithResonanceCurve({
+        'r1:1': { filterCutoff: cutoff, filterResonance: [{ bar: 0, value: 0.8 }] }
+      })
+    )
+    expect(state.stemAutomation['r1:1']).toEqual({ filterCutoff: cutoff })
+    expect(state.stemFilters['r1:1'].resonance).toBeCloseTo(0.8, 10)
+  })
+
+  it('keeps a filter setting the clip already had, changing only its resonance', () => {
+    const saved = savedWithResonanceCurve({
+      'r1:1': { filterResonance: [{ bar: 0, value: 0.25 }] }
+    }) as typeof initialState
+    saved.stemFilters = { 'r1:1': { mode: 'highpass', cutoff: 0.3, resonance: 0 } }
+
+    const { state } = deserializeProject(saved)
+    expect(state.stemFilters['r1:1']).toEqual({
+      mode: 'highpass',
+      cutoff: 0.3,
+      resonance: 0.25
+    })
+  })
+
+  it('drops an empty or malformed curve without touching the dial', () => {
+    const { state } = deserializeProject(
+      savedWithResonanceCurve({
+        'r1:1': { filterResonance: [] },
+        'r1:2': { filterResonance: 'not a curve' },
+        'r1:3': { filterResonance: [{ bar: 'x' }, null], volume: [{ bar: 0, value: 1 }] }
+      })
+    )
+    // A lane someone opened and never drew in can't nudge a knob.
+    expect(state.stemFilters).toEqual({})
+    expect(state.stemAutomation).toEqual({ 'r1:3': { volume: [{ bar: 0, value: 1 }] } })
+  })
+
+  it('loads a project with no resonance curves anywhere without rewriting anything', () => {
+    const curves = { 'r1:1': { volume: [{ bar: 0, value: 0.5 }] } }
+    const { state } = deserializeProject(savedWithResonanceCurve(curves))
+    expect(state.stemAutomation).toEqual(curves)
+    expect(state.stemFilters).toEqual({})
+  })
+})
