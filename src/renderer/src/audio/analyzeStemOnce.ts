@@ -1,6 +1,7 @@
 // src/renderer/src/audio/analyzeStemOnce.ts
 import { isCurrentStemFeatureVersion, type StemFeatures } from '@shared/stemFeatures'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
+import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { adoptWaveformAnalysis, hasWaveformEntry, waveformFromBuffer } from './peakCache'
 import { adoptStemFeaturesFromBuffer, peekStemFeaturesEntry } from './stemFeaturesCache'
@@ -132,4 +133,12 @@ export async function analyzeStemOnce(
           ? 'done'
           : 'failed'
   }
+}
+
+/** Main's batched "what's still missing" answer for these paths (index-
+ * aligned) -- get-stem-analysis-needs (src/main/stemAnalysisNeeds.ts). One
+ * IPC call for the whole list; main chunks and yields. */
+export function fetchStemAnalysisNeeds(paths: string[]): Promise<StemAnalysisNeeds[]> {
+  countWork('ipc:get-stem-analysis-needs')
+  return window.rifffApi.getStemAnalysisNeeds(paths)
 }

@@ -23,6 +23,7 @@ import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { StemPeaks } from '../main/stemPeaksCacheStore'
+import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 
 const api = {
@@ -292,6 +293,8 @@ const api = {
     source: string,
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),
+  getStemAnalysisNeeds: (paths: string[]): Promise<StemAnalysisNeeds[]> =>
+    ipcRenderer.invoke('get-stem-analysis-needs', paths),
   getStemFeatureCache: (path: string): Promise<StemFeatures | null> =>
     ipcRenderer.invoke('get-stem-feature-cache', path),
   setStemFeatureCache: (path: string, features: StemFeatures): Promise<void> =>

@@ -2,16 +2,15 @@
 import { backgroundScanGate } from './backgroundScanGate'
 import { useEffect, useRef } from 'react'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
-import { getOrExtractStemEmbedding } from './stemEmbeddingCache'
-import { getStemFeatures } from './stemFeaturesCache'
+import { needsAnyAnalysis, type StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
+import { analyzeStemOnce, fetchStemAnalysisNeeds } from './analyzeStemOnce'
 
 // Small batches with a real delay between them, rather than firing every
 // currently-placed stem's extraction at once -- a large project's worth of
 // never-before-scanned stems shouldn't compete heavily with real playback/
-// interaction. getStemFeatures' own two-tier cache (renderer memory, then
-// the persistent store) means calling it here for a stem some OTHER path
-// (a screen's own useStemFeatureScan, or an earlier batch) already
-// resolved is a cheap no-op, not redundant work.
+// interaction. Stems main reports as fully analysed are skipped outright,
+// and analyzeStemOnce itself skips anything already in a cache module's
+// memory (a screen's own useStemFeatureScan, or an earlier batch).
 const BATCH_SIZE = 3
 const BATCH_DELAY_MS = 500
 
@@ -42,61 +41,63 @@ export function BackgroundFeatureScan(): null {
     if (toScan.length === 0) return
     let cancelled = false
 
+    // One decode per stem, only for what's missing (background-efficiency
+    // spec, A2/A3): main answers "what does each placed stem still need"
+    // in ONE batched call, stems needing nothing are dropped, and the rest
+    // go through analyzeStemOnce -- instead of a getStemFeatures +
+    // getOrExtractStemEmbedding pair per stem, each doing its own
+    // persisted-cache round trip and (when missing) its own decode.
+    // Needs come from main rather than "request all three" because most
+    // placed stems are already analysed, and asking for everything would
+    // re-decode each of them every session.
+    let work: { path: string; needs: StemAnalysisNeeds }[] = []
+
     // Real regression, found live 2026-09-18 -- see
     // YamnetZeroShotRetroactiveScan.tsx's own matching fix for the full
-    // root-cause writeup. This loop used to fire every batch member with
-    // `void` (fire-and-forget) and schedule the NEXT batch's setTimeout
-    // unconditionally, never waiting for the current batch's real work
-    // (an IPC file read, a Web Audio decode, and a real Worker round-trip
-    // for embedding inference) to actually finish -- so batches piled up
-    // unbounded well past this loop's own BATCH_SIZE=3 intent. Awaiting
-    // the batch before scheduling the next one caps real concurrency at
-    // BATCH_SIZE and makes BATCH_DELAY_MS a genuine gap after real work
-    // finishes, not just after it's fired.
+    // root-cause writeup. The batch is awaited before the next one is
+    // scheduled, capping real concurrency at BATCH_SIZE and making
+    // BATCH_DELAY_MS a genuine gap after real work finishes.
     function runBatch(startIndex: number): void {
       if (cancelled) return
-      // Yield to the user -- see backgroundScanGate.ts (2026-09-21): this
-      // batch's decode/analysis runs on the UI thread, so wait while a
-      // modal is open or input just happened. Deferred, never skipped.
+      // Yield to the user -- see backgroundScanGate.ts (2026-09-21): wait
+      // while a modal is open or input just happened. Deferred, never
+      // skipped.
       if (!backgroundScanGate.mayRun(performance.now())) {
         window.setTimeout(() => runBatch(startIndex), BATCH_DELAY_MS)
         return
       }
-      const batch = toScan.slice(startIndex, startIndex + BATCH_SIZE)
+      const batch = work.slice(startIndex, startIndex + BATCH_SIZE)
       if (batch.length === 0) return
+      for (const { path } of batch) attemptedRef.current.add(path)
       void (async () => {
-        await Promise.allSettled(
-          batch.flatMap((fs) => {
-            attemptedRef.current.add(fs.stem.path)
-            return [
-              // requireCurrentVersion: re-extract a row older than
-              // STEM_FEATURE_VERSION (2026-09-22 spec, Phase 3).
-              getStemFeatures(fs.stem.path, { requireCurrentVersion: true }).catch(
-                (err: unknown) => {
-                  console.error(
-                    'BackgroundFeatureScan: feature extraction failed for stem',
-                    fs.stem.path,
-                    err
-                  )
-                }
-              ),
-              // Embedding extraction (Plan B2) rides the exact same batch/
-              // throttle loop as the hand-crafted feature extraction above,
-              // rather than a second parallel scan -- getOrExtractStemEmbedding
-              // never throws (see its own doc comment), so a rejection here
-              // would be a genuine bug, not an expected failure mode.
-              getOrExtractStemEmbedding(fs.stem.path)
-            ]
-          })
-        )
+        // analyzeStemOnce never rejects and logs its own failures.
+        await Promise.allSettled(batch.map(({ path, needs }) => analyzeStemOnce(path, needs)))
         if (cancelled) return
         const nextIndex = startIndex + BATCH_SIZE
-        if (nextIndex < toScan.length) {
+        if (nextIndex < work.length) {
           window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
         }
       })()
     }
-    runBatch(0)
+
+    // Unique paths -- the same stem can be placed more than once.
+    const paths = [...new Set(toScan.map((fs) => fs.stem.path))]
+    void fetchStemAnalysisNeeds(paths)
+      .then((needs) => {
+        if (cancelled) return
+        work = []
+        paths.forEach((path, i) => {
+          const pathNeeds = needs[i]
+          if (pathNeeds && needsAnyAnalysis(pathNeeds)) work.push({ path, needs: pathNeeds })
+          // Nothing missing -- done, no decode and no further IPC.
+          else attemptedRef.current.add(path)
+        })
+        runBatch(0)
+      })
+      .catch((err: unknown) => {
+        // Nothing was marked attempted, so the next flatStems change retries.
+        console.error('BackgroundFeatureScan: failed to load analysis needs:', err)
+      })
 
     return () => {
       cancelled = true

@@ -135,6 +135,8 @@ import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeak
 import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { readYamnetModelBytes } from './yamnetModel'
 import { enableWorkCounters } from './workCounters'
+import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
+import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
@@ -1092,6 +1094,15 @@ app.whenReady().then(async () => {
       )
       trainCentroidsFromRoleEntries(db, entries, extraCandidateDbs)
     }
+  )
+
+  // Batched "what's still missing" for the ambient scans (background-
+  // efficiency spec, A3) -- chunked IN-list queries against the cache
+  // tables, yielding between chunks; index-aligned with `paths`.
+  ipcMain.handle(
+    'get-stem-analysis-needs',
+    (_event, paths: string[]): Promise<StemAnalysisNeeds[]> =>
+      getStemAnalysisNeeds(openOwnRiffLibraryDb(), paths)
   )
 
   ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>
