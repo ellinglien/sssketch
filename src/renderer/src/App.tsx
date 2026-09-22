@@ -47,6 +47,7 @@ import { importPathsWithChoice } from './audio/importPathsWithChoice'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
+import { loadLastProjectTempo, saveLastProjectTempo } from './state/lastProjectTempo'
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
 import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
@@ -964,6 +965,12 @@ function Frame(): React.JSX.Element {
   }, [state])
 
   const [currentSketch, setCurrentSketch] = useState<CurrentSketch>(null)
+  // Remembers the open project's tempo for the next new project's default
+  // (lastProjectTempo.ts) -- only once a real project is open, so the
+  // pre-project startup state's default tempo never overwrites it.
+  useEffect(() => {
+    if (currentSketch !== null) saveLastProjectTempo(state.bpm)
+  }, [currentSketch, state.bpm])
   // The last content actually known to be durably saved (library folder,
   // external file, or -- immediately after a crash-recovery restore -- the
   // just-recovered snapshot itself). Compared against the live, freshly
@@ -2461,6 +2468,7 @@ function Frame(): React.JSX.Element {
         {newProjectModal && (
           <NewProjectModal
             defaultName={newProjectModal.defaultName}
+            defaultBpm={loadLastProjectTempo(initialState.bpm)}
             onCreate={commitNewProject}
             onCancel={() => setNewProjectModal(null)}
           />

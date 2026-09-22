@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
-import { initialState } from '../state/store'
 
 /** Shown when "New" is clicked, after the discard-unsaved-changes confirm
  * already passed -- lets the user see and edit the auto-generated name
@@ -12,10 +11,14 @@ import { initialState } from '../state/store'
  * 2026-08-08-project-workflow-polish-design.md. */
 export function NewProjectModal({
   defaultName,
+  defaultBpm,
   onCreate,
   onCancel
 }: {
   defaultName: string
+  /** The last open project's tempo (lastProjectTempo.ts), falling back to
+   * initialState.bpm -- direct request, 2026-09-22. */
+  defaultBpm: number
   onCreate: (name: string, bpm: number) => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -27,12 +30,12 @@ export function NewProjectModal({
   // Direct request, 2026-09-20: "when creating a new project, prompt user
   // to adjust the tempo" -- every new project used to silently start at
   // initialState's own hardcoded bpm with no chance to set it up front.
-  // Seeded from initialState.bpm itself (not a duplicated magic number)
-  // so this can never silently drift out of sync with the real default.
+  // Seeded from `defaultBpm` -- the last open project's tempo since
+  // 2026-09-22 (App.tsx passes loadLastProjectTempo(initialState.bpm)).
   // Free-type-until-blur/Enter, clamped to [40, 200] on commit rather than
   // on every keystroke -- same pattern TransportBar.tsx's and Discover's
   // own tempo fields already use.
-  const [bpmText, setBpmText] = useState(String(initialState.bpm))
+  const [bpmText, setBpmText] = useState(String(defaultBpm))
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -44,7 +47,7 @@ export function NewProjectModal({
     const parsedBpm = Number(bpmText)
     const bpm = Number.isFinite(parsedBpm)
       ? Math.min(200, Math.max(40, Math.round(parsedBpm)))
-      : initialState.bpm
+      : defaultBpm
     onCreate(trimmed.length > 0 ? trimmed : defaultName, bpm)
   }
 
