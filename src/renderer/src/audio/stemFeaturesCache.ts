@@ -87,6 +87,41 @@ function refreshStale(path: string, stale: Promise<StemFeatures>): Promise<StemF
 
 async function extractAndPersist(path: string): Promise<StemFeatures> {
   const [brightness, audioBuffer] = await Promise.all([getBrightness(path), decodeStemFile(path)])
+  return featuresFromDecoded(path, audioBuffer, brightness)
+}
+
+/** The in-memory entry for `path` (settled or in flight), if any --
+ * analyzeStemOnce.ts checks it before deciding whether to extract. */
+export function peekStemFeaturesEntry(path: string): Promise<StemFeatures> | undefined {
+  return cache.get(path)
+}
+
+/** Installs an extraction from an already-decoding buffer (analyzeStemOnce.ts)
+ * as this path's entry -- only if the entry is still `expected` (undefined =
+ * none; or the stale entry being replaced, same once-only rule as
+ * refreshStale). Returns the installed promise, or null when someone else
+ * got there first. Same analysis/pitch priming/persistence as a fresh
+ * getStemFeatures extraction (featuresFromDecoded). */
+export function adoptStemFeaturesFromBuffer(
+  path: string,
+  expected: Promise<StemFeatures> | undefined,
+  audioBuffer: Promise<AudioBuffer>,
+  brightness: Promise<number[]>
+): Promise<StemFeatures> | null {
+  if (cache.get(path) !== expected) return null
+  return remember(
+    path,
+    Promise.all([audioBuffer, brightness]).then(([buffer, b]) =>
+      featuresFromDecoded(path, buffer, b)
+    )
+  )
+}
+
+async function featuresFromDecoded(
+  path: string,
+  audioBuffer: AudioBuffer,
+  brightness: number[]
+): Promise<StemFeatures> {
   const analysis = await analyzeStemSamplesOffThread(
     audioBuffer.getChannelData(0),
     audioBuffer.sampleRate

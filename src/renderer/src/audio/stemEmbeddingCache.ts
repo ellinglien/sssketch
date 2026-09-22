@@ -57,25 +57,7 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
       const persisted = await window.rifffApi.getStemEmbeddingCache(path)
       if (persisted) return persisted
 
-      const pcm = await decodeAndResample(path)
-      const result = await extractEmbeddingAndTopClass(pcm)
-      if (!result || result.embedding.every((v) => v === 0)) return null
-
-      // Fire-and-forget, matching getStemFeatures' own setStemFeatureCache
-      // call -- a real library stem's path persists for next time; a
-      // non-library path is silently skipped main-process-side.
-      countWork('ipc:set-stem-embedding-cache')
-      void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
-      // Marks the attempt regardless of topClassIndex -- see
-      // markYamnetZeroShotAttempted's own doc comment (main process) for
-      // why "tried, found nothing mappable" still needs recording.
-      countWork('ipc:mark-yamnet-zeroshot-attempted')
-      void window.rifffApi.markYamnetZeroShotAttempted(path)
-      if (result.topClassIndex !== null) {
-        countWork('ipc:set-yamnet-zeroshot-category')
-        void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
-      }
-      return result.embedding
+      return await embedAndPersist(path, await decodeAndResample(path))
     } catch (err) {
       console.error('getOrExtractStemEmbedding: extraction failed for stem', path, err)
       cache.delete(path)
@@ -83,6 +65,63 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
     }
   })()
 
+  cache.set(path, promise)
+  return promise
+}
+
+/** YAMNet inference on already-resampled 16 kHz mono PCM, then the same
+ * persistence + zero-shot side effects for every fresh extraction (shared
+ * by getOrExtractStemEmbedding and adoptStemEmbeddingFromBuffer). Null for
+ * no result or an all-zero embedding -- see getOrExtractStemEmbedding. */
+async function embedAndPersist(path: string, pcm: Float32Array): Promise<number[] | null> {
+  const result = await extractEmbeddingAndTopClass(pcm)
+  if (!result || result.embedding.every((v) => v === 0)) return null
+
+  // Fire-and-forget, matching getStemFeatures' own setStemFeatureCache
+  // call -- a real library stem's path persists for next time; a
+  // non-library path is silently skipped main-process-side.
+  countWork('ipc:set-stem-embedding-cache')
+  void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
+  // Marks the attempt regardless of topClassIndex -- see
+  // markYamnetZeroShotAttempted's own doc comment (main process) for
+  // why "tried, found nothing mappable" still needs recording.
+  countWork('ipc:mark-yamnet-zeroshot-attempted')
+  void window.rifffApi.markYamnetZeroShotAttempted(path)
+  if (result.topClassIndex !== null) {
+    countWork('ipc:set-yamnet-zeroshot-category')
+    void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
+  }
+  return result.embedding
+}
+
+/** True when this path already has an in-memory entry (settled or in
+ * flight). */
+export function hasStemEmbeddingEntry(path: string): boolean {
+  return cache.has(path)
+}
+
+/** Extracts from an already-decoding buffer (analyzeStemOnce.ts) -- same
+ * resample, inference, persistence and zero-shot writes as
+ * getOrExtractStemEmbedding, minus that function's own read+decode.
+ * Installed as this path's entry so getOrExtractStemEmbedding shares it
+ * mid-flight. Returns null (nothing installed) when the path already has
+ * an entry. Never rejects, same contract as getOrExtractStemEmbedding. */
+export function adoptStemEmbeddingFromBuffer(
+  path: string,
+  audioBuffer: Promise<AudioBuffer>
+): Promise<number[] | null> | null {
+  if (cache.has(path)) return null
+  const promise = (async (): Promise<number[] | null> => {
+    try {
+      return await embedAndPersist(path, await resampleTo16kMono(await audioBuffer))
+    } catch (err) {
+      console.error('adoptStemEmbeddingFromBuffer: extraction failed for stem', path, err)
+      // Unguarded, same as getOrExtractStemEmbedding: only this entry can be
+      // installed for the path while it's in flight.
+      cache.delete(path)
+      return null
+    }
+  })()
   cache.set(path, promise)
   return promise
 }

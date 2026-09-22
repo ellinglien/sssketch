@@ -1,7 +1,7 @@
 import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
 import { countWork } from '../perf/workCounters'
 
-interface WaveformAnalysis {
+export interface WaveformAnalysis {
   peaks: number[]
   /** Per-bucket zero-crossing-rate brightness (see zcrFromChannel) — same
    * 128-bucket resolution as peaks, computed from the same decode so a
@@ -67,11 +67,7 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       countWork('decode')
       const audioBuffer = await getContext().decodeAudioData(arrayBuffer as ArrayBuffer)
-      const channel = audioBuffer.getChannelData(0)
-      const result = {
-        peaks: peaksFromChannel(channel, 128),
-        brightness: zcrFromChannel(channel, 128)
-      }
+      const result = waveformFromBuffer(audioBuffer)
       settled.set(path, result)
       // Fire-and-forget -- a real library stem's path persists for next
       // session (this session's own renderer-memory `cache`/`settled`
@@ -92,6 +88,56 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
 
   cache.set(path, promise)
   return promise
+}
+
+/** Peaks + zero-crossing brightness (128 buckets each) from an already
+ * decoded buffer -- the one function that produces a WaveformAnalysis,
+ * shared by this module's own decode and analyzeStemOnce.ts's single
+ * decode. */
+export function waveformFromBuffer(audioBuffer: AudioBuffer): WaveformAnalysis {
+  const channel = audioBuffer.getChannelData(0)
+  return {
+    peaks: peaksFromChannel(channel, 128),
+    brightness: zcrFromChannel(channel, 128)
+  }
+}
+
+/** Installs a WaveformAnalysis computed elsewhere (analyzeStemOnce.ts) as
+ * this path's entry, so getPeaks/getBrightness/peek* share it -- including
+ * while it's still in flight, so an interactive call mid-analysis never
+ * starts a second decode. Returns the installed promise, or null (nothing
+ * installed) when the path already has an entry. Same eviction-on-
+ * rejection as getAnalysis; `persist` also writes the result to the
+ * persisted cache on success (set-stem-peaks-cache, same as a fresh decode
+ * here). */
+export function adoptWaveformAnalysis(
+  path: string,
+  analysis: Promise<WaveformAnalysis>,
+  { persist }: { persist: boolean }
+): Promise<WaveformAnalysis> | null {
+  if (cache.has(path)) return null
+  const promise = analysis.then(
+    (result) => {
+      settled.set(path, result)
+      if (persist) {
+        countWork('ipc:set-stem-peaks-cache')
+        void window.rifffApi.setStemPeaksCache(path, result)
+      }
+      return result
+    },
+    (err: unknown) => {
+      if (cache.get(path) === promise) cache.delete(path)
+      throw err
+    }
+  )
+  cache.set(path, promise)
+  return promise
+}
+
+/** True when this path already has an in-memory entry (settled or in
+ * flight). */
+export function hasWaveformEntry(path: string): boolean {
+  return cache.has(path)
 }
 
 export function getPeaks(path: string): Promise<number[]> {
