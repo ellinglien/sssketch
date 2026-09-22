@@ -6,6 +6,7 @@ import {
   groupIdFromStemKey,
   type ArrangeMoveRecord
 } from '@shared/autoArrangeApply'
+import type { StemAutomation } from '@shared/toolkit'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
 /** The played-bars override/fallback logic on its own, so a caller that
@@ -546,11 +547,17 @@ export function pasteRifffAction(
 
   const vol: Record<string, number> = {}
   const mute: Record<string, boolean> = {}
+  const stemAutomation: Record<string, StemAutomation> = {}
   for (const stem of source.stems) {
     const oldKey = stemKey(sourceGroupId, stem.slot)
     const newKey = stemKey(newGroupId, stem.slot)
     if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
     if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+    // "if the stem is moved, have the envelope go with it" (Elling) -- and a
+    // duplicate is a move that leaves the original behind. Curves are
+    // clip-relative, so they copy verbatim, with no re-timing.
+    if (state.stemAutomation[oldKey] !== undefined)
+      stemAutomation[newKey] = state.stemAutomation[oldKey]
   }
 
   return {
@@ -558,6 +565,7 @@ export function pasteRifffAction(
     rifff,
     vol,
     mute,
+    stemAutomation,
     off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
     stretch: state.stretch[sourceGroupId] ?? true
   }
@@ -608,14 +616,20 @@ export function pasteStemAction(
   const newKey = stemKey(newGroupId, slot)
   const vol: Record<string, number> = {}
   const mute: Record<string, boolean> = {}
+  const stemAutomation: Record<string, StemAutomation> = {}
   if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
   if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+  // See pasteRifffAction's own comment -- a duplicated clip carries its
+  // drawn curves, verbatim, because they are clip-relative.
+  if (state.stemAutomation[oldKey] !== undefined)
+    stemAutomation[newKey] = state.stemAutomation[oldKey]
 
   return {
     type: 'PASTE_RIFFF',
     rifff,
     vol,
     mute,
+    stemAutomation,
     off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
     stretch: state.stretch[sourceGroupId] ?? true
   }
@@ -660,14 +674,20 @@ function pasteStemWindowAction(
   const newKey = stemKey(newGroupId, slot)
   const vol: Record<string, number> = {}
   const mute: Record<string, boolean> = {}
+  const stemAutomation: Record<string, StemAutomation> = {}
   if (state.vol[oldKey] !== undefined) vol[newKey] = state.vol[oldKey]
   if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
+  // See pasteRifffAction's own comment -- a duplicated clip carries its
+  // drawn curves, verbatim, because they are clip-relative.
+  if (state.stemAutomation[oldKey] !== undefined)
+    stemAutomation[newKey] = state.stemAutomation[oldKey]
 
   return {
     type: 'PASTE_RIFFF',
     rifff,
     vol,
     mute,
+    stemAutomation,
     off: { [newGroupId]: state.off[sourceGroupId] ?? 0 },
     stretch: state.stretch[sourceGroupId] ?? true
   }

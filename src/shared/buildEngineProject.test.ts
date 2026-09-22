@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildEngineProject } from './buildEngineProject'
+import { buildEngineProject, type EngineStem } from './buildEngineProject'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
@@ -442,119 +442,162 @@ describe('buildEngineProject', () => {
 })
 
 // ---- built-in sound toolkit ----
-// docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
-// The wire-format twin of EngineProject::EngineChannelToolkit in
-// native-engine/Source/EngineProject.h -- these tests and
-// EngineProjectTests.cpp's own toolkit cases are the two halves of the same
-// contract.
+// docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md, section
+// 2b (the per-CLIP rescope). The wire-format twin of
+// EngineStem::EngineStemToolkit in native-engine/Source/EngineProject.h --
+// these tests and EngineProjectTests.cpp's own toolkit cases are the two
+// halves of the same contract.
 describe('buildEngineProject toolkit', () => {
   const resolveNothing = async (path: string): Promise<{ path: string; durationSec: number }> => ({
     path,
     durationSec: 1
   })
 
-  it('sends no toolkit entries and default reverb for a project that never touched it', async () => {
-    // This is the guarantee an old project depends on: an empty array is what
-    // makes the engine take its pre-toolkit render path.
+  async function firstStem(state: AppState): Promise<EngineStem> {
+    const project = await buildEngineProject(state, resolveNothing, emptyCatalog)
+    return project.rifffs[0].stems[0]
+  }
+
+  it('sends NO toolkit key at all on a stem for a project that never touched it', async () => {
+    // This is the guarantee an old project depends on: the absence of the
+    // key is what makes the engine take its pre-toolkit render path, and a
+    // stem object with no `toolkit` property is byte-for-byte the payload
+    // this app sent before the toolkit existed.
+    const stem = await firstStem(stateWith({ bpm: 150 }))
+    expect('toolkit' in stem).toBe(false)
     const project = await buildEngineProject(stateWith({ bpm: 150 }), resolveNothing, emptyCatalog)
-    expect(project.channelToolkits).toEqual([])
     expect(project.reverb).toEqual(DEFAULT_REVERB)
   })
 
-  it('omits a channel whose filter is parked at its own neutral end with no send or curves', async () => {
-    const project = await buildEngineProject(
+  it('omits a clip whose filter is parked at its own neutral end with no send or curves', async () => {
+    const stem = await firstStem(
       stateWith({
         bpm: 150,
-        channelFilters: {
-          a: defaultFilterSettings('lowpass'),
-          b: defaultFilterSettings('highpass')
-        },
-        channelSends: { a: 0, b: 0 }
-      }),
-      resolveNothing,
-      emptyCatalog
+        stemFilters: { 'r1:1': defaultFilterSettings('lowpass') },
+        stemSends: { 'r1:1': 0 }
+      })
     )
-    expect(project.channelToolkits).toEqual([])
+    expect('toolkit' in stem).toBe(false)
   })
 
   it('carries a moved filter, a send and every curve onto the wire', async () => {
-    const project = await buildEngineProject(
+    const stem = await firstStem(
       stateWith({
         bpm: 150,
-        channelFilters: { ch1: { mode: 'highpass', cutoff: 0.4, resonance: 0.6 } },
-        channelSends: { ch1: 0.35 },
-        channelAutomation: {
-          ch1: {
+        stemFilters: { 'r1:1': { mode: 'highpass', cutoff: 0.4, resonance: 0.6 } },
+        stemSends: { 'r1:1': 0.35 },
+        stemAutomation: {
+          'r1:1': {
             filterCutoff: [
               { bar: 0, value: 0.1 },
               { bar: 8, value: 0.9 }
             ]
           }
         }
-      }),
-      resolveNothing,
-      emptyCatalog
+      })
     )
 
-    expect(project.channelToolkits).toEqual([
-      {
-        channelId: 'ch1',
-        filterMode: 'highpass',
-        filterCutoff: 0.4,
-        filterResonance: 0.6,
-        reverbSend: 0.35,
-        volume: 1,
-        automation: {
-          filterCutoff: [
-            { bar: 0, value: 0.1 },
-            { bar: 8, value: 0.9 }
-          ],
-          // Every curve is a concrete array on the wire, even the untouched
-          // ones -- the engine reads four fixed keys.
-          filterResonance: [],
-          reverbSend: [],
-          volume: []
-        }
+    expect(stem.toolkit).toEqual({
+      filterMode: 'highpass',
+      filterCutoff: 0.4,
+      filterResonance: 0.6,
+      reverbSend: 0.35,
+      volume: 1,
+      // rifff.startBar is 4, with no crop and no re-one offset.
+      originBar: 4,
+      automation: {
+        filterCutoff: [
+          { bar: 0, value: 0.1 },
+          { bar: 8, value: 0.9 }
+        ],
+        // Every curve is a concrete array on the wire, even the untouched
+        // ones -- the engine reads four fixed keys.
+        filterResonance: [],
+        reverbSend: [],
+        volume: []
       }
-    ])
+    })
   })
 
-  it('includes a channel that has ONLY automation, with its static values left neutral', async () => {
+  it('keeps two stems of one rifff independent -- the toolkit is per clip, not per row', async () => {
+    const twoStem: Rifff = {
+      ...rifff,
+      stems: [
+        ...rifff.stems,
+        {
+          slot: 6,
+          author: 'e',
+          name: 'b',
+          type: 'fx',
+          path: '/b.wav',
+          durationSec: 12.8,
+          barLength: 8
+        }
+      ]
+    }
     const project = await buildEngineProject(
-      stateWith({
+      {
+        ...initialState,
         bpm: 150,
-        channelAutomation: { ch1: { volume: [{ bar: 0, value: 0.5 }] } }
-      }),
+        rifffs: { r1: twoStem },
+        stemAutomation: { 'r1:6': { volume: [{ bar: 0, value: 0.5 }] } }
+      },
       resolveNothing,
       emptyCatalog
     )
-    expect(project.channelToolkits).toHaveLength(1)
-    expect(project.channelToolkits[0].filterMode).toBe('lowpass')
-    // Neutral for THAT mode -- a send-only or automation-only channel must not
+    const [a, b] = project.rifffs[0].stems
+    expect('toolkit' in a).toBe(false)
+    expect(b.toolkit?.automation.volume).toEqual([{ bar: 0, value: 0.5 }])
+  })
+
+  it("originBar is the clip's own drawn left edge: startBar + leftCrop + the re-one offset", async () => {
+    const stem = await firstStem(
+      stateWith({
+        bpm: 150,
+        snapIdx: 2, // SNAP_DIVS[2] === 4, so 6 steps is 1.5 bars
+        off: { r1: 6 },
+        leftCrop: { r1: 2 },
+        stemAutomation: { 'r1:1': { volume: [{ bar: 0, value: 0.5 }] } }
+      })
+    )
+    // startBar 4 + leftCrop 2 + offset 1.5 -- the exact same three terms
+    // clipGeometryFromFields uses to place the clip on screen, which is what
+    // makes "bar 0 of the curve" and "the left edge of the clip" the same
+    // place.
+    expect(stem.toolkit?.originBar).toBe(7.5)
+  })
+
+  it('includes a clip that has ONLY automation, with its static values left neutral', async () => {
+    const stem = await firstStem(
+      stateWith({
+        bpm: 150,
+        stemAutomation: { 'r1:1': { volume: [{ bar: 0, value: 0.5 }] } }
+      })
+    )
+    expect(stem.toolkit?.filterMode).toBe('lowpass')
+    // Neutral for THAT mode -- a send-only or automation-only clip must not
     // arrive with a filter that silences it.
-    expect(project.channelToolkits[0].filterCutoff).toBe(1)
-    expect(project.channelToolkits[0].reverbSend).toBe(0)
+    expect(stem.toolkit?.filterCutoff).toBe(1)
+    expect(stem.toolkit?.reverbSend).toBe(0)
   })
 
-  it("falls back to the channel's own mode neutral cutoff when only a send is set", async () => {
-    const project = await buildEngineProject(
+  it("falls back to the clip's own mode neutral cutoff when only a send is set", async () => {
+    const stem = await firstStem(
       stateWith({
         bpm: 150,
-        channelFilters: { ch1: { mode: 'highpass', cutoff: 0, resonance: 0 } },
-        channelSends: { ch1: 0.5 }
-      }),
-      resolveNothing,
-      emptyCatalog
+        stemFilters: { 'r1:1': { mode: 'highpass', cutoff: 0, resonance: 0 } },
+        stemSends: { 'r1:1': 0.5 }
+      })
     )
-    expect(project.channelToolkits[0].filterCutoff).toBe(0) // highpass neutral, not 1
+    expect(stem.toolkit?.filterCutoff).toBe(0) // highpass neutral, not 1
   })
 
   it('normalises curves on the way out: sorted, clamped, non-finite dropped', async () => {
-    const project = await buildEngineProject(
+    const stem = await firstStem(
       stateWith({
         bpm: 150,
-        channelAutomation: {
-          ch1: {
+        stemAutomation: {
+          'r1:1': {
             reverbSend: [
               { bar: 8, value: 3 },
               { bar: 2, value: -1 },
@@ -562,27 +605,25 @@ describe('buildEngineProject toolkit', () => {
             ]
           }
         }
-      }),
-      resolveNothing,
-      emptyCatalog
+      })
     )
-    expect(project.channelToolkits[0].automation.reverbSend).toEqual([
+    expect(stem.toolkit?.automation.reverbSend).toEqual([
       { bar: 2, value: 0 },
       { bar: 8, value: 1 }
     ])
   })
 
-  it('sends the project reverb settings and keeps channel order stable', async () => {
+  it('sends the project reverb settings, which stay project-wide after the rescope', async () => {
     const project = await buildEngineProject(
       stateWith({
         bpm: 150,
         reverb: { roomSize: 0.8, damping: 0.2, preDelayMs: 45 },
-        channelSends: { zeta: 0.5, alpha: 0.5 }
+        stemSends: { 'r1:1': 0.5 }
       }),
       resolveNothing,
       emptyCatalog
     )
     expect(project.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
-    expect(project.channelToolkits.map((t) => t.channelId)).toEqual(['alpha', 'zeta'])
+    expect(project.rifffs[0].stems[0].toolkit?.reverbSend).toBe(0.5)
   })
 })

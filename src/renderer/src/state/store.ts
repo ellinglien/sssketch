@@ -5,9 +5,9 @@ import {
   normaliseAutomationCurve,
   type AutomationParam,
   type AutomationPoint,
-  type ChannelAutomation,
-  type ChannelFilterSettings,
-  type ProjectReverbSettings
+  type ProjectReverbSettings,
+  type StemAutomation,
+  type StemFilterSettings
 } from '@shared/toolkit'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 
@@ -37,6 +37,35 @@ export const MIN_PLAYED_BARS = 0.25
 // it (see channelOrder's own doc comment).
 function channelHasAnyClip(channelOf: Record<string, string>, channelId: string): boolean {
   return Object.values(channelOf).includes(channelId)
+}
+
+/**
+ * Writes one parameter's curve onto every given clip, normalising it first.
+ *
+ * An emptied curve is REMOVED, not stored as []. "Absent" and "present but
+ * empty" both mean not automated to isStemToolkitNeutral, but only absence
+ * lets a clip go back to being fully neutral and drop off the wire entirely
+ * (buildEngineProject.ts) -- which is what makes clearing a lane actually
+ * restore the pre-toolkit render path rather than leaving the clip
+ * permanently in the toolkit's stage. Same reason the whole clip entry goes
+ * when its last curve does.
+ */
+function writeCurve(
+  all: Record<string, StemAutomation>,
+  keys: string[],
+  param: AutomationParam,
+  rawPoints: AutomationPoint[]
+): Record<string, StemAutomation> {
+  const points = normaliseAutomationCurve(rawPoints)
+  const next = { ...all }
+  for (const key of keys) {
+    const clip: StemAutomation = { ...next[key] }
+    if (points.length === 0) delete clip[param]
+    else clip[param] = points
+    if (Object.keys(clip).length === 0) delete next[key]
+    else next[key] = clip
+  }
+  return next
 }
 
 // Shared by PLACE_ON_TIMELINE and MOVE_TO_CHANNEL — everything about placing
@@ -160,19 +189,21 @@ export interface AppState {
    * collapsed/expanded rendering. 'sketch' replaces the whole Timeline with
    * a single gapless sequence strip (SketchStrip) — only reachable when
    * isSketchEligible(state) (see selectors.ts). 'automation' keeps the
-   * normal Timeline exactly as it is but dims each channel's clips and
-   * lays a drawable automation lane over them (AutomationLane.tsx) --
+   * normal Timeline exactly as it is but lays a drawable automation lane
+   * over each placed clip's own waveform rect (AutomationLane.tsx) --
    * purely a view/interaction mode, so entering and leaving it never
    * touches the arrangement. Cycled by the Tab key via selectors.ts's
    * nextArrangerMode — see App.tsx's Frame component. Not persisted (see
    * serialize.ts). */
   mode: ArrangerMode
-  /** Which parameter each channel's automation lane is currently editing,
-   * keyed by channelId; a channel absent from this record edits
-   * AUTOMATION_PARAMS[0]. Session state, deliberately: it's "what am I
-   * looking at right now," the same category as mode/tidiedView above, so
-   * it isn't persisted (serialize.ts) and isn't undoable (history.ts) --
-   * only the curves themselves are real edits. */
+  /** Which parameter each automation lane is currently editing, keyed by
+   * that lane's own id -- a stemKey for an expanded clip's per-stem lane, a
+   * groupId for a collapsed clip's whole-rifff lane (see AutomationLane.tsx's
+   * `laneId`). A lane absent from this record edits AUTOMATION_PARAMS[0].
+   * Session state, deliberately: it's "what am I looking at right now," the
+   * same category as mode/tidiedView above, so it isn't persisted
+   * (serialize.ts) and isn't undoable (history.ts) -- only the curves
+   * themselves are real edits. */
   automationParamOf: Record<string, AutomationParam>
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
@@ -219,22 +250,28 @@ export interface AppState {
    * in REMOVE_FROM_TIMELINE, DELETE_RIFFFS, and MOVE_TO_CHANNEL -- never a
    * separate pass. */
   channelPlugins: Record<string, [string | null, string | null]>
-  /** The built-in sound toolkit's per-channel filter, keyed by channelId. A
-   * channel absent from this record has no filter -- identical to one present
-   * with defaultFilterSettings() (parked at its mode's neutral end), which is
-   * also what every project saved before the toolkit existed loads as. Real
-   * arrangement data: persists normally. See docs/superpowers/specs/
-   * 2026-09-22-builtin-sound-toolkit-design.md. */
-  channelFilters: Record<string, ChannelFilterSettings>
-  /** How much of each channel goes to the one shared reverb (0..1), keyed by
-   * channelId. Absent or 0 = no send, and a project where every channel is 0
+  /** The built-in sound toolkit's per-CLIP filter, keyed by
+   * stemKey(groupId, slot) -- the same key vol/mute/muteRegions/busOf
+   * already use. A clip absent from this record has no filter -- identical
+   * to one present with defaultFilterSettings() (parked at its mode's
+   * neutral end), which is also what every project saved before the toolkit
+   * existed loads as. Real arrangement data: persists normally. See
+   * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md,
+   * section 2b for why this is per clip rather than the per-channel shape it
+   * briefly had. */
+  stemFilters: Record<string, StemFilterSettings>
+  /** How much of each clip goes to the one shared reverb (0..1), keyed by
+   * stemKey. Absent or 0 = no send, and a project where every clip is 0
    * costs the engine nothing at all (the reverb isn't even constructed). */
-  channelSends: Record<string, number>
-  /** Drawn automation curves, keyed by channelId then by parameter. An
-   * absent/empty curve means "not automated" -- the channel's own static
-   * setting above is used instead. Written by the automation-mode free-draw
-   * UI (step 3 of the design doc; the engine and this state landed first). */
-  channelAutomation: Record<string, ChannelAutomation>
+  stemSends: Record<string, number>
+  /** Drawn automation curves, keyed by stemKey then by parameter, with each
+   * curve's bars measured RELATIVE to its own clip's start -- so moving or
+   * duplicating a clip carries its automation, and a point can never sit
+   * past the audio it belongs to. An absent/empty curve means "not
+   * automated" -- the clip's own static setting above is used instead.
+   * Written by the automation-mode free-draw lane (AutomationLane.tsx),
+   * which is laid over exactly one clip's waveform rect. */
+  stemAutomation: Record<string, StemAutomation>
   /** The one shared reverb's settings -- project-level, not per channel.
    * Only ever audible once some channel actually sends to it. */
   reverb: ProjectReverbSettings
@@ -374,9 +411,9 @@ export const initialState: AppState = {
   metronomeEnabled: false,
   masterChain: [null, null, null, null],
   channelPlugins: {},
-  channelFilters: {},
-  channelSends: {},
-  channelAutomation: {},
+  stemFilters: {},
+  stemSends: {},
+  stemAutomation: {},
   reverb: DEFAULT_REVERB,
   rifffs: {}
 }
@@ -479,6 +516,12 @@ export type Action =
       rifff: Rifff
       vol: Record<string, number>
       mute: Record<string, boolean>
+      /** The source clip's drawn toolkit curves, re-keyed onto the new
+       * groupId's own stemKeys -- omitted (and treated as {}) by every
+       * caller that has nothing to carry. Curves are clip-RELATIVE, so a
+       * duplicate needs no re-timing at all: the same points mean the same
+       * shape wherever the copy lands. */
+      stemAutomation?: Record<string, StemAutomation>
       off: Record<string, number>
       stretch: boolean
     }
@@ -502,19 +545,32 @@ export type Action =
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'SET_VOLUME_DRAG_MODE'; enabled: boolean }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
-  | { type: 'SET_AUTOMATION_PARAM'; channelId: string; param: AutomationParam }
-  /** One whole free-draw gesture's result -- a stroke, a ramp, an inserted
-   * point, a moved point, a deleted point, or a cleared lane (`points:
-   * []`). Deliberately the ONLY way a curve changes, and deliberately
-   * coarse: the lane component keeps its in-progress gesture in local
-   * state and dispatches exactly one of these on release, so a drag that
-   * sampled two hundred positions is one undo step, not two hundred. Same
-   * split the volume/fade drags already use (SET_DRAG_PREVIEW during,
-   * SET_VOLUME once on commit), minus the transient half -- an automation
-   * gesture's preview never needs to be shared with another component. */
+  | { type: 'SET_AUTOMATION_PARAM'; laneId: string; param: AutomationParam }
+  /** One whole free-draw gesture's result on ONE clip -- a stroke, a ramp,
+   * an inserted point, a moved point, a deleted point, or a cleared lane
+   * (`points: []`). `points` are in CLIP-RELATIVE bars. Deliberately the
+   * ONLY way a curve changes, and deliberately coarse: the lane component
+   * keeps its in-progress gesture in local state and dispatches exactly one
+   * of these on release, so a drag that sampled two hundred positions is one
+   * undo step, not two hundred. Same split the volume/fade drags already use
+   * (SET_DRAG_PREVIEW during, SET_VOLUME once on commit), minus the
+   * transient half -- an automation gesture's preview never needs to be
+   * shared with another component. */
   | {
-      type: 'SET_CHANNEL_AUTOMATION'
-      channelId: string
+      type: 'SET_STEM_AUTOMATION'
+      stemKey: string
+      param: AutomationParam
+      points: AutomationPoint[]
+    }
+  /** The same gesture, dispatched by a COLLAPSED clip's lane: one curve
+   * applied identically to every stem in the rifff. A collapsed clip draws
+   * its stems as one block and already treats them as one thing for volume
+   * (SET_GROUP_VOLUME) and mute (SET_GROUP_MUTE) -- its lane follows the
+   * same rule rather than inventing a third convention, and expanding the
+   * clip afterwards reveals per-stem lanes that can then diverge. */
+  | {
+      type: 'SET_GROUP_AUTOMATION'
+      groupId: string
       param: AutomationParam
       points: AutomationPoint[]
     }
@@ -1016,6 +1072,13 @@ export function reducer(state: AppState, action: Action): AppState {
         mute: omitStems(state.mute),
         muteRegions: omitStems(state.muteRegions),
         busOf: omitStems(state.busOf),
+        // The toolkit is per clip now, so its three records are cleaned
+        // exactly like vol/mute/muteRegions above -- a deleted clip must not
+        // leave a curve behind for a future clip that happens to land on the
+        // same groupId:slot (which a re-import genuinely can).
+        stemFilters: omitStems(state.stemFilters),
+        stemSends: omitStems(state.stemSends),
+        stemAutomation: omitStems(state.stemAutomation),
         off: omitGroups(state.off),
         playedBars: omitGroups(state.playedBars),
         stretch: omitGroups(state.stretch),
@@ -1089,6 +1152,7 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff },
         vol: { ...state.vol, ...action.vol },
         mute: { ...state.mute, ...action.mute },
+        stemAutomation: { ...state.stemAutomation, ...(action.stemAutomation ?? {}) },
         off: { ...state.off, ...action.off },
         stretch: { ...state.stretch, [action.rifff.groupId]: action.stretch },
         sel: action.rifff.groupId,
@@ -1324,6 +1388,13 @@ export function reducer(state: AppState, action: Action): AppState {
       const vol = { ...state.vol }
       const mute = { ...state.mute }
       const busOf = { ...state.busOf }
+      // The toolkit is per CLIP, and ungrouping turns one clip into N clips
+      // that each keep their own audio -- so each stem's curves/filter/send
+      // ride along to its new groupId, exactly like vol/mute below. Without
+      // this, ungrouping would silently wipe every drawn curve in the rifff.
+      const stemFilters = { ...state.stemFilters }
+      const stemSends = { ...state.stemSends }
+      const stemAutomation = { ...state.stemAutomation }
       const off = { ...state.off }
       const playedBars = { ...state.playedBars }
       const fadeIn = { ...state.fadeIn }
@@ -1388,6 +1459,13 @@ export function reducer(state: AppState, action: Action): AppState {
         if (state.mute[oldKey] !== undefined) mute[newKey] = state.mute[oldKey]
         delete vol[oldKey]
         delete mute[oldKey]
+        if (state.stemFilters[oldKey] !== undefined) stemFilters[newKey] = state.stemFilters[oldKey]
+        if (state.stemSends[oldKey] !== undefined) stemSends[newKey] = state.stemSends[oldKey]
+        if (state.stemAutomation[oldKey] !== undefined)
+          stemAutomation[newKey] = state.stemAutomation[oldKey]
+        delete stemFilters[oldKey]
+        delete stemSends[oldKey]
+        delete stemAutomation[oldKey]
         off[newGroupId] = groupOff
         fadeIn[newGroupId] = groupFadeIn
         fadeOut[newGroupId] = groupFadeOut
@@ -1401,6 +1479,9 @@ export function reducer(state: AppState, action: Action): AppState {
         vol,
         mute,
         busOf,
+        stemFilters,
+        stemSends,
+        stemAutomation,
         off,
         playedBars,
         fadeIn,
@@ -1499,26 +1580,32 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_AUTOMATION_PARAM':
       return {
         ...state,
-        automationParamOf: { ...state.automationParamOf, [action.channelId]: action.param }
+        automationParamOf: { ...state.automationParamOf, [action.laneId]: action.param }
       }
 
-    case 'SET_CHANNEL_AUTOMATION': {
-      const points = normaliseAutomationCurve(action.points)
-      const existing = state.channelAutomation[action.channelId]
-      // An emptied curve is REMOVED, not stored as []. "Absent" and "present
-      // but empty" both mean not automated to isChannelToolkitNeutral, but
-      // only absence lets a channel go back to being fully neutral and drop
-      // off the wire entirely (buildEngineProject.ts) -- which is what makes
-      // clearing a lane actually restore the pre-toolkit render path rather
-      // than leaving the channel permanently in the toolkit's stage. Same
-      // reason the whole channel entry goes when its last curve does.
-      const nextChannel: ChannelAutomation = { ...existing }
-      if (points.length === 0) delete nextChannel[action.param]
-      else nextChannel[action.param] = points
-      const channelAutomation = { ...state.channelAutomation }
-      if (Object.keys(nextChannel).length === 0) delete channelAutomation[action.channelId]
-      else channelAutomation[action.channelId] = nextChannel
-      return { ...state, channelAutomation }
+    case 'SET_STEM_AUTOMATION':
+      return {
+        ...state,
+        stemAutomation: writeCurve(
+          state.stemAutomation,
+          [action.stemKey],
+          action.param,
+          action.points
+        )
+      }
+
+    case 'SET_GROUP_AUTOMATION': {
+      const rifff = state.rifffs[action.groupId]
+      if (!rifff) return state
+      return {
+        ...state,
+        stemAutomation: writeCurve(
+          state.stemAutomation,
+          rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)),
+          action.param,
+          action.points
+        )
+      }
     }
 
     case 'TOGGLE_INSPECTOR_COLLAPSED':

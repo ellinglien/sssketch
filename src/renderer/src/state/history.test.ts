@@ -334,14 +334,14 @@ describe('automation undo granularity', () => {
   it('pushes one checkpoint per completed gesture, and undo restores the previous curve', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'filterCutoff',
       points: [{ bar: 0, value: 0.2 }]
     })
     h = historyReducer(h, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'filterCutoff',
       points: [
         { bar: 0, value: 0.2 },
@@ -350,15 +350,15 @@ describe('automation undo granularity', () => {
     })
     expect(h.past).toHaveLength(2)
     h = historyReducer(h, { type: 'UNDO' })
-    expect(h.present.channelAutomation.ch1.filterCutoff).toEqual([{ bar: 0, value: 0.2 }])
+    expect(h.present.stemAutomation['r1:0'].filterCutoff).toEqual([{ bar: 0, value: 0.2 }])
     h = historyReducer(h, { type: 'UNDO' })
-    expect(h.present.channelAutomation.ch1).toBeUndefined()
+    expect(h.present.stemAutomation['r1:0']).toBeUndefined()
   })
 
   it('does not checkpoint the lane parameter picker -- that is a view, not an edit', () => {
     let h = createHistoryState(initialState)
-    h = historyReducer(h, { type: 'SET_AUTOMATION_PARAM', channelId: 'ch1', param: 'volume' })
+    h = historyReducer(h, { type: 'SET_AUTOMATION_PARAM', laneId: 'r1:0', param: 'volume' })
     expect(h.past).toHaveLength(0)
-    expect(h.present.automationParamOf.ch1).toBe('volume')
+    expect(h.present.automationParamOf['r1:0']).toBe('volume')
   })
 })

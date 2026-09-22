@@ -1,13 +1,21 @@
 /**
- * The built-in sound toolkit's project data: a per-channel filter, a
- * per-channel send into one shared reverb, and drawn automation over a
- * deliberately small set of parameters.
+ * The built-in sound toolkit's project data: a per-CLIP filter, a per-clip
+ * send into one shared reverb, and drawn automation over a deliberately small
+ * set of parameters.
  *
- * See docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+ * See docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md,
+ * including section 2b (REVISION, 2026-09-22): the toolkit was per CHANNEL
+ * for exactly one build, and moved to per placed stem clip after the first
+ * live walkthrough. A "clip" here is one placed stem, keyed by
+ * stemKey(groupId, slot) -- the same key state.vol/state.mute/
+ * state.muteRegions already use -- and its curves are measured in
+ * CLIP-RELATIVE bars (0 = the clip's own left edge), which is what makes a
+ * moved or duplicated clip carry its automation with it and what makes a
+ * curve unable to extend past the audio it belongs to.
  *
  * Everything here is the TS half of a HAND-SYNCED PAIR with the native
- * engine (CLAUDE.md): ChannelFilterSettings/ChannelAutomation mirror
- * EngineProject::EngineChannelToolkit, and ProjectReverbSettings mirrors
+ * engine (CLAUDE.md): StemFilterSettings/StemAutomation mirror
+ * EngineStem::EngineStemToolkit, and ProjectReverbSettings mirrors
  * ReverbSettings, both in native-engine/Source/. Changing a field on one
  * side means changing it on the other and on every test that constructs
  * either. Values are NORMALISED to [0,1] on this side; mapping to real units
@@ -43,21 +51,39 @@ export const AUTOMATION_PARAM_LABEL: Record<AutomationParam, string> = {
   volume: 'volume'
 }
 
-/** One drawn breakpoint: a normalised value at an absolute arrangement bar --
- * the same coordinate space Rifff.startBar and muteRegions already use, so a
- * bpm change re-times every curve for free. */
+/** The same four, short enough to fit inside a narrow clip's own lane -- the
+ * picker now lives ON the clip (spec section 2b), and a two-bar clip at the
+ * default zoom is barely wider than the words "filter resonance". Lowercase,
+ * no punctuation, same rules as the full labels above; the full label is
+ * still what the picker's tooltip/aria-label says, so nothing is only ever
+ * expressed as an abbreviation. */
+export const AUTOMATION_PARAM_SHORT_LABEL: Record<AutomationParam, string> = {
+  filterCutoff: 'cut',
+  filterResonance: 'res',
+  reverbSend: 'verb',
+  volume: 'vol'
+}
+
+/** One drawn breakpoint: a normalised value at a CLIP-RELATIVE bar -- 0 is
+ * the clip's own left edge, not the arrangement's. Deliberately not the
+ * absolute coordinate space Rifff.startBar and muteRegions use: a curve
+ * belongs to its clip, so moving or duplicating the clip must carry the
+ * shape unchanged, and nothing should be able to draw a breakpoint past the
+ * end of the audio it is automating (see the spec's section 2b). The
+ * absolute bar a point lands on is resolved in exactly one place, on the way
+ * to the engine -- buildEngineProject.ts's clipOriginBar. */
 export interface AutomationPoint {
   bar: number
   value: number
 }
 
-/** A channel's drawn curves. A parameter ABSENT from this record (or present
+/** One clip's drawn curves. A parameter ABSENT from this record (or present
  * with an empty array) is "not automated", which is a different thing from
- * "automated and currently flat": the former uses the channel's own static
+ * "automated and currently flat": the former uses the clip's own static
  * setting, the latter the curve. */
-export type ChannelAutomation = Partial<Record<AutomationParam, AutomationPoint[]>>
+export type StemAutomation = Partial<Record<AutomationParam, AutomationPoint[]>>
 
-export interface ChannelFilterSettings {
+export interface StemFilterSettings {
   mode: FilterMode
   /** [0,1]; the engine maps this logarithmically onto 20Hz..20kHz. */
   cutoff: number
@@ -89,11 +115,11 @@ export function neutralCutoff(mode: FilterMode): number {
   return mode === 'lowpass' ? 1 : 0
 }
 
-export function defaultFilterSettings(mode: FilterMode = 'lowpass'): ChannelFilterSettings {
+export function defaultFilterSettings(mode: FilterMode = 'lowpass'): StemFilterSettings {
   return { mode, cutoff: neutralCutoff(mode), resonance: 0 }
 }
 
-function isNeutralFilter(filter: ChannelFilterSettings | undefined): boolean {
+function isNeutralFilter(filter: StemFilterSettings | undefined): boolean {
   if (!filter) return true
   if (!Number.isFinite(filter.cutoff)) return false
   // A tolerance rather than an exact compare, for the same reason the engine
@@ -102,27 +128,27 @@ function isNeutralFilter(filter: ChannelFilterSettings | undefined): boolean {
   return Math.abs(filter.cutoff - neutralCutoff(filter.mode)) <= 1e-6
 }
 
-function hasCurve(automation: ChannelAutomation | undefined, param: AutomationParam): boolean {
+function hasCurve(automation: StemAutomation | undefined, param: AutomationParam): boolean {
   const points = automation?.[param]
   return Array.isArray(points) && points.length > 0
 }
 
 /**
- * Whether a channel's toolkit does nothing -- i.e. whether it can be left off
+ * Whether a clip's toolkit does nothing -- i.e. whether it can be left off
  * the wire entirely, which is what keeps a project that never touches the
  * toolkit byte-identical to its pre-toolkit self all the way down to the
  * engine's render path.
  *
- * Mirrors toolkitIsNeutral() in native-engine/Source/PlaybackEngine.cpp; the
- * two are checked against each other by intent, not by code sharing (the
+ * Mirrors stemToolkitIsNeutral() in native-engine/Source/PlaybackEngine.cpp;
+ * the two are checked against each other by intent, not by code sharing (the
  * hand-synced pair rule above). Any automation curve at all counts as "the
  * user is using this", even one sitting at its default value -- drawing a
- * curve is a declaration that this channel has the tool on it.
+ * curve is a declaration that this clip has the tool on it.
  */
-export function isChannelToolkitNeutral(
-  filter: ChannelFilterSettings | undefined,
+export function isStemToolkitNeutral(
+  filter: StemFilterSettings | undefined,
   reverbSend: number | undefined,
-  automation: ChannelAutomation | undefined
+  automation: StemAutomation | undefined
 ): boolean {
   if (!isNeutralFilter(filter)) return false
   if (hasCurve(automation, 'filterCutoff') || hasCurve(automation, 'filterResonance')) return false

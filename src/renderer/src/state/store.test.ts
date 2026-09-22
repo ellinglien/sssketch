@@ -2388,106 +2388,192 @@ describe('reducer', () => {
 })
 
 describe('automation curves', () => {
-  it('stores a drawn curve on a channel, normalised', () => {
+  it('stores a drawn curve on one clip, normalised', () => {
     const state = reducer(initialState, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'filterCutoff',
       points: [
         { bar: 8, value: 1.4 },
         { bar: 0, value: -0.2 }
       ]
     })
-    expect(state.channelAutomation.ch1.filterCutoff).toEqual([
+    expect(state.stemAutomation['r1:0'].filterCutoff).toEqual([
       { bar: 0, value: 0 },
       { bar: 8, value: 1 }
     ])
   })
 
-  it('keeps each parameter on a channel independent', () => {
+  it('keeps each parameter on a clip independent', () => {
     let state = reducer(initialState, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'filterCutoff',
       points: [{ bar: 0, value: 0.5 }]
     })
     state = reducer(state, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'reverbSend',
       points: [{ bar: 2, value: 0.25 }]
     })
-    expect(state.channelAutomation.ch1.filterCutoff).toEqual([{ bar: 0, value: 0.5 }])
-    expect(state.channelAutomation.ch1.reverbSend).toEqual([{ bar: 2, value: 0.25 }])
+    expect(state.stemAutomation['r1:0'].filterCutoff).toEqual([{ bar: 0, value: 0.5 }])
+    expect(state.stemAutomation['r1:0'].reverbSend).toEqual([{ bar: 2, value: 0.25 }])
   })
 
-  it('REMOVES an emptied curve rather than storing [], so the channel can go fully neutral again', () => {
+  it('keeps two stems of the SAME rifff independent -- one lane per placed stem', () => {
     let state = reducer(initialState, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.25 }]
+    })
+    state = reducer(state, {
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.75 }]
+    })
+    expect(state.stemAutomation['r1:0'].volume).toEqual([{ bar: 0, value: 0.25 }])
+    expect(state.stemAutomation['r1:1'].volume).toEqual([{ bar: 0, value: 0.75 }])
+  })
+
+  it('REMOVES an emptied curve rather than storing [], so the clip can go fully neutral again', () => {
+    let state = reducer(initialState, {
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: [{ bar: 0, value: 0.5 }]
     })
     state = reducer(state, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: []
     })
-    expect(state.channelAutomation.ch1).toBeUndefined()
-    expect(Object.keys(state.channelAutomation)).toEqual([])
+    expect(state.stemAutomation['r1:0']).toBeUndefined()
+    expect(Object.keys(state.stemAutomation)).toEqual([])
   })
 
-  it('clearing one parameter leaves the channel entry when another is still drawn', () => {
+  it('clearing one parameter leaves the clip entry when another is still drawn', () => {
     let state = reducer(initialState, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: [{ bar: 0, value: 0.5 }]
     })
     state = reducer(state, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'reverbSend',
       points: [{ bar: 0, value: 0.5 }]
     })
     state = reducer(state, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: []
     })
-    expect(state.channelAutomation.ch1).toEqual({ reverbSend: [{ bar: 0, value: 0.5 }] })
+    expect(state.stemAutomation['r1:0']).toEqual({ reverbSend: [{ bar: 0, value: 0.5 }] })
   })
 
   it('does not mutate the previous state -- undo snapshots have to stay intact', () => {
     const before = reducer(initialState, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: [{ bar: 0, value: 0.5 }]
     })
     reducer(before, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'ch1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:0',
       param: 'volume',
       points: [{ bar: 0, value: 0.9 }]
     })
-    expect(before.channelAutomation.ch1.volume).toEqual([{ bar: 0, value: 0.5 }])
+    expect(before.stemAutomation['r1:0'].volume).toEqual([{ bar: 0, value: 0.5 }])
   })
 
-  it('remembers which parameter each channel lane is editing', () => {
+  it("a collapsed clip's lane writes the same curve to every stem in the rifff", () => {
+    const shelved = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    const state = reducer(shelved, {
+      type: 'SET_GROUP_AUTOMATION',
+      groupId: 'r1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.4 }]
+    })
+    // makeRifff's own two stems live in slots 1 and 6.
+    expect(state.stemAutomation['r1:1'].volume).toEqual([{ bar: 0, value: 0.4 }])
+    expect(state.stemAutomation['r1:6'].volume).toEqual([{ bar: 0, value: 0.4 }])
+  })
+
+  it('a group clear empties every stem in the rifff', () => {
+    const shelved = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    let state = reducer(shelved, {
+      type: 'SET_GROUP_AUTOMATION',
+      groupId: 'r1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.4 }]
+    })
+    state = reducer(state, {
+      type: 'SET_GROUP_AUTOMATION',
+      groupId: 'r1',
+      param: 'volume',
+      points: []
+    })
+    expect(Object.keys(state.stemAutomation)).toEqual([])
+  })
+
+  it('deleting a clip takes its curves with it', () => {
+    const shelved = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    const drawn = reducer(shelved, {
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.4 }]
+    })
+    const deleted = reducer(drawn, { type: 'DELETE_RIFFFS', groupIds: ['r1'] })
+    expect(Object.keys(deleted.stemAutomation)).toEqual([])
+  })
+
+  it("ungrouping carries each stem's curve onto its new one-stem rifff", () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, {
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:6',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.3 }]
+    })
+    const ungrouped = reducer(state, { type: 'UNGROUP', groupId: 'r1' })
+    expect(ungrouped.stemAutomation['r1:6']).toBeUndefined()
+    const carried = Object.values(ungrouped.stemAutomation)
+    expect(carried).toEqual([{ volume: [{ bar: 0, value: 0.3 }] }])
+  })
+
+  it('remembers which parameter each lane is editing', () => {
     let state = reducer(initialState, {
       type: 'SET_AUTOMATION_PARAM',
-      channelId: 'ch1',
+      laneId: 'r1:0',
       param: 'reverbSend'
     })
     state = reducer(state, {
       type: 'SET_AUTOMATION_PARAM',
-      channelId: 'ch2',
+      laneId: 'r2',
       param: 'volume'
     })
-    expect(state.automationParamOf).toEqual({ ch1: 'reverbSend', ch2: 'volume' })
+    expect(state.automationParamOf).toEqual({ 'r1:0': 'reverbSend', r2: 'volume' })
   })
 
   it('entering and leaving automation mode changes nothing but the mode', () => {

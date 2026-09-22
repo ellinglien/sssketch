@@ -104,21 +104,21 @@ describe('project serialization', () => {
   it('persists drawn automation curves but not which parameter each lane was showing', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, {
-      type: 'SET_CHANNEL_AUTOMATION',
-      channelId: 'r1',
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: 'r1:1',
       param: 'filterCutoff',
       points: [
         { bar: 0, value: 1 },
         { bar: 8, value: 0 }
       ]
     })
-    state = reducer(state, { type: 'SET_AUTOMATION_PARAM', channelId: 'r1', param: 'reverbSend' })
+    state = reducer(state, { type: 'SET_AUTOMATION_PARAM', laneId: 'r1:1', param: 'reverbSend' })
 
     const parsed = JSON.parse(serializeProject(state))
     expect(parsed.automationParamOf).toBeUndefined()
 
     const { state: restored } = deserializeProject(parsed)
-    expect(restored.channelAutomation.r1.filterCutoff).toEqual([
+    expect(restored.stemAutomation['r1:1'].filterCutoff).toEqual([
       { bar: 0, value: 1 },
       { bar: 8, value: 0 }
     ])
@@ -260,9 +260,9 @@ describe('deserializeProject migration from trackOrder', () => {
 // These tests exist to pin that, since "no code needed" is exactly the kind
 // of property a later refactor can quietly break.
 describe('toolkit persistence', () => {
-  const filters = { ch1: { mode: 'highpass' as const, cutoff: 0.4, resonance: 0.6 } }
+  const filters = { 'r1:1': { mode: 'highpass' as const, cutoff: 0.4, resonance: 0.6 } }
   const automation = {
-    ch1: {
+    'r1:1': {
       filterCutoff: [
         { bar: 0, value: 0.1 },
         { bar: 8, value: 0.9 }
@@ -270,18 +270,18 @@ describe('toolkit persistence', () => {
     }
   }
 
-  it('round-trips filters, sends, automation and reverb settings', () => {
+  it('round-trips per-clip filters, sends, automation and reverb settings', () => {
     const state = {
       ...initialState,
-      channelFilters: filters,
-      channelSends: { ch1: 0.35 },
-      channelAutomation: automation,
+      stemFilters: filters,
+      stemSends: { 'r1:1': 0.35 },
+      stemAutomation: automation,
       reverb: { roomSize: 0.8, damping: 0.2, preDelayMs: 45 }
     }
     const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
-    expect(restored.channelFilters).toEqual(filters)
-    expect(restored.channelSends).toEqual({ ch1: 0.35 })
-    expect(restored.channelAutomation).toEqual(automation)
+    expect(restored.stemFilters).toEqual(filters)
+    expect(restored.stemSends).toEqual({ 'r1:1': 0.35 })
+    expect(restored.stemAutomation).toEqual(automation)
     expect(restored.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
   })
 
@@ -291,15 +291,38 @@ describe('toolkit persistence', () => {
     // buildEngineProject drops from the wire entirely, so the engine takes
     // its pre-toolkit path and the project sounds identical to before.
     const legacy = JSON.parse(serializeProject(initialState))
-    delete legacy.channelFilters
-    delete legacy.channelSends
-    delete legacy.channelAutomation
+    delete legacy.stemFilters
+    delete legacy.stemSends
+    delete legacy.stemAutomation
     delete legacy.reverb
 
     const { state: restored } = deserializeProject(legacy)
-    expect(restored.channelFilters).toEqual({})
-    expect(restored.channelSends).toEqual({})
-    expect(restored.channelAutomation).toEqual({})
+    expect(restored.stemFilters).toEqual({})
+    expect(restored.stemSends).toEqual({})
+    expect(restored.stemAutomation).toEqual({})
     expect(restored.reverb).toEqual({ roomSize: 0.5, damping: 0.5, preDelayMs: 20 })
+  })
+
+  it('DROPS the channel-scoped toolkit a project saved on 2026-09-22 may carry', () => {
+    // The toolkit was per CHANNEL for one day before the live walkthrough
+    // moved it to per CLIP (spec section 2b). There is no honest migration
+    // -- a channel's curve belonged to every clip on that row at once, in
+    // absolute bars -- so such a project loads with NO automation rather
+    // than with wrong automation. The part that actually matters is that it
+    // loads at all, and that the stale keys don't survive onto AppState
+    // where nothing reads them.
+    const saved = {
+      ...JSON.parse(serializeProject(initialState)),
+      channelFilters: { ch1: { mode: 'lowpass', cutoff: 0.3, resonance: 0.2 } },
+      channelSends: { ch1: 0.5 },
+      channelAutomation: { ch1: { volume: [{ bar: 0, value: 0.2 }] } }
+    }
+    const { state: restored } = deserializeProject(saved)
+    expect(restored.stemFilters).toEqual({})
+    expect(restored.stemSends).toEqual({})
+    expect(restored.stemAutomation).toEqual({})
+    expect('channelFilters' in restored).toBe(false)
+    expect('channelSends' in restored).toBe(false)
+    expect('channelAutomation' in restored).toBe(false)
   })
 })

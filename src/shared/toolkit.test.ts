@@ -5,10 +5,10 @@ import {
   DEFAULT_REVERB,
   defaultFilterSettings,
   evaluateAutomation,
-  isChannelToolkitNeutral,
+  isStemToolkitNeutral,
   neutralCutoff,
   normaliseAutomationCurve,
-  type ChannelFilterSettings
+  type StemFilterSettings
 } from './toolkit'
 
 describe('neutral defaults', () => {
@@ -42,39 +42,33 @@ describe('neutral defaults', () => {
   })
 })
 
-describe('isChannelToolkitNeutral', () => {
+describe('isStemToolkitNeutral', () => {
   it('treats a channel with nothing set at all as neutral', () => {
-    expect(isChannelToolkitNeutral(undefined, undefined, undefined)).toBe(true)
-    expect(isChannelToolkitNeutral(defaultFilterSettings(), 0, {})).toBe(true)
+    expect(isStemToolkitNeutral(undefined, undefined, undefined)).toBe(true)
+    expect(isStemToolkitNeutral(defaultFilterSettings(), 0, {})).toBe(true)
   })
 
   it('treats an empty curve as not-automated rather than as automation', () => {
-    expect(isChannelToolkitNeutral(defaultFilterSettings(), 0, { volume: [] })).toBe(true)
+    expect(isStemToolkitNeutral(defaultFilterSettings(), 0, { volume: [] })).toBe(true)
   })
 
   it('is not neutral once the filter is moved off its own mode neutral end', () => {
-    expect(isChannelToolkitNeutral({ mode: 'lowpass', cutoff: 0.5, resonance: 0 }, 0, {})).toBe(
-      false
-    )
-    expect(isChannelToolkitNeutral({ mode: 'highpass', cutoff: 0.5, resonance: 0 }, 0, {})).toBe(
-      false
-    )
+    expect(isStemToolkitNeutral({ mode: 'lowpass', cutoff: 0.5, resonance: 0 }, 0, {})).toBe(false)
+    expect(isStemToolkitNeutral({ mode: 'highpass', cutoff: 0.5, resonance: 0 }, 0, {})).toBe(false)
     // The OTHER mode's neutral end is not this one's.
-    expect(isChannelToolkitNeutral({ mode: 'highpass', cutoff: 1, resonance: 0 }, 0, {})).toBe(
-      false
-    )
+    expect(isStemToolkitNeutral({ mode: 'highpass', cutoff: 1, resonance: 0 }, 0, {})).toBe(false)
   })
 
   it('tolerates a slider parked a hair off its end stop', () => {
-    const nearlyOpen: ChannelFilterSettings = { mode: 'lowpass', cutoff: 1 - 1e-9, resonance: 0 }
-    expect(isChannelToolkitNeutral(nearlyOpen, 0, {})).toBe(true)
+    const nearlyOpen: StemFilterSettings = { mode: 'lowpass', cutoff: 1 - 1e-9, resonance: 0 }
+    expect(isStemToolkitNeutral(nearlyOpen, 0, {})).toBe(true)
   })
 
   it('is not neutral with a send, or with any curve at all', () => {
-    expect(isChannelToolkitNeutral(defaultFilterSettings(), 0.2, {})).toBe(false)
+    expect(isStemToolkitNeutral(defaultFilterSettings(), 0.2, {})).toBe(false)
     for (const param of AUTOMATION_PARAMS) {
       expect(
-        isChannelToolkitNeutral(defaultFilterSettings(), 0, {
+        isStemToolkitNeutral(defaultFilterSettings(), 0, {
           [param]: [{ bar: 0, value: 0.5 }]
         })
       ).toBe(false)
@@ -82,9 +76,7 @@ describe('isChannelToolkitNeutral', () => {
   })
 
   it('never calls a non-finite cutoff neutral', () => {
-    expect(isChannelToolkitNeutral({ mode: 'lowpass', cutoff: NaN, resonance: 0 }, 0, {})).toBe(
-      false
-    )
+    expect(isStemToolkitNeutral({ mode: 'lowpass', cutoff: NaN, resonance: 0 }, 0, {})).toBe(false)
   })
 })
 

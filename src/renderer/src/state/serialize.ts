@@ -126,12 +126,47 @@ function snapBarLengthNoise(rifffs: AppState['rifffs']): AppState['rifffs'] {
   return rifffsChanged ? nextRifffs : rifffs
 }
 
+// The built-in sound toolkit shipped per CHANNEL for exactly one day
+// (2026-09-22) before the first live walkthrough moved it to per CLIP -- see
+// the design doc's section 2b. A project saved in that window carries
+// channelFilters/channelSends/channelAutomation, keyed by channelId, with
+// curves in ABSOLUTE arrangement bars. There is no honest migration: a
+// channel's curve belonged to every clip on that row at once, and the new
+// curves are clip-relative, so re-keying one onto N clips would invent an
+// edit the user never made and silently change what several clips sound
+// like. These keys are therefore DROPPED (the deliberate choice recorded in
+// the commit that made this change), leaving such a project with no
+// automation rather than with wrong automation -- and, crucially, loading
+// without crashing, which is the part that actually matters. Stripped by
+// name rather than by an allow-list so an unrelated unknown key (a newer
+// save opened in an older build) still passes through untouched, the way it
+// always has.
+type ChannelScopedToolkitKeys = {
+  channelFilters?: unknown
+  channelSends?: unknown
+  channelAutomation?: unknown
+}
+
+function dropChannelScopedToolkit<T extends ChannelScopedToolkitKeys>(
+  projectData: T
+): Omit<T, keyof ChannelScopedToolkitKeys> {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  const { channelFilters, channelSends, channelAutomation, ...rest } = projectData
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+  return rest
+}
+
 export function deserializeProject(
-  data: (PersistedProject | LegacyPersistedProject) & { pluginStates?: PluginStatesMap }
+  data: (PersistedProject | LegacyPersistedProject) & {
+    pluginStates?: PluginStatesMap
+  } & ChannelScopedToolkitKeys
 ): { state: AppState; pluginStates: PluginStatesMap } {
   const { pluginStates, ...projectData } = data
+  // Narrowed off projectData itself, not off the stripped copy below -- the
+  // strip returns an Omit over a union, which loses the discriminant that
+  // tells a legacy trackOrder save apart from a channelOrder one.
   const migrated = 'channelOrder' in projectData ? {} : migrateTrackOrder(projectData.trackOrder)
-  const state = { ...initialState, ...projectData, ...migrated }
+  const state = { ...initialState, ...dropChannelScopedToolkit(projectData), ...migrated }
   // SNAP_DIVS has grown/shrunk twice now: [4,8,16,32] -> [4,8,16] (dropped
   // the finest option), then -> [1,2,4,8,16] (two new, COARSER options
   // added at the front -- see its own doc comment). There's no persisted

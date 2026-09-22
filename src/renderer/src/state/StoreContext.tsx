@@ -676,21 +676,21 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // native engine keeps playing the pre-mute audio in that span until some
     // OTHER tracked field happens to change and trigger a resync first.
     state.muteRegions,
-    // The built-in sound toolkit (filter, reverb send, drawn automation
-    // curves, the shared reverb's own settings) -- same class of gap as
-    // state.playedBars/state.leftCrop/state.muteRegions above. There is no
-    // lighter fast path for these the way there is for volume/fade
+    // The built-in sound toolkit (per-clip filter, reverb send, drawn
+    // automation curves, the shared reverb's own settings) -- same class of
+    // gap as state.playedBars/state.leftCrop/state.muteRegions above. There
+    // is no lighter fast path for these the way there is for volume/fade
     // (liveParamSync.ts talks to the engine's per-stem live-param map,
-    // which has no notion of a channel's toolkit), so a full project
-    // reload is how an automation edit becomes audible. That's affordable
-    // precisely because the lane dispatches ONE SET_CHANNEL_AUTOMATION per
-    // completed gesture rather than one per sampled point -- the
-    // drag-frequency reload this comment block warns about just above
-    // (the real, audible glitching that produced the live-param fast path)
-    // can't happen here.
-    state.channelFilters,
-    state.channelSends,
-    state.channelAutomation,
+    // which carries a plain gain, not a curve), so a full project reload is
+    // how an automation edit becomes audible. That's affordable precisely
+    // because the lane dispatches ONE SET_STEM_AUTOMATION (or
+    // SET_GROUP_AUTOMATION) per completed gesture rather than one per
+    // sampled point -- the drag-frequency reload this comment block warns
+    // about just above (the real, audible glitching that produced the
+    // live-param fast path) can't happen here.
+    state.stemFilters,
+    state.stemSends,
+    state.stemAutomation,
     state.reverb
   ])
 
