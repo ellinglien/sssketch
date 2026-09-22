@@ -29,6 +29,7 @@ import {
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
+import { applyTraitBar } from '@shared/traitBar'
 import {
   useAppSelector,
   useDispatch,
@@ -1564,13 +1565,20 @@ export function DiscoverPanel({
       )
       const deduped = candidates.filter((c) => !usedElsewhere.has(c.stemCID))
       const pool = deduped.length > 0 ? deduped : candidates
-      const ranked = rankCandidates(pool, {
+      const targetTraits = kinds.filter(isTraitSlotKind)
+      // Library-wide trait bar (docs/superpowers/specs/2026-09-22-discover-
+      // promise-vs-delivery-design.md, Phase 1): a requested trait needs a
+      // top-40% library percentile, relaxing quietly when too few pass;
+      // unanalysed stems only when nothing else is left. The result's
+      // barUsed is what Phase 2's match meter will show.
+      const { pool: barred } = applyTraitBar(pool, targetTraits)
+      const ranked = rankCandidates(barred, {
         targetBpm: bpm,
         favouriteStemCIDs: rollOptions.preferFavourites ? stemFavourites : undefined,
         // Finding, 2026-09-21: trait kinds were never passed here before,
         // so a "warm" roll ranked by BPM alone. Every trait kind in the set
-        // now adds its own pool-relative score (rankCandidates).
-        targetTraits: kinds.filter(isTraitSlotKind)
+        // now adds its library percentile (rankCandidates).
+        targetTraits
       })
       const picked = pickReroll(ranked, chaos)
       // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
