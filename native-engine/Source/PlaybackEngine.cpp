@@ -19,17 +19,20 @@ namespace sssketch
         // whichever project.bpm they've each already loaded.
         double secPerBarFor(double bpm) { return bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
 
-        /** Whether a channel's toolkit entry does nothing at all -- the test
+        /** Whether a clip's toolkit entry does nothing at all -- the test
          * that decides, once per setProject() rather than per block, whether
-         * renderBlock can skip this channel's toolkit stage entirely.
+         * renderBlock can skip this clip's toolkit stage entirely.
          *
          * "Nothing at all" means all four of: a filter parked at its mode's
          * own neutral end with nothing automating it (channelFilterIsNeutral
          * owns that rule), no reverb send and nothing automating one, unity
          * volume with nothing automating it. Any single one of those failing
-         * makes the whole channel non-neutral -- the stage is one pass over
-         * the channel's buffer, so splitting it finer would buy nothing. */
-        bool toolkitIsNeutral(const EngineProject::EngineChannelToolkit& toolkit)
+         * makes the whole clip non-neutral -- the stage is one pass over the
+         * clip's buffer, so splitting it finer would buy nothing.
+         *
+         * Mirrored by isStemToolkitNeutral() in src/shared/toolkit.ts; the two
+         * are checked against each other by intent, not by code sharing. */
+        bool stemToolkitIsNeutral(const EngineStemToolkit& toolkit)
         {
             const auto& automation = toolkit.automation;
             if (!channelFilterIsNeutral(
@@ -93,22 +96,26 @@ namespace sssketch
         for (const auto& [channelId, rifffPtrs] : next->channelGroups)
             next->scratchChannelIds.push_back(channelId);
 
-        // Resolve each channel's toolkit entry (and whether it does anything)
-        // once, here, off the real-time thread -- see the channelToolkits
-        // member's own doc comment. Pointers go into THIS snapshot's own
-        // project.channelToolkits, so they live exactly as long as it does.
-        next->channelToolkits.assign(next->scratchChannelIds.size(), nullptr);
-        for (const auto& toolkit : next->project.channelToolkits)
+        // Decide once, here, off the real-time thread, which clips actually
+        // have a toolkit doing something -- the neutrality test is a pure
+        // function of the project, so doing it per project change instead of
+        // per stem per block keeps renderBlock's toolkit cost at one bool
+        // test for the overwhelmingly common all-neutral case. A `toolkit`
+        // that IS present on the wire but does nothing is downgraded back to
+        // hasToolkit == false right here, so a stem that arrives with, say, a
+        // cleared lane still takes the pre-toolkit path.
+        for (auto& rifff : next->project.rifffs)
         {
-            if (toolkitIsNeutral(toolkit))
-                continue;
-            for (size_t i = 0; i < next->scratchChannelIds.size(); ++i)
+            for (auto& stem : rifff.stems)
             {
-                if (next->scratchChannelIds[i] != toolkit.channelId)
+                if (!stem.hasToolkit)
                     continue;
-                next->channelToolkits[i] = &toolkit;
+                if (stemToolkitIsNeutral(stem.toolkit))
+                {
+                    stem.hasToolkit = false;
+                    continue;
+                }
                 next->anyToolkitActive = true;
-                break;
             }
         }
 
@@ -236,6 +243,24 @@ namespace sssketch
             std::fill(channelR[i].begin(), channelR[i].end(), 0.0f);
         }
 
+        // The built-in toolkit's shared reverb bus (ReverbBus.h). Opened
+        // BEFORE the per-stem render loop below -- the send is tapped per
+        // CLIP now (spec section 2b), so every clip's send has to land in
+        // the same accumulator before the one reverb pass runs at the end of
+        // the block. Skipped entirely -- not even a beginBlock() buffer clear
+        // -- when no clip has a non-neutral toolkit AND no tail is still
+        // ringing from one that did. That second half matters: a user
+        // dragging a send back to zero (or deleting the only sending clip)
+        // must still hear the tail out rather than have it cut on the next
+        // block.
+        const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging();
+        if (runReverbBus)
+        {
+            reverbBus.prepare(sampleRate, numSamples);
+            reverbBus.setSettings(snap->project.reverb);
+            reverbBus.beginBlock(numSamples);
+        }
+
         size_t channelIdx = 0;
         for (const auto& [channelId, rifffPtrs] : snap->channelGroups)
         {
@@ -263,8 +288,18 @@ namespace sssketch
 
             for (const auto& stem : rifff.stems)
             {
-                // Prefers a live volume-drag override over the committed
-                // stem.volume -- see LiveParamOverrides.h's own doc
+                // A drawn `volume` curve REPLACES this clip's own static
+                // level rather than multiplying with it -- Elling's explicit
+                // choice (spec section 2b: "one place to draw a level"). So
+                // when the curve exists, the sample loop below runs at unity
+                // and applyStemToolkit's smoothed curve value IS the clip's
+                // gain. Resolved here rather than in buildEngineProject so
+                // the wire stays honest about both numbers and the rule lives
+                // on the side that actually applies it.
+                const bool volumeAutomated =
+                    stem.hasToolkit && !stem.toolkit.automation.volume.empty();
+                // Otherwise: prefers a live volume-drag override over the
+                // committed stem.volume -- see LiveParamOverrides.h's own doc
                 // comment. Read once per stem, used for both the mute/
                 // silence check below and every gain multiplication in
                 // this stem's own one-shot/tile-loop branch, so a live
@@ -272,9 +307,11 @@ namespace sssketch
                 // fully-silent one (committed volume 0) audible again --
                 // this MUST be resolved before the skip check below, not
                 // after.
-                const double effectiveVolume = hasLiveOverrides
-                    ? liveParamOverrides.volumeFor(stem.stemKey).value_or(stem.volume)
-                    : stem.volume;
+                const double effectiveVolume = volumeAutomated
+                    ? 1.0
+                    : (hasLiveOverrides
+                           ? liveParamOverrides.volumeFor(stem.stemKey).value_or(stem.volume)
+                           : stem.volume);
                 if (stem.muted || effectiveVolume <= 0.0)
                     continue;
                 // Single combined lookup — get() + sampleRateFor() separately
@@ -285,6 +322,57 @@ namespace sssketch
                 const auto entry = bufferCache.getEntry(stem.resolvedPath);
                 if (entry.buffer == nullptr)
                     continue;
+
+                // A clip with a toolkit renders into its OWN buffer first, so
+                // its filter/volume/send apply to just that clip before it
+                // joins the rest of the channel. A neutral clip writes
+                // straight into the channel accumulator exactly as it always
+                // did -- same pointers, same order of additions, so an
+                // ordinary project's output stays bit-identical.
+                float* stemOutL = chOutL;
+                float* stemOutR = chOutR;
+                if (stem.hasToolkit)
+                {
+                    auto& sL = snap->scratchStemL;
+                    auto& sR = snap->scratchStemR;
+                    if (sL.size() != (size_t) numSamples)
+                    {
+                        sL.resize((size_t) numSamples);
+                        sR.resize((size_t) numSamples);
+                    }
+                    std::fill(sL.begin(), sL.end(), 0.0f);
+                    std::fill(sR.begin(), sR.end(), 0.0f);
+                    stemOutL = sL.data();
+                    stemOutR = sR.data();
+                }
+
+                // Runs this clip's toolkit stage over whatever it just
+                // rendered and folds the result into the channel. Called on
+                // every path that actually produced samples -- the one-shot
+                // branch (which leaves the stem body early) and the tile
+                // loop -- rather than restructuring both into one exit, which
+                // would mean reindenting the whole tile path for nothing. A
+                // no-op, and not even a copy, for a clip with no toolkit:
+                // stemOut* ARE chOut* in that case, so the samples are
+                // already exactly where they belong.
+                const auto finishStem = [&]() {
+                    if (!stem.hasToolkit)
+                        return;
+                    applyStemToolkit(
+                        stem.toolkit,
+                        stem.stemKey,
+                        positionBars,
+                        spb,
+                        sampleRate,
+                        numSamples,
+                        stemOutL,
+                        stemOutR);
+                    for (int i2 = 0; i2 < numSamples; ++i2)
+                    {
+                        chOutL[i2] += stemOutL[i2];
+                        chOutR[i2] += stemOutR[i2];
+                    }
+                };
 
                 if (stem.oneShot)
                 {
@@ -329,9 +417,10 @@ namespace sssketch
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
-                        chOutL[i2] += (float) (l * gain);
-                        chOutR[i2] += (float) (r * gain);
+                        stemOutL[i2] += (float) (l * gain);
+                        stemOutR[i2] += (float) (r * gain);
                     }
+                    finishStem();
                     continue; // handled -- skip the tile-loop path below entirely
                 }
 
@@ -508,56 +597,30 @@ namespace sssketch
                         const int numCh = entry.buffer->getNumChannels();
                         const float l = entry.buffer->getSample(0, srcSample);
                         const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
-                        chOutL[i2] += (float) (l * gain);
-                        chOutR[i2] += (float) (r * gain);
+                        stemOutL[i2] += (float) (l * gain);
+                        stemOutR[i2] += (float) (r * gain);
                     }
                 }
+
+                finishStem();
             }
             }
         }
 
-        // The built-in toolkit's shared reverb bus (ReverbBus.h). Bracketed
-        // around the channel-sum loop below so every channel's send lands in
-        // the same accumulator before the one reverb pass runs. Skipped
-        // entirely -- not even a beginBlock() buffer clear -- when no channel
-        // has a non-neutral toolkit AND no tail is still ringing from one
-        // that did. That second half matters: a user dragging a send back to
-        // zero (or deleting the only clip on the only sending channel) must
-        // still hear the tail out rather than have it cut on the next block.
-        const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging();
-        if (runReverbBus)
-        {
-            reverbBus.prepare(sampleRate, numSamples);
-            reverbBus.setSettings(snap->project.reverb);
-            reverbBus.beginBlock(numSamples);
-        }
-
-        // Run each channel's own chain, then its toolkit stage, then add the
-        // (now fully processed) result into the real output -- a channel with
-        // no chain published is a pure passthrough, and one with no
-        // non-neutral toolkit skips that stage entirely, so this stays
-        // byte-identical to the pre-toolkit direct sum for an ordinary
-        // project.
+        // Run each channel's own chain, then add the result into the real
+        // output -- a channel with no chain published is a pure passthrough,
+        // so this stays byte-identical to the pre-toolkit direct sum for an
+        // ordinary project. The toolkit is NOT here any more: it now runs per
+        // clip, upstream of this, before a clip's samples ever reach its
+        // channel (spec section 2b). One consequence worth naming: a clip's
+        // reverb send is tapped BEFORE the channel's plugin chain now, where
+        // it used to be tapped after -- the built-in toolkit is a per-clip
+        // strip feeding the channel, not a channel strip.
         for (size_t i = 0; i < channelIds.size(); ++i)
         {
             auto* chain = channelChains.chainFor(channelIds[i]);
             if (chain != nullptr)
                 chain->process(numSamples, channelL[i].data(), channelR[i].data());
-
-            // Toolkit runs AFTER the channel's plugin chain: the built-in
-            // filter is a channel-strip tool, so it belongs where a hardware
-            // strip's own filter would be -- downstream of whatever inserts
-            // the user has put on the channel, not ahead of them.
-            if (snap->channelToolkits[i] != nullptr)
-                applyChannelToolkit(
-                    *snap->channelToolkits[i],
-                    channelIds[i],
-                    positionBars,
-                    spb,
-                    sampleRate,
-                    numSamples,
-                    channelL[i].data(),
-                    channelR[i].data());
 
             for (int i2 = 0; i2 < numSamples; ++i2)
             {
@@ -572,15 +635,15 @@ namespace sssketch
             reverbBus.endBlock(numSamples, outL, outR);
     }
 
-    void PlaybackEngine::applyChannelToolkit(
-        const EngineProject::EngineChannelToolkit& toolkit,
-        const juce::String& channelId,
+    void PlaybackEngine::applyStemToolkit(
+        const EngineStemToolkit& toolkit,
+        const juce::String& stemKey,
         double positionBars,
         double secPerBar,
         double sampleRate,
         int numSamples,
-        float* chL,
-        float* chR) const
+        float* stemL,
+        float* stemR) const
     {
         // Every parameter is evaluated once per block, at the bar this block
         // ENDS on (barAtSample with the block's own length), and the
@@ -593,13 +656,20 @@ namespace sssketch
         // a block is ~12ms at 512/44.1k, so the ramp and the block rate are
         // the same order and the parameter never steps.
         //
+        // The bar is made CLIP-RELATIVE first (minus originBar), because that
+        // is the space the curve was drawn in: the lane sits on the clip's
+        // own waveform, so bar 0 of the curve IS the clip's left edge. Moving
+        // the clip moves originBar and nothing else, which is exactly why a
+        // moved clip carries its automation unchanged.
+        //
         // This is also the ONLY place automation is evaluated, and
         // renderBlock is the one function both live playback (Transport.cpp)
         // and offline export (RenderExport.cpp) call -- which is exactly how
         // the design doc's "offline render applies the toolkit identically to
         // live playback" requirement is met: not by two paths kept in sync,
         // but by there being one path.
-        const double targetBar = barAtSample(positionBars, numSamples, sampleRate, secPerBar);
+        const double blockEndBar = barAtSample(positionBars, numSamples, sampleRate, secPerBar);
+        const double targetBar = blockEndBar - toolkit.originBar;
         const auto evaluate = [&](const std::vector<AutomationPoint>& curve, double staticValue) {
             return (float) evaluateAutomation(curve, targetBar, staticValue);
         };
@@ -608,16 +678,20 @@ namespace sssketch
         const float sendTarget = evaluate(toolkit.automation.reverbSend, toolkit.reverbSend);
         const float volumeTarget = evaluate(toolkit.automation.volume, toolkit.volume);
 
-        auto& entry = channelDsp[channelId];
+        // Keyed by the CLIP's own identity, so a moved, re-channelled or
+        // renamed clip keeps its filter running continuously while a
+        // genuinely different clip (a duplicate, a re-import) starts clean
+        // rather than inheriting a stale tail -- see stemDsp's doc comment.
+        auto& entry = stemDsp[stemKey];
         if (entry == nullptr)
-            entry = std::make_unique<ChannelDspState>();
+            entry = std::make_unique<StemDspState>();
         auto& dsp = *entry;
 
         dsp.filter.prepare(sampleRate, numSamples);
         if (!dsp.seeded)
         {
-            // First block for this channel: jump to the evaluated values
-            // rather than ramping up from a default, so a channel doesn't
+            // First block for this clip: jump to the evaluated values
+            // rather than ramping up from a default, so a clip doesn't
             // audibly fade in or sweep open the first time it's heard. This
             // is also what makes an offline export bit-comparable to live
             // playback from the same start point -- RenderExport builds a
@@ -626,8 +700,9 @@ namespace sssketch
             // Seeded from the block's START bar, not the end bar the ongoing
             // targets use: this is "where the curve is right now", the value
             // the very first sample should already be at.
+            const double seedBar = positionBars - toolkit.originBar;
             const auto seed = [&](const std::vector<AutomationPoint>& curve, double staticValue) {
-                return (float) evaluateAutomation(curve, positionBars, staticValue);
+                return (float) evaluateAutomation(curve, seedBar, staticValue);
             };
             dsp.filter.resetTo(
                 toolkit.filterMode,
@@ -644,20 +719,20 @@ namespace sssketch
         dsp.sendSmoother.setTarget(sendTarget);
         dsp.volumeSmoother.setTarget(volumeTarget);
 
-        dsp.filter.process(numSamples, chL, chR);
+        dsp.filter.process(numSamples, stemL, stemR);
 
-        // Volume before the send tap: a post-fader send, so turning a channel
+        // Volume before the send tap: a post-fader send, so turning a clip
         // down turns its reverb down with it (the behaviour every mixer has,
         // and the one that makes a volume automation dip actually sound like
-        // the channel receding rather than like its reverb suddenly
+        // the clip receding rather than like its reverb suddenly
         // dominating).
         if (!(dsp.volumeSmoother.current() == 1.0f && dsp.volumeSmoother.isSettled()))
         {
             for (int i = 0; i < numSamples; ++i)
             {
                 const float g = dsp.volumeSmoother.next();
-                chL[i] *= g;
-                chR[i] *= g;
+                stemL[i] *= g;
+                stemR[i] *= g;
             }
         }
         else
@@ -665,6 +740,6 @@ namespace sssketch
             dsp.volumeSmoother.advance(numSamples);
         }
 
-        reverbBus.addSend(numSamples, chL, chR, dsp.sendSmoother);
+        reverbBus.addSend(numSamples, stemL, stemR, dsp.sendSmoother);
     }
 }

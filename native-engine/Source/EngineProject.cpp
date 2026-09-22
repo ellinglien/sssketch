@@ -66,8 +66,8 @@ namespace sssketch
 
     /** Clamps a normalised wire value into [0,1], falling back for a missing
      * or non-finite one. Every toolkit control is normalised (see
-     * EngineProject::EngineChannelToolkit), so this is the single place that
-     * rule is enforced on the way in. */
+     * EngineStemToolkit), so this is the single place that rule is enforced
+     * on the way in. */
     static double getNormalised(const juce::var& v, const char* key, double fallback)
     {
         const double raw = getDouble(v, key, fallback);
@@ -136,11 +136,12 @@ namespace sssketch
         // error, matching this function's existing lenient-parse
         // convention).
 
-        // The built-in sound toolkit. Both of these are absent from every
-        // project saved before the feature existed, and absent means exactly
-        // neutral (see EngineProject::EngineChannelToolkit's doc comment), so
-        // an old project parses to a project the render path skips entirely
-        // -- bit-identical to its pre-toolkit self. Same lenient-parse
+        // The built-in sound toolkit's project-level half: the one shared
+        // reverb. Its per-CLIP half rides on each stem (see EngineStemToolkit
+        // and the stem loop below). Absent from every project saved before
+        // the feature existed, and absent means exactly neutral, so an old
+        // project parses to a project the render path skips entirely --
+        // bit-identical to its pre-toolkit self. Same lenient-parse
         // convention as masterChain/channelChains above: a missing or
         // wrong-typed value is a default, not an error.
         auto reverbVar = parsed.getProperty("reverb", juce::var());
@@ -154,39 +155,6 @@ namespace sssketch
             const double preDelay = getDouble(reverbVar, "preDelayMs", project.reverb.preDelayMs);
             if (std::isfinite(preDelay))
                 project.reverb.preDelayMs = preDelay;
-        }
-
-        auto toolkitsVar = parsed.getProperty("channelToolkits", juce::var());
-        if (auto* toolkitsArray = toolkitsVar.getArray())
-        {
-            for (auto& entryVar : *toolkitsArray)
-            {
-                if (entryVar.getDynamicObject() == nullptr)
-                    continue;
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = entryVar.getProperty("channelId", "").toString();
-                toolkit.filterMode = entryVar.getProperty("filterMode", "lowpass").toString() == "highpass"
-                    ? FilterMode::highpass
-                    : FilterMode::lowpass;
-                // Note the default: each mode's own neutral end, so a payload
-                // that names a mode but omits the cutoff stays neutral rather
-                // than silently landing on a lowpass's 20Hz.
-                toolkit.filterCutoff = getNormalised(
-                    entryVar, "filterCutoff", neutralCutoffValue(toolkit.filterMode));
-                toolkit.filterResonance = getNormalised(entryVar, "filterResonance", 0.0);
-                toolkit.reverbSend = getNormalised(entryVar, "reverbSend", 0.0);
-                toolkit.volume = getNormalised(entryVar, "volume", 1.0);
-
-                auto automationVar = entryVar.getProperty("automation", juce::var());
-                if (automationVar.getDynamicObject() != nullptr)
-                {
-                    toolkit.automation.filterCutoff = parseAutomationCurve(automationVar, "filterCutoff");
-                    toolkit.automation.filterResonance = parseAutomationCurve(automationVar, "filterResonance");
-                    toolkit.automation.reverbSend = parseAutomationCurve(automationVar, "reverbSend");
-                    toolkit.automation.volume = parseAutomationCurve(automationVar, "volume");
-                }
-                project.channelToolkits.push_back(std::move(toolkit));
-            }
         }
 
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
@@ -231,6 +199,49 @@ namespace sssketch
                         stem.oneShot = getBool(stemVar, "oneShot", false);
                         stem.trimStartSec = getDouble(stemVar, "trimStartSec", 0.0);
                         stem.trimEndSec = getDouble(stemVar, "trimEndSec", -1.0);
+
+                        // The built-in toolkit, per CLIP (spec section 2b).
+                        // An ABSENT `toolkit` key leaves hasToolkit false,
+                        // which is the whole neutral fast path -- that is what
+                        // every stem in a project nobody has drawn on sends.
+                        auto toolkitVar = stemVar.getProperty("toolkit", juce::var());
+                        if (toolkitVar.getDynamicObject() != nullptr)
+                        {
+                            stem.hasToolkit = true;
+                            auto& toolkit = stem.toolkit;
+                            toolkit.filterMode =
+                                toolkitVar.getProperty("filterMode", "lowpass").toString() == "highpass"
+                                    ? FilterMode::highpass
+                                    : FilterMode::lowpass;
+                            // Note the default: each mode's own neutral end,
+                            // so a payload that names a mode but omits the
+                            // cutoff stays neutral rather than silently
+                            // landing on a lowpass's 20Hz.
+                            toolkit.filterCutoff = getNormalised(
+                                toolkitVar, "filterCutoff", neutralCutoffValue(toolkit.filterMode));
+                            toolkit.filterResonance = getNormalised(toolkitVar, "filterResonance", 0.0);
+                            toolkit.reverbSend = getNormalised(toolkitVar, "reverbSend", 0.0);
+                            toolkit.volume = getNormalised(toolkitVar, "volume", 1.0);
+                            // NOT normalised: this is an absolute arrangement
+                            // bar, not a [0,1] control. A non-finite one falls
+                            // back to 0 rather than reaching the audio thread,
+                            // where it would make every curve evaluate at NaN.
+                            const double origin = getDouble(toolkitVar, "originBar", 0.0);
+                            toolkit.originBar = std::isfinite(origin) ? origin : 0.0;
+
+                            auto automationVar = toolkitVar.getProperty("automation", juce::var());
+                            if (automationVar.getDynamicObject() != nullptr)
+                            {
+                                toolkit.automation.filterCutoff =
+                                    parseAutomationCurve(automationVar, "filterCutoff");
+                                toolkit.automation.filterResonance =
+                                    parseAutomationCurve(automationVar, "filterResonance");
+                                toolkit.automation.reverbSend =
+                                    parseAutomationCurve(automationVar, "reverbSend");
+                                toolkit.automation.volume =
+                                    parseAutomationCurve(automationVar, "volume");
+                            }
+                        }
 
                         auto muteRegionsVar = stemVar.getProperty("muteRegions", juce::var());
                         if (auto* muteRegionsArray = muteRegionsVar.getArray())

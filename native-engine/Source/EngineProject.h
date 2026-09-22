@@ -9,6 +9,79 @@
 
 namespace sssketch
 {
+    /** The built-in sound toolkit on ONE placed stem clip: a filter, a reverb
+     * send, a clip volume, and a drawn automation curve for any of them.
+     * Wire-format twin of EngineStemToolkit in src/shared/buildEngineProject.ts
+     * (and of StemFilterSettings/StemAutomation in src/shared/toolkit.ts) -- a
+     * hand-synced pair, like everything else in this file (CLAUDE.md). See
+     * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md,
+     * especially section 2b: the toolkit was per CHANNEL for exactly one build
+     * and moved to per clip after the first live walkthrough.
+     *
+     * A stem whose wire payload has NO `toolkit` key at all behaves exactly
+     * like one present with these defaults, which are in turn exactly neutral:
+     * filter parked at its mode's open end, no send, no gain change, no
+     * curves. That's what makes an old project (which has no such field) load
+     * and sound bit-identical to before this feature existed -- the neutral
+     * path in PlaybackEngine skips every bit of this. */
+    struct EngineStemAutomation
+    {
+        // Empty = "this parameter isn't automated", which is different from
+        // "automated, but currently sitting at its default": the former uses
+        // the clip's own static value below, the latter the curve. Points are
+        // sorted ascending by bar and clamped into [0,1] at parse time, so
+        // evaluateAutomation's own precondition holds by construction for
+        // anything that came off the wire. Bars are CLIP-RELATIVE -- see
+        // EngineStemToolkit::originBar.
+        std::vector<AutomationPoint> filterCutoff;
+        std::vector<AutomationPoint> filterResonance;
+        std::vector<AutomationPoint> reverbSend;
+        std::vector<AutomationPoint> volume;
+
+        bool isEmpty() const
+        {
+            return filterCutoff.empty() && filterResonance.empty()
+                && reverbSend.empty() && volume.empty();
+        }
+    };
+
+    struct EngineStemToolkit
+    {
+        FilterMode filterMode = FilterMode::lowpass;
+        // Normalised [0,1]; the engine owns the map to Hz/Q (see
+        // ChannelFilter.h). Defaults are each mode's own neutral end -- note
+        // that flipping filterMode to highpass without also moving
+        // filterCutoff leaves a NON-neutral filter (1.0 on a highpass is
+        // 20kHz, i.e. everything gone), which is correct: choosing a highpass
+        // and leaving the cutoff at the top is a real, audible choice, not an
+        // accident the engine should second-guess.
+        double filterCutoff = 1.0;
+        double filterResonance = 0.0;
+        /** How much of this clip goes to the shared reverb, post-filter and
+         * post-volume (a post-fader send: turning the clip down turns its
+         * reverb down with it). 0 = none. */
+        double reverbSend = 0.0;
+        /** The static level the `volume` curve sits under -- 1.0 unless some
+         * future per-clip toolkit fader moves it. NOT the same number as
+         * EngineStem::volume (the per-stem gain the app's own envelope drag
+         * writes): when automation.volume is non-empty the CURVE is the clip's
+         * level and EngineStem::volume is ignored entirely, per the spec's
+         * "volume fully replaces the old per-clip volume envelope ... rather
+         * than multiplying with it". */
+        double volume = 1.0;
+        /** The ABSOLUTE arrangement bar that clip-relative bar 0 sits on --
+         * i.e. this clip's own left edge, including its left crop and its
+         * re-one offset. The renderer computes it (buildEngineProject.ts's
+         * clipOriginBar) from the same three terms it uses to DRAW the clip,
+         * so the drawn lane and what is heard cannot disagree; the engine just
+         * subtracts it before evaluating. Deliberately not re-derived here
+         * from startBar/leftCropBars/offsetSteps: the renderer's own version
+         * also has to account for tempo scaling on a stretch-off clip, which
+         * nothing on this side models. */
+        double originBar = 0.0;
+        EngineStemAutomation automation;
+    };
+
     struct EngineStem
     {
         juce::String stemKey;
@@ -47,6 +120,17 @@ namespace sssketch
         // -1.0 = unset (play to the stem's own natural durationSec) -- same
         // sentinel convention as startBarOverride above.
         double trimEndSec = -1.0;
+
+        /** This clip's built-in toolkit. `hasToolkit` is false for a stem
+         * whose wire payload carried no `toolkit` key at all, which is every
+         * stem in a project nobody has drawn on -- and is what lets
+         * renderBlock() take its pre-toolkit path for those. Set by
+         * parseEngineProject, then narrowed further by PlaybackEngine's own
+         * stemToolkitIsNeutral() in setProject (a toolkit that IS present but
+         * does nothing is downgraded back to false there, off the real-time
+         * thread, so renderBlock's per-stem cost stays one bool test). */
+        bool hasToolkit = false;
+        EngineStemToolkit toolkit;
     };
 
     struct EngineRifff
@@ -107,68 +191,9 @@ namespace sssketch
         };
         std::vector<EngineChannelChain> channelChains;
 
-        /** The built-in sound toolkit's per-channel settings: a filter, a
-         * reverb send, a channel volume, and a drawn automation curve for
-         * any of them. Wire-format twin of ChannelFilterSettings +
-         * ChannelAutomation in src/shared/toolkit.ts -- a hand-synced pair,
-         * like everything else in this file (CLAUDE.md). See
-         * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
-         *
-         * A channelId ABSENT from EngineProject::channelToolkits behaves
-         * exactly like one present with these defaults, which are in turn
-         * exactly neutral: filter parked at its mode's open end, no send, no
-         * gain change, no curves. That's what makes an old project (which
-         * has no such field at all) load and sound bit-identical to before
-         * this feature existed -- the neutral path in PlaybackEngine skips
-         * every bit of this. */
-        struct EngineChannelAutomation
-        {
-            // Empty = "this parameter isn't automated", which is different
-            // from "automated, but currently sitting at its default": the
-            // former uses the channel's own static value below, the latter
-            // the curve. Points are sorted ascending by bar and clamped into
-            // [0,1] at parse time, so evaluateAutomation's own precondition
-            // holds by construction for anything that came off the wire.
-            std::vector<AutomationPoint> filterCutoff;
-            std::vector<AutomationPoint> filterResonance;
-            std::vector<AutomationPoint> reverbSend;
-            std::vector<AutomationPoint> volume;
-
-            bool isEmpty() const
-            {
-                return filterCutoff.empty() && filterResonance.empty()
-                    && reverbSend.empty() && volume.empty();
-            }
-        };
-
-        struct EngineChannelToolkit
-        {
-            juce::String channelId;
-            FilterMode filterMode = FilterMode::lowpass;
-            // Normalised [0,1]; the engine owns the map to Hz/Q (see
-            // ChannelFilter.h). Defaults are each mode's own neutral end --
-            // note that flipping filterMode to highpass without also moving
-            // filterCutoff leaves a NON-neutral filter (1.0 on a highpass is
-            // 20kHz, i.e. everything gone), which is correct: choosing a
-            // highpass and leaving the cutoff at the top is a real, audible
-            // choice, not an accident the engine should second-guess.
-            double filterCutoff = 1.0;
-            double filterResonance = 0.0;
-            /** How much of this channel goes to the shared reverb, post-filter
-             * and post-volume (a post-fader send: turning the channel down
-             * turns its reverb down with it). 0 = none. */
-            double reverbSend = 0.0;
-            /** A channel-level gain on top of each stem's own volume -- the
-             * fourth automatable parameter in the toolkit's set. 1.0 = unity. */
-            double volume = 1.0;
-            EngineChannelAutomation automation;
-        };
-
-        std::vector<EngineChannelToolkit> channelToolkits;
-
         /** The one shared reverb's own settings -- project-level, not per
-         * channel (see ReverbBus.h). Defaults are ReverbSettings's own; they
-         * only ever matter once some channel actually sends to it. */
+         * clip (see ReverbBus.h). Defaults are ReverbSettings's own; they only
+         * ever matter once some clip actually sends to it. */
         ReverbSettings reverb;
     };
 

@@ -47,12 +47,12 @@ namespace sssketch
          * direct-sum behaviour.
          *
          * Pure/deterministic for a project that uses no built-in toolkit
-         * (no channel filter, no reverb send, no automation): nothing is
+         * (no clip filter, no reverb send, no automation): nothing is
          * carried between calls on PlaybackEngine's own side, so it stays
          * safe to call repeatedly out of order (as the parity test does).
          * A project that DOES use the toolkit necessarily carries state
          * between calls — a filter has memory and a reverb has a tail; you
-         * cannot have either without it — held in channelDsp/reverbBus
+         * cannot have either without it — held in stemDsp/reverbBus
          * below. Those are only ever touched from the single rendering
          * thread (see their own doc comment), and a neutral project never
          * touches them at all, which is what keeps the out-of-order
@@ -146,31 +146,42 @@ namespace sssketch
             mutable std::vector<std::vector<float>> scratchChannelL, scratchChannelR;
             mutable std::vector<juce::String> scratchChannelIds;
 
-            // Parallel to scratchChannelIds: this channel's own toolkit
-            // settings, or nullptr when the channel is neutral (no filter
-            // off its mode's open end, no send, unity volume, no curves).
-            // Resolved HERE, in setProject, rather than per block in
-            // renderBlock: the neutrality test and the channelId lookup are
-            // both pure functions of the project, so doing them once per
-            // project change instead of once per channel per block keeps
-            // renderBlock's toolkit cost at a single pointer check for the
-            // overwhelmingly common all-neutral case. Points into THIS
-            // snapshot's own project.channelToolkits, same lifetime rule as
-            // channelGroups above.
-            std::vector<const EngineProject::EngineChannelToolkit*> channelToolkits;
+            // Per-stem scratch for one clip's own toolkit stage: the clip
+            // renders into this, gets filtered/faded/tapped for send, and is
+            // then added into its channel's buffer. ONE pair for the whole
+            // snapshot, not one per stem -- a single rendering thread
+            // processes exactly one stem at a time (see renderBlock's own doc
+            // comment), so there is never a second live user. Untouched, and
+            // never even sized, by a project with no toolkit usage.
+            // `mutable` for the same reason the channel scratch above is.
+            mutable std::vector<float> scratchStemL, scratchStemR;
 
-            // True if any entry above is non-null -- lets renderBlock skip
-            // the whole reverb-bus begin/end bracket with one bool test.
+            // True if ANY stem in the project has a non-neutral toolkit --
+            // decided once here, in setProject, off the real-time thread (the
+            // neutrality test is a pure function of the project). Lets
+            // renderBlock skip the whole reverb-bus begin/end bracket with
+            // one bool test, and is what keeps an ordinary project on exactly
+            // the render path it was on before this feature existed. Each
+            // stem's own EngineStem::hasToolkit is narrowed in the same pass,
+            // so the per-stem check in the render loop is also one bool.
             bool anyToolkitActive = false;
         };
 
-        /** Per-channel toolkit DSP state: a filter has memory, a send has a
+        /** Per-CLIP toolkit DSP state: a filter has memory, a send has a
          * smoothed level. Deliberately NOT part of ProjectSnapshot, unlike
-         * every other per-channel derived structure here: setProject()
-         * republishes a whole new snapshot on every live volume-drag frame,
-         * and rebuilding filter state at that rate would click on every
-         * mouse move. Keyed by channelId so it survives republishing,
-         * rechannelling and reordering.
+         * every other derived structure here: setProject() republishes a
+         * whole new snapshot on every live volume-drag frame, and rebuilding
+         * filter state at that rate would click on every mouse move.
+         *
+         * Keyed by stemKey (groupId:slot), which is the identity of the clip
+         * itself -- so it survives republishing, moving the clip in time,
+         * dragging it to another channel, renaming the rifff, or reordering
+         * rows, and a DIFFERENT clip (a duplicate, a re-import, a stem
+         * ungrouped onto a fresh groupId) gets its own fresh entry rather
+         * than inheriting a stale filter tail from whatever used to be
+         * there. That last part is the reason this is keyed by stemKey and
+         * not, say, by resolvedPath: two clips of the same audio file are two
+         * clips, with two filters.
          *
          * Only ever created, read or written by the single rendering thread
          * (the live audio callback, or RenderExport's own offline instance
@@ -188,33 +199,34 @@ namespace sssketch
          * would mean erasing from this map, and the only thread allowed to
          * do that is the one we least want doing bookkeeping. Channel counts
          * here are tens, not thousands. */
-        struct ChannelDspState
+        struct StemDspState
         {
             ChannelFilter filter;
             ParamSmoother sendSmoother;
             ParamSmoother volumeSmoother;
-            // False until the first block that renders this channel, which
+            // False until the first block that renders this clip, which
             // JUMPS the smoothers to their evaluated values instead of
-            // ramping up from zero -- otherwise every channel would fade in
+            // ramping up from zero -- otherwise every clip would fade in
             // over the smoothing time the first time it was heard.
             bool seeded = false;
         };
 
-        /** One channel's toolkit stage, applied IN PLACE to its already-summed
-         * (and already-plugin-chained) scratch buffer: evaluate the four
-         * automatable parameters at this block's start bar, filter, apply the
-         * channel volume, then tap a post-fader send into the shared reverb
-         * bus. Only ever called for a channel whose toolkit is non-neutral.
-         * `const` for the same reason renderBlock is -- see channelDsp. */
-        void applyChannelToolkit(
-            const EngineProject::EngineChannelToolkit& toolkit,
-            const juce::String& channelId,
+        /** One CLIP's toolkit stage, applied IN PLACE to the scratch buffer
+         * that clip just rendered into, BEFORE it is summed into its channel:
+         * evaluate the four automatable parameters at this block's bar
+         * (clip-relative, via the toolkit's own originBar), filter, apply the
+         * clip volume, then tap a post-fader send into the shared reverb bus.
+         * Only ever called for a clip whose toolkit is non-neutral. `const`
+         * for the same reason renderBlock is -- see stemDsp. */
+        void applyStemToolkit(
+            const EngineStemToolkit& toolkit,
+            const juce::String& stemKey,
             double positionBars,
             double secPerBar,
             double sampleRate,
             int numSamples,
-            float* chL,
-            float* chR) const;
+            float* stemL,
+            float* stemR) const;
 
         StemBufferCache& bufferCache;
 
@@ -271,12 +283,12 @@ namespace sssketch
 
         bool metronomeEnabled = false;
 
-        // See ChannelDspState's own doc comment for the threading and
+        // See StemDspState's own doc comment for the threading and
         // lifetime rules these two live under. `mutable` for the same
         // "logically const, physically stateful" reason the scratch buffers
         // are: renderBlock() reads the engine through a const pointer but
         // real DSP cannot be stateless.
-        mutable std::map<juce::String, std::unique_ptr<ChannelDspState>> channelDsp;
+        mutable std::map<juce::String, std::unique_ptr<StemDspState>> stemDsp;
         mutable ReverbBus reverbBus;
 
         LiveParamOverrides liveParamOverrides;

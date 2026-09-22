@@ -1132,7 +1132,8 @@ namespace sssketch
             }
 
             // ---- built-in sound toolkit (filter / reverb send / automation) ----
-            // See docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+            // See docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md,
+            // section 2b: everything here is per CLIP now, not per channel.
 
             beginTest("a project with explicitly neutral toolkit entries renders BIT-identically to one with none");
             {
@@ -1140,8 +1141,8 @@ namespace sssketch
                 // not change what an ordinary project sounds like by even one
                 // sample. Rendering the same arrangement with (a) no toolkit
                 // data at all -- exactly what every project saved before this
-                // feature parses to -- and (b) explicit, neutral toolkit
-                // entries on both channels must produce identical output.
+                // feature parses to -- and (b) explicit, neutral per-clip
+                // toolkits on both clips must produce identical output.
                 auto toneA = writeFixtureWav("sssketch_pe_tk_neutral_a.wav", 0.3f, 44100);
                 auto toneB = writeFixtureWav("sssketch_pe_tk_neutral_b.wav", 0.2f, 44100);
 
@@ -1164,13 +1165,17 @@ namespace sssketch
                 }
 
                 EngineProject withNeutralToolkits = bare;
-                for (const char* channelId : { "ch-1", "ch-2" })
+                for (auto& rifff : withNeutralToolkits.rifffs)
                 {
-                    EngineProject::EngineChannelToolkit toolkit;
-                    toolkit.channelId = channelId;
-                    // Every field left at its default, which is exactly the
-                    // neutral position (see EngineChannelToolkit's doc comment).
-                    withNeutralToolkits.channelToolkits.push_back(toolkit);
+                    for (auto& stem : rifff.stems)
+                    {
+                        // Present on the wire, every field left at its
+                        // default -- which is exactly the neutral position
+                        // (see EngineStemToolkit's doc comment). setProject
+                        // must downgrade hasToolkit back to false for these,
+                        // putting them back on the pre-toolkit render path.
+                        stem.hasToolkit = true;
+                    }
                 }
 
                 std::vector<float> bareL(512, 0.0f), bareR(512, 0.0f);
@@ -1204,14 +1209,14 @@ namespace sssketch
                 toneB.deleteFile();
             }
 
-            beginTest("a channel's filter affects only that channel");
+            beginTest("a clip's filter affects only that clip");
             {
                 // Both fixtures are constant (DC) -- so a HIGHPASS is the
                 // clearest possible probe: DC is the one thing a highpass
                 // must remove completely, and its absence in the sum is
-                // unambiguous. ch-1 gets the highpass, ch-2 gets nothing; if
-                // the filter leaked across channels, ch-2's contribution
-                // would vanish too.
+                // unambiguous. The first clip gets the highpass, the second
+                // gets nothing; if the filter leaked across clips, the
+                // second's contribution would vanish too.
                 auto toneA = writeFixtureWav("sssketch_pe_tk_filter_a.wav", 0.3f, 44100);
                 auto toneB = writeFixtureWav("sssketch_pe_tk_filter_b.wav", 0.2f, 44100);
 
@@ -1233,11 +1238,10 @@ namespace sssketch
                     project.rifffs.push_back(rifff);
                 }
 
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = "ch-1";
-                toolkit.filterMode = FilterMode::highpass;
-                toolkit.filterCutoff = 0.75; // well up the log range -- kHz, not Hz
-                project.channelToolkits.push_back(toolkit);
+                auto& filtered = project.rifffs[0].stems[0];
+                filtered.hasToolkit = true;
+                filtered.toolkit.filterMode = FilterMode::highpass;
+                filtered.toolkit.filterCutoff = 0.75; // well up the log range -- kHz, not Hz
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
@@ -1247,7 +1251,7 @@ namespace sssketch
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
 
                 // By sample 400 (~9ms in) the highpass has long since removed
-                // ch-1's DC, leaving only ch-2's untouched 0.2.
+                // the first clip's DC, leaving only the second's untouched 0.2.
                 expectWithinAbsoluteError(l[400], 0.2f, 0.01f);
                 expectWithinAbsoluteError(r[400], 0.2f, 0.01f);
             }
@@ -1277,10 +1281,8 @@ namespace sssketch
                 dryProject.rifffs.push_back(rifff);
 
                 EngineProject wetProject = dryProject;
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = "ch-1";
-                toolkit.reverbSend = 1.0;
-                wetProject.channelToolkits.push_back(toolkit);
+                wetProject.rifffs[0].stems[0].hasToolkit = true;
+                wetProject.rifffs[0].stems[0].toolkit.reverbSend = 1.0;
                 wetProject.reverb.roomSize = 0.6;
                 wetProject.reverb.preDelayMs = 0.0;
 
@@ -1321,7 +1323,7 @@ namespace sssketch
                 tone.deleteFile();
             }
 
-            beginTest("volume automation drives the channel's level across the arrangement");
+            beginTest("volume automation drives the clip's level across the arrangement");
             {
                 // 60bpm -> 4 sec/bar, and a 4-second constant fixture, so one
                 // bar is exactly one playthrough of the file. A volume curve
@@ -1345,10 +1347,12 @@ namespace sssketch
                 rifff.stems.push_back(stem);
                 project.rifffs.push_back(rifff);
 
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = "ch-1";
-                toolkit.automation.volume = { { 0.0, 1.0 }, { 1.0, 0.0 } };
-                project.channelToolkits.push_back(toolkit);
+                auto& automated = project.rifffs[0].stems[0];
+                automated.hasToolkit = true;
+                // CLIP-RELATIVE bars: the clip starts at arrangement bar 0
+                // here, so the two spaces happen to coincide -- the
+                // clip-relative test below deliberately moves them apart.
+                automated.toolkit.automation.volume = { { 0.0, 1.0 }, { 1.0, 0.0 } };
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
@@ -1408,13 +1412,12 @@ namespace sssketch
                 rifff.stems.push_back(stem);
                 project.rifffs.push_back(rifff);
 
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = "ch-1";
-                toolkit.filterMode = FilterMode::lowpass;
+                auto& swept = project.rifffs[0].stems[0];
+                swept.hasToolkit = true;
+                swept.toolkit.filterMode = FilterMode::lowpass;
                 // 1.0 -> 20kHz (neutral, the sine passes); 0.25 -> ~112Hz
                 // (three octaves below the sine, which is therefore gone).
-                toolkit.automation.filterCutoff = { { 0.0, 1.0 }, { 1.0, 0.25 } };
-                project.channelToolkits.push_back(toolkit);
+                swept.toolkit.automation.filterCutoff = { { 0.0, 1.0 }, { 1.0, 0.25 } };
 
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
@@ -1491,11 +1494,9 @@ namespace sssketch
                 neutral.rifffs.push_back(rifff);
 
                 EngineProject filtered = neutral;
-                EngineProject::EngineChannelToolkit toolkit;
-                toolkit.channelId = "ch-1";
-                toolkit.filterMode = FilterMode::highpass;
-                toolkit.filterCutoff = 0.75;
-                filtered.channelToolkits.push_back(toolkit);
+                filtered.rifffs[0].stems[0].hasToolkit = true;
+                filtered.rifffs[0].stems[0].toolkit.filterMode = FilterMode::highpass;
+                filtered.rifffs[0].stems[0].toolkit.filterCutoff = 0.75;
 
                 auto renderedRms = [this](const EngineProject& project, const juce::String& name) {
                     auto out = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(name);
@@ -1535,6 +1536,248 @@ namespace sssketch
                 expect(filteredRms < 0.01,
                        "filtered export rms was " + juce::String(filteredRms)
                            + " (neutral was " + juce::String(neutralRms) + ")");
+
+                tone.deleteFile();
+            }
+
+            beginTest("two stems on ONE channel keep separate toolkits -- the lane is per clip");
+            {
+                // Elling's second walkthrough finding: ungrouped stems that
+                // happened to share a channel shared one lane. They are two
+                // clips, so they are two toolkits, even inside one rifff on
+                // one channel.
+                auto toneA = writeFixtureWav("sssketch_pe_tk_perstem_a.wav", 0.3f, 44100);
+                auto toneB = writeFixtureWav("sssketch_pe_tk_perstem_b.wav", 0.2f, 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                for (int n = 0; n < 2; ++n)
+                {
+                    EngineStem stem;
+                    stem.stemKey = n == 0 ? "r1:0" : "r1:1";
+                    stem.resolvedPath = (n == 0 ? toneA : toneB).getFullPathName();
+                    stem.durationSec = 4.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                }
+                // Only the FIRST stem gets a highpass, which removes its DC
+                // entirely. The second, on the same channel, must be
+                // untouched.
+                rifff.stems[0].hasToolkit = true;
+                rifff.stems[0].toolkit.filterMode = FilterMode::highpass;
+                rifff.stems[0].toolkit.filterCutoff = 0.75;
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+
+                expectWithinAbsoluteError(l[400], 0.2f, 0.01f);
+
+                toneA.deleteFile();
+                toneB.deleteFile();
+            }
+
+            beginTest("automation bars are CLIP-RELATIVE -- a moved clip's curve moves with it");
+            {
+                // The whole point of originBar. 240bpm -> 1 sec/bar. The clip
+                // starts at arrangement bar 1 and carries a volume curve from
+                // 1.0 at its OWN bar 0 to 0.0 at its own bar 1 -- i.e. over
+                // arrangement seconds 1..2, not 0..1. If originBar were
+                // ignored, the curve would already have reached 0 before the
+                // clip's first sample and the clip would be silent throughout.
+                auto tone = writeFixtureWav("sssketch_pe_tk_cliprel.wav", 0.5f, 44100 * 2);
+
+                EngineProject project;
+                project.bpm = 240.0; // secPerBar = 1.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 1.0;
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.stemKey = "r1:0";
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 2.0;
+                stem.barLength = 2;
+                stem.playedBars = 2.0;
+                stem.hasToolkit = true;
+                stem.toolkit.originBar = 1.0; // the clip's own left edge
+                stem.toolkit.automation.volume = { { 0.0, 1.0 }, { 1.0, 0.0 } };
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                std::vector<float> rendered;
+                for (int start = 0; start < 44100 * 3; start += 512)
+                {
+                    std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                    engine.renderBlock(start / 44100.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                    rendered.insert(rendered.end(), l.begin(), l.end());
+                }
+
+                // 1.1s in: 0.1 of the way through the clip's own first bar,
+                // so still near full level. This is the assertion that fails
+                // outright if the curve is read in absolute bars.
+                expectWithinAbsoluteError(rendered[(size_t) (44100 * 1.1)], 0.5f * 0.9f, 0.03f);
+                // 1.9s in: nearly at the curve's end.
+                expectWithinAbsoluteError(rendered[(size_t) (44100 * 1.9)], 0.5f * 0.1f, 0.03f);
+                // Past the last breakpoint the curve HOLDS at 0 -- silence,
+                // even though the clip itself plays on to 3s.
+                expectWithinAbsoluteError(rendered[(size_t) (44100 * 2.5)], 0.0f, 0.01f);
+
+                tone.deleteFile();
+            }
+
+            beginTest("OFFLINE: a volume curve to zero really silences the clip");
+            {
+                // Direct check on a live report that volume automation
+                // "can't hear anything" while the filter was audible. Both
+                // renders below are the same arrangement through the same
+                // renderBlock -- only the curve differs -- so a difference
+                // here is the curve doing its job and nothing else.
+                auto tone = writeFixtureWav("sssketch_pe_tk_volsilence.wav", 0.5f, 44100 * 2);
+
+                EngineProject neutral;
+                neutral.bpm = 240.0; // secPerBar = 1.0
+                neutral.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 2;
+                EngineStem stem;
+                stem.stemKey = "r1:0";
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 2.0;
+                stem.barLength = 2;
+                stem.playedBars = 2.0;
+                rifff.stems.push_back(stem);
+                neutral.rifffs.push_back(rifff);
+
+                EngineProject faded = neutral;
+                faded.rifffs[0].stems[0].hasToolkit = true;
+                faded.rifffs[0].stems[0].toolkit.automation.volume =
+                    { { 0.0, 1.0 }, { 1.0, 0.0 } };
+
+                auto rmsOfExport = [this](const EngineProject& project,
+                                          const juce::String& name,
+                                          double fromSec,
+                                          double toSec) {
+                    auto out = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                   .getChildFile(name);
+                    out.deleteFile();
+                    juce::String error;
+                    expect(renderProjectToWavFile(project, out.getFullPathName(), 2.0, error),
+                           "offline render failed: " + error);
+                    juce::AudioFormatManager formats;
+                    formats.registerBasicFormats();
+                    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(out));
+                    if (reader == nullptr)
+                    {
+                        expect(false, "could not read back " + out.getFullPathName());
+                        return 0.0;
+                    }
+                    const int numSamples = (int) reader->lengthInSamples;
+                    juce::AudioBuffer<float> buffer(2, numSamples);
+                    reader->read(&buffer, 0, numSamples, 0, true, true);
+                    const int from = juce::jlimit(0, numSamples, (int) (fromSec * 44100.0));
+                    const int to = juce::jlimit(from, numSamples, (int) (toSec * 44100.0));
+                    double sum = 0.0;
+                    for (int i = from; i < to; ++i)
+                        sum += (double) buffer.getSample(0, i) * (double) buffer.getSample(0, i);
+                    out.deleteFile();
+                    return to > from ? std::sqrt(sum / (double) (to - from)) : 0.0;
+                };
+
+                // Second half of the clip, where the curve has brought the
+                // level to (or very near) zero.
+                const double neutralRms =
+                    rmsOfExport(neutral, "sssketch_pe_tk_volsilence_dry.wav", 1.5, 1.9);
+                const double fadedRms =
+                    rmsOfExport(faded, "sssketch_pe_tk_volsilence_wet.wav", 1.5, 1.9);
+
+                expect(neutralRms > 0.4, "neutral export rms was " + juce::String(neutralRms));
+                expect(fadedRms < 0.02,
+                       "volume-automated export rms was " + juce::String(fadedRms)
+                           + " (neutral was " + juce::String(neutralRms) + ")");
+
+                tone.deleteFile();
+            }
+
+            beginTest("OFFLINE: a full reverb send really produces a tail past the dry audio");
+            {
+                // The other half of the same live report. 240bpm -> 1 sec/bar
+                // and a 1-second fixture played for exactly one bar, exported
+                // over 2 seconds: the dry render is EXACTLY silent in its
+                // second half, so any energy there came from the send.
+                auto tone = writeFixtureWav("sssketch_pe_tk_sendtail.wav", 0.5f, 44100);
+
+                EngineProject dry;
+                dry.bpm = 240.0;
+                dry.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "r1:0";
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                stem.playedBars = 1.0;
+                rifff.stems.push_back(stem);
+                dry.rifffs.push_back(rifff);
+
+                EngineProject wet = dry;
+                wet.rifffs[0].stems[0].hasToolkit = true;
+                wet.rifffs[0].stems[0].toolkit.reverbSend = 1.0;
+                wet.reverb.roomSize = 0.6;
+                wet.reverb.preDelayMs = 0.0;
+
+                auto peakAfterDry = [this](const EngineProject& project, const juce::String& name) {
+                    auto out = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                   .getChildFile(name);
+                    out.deleteFile();
+                    juce::String error;
+                    expect(renderProjectToWavFile(project, out.getFullPathName(), 2.0, error),
+                           "offline render failed: " + error);
+                    juce::AudioFormatManager formats;
+                    formats.registerBasicFormats();
+                    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(out));
+                    if (reader == nullptr)
+                    {
+                        expect(false, "could not read back " + out.getFullPathName());
+                        return 0.0;
+                    }
+                    const int numSamples = (int) reader->lengthInSamples;
+                    juce::AudioBuffer<float> buffer(2, numSamples);
+                    reader->read(&buffer, 0, numSamples, 0, true, true);
+                    double peak = 0.0;
+                    for (int i = juce::jmin(numSamples, (int) (1.2 * 44100.0)); i < numSamples; ++i)
+                        peak = juce::jmax(peak, (double) std::abs(buffer.getSample(0, i)));
+                    out.deleteFile();
+                    return peak;
+                };
+
+                expectEquals(peakAfterDry(dry, "sssketch_pe_tk_sendtail_dry.wav"), 0.0);
+                const double wetPeak = peakAfterDry(wet, "sssketch_pe_tk_sendtail_wet.wav");
+                expect(wetPeak > 1.0e-3, "reverb tail peak was " + juce::String(wetPeak));
 
                 tone.deleteFile();
             }
