@@ -203,6 +203,50 @@ plays with no plugin installs:
 Device parameter ids/versions must be verified against a real exported project from the target
 DAW version before shipping — a wrong id silently produces a device with a dead envelope.
 
+## 4b. BUILT, 2026-09-22: step 5, the export
+
+Notes worth keeping, in the same spirit as 2b's and 2d's:
+
+- **Two bugs found by VERIFYING "the render already bakes everything" rather than assuming it.**
+  `nativeExport.ts`'s `loopLengthBarsFor` -- which is the render's own DURATION -- didn't count
+  risers the way `selectors.ts`'s `loopLengthBars` does, so a riser parked past the last clip
+  (the likeliest place to put one) was cut off mid-sweep in every exported mixdown and stems
+  file while playing in full. And `soloState` mutes stems, which a riser isn't, so all five
+  per-bus stems files each carried a full copy of every riser; re-summing them stacked each
+  riser five times. Risers now come out of every isolated render and get one `risers.wav` of
+  their own -- they belong to no bus, because a riser sits on a channel and `busOf` is keyed by
+  stem.
+- **The DAW-project exports never referenced baked audio at all.** They copy source stems, so
+  "bake in" had to be built, not just selected: `exportToolkitAudio.ts` renders one WAV per clip
+  whose toolkit does something (plus the risers), laid out on the ARRANGEMENT's own timeline.
+  That layout is the trick worth remembering -- it makes the source offset of a baked clip
+  simply its own start time, so Ableton's `LoopStart` collapses onto `CurrentStart` and REAPER's
+  `SOFFS` onto `POSITION`, with no second coordinate system to keep in step.
+- A baked clip needs the reverb tail rendered PAST its end (the send feeds a shared bus that
+  rings on), so the bake asks for extra bars and the exporters lengthen the clip by exactly
+  those. Per-clip baking of a shared reverb is sound because the reverb is linear: the sum of
+  each clip's own tail is the tail of their sum.
+- **A bake carries the toolkit, not the plugins.** Channel chains are dropped from it
+  deliberately: these exports have never carried plugin processing, so baking a plugin into
+  exactly the clips that use the toolkit would make them sound different from their neighbours
+  on the same channel and would double up when the user re-added the plugin over there.
+- **In "export the automation" each stem gets its own track.** A DAW automation envelope belongs
+  to the TRACK, so the packing both exporters do (non-overlapping stems sharing one track) would
+  have applied one stem's sweep to another's audio. More tracks is the honest price.
+- The one place the two targets genuinely differ: Ableton's Auto Filter wants **real Hz**
+  (`filterCutoffHz`, ported from `ChannelFilter.cpp` into `src/shared/toolkit.ts` with tests
+  pinning the same properties the engine's own tests pin), while a REAPER `PARMENV` is
+  **normalised 0..1** -- which our dial already is, so that conversion is a no-op.
+- The Ableton export keeps ONE return track here, after a documented history of eight failed
+  attempts that ended in dropping returns entirely. What crashed Ableton then was a MISMATCH
+  (zero send holders against two returns); one holder against one return is the same rule at a
+  different count. Unverified -- no Ableton in this environment -- and the first thing to open.
+- **Not verifiable by a coding agent, and waiting on Elling:** whether either exported project
+  opens and plays. Specifically: Ableton's single-return/single-send-holder scheme, the
+  `Filter_Type` value for a highpass (0/lowpass is captured, 1/highpass is a guess), and on the
+  REAPER side that a highpass clip currently sweeps a LOW PASS ReaEQ band (the one captured
+  state is a lowpass) plus the inferred `BW` parameter carrying resonance.
+
 ## 5. Build order
 
 1. Engine: filter + zita-rev1 send + automation evaluation (+ JUCE unit tests via `--test`).
