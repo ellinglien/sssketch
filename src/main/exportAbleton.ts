@@ -10,9 +10,17 @@ import type { AppState } from '../renderer/src/state/store'
 // template text as a plain parameter instead -- vitest has no electron-vite
 // plugin loaded to understand `?asset`, only the real Electron main build does.
 import templatePath from './ableton/template.xml?asset'
+// The Auto Filter device, captured from a real Live 12.4.6 project (see
+// docs/superpowers/references/ableton12-automation-mapping.md). Read the same
+// way template.xml is, and passed into buildAlsXml as TEXT for the same
+// reason -- that function reads no files, so its tests don't need
+// electron-vite's `?asset` handling.
+import autoFilterPath from './ableton/autoFilter2.xml?asset'
 import { buildAlsXml } from './ableton/buildAlsXml'
 import { sketchAbletonDir, writeSketchMeta } from './projectLibrary'
 import { materializeStemsForExport } from './exportAudioMaterialization'
+import { renderToolkitAudio } from './exportToolkitAudio'
+import type { ToolkitExportMode } from '@shared/toolkit'
 
 /**
  * Materializes every placed stem's source audio into
@@ -37,12 +45,28 @@ import { materializeStemsForExport } from './exportAudioMaterialization'
 export async function buildAndWriteAlsProject(
   state: AppState,
   outputDir: string,
-  projectName: string
+  projectName: string,
+  /** The export dialog's bake/automation choice. Defaults to baking, which
+   * for a project that uses none of the toolkit is a no-op: nothing is
+   * rendered, nothing is skipped, and the .als is what it always was. */
+  toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
-  const { stemFileNames, stemSampleRates } = await materializeStemsForExport(state, outputDir)
+  // Before materializing: a baked clip gets no dry copy at all (it would
+  // just be an unused file), so the bake has to have happened by the time
+  // materializeStemsForExport decides what to copy.
+  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode)
+  const { stemFileNames, stemSampleRates } = await materializeStemsForExport(
+    state,
+    outputDir,
+    new Set(toolkitAudio.bakedClips.keys())
+  )
 
   const templateXml = readFileSync(templatePath, 'utf-8')
-  const alsXml = buildAlsXml(templateXml, state, outputDir, stemFileNames, stemSampleRates)
+  const alsXml = buildAlsXml(templateXml, state, outputDir, stemFileNames, stemSampleRates, {
+    mode: toolkitMode,
+    toolkitAudio,
+    autoFilterXml: readFileSync(autoFilterPath, 'utf-8')
+  })
   const gzipped = gzipSync(Buffer.from(alsXml, 'utf-8'))
   writeFileSync(join(outputDir, `${projectName}.als`), gzipped)
 }
@@ -68,11 +92,15 @@ export async function buildAndWriteAlsProject(
  * no longer going through a dialog, this is the only on-screen confirmation
  * a user gets that the export actually landed somewhere.
  */
-export async function exportAbletonToLibrary(state: AppState, libraryName: string): Promise<void> {
+export async function exportAbletonToLibrary(
+  state: AppState,
+  libraryName: string,
+  toolkitMode: ToolkitExportMode = 'bake'
+): Promise<void> {
   const abletonDir = sketchAbletonDir(libraryName)
   mkdirSync(abletonDir, { recursive: true })
   rmSync(join(abletonDir, 'Samples', 'Imported'), { recursive: true, force: true })
-  await buildAndWriteAlsProject(state, abletonDir, libraryName)
+  await buildAndWriteAlsProject(state, abletonDir, libraryName, toolkitMode)
   const alsPath = join(abletonDir, `${libraryName}.als`)
   writeSketchMeta(libraryName, { lastExportAlsMtimeMs: statSync(alsPath).mtimeMs })
   await shell.openPath(abletonDir)
@@ -98,13 +126,14 @@ export async function exportAbletonToLibrary(state: AppState, libraryName: strin
  */
 export async function exportAbletonNextToSource(
   state: AppState,
-  sourcePath: string
+  sourcePath: string,
+  toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
   const projectName = basename(sourcePath, '.sssketchproj')
   const abletonDir = join(dirname(sourcePath), 'Ableton')
   mkdirSync(abletonDir, { recursive: true })
   rmSync(join(abletonDir, 'Samples', 'Imported'), { recursive: true, force: true })
-  await buildAndWriteAlsProject(state, abletonDir, projectName)
+  await buildAndWriteAlsProject(state, abletonDir, projectName, toolkitMode)
   await shell.openPath(abletonDir)
 }
 
@@ -128,7 +157,8 @@ export async function exportAbletonNextToSource(
 export async function exportAbleton(
   win: BrowserWindow,
   state: AppState,
-  defaultName?: string
+  defaultName?: string,
+  toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'Ableton Live Set', extensions: ['als'] }],
@@ -138,7 +168,7 @@ export async function exportAbleton(
 
   const outputDir = dirname(result.filePath)
   const projectName = basename(result.filePath, '.als')
-  await buildAndWriteAlsProject(state, outputDir, projectName)
+  await buildAndWriteAlsProject(state, outputDir, projectName, toolkitMode)
   await shell.openPath(outputDir)
   return result.filePath
 }

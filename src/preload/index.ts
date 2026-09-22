@@ -3,6 +3,7 @@ import type { Rifff, Stem, BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
+import type { ToolkitExportMode } from '@shared/toolkit'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -125,8 +126,16 @@ const api = {
   // renderStemsToDir doc comment for why that crashed on large projects).
   exportStemsNative: (stateJson: string): Promise<string | null> =>
     ipcRenderer.invoke('export-stems-native', stateJson),
-  exportAls: (stateJson: string, defaultName?: string): Promise<string | null> =>
-    ipcRenderer.invoke('export-als', stateJson, defaultName),
+  // `toolkitMode` is the export dialog's bake/automation choice (see
+  // ExportFormatPicker.tsx and the toolkit spec's section 4). Optional and
+  // last on every one of these six, so a call that predates the choice still
+  // means what it always meant: bake.
+  exportAls: (
+    stateJson: string,
+    defaultName?: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<string | null> =>
+    ipcRenderer.invoke('export-als', stateJson, defaultName, toolkitMode),
   generateDefaultProjectName: (): Promise<string> =>
     ipcRenderer.invoke('generate-default-project-name'),
   saveProjectToLibrary: (name: string, json: string): Promise<{ path: string }> =>
@@ -167,16 +176,36 @@ const api = {
     ipcRenderer.invoke('restore-sketch-backup', name, backupPath),
   readSketchBackup: (name: string, backupPath: string): Promise<string | null> =>
     ipcRenderer.invoke('read-sketch-backup', name, backupPath),
-  exportAlsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
-    ipcRenderer.invoke('export-als-to-library', stateJson, libraryName),
-  exportAlsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
-    ipcRenderer.invoke('export-als-next-to-source', stateJson, sourcePath),
-  exportRpp: (stateJson: string, defaultName?: string): Promise<string | null> =>
-    ipcRenderer.invoke('export-rpp', stateJson, defaultName),
-  exportRppToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
-    ipcRenderer.invoke('export-rpp-to-library', stateJson, libraryName),
-  exportRppNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>
-    ipcRenderer.invoke('export-rpp-next-to-source', stateJson, sourcePath),
+  exportAlsToLibrary: (
+    stateJson: string,
+    libraryName: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<void> =>
+    ipcRenderer.invoke('export-als-to-library', stateJson, libraryName, toolkitMode),
+  exportAlsNextToSource: (
+    stateJson: string,
+    sourcePath: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<void> =>
+    ipcRenderer.invoke('export-als-next-to-source', stateJson, sourcePath, toolkitMode),
+  exportRpp: (
+    stateJson: string,
+    defaultName?: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<string | null> =>
+    ipcRenderer.invoke('export-rpp', stateJson, defaultName, toolkitMode),
+  exportRppToLibrary: (
+    stateJson: string,
+    libraryName: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<void> =>
+    ipcRenderer.invoke('export-rpp-to-library', stateJson, libraryName, toolkitMode),
+  exportRppNextToSource: (
+    stateJson: string,
+    sourcePath: string,
+    toolkitMode?: ToolkitExportMode
+  ): Promise<void> =>
+    ipcRenderer.invoke('export-rpp-next-to-source', stateJson, sourcePath, toolkitMode),
   exportStemsToLibrary: (stateJson: string, libraryName: string): Promise<void> =>
     ipcRenderer.invoke('export-stems-to-library', stateJson, libraryName),
   exportStemsNextToSource: (stateJson: string, sourcePath: string): Promise<void> =>

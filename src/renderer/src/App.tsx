@@ -53,6 +53,7 @@ import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
 import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
+import { projectUsesToolkit, type ToolkitExportMode } from '@shared/toolkit'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
@@ -485,6 +486,17 @@ function Timeline({
 
 type ExportFormat = 'ableton' | 'reaper' | 'stems' | 'stemTracks'
 
+/** A chosen export, including what the user said to do with the built-in
+ * toolkit. Carried as a pair (rather than two useStates) because the tidy-up
+ * nudge can defer a whole export and then run it later -- and an export that
+ * came back from that detour with its toolkit mode lost would silently bake a
+ * project the user asked to get envelopes for. `toolkitMode` is meaningless
+ * for the two stems variants, which are audio and always fully baked. */
+interface PendingExport {
+  format: ExportFormat
+  toolkitMode: ToolkitExportMode
+}
+
 function ProjectMenu({
   currentSketch,
   setCurrentSketch,
@@ -532,7 +544,7 @@ function ProjectMenu({
   const [gearMenu, setGearMenu] = useState<{ x: number; y: number } | null>(null)
   const gearButtonRef = useRef<HTMLButtonElement>(null)
   const [tidyUpNudgeOpen, setTidyUpNudgeOpen] = useState(false)
-  const [pendingExportFormat, setPendingExportFormat] = useState<ExportFormat | null>(null)
+  const [pendingExport, setPendingExport] = useState<PendingExport | null>(null)
   const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
   const [stemsFormatPickerOpen, setStemsFormatPickerOpen] = useState(false)
 
@@ -580,7 +592,10 @@ function ProjectMenu({
     }
   }
 
-  async function runExportProject(format: ExportFormat): Promise<void> {
+  async function runExportProject(
+    format: ExportFormat,
+    toolkitMode: ToolkitExportMode = 'bake'
+  ): Promise<void> {
     setExporting(true)
     try {
       if (currentSketch !== null && currentSketch.kind === 'library') {
@@ -594,9 +609,17 @@ function ProjectMenu({
           ) {
             return
           }
-          await window.rifffApi.exportAlsToLibrary(JSON.stringify(state), currentSketch.name)
+          await window.rifffApi.exportAlsToLibrary(
+            JSON.stringify(state),
+            currentSketch.name,
+            toolkitMode
+          )
         } else if (format === 'reaper') {
-          await window.rifffApi.exportRppToLibrary(JSON.stringify(state), currentSketch.name)
+          await window.rifffApi.exportRppToLibrary(
+            JSON.stringify(state),
+            currentSketch.name,
+            toolkitMode
+          )
         } else if (format === 'stemTracks') {
           await window.rifffApi.exportStemTracksToLibrary(JSON.stringify(state), currentSketch.name)
         } else {
@@ -604,9 +627,17 @@ function ProjectMenu({
         }
       } else if (currentSketch !== null && currentSketch.kind === 'external') {
         if (format === 'ableton') {
-          await window.rifffApi.exportAlsNextToSource(JSON.stringify(state), currentSketch.path)
+          await window.rifffApi.exportAlsNextToSource(
+            JSON.stringify(state),
+            currentSketch.path,
+            toolkitMode
+          )
         } else if (format === 'reaper') {
-          await window.rifffApi.exportRppNextToSource(JSON.stringify(state), currentSketch.path)
+          await window.rifffApi.exportRppNextToSource(
+            JSON.stringify(state),
+            currentSketch.path,
+            toolkitMode
+          )
         } else if (format === 'stemTracks') {
           await window.rifffApi.exportStemTracksNextToSource(
             JSON.stringify(state),
@@ -622,10 +653,10 @@ function ProjectMenu({
         // dialog-based folder picker as their fallback.
         if (format === 'ableton') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          await window.rifffApi.exportAls(JSON.stringify(state), defaultName)
+          await window.rifffApi.exportAls(JSON.stringify(state), defaultName, toolkitMode)
         } else if (format === 'reaper') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          await window.rifffApi.exportRpp(JSON.stringify(state), defaultName)
+          await window.rifffApi.exportRpp(JSON.stringify(state), defaultName, toolkitMode)
         } else if (format === 'stemTracks') {
           // exportStemTracksNative's filenames embed the project name
           // directly, unlike exportAls/exportRpp's optional save-dialog
@@ -644,13 +675,16 @@ function ProjectMenu({
     }
   }
 
-  function handleExportProject(format: ExportFormat): void {
+  function handleExportProject(
+    format: ExportFormat,
+    toolkitMode: ToolkitExportMode = 'bake'
+  ): void {
     if (Object.keys(state.busOf).length === 0) {
-      setPendingExportFormat(format)
+      setPendingExport({ format, toolkitMode })
       setTidyUpNudgeOpen(true)
       return
     }
-    void runExportProject(format)
+    void runExportProject(format, toolkitMode)
   }
 
   // Auto-arrange (and Draw Arrangement, DrawArrangeWizard.tsx) pool every
@@ -809,9 +843,10 @@ function ProjectMenu({
       )}
       {exportFormatPickerOpen && (
         <ExportFormatPicker
-          onChoose={(format) => {
+          toolkitInUse={projectUsesToolkit(state)}
+          onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
-            handleExportProject(format)
+            handleExportProject(format, toolkitMode)
           }}
           onCancel={() => setExportFormatPickerOpen(false)}
         />
@@ -833,7 +868,8 @@ function ProjectMenu({
           }}
           onExportAnyway={() => {
             setTidyUpNudgeOpen(false)
-            if (pendingExportFormat) void runExportProject(pendingExportFormat)
+            if (pendingExport)
+              void runExportProject(pendingExport.format, pendingExport.toolkitMode)
           }}
         />
       )}

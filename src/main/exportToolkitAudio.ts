@@ -5,10 +5,8 @@ import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { stemKey } from '@shared/types'
 import { isStemToolkitNeutral, type ToolkitExportMode } from '@shared/toolkit'
-import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
-import { loadCatalog } from './pluginCatalog'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { loopLengthBarsFor, riserOnlyState, soloState, withoutRisers } from './nativeExport'
 
@@ -144,8 +142,7 @@ function clipsToBake(
 export async function renderToolkitAudio(
   state: AppState,
   outputDir: string,
-  mode: ToolkitExportMode,
-  rawPluginStates: RawPluginStatesCapture | null = null
+  mode: ToolkitExportMode
 ): Promise<ToolkitAudio> {
   const baking = mode === 'bake' ? clipsToBake(state) : []
   const hasRisers = Object.keys(state.risers ?? {}).length > 0
@@ -169,14 +166,19 @@ export async function renderToolkitAudio(
     )
   }
 
-  const pluginCatalog = loadCatalog()
-  // Same "only channel chains can apply, since soloState zeroes the master"
-  // reasoning renderStemsToDir spells out -- built from the full state either
-  // way so a plugin's identity doesn't depend on which clip is isolated.
-  const pluginStates =
-    rawPluginStates !== null
-      ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
-      : {}
+  // NO plugins in a bake: not the master chain (soloState already zeroes it,
+  // for the reason its own doc comment gives) and not the channel chains
+  // either. That second one is a deliberate choice rather than an oversight.
+  // A .als/.rpp export has never carried plugin processing at all -- it
+  // references audio and leaves the effects to the other DAW -- so baking a
+  // channel's plugin into the handful of clips that happen to use the toolkit
+  // would make exactly those clips sound different from their neighbours on
+  // the same channel, and would double up the moment the user loaded that
+  // plugin on the track over there. The honest shape is: the bake carries the
+  // TOOLKIT, consistently, and plugins stay the user's to re-add. Called out
+  // in the export dialog's own note about what each mode loses.
+  const dryOfPlugins = (input: AppState): AppState => ({ ...input, channelPlugins: {} })
+  const pluginCatalog = { plugins: [] }
 
   const bakedClips = new Map<string, BakedClip>()
   let riserFileName: string | undefined
@@ -197,13 +199,8 @@ export async function renderToolkitAudio(
       // Risers are rendered separately (they belong to a channel, not to any
       // one clip), so they're taken out here -- otherwise every baked clip
       // would carry a full copy of every riser.
-      const clipState = withoutRisers(soloState(state, new Set([clip.key]), allKeys))
-      const project = await buildEngineProject(
-        clipState,
-        resolveStretchedForExport,
-        pluginCatalog,
-        pluginStates
-      )
+      const clipState = dryOfPlugins(withoutRisers(soloState(state, new Set([clip.key]), allKeys)))
+      const project = await buildEngineProject(clipState, resolveStretchedForExport, pluginCatalog)
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
         'render-export',
@@ -220,10 +217,9 @@ export async function renderToolkitAudio(
     if (hasRisers) {
       riserFileName = 'risers.wav'
       const project = await buildEngineProject(
-        riserOnlyState(state, allKeys),
+        dryOfPlugins(riserOnlyState(state, allKeys)),
         resolveStretchedForExport,
-        pluginCatalog,
-        pluginStates
+        pluginCatalog
       )
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(

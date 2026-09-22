@@ -5,7 +5,9 @@ import { dialog, shell, BrowserWindow } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { buildRppProject } from './reaper/buildRppProject'
 import { materializeStemsForExport } from './exportAudioMaterialization'
+import { renderToolkitAudio } from './exportToolkitAudio'
 import { sketchReaperDir } from './projectLibrary'
+import type { ToolkitExportMode } from '@shared/toolkit'
 
 /**
  * Materializes every placed stem's source audio into
@@ -22,10 +24,20 @@ import { sketchReaperDir } from './projectLibrary'
 export async function buildAndWriteRppProject(
   state: AppState,
   outputDir: string,
-  projectName: string
+  projectName: string,
+  /** The export dialog's bake/automation choice -- see
+   * buildAndWriteAlsProject's own note; this path mirrors it exactly. */
+  toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
-  const { stemFileNames } = await materializeStemsForExport(state, outputDir)
-  const rppText = buildRppProject(state, stemFileNames)
+  // Before materializing, same as the Ableton path: a baked clip gets no dry
+  // copy.
+  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode)
+  const { stemFileNames } = await materializeStemsForExport(
+    state,
+    outputDir,
+    new Set(toolkitAudio.bakedClips.keys())
+  )
+  const rppText = buildRppProject(state, stemFileNames, { mode: toolkitMode, toolkitAudio })
   writeFileSync(join(outputDir, `${projectName}.rpp`), rppText, 'utf-8')
 }
 
@@ -38,11 +50,15 @@ export async function buildAndWriteRppProject(
  * established workflow (mixing directly in Ableton after export); no
  * equivalent has been requested for Reaper, so this simply overwrites.
  */
-export async function exportReaperToLibrary(state: AppState, libraryName: string): Promise<void> {
+export async function exportReaperToLibrary(
+  state: AppState,
+  libraryName: string,
+  toolkitMode: ToolkitExportMode = 'bake'
+): Promise<void> {
   const reaperDir = sketchReaperDir(libraryName)
   mkdirSync(reaperDir, { recursive: true })
   rmSync(join(reaperDir, 'Samples', 'Imported'), { recursive: true, force: true })
-  await buildAndWriteRppProject(state, reaperDir, libraryName)
+  await buildAndWriteRppProject(state, reaperDir, libraryName, toolkitMode)
   await shell.openPath(reaperDir)
 }
 
@@ -52,12 +68,16 @@ export async function exportReaperToLibrary(state: AppState, libraryName: string
  * file location but isn't a library sketch -- an external .sssketchproj
  * path. Mirrors exportAbletonNextToSource exactly.
  */
-export async function exportReaperNextToSource(state: AppState, sourcePath: string): Promise<void> {
+export async function exportReaperNextToSource(
+  state: AppState,
+  sourcePath: string,
+  toolkitMode: ToolkitExportMode = 'bake'
+): Promise<void> {
   const projectName = basename(sourcePath, '.sssketchproj')
   const reaperDir = join(dirname(sourcePath), 'Reaper')
   mkdirSync(reaperDir, { recursive: true })
   rmSync(join(reaperDir, 'Samples', 'Imported'), { recursive: true, force: true })
-  await buildAndWriteRppProject(state, reaperDir, projectName)
+  await buildAndWriteRppProject(state, reaperDir, projectName, toolkitMode)
   await shell.openPath(reaperDir)
 }
 
@@ -70,7 +90,8 @@ export async function exportReaperNextToSource(state: AppState, sourcePath: stri
 export async function exportReaper(
   win: BrowserWindow,
   state: AppState,
-  defaultName?: string
+  defaultName?: string,
+  toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<string | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'Reaper Project', extensions: ['rpp'] }],
@@ -80,7 +101,7 @@ export async function exportReaper(
 
   const outputDir = dirname(result.filePath)
   const projectName = basename(result.filePath, '.rpp')
-  await buildAndWriteRppProject(state, outputDir, projectName)
+  await buildAndWriteRppProject(state, outputDir, projectName, toolkitMode)
   await shell.openPath(outputDir)
   return result.filePath
 }

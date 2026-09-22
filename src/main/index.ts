@@ -32,6 +32,7 @@ import {
 } from './projectFile'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
+import type { ToolkitExportMode } from '@shared/toolkit'
 import { exportAbleton, exportAbletonToLibrary, exportAbletonNextToSource } from './exportAbleton'
 import { exportReaper, exportReaperToLibrary, exportReaperNextToSource } from './exportReaper'
 import {
@@ -679,11 +680,14 @@ app.whenReady().then(async () => {
     return nativeExportStemsToDisk(win, state, rawPluginStates)
   })
 
-  ipcMain.handle('export-als', async (event, stateJson: string, defaultName?: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender)!
-    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return exportAbleton(win, state, defaultName)
-  })
+  ipcMain.handle(
+    'export-als',
+    async (event, stateJson: string, defaultName?: string, toolkitMode?: ToolkitExportMode) => {
+      const win = BrowserWindow.fromWebContents(event.sender)!
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportAbleton(win, state, defaultName, toolkitMode)
+    }
+  )
 
   ipcMain.handle('generate-default-project-name', () => generateDefaultProjectName())
 
@@ -735,39 +739,42 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'export-als-to-library',
-    async (_event, stateJson: string, libraryName: string) => {
+    async (_event, stateJson: string, libraryName: string, toolkitMode?: ToolkitExportMode) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportAbletonToLibrary(state, libraryName)
+      return exportAbletonToLibrary(state, libraryName, toolkitMode)
     }
   )
 
   ipcMain.handle(
     'export-als-next-to-source',
-    async (_event, stateJson: string, sourcePath: string) => {
+    async (_event, stateJson: string, sourcePath: string, toolkitMode?: ToolkitExportMode) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportAbletonNextToSource(state, sourcePath)
+      return exportAbletonNextToSource(state, sourcePath, toolkitMode)
     }
   )
 
-  ipcMain.handle('export-rpp', async (event, stateJson: string, defaultName?: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender)!
-    const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-    return exportReaper(win, state, defaultName)
-  })
+  ipcMain.handle(
+    'export-rpp',
+    async (event, stateJson: string, defaultName?: string, toolkitMode?: ToolkitExportMode) => {
+      const win = BrowserWindow.fromWebContents(event.sender)!
+      const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
+      return exportReaper(win, state, defaultName, toolkitMode)
+    }
+  )
 
   ipcMain.handle(
     'export-rpp-to-library',
-    async (_event, stateJson: string, libraryName: string) => {
+    async (_event, stateJson: string, libraryName: string, toolkitMode?: ToolkitExportMode) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportReaperToLibrary(state, libraryName)
+      return exportReaperToLibrary(state, libraryName, toolkitMode)
     }
   )
 
   ipcMain.handle(
     'export-rpp-next-to-source',
-    async (_event, stateJson: string, sourcePath: string) => {
+    async (_event, stateJson: string, sourcePath: string, toolkitMode?: ToolkitExportMode) => {
       const state = JSON.parse(stateJson) as import('../renderer/src/state/store').AppState
-      return exportReaperNextToSource(state, sourcePath)
+      return exportReaperNextToSource(state, sourcePath, toolkitMode)
     }
   )
 
