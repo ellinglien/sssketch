@@ -1229,12 +1229,16 @@ export function DiscoverPanel({
     }
   }
 
-  // Direct request, 2026-09-21 (combination slots): the add row is a
-  // select-then-add picker -- every kind click toggles it into this pending
-  // set, and a separate "+ add …" button commits the whole set as ONE new
-  // slot. Mask kinds are dropped from what gets added while the "endlesss"
-  // source is off (they can't match anything then), so a selection made
-  // before unticking it never produces a dead slot.
+  // Direct request, 2026-09-21 (combination slots), reworked 2026-09-22 as
+  // ARM-then-fire so adding never needs the cursor to move: clicking an
+  // unlit kind arms it into this pending set; clicking ANY lit kind commits
+  // the whole set as ONE new slot and clears it ("click drums, then bright,
+  // then either one again = a drums · bright slot"). The row's order never
+  // changes, so the button you just clicked is always still under the
+  // cursor. Esc disarms without adding. Mask kinds are dropped from what
+  // gets added while the "endlesss" source is off (they can't match
+  // anything then), so a selection made before unticking it never produces
+  // a dead slot.
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
   const addableKinds = soundSourceEndlesss
     ? pendingAddKinds
@@ -1245,6 +1249,24 @@ export function DiscoverPanel({
     addSlot(addableKinds)
     setPendingAddKinds([])
   }
+
+  function handleAddRowKindClick(kind: DiscoverSlotKind): void {
+    if (pendingAddKinds.includes(kind)) addPendingSlot()
+    else setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
+  }
+
+  const hasPendingAddKinds = pendingAddKinds.length > 0
+  useEffect(() => {
+    if (!hasPendingAddKinds) return
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      setPendingAddKinds([])
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [hasPendingAddKinds])
 
   // Direct request, 2026-09-20: "add + Random to the bottom list" -- an
   // eighth button alongside the 7 kind buttons, for a slot seeded from a
@@ -2487,9 +2509,7 @@ export function DiscoverPanel({
               key={kind}
               disabled={disabled}
               aria-pressed={selected}
-              onClick={() =>
-                setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
-              }
+              onClick={() => handleAddRowKindClick(kind)}
               data-tooltip={disabled ? 'needs endlesss on' : undefined}
               style={{
                 fontFamily: 'inherit',
@@ -2541,32 +2561,23 @@ export function DiscoverPanel({
           + sample
         </button>
       </div>
-      {addableKinds.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            marginTop: 6,
-            marginLeft: 152,
-            marginRight: 498
-          }}
-        >
-          <button
-            onClick={addPendingSlot}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 9,
-              padding: '4px 10px',
-              background: 'transparent',
-              border: '1px solid var(--ra-border-strong)',
-              color: 'var(--ra-text)',
-              cursor: 'pointer'
-            }}
-          >
-            + add {slotKindsLabel(addableKinds)}
-          </button>
-        </div>
-      )}
+      {/* Always rendered (fixed height) so arming never shifts anything
+          on screen -- this just says what the next click on a lit kind
+          will add. */}
+      <div
+        style={{
+          height: 14,
+          marginTop: 6,
+          marginLeft: 152,
+          marginRight: 498,
+          textAlign: 'center',
+          fontSize: 9,
+          color: 'var(--ra-text-3)'
+        }}
+      >
+        {addableKinds.length > 0 &&
+          `click a lit kind to add ${slotKindsLabel(addableKinds)} · esc to clear`}
+      </div>
     </div>
   )
 }
