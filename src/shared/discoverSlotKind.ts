@@ -60,6 +60,16 @@ export function discoverSlotKindToArrangeRole(kind: DiscoverSlotKind): ArrangeRo
 
 export type DiscoverTraitKind = 'bassHeavy' | 'rhythmic' | 'bright' | 'warm'
 
+export type DiscoverMaskKind = 'drums' | 'bass' | 'lead'
+
+/** Why a MASK kind admitted a stem (docs/superpowers/specs/2026-09-22-
+ * discover-promise-vs-delivery-design.md, Phase 2): a human Tidy Up /
+ * Discover confirmation (StemCategories), Endlesss's own instrument tag
+ * (the mask), or the overnight classifier's guess (StemAutoCategory). */
+export type DiscoverKindSource = 'confirmed' | 'tag' | 'guess'
+
+export type DiscoverKindSources = Partial<Record<DiscoverMaskKind, DiscoverKindSource>>
+
 /** Display text per kind, shared by slotKindsLabel, the add row and the
  * kind picker. Direct request, 2026-09-22: playful names ("a bit more
  * whimsy") -- display only; the kind values themselves (and so matching,

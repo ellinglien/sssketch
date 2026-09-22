@@ -3120,6 +3120,7 @@ function DiscoverSlotRow({
                 slotKinds: slot.kinds,
                 traitValues: {},
                 traitPercentiles: {},
+                kindSources: {},
                 drumSubRole: null,
                 riffBpm: result.bpm,
                 riffCreationTime: result.creationTime

@@ -13,6 +13,7 @@ function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
     slotKinds: ['drums'],
     traitValues: {},
     traitPercentiles: {},
+    kindSources: {},
     riffCreationTime: null,
     drumSubRole: null,
     riffBpm: 128,

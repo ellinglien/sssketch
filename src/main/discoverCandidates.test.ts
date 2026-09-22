@@ -1684,3 +1684,82 @@ describe('getDiscoverCandidates (kind sets)', () => {
     ).toEqual([])
   })
 })
+
+describe('getDiscoverCandidates (kindSources)', () => {
+  const DRUM = 1 << 1
+  const BASS = 1 << 3
+  const MIC = 1 << 4
+  const jamsFor = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
+    { jamCID: 'jam1', dbForJam: db }
+  ]
+
+  it("an Endlesss drum-masked stem is admitted to drums by 'tag'", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+
+    const [c] = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['drums'] })
+    expect(c.kindSources).toEqual({ drums: 'tag' })
+  })
+
+  it("a stem confirmed for drums is 'confirmed', even when its mask would also say drums", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d', 'u'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedStem(own, 'u', 'jam1')
+    seedCategory(own, 'd', { arrangeRole: 'drums' })
+    seedCategory(own, 'u', { arrangeRole: 'drums' })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jamsFor(own),
+      kinds: ['drums']
+    })
+    const byCID = new Map(candidates.map((c) => [c.stemCID, c]))
+    expect(byCID.get('d')!.kindSources).toEqual({ drums: 'confirmed' })
+    expect(byCID.get('u')!.kindSources).toEqual({ drums: 'confirmed' })
+  })
+
+  it("a mic stem admitted by the overnight classifier is 'guess'", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic', 'bare'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedStem(own, 'bare', 'jam1')
+    seedAutoCategory(own, 'mic', 'drums')
+    seedAutoCategory(own, 'bare', 'drums')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jamsFor(own),
+      kinds: ['drums']
+    })
+    expect(candidates.map((c) => c.kindSources)).toEqual([{ drums: 'guess' }, { drums: 'guess' }])
+  })
+
+  it('a combination set records the source under the kind that admitted each stem', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d', 'b'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedStem(own, 'b', 'jam1', { instrument: BASS })
+    seedCategory(own, 'b', { arrangeRole: 'bass' })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jamsFor(own),
+      kinds: ['drums', 'bass', 'bright']
+    })
+    const byCID = new Map(candidates.map((c) => [c.stemCID, c]))
+    expect(byCID.get('d')!.kindSources).toEqual({ drums: 'tag' })
+    expect(byCID.get('b')!.kindSources).toEqual({ bass: 'confirmed' })
+  })
+
+  it('trait-only candidates carry an empty kindSources', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'd', featuresJSON({ spectralCentroidHz: 400 }))
+
+    const [c] = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['bright'] })
+    expect(c.kindSources).toEqual({})
+  })
+})

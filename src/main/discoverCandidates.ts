@@ -11,6 +11,9 @@ import {
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
+  type DiscoverKindSource,
+  type DiscoverKindSources,
+  type DiscoverMaskKind,
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
@@ -73,6 +76,14 @@ export interface DiscoverCandidate {
    * rankCandidates actually use. {} when the slot has no trait kinds or
    * the stem has no values; null per kind when unknown. */
   traitPercentiles: TraitPercentiles
+  /** Per MASK kind of the slot that admitted this stem, which rule did it
+   * (docs/superpowers/specs/2026-09-22-discover-promise-vs-delivery-
+   * design.md, Phase 2 -- the slot's match meter): 'confirmed' (a human
+   * StemCategories row for the kind's role -- always wins), 'tag' (the
+   * Endlesss instrument mask), 'guess' (the overnight classifier, only for
+   * stems the mask can't place). {} for trait-only sets and every non-
+   * mask-pool constructor (random/adjacency/seeded). */
+  kindSources: DiscoverKindSources
   /** The OWNING RIFF's own creation time (Riffs.CreationTime, Unix
    * seconds) -- same "riff-level, not stem-level, since it's always
    * populated" rationale as riffBpm above. Copied onto the eventual placed
@@ -634,11 +645,19 @@ function yieldToEventLoop(): Promise<void> {
  * (the shared getInstrumentRowsForDb cache), and "is this jam one we're
  * allowed to include" is filtered in JS (allowedJamCIDs) -- O(uniqueDbs),
  * not O(jams). */
+interface MaskKindAdmission {
+  /** Stems.Instrument, null when unset. */
+  instrument: number | null
+  /** Which rule admitted the stem -- surfaced on the candidate as
+   * kindSources (the match meter), never re-derived per stem. */
+  source: DiscoverKindSource
+}
+
 async function getMaskKindStemMasks(
   ownDb: Database.Database,
   jams: JamDbPair[],
   kind: DiscoverSlotKind
-): Promise<Map<string, number | null>> {
+): Promise<Map<string, MaskKindAdmission>> {
   const arrangeRole = discoverSlotKindToArrangeRole(kind)
   const confirmedRoleByStemCID = new Map(
     (
@@ -656,7 +675,7 @@ async function getMaskKindStemMasks(
     else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
   }
 
-  const maskByStemCID = new Map<string, number | null>()
+  const maskByStemCID = new Map<string, MaskKindAdmission>()
   let sinceYield = 0
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const rows = await getInstrumentRowsForDb(db)
@@ -666,7 +685,9 @@ async function getMaskKindStemMasks(
         if (confirmedRole !== undefined) {
           // Confirmed for this role: record its mask for the caller's
           // sound-source filter. Confirmed for another role: excluded.
-          if (confirmedRole === arrangeRole) maskByStemCID.set(row.StemCID, row.Instrument)
+          if (confirmedRole === arrangeRole) {
+            maskByStemCID.set(row.StemCID, { instrument: row.Instrument, source: 'confirmed' })
+          }
         } else {
           const soundType =
             row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
@@ -676,7 +697,12 @@ async function getMaskKindStemMasks(
               (soundType === 'bass' && kind === 'bass') ||
               (soundType === 'notes' && kind === 'lead')
             : autoForRole.has(row.StemCID)
-          if (admitted) maskByStemCID.set(row.StemCID, row.Instrument)
+          if (admitted) {
+            maskByStemCID.set(row.StemCID, {
+              instrument: row.Instrument,
+              source: maskPlaced ? 'tag' : 'guess'
+            })
+          }
         }
       }
       sinceYield += 1
@@ -742,7 +768,7 @@ export async function getDiscoverCandidates({
 
   // Nothing can pass the sound-source filter -- skip the walk entirely.
   if (!soundSource.endlesss && !soundSource.audioIn) return []
-  const seen = new Set<string>()
+  const indexByStemCID = new Map<string, number>()
   const pool: DiscoverCandidate[] = []
   for (const kind of maskKinds) {
     const perKind = await getMaskDiscoverCandidates({
@@ -754,8 +780,18 @@ export async function getDiscoverCandidates({
       soundSource
     })
     for (const candidate of perKind) {
-      if (seen.has(candidate.stemCID)) continue
-      seen.add(candidate.stemCID)
+      const existing = indexByStemCID.get(candidate.stemCID)
+      if (existing !== undefined) {
+        // Admitted by more than one mask kind of the set: keep the first
+        // candidate, record every kind's own source for the meter.
+        const kept = pool[existing]
+        pool[existing] = {
+          ...kept,
+          kindSources: { ...kept.kindSources, ...candidate.kindSources }
+        }
+        continue
+      }
+      indexByStemCID.set(candidate.stemCID, pool.length)
       pool.push({ ...candidate, slotKinds: normalized })
     }
   }
@@ -915,15 +951,20 @@ async function getMaskDiscoverCandidates({
     .all(arrangeRole) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
+  // Every stem in categoryByStemCID at this point is human-confirmed.
+  const sourceByStemCID = new Map<string, DiscoverKindSource>(
+    confirmedRows.map((row) => [row.StemCID, 'confirmed'])
+  )
 
   // Live mask match plus, for stems the mask can't place, the overnight
   // classifier's guess -- see getMaskKindStemMasks's own doc comment.
   const maskByStemCID = await getMaskKindStemMasks(ownDb, jams, kind)
-  for (const stemCID of maskByStemCID.keys()) {
+  for (const [stemCID, admission] of maskByStemCID) {
     // getMaskKindStemMasks only admits stems NOT confirmed for any role
     // (plus records masks for ones confirmed for THIS role, already
     // present), so this never overwrites a real human confirmation.
     if (categoryByStemCID.has(stemCID)) continue
+    sourceByStemCID.set(stemCID, admission.source)
     categoryByStemCID.set(stemCID, {
       StemCID: stemCID,
       ArrangeRole: arrangeRole,
@@ -935,7 +976,7 @@ async function getMaskDiscoverCandidates({
   // BEFORE sampling so the bounded sample isn't wasted on stems that would
   // be filtered out anyway.
   const eligibleStemCIDs = [...categoryByStemCID.keys()].filter((stemCID) =>
-    soundSourceMatchesFilter(maskByStemCID.get(stemCID), soundSource)
+    soundSourceMatchesFilter(maskByStemCID.get(stemCID)?.instrument, soundSource)
   )
   if (eligibleStemCIDs.length === 0) return []
 
@@ -1042,6 +1083,7 @@ async function getMaskDiscoverCandidates({
           riffBpm: riffInfo.bpmRnd,
           traitValues: {},
           traitPercentiles: {},
+          kindSources: { [kind as DiscoverMaskKind]: sourceByStemCID.get(stemCID) ?? 'confirmed' },
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1266,6 +1308,7 @@ async function getTraitPoolCandidates({
           riffBpm: riffInfo.bpmRnd,
           traitValues: entry.traitValues,
           traitPercentiles: {},
+          kindSources: {},
           riffCreationTime: riffInfo.creationTime
         })
       }
@@ -1429,6 +1472,7 @@ export async function getRandomLibraryCandidate({
       slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
       traitPercentiles: {},
+      kindSources: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime
@@ -1526,6 +1570,7 @@ async function getRandomOwnStemCandidate(
       slotKinds: normalizeSlotKinds(kinds),
       traitValues: {},
       traitPercentiles: {},
+      kindSources: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
       riffCreationTime: riffRow.CreationTime

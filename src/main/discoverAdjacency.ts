@@ -207,6 +207,7 @@ export async function getAdjacentDiscoverCandidates(
         // Adjacency stays on pool-relative trait ranking for now (the
         // library-percentile bar is the main roll path only, Phase 1).
         traitPercentiles: {},
+        kindSources: {},
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --

@@ -33,6 +33,7 @@ function fixtureCandidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverC
     riffBpm: 120,
     traitValues: {},
     traitPercentiles: {},
+    kindSources: {},
     riffCreationTime: null,
     ...overrides
   }

@@ -1368,6 +1368,7 @@ export function LibraryBrowser({
         riffBpm: resolvedRiff.bpm,
         traitValues: {},
         traitPercentiles: {},
+        kindSources: {},
         riffCreationTime: resolvedRiff.creationTime ?? null
       }))
       // Same "push a snapshot before mutating" convention every other
