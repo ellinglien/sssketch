@@ -93,6 +93,16 @@ namespace sssketch
 
     void ReverbBus::setSettings(const ReverbSettings& s)
     {
+        // Compared rather than blindly assigned: the render path pushes the
+        // project's settings every single block, and each of zita's setters
+        // bumps a change counter that makes its next prepare() re-solve all
+        // eight Filt1 gain sets. Doing that once per block instead of once
+        // per actual change would be real, pointless work on the audio
+        // thread.
+        if (s.roomSize == settings.roomSize
+            && s.damping == settings.damping
+            && s.preDelayMs == settings.preDelayMs)
+            return;
         settings = s;
         settingsDirty = true;
     }

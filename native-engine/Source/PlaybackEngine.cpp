@@ -18,6 +18,32 @@ namespace sssketch
         // comment), so this free function is what both instead call against
         // whichever project.bpm they've each already loaded.
         double secPerBarFor(double bpm) { return bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
+
+        /** Whether a channel's toolkit entry does nothing at all -- the test
+         * that decides, once per setProject() rather than per block, whether
+         * renderBlock can skip this channel's toolkit stage entirely.
+         *
+         * "Nothing at all" means all four of: a filter parked at its mode's
+         * own neutral end with nothing automating it (channelFilterIsNeutral
+         * owns that rule), no reverb send and nothing automating one, unity
+         * volume with nothing automating it. Any single one of those failing
+         * makes the whole channel non-neutral -- the stage is one pass over
+         * the channel's buffer, so splitting it finer would buy nothing. */
+        bool toolkitIsNeutral(const EngineProject::EngineChannelToolkit& toolkit)
+        {
+            const auto& automation = toolkit.automation;
+            if (!channelFilterIsNeutral(
+                    toolkit.filterMode,
+                    toolkit.filterCutoff,
+                    !automation.filterCutoff.empty(),
+                    !automation.filterResonance.empty()))
+                return false;
+            if (toolkit.reverbSend > 0.0 || !automation.reverbSend.empty())
+                return false;
+            if (toolkit.volume != 1.0 || !automation.volume.empty())
+                return false;
+            return true;
+        }
     }
 
     PlaybackEngine::PlaybackEngine(StemBufferCache& cache)
@@ -66,6 +92,25 @@ namespace sssketch
         next->scratchChannelIds.reserve(next->channelGroups.size());
         for (const auto& [channelId, rifffPtrs] : next->channelGroups)
             next->scratchChannelIds.push_back(channelId);
+
+        // Resolve each channel's toolkit entry (and whether it does anything)
+        // once, here, off the real-time thread -- see the channelToolkits
+        // member's own doc comment. Pointers go into THIS snapshot's own
+        // project.channelToolkits, so they live exactly as long as it does.
+        next->channelToolkits.assign(next->scratchChannelIds.size(), nullptr);
+        for (const auto& toolkit : next->project.channelToolkits)
+        {
+            if (toolkitIsNeutral(toolkit))
+                continue;
+            for (size_t i = 0; i < next->scratchChannelIds.size(); ++i)
+            {
+                if (next->scratchChannelIds[i] != toolkit.channelId)
+                    continue;
+                next->channelToolkits[i] = &toolkit;
+                next->anyToolkitActive = true;
+                break;
+            }
+        }
 
         // Publishes the new snapshot and releases this function's own
         // reference to the old one in a single atomic operation. Whatever
@@ -471,19 +516,155 @@ namespace sssketch
             }
         }
 
-        // Run each channel's own chain, then add its (now processed) result
-        // into the real output -- a channel with no chain published is a
-        // pure passthrough.
+        // The built-in toolkit's shared reverb bus (ReverbBus.h). Bracketed
+        // around the channel-sum loop below so every channel's send lands in
+        // the same accumulator before the one reverb pass runs. Skipped
+        // entirely -- not even a beginBlock() buffer clear -- when no channel
+        // has a non-neutral toolkit AND no tail is still ringing from one
+        // that did. That second half matters: a user dragging a send back to
+        // zero (or deleting the only clip on the only sending channel) must
+        // still hear the tail out rather than have it cut on the next block.
+        const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging();
+        if (runReverbBus)
+        {
+            reverbBus.prepare(sampleRate, numSamples);
+            reverbBus.setSettings(snap->project.reverb);
+            reverbBus.beginBlock(numSamples);
+        }
+
+        // Run each channel's own chain, then its toolkit stage, then add the
+        // (now fully processed) result into the real output -- a channel with
+        // no chain published is a pure passthrough, and one with no
+        // non-neutral toolkit skips that stage entirely, so this stays
+        // byte-identical to the pre-toolkit direct sum for an ordinary
+        // project.
         for (size_t i = 0; i < channelIds.size(); ++i)
         {
             auto* chain = channelChains.chainFor(channelIds[i]);
             if (chain != nullptr)
                 chain->process(numSamples, channelL[i].data(), channelR[i].data());
+
+            // Toolkit runs AFTER the channel's plugin chain: the built-in
+            // filter is a channel-strip tool, so it belongs where a hardware
+            // strip's own filter would be -- downstream of whatever inserts
+            // the user has put on the channel, not ahead of them.
+            if (snap->channelToolkits[i] != nullptr)
+                applyChannelToolkit(
+                    *snap->channelToolkits[i],
+                    channelIds[i],
+                    positionBars,
+                    spb,
+                    sampleRate,
+                    numSamples,
+                    channelL[i].data(),
+                    channelR[i].data());
+
             for (int i2 = 0; i2 < numSamples; ++i2)
             {
                 outL[i2] += channelL[i][i2];
                 outR[i2] += channelR[i][i2];
             }
         }
+
+        // Adds the wet reverb on top of the summed dry mix. A no-op leaving
+        // outL/outR bit-identical if nothing was actually sent this block.
+        if (runReverbBus)
+            reverbBus.endBlock(numSamples, outL, outR);
+    }
+
+    void PlaybackEngine::applyChannelToolkit(
+        const EngineProject::EngineChannelToolkit& toolkit,
+        const juce::String& channelId,
+        double positionBars,
+        double secPerBar,
+        double sampleRate,
+        int numSamples,
+        float* chL,
+        float* chR) const
+    {
+        // Every parameter is evaluated once per block, at the bar this block
+        // ENDS on (barAtSample with the block's own length), and the
+        // smoothers travel toward it across the block. Aiming at the end
+        // rather than the start is what removes a systematic one-block lag:
+        // the smoother spends the block heading where the curve is going,
+        // not where it has already been. Evaluating once per block rather
+        // than per sample is what makes this affordable; the smoothing
+        // (ParamSmoother, ~15ms) is what makes it inaudible that we did --
+        // a block is ~12ms at 512/44.1k, so the ramp and the block rate are
+        // the same order and the parameter never steps.
+        //
+        // This is also the ONLY place automation is evaluated, and
+        // renderBlock is the one function both live playback (Transport.cpp)
+        // and offline export (RenderExport.cpp) call -- which is exactly how
+        // the design doc's "offline render applies the toolkit identically to
+        // live playback" requirement is met: not by two paths kept in sync,
+        // but by there being one path.
+        const double targetBar = barAtSample(positionBars, numSamples, sampleRate, secPerBar);
+        const auto evaluate = [&](const std::vector<AutomationPoint>& curve, double staticValue) {
+            return (float) evaluateAutomation(curve, targetBar, staticValue);
+        };
+        const float cutoffTarget = evaluate(toolkit.automation.filterCutoff, toolkit.filterCutoff);
+        const float resonanceTarget = evaluate(toolkit.automation.filterResonance, toolkit.filterResonance);
+        const float sendTarget = evaluate(toolkit.automation.reverbSend, toolkit.reverbSend);
+        const float volumeTarget = evaluate(toolkit.automation.volume, toolkit.volume);
+
+        auto& entry = channelDsp[channelId];
+        if (entry == nullptr)
+            entry = std::make_unique<ChannelDspState>();
+        auto& dsp = *entry;
+
+        dsp.filter.prepare(sampleRate, numSamples);
+        if (!dsp.seeded)
+        {
+            // First block for this channel: jump to the evaluated values
+            // rather than ramping up from a default, so a channel doesn't
+            // audibly fade in or sweep open the first time it's heard. This
+            // is also what makes an offline export bit-comparable to live
+            // playback from the same start point -- RenderExport builds a
+            // fresh PlaybackEngine, so it takes this same first-block branch
+            // at bar 0 exactly as a fresh live session does.
+            // Seeded from the block's START bar, not the end bar the ongoing
+            // targets use: this is "where the curve is right now", the value
+            // the very first sample should already be at.
+            const auto seed = [&](const std::vector<AutomationPoint>& curve, double staticValue) {
+                return (float) evaluateAutomation(curve, positionBars, staticValue);
+            };
+            dsp.filter.resetTo(
+                toolkit.filterMode,
+                seed(toolkit.automation.filterCutoff, toolkit.filterCutoff),
+                seed(toolkit.automation.filterResonance, toolkit.filterResonance));
+            dsp.sendSmoother.reset(
+                sampleRate, kAutomationSmoothingSec, seed(toolkit.automation.reverbSend, toolkit.reverbSend));
+            dsp.volumeSmoother.reset(
+                sampleRate, kAutomationSmoothingSec, seed(toolkit.automation.volume, toolkit.volume));
+            dsp.seeded = true;
+        }
+
+        dsp.filter.setTargets(toolkit.filterMode, cutoffTarget, resonanceTarget);
+        dsp.sendSmoother.setTarget(sendTarget);
+        dsp.volumeSmoother.setTarget(volumeTarget);
+
+        dsp.filter.process(numSamples, chL, chR);
+
+        // Volume before the send tap: a post-fader send, so turning a channel
+        // down turns its reverb down with it (the behaviour every mixer has,
+        // and the one that makes a volume automation dip actually sound like
+        // the channel receding rather than like its reverb suddenly
+        // dominating).
+        if (!(dsp.volumeSmoother.current() == 1.0f && dsp.volumeSmoother.isSettled()))
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float g = dsp.volumeSmoother.next();
+                chL[i] *= g;
+                chR[i] *= g;
+            }
+        }
+        else
+        {
+            dsp.volumeSmoother.advance(numSamples);
+        }
+
+        reverbBus.addSend(numSamples, chL, chR, dsp.sendSmoother);
     }
 }

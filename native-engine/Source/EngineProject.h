@@ -1,5 +1,8 @@
 #pragma once
+#include "AutomationCurve.h"
+#include "ChannelFilter.h"
 #include "PluginChain.h"
+#include "ReverbBus.h"
 #include <juce_core/juce_core.h>
 #include <array>
 #include <vector>
@@ -103,6 +106,70 @@ namespace sssketch
             std::array<MasterChainSlot, kNumChannelChainSlots> slots {};
         };
         std::vector<EngineChannelChain> channelChains;
+
+        /** The built-in sound toolkit's per-channel settings: a filter, a
+         * reverb send, a channel volume, and a drawn automation curve for
+         * any of them. Wire-format twin of ChannelFilterSettings +
+         * ChannelAutomation in src/shared/toolkit.ts -- a hand-synced pair,
+         * like everything else in this file (CLAUDE.md). See
+         * docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+         *
+         * A channelId ABSENT from EngineProject::channelToolkits behaves
+         * exactly like one present with these defaults, which are in turn
+         * exactly neutral: filter parked at its mode's open end, no send, no
+         * gain change, no curves. That's what makes an old project (which
+         * has no such field at all) load and sound bit-identical to before
+         * this feature existed -- the neutral path in PlaybackEngine skips
+         * every bit of this. */
+        struct EngineChannelAutomation
+        {
+            // Empty = "this parameter isn't automated", which is different
+            // from "automated, but currently sitting at its default": the
+            // former uses the channel's own static value below, the latter
+            // the curve. Points are sorted ascending by bar and clamped into
+            // [0,1] at parse time, so evaluateAutomation's own precondition
+            // holds by construction for anything that came off the wire.
+            std::vector<AutomationPoint> filterCutoff;
+            std::vector<AutomationPoint> filterResonance;
+            std::vector<AutomationPoint> reverbSend;
+            std::vector<AutomationPoint> volume;
+
+            bool isEmpty() const
+            {
+                return filterCutoff.empty() && filterResonance.empty()
+                    && reverbSend.empty() && volume.empty();
+            }
+        };
+
+        struct EngineChannelToolkit
+        {
+            juce::String channelId;
+            FilterMode filterMode = FilterMode::lowpass;
+            // Normalised [0,1]; the engine owns the map to Hz/Q (see
+            // ChannelFilter.h). Defaults are each mode's own neutral end --
+            // note that flipping filterMode to highpass without also moving
+            // filterCutoff leaves a NON-neutral filter (1.0 on a highpass is
+            // 20kHz, i.e. everything gone), which is correct: choosing a
+            // highpass and leaving the cutoff at the top is a real, audible
+            // choice, not an accident the engine should second-guess.
+            double filterCutoff = 1.0;
+            double filterResonance = 0.0;
+            /** How much of this channel goes to the shared reverb, post-filter
+             * and post-volume (a post-fader send: turning the channel down
+             * turns its reverb down with it). 0 = none. */
+            double reverbSend = 0.0;
+            /** A channel-level gain on top of each stem's own volume -- the
+             * fourth automatable parameter in the toolkit's set. 1.0 = unity. */
+            double volume = 1.0;
+            EngineChannelAutomation automation;
+        };
+
+        std::vector<EngineChannelToolkit> channelToolkits;
+
+        /** The one shared reverb's own settings -- project-level, not per
+         * channel (see ReverbBus.h). Defaults are ReverbSettings's own; they
+         * only ever matter once some channel actually sends to it. */
+        ReverbSettings reverb;
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.

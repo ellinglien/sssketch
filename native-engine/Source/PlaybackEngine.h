@@ -44,10 +44,19 @@ namespace sssketch
          * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md)
          * -- a channel with no chain currently published (chainFor returns
          * nullptr) is a pure passthrough, identical to the pre-this-feature
-         * direct-sum behaviour. Otherwise pure/deterministic given the same
-         * channelChains state: no hidden state carried between calls on
-         * PlaybackEngine's own side — safe to call repeatedly out of order
-         * (as the parity test does) or from a real-time callback. */
+         * direct-sum behaviour.
+         *
+         * Pure/deterministic for a project that uses no built-in toolkit
+         * (no channel filter, no reverb send, no automation): nothing is
+         * carried between calls on PlaybackEngine's own side, so it stays
+         * safe to call repeatedly out of order (as the parity test does).
+         * A project that DOES use the toolkit necessarily carries state
+         * between calls — a filter has memory and a reverb has a tail; you
+         * cannot have either without it — held in channelDsp/reverbBus
+         * below. Those are only ever touched from the single rendering
+         * thread (see their own doc comment), and a neutral project never
+         * touches them at all, which is what keeps the out-of-order
+         * guarantee true exactly where it was true before. */
         void renderBlock(
             double positionBars,
             double sampleRate,
@@ -136,7 +145,76 @@ namespace sssketch
             // space, for as long as it stays published.
             mutable std::vector<std::vector<float>> scratchChannelL, scratchChannelR;
             mutable std::vector<juce::String> scratchChannelIds;
+
+            // Parallel to scratchChannelIds: this channel's own toolkit
+            // settings, or nullptr when the channel is neutral (no filter
+            // off its mode's open end, no send, unity volume, no curves).
+            // Resolved HERE, in setProject, rather than per block in
+            // renderBlock: the neutrality test and the channelId lookup are
+            // both pure functions of the project, so doing them once per
+            // project change instead of once per channel per block keeps
+            // renderBlock's toolkit cost at a single pointer check for the
+            // overwhelmingly common all-neutral case. Points into THIS
+            // snapshot's own project.channelToolkits, same lifetime rule as
+            // channelGroups above.
+            std::vector<const EngineProject::EngineChannelToolkit*> channelToolkits;
+
+            // True if any entry above is non-null -- lets renderBlock skip
+            // the whole reverb-bus begin/end bracket with one bool test.
+            bool anyToolkitActive = false;
         };
+
+        /** Per-channel toolkit DSP state: a filter has memory, a send has a
+         * smoothed level. Deliberately NOT part of ProjectSnapshot, unlike
+         * every other per-channel derived structure here: setProject()
+         * republishes a whole new snapshot on every live volume-drag frame,
+         * and rebuilding filter state at that rate would click on every
+         * mouse move. Keyed by channelId so it survives republishing,
+         * rechannelling and reordering.
+         *
+         * Only ever created, read or written by the single rendering thread
+         * (the live audio callback, or RenderExport's own offline instance
+         * -- never both, see renderBlock's doc comment), which is the same
+         * invariant the scratch buffers rely on; setProject() never touches
+         * this map, so there is nothing for it to race with.
+         *
+         * Entries are created lazily, on the first block a given channel
+         * actually needs one -- so a project with no toolkit usage never
+         * allocates a single one of these. That first creation does allocate
+         * on the audio thread; accepted for the same reason the scratch
+         * buffers' own first-use resize() is, and it is genuinely one-off
+         * per channel rather than per block. Stale entries for channels that
+         * no longer exist are left in place rather than pruned: pruning
+         * would mean erasing from this map, and the only thread allowed to
+         * do that is the one we least want doing bookkeeping. Channel counts
+         * here are tens, not thousands. */
+        struct ChannelDspState
+        {
+            ChannelFilter filter;
+            ParamSmoother sendSmoother;
+            ParamSmoother volumeSmoother;
+            // False until the first block that renders this channel, which
+            // JUMPS the smoothers to their evaluated values instead of
+            // ramping up from zero -- otherwise every channel would fade in
+            // over the smoothing time the first time it was heard.
+            bool seeded = false;
+        };
+
+        /** One channel's toolkit stage, applied IN PLACE to its already-summed
+         * (and already-plugin-chained) scratch buffer: evaluate the four
+         * automatable parameters at this block's start bar, filter, apply the
+         * channel volume, then tap a post-fader send into the shared reverb
+         * bus. Only ever called for a channel whose toolkit is non-neutral.
+         * `const` for the same reason renderBlock is -- see channelDsp. */
+        void applyChannelToolkit(
+            const EngineProject::EngineChannelToolkit& toolkit,
+            const juce::String& channelId,
+            double positionBars,
+            double secPerBar,
+            double sampleRate,
+            int numSamples,
+            float* chL,
+            float* chR) const;
 
         StemBufferCache& bufferCache;
 
@@ -192,6 +270,14 @@ namespace sssketch
         std::shared_ptr<const ProjectSnapshot> published;
 
         bool metronomeEnabled = false;
+
+        // See ChannelDspState's own doc comment for the threading and
+        // lifetime rules these two live under. `mutable` for the same
+        // "logically const, physically stateful" reason the scratch buffers
+        // are: renderBlock() reads the engine through a const pointer but
+        // real DSP cannot be stateless.
+        mutable std::map<juce::String, std::unique_ptr<ChannelDspState>> channelDsp;
+        mutable ReverbBus reverbBus;
 
         LiveParamOverrides liveParamOverrides;
     };

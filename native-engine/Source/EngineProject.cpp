@@ -1,4 +1,6 @@
 #include "EngineProject.h"
+#include <algorithm>
+#include <cmath>
 
 namespace sssketch
 {
@@ -22,6 +24,56 @@ namespace sssketch
     static bool isNullish(const juce::var& v)
     {
         return v.isVoid() || v.isUndefined();
+    }
+
+    /** Reads one drawn automation curve off the wire into the shape
+     * evaluateAutomation() requires: sorted ascending by bar, values clamped
+     * into [0,1], non-finite entries dropped entirely.
+     *
+     * All three of those are done HERE, once, at parse time, rather than
+     * defensively on every block in the audio callback -- this is the only
+     * place curve data crosses from untrusted JSON into the engine, so it's
+     * the only place that has to care. std::stable_sort so two points sharing
+     * a bar keep the order the renderer drew them in, which is what makes a
+     * vertical step read as "jump to the later value" (see
+     * evaluateAutomation's own segment-selection comment). A missing or
+     * non-array value leaves the curve empty, i.e. "not automated" -- the
+     * same lenient-parse convention the rest of this file uses. */
+    static std::vector<AutomationPoint> parseAutomationCurve(const juce::var& container, const char* key)
+    {
+        std::vector<AutomationPoint> points;
+        auto curveVar = container.getProperty(key, juce::var());
+        auto* array = curveVar.getArray();
+        if (array == nullptr)
+            return points;
+        points.reserve((size_t) array->size());
+        for (auto& pointVar : *array)
+        {
+            if (pointVar.getDynamicObject() == nullptr)
+                continue;
+            AutomationPoint point;
+            point.bar = getDouble(pointVar, "bar", 0.0);
+            point.value = getDouble(pointVar, "value", 0.0);
+            if (!std::isfinite(point.bar) || !std::isfinite(point.value))
+                continue;
+            point.value = std::clamp(point.value, 0.0, 1.0);
+            points.push_back(point);
+        }
+        std::stable_sort(points.begin(), points.end(),
+            [](const AutomationPoint& a, const AutomationPoint& b) { return a.bar < b.bar; });
+        return points;
+    }
+
+    /** Clamps a normalised wire value into [0,1], falling back for a missing
+     * or non-finite one. Every toolkit control is normalised (see
+     * EngineProject::EngineChannelToolkit), so this is the single place that
+     * rule is enforced on the way in. */
+    static double getNormalised(const juce::var& v, const char* key, double fallback)
+    {
+        const double raw = getDouble(v, key, fallback);
+        if (!std::isfinite(raw))
+            return fallback;
+        return std::clamp(raw, 0.0, 1.0);
     }
 
     bool parseEngineProject(const juce::String& json, EngineProject& projectOut, juce::String& errorOut)
@@ -83,6 +135,59 @@ namespace sssketch
         // else: leave channelChains empty (missing/absent is not a parse
         // error, matching this function's existing lenient-parse
         // convention).
+
+        // The built-in sound toolkit. Both of these are absent from every
+        // project saved before the feature existed, and absent means exactly
+        // neutral (see EngineProject::EngineChannelToolkit's doc comment), so
+        // an old project parses to a project the render path skips entirely
+        // -- bit-identical to its pre-toolkit self. Same lenient-parse
+        // convention as masterChain/channelChains above: a missing or
+        // wrong-typed value is a default, not an error.
+        auto reverbVar = parsed.getProperty("reverb", juce::var());
+        if (reverbVar.getDynamicObject() != nullptr)
+        {
+            project.reverb.roomSize = getNormalised(reverbVar, "roomSize", project.reverb.roomSize);
+            project.reverb.damping = getNormalised(reverbVar, "damping", project.reverb.damping);
+            // NOT normalised -- pre-delay is in real milliseconds (see
+            // ReverbSettings). ReverbBus clamps it into the window zita can
+            // actually address, so no range check is needed here.
+            const double preDelay = getDouble(reverbVar, "preDelayMs", project.reverb.preDelayMs);
+            if (std::isfinite(preDelay))
+                project.reverb.preDelayMs = preDelay;
+        }
+
+        auto toolkitsVar = parsed.getProperty("channelToolkits", juce::var());
+        if (auto* toolkitsArray = toolkitsVar.getArray())
+        {
+            for (auto& entryVar : *toolkitsArray)
+            {
+                if (entryVar.getDynamicObject() == nullptr)
+                    continue;
+                EngineProject::EngineChannelToolkit toolkit;
+                toolkit.channelId = entryVar.getProperty("channelId", "").toString();
+                toolkit.filterMode = entryVar.getProperty("filterMode", "lowpass").toString() == "highpass"
+                    ? FilterMode::highpass
+                    : FilterMode::lowpass;
+                // Note the default: each mode's own neutral end, so a payload
+                // that names a mode but omits the cutoff stays neutral rather
+                // than silently landing on a lowpass's 20Hz.
+                toolkit.filterCutoff = getNormalised(
+                    entryVar, "filterCutoff", neutralCutoffValue(toolkit.filterMode));
+                toolkit.filterResonance = getNormalised(entryVar, "filterResonance", 0.0);
+                toolkit.reverbSend = getNormalised(entryVar, "reverbSend", 0.0);
+                toolkit.volume = getNormalised(entryVar, "volume", 1.0);
+
+                auto automationVar = entryVar.getProperty("automation", juce::var());
+                if (automationVar.getDynamicObject() != nullptr)
+                {
+                    toolkit.automation.filterCutoff = parseAutomationCurve(automationVar, "filterCutoff");
+                    toolkit.automation.filterResonance = parseAutomationCurve(automationVar, "filterResonance");
+                    toolkit.automation.reverbSend = parseAutomationCurve(automationVar, "reverbSend");
+                    toolkit.automation.volume = parseAutomationCurve(automationVar, "volume");
+                }
+                project.channelToolkits.push_back(std::move(toolkit));
+            }
+        }
 
         auto rifffsVar = parsed.getProperty("rifffs", juce::var());
         if (auto* rifffsArray = rifffsVar.getArray())

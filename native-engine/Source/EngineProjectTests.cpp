@@ -327,6 +327,151 @@ namespace sssketch
                 expect(ok);
                 expect(project.rifffs[0].stems[0].muteRegions.empty());
             }
+
+            // ---- built-in sound toolkit wire format ----
+            // See docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+
+            beginTest("a project with no toolkit fields parses to exactly neutral defaults");
+            {
+                // This is what EVERY project saved before the toolkit existed
+                // looks like on the wire. It must parse without complaint and
+                // land on values PlaybackEngine's own neutrality test skips.
+                EngineProject project;
+                juce::String error;
+                bool ok = parseEngineProject(
+                    R"({"bpm":120.0,"rifffs":[{"groupId":"g1","stems":[{"stemKey":"g1:0"}]}]})",
+                    project, error);
+                expect(ok, error);
+                expect(project.channelToolkits.empty());
+                expectEquals(project.reverb.roomSize, 0.5);
+                expectEquals(project.reverb.damping, 0.5);
+                expectEquals(project.reverb.preDelayMs, 20.0);
+            }
+
+            beginTest("parses per-channel filter, send, volume and automation curves");
+            {
+                const juce::String json = R"(
+                {
+                  "bpm": 120.0,
+                  "reverb": { "roomSize": 0.8, "damping": 0.2, "preDelayMs": 45.0 },
+                  "channelToolkits": [
+                    {
+                      "channelId": "ch-1",
+                      "filterMode": "highpass",
+                      "filterCutoff": 0.4,
+                      "filterResonance": 0.6,
+                      "reverbSend": 0.35,
+                      "volume": 0.9,
+                      "automation": {
+                        "filterCutoff": [
+                          { "bar": 0.0, "value": 0.1 },
+                          { "bar": 8.0, "value": 0.9 }
+                        ],
+                        "reverbSend": [ { "bar": 4.0, "value": 1.0 } ]
+                      }
+                    }
+                  ],
+                  "rifffs": []
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error), error);
+
+                expectEquals((int) project.channelToolkits.size(), 1);
+                const auto& toolkit = project.channelToolkits[0];
+                expect(toolkit.channelId == "ch-1");
+                expect(toolkit.filterMode == FilterMode::highpass);
+                expectEquals(toolkit.filterCutoff, 0.4);
+                expectEquals(toolkit.filterResonance, 0.6);
+                expectEquals(toolkit.reverbSend, 0.35);
+                expectEquals(toolkit.volume, 0.9);
+
+                expectEquals((int) toolkit.automation.filterCutoff.size(), 2);
+                expectEquals(toolkit.automation.filterCutoff[0].bar, 0.0);
+                expectEquals(toolkit.automation.filterCutoff[1].value, 0.9);
+                expectEquals((int) toolkit.automation.reverbSend.size(), 1);
+                // Curves not mentioned in the payload stay empty, i.e. "not
+                // automated" -- distinct from "automated but flat".
+                expect(toolkit.automation.filterResonance.empty());
+                expect(toolkit.automation.volume.empty());
+
+                expectEquals(project.reverb.roomSize, 0.8);
+                expectEquals(project.reverb.damping, 0.2);
+                expectEquals(project.reverb.preDelayMs, 45.0);
+            }
+
+            beginTest("a toolkit entry naming a mode but no cutoff stays neutral for THAT mode");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"channelToolkits":[{"channelId":"ch-1","filterMode":"highpass"}],"rifffs":[]})",
+                    project, error), error);
+                expectEquals(project.channelToolkits[0].filterCutoff, neutralCutoffValue(FilterMode::highpass));
+
+                EngineProject lowpassProject;
+                expect(parseEngineProject(
+                    R"({"channelToolkits":[{"channelId":"ch-2"}],"rifffs":[]})",
+                    lowpassProject, error), error);
+                expect(lowpassProject.channelToolkits[0].filterMode == FilterMode::lowpass);
+                expectEquals(lowpassProject.channelToolkits[0].filterCutoff, neutralCutoffValue(FilterMode::lowpass));
+            }
+
+            beginTest("automation points are sorted, clamped and cleaned at parse time");
+            {
+                // evaluateAutomation assumes sorted, in-range points; this is
+                // the one boundary where untrusted data gets in, so it is the
+                // one place that has to enforce it.
+                const juce::String json = R"(
+                {
+                  "channelToolkits": [
+                    {
+                      "channelId": "ch-1",
+                      "automation": {
+                        "volume": [
+                          { "bar": 8.0, "value": 3.0 },
+                          { "bar": 2.0, "value": -1.0 },
+                          { "bar": 4.0, "value": 0.5 },
+                          "not an object"
+                        ]
+                      }
+                    }
+                  ],
+                  "rifffs": []
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error), error);
+
+                const auto& curve = project.channelToolkits[0].automation.volume;
+                expectEquals((int) curve.size(), 3); // the non-object entry is dropped
+                expectEquals(curve[0].bar, 2.0);
+                expectEquals(curve[1].bar, 4.0);
+                expectEquals(curve[2].bar, 8.0);
+                expectEquals(curve[0].value, 0.0); // -1 clamped up
+                expectEquals(curve[2].value, 1.0); // 3 clamped down
+            }
+
+            beginTest("out-of-range and wrong-typed toolkit values degrade instead of failing the parse");
+            {
+                // Same lenient-parse convention the rest of this file uses --
+                // a malformed toolkit must never cost the user their whole
+                // project.
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"channelToolkits":"nope","reverb":42,"rifffs":[]})", project, error), error);
+                expect(project.channelToolkits.empty());
+                expectEquals(project.reverb.roomSize, 0.5);
+
+                EngineProject clamped;
+                expect(parseEngineProject(
+                    R"({"channelToolkits":[{"channelId":"c","filterCutoff":9.0,"reverbSend":-2.0,"volume":5.0}],"rifffs":[]})",
+                    clamped, error), error);
+                expectEquals(clamped.channelToolkits[0].filterCutoff, 1.0);
+                expectEquals(clamped.channelToolkits[0].reverbSend, 0.0);
+                expectEquals(clamped.channelToolkits[0].volume, 1.0);
+            }
         }
     };
 
