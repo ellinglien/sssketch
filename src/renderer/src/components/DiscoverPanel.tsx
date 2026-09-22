@@ -8,10 +8,8 @@ import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import {
-  DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
-  DISCOVER_TRAIT_SLOT_KINDS,
   isTraitSlotKind,
   slotKindsKey,
   slotKindsLabel,
