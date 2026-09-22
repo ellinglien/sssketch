@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupRiffsByDateAndTempo } from './LibraryBrowser'
+import { groupRiffsByDateAndTempo } from './riffGrouping'
 import type { RiffLibraryRiffSummary } from '@shared/riffLibraryTypes'
 
 /** Minimal summary -- only the three fields the grouping reads. */
