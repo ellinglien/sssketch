@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTOMATION_HIT_RADIUS_PX,
   addStrokeSample,
+  applyEdgeFade,
   applyStroke,
   barToX,
   curvePolyline,
+  edgeFadeState,
   hitTestPoint,
   insertPoint,
   movePoint,
@@ -443,5 +445,134 @@ describe('one coordinate space for the line and its points', () => {
       heightUnits: 100
     })
     expect(vertices[vertices.length - 1].x).toBe(clipWidthPx)
+  })
+})
+
+// The edge grabbers: "have the grabbers behave exactly like the fade in and
+// fade out action.. where you drag it horiz to create a fade from 0
+// (beginning) or end (to zero)" (Elling). applyEdgeFade is the write side
+// (splice a fade onto the curve's own edge, reusing applyStroke's inside/
+// outside rule so hand-drawn points beyond the fade region survive);
+// edgeFadeState is the read side the grabber's own on-screen position comes
+// from, reading the fade the CURVE's shape already implies rather than
+// tracking a separate fadeIn/fadeOut number the way the old per-clip
+// envelope did (there is nowhere to store one per parameter per stem).
+describe('applyEdgeFade', () => {
+  const LENGTH = 12
+
+  it('fades in from 0 at bar 0 up to the level the curve already holds at N, on an empty lane', () => {
+    // Empty lane -> 1.0, "a plain fade in" (spec).
+    expect(applyEdgeFade([], { edge: 'start', bars: 4, lengthBars: LENGTH })).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 4, value: 1 }
+    ])
+  })
+
+  it('fades out to 0 at the clip end, holding the level the curve already had before the fade', () => {
+    expect(applyEdgeFade([], { edge: 'end', bars: 4, lengthBars: LENGTH })).toEqual([
+      { bar: 8, value: 1 },
+      { bar: 12, value: 0 }
+    ])
+  })
+
+  it('reads the "top" from whatever the curve already does at that bar, not always 1.0', () => {
+    const drawn: AutomationPoint[] = [
+      { bar: 0, value: 0.6 },
+      { bar: 12, value: 0.6 }
+    ]
+    expect(applyEdgeFade(drawn, { edge: 'start', bars: 4, lengthBars: LENGTH })).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 4, value: 0.6 },
+      { bar: 12, value: 0.6 }
+    ])
+  })
+
+  it('dragging back to 0 bars removes the fade -- returns the input curve untouched', () => {
+    const drawn: AutomationPoint[] = [
+      { bar: 0, value: 0.6 },
+      { bar: 12, value: 0.6 }
+    ]
+    expect(applyEdgeFade(drawn, { edge: 'start', bars: 0, lengthBars: LENGTH })).toEqual(drawn)
+    expect(applyEdgeFade(drawn, { edge: 'end', bars: 0, lengthBars: LENGTH })).toEqual(drawn)
+  })
+
+  it('preserves points between the fade region and the rest of the curve', () => {
+    const drawn: AutomationPoint[] = [
+      { bar: 0, value: 1 },
+      { bar: 6, value: 0.5 },
+      { bar: 12, value: 0 }
+    ]
+    // Fading in the first 2 bars shouldn't disturb the hand-drawn point at
+    // bar 6 or the curve's own end.
+    expect(applyEdgeFade(drawn, { edge: 'start', bars: 2, lengthBars: LENGTH })).toEqual([
+      { bar: 0, value: 0 },
+      // top = curve's own value at bar 2, interpolated between (0,1) and (6,0.5)
+      { bar: 2, value: 1 - (0.5 * 2) / 6 },
+      { bar: 6, value: 0.5 },
+      { bar: 12, value: 0 }
+    ])
+  })
+
+  it('clamps bars into the clip length -- cannot fade past the clip', () => {
+    expect(applyEdgeFade([], { edge: 'start', bars: 999, lengthBars: LENGTH })).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 12, value: 1 }
+    ])
+    expect(applyEdgeFade([], { edge: 'start', bars: -5, lengthBars: LENGTH })).toEqual([])
+  })
+
+  it('the two fades meet in the middle without crossing when they overlap -- the later edit wins the overlap', () => {
+    const faded = applyEdgeFade([], { edge: 'start', bars: 5, lengthBars: LENGTH })
+    // faded: [{0,0},{5,1}]. Now fade out the last 8 bars (region [4,12]),
+    // which eats into the start fade's own endpoint at bar 5.
+    const both = applyEdgeFade(faded, { edge: 'end', bars: 8, lengthBars: LENGTH })
+    // The end-fade's own top is read off the start-fade's ramp at bar 4:
+    // linear from (0,0) to (5,1) -> 0.8 at bar 4.
+    expect(both).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 4, value: 0.8 },
+      { bar: 12, value: 0 }
+    ])
+    // Monotonic, single-valued curve -- nothing to "cross": every bar has
+    // exactly one value, by construction (AutomationPoint[] can't represent
+    // two lines at once).
+    for (let i = 1; i < both.length; i += 1) {
+      expect(both[i].bar).toBeGreaterThan(both[i - 1].bar)
+    }
+  })
+
+  it('does not mutate its input', () => {
+    const points: AutomationPoint[] = [{ bar: 0, value: 1 }]
+    applyEdgeFade(points, { edge: 'start', bars: 2, lengthBars: LENGTH })
+    expect(points).toEqual([{ bar: 0, value: 1 }])
+  })
+})
+
+describe('edgeFadeState', () => {
+  const LENGTH = 12
+
+  it("reports no fade and the curve's own resting level on an empty lane", () => {
+    expect(edgeFadeState([], 'start', LENGTH)).toEqual({ bars: 0, level: 1 })
+    expect(edgeFadeState([], 'end', LENGTH)).toEqual({ bars: 0, level: 1 })
+  })
+
+  it('reports no fade and the resting level on a flat hand-drawn curve', () => {
+    const drawn: AutomationPoint[] = [{ bar: 3, value: 0.4 }]
+    // Holds flat before the first point, so bar 0's own level is 0.4.
+    expect(edgeFadeState(drawn, 'start', LENGTH)).toEqual({ bars: 0, level: 0.4 })
+    expect(edgeFadeState(drawn, 'end', LENGTH)).toEqual({ bars: 0, level: 0.4 })
+  })
+
+  it('round-trips with applyEdgeFade: reading back what was just written', () => {
+    const start = applyEdgeFade([], { edge: 'start', bars: 3, lengthBars: LENGTH })
+    expect(edgeFadeState(start, 'start', LENGTH)).toEqual({ bars: 3, level: 1 })
+
+    const end = applyEdgeFade([], { edge: 'end', bars: 5, lengthBars: LENGTH })
+    expect(edgeFadeState(end, 'end', LENGTH)).toEqual({ bars: 5, level: 1 })
+  })
+
+  it('is unfooled by a plain drawn point that merely happens to sit at 0 with value 0', () => {
+    // A single point at (0,0) has no "top" to report a fade length from.
+    expect(edgeFadeState([{ bar: 0, value: 0 }], 'start', LENGTH)).toEqual({ bars: 0, level: 0 })
   })
 })

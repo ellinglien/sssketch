@@ -9,9 +9,11 @@ import {
 import {
   AUTOMATION_SIMPLIFY_TOLERANCE,
   addStrokeSample,
+  applyEdgeFade,
   applyStroke,
   barToX,
   curvePolyline,
+  edgeFadeState,
   hitTestPoint,
   insertPoint,
   movePoint,
@@ -48,6 +50,17 @@ const VIEWBOX_HEIGHT = 100
  * tokens.css. 5px matches AUTOMATION_HIT_RADIUS_PX, so "looks like I'm on
  * it" and "grabs it" agree. */
 const POINT_SIZE = 5
+
+/** The edge grabbers' visible dot and hit box -- sized identically to
+ * StemWaveformRow.tsx's own fade-in/fade-out knee handles (7px dot, 14px hit
+ * box) so the two feel like the same control. The circle (not a sharp-
+ * cornered square, unlike POINT_SIZE above) is a deliberate match to that
+ * existing handle rather than a tokens.css violation -- round dot handles
+ * (this one, the old fade knees, RiffCircle) are this app's established
+ * exception for "a thing you grab and drag," distinct from the automation
+ * points themselves, which are ordinary breakpoints, not fade controls. */
+const EDGE_GRABBER_DOT_SIZE = 7
+const EDGE_GRABBER_HIT_SIZE = 14
 
 /** Below this the picker is hidden entirely: it would cover the whole lane,
  * leaving nothing to draw on. The lane itself still works (it keeps whatever
@@ -286,6 +299,51 @@ export function AutomationLane({
     commit(removePoint(committed, hit))
   }
 
+  /**
+   * The edge grabbers: "have the grabbers behave exactly like the fade in
+   * and fade out action.. where you drag it horiz to create a fade from 0
+   * (beginning) or end (to zero)" (Elling). Mirrors
+   * StemWaveformRow.tsx's handleFadeInStart/handleFadeOutStart as closely as
+   * this lane's own conventions allow: the modifier (Option = fine
+   * position) is read once at press time for the same reason the rest of
+   * this file already does, the drag runs in plain bars (this lane has no
+   * FADE_DRAG_SLOWDOWN -- it's already bar-scaled by ppb for every other
+   * gesture here, and slowing it down again would make it the one gesture
+   * in the lane that doesn't track the cursor 1:1), and the whole drag is
+   * one gesture -> one commit, exactly like every other edit in this lane
+   * (see this component's own doc comment, "Gesture -> undo").
+   *
+   * `original` is the curve as it stood before this press -- frozen for the
+   * whole drag, the same way handleFadeInStart freezes `startFadeIn` --
+   * so `applyEdgeFade` always reads its "top" off the curve as it was
+   * before THIS drag touched it, and dragging the grabber back to where it
+   * started is a true no-op.
+   */
+  function handleEdgeGrabberStart(edge: 'start' | 'end', e: React.MouseEvent): void {
+    const original = committed
+    const snap = !e.altKey
+    const start = edgeFadeState(original, edge, clipBars)
+    let current = original
+    startPointerDrag(
+      e,
+      (dx) => {
+        // Dragging the LEFT grabber right grows the fade-in; dragging the
+        // RIGHT grabber LEFT grows the fade-out -- the same mirrored sign
+        // handleFadeOutStart's own comment explains (dx negative = drag
+        // left = fade-out grows).
+        const deltaBars = xToBar(dx, ppb)
+        const candidate = edge === 'start' ? start.bars + deltaBars : start.bars - deltaBars
+        const bars = snapBar(candidate, snap, clipBars)
+        current = applyEdgeFade(original, { edge, bars, lengthBars: clipBars })
+        setGesture(current)
+      },
+      (didMove) => {
+        setGesture(null)
+        if (didMove) commit(current)
+      }
+    )
+  }
+
   function handleContextMenu(e: React.MouseEvent<HTMLDivElement>): void {
     // Always swallowed, so a right-click in a lane never falls through to
     // the arranger's own clip/paste menu -- in this mode the lane owns the
@@ -305,6 +363,16 @@ export function AutomationLane({
     .join(' ')
 
   const showPicker = widthPx >= PICKER_MIN_LANE_WIDTH_PX
+
+  // Read directly off `points` (gesture-or-committed, same as the polyline
+  // above), not off a separately-tracked drag value -- so a grabber's own
+  // dot slides live during ITS OWN drag (setGesture triggers this re-render
+  // the same as every other edit here) and also updates immediately if the
+  // OTHER edge's fade is what just moved underneath it (the "meet in the
+  // middle" case).
+  const startFade = edgeFadeState(points, 'start', clipBars)
+  const endFade = edgeFadeState(points, 'end', clipBars)
+  const endFadeBar = clipBars - endFade.bars
 
   return (
     <div
@@ -430,6 +498,70 @@ export function AutomationLane({
           }}
         />
       ))}
+      {/* Edge grabbers -- see handleEdgeGrabberStart's doc comment. Rendered
+          after (so stacked above) the plain breakpoints above, since a
+          grabber sitting exactly at bar 0 or the clip's own end would
+          otherwise compete with an ordinary point drawn at that same spot
+          for the mousedown; the grabber is meant to win there. Hit boxes are
+          14x14 around a 7px dot -- identical to StemWaveformRow.tsx's own
+          fade knee handles, and for the same reason its own comment gives:
+          the visible dot alone is too easy to miss by a pixel. */}
+      <div
+        onMouseDown={(e) => handleEdgeGrabberStart('start', e)}
+        onContextMenu={(e) => e.stopPropagation()}
+        title={`fade in: ${startFade.bars.toFixed(2)} bars`}
+        style={{
+          position: 'absolute',
+          left: barToX(startFade.bars, ppb),
+          top: `${valueToY(startFade.level, VIEWBOX_HEIGHT)}%`,
+          transform: 'translate(-50%, -50%)',
+          width: EDGE_GRABBER_HIT_SIZE,
+          height: EDGE_GRABBER_HIT_SIZE,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          zIndex: 5
+        }}
+      >
+        <div
+          style={{
+            width: EDGE_GRABBER_DOT_SIZE,
+            height: EDGE_GRABBER_DOT_SIZE,
+            borderRadius: '50%',
+            background: 'var(--ra-text)',
+            pointerEvents: 'none'
+          }}
+        />
+      </div>
+      <div
+        onMouseDown={(e) => handleEdgeGrabberStart('end', e)}
+        onContextMenu={(e) => e.stopPropagation()}
+        title={`fade out: ${endFade.bars.toFixed(2)} bars`}
+        style={{
+          position: 'absolute',
+          left: barToX(endFadeBar, ppb),
+          top: `${valueToY(endFade.level, VIEWBOX_HEIGHT)}%`,
+          transform: 'translate(-50%, -50%)',
+          width: EDGE_GRABBER_HIT_SIZE,
+          height: EDGE_GRABBER_HIT_SIZE,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          zIndex: 5
+        }}
+      >
+        <div
+          style={{
+            width: EDGE_GRABBER_DOT_SIZE,
+            height: EDGE_GRABBER_DOT_SIZE,
+            borderRadius: '50%',
+            background: 'var(--ra-text)',
+            pointerEvents: 'none'
+          }}
+        />
+      </div>
     </div>
   )
 }

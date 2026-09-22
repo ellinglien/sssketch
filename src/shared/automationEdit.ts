@@ -16,7 +16,7 @@
  * over the wire without a second cleanup pass.
  */
 
-import { normaliseAutomationCurve, type AutomationPoint } from './toolkit'
+import { evaluateAutomation, normaliseAutomationCurve, type AutomationPoint } from './toolkit'
 
 /** How close (in screen pixels) the cursor has to be to a breakpoint to
  * grab it. Points render as 5px squares, so this is roughly "anywhere on
@@ -284,6 +284,121 @@ export function applyStroke(
     (point) => point.bar < from - BAR_EPSILON || point.bar > to + BAR_EPSILON
   )
   return normaliseAutomationCurve([...kept, ...normalisedStroke])
+}
+
+/** How close a value has to be to 0 to read as "this point IS the fade's
+ * zero anchor" rather than a hand-drawn point that merely landed near it --
+ * the value-axis counterpart of BAR_EPSILON, needed for the same reason
+ * (round-tripping a curve through JSON can land an exact 0 a hair off). */
+const VALUE_EPSILON = 1e-6
+
+function isZeroValue(value: number): boolean {
+  return Math.abs(value) <= VALUE_EPSILON
+}
+
+/**
+ * Writes (or removes) a fade at one edge of the clip -- the edge grabbers'
+ * own action, defined to feel identical to the existing clip-level fade
+ * handles (StemWaveformRow.tsx's handleFadeInStart/handleFadeOutStart):
+ * "drag it horiz to create a fade from 0 (beginning) or end (to zero)"
+ * (Elling). The difference from that older mechanism is only WHERE the
+ * result lives -- there's no separate fadeIn/fadeOut number per parameter
+ * per stem to store, so the fade is written directly into the curve's own
+ * points, at its own edge.
+ *
+ * `bars` is the fade's length, clamped into [0, lengthBars] -- dragging the
+ * grabber back to 0 removes the fade entirely (returns `points` unchanged:
+ * the edge region collapses to nothing, so there is nothing to splice).
+ * Otherwise the edge region ([0,bars] for 'start', [lengthBars-bars,
+ * lengthBars] for 'end') is rewritten to ramp between 0 and the "top" --
+ * the level the curve ALREADY holds just past the fade's far end, read via
+ * evaluateAutomation on the curve as it stood before this edit (so a fade
+ * dragged out to meet a hand-drawn shape rises or falls to meet it, rather
+ * than always aiming for 1.0). An empty lane's top is 1.0 -- "a plain fade
+ * in" (spec).
+ *
+ * Reuses applyStroke's own inside/outside splice rule (same idea CLAUDE.md's
+ * "reuse it if it fits" points at): anything the fade's own span covers is
+ * replaced, everything outside -- including a hand-drawn point sitting
+ * between the fade and the rest of the curve -- survives untouched. That
+ * same rule is what makes two fades dragged far enough to overlap "meet in
+ * the middle" rather than cross: whichever edge is edited last reads its
+ * own top off whatever the curve (including the OTHER fade's ramp) already
+ * does at its boundary bar, and its own splice simply overwrites that
+ * region -- there is only ever one value per bar, so there is nothing to
+ * cross by construction.
+ */
+export function applyEdgeFade(
+  points: AutomationPoint[],
+  opts: { edge: 'start' | 'end'; bars: number; lengthBars: number }
+): AutomationPoint[] {
+  const lengthBars = Number.isFinite(opts.lengthBars) ? Math.max(0, opts.lengthBars) : 0
+  const bars = Math.min(lengthBars, Math.max(0, Number.isFinite(opts.bars) ? opts.bars : 0))
+  const normalised = normaliseAutomationCurve(points)
+  if (bars <= BAR_EPSILON) return normalised
+
+  if (opts.edge === 'start') {
+    const top = evaluateAutomation(normalised, bars, 1)
+    return applyStroke(normalised, [
+      { bar: 0, value: 0 },
+      { bar: bars, value: top }
+    ])
+  }
+
+  const from = lengthBars - bars
+  const top = evaluateAutomation(normalised, from, 1)
+  return applyStroke(normalised, [
+    { bar: from, value: top },
+    { bar: lengthBars, value: 0 }
+  ])
+}
+
+/**
+ * The read side of an edge grabber: how long a fade the curve's CURRENT
+ * shape already implies at that edge, and the level it fades toward -- what
+ * the grabber's own on-screen position comes from (drawn at
+ * `(barToX(bars, ppb), valueToY(level, ...))`, mirroring the old fade
+ * handles' own knee position, held at a constant "plateau" height while it
+ * slides). There's no stored fadeIn/fadeOut number to read the way
+ * StemWaveformRow reads `state.fadeIn`/`state.fadeOut` -- automation curves
+ * don't have a dedicated field per edge, so this reads the fade BACK OUT of
+ * the points applyEdgeFade wrote: a fade is exactly "the edge's own point
+ * sits at value 0", and the length is the distance to whatever point comes
+ * next.
+ *
+ * A curve that was never touched by the grabber -- including an empty one,
+ * or one with a single hand-drawn point that happens to sit at (0,0) with
+ * nothing after it to read a "top" from -- reports `{ bars: 0, level }`,
+ * where `level` is simply the curve's own resting value at that edge
+ * (evaluateAutomation's hold-before-first/hold-after-last, so the grabber
+ * rests wherever the curve already sits rather than snapping to 1.0 on a
+ * curve that was deliberately drawn to start somewhere else).
+ */
+export function edgeFadeState(
+  points: AutomationPoint[],
+  edge: 'start' | 'end',
+  lengthBars: number
+): { bars: number; level: number } {
+  const length = Number.isFinite(lengthBars) ? Math.max(0, lengthBars) : 0
+  const normalised = normaliseAutomationCurve(points)
+  const edgeBar = edge === 'start' ? 0 : length
+  const restLevel = evaluateAutomation(normalised, edgeBar, 1)
+  if (normalised.length < 2) return { bars: 0, level: restLevel }
+
+  if (edge === 'start') {
+    const [first, second] = normalised
+    if (Math.abs(first.bar) <= BAR_EPSILON && isZeroValue(first.value)) {
+      return { bars: second.bar, level: second.value }
+    }
+    return { bars: 0, level: restLevel }
+  }
+
+  const last = normalised[normalised.length - 1]
+  const secondLast = normalised[normalised.length - 2]
+  if (Math.abs(last.bar - length) <= BAR_EPSILON && isZeroValue(last.value)) {
+    return { bars: length - secondLast.bar, level: secondLast.value }
+  }
+  return { bars: 0, level: restLevel }
 }
 
 /**
