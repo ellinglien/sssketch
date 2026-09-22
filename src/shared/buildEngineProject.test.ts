@@ -3,6 +3,7 @@ import { buildEngineProject } from './buildEngineProject'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
+import { DEFAULT_REVERB, defaultFilterSettings } from './toolkit'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -437,5 +438,151 @@ describe('buildEngineProject', () => {
     )
 
     expect(project.masterChain[0].stateBase64).toBe('')
+  })
+})
+
+// ---- built-in sound toolkit ----
+// docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+// The wire-format twin of EngineProject::EngineChannelToolkit in
+// native-engine/Source/EngineProject.h -- these tests and
+// EngineProjectTests.cpp's own toolkit cases are the two halves of the same
+// contract.
+describe('buildEngineProject toolkit', () => {
+  const resolveNothing = async (path: string): Promise<{ path: string; durationSec: number }> => ({
+    path,
+    durationSec: 1
+  })
+
+  it('sends no toolkit entries and default reverb for a project that never touched it', async () => {
+    // This is the guarantee an old project depends on: an empty array is what
+    // makes the engine take its pre-toolkit render path.
+    const project = await buildEngineProject(stateWith({ bpm: 150 }), resolveNothing, emptyCatalog)
+    expect(project.channelToolkits).toEqual([])
+    expect(project.reverb).toEqual(DEFAULT_REVERB)
+  })
+
+  it('omits a channel whose filter is parked at its own neutral end with no send or curves', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        channelFilters: {
+          a: defaultFilterSettings('lowpass'),
+          b: defaultFilterSettings('highpass')
+        },
+        channelSends: { a: 0, b: 0 }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.channelToolkits).toEqual([])
+  })
+
+  it('carries a moved filter, a send and every curve onto the wire', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        channelFilters: { ch1: { mode: 'highpass', cutoff: 0.4, resonance: 0.6 } },
+        channelSends: { ch1: 0.35 },
+        channelAutomation: {
+          ch1: {
+            filterCutoff: [
+              { bar: 0, value: 0.1 },
+              { bar: 8, value: 0.9 }
+            ]
+          }
+        }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+
+    expect(project.channelToolkits).toEqual([
+      {
+        channelId: 'ch1',
+        filterMode: 'highpass',
+        filterCutoff: 0.4,
+        filterResonance: 0.6,
+        reverbSend: 0.35,
+        volume: 1,
+        automation: {
+          filterCutoff: [
+            { bar: 0, value: 0.1 },
+            { bar: 8, value: 0.9 }
+          ],
+          // Every curve is a concrete array on the wire, even the untouched
+          // ones -- the engine reads four fixed keys.
+          filterResonance: [],
+          reverbSend: [],
+          volume: []
+        }
+      }
+    ])
+  })
+
+  it('includes a channel that has ONLY automation, with its static values left neutral', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        channelAutomation: { ch1: { volume: [{ bar: 0, value: 0.5 }] } }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.channelToolkits).toHaveLength(1)
+    expect(project.channelToolkits[0].filterMode).toBe('lowpass')
+    // Neutral for THAT mode -- a send-only or automation-only channel must not
+    // arrive with a filter that silences it.
+    expect(project.channelToolkits[0].filterCutoff).toBe(1)
+    expect(project.channelToolkits[0].reverbSend).toBe(0)
+  })
+
+  it("falls back to the channel's own mode neutral cutoff when only a send is set", async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        channelFilters: { ch1: { mode: 'highpass', cutoff: 0, resonance: 0 } },
+        channelSends: { ch1: 0.5 }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.channelToolkits[0].filterCutoff).toBe(0) // highpass neutral, not 1
+  })
+
+  it('normalises curves on the way out: sorted, clamped, non-finite dropped', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        channelAutomation: {
+          ch1: {
+            reverbSend: [
+              { bar: 8, value: 3 },
+              { bar: 2, value: -1 },
+              { bar: NaN, value: 0.5 }
+            ]
+          }
+        }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.channelToolkits[0].automation.reverbSend).toEqual([
+      { bar: 2, value: 0 },
+      { bar: 8, value: 1 }
+    ])
+  })
+
+  it('sends the project reverb settings and keeps channel order stable', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        reverb: { roomSize: 0.8, damping: 0.2, preDelayMs: 45 },
+        channelSends: { zeta: 0.5, alpha: 0.5 }
+      }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
+    expect(project.channelToolkits.map((t) => t.channelId)).toEqual(['alpha', 'zeta'])
   })
 })

@@ -1,5 +1,11 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
+import {
+  DEFAULT_REVERB,
+  type ChannelAutomation,
+  type ChannelFilterSettings,
+  type ProjectReverbSettings
+} from '@shared/toolkit'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
@@ -199,6 +205,25 @@ export interface AppState {
    * in REMOVE_FROM_TIMELINE, DELETE_RIFFFS, and MOVE_TO_CHANNEL -- never a
    * separate pass. */
   channelPlugins: Record<string, [string | null, string | null]>
+  /** The built-in sound toolkit's per-channel filter, keyed by channelId. A
+   * channel absent from this record has no filter -- identical to one present
+   * with defaultFilterSettings() (parked at its mode's neutral end), which is
+   * also what every project saved before the toolkit existed loads as. Real
+   * arrangement data: persists normally. See docs/superpowers/specs/
+   * 2026-09-22-builtin-sound-toolkit-design.md. */
+  channelFilters: Record<string, ChannelFilterSettings>
+  /** How much of each channel goes to the one shared reverb (0..1), keyed by
+   * channelId. Absent or 0 = no send, and a project where every channel is 0
+   * costs the engine nothing at all (the reverb isn't even constructed). */
+  channelSends: Record<string, number>
+  /** Drawn automation curves, keyed by channelId then by parameter. An
+   * absent/empty curve means "not automated" -- the channel's own static
+   * setting above is used instead. Written by the automation-mode free-draw
+   * UI (step 3 of the design doc; the engine and this state landed first). */
+  channelAutomation: Record<string, ChannelAutomation>
+  /** The one shared reverb's settings -- project-level, not per channel.
+   * Only ever audible once some channel actually sends to it. */
+  reverb: ProjectReverbSettings
   /** The loop-recording region, in bars — null until the user first drags
    * one out on the Ruler. Independent of loopLengthBars (the whole
    * project's own wrap point, computed from placed clips) -- this can be
@@ -334,6 +359,10 @@ export const initialState: AppState = {
   metronomeEnabled: false,
   masterChain: [null, null, null, null],
   channelPlugins: {},
+  channelFilters: {},
+  channelSends: {},
+  channelAutomation: {},
+  reverb: DEFAULT_REVERB,
   rifffs: {}
 }
 

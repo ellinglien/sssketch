@@ -215,3 +215,56 @@ describe('deserializeProject migration from trackOrder', () => {
     expect(restored.channelOf).toEqual({ r1: 'r1' })
   })
 })
+
+// ---- built-in sound toolkit persistence ----
+// docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md. The
+// toolkit needs no serializer code of its own: serializeProject writes the
+// whole AppState minus a named list of transient UI fields, and
+// deserializeProject spreads the parsed data over initialState -- so new
+// arrangement state persists and old files load with defaults automatically.
+// These tests exist to pin that, since "no code needed" is exactly the kind
+// of property a later refactor can quietly break.
+describe('toolkit persistence', () => {
+  const filters = { ch1: { mode: 'highpass' as const, cutoff: 0.4, resonance: 0.6 } }
+  const automation = {
+    ch1: {
+      filterCutoff: [
+        { bar: 0, value: 0.1 },
+        { bar: 8, value: 0.9 }
+      ]
+    }
+  }
+
+  it('round-trips filters, sends, automation and reverb settings', () => {
+    const state = {
+      ...initialState,
+      channelFilters: filters,
+      channelSends: { ch1: 0.35 },
+      channelAutomation: automation,
+      reverb: { roomSize: 0.8, damping: 0.2, preDelayMs: 45 }
+    }
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+    expect(restored.channelFilters).toEqual(filters)
+    expect(restored.channelSends).toEqual({ ch1: 0.35 })
+    expect(restored.channelAutomation).toEqual(automation)
+    expect(restored.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
+  })
+
+  it('loads a project saved before the toolkit existed with neutral defaults', () => {
+    // Exactly what an older .sssketchproj looks like: none of the four keys
+    // present at all. It must load without complaint AND land on values
+    // buildEngineProject drops from the wire entirely, so the engine takes
+    // its pre-toolkit path and the project sounds identical to before.
+    const legacy = JSON.parse(serializeProject(initialState))
+    delete legacy.channelFilters
+    delete legacy.channelSends
+    delete legacy.channelAutomation
+    delete legacy.reverb
+
+    const { state: restored } = deserializeProject(legacy)
+    expect(restored.channelFilters).toEqual({})
+    expect(restored.channelSends).toEqual({})
+    expect(restored.channelAutomation).toEqual({})
+    expect(restored.reverb).toEqual({ roomSize: 0.5, damping: 0.5, preDelayMs: 20 })
+  })
+})

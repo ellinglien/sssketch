@@ -4,6 +4,17 @@ import { loopLengthBars, resolvePlayedBars } from '../renderer/src/state/selecto
 import { stemKey } from './types'
 import type { PluginStatesMap } from './pluginStates'
 import { stateForSlot } from './pluginStates'
+import {
+  DEFAULT_REVERB,
+  defaultFilterSettings,
+  isChannelToolkitNeutral,
+  neutralCutoff,
+  normaliseAutomationCurve,
+  type AutomationPoint,
+  type ChannelFilterSettings,
+  type FilterMode,
+  type ProjectReverbSettings
+} from './toolkit'
 
 export interface EngineStem {
   stemKey: string
@@ -66,6 +77,15 @@ export interface EngineProject {
    * convention as channelPlugins itself on the renderer side. See
    * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md. */
   channelChains: EngineChannelChain[]
+  /** One entry per channel whose toolkit actually does something -- a
+   * neutral channel is left out entirely, exactly like channelChains above,
+   * so an ordinary project sends an empty array and the engine's render path
+   * skips the whole stage. See buildChannelToolkits below. */
+  channelToolkits: EngineChannelToolkit[]
+  /** The shared reverb's own settings. Always sent (it is three numbers, and
+   * the engine defaults them anyway) -- only ever audible once some channel
+   * in channelToolkits has a non-zero send. */
+  reverb: ProjectReverbSettings
 }
 
 export interface EngineMasterChainSlot {
@@ -77,6 +97,97 @@ export interface EngineMasterChainSlot {
 export interface EngineChannelChain {
   channelId: string
   slots: [EngineMasterChainSlot, EngineMasterChainSlot]
+}
+
+/** The built-in sound toolkit on the wire. Twin of
+ * EngineProject::EngineChannelToolkit (native-engine/Source/EngineProject.h) --
+ * the hand-synced pair CLAUDE.md warns about: change one side and you change
+ * the other and every test that builds either.
+ *
+ * Unlike the renderer-side types in src/shared/toolkit.ts, every curve here
+ * is a concrete array (never absent) and every static value is concrete,
+ * because the engine's parser reads fixed keys. The channel LIST is where
+ * absence still carries meaning: only non-neutral channels appear at all. */
+export interface EngineChannelAutomation {
+  filterCutoff: AutomationPoint[]
+  filterResonance: AutomationPoint[]
+  reverbSend: AutomationPoint[]
+  volume: AutomationPoint[]
+}
+
+export interface EngineChannelToolkit {
+  channelId: string
+  filterMode: FilterMode
+  filterCutoff: number
+  filterResonance: number
+  reverbSend: number
+  /** A channel-level gain under the toolkit's own volume automation. Always 1
+   * today: there is no static per-channel fader in the app yet, so the only
+   * thing that moves this is a drawn `volume` curve. The field exists because
+   * the engine's wire format has it and the two must match; a future channel
+   * fader fills it in without another wire-format change. */
+  volume: number
+  automation: EngineChannelAutomation
+}
+
+/**
+ * Projects the toolkit half of AppState down to the wire, dropping every
+ * channel whose toolkit does nothing.
+ *
+ * That dropping is the load-bearing part, not an optimisation: an empty
+ * channelToolkits array is what makes the engine take its pre-toolkit render
+ * path, which is what makes an old project sound bit-identical to how it
+ * sounded before this feature existed (there is an engine-side test asserting
+ * exactly that, sample for sample). isChannelToolkitNeutral owns the rule and
+ * is mirrored by toolkitIsNeutral() in PlaybackEngine.cpp.
+ *
+ * Channels are gathered from all three records rather than from
+ * state.channelOrder: a channel can carry toolkit settings the moment it is
+ * touched, and ordering is irrelevant here (the engine looks entries up by
+ * channelId). Sorted anyway, so the payload is stable between builds and a
+ * diff of two engine projects stays readable.
+ */
+export function buildChannelToolkits(state: AppState): EngineChannelToolkit[] {
+  const channelIds = new Set<string>([
+    ...Object.keys(state.channelFilters ?? {}),
+    ...Object.keys(state.channelSends ?? {}),
+    ...Object.keys(state.channelAutomation ?? {})
+  ])
+
+  const toolkits: EngineChannelToolkit[] = []
+  for (const channelId of [...channelIds].sort()) {
+    const filter: ChannelFilterSettings | undefined = state.channelFilters?.[channelId]
+    const send = state.channelSends?.[channelId]
+    const automation = state.channelAutomation?.[channelId]
+    if (isChannelToolkitNeutral(filter, send, automation)) continue
+
+    const mode = filter?.mode ?? 'lowpass'
+    // Written out field by field rather than mapped over AUTOMATION_PARAMS:
+    // the engine's parser reads these four fixed keys, so the wire type is
+    // deliberately a closed shape, and spelling it out is what makes adding a
+    // fifth parameter a compile error here rather than a silently missing key
+    // at runtime.
+    const curves: EngineChannelAutomation = {
+      filterCutoff: normaliseAutomationCurve(automation?.filterCutoff ?? []),
+      filterResonance: normaliseAutomationCurve(automation?.filterResonance ?? []),
+      reverbSend: normaliseAutomationCurve(automation?.reverbSend ?? []),
+      volume: normaliseAutomationCurve(automation?.volume ?? [])
+    }
+
+    toolkits.push({
+      channelId,
+      filterMode: mode,
+      // Falls back to THIS mode's own neutral end, not to a fixed 1 -- a
+      // channel that only has a send set must not accidentally arrive with a
+      // highpass parked at 20kHz (i.e. silence).
+      filterCutoff: filter?.cutoff ?? neutralCutoff(mode),
+      filterResonance: filter?.resonance ?? defaultFilterSettings(mode).resonance,
+      reverbSend: send ?? 0,
+      volume: 1, // see EngineChannelToolkit.volume
+      automation: curves
+    })
+  }
+  return toolkits
 }
 
 /** Minimal shape buildEngineProject needs from the plugin catalog -- callers
@@ -346,6 +457,8 @@ export async function buildEngineProject(
     loopLengthBars: loopLengthBars(state),
     masterChain,
     channelChains,
+    channelToolkits: buildChannelToolkits(state),
+    reverb: state.reverb ?? DEFAULT_REVERB,
     rifffs
   }
 }
