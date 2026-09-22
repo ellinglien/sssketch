@@ -75,6 +75,9 @@ None of this would have been possible without OUROVEON having done that reverse-
   - Real-time playback, device I/O, and VST3/AU plugin hosting via [JUCE](https://juce.com/)
   - Tempo sync with other apps/devices via [Ableton Link](https://github.com/Ableton/link)
   - Stem time-stretching via [Rubberband](https://breakfastquay.com/rubberband/)
+  - Built-in reverb via [zita-rev1](https://github.com/PelleJuul/zita-rev1) — Fons
+    Adriaensen's FDN reverb, vendored unmodified (GPL-3.0-or-later, same as this repo) under
+    `native-engine/Source/dsp/zita-rev1/`; see that folder's `VENDORED.md`
 
 - **App Shell**
   - Desktop app shell via [Electron](https://www.electronjs.org/)

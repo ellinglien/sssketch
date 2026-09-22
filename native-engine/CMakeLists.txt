@@ -83,6 +83,23 @@ juce_add_gui_app(sssketch_engine
 # (much larger, third-party) codebase, which would otherwise drown this out.
 target_compile_options(sssketch_engine PRIVATE -Wall -Wextra)
 
+# zita-rev1, vendored verbatim from https://github.com/PelleJuul/zita-rev1
+# (Fons Adriaensen's FDN reverb; GPL-3-or-later, same as this repo's own
+# LICENSE) -- see Source/dsp/zita-rev1/VENDORED.md for provenance and for
+# why reverb.h's own two dependencies (pareq.h/global.h) are vendored
+# alongside the two files the design doc names. Compiled with -w so the
+# project's own -Wall -Wextra (deliberately scoped to sssketch's code, see
+# target_compile_options above) doesn't spray warnings about third-party
+# code we refuse to modify -- the file-level option is appended after the
+# target-level ones, so -w wins. Listed here, in its own set_source_files_
+# properties call, rather than buried in the main target_sources list below.
+set(SSSKETCH_VENDORED_SOURCES
+  Source/dsp/zita-rev1/reverb.cpp
+  Source/dsp/zita-rev1/pareq.cpp
+)
+set_source_files_properties(${SSSKETCH_VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+target_sources(sssketch_engine PRIVATE ${SSSKETCH_VENDORED_SOURCES})
+
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
   Source/PluginArchitecture.cpp
@@ -152,5 +169,10 @@ target_link_libraries(sssketch_engine PRIVATE
   juce::juce_audio_processors
   juce::juce_audio_basics
   juce::juce_audio_utils
+  # Added for dsp::StateVariableTPTFilter, the per-channel filter behind the
+  # built-in sound toolkit (ChannelFilter.h) -- part of JUCE itself, so this
+  # is a link-line addition, not a new third-party dependency. See
+  # docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
+  juce::juce_dsp
   Ableton::Link
 )
