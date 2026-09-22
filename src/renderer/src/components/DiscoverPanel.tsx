@@ -2489,10 +2489,7 @@ export function DiscoverPanel({
           marginRight: 498
         }}
       >
-        {/* Direct request, 2026-09-22: trait kinds first, then drums/bass/lead
-            after warm. Display order only -- DISCOVER_SLOT_KIND_OPTIONS (and
-            so combo labels like "drums · warm") keeps its canonical order. */}
-        {[...DISCOVER_TRAIT_SLOT_KINDS, ...DISCOVER_MASK_SLOT_KINDS].map((kind) => {
+        {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
           const selected = pendingAddKinds.includes(kind)
           return (
             <button
