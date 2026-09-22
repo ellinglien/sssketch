@@ -2455,14 +2455,17 @@ export function DiscoverPanel({
           from the top row, in its own column right of the chip list. A
           three-column grid with equal-min side tracks keeps the list itself
           centred in that span; the dial column sits right beside it, and
-          the empty left track mirrors its width. */}
+          the empty left track mirrors its width.
+
+          Direct request, 2026-09-22 ("use more of the space below, no need
+          to be constrained by wave length"): the waveform-span margins
+          (152/498 above) are dropped -- the chip list now centres across the
+          panel's full width, so it fits on one line instead of wrapping. */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: `minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr) auto minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr)`,
-          marginTop: 10,
-          marginLeft: 152,
-          marginRight: 498
+          marginTop: 10
         }}
       >
         <div />
