@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer } from './store'
+import { initialState, reducer, type AppState } from './store'
 import { serializeProject, deserializeProject, type LegacyPersistedProject } from './serialize'
 import type { Rifff } from '@shared/types'
+import { edgeFadeState } from '@shared/automationEdit'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -326,5 +327,123 @@ describe('toolkit persistence', () => {
     expect('channelFilters' in restored).toBe(false)
     expect('channelSends' in restored).toBe(false)
     expect('channelAutomation' in restored).toBe(false)
+  })
+})
+
+describe('loading a project saved with the old per-rifff edge fades', () => {
+  // The shape a pre-2026-09-22 .sssketchproj actually has: a plain
+  // serialized AppState from back then, i.e. today's minus the toolkit,
+  // plus fadeIn/fadeOut keyed by groupId. Built by serializing a current
+  // state and adding the old keys back, so the fixture can't drift away
+  // from what deserializeProject really receives.
+  function savedWithFades(
+    fades: { fadeIn?: Record<string, number>; fadeOut?: Record<string, number> },
+    build: (state: AppState) => AppState = (s) => s
+  ): Parameters<typeof deserializeProject>[0] {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: twoStemRifff })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 4 })
+    state = build(state)
+    return { ...JSON.parse(serializeProject(state)), ...fades }
+  }
+
+  const twoStemRifff: Rifff = {
+    ...rifff,
+    barLength: 8,
+    startBar: undefined,
+    stems: [
+      { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 },
+      { slot: 2, author: 'e', name: 'b', type: 'fx', path: '/b.wav', durationSec: 1, barLength: 8 }
+    ]
+  }
+
+  it('rewrites a saved fade-in/fade-out as the same shape on every stem of that rifff', () => {
+    const { state } = deserializeProject(savedWithFades({ fadeIn: { r1: 2 }, fadeOut: { r1: 1 } }))
+
+    for (const key of ['r1:1', 'r1:2']) {
+      const curve = state.stemAutomation[key]?.volume
+      expect(curve).toBeDefined()
+      // The clip is 8 bars long (barLength 8, no crop, stretch on), so a
+      // 2-bar fade-in and a 1-bar fade-out are exactly what the lane's own
+      // edge grabbers would read back out of these points.
+      expect(edgeFadeState(curve!, 'start', 8)).toEqual({ bars: 2, level: 1 })
+      expect(edgeFadeState(curve!, 'end', 8)).toEqual({ bars: 1, level: 1 })
+    }
+  })
+
+  it('drops the old fields entirely rather than carrying them into state', () => {
+    const { state } = deserializeProject(savedWithFades({ fadeIn: { r1: 2 } }))
+    expect('fadeIn' in state).toBe(false)
+    expect('fadeOut' in state).toBe(false)
+  })
+
+  it('leaves the clip gain alone -- the dial stays the level, the curve is only the shape', () => {
+    const { state } = deserializeProject(
+      savedWithFades({ fadeIn: { r1: 2 } }, (s) =>
+        reducer(s, { type: 'SET_GROUP_VOLUME', groupId: 'r1', volume: 0.4 })
+      )
+    )
+    expect(state.vol['r1:1']).toBe(0.4)
+    // ...and the fade still rises to the curve's own full 1.0, not to 0.4:
+    // the two multiply, they don't replace each other.
+    expect(state.stemAutomation['r1:1']?.volume).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 2, value: 1 }
+    ])
+  })
+
+  it("measures the fade against the clip's own resized length, not its raw barLength", () => {
+    const { state } = deserializeProject(
+      savedWithFades({ fadeOut: { r1: 1 } }, (s) =>
+        reducer(s, { type: 'SET_PLAYED_BARS', key: 'r1', bars: 4 })
+      )
+    )
+    // A 4-bar clip: the fade-out's zero has to land on bar 4, the clip's
+    // own right edge, not on bar 8.
+    expect(state.stemAutomation['r1:1']?.volume).toEqual([
+      { bar: 3, value: 1 },
+      { bar: 4, value: 0 }
+    ])
+  })
+
+  it('splices the fade onto a curve the project already had, leaving the rest of it alone', () => {
+    const { state } = deserializeProject(
+      savedWithFades({ fadeIn: { r1: 1 } }, (s) =>
+        reducer(s, {
+          type: 'SET_STEM_AUTOMATION',
+          stemKey: 'r1:1',
+          param: 'volume',
+          points: [
+            { bar: 4, value: 0.5 },
+            { bar: 6, value: 0.5 }
+          ]
+        })
+      )
+    )
+    // The fade rises to the level the curve ALREADY holds at its far end
+    // (0.5 here, applyEdgeFade's own rule) rather than overshooting to 1.0
+    // and dropping straight back down, and everything past the fade is
+    // untouched.
+    expect(state.stemAutomation['r1:1']?.volume).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 1, value: 0.5 },
+      { bar: 4, value: 0.5 },
+      { bar: 6, value: 0.5 }
+    ])
+  })
+
+  it('writes nothing at all for a project that never had a fade', () => {
+    const { state } = deserializeProject(savedWithFades({}))
+    expect(state.stemAutomation).toEqual({})
+  })
+
+  it('survives junk in the old fields, and a fade naming a rifff that is gone', () => {
+    const { state } = deserializeProject(
+      savedWithFades({
+        fadeIn: { r1: Number.NaN, 'long-deleted': 2 },
+        fadeOut: 'not a record' as unknown as Record<string, number>
+      })
+    )
+    expect(state.stemAutomation).toEqual({})
+    expect(state.rifffs.r1).toBeDefined()
   })
 })

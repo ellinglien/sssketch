@@ -1,6 +1,9 @@
 import { initialState, type AppState } from './store'
 import { isSketchEligible } from './selectors'
 import { snapToWholeBarIfNearlyExact } from '@shared/barLengthSnap'
+import { applyEdgeFade, clipLengthBars } from '@shared/automationEdit'
+import { stemKey } from '@shared/types'
+import type { StemAutomation } from '@shared/toolkit'
 import type { PluginStatesMap } from '@shared/pluginStates'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
@@ -154,16 +157,101 @@ function dropChannelScopedToolkit<T extends ChannelScopedToolkitKeys>(
   return rest
 }
 
+/** A `.sssketchproj` saved before 2026-09-22 carries the per-RIFFF edge
+ * fades the old envelope drag wrote, in bars, keyed by groupId. Both keys
+ * are optional: a project that never had a fade simply doesn't have them,
+ * and an older one might have only one. */
+interface LegacyEdgeFadeKeys {
+  fadeIn?: unknown
+  fadeOut?: unknown
+}
+
+/** One saved fade length, or 0 for anything that isn't a usable number --
+ * a `.sssketchproj` is plain JSON that people can and do hand-edit, and a
+ * load must never throw over one. */
+function legacyFadeBars(record: unknown, groupId: string): number {
+  if (typeof record !== 'object' || record === null) return 0
+  const value = (record as Record<string, unknown>)[groupId]
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return value
+}
+
+/**
+ * Turns an old project's saved fadeIn/fadeOut into the equivalent `volume`
+ * automation curve on every stem of the rifff that had them, so a project
+ * someone already made goes on sounding the way they made it.
+ *
+ * Why this is a faithful translation rather than an approximation:
+ * applyEdgeFade is the SAME function the lane's own edge grabbers call, so
+ * a migrated fade is byte-for-byte a fade the user could have dragged
+ * themselves -- and the level the fade rises to comes off the curve, which
+ * on an untouched clip is 1.0, i.e. "full", exactly as the old envelope's
+ * plateau meant "this clip's own gain". That gain (state.vol) is untouched
+ * here: it stays the clip's LEVEL, and the curve is only its SHAPE, which
+ * is the split the gain dial and the volume curve keep from here on.
+ *
+ * Fades were a per-RIFFF field, so every stem of the rifff gets the same
+ * curve -- the same fan-out SET_GROUP_VOLUME already does, and the same
+ * thing a collapsed clip's own lane writes today. Expanding the clip
+ * afterwards reveals per-stem lanes that can then diverge.
+ *
+ * One deliberate difference: the engine used to clamp a fade to half the
+ * audible segment, so an oversized saved value (the old drag allowed up to
+ * 4 bars, on a clip that might be 2) SOUNDED shorter than it was stored.
+ * applyEdgeFade clamps to the clip's whole length instead, so such a fade
+ * migrates to what was stored, not to what was heard. That only affects a
+ * fade deliberately dragged longer than half its own clip.
+ */
+function migrateEdgeFadesToVolumeCurves(state: AppState, legacy: LegacyEdgeFadeKeys): AppState {
+  let changed = false
+  const stemAutomation: Record<string, StemAutomation> = { ...state.stemAutomation }
+
+  for (const [groupId, rifff] of Object.entries(state.rifffs)) {
+    const fadeInBars = legacyFadeBars(legacy.fadeIn, groupId)
+    const fadeOutBars = legacyFadeBars(legacy.fadeOut, groupId)
+    if (fadeInBars === 0 && fadeOutBars === 0) continue
+
+    const lengthBars = clipLengthBars({
+      playedBars: state.playedBars[groupId] ?? rifff.barLength,
+      leftCropBars: state.leftCrop[groupId] ?? 0,
+      stretchOn: state.stretch[groupId] ?? true,
+      rifffBpm: rifff.bpm,
+      stateBpm: state.bpm
+    })
+    if (!(lengthBars > 0)) continue
+
+    for (const stem of rifff.stems) {
+      const key = stemKey(groupId, stem.slot)
+      const existing = stemAutomation[key]
+      let points = existing?.volume ?? []
+      if (fadeInBars > 0) {
+        points = applyEdgeFade(points, { edge: 'start', bars: fadeInBars, lengthBars })
+      }
+      if (fadeOutBars > 0) {
+        points = applyEdgeFade(points, { edge: 'end', bars: fadeOutBars, lengthBars })
+      }
+      stemAutomation[key] = { ...existing, volume: points }
+      changed = true
+    }
+  }
+
+  return changed ? { ...state, stemAutomation } : state
+}
+
 export function deserializeProject(
   data: (PersistedProject | LegacyPersistedProject) & {
     pluginStates?: PluginStatesMap
-  } & ChannelScopedToolkitKeys
+  } & ChannelScopedToolkitKeys &
+    LegacyEdgeFadeKeys
 ): { state: AppState; pluginStates: PluginStatesMap } {
-  const { pluginStates, ...projectData } = data
+  const { pluginStates, fadeIn, fadeOut, ...projectData } = data
   // Narrowed off projectData itself, not off the stripped copy below -- the
   // strip returns an Omit over a union, which loses the discriminant that
   // tells a legacy trackOrder save apart from a channelOrder one.
   const migrated = 'channelOrder' in projectData ? {} : migrateTrackOrder(projectData.trackOrder)
+  // fadeIn/fadeOut are pulled out of `data` above rather than spread in
+  // here: they aren't AppState fields any more, and the curve they become
+  // is written below, once the state they're measured against is assembled.
   const state = { ...initialState, ...dropChannelScopedToolkit(projectData), ...migrated }
   // SNAP_DIVS has grown/shrunk twice now: [4,8,16,32] -> [4,8,16] (dropped
   // the finest option), then -> [1,2,4,8,16] (two new, COARSER options
@@ -181,6 +269,9 @@ export function deserializeProject(
   // it's re-picked, not anything already committed to audio.
   if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
+  // After snapBarLengthNoise, deliberately: a clip's length in bars is what
+  // a migrated fade is measured against, so it has to be the repaired one.
+  const withMigratedFades = migrateEdgeFadesToVolumeCurves(state, { fadeIn, fadeOut })
   return {
     // Only SKETCH mode has an eligibility requirement -- normal and
     // automation are always showable, so a project that can't be sketched
@@ -188,7 +279,9 @@ export function deserializeProject(
     // (mode isn't persisted at all, so in practice this is defence against
     // a hand-edited file, not a path a save/load round trip takes).
     state:
-      state.mode !== 'sketch' || isSketchEligible(state) ? state : { ...state, mode: 'normal' },
+      withMigratedFades.mode !== 'sketch' || isSketchEligible(withMigratedFades)
+        ? withMigratedFades
+        : { ...withMigratedFades, mode: 'normal' },
     pluginStates: pluginStates ?? {}
   }
 }
