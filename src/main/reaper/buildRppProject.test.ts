@@ -3,6 +3,10 @@ import { buildRppProject } from './buildRppProject'
 import { parseRpp, findChild, findAllChildren, type RppNode } from './rppNode'
 import type { AppState } from '../../renderer/src/state/store'
 import type { Rifff } from '@shared/types'
+import type { RiserClip } from '@shared/riser'
+// Type-only, same as buildRppProject.ts's own import: exportToolkitAudio.ts
+// spawns the native engine, and this suite stays pure.
+import type { BakedClip, ToolkitExportOptions } from '../exportToolkitAudio'
 
 function emptyAppState(overrides: Partial<AppState> = {}): AppState {
   return {
@@ -84,6 +88,52 @@ function tracksOf(rppText: string): { root: RppNode; tracks: RppNode[] } {
 
 function firstItemOf(track: RppNode): RppNode {
   return findAllChildren(track, 'ITEM')[0]
+}
+
+function bakeOptions(
+  bakedClips: [string, BakedClip][] = [],
+  riserFileName?: string
+): ToolkitExportOptions {
+  return { mode: 'bake', toolkitAudio: { bakedClips: new Map(bakedClips), riserFileName } }
+}
+
+function automationOptions(riserFileName?: string): ToolkitExportOptions {
+  return { mode: 'automation', toolkitAudio: { bakedClips: new Map(), riserFileName } }
+}
+
+/** Two builds of the same project can never be string-equal as-is: every
+ * TRACK/ITEM carries a fresh GUID and the project header carries the wall
+ * clock. Blanking exactly those two makes "is this byte-identical" an
+ * answerable question about everything else. */
+function stableText(rppText: string): string {
+  return rppText
+    .replace(/\{[0-9A-F-]{36}\}/g, '{GUID}')
+    .replace(/^<REAPER_PROJECT .*$/m, '<REAPER_PROJECT')
+}
+
+function riser(overrides: Partial<RiserClip> = {}): RiserClip {
+  return {
+    id: 'riser-1',
+    channelId: 'ch-1',
+    startBar: 4,
+    lengthBars: 2,
+    startCutoffValue: 0.3,
+    endCutoffValue: 0.95,
+    curve: [],
+    level: 0.6,
+    ...overrides
+  }
+}
+
+function trackNamed(tracks: RppNode[], name: string): RppNode[] {
+  return tracks.filter((t) => findChild(t, 'NAME')?.params[0] === `"${name}"`)
+}
+
+function ptValuesOf(envelope: RppNode): { sec: number; value: number }[] {
+  return findAllChildren(envelope, 'PT').map((pt) => ({
+    sec: Number(pt.params[0]),
+    value: Number(pt.params[1])
+  }))
 }
 
 describe('buildRppProject', () => {
@@ -311,5 +361,490 @@ describe('buildRppProject', () => {
 
     expect(tracks).toHaveLength(1) // merged onto ONE track, not two
     expect(findAllChildren(tracks[0], 'ITEM')).toHaveLength(2) // both stems' items present
+  })
+})
+
+describe('buildRppProject: a project that uses none of the toolkit', () => {
+  it('produces byte-identical output with and without an options argument', () => {
+    // The load-bearing guarantee of the whole feature: adding the toolkit
+    // must not change one byte of an export that predates it. Two rifffs,
+    // two buses, a crop, a mute region and a fade -- i.e. most of this
+    // exporter's surface -- and NO toolkit data at all.
+    const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
+    const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 4 }
+    const state = emptyAppState({
+      rifffs: { a: rifffA, b: rifffB, 'os-1': realOneShotRifff() },
+      busOf: { 'a:0': 'drums', 'b:0': 'bass', 'os-1:0': 'lead' },
+      leftCrop: { b: 1 },
+      playedBars: { b: 6 },
+      muteRegions: { 'a:0': [{ startBar: 1, endBar: 2 }] },
+      vol: { 'b:0': 0.4 }
+    })
+    const fileNames = new Map([
+      ['a:0', 'a.wav'],
+      ['b:0', 'b.wav'],
+      ['os-1:0', 'vox.wav']
+    ])
+
+    const withoutOptions = buildRppProject(state, fileNames)
+    const withDefaultOptions = buildRppProject(state, fileNames, bakeOptions())
+    const withAutomationMode = buildRppProject(state, fileNames, automationOptions())
+
+    expect(stableText(withDefaultOptions)).toBe(stableText(withoutOptions))
+    // Even automation MODE changes nothing when there is no automation --
+    // except that nothing can share a track any more, which is the one
+    // deliberate difference. Everything else about the text is the same.
+    expect(findAllChildren(parseRpp(withAutomationMode), 'TRACK')).toHaveLength(3)
+  })
+})
+
+describe('buildRppProject: bake mode', () => {
+  it('references the baked file instead of the dry stem, laid out on the arrangement timeline', () => {
+    // drumsRifff: startBar 8, 4 bars; state.bpm 120 -> secPerBar 2, so the
+    // clip is seconds [16, 24). tailBars 1 -> one extra bar of reverb tail.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      vol: { 'rifff-1:0': 0.5 }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map([['rifff-1:0', 'dry-kick.wav']]),
+      bakeOptions([['rifff-1:0', { fileName: 'my-rifff-kick-toolkit.wav', tailBars: 1 }]])
+    )
+    const item = firstItemOf(tracksOf(rppText).tracks[0])
+
+    expect(findChild(findChild(item, 'SOURCE')!, 'FILE')?.params[0]).toBe(
+      '"Samples/Imported/my-rifff-kick-toolkit.wav"'
+    )
+    expect(Number(findChild(item, 'POSITION')?.params[0])).toBeCloseTo(16, 9)
+    // The identity mapping: bar 0 of the render is bar 0 of the arrangement,
+    // so the source offset is simply the clip's own start.
+    expect(Number(findChild(item, 'SOFFS')?.params[0])).toBeCloseTo(16, 9)
+    // 4 bars of clip + 1 bar of rendered reverb tail, at 2 sec/bar.
+    expect(Number(findChild(item, 'LENGTH')?.params[0])).toBeCloseTo(10, 9)
+    expect(findChild(item, 'LOOP')?.params).toEqual(['0'])
+    expect(findChild(item, 'PLAYRATE')?.params).toEqual(['1', '1', '0', '-1', '0', '-1'])
+    // Gain and fades are already in the samples -- applying either again
+    // would apply it twice.
+    expect(findChild(item, 'VOLPAN')?.params).toEqual(['1', '0', '1', '-1'])
+    expect(findChild(item, 'FADEIN')?.params).toEqual(['0', '0', '0', '1', '0', '0'])
+    expect(findChild(item, 'FADEOUT')?.params).toEqual(['0', '0', '0', '1', '0', '0'])
+  })
+
+  it('does NOT split a baked clip around its mute regions', () => {
+    // The dry path splits this into 2 items (see the existing mute-region
+    // test). The baked render already contains the silence -- and any
+    // reverb tail ringing through the gap -- so splitting would chop audio
+    // that was deliberately rendered.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      muteRegions: { 'rifff-1:0': [{ startBar: 9, endBar: 9.5 }] },
+      stemAutomation: {
+        'rifff-1:0': {
+          volume: [
+            { bar: 0, value: 0 },
+            { bar: 1, value: 1 }
+          ]
+        }
+      }
+    })
+    const dry = buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]))
+    expect(findAllChildren(tracksOf(dry).tracks[0], 'ITEM')).toHaveLength(2)
+
+    const baked = buildRppProject(
+      state,
+      new Map([['rifff-1:0', 'a.wav']]),
+      bakeOptions([['rifff-1:0', { fileName: 'baked.wav', tailBars: 0 }]])
+    )
+    const items = findAllChildren(tracksOf(baked).tracks[0], 'ITEM')
+    expect(items).toHaveLength(1)
+    expect(Number(findChild(items[0], 'LENGTH')?.params[0])).toBeCloseTo(8, 9)
+  })
+
+  it('still packs two non-overlapping same-bus stems onto one track', () => {
+    // Same scenario as the dry-path packing test -- baking changes the
+    // audio a clip references, not where it lands.
+    const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
+    const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 4 }
+    const state = emptyAppState({
+      rifffs: { a: rifffA, b: rifffB },
+      busOf: { 'a:0': 'drums', 'b:0': 'drums' }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map([
+        ['a:0', 'a.wav'],
+        ['b:0', 'b.wav']
+      ]),
+      bakeOptions([['a:0', { fileName: 'a-toolkit.wav', tailBars: 0 }]])
+    )
+    const { tracks } = tracksOf(rppText)
+    expect(tracks).toHaveLength(1)
+    expect(findAllChildren(tracks[0], 'ITEM')).toHaveLength(2)
+  })
+})
+
+describe('buildRppProject: automation mode', () => {
+  it('gives every stem its own track where bake mode packs two onto one', () => {
+    const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
+    const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 4 }
+    const state = emptyAppState({
+      rifffs: { a: rifffA, b: rifffB },
+      busOf: { 'a:0': 'drums', 'b:0': 'drums' }
+    })
+    const fileNames = new Map([
+      ['a:0', 'a.wav'],
+      ['b:0', 'b.wav']
+    ])
+
+    expect(tracksOf(buildRppProject(state, fileNames, bakeOptions())).tracks).toHaveLength(1)
+
+    const { tracks } = tracksOf(buildRppProject(state, fileNames, automationOptions()))
+    expect(tracks).toHaveLength(2)
+    // Each is named the way a single-entry packed track already is -- a
+    // track envelope belongs to the whole track, so naming the first one
+    // after the whole bus would misdescribe what is on it.
+    expect(tracks.map((t) => findChild(t, 'NAME')?.params[0])).toEqual([
+      '"DRUMS - my-rifff - kick"',
+      '"DRUMS - my-rifff - kick"'
+    ])
+    tracks.forEach((t) => expect(findAllChildren(t, 'ITEM')).toHaveLength(1))
+  })
+
+  it('writes a VOLENV2 whose times are SECONDS and whose values are the dial times the curve', () => {
+    // startBar 8 at 120bpm -> the clip's left edge is second 16, and the
+    // curve's bars are CLIP-relative, so bar 2 is second 16 + 2*2 = 20.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      vol: { 'rifff-1:0': 0.5 },
+      stemAutomation: {
+        'rifff-1:0': {
+          volume: [
+            { bar: 0, value: 0 },
+            { bar: 2, value: 1 },
+            { bar: 4, value: 0.5 }
+          ]
+        }
+      }
+    })
+    const rppText = buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions())
+    const track = tracksOf(rppText).tracks[0]
+    const env = findChild(track, 'VOLENV2')!
+
+    expect(findChild(env, 'VOLTYPE')?.params).toEqual(['1'])
+    expect(findChild(env, 'ACT')?.params).toEqual(['1', '-1'])
+    expect(findChild(env, 'ARM')?.params).toEqual(['1'])
+    expect(findChild(env, 'DEFSHAPE')?.params).toEqual(['0', '-1', '-1'])
+    // The engine MULTIPLIES dial by curve (buildEngineProject's
+    // scaleCurveByGain), so the export has to as well.
+    expect(ptValuesOf(env)).toEqual([
+      { sec: 16, value: 0 },
+      { sec: 20, value: 0.5 },
+      { sec: 24, value: 0.25 }
+    ])
+  })
+
+  it('lets the volume envelope own the level: the item keeps gain 1 and no fades', () => {
+    // The very same curve exports as clip FADES on the dry path (the
+    // existing mute-region test pins that). With a real envelope carrying
+    // the shape, keeping the fades would ramp the audio twice.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      vol: { 'rifff-1:0': 0.8 },
+      stemAutomation: {
+        'rifff-1:0': {
+          volume: [
+            { bar: 0, value: 0 },
+            { bar: 1, value: 1 },
+            { bar: 3, value: 1 },
+            { bar: 4, value: 0 }
+          ]
+        }
+      }
+    })
+    const fileNames = new Map([['rifff-1:0', 'a.wav']])
+
+    const dryItem = firstItemOf(tracksOf(buildRppProject(state, fileNames)).tracks[0])
+    expect(findChild(dryItem, 'FADEIN')?.params[0]).toBe('1')
+    expect(findChild(dryItem, 'VOLPAN')?.params[0]).toBe('0.8')
+
+    const item = firstItemOf(
+      tracksOf(buildRppProject(state, fileNames, automationOptions())).tracks[0]
+    )
+    expect(findChild(item, 'FADEIN')?.params).toEqual(['0', '0', '0', '1', '0', '0'])
+    expect(findChild(item, 'FADEOUT')?.params).toEqual(['0', '0', '0', '1', '0', '0'])
+    expect(findChild(item, 'VOLPAN')?.params[0]).toBe('1')
+  })
+
+  it('puts ONE reverb bus track last, with the AUXRECV naming the source track INDEX', () => {
+    // Two buses -> drums is track 0, bass is track 1 (BUS_IDS order). Both
+    // send, so both AUXRECVs live on the one appended bus track.
+    const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
+    const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 0 }
+    const state = emptyAppState({
+      rifffs: { a: rifffA, b: rifffB },
+      busOf: { 'a:0': 'drums', 'b:0': 'bass' },
+      stemSends: { 'a:0': 0.25, 'b:0': 0.75 }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map([
+        ['a:0', 'a.wav'],
+        ['b:0', 'b.wav']
+      ]),
+      automationOptions()
+    )
+    const { tracks } = tracksOf(rppText)
+
+    expect(trackNamed(tracks, 'reverb bus')).toHaveLength(1)
+    expect(findChild(tracks[tracks.length - 1], 'NAME')?.params[0]).toBe('"reverb bus"')
+
+    const bus = tracks[2]
+    const recvs = findAllChildren(bus, 'AUXRECV')
+    expect(recvs).toHaveLength(2)
+    // Field 0 is the SOURCE track index, field 2 the static send level.
+    expect(recvs[0].params[0]).toBe('0')
+    expect(Number(recvs[0].params[2])).toBeCloseTo(0.25, 9)
+    expect(recvs[1].params[0]).toBe('1')
+    expect(Number(recvs[1].params[2])).toBeCloseTo(0.75, 9)
+    // A static send has no curve, so there is no envelope to write.
+    expect(findAllChildren(bus, 'AUXVOLENV')).toHaveLength(0)
+    // Stock ReaVerbate, so the project opens with nothing to install.
+    const vst = findChild(findChild(bus, 'FXCHAIN')!, 'VST')!
+    expect(vst.params[0]).toBe('"VST: ReaVerbate (Cockos)"')
+  })
+
+  it('puts the send ENVELOPE on the receiving bus track, not on the sending track', () => {
+    // The one thing the reference doc warns is easy to get backwards.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      stemSends: { 'rifff-1:0': 0.5 },
+      stemAutomation: {
+        'rifff-1:0': {
+          reverbSend: [
+            { bar: 0, value: 0 },
+            { bar: 4, value: 0.8 }
+          ]
+        }
+      }
+    })
+    const { tracks } = tracksOf(
+      buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions())
+    )
+    const source = tracks[0]
+    const bus = tracks[1]
+
+    expect(findAllChildren(source, 'AUXVOLENV')).toHaveLength(0)
+    expect(findAllChildren(source, 'AUXRECV')).toHaveLength(0)
+
+    const env = findChild(bus, 'AUXVOLENV')!
+    expect(findChild(env, 'VOLTYPE')?.params).toEqual(['1'])
+    // Clip-relative bars against the clip's own left edge (second 16), in
+    // seconds; values pass through as linear send gain.
+    expect(ptValuesOf(env)).toEqual([
+      { sec: 16, value: 0 },
+      { sec: 24, value: 0.8 }
+    ])
+    // With an envelope carrying the level, the AUXRECV fader sits at unity
+    // -- which is exactly what doop.RPP's own captured send does.
+    expect(findChild(bus, 'AUXRECV')?.params[2]).toBe('1')
+  })
+
+  it('emits the captured ReaEQ and a cutoff PARMENV whose values are normalised 0..1, not Hz', () => {
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.25, resonance: 0 } },
+      stemAutomation: {
+        'rifff-1:0': {
+          filterCutoff: [
+            { bar: 0, value: 0.25 },
+            { bar: 4, value: 0.75 }
+          ]
+        }
+      }
+    })
+    const track = tracksOf(
+      buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions())
+    ).tracks[0]
+    const chain = findChild(track, 'FXCHAIN')!
+    const vst = findChild(chain, 'VST')!
+
+    expect(vst.params[0]).toBe('"VST: ReaEQ (Cockos)"')
+    // The base64 state is what makes band 1 a Low Pass, which is what makes
+    // "Freq-Low Pass 1" exist as a parameter at all.
+    expect(vst.children?.length).toBe(5)
+    expect(vst.children?.[0].tag).toBe(
+      'cWVlcu5e7f4CAAAAAQAAAAAAAAACAAAAAAAAAAIAAAABAAAAAAAAAAIAAAAAAAAAzQAAAAEAAAAAABAA'
+    )
+
+    const parmenvs = findAllChildren(chain, 'PARMENV')
+    expect(parmenvs).toHaveLength(1) // resonance is 0 -- see the next test
+    expect(parmenvs[0].params.slice(0, 5)).toEqual([
+      '0:_Freq_Low_Pass_1',
+      '0',
+      '1',
+      '0.5',
+      '"Freq-Low Pass 1 / ReaEQ"'
+    ])
+    // THE ASSERTION THAT MATTERS: 0.25 comes out as 0.25. REAPER's
+    // parameter envelopes are normalised, our cutoff dial already is, so
+    // this conversion is a no-op -- unlike Ableton's, which is real Hz.
+    expect(ptValuesOf(parmenvs[0])).toEqual([
+      { sec: 16, value: 0.25 },
+      { sec: 24, value: 0.75 }
+    ])
+    expect(findChild(chain, 'PARM_TCP')?.params).toEqual(['0:_Freq_Low_Pass_1'])
+  })
+
+  it('writes a single flat cutoff point for a static non-neutral cutoff with no curve', () => {
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.4, resonance: 0 } }
+    })
+    const chain = findChild(
+      tracksOf(buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions()))
+        .tracks[0],
+      'FXCHAIN'
+    )!
+    expect(ptValuesOf(findAllChildren(chain, 'PARMENV')[0])).toEqual([{ sec: 16, value: 0.4 }])
+  })
+
+  it('leaves out the ReaEQ entirely for a clip whose cutoff is at its neutral end', () => {
+    // A lowpass parked fully open does nothing, so exporting a device for it
+    // would be noise -- the same rule isStemToolkitNeutral already owns.
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 1, resonance: 0.9 } }
+    })
+    const track = tracksOf(
+      buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions())
+    ).tracks[0]
+    expect(findChild(track, 'FXCHAIN')).toBeUndefined()
+  })
+
+  it('writes resonance as a STATIC one-point bandwidth PARMENV, and only when the dial was turned up', () => {
+    const base = {
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' as const }
+    }
+    const fileNames = new Map([['rifff-1:0', 'a.wav']])
+
+    const withResonance = tracksOf(
+      buildRppProject(
+        emptyAppState({
+          ...base,
+          stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.4, resonance: 0.5 } }
+        }),
+        fileNames,
+        automationOptions()
+      )
+    ).tracks[0]
+    const parmenvs = findAllChildren(findChild(withResonance, 'FXCHAIN')!, 'PARMENV')
+    expect(parmenvs).toHaveLength(2)
+    expect(parmenvs[1].params[0]).toBe('2:_BW_Low_Pass_1')
+    expect(parmenvs[1].params[4]).toBe('"BW-Low Pass 1 / ReaEQ"')
+    // ONE point -- resonance is a dial, not a lane (spec section 2c) -- and
+    // normalised into [0,1], narrower (lower) as the dial goes up, since
+    // bandwidth is the inverse of Q.
+    const points = ptValuesOf(parmenvs[1])
+    expect(points).toHaveLength(1)
+    expect(points[0].sec).toBe(16)
+    expect(points[0].value).toBeGreaterThan(0)
+    expect(points[0].value).toBeLessThan(1)
+
+    const noResonance = tracksOf(
+      buildRppProject(
+        emptyAppState({
+          ...base,
+          stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.4, resonance: 0 } }
+        }),
+        fileNames,
+        automationOptions()
+      )
+    ).tracks[0]
+    // Untouched dial -> ReaEQ keeps the bandwidth baked into the captured
+    // state rather than being overridden by our inferred parameter.
+    expect(findAllChildren(findChild(noResonance, 'FXCHAIN')!, 'PARMENV')).toHaveLength(1)
+  })
+
+  it('turning the dial further up narrows the exported bandwidth', () => {
+    const bandwidthFor = (resonance: number): number => {
+      const state = emptyAppState({
+        rifffs: { 'rifff-1': drumsRifff() },
+        busOf: { 'rifff-1:0': 'drums' },
+        stemFilters: { 'rifff-1:0': { mode: 'lowpass', cutoff: 0.4, resonance } }
+      })
+      const chain = findChild(
+        tracksOf(buildRppProject(state, new Map([['rifff-1:0', 'a.wav']]), automationOptions()))
+          .tracks[0],
+        'FXCHAIN'
+      )!
+      return ptValuesOf(findAllChildren(chain, 'PARMENV')[1])[0].value
+    }
+    expect(bandwidthFor(1)).toBeLessThan(bandwidthFor(0.5))
+    expect(bandwidthFor(0.5)).toBeLessThan(bandwidthFor(0.01))
+  })
+})
+
+describe('buildRppProject: risers', () => {
+  it('emits one item per riser at the right seconds, in BOTH modes', () => {
+    // Risers are generated, so they always come out as rendered audio
+    // whichever mode the user picked (spec section 4, Elling's decision).
+    const state = emptyAppState({
+      bpm: 120, // secPerBar 2
+      risers: {
+        'riser-1': riser({ id: 'riser-1', startBar: 4, lengthBars: 2 }),
+        'riser-2': riser({ id: 'riser-2', startBar: 12, lengthBars: 4 })
+      }
+    })
+
+    for (const options of [bakeOptions([], 'risers.wav'), automationOptions('risers.wav')]) {
+      const { tracks } = tracksOf(buildRppProject(state, new Map(), options))
+      const riserTracks = trackNamed(tracks, 'risers')
+      expect(riserTracks).toHaveLength(1) // they don't overlap
+      const items = findAllChildren(riserTracks[0], 'ITEM')
+      expect(items).toHaveLength(2)
+
+      expect(Number(findChild(items[0], 'POSITION')?.params[0])).toBeCloseTo(8, 9)
+      expect(Number(findChild(items[0], 'LENGTH')?.params[0])).toBeCloseTo(4, 9)
+      // Same identity mapping a baked clip uses: every riser lives in the
+      // one file, laid out on the arrangement's own timeline.
+      expect(Number(findChild(items[0], 'SOFFS')?.params[0])).toBeCloseTo(8, 9)
+      expect(findChild(items[0], 'LOOP')?.params).toEqual(['0'])
+      expect(findChild(items[0], 'VOLPAN')?.params).toEqual(['1', '0', '1', '-1'])
+      expect(findChild(findChild(items[0], 'SOURCE')!, 'FILE')?.params[0]).toBe(
+        '"Samples/Imported/risers.wav"'
+      )
+
+      expect(Number(findChild(items[1], 'POSITION')?.params[0])).toBeCloseTo(24, 9)
+      expect(Number(findChild(items[1], 'LENGTH')?.params[0])).toBeCloseTo(8, 9)
+    }
+  })
+
+  it('opens a second risers track when two risers overlap in time', () => {
+    const state = emptyAppState({
+      risers: {
+        'riser-1': riser({ id: 'riser-1', startBar: 4, lengthBars: 4 }),
+        'riser-2': riser({ id: 'riser-2', startBar: 6, lengthBars: 4 })
+      }
+    })
+    const { tracks } = tracksOf(buildRppProject(state, new Map(), bakeOptions([], 'risers.wav')))
+    const riserTracks = trackNamed(tracks, 'risers')
+    expect(riserTracks).toHaveLength(2)
+    riserTracks.forEach((t) => expect(findAllChildren(t, 'ITEM')).toHaveLength(1))
+  })
+
+  it('emits no risers track at all when nothing was rendered for them', () => {
+    const state = emptyAppState({ risers: { 'riser-1': riser() } })
+    const { tracks } = tracksOf(buildRppProject(state, new Map(), bakeOptions()))
+    expect(trackNamed(tracks, 'risers')).toHaveLength(0)
   })
 })
