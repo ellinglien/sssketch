@@ -8,6 +8,7 @@ import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import {
+  DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
   DISCOVER_TRAIT_SLOT_KINDS,
@@ -2504,7 +2505,10 @@ export function DiscoverPanel({
           marginRight: 498
         }}
       >
-        {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
+        {/* Direct request, 2026-09-22: trait kinds first, then drums/bass/lead
+            after warm. Display order only -- DISCOVER_SLOT_KIND_OPTIONS (and
+            so combo labels like "drums · warm") keeps its canonical order. */}
+        {[...DISCOVER_TRAIT_SLOT_KINDS, ...DISCOVER_MASK_SLOT_KINDS].map((kind) => {
           // Instrument kinds are Endlesss content by definition -- with the
           // "endlesss" source off they can't match anything (spec, 2026-09-21).
           const disabled = !soundSourceEndlesss && isMaskSlotKind(kind)
