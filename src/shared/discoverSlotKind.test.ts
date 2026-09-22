@@ -113,7 +113,7 @@ describe('toggleSlotKind', () => {
 
 describe('slotKindsLabel / slotKindsKey', () => {
   it('joins display labels with a middle dot, canonical order', () => {
-    expect(slotKindsLabel(['warm', 'bassHeavy', 'drums'])).toBe('drums · bass-heavy · warm')
+    expect(slotKindsLabel(['warm', 'bassHeavy', 'drums'])).toBe('drummy · chonky · buttery')
   })
 
   it('key is order-independent', () => {
@@ -121,7 +121,15 @@ describe('slotKindsLabel / slotKindsKey', () => {
     expect(slotKindsKey(['warm', 'drums'])).toBe('drums+warm')
   })
 
-  it('DISCOVER_SLOT_KIND_LABEL hyphenates the camelCase kind', () => {
-    expect(DISCOVER_SLOT_KIND_LABEL.bassHeavy).toBe('bass-heavy')
+  it('DISCOVER_SLOT_KIND_LABEL uses the playful display names', () => {
+    expect(DISCOVER_SLOT_KIND_LABEL).toEqual({
+      drums: 'drummy',
+      bass: 'bassish',
+      lead: 'leadesque',
+      bassHeavy: 'chonky',
+      rhythmic: 'rhythmic',
+      bright: 'sparkly',
+      warm: 'buttery'
+    })
   })
 })

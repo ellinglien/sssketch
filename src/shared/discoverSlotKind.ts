@@ -60,17 +60,18 @@ export function discoverSlotKindToArrangeRole(kind: DiscoverSlotKind): ArrangeRo
 
 export type DiscoverTraitKind = 'bassHeavy' | 'rhythmic' | 'bright' | 'warm'
 
-/** Display text per kind -- the literal value except for the camelCase
- * trait kind. Moved here from DiscoverPanel.tsx so slotKindsLabel (and the
- * kind picker) share one table. */
+/** Display text per kind, shared by slotKindsLabel, the add row and the
+ * kind picker. Direct request, 2026-09-22: playful names ("a bit more
+ * whimsy") -- display only; the kind values themselves (and so matching,
+ * saved state, and code) are unchanged. */
 export const DISCOVER_SLOT_KIND_LABEL: Record<DiscoverSlotKind, string> = {
-  drums: 'drums',
-  bass: 'bass',
-  lead: 'lead',
-  bassHeavy: 'bass-heavy',
+  drums: 'drummy',
+  bass: 'bassish',
+  lead: 'leadesque',
+  bassHeavy: 'chonky',
   rhythmic: 'rhythmic',
-  bright: 'bright',
-  warm: 'warm'
+  bright: 'sparkly',
+  warm: 'buttery'
 }
 
 export function isMaskSlotKind(kind: DiscoverSlotKind): boolean {
