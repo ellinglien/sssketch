@@ -1882,26 +1882,24 @@ function Frame(): React.JSX.Element {
     }
   }, [dispatch])
 
-  // Shared by the TransportBar mode button and the Tab shortcut below --
-  // nextArrangerMode already silently stays on 'normal' rather than landing
-  // on a mode it can't show, but that read as broken rather than
-  // unavailable: clicking (or hitting Tab) while ineligible visibly did
-  // nothing, with the reason only discoverable by hovering the button's own
-  // title text. This surfaces that same reason as an explicit explanation
-  // at the moment the attempt is actually made.
+  // Shared by the Titlebar mode button and the Tab shortcut below.
+  //
+  // This used to block with an alert ("sketch mode requires a plain,
+  // back-to-back arrangement...") when the cycle would have stayed put:
+  // before automation mode existed, an ineligible project's toggle went
+  // normal -> normal, which read as broken rather than unavailable. The
+  // cycle now always advances (normal -> automation when sketch is
+  // ineligible — see nextArrangerMode), so there's no longer a dead click
+  // to explain, and a modal alert on a key the user is cycling through
+  // would be worse than the silence it replaced. The reason sketch is
+  // unavailable stays where it already was, in the button's own title text.
   function handleCycleArrangerMode(): void {
-    if (state.mode === 'normal' && !isSketchEligible(state)) {
-      window.alert(
-        'sketch mode requires a plain, back-to-back arrangement — no fades, offsets, or gaps.'
-      )
-      return
-    }
     dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
   }
 
-  // Tab cycles the arranger mode, Ableton-style: normal -> compact -> sketch
-  // -> normal, skipping sketch when isSketchEligible(state) is false (see
-  // nextArrangerMode). Skipped while focus is in a text input — Tab's native
+  // Tab cycles the arranger mode, Ableton-style: arrange -> sketch ->
+  // automation -> arrange, skipping sketch when isSketchEligible(state) is
+  // false (see nextArrangerMode). Skipped while focus is in a text input — Tab's native
   // move-to-next-field behavior is more useful there than the arrangement's
   // own view-mode cycle (matches Delete/V/undo's same input-skip pattern).
   useEffect(() => {

@@ -256,12 +256,18 @@ export function modeLabel(mode: ArrangerMode): string {
   return mode === 'normal' ? 'arrange' : mode
 }
 
-/** What Tab / the TransportBar's mode button should switch to next —
- * normal <-> sketch, staying on 'normal' when isSketchEligible(state) is
- * false, so the toggle never lands on a mode it can't actually show. */
+/** What Tab / the Titlebar's mode button should switch to next — arrange ->
+ * sketch -> automation -> arrange, skipping sketch straight to automation
+ * when isSketchEligible(state) is false, so the cycle never lands on a mode
+ * it can't actually show. Unlike sketch, automation has no eligibility
+ * requirement at all: it's the ordinary arranger with a drawable lane over
+ * each row, so it's always showable, and the cycle therefore always
+ * advances (before automation existed, an ineligible project's toggle sat
+ * on 'normal' and appeared to do nothing — see App.tsx). */
 export function nextArrangerMode(state: AppState): ArrangerMode {
-  if (state.mode === 'sketch') return 'normal'
-  return isSketchEligible(state) ? 'sketch' : 'normal'
+  if (state.mode === 'sketch') return 'automation'
+  if (state.mode === 'automation') return 'normal'
+  return isSketchEligible(state) ? 'sketch' : 'automation'
 }
 
 /** Which placed rifff's [startBar, startBar + playedBars) range contains

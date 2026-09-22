@@ -2386,3 +2386,117 @@ describe('reducer', () => {
     })
   })
 })
+
+describe('automation curves', () => {
+  it('stores a drawn curve on a channel, normalised', () => {
+    const state = reducer(initialState, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'filterCutoff',
+      points: [
+        { bar: 8, value: 1.4 },
+        { bar: 0, value: -0.2 }
+      ]
+    })
+    expect(state.channelAutomation.ch1.filterCutoff).toEqual([
+      { bar: 0, value: 0 },
+      { bar: 8, value: 1 }
+    ])
+  })
+
+  it('keeps each parameter on a channel independent', () => {
+    let state = reducer(initialState, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'filterCutoff',
+      points: [{ bar: 0, value: 0.5 }]
+    })
+    state = reducer(state, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'reverbSend',
+      points: [{ bar: 2, value: 0.25 }]
+    })
+    expect(state.channelAutomation.ch1.filterCutoff).toEqual([{ bar: 0, value: 0.5 }])
+    expect(state.channelAutomation.ch1.reverbSend).toEqual([{ bar: 2, value: 0.25 }])
+  })
+
+  it('REMOVES an emptied curve rather than storing [], so the channel can go fully neutral again', () => {
+    let state = reducer(initialState, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.5 }]
+    })
+    state = reducer(state, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: []
+    })
+    expect(state.channelAutomation.ch1).toBeUndefined()
+    expect(Object.keys(state.channelAutomation)).toEqual([])
+  })
+
+  it('clearing one parameter leaves the channel entry when another is still drawn', () => {
+    let state = reducer(initialState, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.5 }]
+    })
+    state = reducer(state, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'reverbSend',
+      points: [{ bar: 0, value: 0.5 }]
+    })
+    state = reducer(state, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: []
+    })
+    expect(state.channelAutomation.ch1).toEqual({ reverbSend: [{ bar: 0, value: 0.5 }] })
+  })
+
+  it('does not mutate the previous state -- undo snapshots have to stay intact', () => {
+    const before = reducer(initialState, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.5 }]
+    })
+    reducer(before, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'ch1',
+      param: 'volume',
+      points: [{ bar: 0, value: 0.9 }]
+    })
+    expect(before.channelAutomation.ch1.volume).toEqual([{ bar: 0, value: 0.5 }])
+  })
+
+  it('remembers which parameter each channel lane is editing', () => {
+    let state = reducer(initialState, {
+      type: 'SET_AUTOMATION_PARAM',
+      channelId: 'ch1',
+      param: 'reverbSend'
+    })
+    state = reducer(state, {
+      type: 'SET_AUTOMATION_PARAM',
+      channelId: 'ch2',
+      param: 'volume'
+    })
+    expect(state.automationParamOf).toEqual({ ch1: 'reverbSend', ch2: 'volume' })
+  })
+
+  it('entering and leaving automation mode changes nothing but the mode', () => {
+    const placed = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r1' })
+    })
+    const there = reducer(placed, { type: 'SET_ARRANGER_MODE', mode: 'automation' })
+    const back = reducer(there, { type: 'SET_ARRANGER_MODE', mode: 'normal' })
+    expect({ ...back, mode: placed.mode }).toEqual(placed)
+  })
+})

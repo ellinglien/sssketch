@@ -35,6 +35,13 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'TOGGLE_VOLUME_DRAG_MODE',
   'SET_VOLUME_DRAG_MODE',
   'SET_ARRANGER_MODE',
+  // Which parameter a channel's automation lane is currently showing --
+  // "what am I looking at," not an edit, same category as
+  // SET_ARRANGER_MODE directly above. The real edit is
+  // SET_CHANNEL_AUTOMATION, which is NOT in this set: the lane dispatches
+  // exactly one of those per completed gesture (see its own comment in
+  // store.ts), so a freehand drag is one undo step.
+  'SET_AUTOMATION_PARAM',
   'TOGGLE_INSPECTOR_COLLAPSED',
   'TOGGLE_METRONOME',
   'ARM_RECORDING_CHANNEL',

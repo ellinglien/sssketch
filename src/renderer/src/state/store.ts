@@ -2,6 +2,9 @@ import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@sh
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
+  normaliseAutomationCurve,
+  type AutomationParam,
+  type AutomationPoint,
   type ChannelAutomation,
   type ChannelFilterSettings,
   type ProjectReverbSettings
@@ -56,7 +59,7 @@ function placeOnTimeline(state: AppState, groupId: string, startBar: number): Ap
   }
 }
 
-export type ArrangerMode = 'normal' | 'sketch'
+export type ArrangerMode = 'normal' | 'sketch' | 'automation'
 
 export type LoopRegion = { startBar: number; endBar: number } | null
 
@@ -156,10 +159,21 @@ export interface AppState {
   /** Global arrangement-wide view mode. 'normal' is today's per-rifff
    * collapsed/expanded rendering. 'sketch' replaces the whole Timeline with
    * a single gapless sequence strip (SketchStrip) — only reachable when
-   * isSketchEligible(state) (see selectors.ts). Cycled by the Tab key via
-   * selectors.ts's nextArrangerMode — see App.tsx's Frame component. Not
-   * persisted (see serialize.ts). */
+   * isSketchEligible(state) (see selectors.ts). 'automation' keeps the
+   * normal Timeline exactly as it is but dims each channel's clips and
+   * lays a drawable automation lane over them (AutomationLane.tsx) --
+   * purely a view/interaction mode, so entering and leaving it never
+   * touches the arrangement. Cycled by the Tab key via selectors.ts's
+   * nextArrangerMode — see App.tsx's Frame component. Not persisted (see
+   * serialize.ts). */
   mode: ArrangerMode
+  /** Which parameter each channel's automation lane is currently editing,
+   * keyed by channelId; a channel absent from this record edits
+   * AUTOMATION_PARAMS[0]. Session state, deliberately: it's "what am I
+   * looking at right now," the same category as mode/tidiedView above, so
+   * it isn't persisted (serialize.ts) and isn't undoable (history.ts) --
+   * only the curves themselves are real edits. */
+  automationParamOf: Record<string, AutomationParam>
   /** Hides the Inspector panel entirely, giving its width back to the
    * arranger. Toggled from TransportBar. Not persisted (see serialize.ts). */
   inspectorCollapsed: boolean
@@ -353,6 +367,7 @@ export const initialState: AppState = {
   pendingLockInConfirm: false,
   volumeDragMode: false,
   mode: 'sketch',
+  automationParamOf: {},
   inspectorCollapsed: false,
   tidiedView: false,
   regionSelection: null,
@@ -487,6 +502,22 @@ export type Action =
   | { type: 'TOGGLE_VOLUME_DRAG_MODE' }
   | { type: 'SET_VOLUME_DRAG_MODE'; enabled: boolean }
   | { type: 'SET_ARRANGER_MODE'; mode: ArrangerMode }
+  | { type: 'SET_AUTOMATION_PARAM'; channelId: string; param: AutomationParam }
+  /** One whole free-draw gesture's result -- a stroke, a ramp, an inserted
+   * point, a moved point, a deleted point, or a cleared lane (`points:
+   * []`). Deliberately the ONLY way a curve changes, and deliberately
+   * coarse: the lane component keeps its in-progress gesture in local
+   * state and dispatches exactly one of these on release, so a drag that
+   * sampled two hundred positions is one undo step, not two hundred. Same
+   * split the volume/fade drags already use (SET_DRAG_PREVIEW during,
+   * SET_VOLUME once on commit), minus the transient half -- an automation
+   * gesture's preview never needs to be shared with another component. */
+  | {
+      type: 'SET_CHANNEL_AUTOMATION'
+      channelId: string
+      param: AutomationParam
+      points: AutomationPoint[]
+    }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
@@ -1464,6 +1495,31 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_ARRANGER_MODE':
       return { ...state, mode: action.mode }
+
+    case 'SET_AUTOMATION_PARAM':
+      return {
+        ...state,
+        automationParamOf: { ...state.automationParamOf, [action.channelId]: action.param }
+      }
+
+    case 'SET_CHANNEL_AUTOMATION': {
+      const points = normaliseAutomationCurve(action.points)
+      const existing = state.channelAutomation[action.channelId]
+      // An emptied curve is REMOVED, not stored as []. "Absent" and "present
+      // but empty" both mean not automated to isChannelToolkitNeutral, but
+      // only absence lets a channel go back to being fully neutral and drop
+      // off the wire entirely (buildEngineProject.ts) -- which is what makes
+      // clearing a lane actually restore the pre-toolkit render path rather
+      // than leaving the channel permanently in the toolkit's stage. Same
+      // reason the whole channel entry goes when its last curve does.
+      const nextChannel: ChannelAutomation = { ...existing }
+      if (points.length === 0) delete nextChannel[action.param]
+      else nextChannel[action.param] = points
+      const channelAutomation = { ...state.channelAutomation }
+      if (Object.keys(nextChannel).length === 0) delete channelAutomation[action.channelId]
+      else channelAutomation[action.channelId] = nextChannel
+      return { ...state, channelAutomation }
+    }
 
     case 'TOGGLE_INSPECTOR_COLLAPSED':
       return { ...state, inspectorCollapsed: !state.inspectorCollapsed }

@@ -706,20 +706,24 @@ describe('isSketchEligible', () => {
 })
 
 describe('nextArrangerMode', () => {
-  it('toggles normal <-> sketch when sketch-eligible', () => {
+  it('cycles arrange -> sketch -> automation -> arrange when sketch-eligible', () => {
     const state = { ...initialState, mode: 'normal' as const } // empty timeline: trivially eligible
     expect(nextArrangerMode(state)).toBe('sketch')
-    expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('normal')
+    expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('automation')
+    expect(nextArrangerMode({ ...state, mode: 'automation' })).toBe('normal')
   })
 
-  it('stays on normal when the arrangement is not sketch-eligible', () => {
+  it('skips sketch straight to automation when the arrangement is not sketch-eligible', () => {
     let state = reducer(initialState, {
       type: 'ADD_TO_SHELF',
       rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
-    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('normal')
+    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('automation')
+    // ...and automation still hands back to arrange, so the cycle always
+    // advances rather than parking on a mode it can't show.
+    expect(nextArrangerMode({ ...state, mode: 'automation' })).toBe('normal')
   })
 })
 

@@ -13,6 +13,7 @@ export type PersistedProject = Omit<
   AppState,
   | 'volumeDragMode'
   | 'mode'
+  | 'automationParamOf'
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
   | 'armedChannelId'
@@ -46,6 +47,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
   const {
     volumeDragMode,
     mode,
+    automationParamOf,
     inspectorCollapsed,
     metronomeEnabled,
     armedChannelId,
@@ -147,7 +149,13 @@ export function deserializeProject(
   if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
   return {
-    state: isSketchEligible(state) ? state : { ...state, mode: 'normal' },
+    // Only SKETCH mode has an eligibility requirement -- normal and
+    // automation are always showable, so a project that can't be sketched
+    // only gets forced back to normal if it somehow arrived in sketch mode
+    // (mode isn't persisted at all, so in practice this is defence against
+    // a hand-edited file, not a path a save/load round trip takes).
+    state:
+      state.mode !== 'sketch' || isSketchEligible(state) ? state : { ...state, mode: 'normal' },
     pluginStates: pluginStates ?? {}
   }
 }

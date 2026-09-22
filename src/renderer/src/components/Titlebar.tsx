@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { modeLabel } from '../state/selectors'
+import type { ArrangerMode } from '../state/store'
 
 // Matches ProjectMenu's own buttonStyle (App.tsx) exactly -- the mode
 // toggle button below moved up here from TransportBar.tsx per direct
@@ -65,7 +66,7 @@ export function Titlebar({
    * active, no background/border highlight. The label text itself stays
    * red (var(--ra-mute-on), see the button's own style below), the one
    * thing per direct feedback that should still stand out. */
-  mode: 'normal' | 'sketch'
+  mode: ArrangerMode
   sketchEligible: boolean
   onCycleMode: () => void
 }): React.JSX.Element {
@@ -150,17 +151,18 @@ export function Titlebar({
           aria-label="Cycle arranger mode"
           data-tour-id="tour-mode"
           title={
-            mode === 'normal' && !sketchEligible
-              ? 'mode: arrange (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first'
+            !sketchEligible
+              ? `mode: ${modeLabel(mode)} (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first`
               : `mode: ${modeLabel(mode)} (Tab)`
           }
           style={{
             ...buttonStyle,
-            // Fixed, not content-width -- "arrange" and "sketch" are
-            // different lengths, and per direct feedback the button itself
-            // shouldn't visibly resize when the mode flips. Sized to fit
-            // "arrange" (the longer label) comfortably.
-            width: 64,
+            // Fixed, not content-width -- the three labels are different
+            // lengths, and per direct feedback the button itself shouldn't
+            // visibly resize when the mode flips. Sized to fit "automation"
+            // (the longest label) comfortably; it was 64 when "arrange" was
+            // the longest.
+            width: 96,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

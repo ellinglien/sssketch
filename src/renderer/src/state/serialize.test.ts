@@ -100,6 +100,30 @@ describe('project serialization', () => {
     expect(restored.gatedRecordingEnabled).toBe(initialState.gatedRecordingEnabled)
     expect(restored.gatedRecordingChannelId).toBe(initialState.gatedRecordingChannelId)
   })
+
+  it('persists drawn automation curves but not which parameter each lane was showing', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, {
+      type: 'SET_CHANNEL_AUTOMATION',
+      channelId: 'r1',
+      param: 'filterCutoff',
+      points: [
+        { bar: 0, value: 1 },
+        { bar: 8, value: 0 }
+      ]
+    })
+    state = reducer(state, { type: 'SET_AUTOMATION_PARAM', channelId: 'r1', param: 'reverbSend' })
+
+    const parsed = JSON.parse(serializeProject(state))
+    expect(parsed.automationParamOf).toBeUndefined()
+
+    const { state: restored } = deserializeProject(parsed)
+    expect(restored.channelAutomation.r1.filterCutoff).toEqual([
+      { bar: 0, value: 1 },
+      { bar: 8, value: 0 }
+    ])
+    expect(restored.automationParamOf).toEqual({})
+  })
 })
 
 describe('deserializeProject mode fallback', () => {
@@ -117,6 +141,17 @@ describe('deserializeProject mode fallback', () => {
     state = reducer(state, { type: 'SET_FADE_IN', groupId: 'r1', bars: 1 }) // disqualifies sketch
     const persisted = JSON.parse(serializeProject(state))
     expect(deserializeProject(persisted).state.mode).toBe('normal')
+  })
+
+  it('leaves automation mode alone -- only sketch has an eligibility requirement', () => {
+    // mode isn't persisted, so this has to be forced onto the parsed object
+    // the way a hand-edited .sssketchproj could; the point is that the
+    // sketch-eligibility fallback doesn't kick a non-sketch mode to normal.
+    const persisted = {
+      ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
+      mode: 'automation'
+    } as unknown as import('./serialize').PersistedProject
+    expect(deserializeProject(persisted).state.mode).toBe('automation')
   })
 })
 
