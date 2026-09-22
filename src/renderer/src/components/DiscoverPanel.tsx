@@ -2439,7 +2439,7 @@ export function DiscoverPanel({
                 renders it in caps, like every other label here. */}
             <span
               style={{
-                fontSize: 10,
+                fontSize: 12,
                 fontWeight: 700,
                 color: 'var(--ra-text)',
                 marginRight: 4
@@ -2608,8 +2608,8 @@ function AddRowChip({
       onClick={onClick}
       style={{
         fontFamily: 'inherit',
-        fontSize: 9,
-        padding: '4px 8px',
+        fontSize: 11,
+        padding: '5px 9px',
         background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
         border: `1px solid ${selected ? 'var(--ra-text)' : 'transparent'}`,
         color: selected ? 'var(--ra-text)' : 'var(--ra-text-2)',
