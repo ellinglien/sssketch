@@ -147,6 +147,8 @@ target_sources(sssketch_engine PRIVATE
   Source/LiveParamOverridesTests.cpp
   Source/AutomationCurve.cpp
   Source/AutomationCurveTests.cpp
+  Source/ChannelFilter.cpp
+  Source/ChannelFilterTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE
