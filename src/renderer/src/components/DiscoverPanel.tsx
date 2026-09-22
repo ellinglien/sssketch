@@ -5,6 +5,8 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { Dial } from './Dial'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
+import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
+import { ROLE_LABELS } from './autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -13,6 +15,7 @@ import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
   DISCOVER_TRAIT_SLOT_KINDS,
+  discoverSlotKindToArrangeRole,
   isTraitSlotKind,
   slotKindsKey,
   slotKindsLabel,
@@ -30,6 +33,13 @@ import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { applyTraitBar } from '@shared/traitBar'
+import {
+  buildMatchMeter,
+  discoverRoleLabel,
+  reclassifyKindSources,
+  MATCH_METER_STEPS
+} from '@shared/discoverMatchMeter'
+import type { ArrangeRole } from '@shared/stemRole'
 import {
   useAppSelector,
   useDispatch,
@@ -141,6 +151,22 @@ export interface DiscoverSlot {
   kinds: DiscoverSlotKind[]
   locked: boolean
   candidate: DiscoverCandidate | null
+  /** Match meter (docs/superpowers/specs/2026-09-22-discover-promise-vs-
+   * delivery-design.md, Phase 2): the trait bar applyTraitBar actually used
+   * when rollForSlot picked `candidate`, so the meter can say when a pick
+   * was relaxed. Set in the same setSlots call as `candidate` on every
+   * roll. Paired with that exact candidate OBJECT -- any other path that
+   * swaps the candidate (nearby, random, seeding, duplicate-then-reroll)
+   * just leaves a stale pair, which DiscoverSlotRow ignores by identity
+   * rather than every candidate setter having to remember to clear it. */
+  pickBar?: { candidate: DiscoverCandidate; barUsed: number | null }
+  /** A reclassify from this slot's match meter (the user confirmed the
+   * stem's role from Discover), paired with the candidate it applied to --
+   * same identity rule as pickBar. Kept OFF the candidate object itself on
+   * purpose: a new candidate object would re-run DiscoverSlotRow's own
+   * resolution effect ([slot.candidate]) for the same stem. The meter
+   * derives the updated kindSources from this (reclassifyKindSources). */
+  reclassified?: { candidate: DiscoverCandidate; role: ArrangeRole }
   /** An already-resolved stem this slot should start showing immediately,
    * bypassing `candidate`-based resolution entirely -- set only by seeding
    * Discover from an existing riff's stems that are ALREADY local/resolved
@@ -315,15 +341,6 @@ export function DiscoverPanel({
    * next to the tempo adjust to set it to the original rifff tempo?" */
   seedBpm: number | null
 }): React.JSX.Element {
-  // Unused -- accepted here because this component's real consumer
-  // (LibraryBrowser.tsx) already passes it. Task 11 ("plunk in arranger")
-  // turned out not to need it after all: PLACE_LOOP_ON_TIMELINE takes a
-  // flat startBar computed from the timeline's own existing rifffs, not
-  // anything scoped to the current sketch. This `void` is only to satisfy
-  // this project's tsconfig noUnusedParameters / @typescript-eslint/no-
-  // unused-vars until a real use turns up.
-  void currentSketch
-
   // Synchronously-current mirror of the `slots` prop -- same reason
   // previewingSlotIdsRef exists (see its own comment below): rerollAll is a
   // long-running async loop (one IPC round trip per slot, sequential) whose
@@ -1569,9 +1586,9 @@ export function DiscoverPanel({
       // Library-wide trait bar (docs/superpowers/specs/2026-09-22-discover-
       // promise-vs-delivery-design.md, Phase 1): a requested trait needs a
       // top-40% library percentile, relaxing quietly when too few pass;
-      // unanalysed stems only when nothing else is left. The result's
-      // barUsed is what Phase 2's match meter will show.
-      const { pool: barred } = applyTraitBar(pool, targetTraits)
+      // unanalysed stems only when nothing else is left. barUsed rides
+      // along with the pick (pickBar) for the slot's match meter.
+      const { pool: barred, barUsed } = applyTraitBar(pool, targetTraits)
       const ranked = rankCandidates(barred, {
         targetBpm: bpm,
         favouriteStemCIDs: rollOptions.preferFavourites ? stemFavourites : undefined,
@@ -1593,7 +1610,16 @@ export function DiscoverPanel({
       // leaves it untouched on a real error.
       setSlots((prev) =>
         prev.map((s) =>
-          s.id === id ? { ...s, candidate: picked, hasRerolled: true, seedStem: undefined } : s
+          s.id === id
+            ? {
+                ...s,
+                candidate: picked,
+                pickBar: picked ? { candidate: picked, barUsed } : undefined,
+                reclassified: undefined,
+                hasRerolled: true,
+                seedStem: undefined
+              }
+            : s
         )
       )
     } catch (err) {
@@ -1615,6 +1641,38 @@ export function DiscoverPanel({
         })
       }
     }
+  }
+
+  // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
+  // choice: reclassify, don't skip): records a role confirmation for the
+  // slot's stem through the SAME write path Tidy Up uses
+  // (upsertStemCategoryRole -- StemCategories + arrangeRole centroid
+  // training), source 'discover'. The bare StemCID is passed as the entry's
+  // `path`: main resolves a path to a StemCID by its basename
+  // (stemCIDForPath), and a StemCID is its own basename -- so this works
+  // before the stem has even finished downloading. Does NOT reroll or
+  // remove the stem, and works on locked slots (it doesn't change which
+  // stem the slot holds). No undo snapshot: slot content is unchanged, and
+  // the write itself is a library-level confirmation like Tidy Up's. On a
+  // failed write nothing changes in the UI (logged, codebase convention).
+  async function reclassifySlot(id: string, role: ArrangeRole): Promise<void> {
+    const candidate = slots.find((s) => s.id === id)?.candidate
+    if (!candidate) return
+    try {
+      await window.rifffApi.upsertStemCategoryRole(
+        [{ path: candidate.stemCID, arrangeRole: role }],
+        'discover',
+        currentSketch
+      )
+    } catch (err) {
+      console.error(`DiscoverPanel: reclassifySlot(${candidate.stemCID}, ${role}) failed:`, err)
+      return
+    }
+    setSlots((prev) =>
+      prev.map((s) =>
+        s.id === id && s.candidate === candidate ? { ...s, reclassified: { candidate, role } } : s
+      )
+    )
   }
 
   async function rerollSlot(id: string): Promise<void> {
@@ -2379,6 +2437,7 @@ export function DiscoverPanel({
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
             onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
+            onReclassify={(role) => void reclassifySlot(slot.id, role)}
             soundSourceEndlesss={globalRollOptions.soundSource.endlesss}
             soundSourceAudioIn={globalRollOptions.soundSource.audioIn}
           />
@@ -2802,6 +2861,7 @@ function DiscoverSlotRow({
   onGainChange,
   onSwapFromNearby,
   onChangeKinds,
+  onReclassify,
   soundSourceEndlesss,
   soundSourceAudioIn
 }: {
@@ -2913,6 +2973,9 @@ function DiscoverSlotRow({
   /** DiscoverPanel's own changeSlotKinds -- fired by the kind picker on
    * every chip toggle (the panel rerolls this slot). */
   onChangeKinds: (kinds: DiscoverSlotKind[]) => void
+  /** DiscoverPanel's own reclassifySlot -- fired by the match meter's
+   * reclassify picker with the chosen role. */
+  onReclassify: (role: ArrangeRole) => void
   /** DiscoverPanel's own global endlesss sounds / other sounds toggles
    * (globalRollOptions) -- passed as two primitive booleans, not one
    * object, so this row's own re-render checks stay cheap; combined into a
@@ -3073,6 +3136,44 @@ function DiscoverSlotRow({
   const kindButtonRef = useRef<HTMLButtonElement>(null)
   // Stable identity -- same playhead-tick re-render reasoning as closeNearbyMenu.
   const closeKindMenu = useCallback(() => setKindMenu(null), [])
+
+  // Match meter (docs/superpowers/specs/2026-09-22-discover-promise-vs-
+  // delivery-design.md, Phase 2) -- one compact readout per requested kind,
+  // under the kind label. Mask kinds say why the stem was admitted
+  // (tag/guess/confirmed, from the candidate's kindSources, or the
+  // slot's own reclassify); trait kinds show 5-step bars from the stem's
+  // library percentile. Trait entries only for a candidate rollForSlot
+  // picked (pickBar paired with it): random/nearby/seeded candidates never
+  // had percentiles computed, and empty bars there would misreport them as
+  // unanalysed. Nothing at all without a candidate.
+  const meterEntries = useMemo(() => {
+    const candidate = slot.candidate
+    if (!candidate) return []
+    const fromRoll = slot.pickBar?.candidate === candidate
+    const reclassified = slot.reclassified?.candidate === candidate ? slot.reclassified : undefined
+    return buildMatchMeter({
+      kinds: slot.kinds,
+      kindSources: reclassified
+        ? reclassifyKindSources(slot.kinds, reclassified.role)
+        : (candidate.kindSources ?? {}),
+      traitPercentiles: candidate.traitPercentiles ?? {},
+      barUsed: fromRoll ? (slot.pickBar?.barUsed ?? null) : null,
+      reclassified: reclassified
+        ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role, ROLE_LABELS) }
+        : undefined
+    }).filter((entry) => entry.type === 'mask' || fromRoll)
+  }, [slot.candidate, slot.kinds, slot.pickBar, slot.reclassified])
+
+  // Reclassify picker -- same position/dismissal pattern as kindMenu, anchored
+  // on whichever meter source word was clicked; the whole meter is the
+  // dismissal ignoreRef so clicking another source word just re-anchors.
+  const [reclassifyMenu, setReclassifyMenu] = useState<{
+    x: number
+    y: number
+    currentRole: ArrangeRole | null
+  } | null>(null)
+  const meterRef = useRef<HTMLDivElement>(null)
+  const closeReclassifyMenu = useCallback(() => setReclassifyMenu(null), [])
 
   // Direct request, 2026-09-16: "i imported a batch of rifffs using the
   // import from library feature and attempting to discover the individual
@@ -3763,41 +3864,141 @@ function DiscoverSlotRow({
           )}
         </div>
         <div style={{ gridColumn: 8 }} />
-        <button
-          ref={kindButtonRef}
-          disabled={slot.locked}
-          onClick={(e) => {
-            if (kindMenu) {
-              closeKindMenu()
-              return
-            }
-            const rect = e.currentTarget.getBoundingClientRect()
-            setKindMenu({ x: rect.left, y: rect.bottom + 4 })
-          }}
-          aria-expanded={kindMenu !== null}
-          aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
-          data-tooltip={slot.locked ? 'unlock to change kinds' : slotKindsLabel(slot.kinds)}
+        {/* Kind label + match meter stacked in the 110px label column --
+            see the meter's own comment on meterEntries above. */}
+        <div
           style={{
             gridColumn: 9,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 3,
             width: 110,
-            padding: 0,
-            fontFamily: 'inherit',
-            fontSize: 9,
-            textAlign: 'left',
-            background: 'transparent',
-            border: 'none',
-            color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
-            cursor: slot.locked ? 'default' : 'pointer'
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 3,
+            minWidth: 0
           }}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {slotKindsLabel(slot.kinds)}
-          </span>
-          {!slot.locked && <span aria-hidden="true">▾</span>}
-        </button>
+          <button
+            ref={kindButtonRef}
+            disabled={slot.locked}
+            onClick={(e) => {
+              if (kindMenu) {
+                closeKindMenu()
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setKindMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            aria-expanded={kindMenu !== null}
+            aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
+            data-tooltip={slot.locked ? 'unlock to change kinds' : slotKindsLabel(slot.kinds)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              width: 110,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 9,
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+              cursor: slot.locked ? 'default' : 'pointer'
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {slotKindsLabel(slot.kinds)}
+            </span>
+            {!slot.locked && <span aria-hidden="true">▾</span>}
+          </button>
+          {meterEntries.length > 0 && (
+            <div
+              ref={meterRef}
+              aria-label="match"
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                columnGap: 6,
+                rowGap: 2,
+                fontSize: 8,
+                lineHeight: '10px',
+                color: 'var(--ra-text-3)'
+              }}
+            >
+              {meterEntries.map((entry) =>
+                entry.type === 'mask' ? (
+                  <span
+                    key={`mask-${entry.kind ?? 'reclassified'}`}
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    {entry.label}:{' '}
+                    <button
+                      onClick={(e) => {
+                        if (reclassifyMenu) {
+                          closeReclassifyMenu()
+                          return
+                        }
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        setReclassifyMenu({
+                          x: rect.left,
+                          y: rect.bottom + 4,
+                          currentRole:
+                            entry.kind !== null
+                              ? discoverSlotKindToArrangeRole(entry.kind)
+                              : (slot.reclassified?.role ?? null)
+                        })
+                      }}
+                      aria-expanded={reclassifyMenu !== null}
+                      aria-label={entry.tooltip}
+                      data-tooltip={entry.tooltip}
+                      style={{
+                        padding: 0,
+                        fontFamily: 'inherit',
+                        fontSize: 'inherit',
+                        lineHeight: 'inherit',
+                        background: 'transparent',
+                        border: 'none',
+                        borderBottom: '1px dotted var(--ra-text-4)',
+                        color: reclassifyMenu ? 'var(--ra-text)' : 'var(--ra-text-2)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {entry.source}
+                    </button>
+                  </span>
+                ) : (
+                  <span
+                    key={`trait-${entry.kind}`}
+                    data-tooltip={entry.tooltip}
+                    aria-label={entry.tooltip}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {entry.label}
+                    {/* CSS cells, not the ▮▯ glyphs: Silkscreen has neither,
+                      and a fallback-font glyph would break the pixel look.
+                      Grey chrome only -- no new colour. */}
+                    <span aria-hidden="true" style={{ display: 'inline-flex', gap: 1 }}>
+                      {Array.from({ length: MATCH_METER_STEPS }, (_, i) => (
+                        <span
+                          key={i}
+                          style={{
+                            width: 3,
+                            height: 6,
+                            background: i < entry.filled ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
+                          }}
+                        />
+                      ))}
+                    </span>
+                  </span>
+                )
+              )}
+            </div>
+          )}
+        </div>
         <div style={{ gridColumn: 10 }} />
         {/* Purely decorative -- direct request, 2026-09-17: "place a dice
             icon to the left of the similar/adjacent/random buttons... this
@@ -3931,6 +4132,16 @@ function DiscoverSlotRow({
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
+        />
+      )}
+      {reclassifyMenu && slot.candidate && (
+        <DiscoverReclassifyPicker
+          x={reclassifyMenu.x}
+          y={reclassifyMenu.y}
+          currentRole={reclassifyMenu.currentRole}
+          onPick={onReclassify}
+          onClose={closeReclassifyMenu}
+          ignoreRef={meterRef}
         />
       )}
       {kindMenu && !slot.locked && (
