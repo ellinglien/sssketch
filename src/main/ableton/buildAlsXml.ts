@@ -1227,6 +1227,17 @@ export function buildAlsXml(
       // edgeFadesFor exists to rescue, so writing clip fades too would fade
       // twice. Both drop out here rather than inside buildStemClips, which
       // knows nothing about export modes.
+      //
+      // Gated on this stem's toolkit doing something, because applyTrackToolkit
+      // is: a clip nobody has drawn on gets no track Volume written, so moving
+      // its dial off the clip as well would simply lose it.
+      const toolkitOnThisStem =
+        automationMode &&
+        !isStemToolkitNeutral(
+          state.stemFilters?.[key],
+          state.stemSends?.[key],
+          state.stemAutomation?.[key]
+        )
       const volumeAutomated =
         automationMode && (state.stemAutomation?.[key]?.volume?.length ?? 0) > 0
       const edgeFades = volumeAutomated
@@ -1250,7 +1261,7 @@ export function buildAlsXml(
         // muteRegions below), keeping it present at 0 lets it be
         // re-enabled with a single fader move directly in Ableton, which
         // isn't possible for a clip that was never exported.
-        state.mute[key] ? 0 : automationMode ? 1 : (state.vol[key] ?? 1),
+        state.mute[key] ? 0 : toolkitOnThisStem ? 1 : (state.vol[key] ?? 1),
         edgeFades.fadeInBars,
         edgeFades.fadeOutBars,
         stemSampleRates.get(key)

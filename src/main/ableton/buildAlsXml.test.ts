@@ -1609,6 +1609,23 @@ describe('the built-in sound toolkit', () => {
       expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('false')
     })
 
+    it('keeps a dial on the clip for a stem nobody drew anything on', () => {
+      // Only a stem whose toolkit does something gets a track Volume written
+      // (applyTrackToolkit bails on a neutral one), so moving the dial off
+      // the clip for everybody would quietly lose it -- a stem that isn't
+      // using the toolkit at all would come out at full level.
+      const state = toolkitState({ vol: { 'rifff-1:0': 0.3 } })
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() }
+      })
+      const { tracks } = tracksOf(xml)
+      const track = findChild(tracks, 'AudioTrack')!
+      const clipBody = childArray(findAudioClip(track), 'AudioClip')
+      expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('0.3')
+      expect(manualOf(findChild(mixerBodyOf(track), 'Volume')!, 'Volume')).toBe(1)
+    })
+
     it('keeps ONE reverb return, one send holder per track, and automates that send', () => {
       const state = toolkitState({
         stemSends: { 'rifff-1:0': 0.25 },
