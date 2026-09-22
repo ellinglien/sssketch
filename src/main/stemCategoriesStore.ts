@@ -5,6 +5,7 @@ import type { BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import { sketchProjectPath } from './projectLibrary'
 import { countWork } from './workCounters'
+import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
 /** Resolves a renderer-supplied ProjectRef into the real absolute path
  * StemCategories.SourceProject should carry -- a library-kind sketch is
@@ -149,6 +150,8 @@ export function upsertStemCategoryRole(
     }
   })
   txn(entries)
+  // Discover's precomputed per-kind stem lists read ArrangeRole.
+  bumpStemClassificationVersion(db)
 }
 
 export interface StemCategoryRow {

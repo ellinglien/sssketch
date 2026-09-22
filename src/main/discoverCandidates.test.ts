@@ -9,6 +9,7 @@ import {
 } from './discoverCandidates'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
+import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -1957,5 +1958,207 @@ describe('background efficiency B1: trait values from the in-memory table', () =
     seedFeatures(own, 'nofeat', featuresJSON({ bassEnergyRatio: 0.33 }))
     const pool = await getDiscoverCandidates({ ownDb: own, jams: jams(own), kinds: ['bassHeavy'] })
     expect(pool.find((c) => c.stemCID === 'nofeat')?.traitValues).toEqual({ bassHeavy: 0.33 })
+  })
+})
+
+describe('background efficiency B2: per-kind stem lists', () => {
+  const MASKS = [null, 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, (1 << 4) | (1 << 1), 1 << 6]
+  const ROLES = ['drums', 'bass', 'lead', 'aux']
+  type Kind = 'drums' | 'bass' | 'lead'
+
+  /** The pre-B2 walk (getMaskKindStemMasks + getMaskDiscoverCandidates's
+   * confirmed/sound-source steps), written out plainly -- the reference the
+   * precomputed lists must reproduce. */
+  function referencePool(
+    own: Database.Database,
+    jams: { jamCID: string; dbForJam: Database.Database }[],
+    kind: Kind,
+    soundSource = { endlesss: true, audioIn: true }
+  ): Map<string, string> {
+    const confirmed = new Map(
+      (
+        own
+          .prepare(`SELECT StemCID, ArrangeRole FROM StemCategories WHERE ArrangeRole IS NOT NULL`)
+          .all() as { StemCID: string; ArrangeRole: string }[]
+      ).map((r) => [r.StemCID, r.ArrangeRole])
+    )
+    const auto = new Map(
+      (
+        own.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
+          StemCID: string
+          ArrangeRole: string
+        }[]
+      ).map((r) => [r.StemCID, r.ArrangeRole])
+    )
+    const byDb = new Map<Database.Database, Set<string>>()
+    for (const j of jams) {
+      if (!byDb.has(j.dbForJam)) byDb.set(j.dbForJam, new Set())
+      byDb.get(j.dbForJam)!.add(j.jamCID)
+    }
+    const admitted = new Map<string, { instrument: number | null; source: string }>()
+    for (const [db, allowed] of byDb) {
+      const rows = db
+        .prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems ORDER BY StemCID`)
+        .all() as { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+      for (const row of rows) {
+        if (!allowed.has(row.OwnerJamCID) || admitted.has(row.StemCID)) continue
+        const c = confirmed.get(row.StemCID)
+        if (c !== undefined) {
+          if (c === kind)
+            admitted.set(row.StemCID, { instrument: row.Instrument, source: 'confirmed' })
+          continue
+        }
+        const t = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
+        const placed = t === 'drums' || t === 'bass' || t === 'notes'
+        const ok = placed
+          ? (t === 'drums' && kind === 'drums') ||
+            (t === 'bass' && kind === 'bass') ||
+            (t === 'notes' && kind === 'lead')
+          : auto.get(row.StemCID) === kind
+        if (ok)
+          admitted.set(row.StemCID, {
+            instrument: row.Instrument,
+            source: placed ? 'tag' : 'guess'
+          })
+      }
+    }
+    const out = new Map<string, string>()
+    // Confirmed stems the walk never passed still count (mask unknown).
+    for (const [cid, role] of confirmed) if (role === kind) out.set(cid, 'confirmed')
+    for (const [cid, a] of admitted) {
+      if (!out.has(cid)) out.set(cid, a.source)
+    }
+    for (const cid of [...out.keys()]) {
+      if (!soundSourceMatchesFilter(admitted.get(cid)?.instrument, soundSource)) out.delete(cid)
+    }
+    return out
+  }
+
+  function seedRandomLibrary(own: Database.Database, other: Database.Database, seed: number): void {
+    let x = seed
+    const rand = (n: number): number => {
+      x = (x * 1103515245 + 12345) % 2147483648
+      return x % n
+    }
+    for (let r = 0; r < 40; r++) {
+      const db = r % 4 === 3 ? other : own
+      const jam = `jam${r % 5}`
+      const cids = Array.from({ length: 8 }, (_, i) => `s${r * 8 + i}`)
+      seedRiff(db, `r${r}`, jam, 120, cids)
+      for (const cid of cids) {
+        seedStem(db, cid, jam, { instrument: MASKS[rand(MASKS.length)] ?? undefined })
+        if (rand(5) === 0) seedCategory(own, cid, { arrangeRole: ROLES[rand(ROLES.length)] })
+        else if (rand(4) === 0) seedCategory(own, cid, { busId: 'drums' }) // bus-only row
+        if (rand(3) === 0) seedAutoCategory(own, cid, ROLES[rand(ROLES.length)])
+      }
+    }
+    // A stem present in both dbs with different masks.
+    seedRiff(other, 'rdup', 'jam1', 120, ['s0'])
+    seedStem(other, 's0', 'jam1', { instrument: 1 << 3 })
+  }
+
+  it('matches the old per-roll walk for a mixed library (tag/confirmed/guess/excluded, two dbs, a jam left out)', async () => {
+    for (const seed of [1, 7, 42]) {
+      const own = freshDb()
+      const other = freshDb()
+      seedRandomLibrary(own, other, seed)
+      const jams = [
+        { jamCID: 'jam0', dbForJam: own },
+        { jamCID: 'jam1', dbForJam: own },
+        { jamCID: 'jam2', dbForJam: own },
+        { jamCID: 'jam3', dbForJam: own },
+        { jamCID: 'jam1', dbForJam: other },
+        { jamCID: 'jam3', dbForJam: other }
+      ]
+      for (const kind of ['drums', 'bass', 'lead'] as Kind[]) {
+        for (const soundSource of [
+          { endlesss: true, audioIn: true },
+          { endlesss: false, audioIn: true },
+          { endlesss: true, audioIn: false }
+        ]) {
+          const expected = referencePool(own, jams, kind, soundSource)
+          const got = await getDiscoverCandidates({ ownDb: own, jams, kinds: [kind], soundSource })
+          // A confirmed stem with no resolvable riff/Stems row drops out at
+          // resolution -- compare against what resolution keeps.
+          const resolvable = new Set(got.map((c) => c.stemCID))
+          const expectedResolvable = [...expected].filter(([cid]) => resolvable.has(cid))
+          expect(got.map((c) => [c.stemCID, c.kindSources[kind]]).sort()).toEqual(
+            expectedResolvable.sort()
+          )
+          // ...and nothing the reference admits that is resolvable is missing.
+          for (const [cid] of expected) {
+            const inSomeJam = jams.some(
+              (j) =>
+                j.dbForJam
+                  .prepare(`SELECT 1 FROM Stems WHERE StemCID = ? AND OwnerJamCID = ?`)
+                  .get(cid, j.jamCID) &&
+                j.dbForJam
+                  .prepare(
+                    `SELECT 1 FROM Riffs WHERE StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?`
+                  )
+                  .get(...Array(8).fill(cid))
+            )
+            if (inSomeJam) expect(resolvable.has(cid)).toBe(true)
+          }
+        }
+      }
+    }
+  })
+
+  it('reuses the precomputed lists when nothing changed (no classification re-read)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['d1', 'm1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 1 << 1 })
+    seedStem(own, 'm1', 'jam1', { instrument: 1 << 4 })
+    seedAutoCategory(own, 'm1', 'drums')
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+    await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+
+    const prepareSpy = vi.spyOn(own, 'prepare')
+    const again = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    const bass = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['bass'] })
+    expect(again.map((c) => c.stemCID).sort()).toEqual(['d1', 'm1'])
+    expect(bass).toEqual([])
+    const rebuildReads = prepareSpy.mock.calls.filter(
+      ([sql]) =>
+        /SELECT StemCID, ArrangeRole FROM StemAutoCategory/.test(sql) ||
+        /ArrangeRole IS NOT NULL`?$/.test(sql.trim()) ||
+        /FROM StemAutoCategory WHERE ArrangeRole = \?/.test(sql)
+    )
+    expect(rebuildReads).toEqual([])
+  })
+
+  it('picks up a reclassify (upsertStemCategoryRole) on the very next roll', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['mic', 'd1'])
+    seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
+    seedStem(own, 'd1', 'jam1', { instrument: 1 << 1 })
+    seedCategory(own, 'mic', { arrangeRole: 'drums' }) // UpdatedAt 1000
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+    const before = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(before.map((c) => [c.stemCID, c.kindSources.drums]).sort()).toEqual([
+      ['d1', 'tag'],
+      ['mic', 'confirmed']
+    ])
+
+    // An in-place role change with the SAME UpdatedAt: row count, MAX and
+    // TOTAL of UpdatedAt all stay put -- only the writer's version bump
+    // can tell the precomputed lists they're stale.
+    upsertStemCategoryRole(own, [{ path: 'mic', arrangeRole: 'bass' }], 'discover', null, 1000)
+    const drums = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] })
+    expect(drums.map((c) => c.stemCID)).toEqual(['d1'])
+    const bass = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['bass'] })
+    expect(bass.map((c) => [c.stemCID, c.kindSources.bass])).toEqual([['mic', 'confirmed']])
+  })
+
+  it('picks up a StemAutoCategory row written straight to SQL (change signal query)', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
+    const jams = [{ jamCID: 'jam1', dbForJam: own }]
+    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })).toEqual([])
+    seedAutoCategory(own, 'mic', 'lead')
+    const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })
+    expect(lead.map((c) => [c.stemCID, c.kindSources.lead])).toEqual([['mic', 'guess']])
   })
 })

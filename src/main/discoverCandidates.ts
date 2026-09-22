@@ -7,6 +7,7 @@ import {
   type DiscoverSoundSourceFilter
 } from '@shared/riffLibraryTypes'
 import {
+  DISCOVER_MASK_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
   isMaskSlotKind,
   isTraitSlotKind,
@@ -35,7 +36,7 @@ import {
   loadCachedInstrumentRows,
   saveInstrumentRowsCache
 } from './discoverIndexCache'
-import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
+import { getStemClassificationVersion } from './stemClassificationVersion'
 
 /** One library-wide candidate for a Discover slot.
  *
@@ -637,15 +638,14 @@ function yieldToEventLoop(): Promise<void> {
  *   answer for them at all. Scoped to exactly those stems, so the mask
  *   stays authoritative wherever it has something to say.
  *
- * The StemAutoCategory stems for the role are loaded ONCE up front (one
- * query on ownDb), then the walk is a single pass over each db's cached
- * instrument rows (getInstrumentRowsForDb, above) -- no SQL of its own
- * beyond that and the two small ownDb queries. Reads each jam's own
- * `Stems` table (not ownDb) for the Instrument values, via that cache;
- * `.all()`, never `.iterate()`, per this file's own "never leave a
- * statement open across an await" rule (a real live crash). Yields every
- * CLASSIFY_YIELD_EVERY rows -- cheap per row, but real synchronous work at
- * library scale.
+ * Background efficiency B2: the admission rule above is applied ONCE per
+ * db, for all three mask kinds in one pass over its cached instrument rows
+ * (getMaskKindIndex, below), and reused by every roll until those rows are
+ * rebuilt or the classification tables change -- a roll then only filters
+ * the kind's own admitted list by the caller's jams (still keeping the
+ * FIRST admitted row per StemCID, dbs in `jams` order, exactly as the old
+ * per-roll walk did). Yields every CLASSIFY_YIELD_EVERY rows -- cheap per
+ * row, but real synchronous work at library scale.
  *
  * Real perf bugs fixed here 2026-09-15 (found live via Elling's own
  * question: "if 15,054 drum stems have been analyzed, why does it take 38
@@ -670,15 +670,7 @@ async function getMaskKindStemMasks(
   jams: JamDbPair[],
   kind: DiscoverSlotKind
 ): Promise<Map<string, MaskKindAdmission>> {
-  const arrangeRole = discoverSlotKindToArrangeRole(kind)
-  const confirmedRoleByStemCID = new Map(
-    (
-      ownDb
-        .prepare(`SELECT StemCID, ArrangeRole FROM StemCategories WHERE ArrangeRole IS NOT NULL`)
-        .all() as { StemCID: string; ArrangeRole: string }[]
-    ).map((r) => [r.StemCID, r.ArrangeRole])
-  )
-  const autoForRole = getAutoCategorizedStemCIDs(ownDb, arrangeRole)
+  const signature = readClassificationSignature(ownDb)
 
   const jamCIDsByDb = new Map<Database.Database, Set<string>>()
   for (const { jamCID, dbForJam } of jams) {
@@ -691,31 +683,14 @@ async function getMaskKindStemMasks(
   let sinceYield = 0
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const rows = await getInstrumentRowsForDb(db)
-    for (const row of rows) {
+    const index = await getMaskKindIndex(db, rows, ownDb, signature)
+    const admitted = index.byKind.get(kind as DiscoverMaskKind)
+    if (!admitted) continue
+    countWork('scan:discover.kind-list-rows', admitted.rows.length)
+    for (let i = 0; i < admitted.rows.length; i++) {
+      const row = admitted.rows[i]
       if (allowedJamCIDs.has(row.OwnerJamCID) && !maskByStemCID.has(row.StemCID)) {
-        const confirmedRole = confirmedRoleByStemCID.get(row.StemCID)
-        if (confirmedRole !== undefined) {
-          // Confirmed for this role: record its mask for the caller's
-          // sound-source filter. Confirmed for another role: excluded.
-          if (confirmedRole === arrangeRole) {
-            maskByStemCID.set(row.StemCID, { instrument: row.Instrument, source: 'confirmed' })
-          }
-        } else {
-          const soundType =
-            row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
-          const maskPlaced = soundType === 'drums' || soundType === 'bass' || soundType === 'notes'
-          const admitted = maskPlaced
-            ? (soundType === 'drums' && kind === 'drums') ||
-              (soundType === 'bass' && kind === 'bass') ||
-              (soundType === 'notes' && kind === 'lead')
-            : autoForRole.has(row.StemCID)
-          if (admitted) {
-            maskByStemCID.set(row.StemCID, {
-              instrument: row.Instrument,
-              source: maskPlaced ? 'tag' : 'guess'
-            })
-          }
-        }
+        maskByStemCID.set(row.StemCID, { instrument: row.Instrument, source: admitted.sources[i] })
       }
       sinceYield += 1
       if (sinceYield >= CLASSIFY_YIELD_EVERY) {
@@ -725,6 +700,172 @@ async function getMaskKindStemMasks(
     }
   }
   return maskByStemCID
+}
+
+type InstrumentRow = { StemCID: string; Instrument: number | null; OwnerJamCID: string }
+
+/** One mask kind's admitted rows (in instrument-row order) and the rule
+ * that admitted each -- parallel arrays. */
+interface MaskKindList {
+  rows: InstrumentRow[]
+  sources: DiscoverKindSource[]
+}
+
+/** Background efficiency B2: per db, every instrument row admitted to each
+ * mask kind (getMaskKindStemMasks's own rule), computed once from the
+ * cached instrument rows + ownDb's StemCategories/StemAutoCategory. Valid
+ * while `rows` is the same cached array (a rebuilt instrument-row cache is
+ * a new array) and the classification signature hasn't moved. */
+interface MaskKindIndex {
+  rows: InstrumentRow[]
+  ownDb: Database.Database
+  signature: string
+  byKind: Map<DiscoverMaskKind, MaskKindList>
+}
+
+const maskKindIndexCache = new WeakMap<Database.Database, MaskKindIndex>()
+const maskKindIndexInFlight = new WeakMap<
+  Database.Database,
+  {
+    rows: InstrumentRow[]
+    ownDb: Database.Database
+    signature: string
+    promise: Promise<MaskKindIndex>
+  }
+>()
+
+/** Cheap change signal for the classification tables, read once per roll:
+ * the in-process write counter (stemClassificationVersion.ts -- catches
+ * every write this app makes, even one that leaves counts/timestamps
+ * alone) plus row counts and UpdatedAt/ComputedAt aggregates (catches a
+ * write made straight to SQL). One small query on ownDb; both tables are
+ * narrow (hundreds / tens of thousands of rows). */
+function readClassificationSignature(ownDb: Database.Database): string {
+  countWork('sql:discover.classification-signal')
+  const row = ownDb
+    .prepare(
+      `SELECT
+         (SELECT COUNT(ArrangeRole) FROM StemCategories) AS confirmedCount,
+         (SELECT MAX(UpdatedAt) FROM StemCategories) AS confirmedMax,
+         (SELECT TOTAL(UpdatedAt) FROM StemCategories) AS confirmedTotal,
+         (SELECT COUNT(*) FROM StemAutoCategory) AS autoCount,
+         (SELECT MAX(ComputedAt) FROM StemAutoCategory) AS autoMax,
+         (SELECT TOTAL(ComputedAt) FROM StemAutoCategory) AS autoTotal`
+    )
+    .get() as Record<string, number | null>
+  return [
+    getStemClassificationVersion(ownDb),
+    row.confirmedCount,
+    row.confirmedMax,
+    row.confirmedTotal,
+    row.autoCount,
+    row.autoMax,
+    row.autoTotal
+  ].join('|')
+}
+
+async function getMaskKindIndex(
+  db: Database.Database,
+  rows: InstrumentRow[],
+  ownDb: Database.Database,
+  signature: string
+): Promise<MaskKindIndex> {
+  const cached = maskKindIndexCache.get(db)
+  if (cached && cached.rows === rows && cached.ownDb === ownDb && cached.signature === signature) {
+    return cached
+  }
+  const inFlight = maskKindIndexInFlight.get(db)
+  if (
+    inFlight &&
+    inFlight.rows === rows &&
+    inFlight.ownDb === ownDb &&
+    inFlight.signature === signature
+  ) {
+    return inFlight.promise
+  }
+  const promise = buildMaskKindIndex(rows, ownDb, signature)
+    .then((index) => {
+      maskKindIndexCache.set(db, index)
+      return index
+    })
+    .finally(() => {
+      if (maskKindIndexInFlight.get(db)?.promise === promise) maskKindIndexInFlight.delete(db)
+    })
+  maskKindIndexInFlight.set(db, { rows, ownDb, signature, promise })
+  return promise
+}
+
+/** One pass over `rows` for all three mask kinds. StemCategories is read
+ * ONLY from ownDb (an external archive never has it -- see
+ * getMaskDiscoverCandidates's own CRITICAL note). A stem confirmed for any
+ * role is admitted only to that role's kind ('confirmed'); otherwise a
+ * mask that places it decides alone ('tag'); otherwise the overnight
+ * classifier's guess ('guess'). `.all()`, never `.iterate()` across the
+ * awaits below. */
+async function buildMaskKindIndex(
+  rows: InstrumentRow[],
+  ownDb: Database.Database,
+  signature: string
+): Promise<MaskKindIndex> {
+  countWork('sql:discover.kind-index-build', 2)
+  const confirmedRoleByStemCID = new Map(
+    (
+      ownDb
+        .prepare(`SELECT StemCID, ArrangeRole FROM StemCategories WHERE ArrangeRole IS NOT NULL`)
+        .all() as { StemCID: string; ArrangeRole: string }[]
+    ).map((r) => [r.StemCID, r.ArrangeRole])
+  )
+  const autoRoleByStemCID = new Map(
+    (
+      ownDb.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
+        StemCID: string
+        ArrangeRole: string
+      }[]
+    ).map((r) => [r.StemCID, r.ArrangeRole])
+  )
+
+  const kindByRole = new Map<string, DiscoverMaskKind>(
+    DISCOVER_MASK_SLOT_KINDS.map((k) => [discoverSlotKindToArrangeRole(k), k as DiscoverMaskKind])
+  )
+  const byKind = new Map<DiscoverMaskKind, MaskKindList>(
+    DISCOVER_MASK_SLOT_KINDS.map((k) => [k as DiscoverMaskKind, { rows: [], sources: [] }])
+  )
+  const admit = (
+    kind: DiscoverMaskKind | undefined,
+    row: InstrumentRow,
+    source: DiscoverKindSource
+  ): void => {
+    if (!kind) return
+    const list = byKind.get(kind)!
+    list.rows.push(row)
+    list.sources.push(source)
+  }
+
+  countWork('scan:discover.kind-index-rows', rows.length)
+  let sinceYield = 0
+  for (const row of rows) {
+    const confirmedRole = confirmedRoleByStemCID.get(row.StemCID)
+    if (confirmedRole !== undefined) {
+      // Confirmed for a mask kind's role: that kind's own source.
+      // Confirmed for any other role: excluded from every mask kind.
+      admit(kindByRole.get(confirmedRole), row, 'confirmed')
+    } else {
+      const soundType = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
+      if (soundType === 'drums') admit('drums', row, 'tag')
+      else if (soundType === 'bass') admit('bass', row, 'tag')
+      else if (soundType === 'notes') admit('lead', row, 'tag')
+      else {
+        const autoRole = autoRoleByStemCID.get(row.StemCID)
+        if (autoRole !== undefined) admit(kindByRole.get(autoRole), row, 'guess')
+      }
+    }
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  return { rows, ownDb, signature, byKind }
 }
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-

@@ -1,6 +1,7 @@
 // src/main/stemAutoCategoryStore.ts
 import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
+import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
 export type StemAutoCategorySource = 'embedding' | 'centroid' | 'yamnet-zeroshot' | 'instrumentMask'
 
@@ -136,4 +137,6 @@ export function upsertStemAutoCategory(
          ComputedAt = excluded.ComputedAt`
     )
     .run({ stemCID, arrangeRole, source, computedAt })
+  // Discover's precomputed per-kind stem lists read this table.
+  bumpStemClassificationVersion(ownDb)
 }
