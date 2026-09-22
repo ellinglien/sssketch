@@ -54,6 +54,27 @@ Remember: the engine is a separate build and does NOT hot-reload — rebuild
   is mirrored into `buildEngineProject.ts` + `EngineProject` — the hand-synced pair CLAUDE.md
   warns about: change both sides and their tests together.
 
+## 2b. REVISION, 2026-09-22 (after the first live walkthrough): automation is PER CLIP
+
+Elling, seeing the first build: "the automation lane is too tall ... the automation should be
+limited to the wave area (don't even allow to draw beyond where the wave is). it should be
+fixed to the placement. if the stem is moved, have the envelope go with it." Plus: each
+ungrouped stem should get its own lane.
+
+So the toolkit's scope moves from CHANNEL to CLIP (a placed stem), matching the existing
+per-stem volume envelope:
+- Curves are stored per stem clip, in CLIP-RELATIVE bars (0 = the clip's own start), so moving,
+  duplicating or re-ordering a clip carries its automation with it, and a curve can never
+  extend past the audio it belongs to.
+- Drawing is confined to the clip's waveform rect: the lane IS the waveform area (not the row,
+  not the name bar), and input outside it does nothing.
+- The engine applies filter / reverb send / volume PER STEM, before stems sum into their
+  channel; the reverb send still feeds the one shared bus.
+- `volume` fully replaces the old per-clip volume envelope (Elling's choice) rather than
+  multiplying with it — one place to draw a level.
+- Channel-level filter/send settings from the first pass are dropped; there is no channel
+  scope for the toolkit any more.
+
 ## 3. Automation mode (renderer)
 
 - A new arranger mode alongside the existing ones (SET_ARRANGER_MODE), reached from the
