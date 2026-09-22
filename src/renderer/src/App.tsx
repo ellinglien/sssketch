@@ -427,7 +427,6 @@ function Timeline({
           rifffs={channel.rifffs}
           bus={channel.bus}
           automationMode={state.mode === 'automation'}
-          laneWidthPx={timelineWidthPx}
           onOpenContextMenu={onOpenClipMenu}
           onDropOnChannel={handleDropOnChannel}
         />

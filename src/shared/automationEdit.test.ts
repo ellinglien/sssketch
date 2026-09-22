@@ -64,6 +64,24 @@ describe('snapBar', () => {
     expect(snapBar(-2.2, true)).toBe(0)
     expect(snapBar(-0.4, false)).toBe(0)
   })
+
+  it("never goes past the clip's own length -- drawing beyond the wave is impossible", () => {
+    // "don't even allow to draw beyond where the wave is" (Elling, spec 2b).
+    expect(snapBar(9.4, true, 8)).toBe(8)
+    expect(snapBar(12, false, 8)).toBe(8)
+  })
+
+  it('clamps AFTER snapping, so a fractional-length clip can end exactly on its edge', () => {
+    // A clip 6.5 bars long: snapping 6.4 to bar 6 is fine, but a drag past
+    // the end must land ON 6.5, not back at whole bar 6 -- otherwise the
+    // last half-bar of audio could never be automated at all.
+    expect(snapBar(6.4, true, 6.5)).toBe(6)
+    expect(snapBar(7.2, true, 6.5)).toBe(6.5)
+  })
+
+  it('still behaves as before when no limit is given', () => {
+    expect(snapBar(99.6, true)).toBe(100)
+  })
 })
 
 describe('hitTestPoint', () => {
@@ -373,5 +391,57 @@ describe('curvePolyline', () => {
       { x: 0, y: 50 },
       { x: 240, y: 50 }
     ])
+  })
+})
+
+// The "dots aren't on the line" bug, pinned as an invariant. AutomationLane
+// draws a breakpoint as an absolutely-positioned square at `left:
+// barToX(bar, ppb)` px and `top: valueToY(value, 100)%`, and the curve as an
+// SVG polyline inside a viewBox of `0 0 widthPx 100`. Those two agree only
+// if the SVG's rendered width equals widthPx (one viewBox x unit == one CSS
+// pixel) -- the old lane was `width="100%"` over a viewBox sized to the
+// whole timeline while its box was `minWidth: 100%` of the viewport, so on
+// any project narrower than the window the line drifted off its own points.
+// These assert the mapping itself; the component now passes an explicit
+// pixel width so the premise holds.
+describe('one coordinate space for the line and its points', () => {
+  const points: AutomationPoint[] = [
+    { bar: 0, value: 1 },
+    { bar: 2, value: 0.25 },
+    { bar: 4, value: 0 }
+  ]
+
+  it("every polyline vertex sits at exactly its own point's x pixel", () => {
+    const widthPx = 4 * PPB
+    const vertices = curvePolyline(points, { ppb: PPB, widthPx, heightUnits: 100 })
+    for (const point of points) {
+      const vertex = vertices.find((v) => v.x === barToX(point.bar, PPB))
+      expect(vertex).toBeDefined()
+    }
+  })
+
+  it("a vertex y in viewBox units is the same FRACTION of the lane as the square's top %", () => {
+    // valueToY is scale-free: the polyline uses heightUnits=100 (so y IS a
+    // percentage) and the square uses the same call for its `top: N%`, which
+    // is the whole reason the vertical axis can stay non-uniformly scaled
+    // while the horizontal one cannot.
+    for (const point of points) {
+      const asPercent = valueToY(point.value, 100)
+      const asPixels = valueToY(point.value, LANE)
+      expect(asPixels / LANE).toBeCloseTo(asPercent / 100, 12)
+    }
+  })
+
+  it("the trailing hold reaches the CLIP's right edge, not the timeline's", () => {
+    // The lane is the clip's waveform rect now, so widthPx is the clip's own
+    // width -- a curve whose last point is mid-clip holds flat to the clip
+    // edge and stops there.
+    const clipWidthPx = 3 * PPB
+    const vertices = curvePolyline([{ bar: 1, value: 0.5 }], {
+      ppb: PPB,
+      widthPx: clipWidthPx,
+      heightUnits: 100
+    })
+    expect(vertices[vertices.length - 1].x).toBe(clipWidthPx)
   })
 })

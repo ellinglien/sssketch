@@ -10,6 +10,7 @@ import {
   tileOffsetsPx
 } from '../state/selectors'
 import { stemDisplayColorVar } from '../theme/typeColor'
+import { AutomationLane } from './AutomationLane'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import {
@@ -115,9 +116,15 @@ export function CollapsedRifffRow({
   // still narrower than before, since this only re-renders on a mute
   // change now, not on every dispatch.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
+  // Which stem's stored curve the collapsed lane DISPLAYS. A group lane
+  // writes the identical curve to every stem, so any of them is a faithful
+  // representative; the first is the same one identityColor/CollapsedTiles
+  // already treat as the rifff's stand-in.
+  const firstStemKey = rifff.stems[0] ? stemKey(groupId, rifff.stems[0].slot) : null
   const bpm = useAppSelector((s) => s.bpm)
   const volumeDragMode = useAppSelector((s) => s.volumeDragMode)
   const mute = useAppSelector((s) => s.mute)
+  const automationMode = useAppSelector((s) => s.mode === 'automation')
   const busOf = useAppSelector((s) => s.busOf)
   const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
   const regionSelection = useAppSelector((s) => s.regionSelection)
@@ -1035,6 +1042,27 @@ export function CollapsedRifffRow({
             >
               {dbLabel(displayedVolume)}
             </div>
+          )}
+
+          {/* The clip's own automation lane -- LAST child of the collapsed
+              block, so it covers exactly the wave area (not the row, not the
+              rifff's name bar). A collapsed clip draws every stem as ONE
+              block, so it gets ONE lane, which writes the same curve to all
+              of them -- the same whole-rifff treatment SET_GROUP_VOLUME and
+              SET_GROUP_MUTE already give the collapsed view. Expanding the
+              clip reveals a lane per stem (StemWaveformRow), which can then
+              diverge freely; the curves are always STORED per stem either
+              way. See the spec's section 2b. */}
+          {automationMode && firstStemKey && (
+            <AutomationLane
+              laneId={groupId}
+              target={{
+                kind: 'group',
+                groupId,
+                representativeStemKey: firstStemKey
+              }}
+              widthPx={widthPx}
+            />
           )}
         </div>
       </div>

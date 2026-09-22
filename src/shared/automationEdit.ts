@@ -70,14 +70,25 @@ export function yToValue(y: number, laneHeight: number): number {
 /**
  * Where a bar position actually lands: on the nearest whole bar by default,
  * or at a fine position when the snap override modifier is held (Option --
- * see AutomationLane.tsx for why that key specifically). Never negative:
- * dragging off the left edge of the arrangement parks at bar 0 rather than
- * writing points into negative time, which nothing downstream expects.
+ * see AutomationLane.tsx for why that key specifically).
+ *
+ * Confined to [0, maxBar]. Never negative: dragging off the left edge parks
+ * at bar 0 rather than writing points into negative time, which nothing
+ * downstream expects. And never past `maxBar` -- the clip's own length in
+ * bars -- which is the direct answer to "don't even allow to draw beyond
+ * where the wave is" (Elling, spec section 2b): a curve belongs to its clip,
+ * so a point outside the audio it automates is not a thing that can exist.
+ * The clamp runs AFTER the snap deliberately, so a clip whose length isn't a
+ * whole number of bars still gets a breakpoint exactly ON its right edge
+ * rather than at the last whole bar before it.
  */
-export function snapBar(bar: number, snapEnabled: boolean): number {
+export function snapBar(bar: number, snapEnabled: boolean, maxBar = Infinity): number {
   const clamped = Math.max(0, Number.isFinite(bar) ? bar : 0)
-  if (snapEnabled) return Math.round(clamped)
-  return Math.round(clamped * FINE_BAR_RESOLUTION) / FINE_BAR_RESOLUTION
+  const snapped = snapEnabled
+    ? Math.round(clamped)
+    : Math.round(clamped * FINE_BAR_RESOLUTION) / FINE_BAR_RESOLUTION
+  const limit = Number.isFinite(maxBar) ? Math.max(0, maxBar) : Infinity
+  return Math.min(snapped, limit)
 }
 
 /**
