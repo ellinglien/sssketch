@@ -1045,6 +1045,21 @@ describe('getRandomLibraryCandidate', () => {
     })
   })
 
+  it('reliably finds a stem when most listed jams have none synced (real archive shape)', async () => {
+    // Real bug, 2026-09-22: the external archive lists 5,056 jams but only
+    // 42 have stems -- guessing 15 random jams missed ~88% of the time,
+    // so most random rolls came back "no match".
+    const own = freshDb()
+    const jams = [{ jamCID: 'jam-with-stems', dbForJam: own }]
+    for (let i = 0; i < 300; i++) jams.push({ jamCID: `empty-${i}`, dbForJam: own })
+    seedRiff(own, 'r1', 'jam-with-stems', 120, ['s1'])
+    seedStem(own, 's1', 'jam-with-stems')
+    for (let i = 0; i < 30; i++) {
+      const candidate = await getRandomLibraryCandidate({ jams, kinds: ['drums'] })
+      expect(candidate?.stemCID).toBe('s1')
+    }
+  })
+
   it('returns null when no jam has any stem at all', async () => {
     const own = freshDb()
     const candidate = await getRandomLibraryCandidate({

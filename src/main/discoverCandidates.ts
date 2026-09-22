@@ -1324,11 +1324,9 @@ async function getTraitPoolCandidates({
   return result
 }
 
-// How many jams to try, at most, before giving up and returning null --
-// bounds the cost regardless of library size (see getRandomLibraryCandidate
-// below's own doc comment for why trying jams one at a time, rather than
-// one query over the whole library, is the deliberate design here).
-const RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS = 15
+// Random stem probes getRandomLibraryCandidate tries against the cached
+// instrument-row index before falling back to one filtered pass.
+const RANDOM_STEM_PROBES = 200
 
 // The mic-bit condition SQL-side, tied directly to soundSourceMatchesFilter's
 // own semantics (@shared/riffLibraryTypes): a stem counts as "audioIn" only
@@ -1374,19 +1372,10 @@ function soundSourceSqlFragment(soundSource: DiscoverSoundSourceFilter): string 
  * random rolls stay kind-agnostic by design, but they must still honor the
  * endlesss/audioIn checkboxes like every other roll).
  *
- * Picks a RANDOM JAM first (not `ORDER BY RANDOM() LIMIT 1` over every
- * jam's Stems table unioned together), then a random stem WITHIN that one
- * jam -- scanning every jam's own table to pick one random row across the
- * whole library would cost as much as the exact full-library scan this
- * feature exists to avoid waiting on. Tries up to
- * RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS different jams (shuffled) before
- * giving up, since a single jam might have no stems at all (rare) -- an
- * acceptable, bounded gamble for the UNFILTERED case, where nearly every
- * jam has SOME stem to offer. The soundSource filter is applied IN SQL
- * (soundSourceSqlFragment, above), not by post-filtering the one row this
- * function's own `ORDER BY RANDOM() LIMIT 1` already picked -- an
- * audioIn-only filter applied AFTER picking would almost always come back
- * empty, since audioIn stems are a small minority of a real jam's stems.
+ * Samples random STEMS from the cached per-db instrument-row index (see
+ * the comment at the top of the body for the 2026-09-22 bug that replaced
+ * the old "try 15 random jams" approach), filtered by the allowed jams and
+ * the soundSource checkboxes, and resolved through the cached riff index.
  *
  * Real bug, found live 2026-09-15 (root cause of "no match for this
  * role" on EVERY role, for a brand-new empty project, right after
@@ -1421,64 +1410,93 @@ export async function getRandomLibraryCandidate({
     return getRandomOwnStemCandidate(jams, kinds, targetUser, soundSource)
   }
 
-  const soundSourceFragment = soundSourceSqlFragment(soundSource)
-  const shuffled = [...jams]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS)
+  // Real bug, 2026-09-22 ("deselecting my sounds turns up no results"):
+  // this used to try RANDOM_CANDIDATE_MAX_JAM_ATTEMPTS random JAMS and give
+  // up -- but an external archive can list thousands of jams with only a
+  // handful actually synced (Elling's: 5,056 listed, 42 with stems), so
+  // ~88% of rolls missed. Now samples random STEMS from the per-db
+  // instrument-row index (getInstrumentRowsForDb -- already cached and
+  // prewarmed at startup, so no full-table SQL here), resolving each hit's
+  // riff through the equally-cached riff index. A bounded number of random
+  // probes covers the common case; a single filtered pass is the fallback
+  // for a rare filter (e.g. "other sounds" only), so a match that exists is
+  // never missed.
+  const jamCIDsByDb = new Map<Database.Database, Set<string>>()
+  for (const { jamCID, dbForJam } of jams) {
+    const existing = jamCIDsByDb.get(dbForJam)
+    if (existing) existing.add(jamCID)
+    else jamCIDsByDb.set(dbForJam, new Set([jamCID]))
+  }
+  const pools: {
+    db: Database.Database
+    allowed: Set<string>
+    rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+    riffIndex: Map<string, RiffIndexEntry>
+  }[] = []
+  let totalRows = 0
+  for (const [db, allowed] of jamCIDsByDb) {
+    const rows = await getInstrumentRowsForDb(db)
+    if (rows.length === 0) continue
+    pools.push({ db, allowed, rows, riffIndex: await getRiffIndexForDb(db) })
+    totalRows += rows.length
+  }
+  if (totalRows === 0) return null
 
-  for (const { jamCID, dbForJam } of shuffled) {
-    let stemRow:
-      { StemCID: string; PresetName: string | null; CreatorUserName: string | null } | undefined
-    try {
-      stemRow = dbForJam
-        .prepare(
-          `SELECT StemCID, PresetName, CreatorUserName FROM Stems
-           WHERE OwnerJamCID = ?${soundSourceFragment ? ` AND ${soundSourceFragment}` : ''}
-           ORDER BY RANDOM() LIMIT 1`
-        )
-        .get(jamCID) as typeof stemRow
-    } catch {
-      // Same defensive handling as every other per-jam query in this file
-      // -- an external jam db missing even a core table shouldn't abort
-      // the whole attempt, just this one jam.
-      continue
-    }
-    if (!stemRow) continue
+  const eligible = (
+    pool: (typeof pools)[number],
+    row: (typeof pools)[number]['rows'][number]
+  ): boolean =>
+    pool.allowed.has(row.OwnerJamCID) &&
+    soundSourceMatchesFilter(row.Instrument, soundSource) &&
+    pool.riffIndex.has(row.StemCID)
 
-    let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
-    try {
-      riffRow = dbForJam
-        .prepare(
-          `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
-             StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
-             StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
-           ) LIMIT 1`
-        )
-        .get(jamCID, ...Array<string>(8).fill(stemRow.StemCID)) as typeof riffRow
-    } catch {
-      continue
-    }
-    // A Stems row with no owning Riffs row is stale/orphaned data (same
-    // real-world case the main candidate query already tolerates) -- try
-    // another jam rather than returning a candidate with no riff to place.
-    if (!riffRow) continue
-
-    return {
-      stemCID: stemRow.StemCID,
-      jamCID,
-      riffCID: riffRow.RiffCID,
-      presetName: stemRow.PresetName ?? '',
-      creatorUserName: stemRow.CreatorUserName ?? '',
-      slotKinds: normalizeSlotKinds(kinds),
-      traitValues: {},
-      traitPercentiles: {},
-      kindSources: {},
-      drumSubRole: null,
-      riffBpm: riffRow.BPMrnd,
-      riffCreationTime: riffRow.CreationTime
+  let hit: { pool: (typeof pools)[number]; stemCID: string } | null = null
+  for (let attempt = 0; attempt < RANDOM_STEM_PROBES && !hit; attempt++) {
+    let index = Math.floor(Math.random() * totalRows)
+    for (const pool of pools) {
+      if (index < pool.rows.length) {
+        const row = pool.rows[index]
+        if (eligible(pool, row)) hit = { pool, stemCID: row.StemCID }
+        break
+      }
+      index -= pool.rows.length
     }
   }
-  return null
+  if (!hit) {
+    const all: { pool: (typeof pools)[number]; stemCID: string }[] = []
+    for (const pool of pools) {
+      for (const row of pool.rows) if (eligible(pool, row)) all.push({ pool, stemCID: row.StemCID })
+      await yieldToEventLoop()
+    }
+    if (all.length === 0) return null
+    hit = all[Math.floor(Math.random() * all.length)]
+  }
+
+  const riff = hit.pool.riffIndex.get(hit.stemCID)
+  if (!riff) return null
+  let stemRow: { PresetName: string | null; CreatorUserName: string | null } | undefined
+  try {
+    stemRow = hit.pool.db
+      .prepare(`SELECT PresetName, CreatorUserName FROM Stems WHERE StemCID = ?`)
+      .get(hit.stemCID) as typeof stemRow
+  } catch {
+    return null
+  }
+  if (!stemRow) return null
+  return {
+    stemCID: hit.stemCID,
+    jamCID: riff.ownerJamCID,
+    riffCID: riff.riffCID,
+    presetName: stemRow.PresetName ?? '',
+    creatorUserName: stemRow.CreatorUserName ?? '',
+    slotKinds: normalizeSlotKinds(kinds),
+    traitValues: {},
+    traitPercentiles: {},
+    kindSources: {},
+    drumSubRole: null,
+    riffBpm: riff.bpmRnd,
+    riffCreationTime: riff.creationTime
+  }
 }
 
 /** getRandomLibraryCandidate's own onlyOwnStems path -- see that function's
