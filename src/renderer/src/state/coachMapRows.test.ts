@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { startCoach } from '@shared/coach'
+import type { LockedClimax } from '@shared/coachClimax'
 import { createRiser } from '@shared/riser'
-import type { Rifff } from '@shared/types'
+import type { ArrangeRole } from '@shared/stemRole'
+import type { Rifff, SoundType } from '@shared/types'
 import { initialState, type AppState } from './store'
 import { coachMapRows } from './coachMapRows'
 
-function rifff(groupId: string, path: string, startBar: number): Rifff {
+function rifff(groupId: string, path: string, startBar: number, type: SoundType = 'drums'): Rifff {
   return {
     groupId,
     name: path,
@@ -13,8 +15,52 @@ function rifff(groupId: string, path: string, startBar: number): Rifff {
     barLength: 4,
     folderPath: '/x',
     startBar,
-    stems: [{ slot: 1, author: 'e', name: path, type: 'drums', path, durationSec: 4, barLength: 4 }]
+    stems: [{ slot: 1, author: 'e', name: path, type, path, durationSec: 4, barLength: 4 }]
   }
+}
+
+/** A climax as the auto-arranger's role step leaves it: every stem recorded
+ * through audio-in (which is what real Endlesss material looks like), the
+ * role the only thing that tells them apart. */
+function climaxOf(roles: Record<string, ArrangeRole>): LockedClimax {
+  return {
+    bpm: 120,
+    barLength: 4,
+    lockedAt: 0,
+    stems: Object.entries(roles).map(([path, role]) => ({
+      path,
+      name: 'audio in',
+      author: 'e',
+      type: 'audioIn' as SoundType,
+      durationSec: 4,
+      barLength: 4,
+      kinds: [],
+      role,
+      gain: 1
+    }))
+  }
+}
+
+/** A state whose map laid out one channel per path, with the given climax. */
+function laidOutState(paths: string[], climax: LockedClimax | null): AppState {
+  const rifffs = paths.map((path, i) => rifff(`c${i}`, path, 0, 'audioIn'))
+  return stateWith(rifffs, {
+    coach: {
+      ...startCoach(0),
+      lockedClimax: climax,
+      sections: [
+        {
+          id: 's1',
+          type: 'drop' as const,
+          name: 'drop',
+          passes: 1,
+          cells: {},
+          startBar: 0,
+          placedGroupIds: Object.fromEntries(paths.map((path, i) => [path, `c${i}`]))
+        }
+      ]
+    }
+  })
 }
 
 function stateWith(rifffs: Rifff[], extra: Partial<AppState> = {}): AppState {
@@ -90,6 +136,41 @@ describe('coachMapRows', () => {
     const state = stateWith([rifff('a', '/kick.wav', 0)])
     expect(coachMapRows(state)[0].kind).toBe('other')
     expect(coachMapRows(state)[0].path).toBeNull()
+  })
+
+  it('names a laid-out row by the role the user confirmed, not the raw sound type', () => {
+    // Every Endlesss stem here is recorded through audio-in and named
+    // "audio in" -- the confirmed role is the only thing that says anything.
+    const state = laidOutState(['/one.wav'], climaxOf({ '/one.wav': 'bass' }))
+    expect(coachMapRows(state)[0].label).toBe('bass')
+  })
+
+  it('numbers rows that share a role so two drums are tellable apart', () => {
+    const state = laidOutState(
+      ['/one.wav', '/two.wav', '/three.wav'],
+      climaxOf({ '/one.wav': 'drums', '/two.wav': 'drums', '/three.wav': 'vocal' })
+    )
+    expect(coachMapRows(state).map((row) => row.label)).toEqual(['drums 1', 'drums 2', 'vocal'])
+  })
+
+  it('spells a role the way every other picker spells it', () => {
+    const state = laidOutState(['/one.wav'], climaxOf({ '/one.wav': 'textureFx' }))
+    expect(coachMapRows(state)[0].label).toBe('texture/fx')
+  })
+
+  it('falls back to the stem own name when the climax has no role for that path', () => {
+    const state = laidOutState(['/one.wav'], climaxOf({ '/other.wav': 'bass' }))
+    expect(coachMapRows(state)[0].label).toBe('/one.wav')
+  })
+
+  it('leaves a riser row named by the riser, never by a role', () => {
+    const riser = createRiser({ id: 'r1', channelId: 'chan-r', startBar: 12 })
+    const state = {
+      ...initialState,
+      risers: { r1: { ...riser, name: 'lift' } },
+      coach: { ...startCoach(0), lockedClimax: climaxOf({ '/one.wav': 'bass' }) }
+    }
+    expect(coachMapRows(state)[0].label).toBe('lift')
   })
 
   it('reads a stem that leaves and comes back as two clips on one row', () => {
