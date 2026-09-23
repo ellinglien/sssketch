@@ -11,7 +11,7 @@ import {
   type CoachMoveAction,
   type CoachOfferAction
 } from '@shared/coachSteps'
-import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import { canLockClimax, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { COACH_NO_MOVES_LINES, COACH_STUCK_LINES, pickLineVariant } from '@shared/coachLines'
 
 const BUBBLE_WIDTH = 300
@@ -161,6 +161,25 @@ function useAnchorLeft(
 }
 
 /**
+ * Why a move cannot run right now, or null when it can.
+ *
+ * Exactly one move has a precondition the user can be standing in front of
+ * without meeting: locking the climax needs something resolved in Discover
+ * to freeze. The transition already refuses that (lockCoachClimax returns
+ * the flow untouched), which as a live button is a click that does nothing
+ * and says nothing -- so the button goes to the app's own disabled
+ * treatment and the reason goes in its title. Read off the same rule the
+ * transition uses (canLockClimax), so the two can never disagree.
+ */
+function moveBlockedReason(
+  action: CoachMoveAction,
+  slots: readonly CoachSlotSnapshot[]
+): string | null {
+  if (action.kind !== 'lock-climax' || canLockClimax(slots)) return null
+  return 'nothing has resolved in discover yet, so there is nothing to lock'
+}
+
+/**
  * sssketchy on screen: the sprite on the bottom edge, and one speech bubble
  * carrying exactly one thought.
  *
@@ -306,6 +325,12 @@ function SssketchyCoachPanel({
   // button disabled, which is the honest answer: one of those is a decision
   // only the user can make, the other is a person listening.
   const primaryMove = rawStep === undefined ? null : coachStepPrimaryMove(rawStep, coach.flavour)
+  // Disabled for two different reasons, and the title says which: a step
+  // whose work is not the app's to do has no primary move at all, and the
+  // lock-in has one that cannot run until something has resolved.
+  const primaryBlocked =
+    primaryMove === null ? null : moveBlockedReason(primaryMove.action, discoverSlots)
+  const primaryDead = primaryMove === null || primaryBlocked !== null
   const offers = step?.offers ?? []
   const seededLine = coachSeededLine(coach.seededKinds, step?.label ?? '', coach.lineSeed)
 
@@ -377,16 +402,27 @@ function SssketchyCoachPanel({
                   {pickLineVariant(COACH_NO_MOVES_LINES, coach.lineSeed)}
                 </div>
               ) : (
-                moves.map((move) => (
-                  <button
-                    key={move.id}
-                    type="button"
-                    onClick={() => onMove(move.action)}
-                    style={{ ...bubbleButtonStyle, display: 'block', marginTop: 'var(--ra-s-1)' }}
-                  >
-                    {move.label}
-                  </button>
-                ))
+                moves.map((move) => {
+                  const blocked = moveBlockedReason(move.action, discoverSlots)
+                  return (
+                    <button
+                      key={move.id}
+                      type="button"
+                      disabled={blocked !== null}
+                      onClick={() => onMove(move.action)}
+                      title={blocked ?? move.label}
+                      style={{
+                        ...bubbleButtonStyle,
+                        display: 'block',
+                        marginTop: 'var(--ra-s-1)',
+                        opacity: blocked === null ? 1 : 0.3,
+                        cursor: blocked === null ? 'pointer' : 'not-allowed'
+                      }}
+                    >
+                      {move.label}
+                    </button>
+                  )
+                })
               )}
             </div>
           )}
@@ -444,15 +480,19 @@ function SssketchyCoachPanel({
                     not-allowed) rather than a custom one. */}
                 <button
                   type="button"
-                  disabled={primaryMove === null}
+                  disabled={primaryDead}
                   onClick={() => {
-                    if (primaryMove !== null) onMove(primaryMove.action)
+                    if (primaryMove !== null && primaryBlocked === null) onMove(primaryMove.action)
                   }}
-                  title={primaryMove === null ? 'this one is yours' : primaryMove.label}
+                  title={
+                    primaryMove === null
+                      ? 'this one is yours'
+                      : (primaryBlocked ?? primaryMove.label)
+                  }
                   style={{
                     ...bubbleButtonStyle,
-                    opacity: primaryMove === null ? 0.3 : 1,
-                    cursor: primaryMove === null ? 'not-allowed' : 'pointer'
+                    opacity: primaryDead ? 0.3 : 1,
+                    cursor: primaryDead ? 'not-allowed' : 'pointer'
                   }}
                 >
                   do it for me

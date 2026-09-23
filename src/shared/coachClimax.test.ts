@@ -3,6 +3,7 @@ import {
   coachSlotRole,
   isDiscoverSlotKind,
   kindsCoverSet,
+  canLockClimax,
   lockClimaxFromSlots,
   sanitiseLockedClimax,
   type CoachSlotSnapshot
@@ -38,6 +39,24 @@ describe('coachSlotRole', () => {
 
   it('falls back to aux rather than guessing for an empty set', () => {
     expect(coachSlotRole([])).toBe('aux')
+  })
+})
+
+describe('canLockClimax', () => {
+  it('is true exactly when there is something real to freeze', () => {
+    expect(canLockClimax([])).toBe(false)
+    expect(canLockClimax([slot({ stem: null })])).toBe(false)
+    expect(canLockClimax([slot({ stem: null }), slot()])).toBe(true)
+  })
+
+  it('answers the same question the lock itself does, so a live button always locks', () => {
+    // The button that runs the lock is disabled off this, and the lock
+    // returns null off the same rule -- one of them being more generous
+    // than the other is exactly how a dead click gets back in.
+    const cases = [[], [slot({ stem: null })], [slot()], [slot(), slot({ stem: null })]]
+    for (const slots of cases) {
+      expect(canLockClimax(slots)).toBe(lockClimaxFromSlots(slots, 120, NOW) !== null)
+    }
   })
 })
 

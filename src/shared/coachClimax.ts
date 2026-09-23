@@ -115,6 +115,19 @@ function clampGain(value: unknown): number {
 }
 
 /**
+ * Whether there is anything to freeze yet.
+ *
+ * Exported so the UI can DISABLE the lock rather than run it into a silent
+ * no-op: lockCoachClimax on an empty Discover returns the flow untouched,
+ * which as a live button is a click that does nothing and explains
+ * nothing. Same rule as lockClimaxFromSlots' own null return, stated once
+ * so the button and the transition can never disagree.
+ */
+export function canLockClimax(slots: readonly CoachSlotSnapshot[]): boolean {
+  return slots.some((slot) => slot.stem !== null)
+}
+
+/**
  * Freezes the loop as it stands. Every slot with real audio behind it is
  * included, muted ones at gain 0 rather than dropped -- the same choice
  * resolveDiscoverRifff already makes when plunking into the arranger ("keeps
