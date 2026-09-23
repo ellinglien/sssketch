@@ -3074,3 +3074,99 @@ describe('the phase-three coach actions', () => {
     ).toBeNull()
   })
 })
+
+describe('a riser on its own row', () => {
+  function withRiser(id: string, channelId: string): AppState {
+    return reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id, channelId, startBar: 0 })
+    })
+  }
+
+  it('numbers an unnamed riser as it lands', () => {
+    const state = withRiser('r1', 'ch-r1')
+    expect(state.risers['r1'].name).toBe('riser 1')
+  })
+
+  it('numbers a second one without repeating the first', () => {
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'r2', channelId: 'ch-r2', startBar: 8 })
+    })
+    expect([state.risers['r1'].name, state.risers['r2'].name]).toEqual(['riser 1', 'riser 2'])
+  })
+
+  it('keeps a name the caller asked for', () => {
+    const state = reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'r1', channelId: 'ch-r1', startBar: 0, name: 'the lift' })
+    })
+    expect(state.risers['r1'].name).toBe('the lift')
+  })
+
+  it('renames one, trimming what was typed', () => {
+    const state = reducer(withRiser('r1', 'ch-r1'), {
+      type: 'RENAME_RISER',
+      id: 'r1',
+      name: '  into the drop  '
+    })
+    expect(state.risers['r1'].name).toBe('into the drop')
+  })
+
+  it('ignores a rename to nothing rather than leaving a blank row', () => {
+    const before = withRiser('r1', 'ch-r1')
+    expect(reducer(before, { type: 'RENAME_RISER', id: 'r1', name: '   ' })).toBe(before)
+  })
+
+  it('mutes and unmutes one directly', () => {
+    let state = reducer(withRiser('r1', 'ch-r1'), {
+      type: 'SET_RISER_MUTE',
+      id: 'r1',
+      muted: true
+    })
+    expect(state.risers['r1'].muted).toBe(true)
+    state = reducer(state, { type: 'SET_RISER_MUTE', id: 'r1', muted: false })
+    expect(state.risers['r1'].muted).toBe(false)
+  })
+
+  it('mutes the risers on a row when the row is muted', () => {
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
+    })
+    state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'ch-r1', muted: true })
+    expect(state.risers['r1'].muted).toBe(true)
+    expect(state.risers['r2'].muted).toBe(false)
+  })
+
+  it('solos a riser row by muting every other riser', () => {
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
+    })
+    state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
+    expect(state.risers['r1'].muted).toBe(false)
+    expect(state.risers['r2'].muted).toBe(true)
+  })
+
+  it('un-solos back to everything audible on a second press', () => {
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
+    })
+    state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
+    state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
+    expect(state.risers['r1'].muted).toBe(false)
+    expect(state.risers['r2'].muted).toBe(false)
+  })
+
+  it('leaves the risers record untouched when there are none to solo', () => {
+    const before = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    const after = reducer(before, { type: 'SOLO_CHANNEL', channelId: 'nope' })
+    expect(after.risers).toBe(before.risers)
+  })
+})

@@ -10,7 +10,7 @@ import {
   type StemAutomation,
   type StemFilterSettings
 } from '@shared/toolkit'
-import { MIN_RISER_LENGTH_BARS, normaliseRiser, type RiserClip } from '@shared/riser'
+import { MIN_RISER_LENGTH_BARS, nextRiserName, normaliseRiser, type RiserClip } from '@shared/riser'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import {
   advanceCoach,
@@ -75,6 +75,28 @@ function channelHasAnyClip(
 ): boolean {
   if (Object.values(channelOf).includes(channelId)) return true
   return Object.values(risers).some((riser) => riser.channelId === channelId)
+}
+
+/** Every riser on one channel, muted or unmuted together. Returns the SAME
+ * record when nothing changed, so a mute on a riserless row cannot trigger
+ * StoreContext's engine-sync effect (which depends on state.risers) for
+ * nothing. */
+function setRisersMutedOnChannel(
+  risers: Record<string, RiserClip>,
+  channelId: string,
+  muted: boolean
+): Record<string, RiserClip> {
+  let changed = false
+  const next: Record<string, RiserClip> = {}
+  for (const [id, riser] of Object.entries(risers)) {
+    if (riser.channelId === channelId && riser.muted !== muted) {
+      next[id] = { ...riser, muted }
+      changed = true
+    } else {
+      next[id] = riser
+    }
+  }
+  return changed ? next : risers
 }
 
 /**
@@ -703,6 +725,13 @@ export type Action =
    * ramp" -- see RiserClip.curve. */
   | { type: 'SET_RISER_CURVE'; id: string; points: AutomationPoint[] }
   | { type: 'SET_RISER_LEVEL'; id: string; level: number }
+  /** This riser's row label. A blank rename is ignored rather than leaving
+   * an unlabelled row -- EditableText already discards one, this is the
+   * belt-and-braces half. */
+  | { type: 'RENAME_RISER'; id: string; name: string }
+  /** This riser's own mute. A riser has no stems, so state.mute cannot hold
+   * it; muting is what keeps it off the wire entirely (audibleRisers). */
+  | { type: 'SET_RISER_MUTE'; id: string; muted: boolean }
   | { type: 'REMOVE_RISER'; id: string }
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
@@ -1456,18 +1485,28 @@ export function reducer(state: AppState, action: Action): AppState {
           mute[stemKey(rifff.groupId, stem.slot)] = action.muted
         }
       }
-      return { ...state, mute }
+      // A riser has no stems, so state.mute has nothing to key it by: its
+      // own `muted` flag is the other half of this row's m button. Without
+      // this, a riser-only row's m button renders, lights up, and changes
+      // nothing audible.
+      const risers = setRisersMutedOnChannel(state.risers, action.channelId, action.muted)
+      return { ...state, mute, risers }
     }
 
     case 'SOLO_CHANNEL': {
       const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
       const channelOfRifff = (r: Rifff): string => state.channelOf[r.groupId] ?? r.groupId
-      const alreadySoloed = rifffList.every((rifff) =>
-        rifff.stems.every((stem) => {
-          const expectedMuted = channelOfRifff(rifff) !== action.channelId
-          return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
-        })
-      )
+      const riserList = Object.values(state.risers)
+      // Risers join the "is this already the only thing audible" scan on the
+      // same terms the clips do -- otherwise soloing a riser-only row would
+      // look like a no-op to the toggle and never turn back off.
+      const alreadySoloed =
+        rifffList.every((rifff) =>
+          rifff.stems.every((stem) => {
+            const expectedMuted = channelOfRifff(rifff) !== action.channelId
+            return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
+          })
+        ) && riserList.every((riser) => riser.muted === (riser.channelId !== action.channelId))
       const mute = { ...state.mute }
       for (const rifff of rifffList) {
         for (const stem of rifff.stems) {
@@ -1476,7 +1515,20 @@ export function reducer(state: AppState, action: Action): AppState {
             : channelOfRifff(rifff) !== action.channelId
         }
       }
-      return { ...state, mute }
+      // Same identity guard as setRisersMutedOnChannel's: a project with no
+      // risers must not get a fresh (equal) record and a needless engine
+      // reload out of every solo press.
+      let risers = state.risers
+      if (riserList.length > 0) {
+        risers = {}
+        for (const riser of riserList) {
+          risers[riser.id] = {
+            ...riser,
+            muted: alreadySoloed ? false : riser.channelId !== action.channelId
+          }
+        }
+      }
+      return { ...state, mute, risers }
     }
 
     // Solos an arbitrary SET of stems that may span multiple different
@@ -1785,7 +1837,14 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'ADD_RISER': {
-      const riser = normaliseRiser(action.riser)
+      const normalised = normaliseRiser(action.riser)
+      // An unnamed riser is numbered HERE rather than in createRiser,
+      // because this is the only place that can see the other risers -- and
+      // the only place that stays correct inside a BATCH adding several at
+      // once (history.ts re-enters this reducer per action, so the second
+      // riser already sees the first one's name taken).
+      const riser =
+        normalised.name === '' ? { ...normalised, name: nextRiserName(state.risers) } : normalised
       // A riser keeps its own row alive (see channelHasAnyClip), so a riser
       // landing on a channel nobody has placed a clip on yet has to put that
       // channel into channelOrder itself -- otherwise channelsInOrder would
@@ -1863,6 +1922,24 @@ export function reducer(state: AppState, action: Action): AppState {
           ...state.risers,
           [action.id]: normaliseRiser({ ...existing, level: action.level })
         }
+      }
+    }
+
+    case 'RENAME_RISER': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      const name = action.name.trim()
+      if (name === '') return state
+      return { ...state, risers: { ...state.risers, [action.id]: { ...existing, name } } }
+    }
+
+    case 'SET_RISER_MUTE': {
+      const existing = state.risers[action.id]
+      if (!existing) return state
+      if (existing.muted === action.muted) return state
+      return {
+        ...state,
+        risers: { ...state.risers, [action.id]: { ...existing, muted: action.muted } }
       }
     }
 
