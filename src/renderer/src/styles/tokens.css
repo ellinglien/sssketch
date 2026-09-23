@@ -2,7 +2,7 @@
  * Extracted from "Rifff Arranger.dc.html" (option 2a is the recommended build),
  * then re-cut to the "6b" monochrome pass ("Ssstitch 6b Real.dc.html", imported
  * via the claude_design MCP): near-black shell, whisper-thin rules, one
- * face throughout (Astloch; Silkscreen until 2026-09-23), sharp corners everywhere, and color spent only on the things that
+ * face throughout (Supermercado One; Silkscreen until 2026-09-23), sharp corners everywhere, and color spent only on the things that
  * carry information — stem waveforms/glyphs, the playhead, and mute/danger state.
  * The prototype itself is inline-styled; this file is the portable token set.
  */
@@ -76,7 +76,7 @@
   --ra-recording-live: #8f7dd4;
 
   /* ——— type ——— */
-  --ra-font: 'Astloch', ui-serif, Georgia, serif;
+  --ra-font: 'Supermercado One', ui-rounded, system-ui, sans-serif;
   --ra-fs-9: 9px; /* slot numbers, dB, meta */
   --ra-fs-10: 10px; /* labels, eyebrows, hints */
   --ra-fs-11: 11px; /* stem + rifff names */

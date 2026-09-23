@@ -13,7 +13,7 @@ is continuing something, not starting over.
 
 ## Identity
 
-A near-black, monochrome desktop app shell. Astloch (a display blackletter)
+A near-black, monochrome desktop app shell. Supermercado One (a rounded display sans)
 throughout, sharp corners everywhere — no rounded rectangles anywhere, buttons and clips
 included. Color is spent deliberately and sparingly: almost the entire UI is greyscale, and
 saturated color appears *only* on things that carry actual audio information (stem
@@ -86,7 +86,7 @@ while playing, as a deliberate "live" cue.
 
 ## Typography
 
-Font stack: `'Astloch', ui-serif, Georgia, serif`
+Font stack: `'Supermercado One', ui-rounded, system-ui, sans-serif`
 
 | Size | Use |
 |---|---|

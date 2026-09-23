@@ -142,7 +142,7 @@ bulk in-process scan.
 ## Design system
 
 `src/renderer/src/styles/tokens.css` is the single source of truth — read it before adding
-any UI. Summary: near-black monochrome shell, Astloch throughout (ONE face, for
+any UI. Summary: near-black monochrome shell, Supermercado One throughout (ONE face, for
 labels and prose alike), lowercase by default with uppercase as the emphasis, sharp corners
 everywhere (no `border-radius`), color spent *only* on things that carry audio information
 (stem waveforms/glyphs, the playhead, mute/danger state) — never on chrome. UI copy is

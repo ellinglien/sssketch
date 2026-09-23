@@ -1,4 +1,5 @@
-Copyright (c) 2010, 2011 Daniel Rhatigan (sparky@ultrasparky.org) with Reserved Font Name Astloch.
+Copyright (c) 2011-2012 by Sorkin Type Co (www.sorkintype.com),
+with Reserved Font Name "Supermercado".
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

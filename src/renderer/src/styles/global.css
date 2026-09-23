@@ -1,27 +1,20 @@
-/* Astloch, the app's one typeface. SIL Open Font License 1.1, licence
-   beside it as Astloch-OFL.txt, which OFL requires travel with the font.
+/* Supermercado One, the app's one typeface. SIL Open Font License 1.1,
+   licence beside it as SupermercadoOne-OFL.txt, which OFL requires.
 
-   Regular and Bold, no light cut, so --ra-fw-regular stays 400 -- same
-   situation as Comic Relief before it (see tokens.css).
+   ONE cut only -- no bold, no light. Both faces below point at the same
+   file so any surviving `font-weight: 700` gets the real thing rather than
+   a synthesised bold, and --ra-fw-regular stays 400.
 
-   Worth saying plainly: this is a DISPLAY blackletter. It was drawn for
-   headings at size, not for 9-11px interface labels, which is most of what
-   this app renders. Expect the small text to be hard to read and the dense
-   surfaces -- the map's row headers, the transport readouts, the keys list
-   -- to suffer most. Kept anyway because it is a deliberate choice; the
-   previous faces are one line away in git if it does not hold up.
-
-   Case still carries emphasis: lowercase by default, uppercase where bold
-   used to be -- though note blackletter lowercase and uppercase differ far
-   more than in a sans, so that contrast will read much louder here. */
+   That makes case the only emphasis available again, which is what the app
+   already does: lowercase by default, uppercase where bold used to be. */
 @font-face {
-  font-family: 'Astloch';
-  src: url('../assets/fonts/Astloch-Regular.ttf') format('truetype');
+  font-family: 'Supermercado One';
+  src: url('../assets/fonts/SupermercadoOne-Regular.ttf') format('truetype');
   font-weight: 400;
 }
 @font-face {
-  font-family: 'Astloch';
-  src: url('../assets/fonts/Astloch-Bold.ttf') format('truetype');
+  font-family: 'Supermercado One';
+  src: url('../assets/fonts/SupermercadoOne-Regular.ttf') format('truetype');
   font-weight: 700;
 }
 
