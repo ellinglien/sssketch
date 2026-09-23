@@ -1,20 +1,24 @@
-/* Supermercado One, the app's one typeface. SIL Open Font License 1.1,
-   licence beside it as SupermercadoOne-OFL.txt, which OFL requires.
+/* VT323, the app's one typeface. SIL Open Font License 1.1, licence beside
+   it as VT323-OFL.txt, which OFL requires travel with the font.
 
-   ONE cut only -- no bold, no light. Both faces below point at the same
-   file so any surviving `font-weight: 700` gets the real thing rather than
-   a synthesised bold, and --ra-fw-regular stays 400.
+   A DEC VT320 terminal face: monospace, one cut, and the closest thing yet
+   to what Silkscreen was actually for -- machine-set label text, small, and
+   at home next to numbers. Both @font-face rules point at the same file, so
+   any surviving font-weight: 700 renders the real thing instead of a
+   synthesised bold, and --ra-fw-regular stays 400.
 
-   That makes case the only emphasis available again, which is what the app
-   already does: lowercase by default, uppercase where bold used to be. */
+   Monospace again, which matters: the transport readouts, bar counts and
+   tempo field all sit still while they count, the way they did before Comic
+   Relief. Case stays the emphasis -- lowercase by default, uppercase where
+   bold used to be. */
 @font-face {
-  font-family: 'Supermercado One';
-  src: url('../assets/fonts/SupermercadoOne-Regular.ttf') format('truetype');
+  font-family: 'VT323';
+  src: url('../assets/fonts/VT323-Regular.ttf') format('truetype');
   font-weight: 400;
 }
 @font-face {
-  font-family: 'Supermercado One';
-  src: url('../assets/fonts/SupermercadoOne-Regular.ttf') format('truetype');
+  font-family: 'VT323';
+  src: url('../assets/fonts/VT323-Regular.ttf') format('truetype');
   font-weight: 700;
 }
 
