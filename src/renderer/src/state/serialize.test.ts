@@ -564,6 +564,36 @@ describe('noise risers in the saved file', () => {
     expect(restored.risers).toEqual({})
     expect(restored.rifffs.r1).toBeDefined()
   })
+
+  it('round-trips a named, muted riser', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 12, lengthBars: 8 })
+    })
+    state = reducer(state, { type: 'RENAME_RISER', id: 'riser-1', name: 'into the drop' })
+    state = reducer(state, { type: 'SET_RISER_MUTE', id: 'riser-1', muted: true })
+
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+
+    expect(restored.risers['riser-1'].name).toBe('into the drop')
+    expect(restored.risers['riser-1'].muted).toBe(true)
+  })
+
+  it('numbers a riser saved before names existed, and leaves it audible', () => {
+    const state = reducer(initialState, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'riser-1', channelId: 'ch1', startBar: 12 })
+    })
+    const saved = JSON.parse(serializeProject(state))
+    delete saved.risers['riser-1'].name
+    delete saved.risers['riser-1'].muted
+
+    const { state: restored } = deserializeProject(saved)
+
+    expect(restored.risers['riser-1'].name).toBe('riser 1')
+    expect(restored.risers['riser-1'].muted).toBe(false)
+    expect(restored.risers['riser-1'].startBar).toBe(12)
+  })
 })
 
 describe('the guided flow across a save and a load', () => {

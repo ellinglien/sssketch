@@ -12,6 +12,7 @@ import {
 } from '@shared/toolkit'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import { sanitiseLoadedCoach } from '@shared/coach'
+import { normaliseLoadedRisers } from '@shared/riser'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -361,6 +362,12 @@ export function deserializeProject(
   // it's re-picked, not anything already committed to audio.
   if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
+  // Risers came before their `name` and `muted` fields did, and a
+  // `.sssketchproj` is plain JSON people can and do hand-edit -- so every
+  // saved riser is brought up to today's shape here, once, before anything
+  // renders it. Without this a pre-2026-09-23 project's rows would be
+  // labelled "undefined" until something happened to dispatch against them.
+  state.risers = normaliseLoadedRisers(state.risers)
   // The guided flow's own load rules, in one place (see sanitiseLoadedCoach
   // for the full why): which step you got to and how long each phase took
   // come back; his visibility and his clock do not. A flow saved mid-step
