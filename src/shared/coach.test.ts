@@ -142,7 +142,7 @@ describe('advanceCoach', () => {
       minute += 1
       expect(minute).toBeLessThan(50) // a runaway loop is a bug, not a hang
     }
-    expect(coach.stepId).toBe('finish')
+    expect(coach.stepId).toBe('p3-export')
     expect(coach.runningSince).toBeNull()
     expect(Object.keys(coach.outcomes)).toEqual([...coachStepOrder(null)])
   })
@@ -195,7 +195,7 @@ describe('dismissCoach', () => {
     const dismissed = dismissCoach(coach, T0 + 50 * MINUTE)
     expect(dismissed.status).toBe('dismissed')
     expect(dismissed.outcomes).toEqual(coach.outcomes)
-    expect(dismissed.stepId).toBe('finish')
+    expect(dismissed.stepId).toBe('p3-export')
     // ...and the flow is still, durably, a finished one.
     expect(coachIsComplete(dismissed)).toBe(true)
   })

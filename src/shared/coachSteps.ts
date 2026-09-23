@@ -10,15 +10,16 @@
  *
  * The eight 'p1-' rows are phase one, the climax loop (build order step 2,
  * 2026-09-22). The three 'p2-' rows are phase two, shipped 2026-09-22 (build
- * order step 3); 'finish' is still a one-row PLACEHOLDER for build order
- * step 4, so the shell can be stepped through end to end before that phase
- * exists. Every line carries real, hand-written copy
+ * order step 3); the three 'p3-' rows are phase three, shipped 2026-09-22
+ * (build order step 4), and complete the table -- there is no placeholder
+ * left in it. Every line carries real, hand-written copy
  * rather than lorem, because the copy is the part that has to be reviewed by
  * a person, and every line is true by construction (they describe the STEP,
  * never the user's music -- see the spec's "What he is allowed to say").
  */
 
 import type { CoachSectionOp } from './coachSections'
+import type { CoachExportOp, CoachTensionOp, CoachTransportOp } from './coachTension'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 export type CoachPhase = 'loop' | 'arrangement' | 'polish'
@@ -87,8 +88,12 @@ export function coachPhaseDef(phase: CoachPhase): CoachPhaseDef {
  * project saved by that build loads with an unknown stepId and is repaired
  * back to the first step -- see sanitiseLoadedCoach. The 'p2-' rows are
  * phase two, shipped 2026-09-22 (build order step 3); they replaced the
- * single 'sections' placeholder the same way. 'finish' is still a
- * placeholder, for build order step 4. */
+ * single 'sections' placeholder the same way.
+ *
+ * The 'p3-' rows are phase three, shipped 2026-09-22 (build order step 4);
+ * they replaced the single 'finish' placeholder the same way, so a project
+ * saved on that placeholder loads with an unknown stepId and is repaired
+ * back to the first step -- see sanitiseLoadedCoach. */
 export type CoachStepId =
   | 'p1-flavour'
   | 'p1-low-end'
@@ -101,19 +106,29 @@ export type CoachStepId =
   | 'p2-first'
   | 'p2-section'
   | 'p2-next'
-  | 'finish'
+  | 'p3-tension'
+  | 'p3-balance'
+  | 'p3-export'
 
 /** What a move actually DOES, as data rather than as a callback -- the
  * renderer switches on `kind` and nothing in src/shared/ knows that
  * Discover, React or Electron exist. 'add-slot' adds one Discover slot
  * targeting `kinds`; 'lock-climax' freezes the loop (see ./coachClimax.ts);
  * 'section-op' presses one of the phase-two panel's own buttons (see
- * ./coachSections.ts's CoachSectionOp), so the bubble's "stuck?" list and
- * the panel can never offer two different sets of moves. */
+ * ./coachSections.ts's CoachSectionOp); 'tension-op' presses one of the
+ * phase-three panel's (./coachTension.ts); 'transport-op' is the balance
+ * step simply starting playback, which is a machine fact rather than a
+ * musical decision; 'export-op' opens one of the export menu's own three
+ * entries. Every one of them is a button that already exists somewhere,
+ * restated as data, so the bubble's "stuck?" list and the panel can never
+ * offer two different sets of moves. */
 export type CoachMoveAction =
   | { kind: 'add-slot'; kinds: readonly DiscoverSlotKind[] }
   | { kind: 'lock-climax' }
   | { kind: 'section-op'; op: CoachSectionOp }
+  | { kind: 'tension-op'; op: CoachTensionOp }
+  | { kind: 'transport-op'; op: CoachTransportOp }
+  | { kind: 'export-op'; op: CoachExportOp }
 
 /** One concrete move a step can make on the user's behalf. Surfaced by the
  * bubble's "stuck?" button, which "surfaces concrete moves this step can
@@ -536,16 +551,79 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     anchorSelector: TIMELINE
   },
   {
-    id: 'finish',
+    id: 'p3-tension',
     phase: 'polish',
-    label: 'finish and export a v1',
+    label: 'the tension pass',
     lines: [
-      'phase three: transitions, a balance pass, then a v1 out the door.',
-      'last phase. smooth the joins, check the levels, export something you can listen to.',
-      'phase three is finishing. risers into the drops, a balance check, then export.',
-      'nearly there. tension at the boundaries, one listen through, then v1.'
+      'phase three. the joins between sections first -- a sweep into a drop, a fade into a breakdown.',
+      'last phase. start at the seams: what is offered there comes from the names you gave.',
+      'tension pass. nothing is on until you switch it on, and what it makes is an ordinary curve.',
+      'this step is the joins. a drop gets a sweep and a swell; a build into a drop also gets a riser.'
     ],
-    moves: []
+    // The panel's own two controls, restated here so the bubble's "stuck?"
+    // list and "do it for me" can never offer a different set of moves than
+    // the panel shows. "add all of these" is the primary one for the same
+    // reason "drop the suggested ones" is phase two's -- it is the single
+    // shortcut worth having, and it still only ever runs on a click.
+    moves: [
+      {
+        id: 'tension-add-all',
+        label: 'add all of these',
+        action: { kind: 'tension-op', op: 'add-all' }
+      },
+      {
+        id: 'tension-listen',
+        label: 'play the first join',
+        action: { kind: 'tension-op', op: 'listen' }
+      }
+    ],
+    primaryMoveId: 'tension-add-all',
+    anchorSelector: TIMELINE
+  },
+  {
+    id: 'p3-balance',
+    phase: 'polish',
+    label: 'the balance check',
+    lines: [
+      'balance check. play the whole thing through and set the levels while it runs.',
+      'one listen, top to bottom, with the row gains to hand.',
+      'this step is levels. what they should be is yours -- i can only start it playing.',
+      'play it through. the gain on each row is the only control this step is about.'
+    ],
+    // Pressing play is a machine fact, not a musical decision, which is why
+    // this step has a move at all where phase one's balance step did not:
+    // that one asked the app to judge a mix, this one asks it to hit space.
+    moves: [
+      {
+        id: 'balance-play',
+        label: 'play the whole thing from the top',
+        action: { kind: 'transport-op', op: 'play-from-top' }
+      }
+    ],
+    primaryMoveId: 'balance-play',
+    anchorSelector: TIMELINE
+  },
+  {
+    id: 'p3-export',
+    phase: 'polish',
+    label: 'export a v1',
+    lines: [
+      'last step. a mix, the stems, or an ableton or reaper project -- whichever you want a v1 in.',
+      'export time. the usual picker, and the project gets marked once a file really comes out.',
+      'get a v1 out. a mix is the quickest; the daw projects carry the curves across as well.',
+      'this is the end of the method: export something you can listen to away from here.'
+    ],
+    moves: [
+      { id: 'export-mix', label: 'export a mix', action: { kind: 'export-op', op: 'mix' } },
+      { id: 'export-stems', label: 'export the stems', action: { kind: 'export-op', op: 'stems' } },
+      {
+        id: 'export-project',
+        label: 'export an ableton or reaper project',
+        action: { kind: 'export-op', op: 'project' }
+      }
+    ],
+    primaryMoveId: 'export-mix',
+    anchorSelector: TIMELINE
   }
 ]
 
@@ -590,15 +668,22 @@ const PHASE1_MELODIC_ORDER: readonly CoachStepId[] = [
   'p1-lock'
 ]
 
-/** Phase two's own loop plus phase three's remaining placeholder. The
- * answer to the melodic-or-groove question does not reach them.
+/** Phase two's own loop plus phase three's three steps. The answer to the
+ * melodic-or-groove question does not reach them.
  *
  * p2-section repeats: the flow walks p2-first -> p2-section -> p2-next and
  * then goes BACK to p2-section for as long as the user keeps choosing
  * another section (startCoachSection, ./coachPhase2.ts). This flat order is
  * still what advanceCoach's next/skip walks, so skipping from p2-next lands
- * on 'finish' -- which is exactly "stop arranging and go to polish". */
-const LATER_PHASE_ORDER: readonly CoachStepId[] = ['p2-first', 'p2-section', 'p2-next', 'finish']
+ * on p3-tension -- which is exactly "stop arranging and go to polish". */
+const LATER_PHASE_ORDER: readonly CoachStepId[] = [
+  'p2-first',
+  'p2-section',
+  'p2-next',
+  'p3-tension',
+  'p3-balance',
+  'p3-export'
+]
 
 /** The whole flow, in the order this answer puts it in. */
 export function coachStepOrder(flavour: CoachFlavour | null): readonly CoachStepId[] {

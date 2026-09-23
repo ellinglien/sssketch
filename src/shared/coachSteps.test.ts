@@ -53,7 +53,9 @@ describe('coach steps', () => {
       'p2-first',
       'p2-section',
       'p2-next',
-      'finish'
+      'p3-tension',
+      'p3-balance',
+      'p3-export'
     ])
     expect(coachStepOrder('melodic')).toEqual([
       'p1-flavour',
@@ -67,7 +69,9 @@ describe('coach steps', () => {
       'p2-first',
       'p2-section',
       'p2-next',
-      'finish'
+      'p3-tension',
+      'p3-balance',
+      'p3-export'
     ])
   })
 
@@ -159,7 +163,7 @@ describe('coach steps', () => {
     expect(coachStepById('p2-first')?.phase).toBe('arrangement')
     expect(coachStepById('p2-section')?.phase).toBe('arrangement')
     expect(coachStepById('p2-next')?.phase).toBe('arrangement')
-    expect(coachStepById('finish')?.phase).toBe('polish')
+    expect(coachStepById('p3-tension')?.phase).toBe('polish')
   })
 
   it('offers no moves on either question step -- those are the user\u2019s call', () => {
@@ -327,5 +331,47 @@ describe('resolveCoachStep', () => {
     const noPrimary: CoachStepDef = { ...step, primaryMoveId: undefined, byFlavour: undefined }
     expect(coachStepPrimaryMove(noPrimary, null)).toBeNull()
     expect(coachStepArmKinds(noPrimary, null)).toBeNull()
+  })
+})
+
+describe('phase three', () => {
+  it('replaces the finish placeholder with three real steps', () => {
+    expect(coachStepById('finish')).toBeUndefined()
+    expect(isCoachStepId('finish')).toBe(false)
+    for (const id of ['p3-tension', 'p3-balance', 'p3-export']) {
+      expect(isCoachStepId(id)).toBe(true)
+      expect(coachStepById(id)?.phase).toBe('polish')
+    }
+  })
+
+  it('walks tension, then balance, then export, and then ends the flow', () => {
+    expect(nextCoachStepId('p2-next', 'groove')).toBe('p3-tension')
+    expect(nextCoachStepId('p3-tension', 'groove')).toBe('p3-balance')
+    expect(nextCoachStepId('p3-balance', 'groove')).toBe('p3-export')
+    expect(nextCoachStepId('p3-export', 'groove')).toBeNull()
+  })
+
+  it('puts all three in the polish phase, in order, for either flavour', () => {
+    for (const flavour of ['groove', 'melodic'] as const) {
+      expect(coachStepsInPhase('polish', flavour).map((step) => step.id)).toEqual([
+        'p3-tension',
+        'p3-balance',
+        'p3-export'
+      ])
+    }
+  })
+
+  it('gives each of the three a primary move, so "do it for me" is never dead here', () => {
+    for (const id of ['p3-tension', 'p3-balance', 'p3-export'] as const) {
+      const step = coachStepById(id)
+      expect(step).toBeDefined()
+      expect(coachStepPrimaryMove(step!, null)).not.toBeNull()
+    }
+  })
+
+  it('arms nothing in discover -- phase three never touches the add row', () => {
+    for (const id of ['p3-tension', 'p3-balance', 'p3-export'] as const) {
+      expect(coachStepArmKinds(coachStepById(id)!, null)).toBeNull()
+    }
   })
 })
