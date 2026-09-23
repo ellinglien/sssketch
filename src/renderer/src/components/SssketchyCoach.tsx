@@ -190,6 +190,10 @@ function SssketchyCoachPanel({
   onMove,
   onNext,
   onSkip,
+  onWalkBack,
+  onWalkNext,
+  onStartWalk,
+  onLeaveWalk,
   onMinimise,
   onRestore,
   onDismiss
@@ -205,6 +209,13 @@ function SssketchyCoachPanel({
   onMove: (action: CoachMoveAction) => void
   onNext: () => void
   onSkip: () => void
+  /** The section walk's own navigation. Not CoachMoves: a move is
+   * something the app does on the user's BEHALF, and stepping to the next
+   * column is the user moving himself. */
+  onWalkBack: () => void
+  onWalkNext: () => void
+  onStartWalk: () => void
+  onLeaveWalk: () => void
   onMinimise: () => void
   onRestore: () => void
   onDismiss: () => void
@@ -442,6 +453,53 @@ function SssketchyCoachPanel({
             </div>
           )}
 
+          {/* The walk's own controls. "back" clamps at the first column and
+              "next" past the last one ENDS the walk (walkCoachTo), so the
+              last press does the obvious thing rather than nothing. "leave
+              the walk" is spelled out rather than shrunk to a close box:
+              "leaving the walk keeps the map" (spec) is the whole reason it
+              is safe to press, and a glyph cannot say that. */}
+          {coach.walkIndex !== null && !finished && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 'var(--ra-s-1)',
+                marginTop: 'var(--ra-s-5)'
+              }}
+            >
+              <span style={{ flex: 1, fontSize: 9, color: 'var(--ra-text-3)' }}>
+                {coach.sections[coach.walkIndex]?.name ?? ''} ({coach.walkIndex + 1} of{' '}
+                {coach.sections.length})
+              </span>
+              <button type="button" onClick={onWalkBack} style={bubbleButtonStyle}>
+                back
+              </button>
+              <button type="button" onClick={onWalkNext} style={bubbleButtonStyle}>
+                next section
+              </button>
+              <button
+                type="button"
+                onClick={onLeaveWalk}
+                style={bubbleButtonStyle}
+                title="stop walking -- the map stays exactly as it is"
+              >
+                leave the walk
+              </button>
+            </div>
+          )}
+
+          {/* Leaving is reversible, and the offer is never pushy: one
+              button, only once there is a map to walk. */}
+          {coach.walkIndex === null && coach.sections.length > 0 && !finished && (
+            <div style={{ marginTop: 'var(--ra-s-5)' }}>
+              <button type="button" onClick={onStartWalk} style={bubbleButtonStyle}>
+                walk the sections
+              </button>
+            </div>
+          )}
+
           <div
             style={{
               display: 'flex',
@@ -565,6 +623,14 @@ export function SssketchyCoach({
         onMove={onMove}
         onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
         onSkip={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'skipped' })}
+        onWalkBack={() =>
+          dispatch({ type: 'COACH_WALK_TO', now: Date.now(), index: (coach.walkIndex ?? 0) - 1 })
+        }
+        onWalkNext={() =>
+          dispatch({ type: 'COACH_WALK_TO', now: Date.now(), index: (coach.walkIndex ?? 0) + 1 })
+        }
+        onStartWalk={() => dispatch({ type: 'COACH_START_WALK', now: Date.now() })}
+        onLeaveWalk={() => dispatch({ type: 'COACH_END_WALK', now: Date.now() })}
         onMinimise={() => dispatch({ type: 'COACH_MINIMISE' })}
         onRestore={() => dispatch({ type: 'COACH_RESTORE', now: Date.now() })}
         onDismiss={() => dispatch({ type: 'COACH_DISMISS', now: Date.now() })}
