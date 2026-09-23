@@ -9,23 +9,23 @@
 
 :root {
   /* ——— shell (6b: near-black, monochrome) ——— */
-  --ra-bg-page:        #050505;  /* canvas behind the app */
-  --ra-bg-frame:       #0a0a0a;  /* app frame */
-  --ra-bg-bar:         #0a0a0a;  /* transport bar, inspector */
-  --ra-bg-rail:        #0a0a0a;  /* shelf strip, ruler */
-  --ra-bg-row:         #0a0a0a;  /* block row */
-  --ra-bg-row-active:  #161616;  /* selected block row, control fill */
-  --ra-bg-row-sub:     #0e0e0e;  /* expanded stem sub-row */
+  --ra-bg-page: #050505; /* canvas behind the app */
+  --ra-bg-frame: #0a0a0a; /* app frame */
+  --ra-bg-bar: #0a0a0a; /* transport bar, inspector */
+  --ra-bg-rail: #0a0a0a; /* shelf strip, ruler */
+  --ra-bg-row: #0a0a0a; /* block row */
+  --ra-bg-row-active: #161616; /* selected block row, control fill */
+  --ra-bg-row-sub: #0e0e0e; /* expanded stem sub-row */
 
-  --ra-border:         #222222;
-  --ra-border-soft:    #1a1a1a;
-  --ra-border-strong:  #3a3a3a;  /* primary buttons, dashed drop targets */
-  --ra-grid-minor:     #151515;  /* bar lines between downbeats */
+  --ra-border: #222222;
+  --ra-border-soft: #1a1a1a;
+  --ra-border-strong: #3a3a3a; /* primary buttons, dashed drop targets */
+  --ra-grid-minor: #151515; /* bar lines between downbeats */
 
-  --ra-text:           #ededed;
-  --ra-text-2:         #8f8f8f;
-  --ra-text-3:         #6a6a6a;
-  --ra-text-4:         #3a3a3a;
+  --ra-text: #ededed;
+  --ra-text-2: #8f8f8f;
+  --ra-text-3: #6a6a6a;
+  --ra-text-4: #3a3a3a;
 
   /* ——— sound-type colors (the only saturated things on screen, besides the
    * playhead — drive swatches, clips, waveforms, glyph rings, chips). Five of
@@ -33,14 +33,14 @@
    * verbatim; sampler/extFx/audioIn extend that same family for the app's
    * full 8-type set, which 6b's own mockup (2-color placeholder data) didn't
    * need to cover. ——— */
-  --ra-type-drums:     #d98b4e;
-  --ra-type-notes:     #c9a24a;
-  --ra-type-bass:      #7fb0d8;
-  --ra-type-ext-inst:  #c07fb8;
-  --ra-type-sampler:   #9a8fd8;
-  --ra-type-fx:        #5ec8b5;
-  --ra-type-ext-fx:    #7fc98a;
-  --ra-type-audio-in:  #c56164;
+  --ra-type-drums: #d98b4e;
+  --ra-type-notes: #c9a24a;
+  --ra-type-bass: #7fb0d8;
+  --ra-type-ext-inst: #c07fb8;
+  --ra-type-sampler: #9a8fd8;
+  --ra-type-fx: #5ec8b5;
+  --ra-type-ext-fx: #7fc98a;
+  --ra-type-audio-in: #c56164;
 
   /* alpha recipe for any type color C:
    *   clip background   C @ 7%
@@ -51,18 +51,18 @@
    */
 
   /* ——— state colors ——— */
-  --ra-playhead:       #c56164;
+  --ra-playhead: #c56164;
   /* Toggle-active chrome (play, envelope, compact, stretch) is a subtle grey
    * fill + bright ink, not a saturated color — 6b spends color only on audio
    * data. The one exception (transport play button inverts to bright-bg/
    * dark-ink while playing, a "live" cue) is hardcoded in TransportBar.tsx
    * rather than tokenized, since nothing else uses that specific inversion. */
-  --ra-play-on:        #ededed;
-  --ra-play-on-ink:    #0a0a0a;
-  --ra-mute-on:        #c56164;
-  --ra-mute-on-ink:    #1a0a0a;
-  --ra-stretch-on:     #ededed;
-  --ra-stretch-on-bg:  #161616;
+  --ra-play-on: #ededed;
+  --ra-play-on-ink: #0a0a0a;
+  --ra-mute-on: #c56164;
+  --ra-mute-on-ink: #1a0a0a;
+  --ra-stretch-on: #ededed;
+  --ra-stretch-on-bg: #161616;
   /* This app's own "recorded via the loop-record feature" color -- covers
    * BOTH the live capture-in-progress overlay (ChannelRow's armed-channel
    * overlay) AND, via stemColorVar (theme/typeColor.ts), a committed
@@ -76,15 +76,20 @@
   --ra-recording-live: #8f7dd4;
 
   /* ——— type ——— */
-  --ra-font: "Silkscreen", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --ra-fs-9: 9px;    /* slot numbers, dB, meta */
-  --ra-fs-10: 10px;  /* labels, eyebrows, hints */
-  --ra-fs-11: 11px;  /* stem + rifff names */
-  --ra-fs-13: 13px;  /* app title, body */
-  --ra-fs-14: 14px;  /* inspector title, tempo value */
-  --ra-fs-16: 16px;  /* transport position, offset value */
-  --ra-fs-19: 19px;  /* tempo pair */
-  --ra-fw-regular: 400;
+  --ra-font: 'Silkscreen', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ra-fs-9: 9px; /* slot numbers, dB, meta */
+  --ra-fs-10: 10px; /* labels, eyebrows, hints */
+  --ra-fs-11: 11px; /* stem + rifff names */
+  --ra-fs-13: 13px; /* app title, body */
+  --ra-fs-14: 14px; /* inspector title, tempo value */
+  --ra-fs-16: 16px; /* transport position, offset value */
+  --ra-fs-19: 19px; /* tempo pair */
+  /* 300, a real Light instance of the variable face -- not 400. Direct
+     request: "can we use only the light weight version of the font in the
+     app". Silkscreen and Tiny5 could not honour it (no light cut exists in
+     either), so the first pass settled for removing bold; Handjet's weight
+     axis makes the literal thing possible. */
+  --ra-fw-regular: 300;
   --ra-fw-semibold: 600;
   --ra-fw-bold: 700;
   --ra-lh-tight: 1.25;
@@ -123,23 +128,23 @@
   --ra-h-ruler: 24px;
   --ra-h-block: 52px;
   --ra-h-stem-sub: 26px;
-  --ra-h-stem-lane: 34px;   /* option 1a */
+  --ra-h-stem-lane: 34px; /* option 1a */
   --ra-h-titlebar: 38px;
 
-  --ra-w-lane-header: 212px;  /* 2a / 1b — 296px in 1a / 1c */
+  --ra-w-lane-header: 212px; /* 2a / 1b — 296px in 1a / 1c */
   --ra-w-inspector: 308px;
   --ra-w-shelf-card: 212px;
   --ra-w-popover: 268px;
 
-  --ra-ppb: 24px;   /* px per bar, 2a / 1b — 30px in 1a / 1c */
+  --ra-ppb: 24px; /* px per bar, 2a / 1b — 30px in 1a / 1c */
   --ra-bars: 32;
 
   /* ——— elevation & motion ——— */
   --ra-shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.4);
   --ra-backdrop: rgba(0, 0, 0, 0.4);
-  --ra-dur-fast: 120ms;   /* hovers */
-  --ra-dur-med: 220ms;    /* state changes */
-  --ra-dur-slow: 380ms;   /* panel slides */
+  --ra-dur-fast: 120ms; /* hovers */
+  --ra-dur-med: 220ms; /* state changes */
+  --ra-dur-slow: 380ms; /* panel slides */
   --ra-ease: cubic-bezier(0.22, 0.8, 0.32, 1);
 
   /* ——— z-index scale ——— */
@@ -147,10 +152,10 @@
    * 100, 110, 500, 1000, 1200) scattered across modals/panels/popovers with
    * no ordering rule. See docs/superpowers/specs/
    * 2026-09-16-unified-ui-consistency-design.md. */
-  --ra-z-anchored: 100;            /* context menus, plugin chain panels,
+  --ra-z-anchored: 100; /* context menus, plugin chain panels,
                                        popovers pinned to a trigger element */
-  --ra-z-modal: 110;               /* every app-level modal/dialog */
-  --ra-z-fullscreen: 1000;         /* full-screen views: Library Browser,
+  --ra-z-modal: 110; /* every app-level modal/dialog */
+  --ra-z-fullscreen: 1000; /* full-screen views: Library Browser,
                                        BeatPicker, BusyOverlay */
   --ra-z-fullscreen-popover: 1200; /* a popover that must float above a
                                        full-screen view's own content (e.g.

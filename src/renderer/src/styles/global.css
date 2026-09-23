@@ -8,32 +8,30 @@
   src: url('../assets/fonts/AtkinsonHyperlegibleMono-Bold.ttf') format('truetype');
   font-weight: 700;
 }
-/* Tiny5, and unlike the two Pixel Sagas faces tried before it this one can
-   actually ship: SIL Open Font License 1.1, GPL-compatible. Its licence sits
-   beside it as Tiny5-OFL.txt, which OFL requires travel with the font.
+/* Handjet (SIL Open Font License 1.1, so it can ship; its licence travels
+   beside it as Handjet-OFL.txt, which OFL requires).
 
-   CASE carries emphasis here, because Tiny5 has one weight and no bold cut.
-   The app renders LOWERCASE by default -- which is what tokens.css always
-   asked for, and what the copy has always been written as -- and the few
-   places that used bold to mark an active thing go UPPERCASE instead.
+   Unlike every face tried before it, Handjet is VARIABLE -- one file with a
+   real weight axis from Thin to Black. That is why the @font-face declares
+   `font-weight: 100 900` rather than a single value: the browser
+   interpolates, so any weight in that range is a real instance and nothing
+   is ever synthesised.
 
-   Silkscreen never needed this: its lowercase glyphs simply LOOKED like
-   capitals, so the app read as uppercase while its copy was lowercase and
-   nobody had to decide which it was. Now it is decided, in one place, and it
-   survives the next font change.
+   It also makes the original request literally possible. "can we use only
+   the light weight version of the font" could not be honoured with
+   Silkscreen or Tiny5, which ship one or two fixed cuts and no light at all
+   -- the best either allowed was "stop using bold". Here `--ra-fw-regular`
+   is set to a genuine 300, and body inherits it.
 
-   Both faces point at the same file on purpose. There is no bold cut, and
-   naming the 700 face stops any surviving `font-weight: 700` from falling
-   back to a synthesised bold. */
+   CASE still carries emphasis: lowercase by default (the case the copy is
+   written in, and what tokens.css always asked for), UPPERCASE on the few
+   things that used to be bold. Kept even though a real bold now exists,
+   because the app has been read that way since the switch -- worth
+   revisiting deliberately rather than by accident. */
 @font-face {
   font-family: 'Silkscreen';
-  src: url('../assets/fonts/Tiny5-Regular.ttf') format('truetype');
-  font-weight: 400;
-}
-@font-face {
-  font-family: 'Silkscreen';
-  src: url('../assets/fonts/Tiny5-Regular.ttf') format('truetype');
-  font-weight: 700;
+  src: url('../assets/fonts/Handjet.ttf') format('truetype-variations');
+  font-weight: 100 900;
 }
 
 * {
@@ -50,6 +48,7 @@ body,
 body {
   background: var(--ra-bg-page);
   font-family: var(--ra-font);
+  font-weight: var(--ra-fw-regular);
   /* Lowercase by default -- the case the copy is actually written in, and
      the case tokens.css has always asked for. Stated here rather than left
      to whichever font is loaded, so it survives a font swap. UPPERCASE is
