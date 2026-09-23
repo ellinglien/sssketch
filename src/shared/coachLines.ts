@@ -106,3 +106,36 @@ export const COACH_NEXT_SECTION_LINE_TEMPLATES: readonly string[] = [
   'that is the {section} on the timeline. move it, resize it, redraw it -- or keep going.',
   '{section} done. an outro ends this phase; anything else keeps it running.'
 ]
+
+/** What the bubble says on the tension pass. {joins} is a ready-made phrase
+ * ("one join", "three joins") built by the caller, so the template does not
+ * have to carry a plural rule. Every variant states the same fact -- the
+ * joins exist and their NAMES are what is being read -- because that fact
+ * is the only thing about this step that is true of every track. Nothing
+ * here says a join needs anything. */
+export const COACH_TENSION_LINE_TEMPLATES: readonly string[] = [
+  'the tension pass. {joins} where the names you gave say what usually goes in.',
+  'joins next. {joins} here, each carrying what that pair of names asks for.',
+  'this step is the seams between sections. {joins} to look at, nothing on yet.',
+  '{joins} between your sections. nothing goes in until you switch it on.'
+]
+
+/** The same step when the section names ask for nothing -- no drop and no
+ * breakdown to lead into. Says so plainly rather than inventing an offer,
+ * which is the same choice COACH_NO_MOVES_LINES makes. */
+export const COACH_TENSION_NONE_LINES: readonly string[] = [
+  'none of your joins run into a drop or a breakdown, so there is nothing to offer here.',
+  'nothing for this step to do: the names either side of every join ask for nothing.',
+  'no drops and no breakdowns to lead into. skip this one.',
+  'this pass reads section names, and yours do not ask for anything. next when you like.'
+]
+
+/** After an export has really written a file. Reports the file, which is a
+ * fact, and says the material is still ordinary -- never that the track is
+ * any good, which is the one thing he does not know. */
+export const COACH_V1_EXPORTED_LINES: readonly string[] = [
+  'that is a v1, out of the app and onto disk. go and listen to it somewhere else.',
+  'v1 exported. the project is marked, and everything in here is still ordinary material.',
+  'exported. that is the whole method, top to bottom.',
+  'v1 is out. nothing here is locked -- open it again and keep going whenever you like.'
+]

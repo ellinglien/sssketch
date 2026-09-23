@@ -7,6 +7,9 @@ import {
   COACH_SEEDED_LINE_TEMPLATES,
   COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
+  COACH_TENSION_LINE_TEMPLATES,
+  COACH_TENSION_NONE_LINES,
+  COACH_V1_EXPORTED_LINES,
   pickLineVariant
 } from './coachLines'
 
@@ -42,7 +45,10 @@ describe('the shared line tables', () => {
     COACH_STEP_SATISFIED_LINES,
     COACH_SEEDED_LINE_TEMPLATES,
     COACH_SECTION_LINE_TEMPLATES,
-    COACH_NEXT_SECTION_LINE_TEMPLATES
+    COACH_NEXT_SECTION_LINE_TEMPLATES,
+    COACH_TENSION_LINE_TEMPLATES,
+    COACH_TENSION_NONE_LINES,
+    COACH_V1_EXPORTED_LINES
   ]
 
   it('each give at least three variants', () => {
@@ -93,6 +99,18 @@ describe('the section templates', () => {
     // been removed, because nothing has been.
     for (const template of COACH_SECTION_LINE_TEMPLATES) {
       expect(template).not.toMatch(/i (removed|took out|dropped)/i)
+    }
+  })
+})
+
+describe('the phase-three tables', () => {
+  it('give the tension line a {joins} slot to fill', () => {
+    for (const line of COACH_TENSION_LINE_TEMPLATES) expect(line).toContain('{joins}')
+  })
+
+  it('never claim the track is finished, only that a file came out', () => {
+    for (const line of COACH_V1_EXPORTED_LINES) {
+      expect(line).not.toMatch(/\bgood\b|\bgreat\b|\bnice\b|\bsounds\b/)
     }
   })
 })
