@@ -147,8 +147,24 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
     [coach]
   )
 
+  // The walk and the tension pass are the same journey seen twice, so the
+  // join the user is standing next to leads. Sorted, never filtered: the
+  // others are still there, because a pass that hid the joins you were not
+  // on would be a flow you cannot skim.
+  const ordered = useMemo<CoachSectionBoundary[]>(() => {
+    const walkIndex = coach?.walkIndex ?? null
+    if (walkIndex === null) return boundaries
+    return [...boundaries].sort(
+      (a, b) => Math.abs(a.index - walkIndex) - Math.abs(b.index - walkIndex)
+    )
+  }, [boundaries, coach])
+
   // Registered in an effect with its own teardown -- no setState here, so
   // react-hooks/set-state-in-effect is satisfied by construction.
+  //
+  // Reads `boundaries`, not `ordered`: "play the first join" means the first
+  // in TIMELINE order, which is what a person asking for it means, not
+  // whichever one the walk happens to be nearest.
   useEffect(() => {
     return registerCoachTensionOp((op: CoachTensionOp): void => {
       if (op === 'add-all') {
@@ -196,7 +212,7 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
 
   return (
     <div style={panelStyle}>
-      {boundaries.map((boundary) => (
+      {ordered.map((boundary) => (
         <div key={boundary.index} style={{ marginBottom: 'var(--ra-s-5)' }}>
           <div
             style={{

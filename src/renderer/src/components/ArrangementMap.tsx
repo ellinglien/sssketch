@@ -64,6 +64,24 @@ export function ArrangementMap(): React.JSX.Element {
     () => new Set(boundaries.map((boundary) => boundary.index)),
     [boundaries]
   )
+  // Which joins actually have something switched on -- the one fact the map
+  // can report about a seam. Monochrome and thicker, never a colour: a join
+  // is structure, not audio information. The toggles themselves stay in the
+  // bubble (SssketchyTensionPanel), because a second set here would be two
+  // ways to do one thing.
+  const appliedAt = useMemo(
+    () => new Set((coach?.tension ?? []).map((entry) => entry.sectionIndex)),
+    [coach]
+  )
+  const dividerFor = useCallback(
+    (index: number): string | undefined => {
+      if (!boundaryAfter.has(index)) return undefined
+      return appliedAt.has(index)
+        ? '2px solid var(--ra-text-2)'
+        : '1px solid var(--ra-border-strong)'
+    },
+    [appliedAt, boundaryAfter]
+  )
 
   const toggle = useCallback(
     (row: CoachMapRow, section: CoachSection, passIndex: number, on: boolean): void => {
@@ -99,9 +117,7 @@ export function ArrangementMap(): React.JSX.Element {
             style={{
               flex: 'none',
               marginRight: boundaryAfter.has(index) ? SECTION_GAP + 2 : SECTION_GAP,
-              borderRight: boundaryAfter.has(index)
-                ? '1px solid var(--ra-border-strong)'
-                : undefined,
+              borderRight: dividerFor(index),
               paddingRight: boundaryAfter.has(index) ? SECTION_GAP : 0,
               width: section.passes * (MAP_CELL_WIDTH + MAP_CELL_GAP),
               fontSize: 10,
@@ -167,9 +183,7 @@ export function ArrangementMap(): React.JSX.Element {
                   gap: MAP_CELL_GAP,
                   flex: 'none',
                   marginRight: boundaryAfter.has(sectionIndex) ? SECTION_GAP + 2 : SECTION_GAP,
-                  borderRight: boundaryAfter.has(sectionIndex)
-                    ? '1px solid var(--ra-border-strong)'
-                    : undefined,
+                  borderRight: dividerFor(sectionIndex),
                   paddingRight: boundaryAfter.has(sectionIndex) ? SECTION_GAP : 0,
                   background: walkIndex === sectionIndex ? 'var(--ra-bg-row-sub)' : undefined
                 }}
