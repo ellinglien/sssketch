@@ -22,10 +22,19 @@ const DIAL_RIGHT_PX = 26
  * rule SET_GROUP_VOLUME/SET_GROUP_MUTE and the collapsed automation lane
  * already follow, rather than a third convention. Either way the gain is
  * STORED per stem (state.vol, keyed by stemKey), so expanding a collapsed
- * clip afterwards reveals per-stem dials that can then diverge. */
+ * clip afterwards reveals per-stem dials that can then diverge.
+ *
+ * A RISER is the odd one out and deliberately shares this control anyway: it
+ * has no stem and no state.vol entry, so its number is RiserClip.level and
+ * its commit is SET_RISER_LEVEL. It gets this dial rather than a knob of its
+ * own because a riser now owns a whole arranger row (2026-09-23), and one
+ * row should have exactly one level control in exactly one place -- the
+ * riser's old corner knob (RiserBlock.tsx) was removed in the same change
+ * rather than shipping two that fight. */
 export type GainDialTarget =
   | { kind: 'stem'; stemKey: string }
   | { kind: 'group'; groupId: string; representativeStemKey: string }
+  | { kind: 'riser'; riserId: string }
 
 /**
  * The static per-stem gain (state.vol), as a knob pinned to the right edge
@@ -72,12 +81,32 @@ export function RowGainDial({
   ariaLabel: string
 }): React.JSX.Element {
   const dispatch = useDispatch()
-  const key = target.kind === 'stem' ? target.stemKey : target.representativeStemKey
-  const committed = useAppSelector((s) => s.vol[key] ?? 1)
+  const key =
+    target.kind === 'stem'
+      ? target.stemKey
+      : target.kind === 'group'
+        ? target.representativeStemKey
+        : target.riserId
+  const stemGain = useAppSelector((s) => s.vol[key] ?? 1)
+  // A riser's level is on the riser, not in state.vol. Read unconditionally
+  // (null for the other two kinds) so the hook order stays fixed, which is
+  // what a conditional useAppSelector would break.
+  const riserLevel = useAppSelector((s) =>
+    target.kind === 'riser' ? (s.risers[target.riserId]?.level ?? null) : null
+  )
+  // ?? not ||: a riser dialled to 0 is a real value, not "unset".
+  const committed = riserLevel ?? stemGain
+  // The in-progress drag, for every kind. A riser reuses state.dragVol keyed
+  // by its own id: dragVol keys are stemKeys (`${groupId}:${slot}`), so a
+  // crypto.randomUUID riser id cannot collide with one, SET_DRAG_PREVIEW is
+  // already transient in history.ts, and state.dragVol is deliberately NOT
+  // in StoreContext's engine-sync deps -- so a riser level drag costs zero
+  // undo checkpoints and zero engine reloads until it lands. (Before this,
+  // the riser's corner knob dispatched SET_RISER_LEVEL on every mousemove,
+  // which is one undo checkpoint per mousemove -- a real bug this fixes.)
   const preview = useAppSelector((s) => s.dragVol[key] ?? null)
   // Only a group dial needs this (to fan its live value out across every
-  // stem); reading it for a stem dial too keeps the hook order fixed, which
-  // is what a conditional useAppSelector would break.
+  // stem); reading it for the other kinds too keeps the hook order fixed.
   const groupStems = useAppSelector((s) =>
     target.kind === 'group' ? s.rifffs[target.groupId].stems : null
   )
@@ -85,6 +114,14 @@ export function RowGainDial({
 
   function handleChange(dialValue: number): void {
     const value = dialValue / 100
+    if (target.kind === 'riser') {
+      // No scheduleLiveParamSync: the engine has no live-override path for a
+      // generated riser (liveParamSync's params are all per-stem), so the
+      // new level becomes audible on the commit's own project reload. The
+      // knob and the block's drawn swell both track the drag from dragVol.
+      dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value })
+      return
+    }
     if (target.kind === 'stem') {
       dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value })
       scheduleLiveParamSync('volume', key, value)
@@ -101,6 +138,11 @@ export function RowGainDial({
 
   function handleCommit(dialValue: number): void {
     const value = dialValue / 100
+    if (target.kind === 'riser') {
+      dispatch({ type: 'SET_RISER_LEVEL', id: target.riserId, level: value })
+      dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: undefined })
+      return
+    }
     if (target.kind === 'stem') {
       dispatch({ type: 'SET_VOLUME', stemKey: key, volume: value })
       dispatch({ type: 'SET_DRAG_PREVIEW', field: 'volume', key, value: undefined })
