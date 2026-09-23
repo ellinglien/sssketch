@@ -42,6 +42,8 @@ import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
+import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import {
   buildSeedSlotsFromCandidates,
   discoverSlotKindForSoundType,
@@ -136,7 +138,10 @@ export function LibraryBrowser({
   discoverRedoStack,
   setDiscoverRedoStack,
   discoverSeedBpm,
-  setDiscoverSeedBpm
+  setDiscoverSeedBpm,
+  coachArmedKinds,
+  onCoachSlotsChange,
+  initialMode
 }: {
   onClose: () => void
   /** Called once import(s) succeed with every newly-created groupId (one for
@@ -180,6 +185,14 @@ export function LibraryBrowser({
   setDiscoverRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   discoverSeedBpm: number | null
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
+  /** Passed straight through to DiscoverPanel -- see its own doc comments. */
+  coachArmedKinds?: readonly DiscoverSlotKind[] | null
+  onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
+  /** Which tab to open on, overriding the "open where you left off" rule
+   * below. Set only by the guided flow, which always means Discover -- on
+   * an empty project the default would land on 'browse', where the add row
+   * a phase-one step just armed is not even mounted. */
+  initialMode?: 'browse' | 'discover'
 }): React.JSX.Element {
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
@@ -189,8 +202,8 @@ export function LibraryBrowser({
   // that was never explicitly cleared -- both cases should open on the
   // 'discover' tab, matching direct request 2026-09-17 ("return to
   // working on the group of stems i had before").
-  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(() =>
-    discoverHasRealContent(discoverSlots) ? 'discover' : 'browse'
+  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(
+    () => initialMode ?? (discoverHasRealContent(discoverSlots) ? 'discover' : 'browse')
   )
 
   // Auth (gates sync-triggering and live jam-membership discovery)
@@ -2236,6 +2249,8 @@ export function LibraryBrowser({
             traitMatchBar={traitMatchBar}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
+            coachArmedKinds={coachArmedKinds}
+            onCoachSlotsChange={onCoachSlotsChange}
           />
         )}
       </div>
