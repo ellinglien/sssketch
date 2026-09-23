@@ -7,6 +7,7 @@ import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
 import { ContextMenu } from './ContextMenu'
 import { AudioDeviceModal } from './AudioDeviceModal'
+import { KeyGesturesModal } from './KeyGesturesModal'
 
 // Persisted per-machine (same pattern as LoreLibraryBrowser's own
 // loreUsername), not part of the project file -- selectedInputDevice/
@@ -273,6 +274,9 @@ export function TransportBar({
   // used to sit directly in the transport bar (see AudioDeviceModal.tsx's
   // own doc comment).
   const [audioModalOpen, setAudioModalOpen] = useState(false)
+  // The app's own shortcut/gesture reference -- see KeyGesturesModal.tsx
+  // for why it exists at all.
+  const [keysModalOpen, setKeysModalOpen] = useState(false)
   // Fetched fresh each time the settings menu opens (see the trigger
   // button below) rather than kept live -- the menu is only open for a
   // few seconds at most, and this avoids a persistent poll/subscription
@@ -887,6 +891,7 @@ export function TransportBar({
                   }
                 ]
               : []),
+            { label: 'keys and gestures…', onClick: () => setKeysModalOpen(true) },
             {
               label: 'audio…',
               onClick: () => {
@@ -912,6 +917,8 @@ export function TransportBar({
           onClose={() => setSettingsMenu(null)}
         />
       )}
+
+      {keysModalOpen && <KeyGesturesModal onClose={() => setKeysModalOpen(false)} />}
 
       {audioModalOpen && (
         <AudioDeviceModal
