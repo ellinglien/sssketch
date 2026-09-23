@@ -1167,7 +1167,6 @@ function ClusterRow({
             whiteSpace: 'nowrap'
           }}
           data-tooltip="solo + play this whole cluster, from its own earliest clip"
-          data-tooltip-align="start"
         >
           {rowIsPreviewing && playing ? '■' : '▶'}
         </button>
@@ -1189,7 +1188,6 @@ function ClusterRow({
             aria-label="split cluster"
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
             data-tooltip="split this cluster into its two closest sub-groups"
-            data-tooltip-align="start"
           >
             <ForkIcon />
           </button>

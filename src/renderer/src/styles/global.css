@@ -98,8 +98,23 @@ button {
  * fighting it. `:not(:disabled)` keeps a disabled button visually inert.
  * See docs/superpowers/specs/2026-09-16-unified-ui-consistency-design.md
  * -- "1.12" is a starting point, not pixel-verified from this environment. */
-button:not(:disabled):hover,
-[role='button']:hover {
+/* `:not([data-tooltip])` is load-bearing, not tidying: `filter` makes an
+ * element a containing block for its `position: fixed` descendants, and a
+ * tooltip trigger's own `::after` IS such a descendant (see the tooltip
+ * block below, which uses CSS anchor positioning to stay inside the
+ * window). With the filter applied, the tooltip's containing block shrinks
+ * from the window to the 26px button, every anchor-positioning fallback
+ * then "overflows" that tiny box, so none can be chosen and the tooltip
+ * stays off-screen. Measured, not reasoned: with the filter on a trigger
+ * at the right window edge the tooltip sat at x 1159-1393 in a 1200px
+ * window; with it off, 966-1200. A tooltip only ever shows on hover, so
+ * the filter and the tooltip are always live at the same moment -- they
+ * cannot coexist. These are all icon-only buttons, which is exactly the
+ * set the 2026-09-21 note below calls out as ones where this brightness
+ * bump was invisible anyway; they keep the inset box-shadow hover tint,
+ * which lands on the same --ra-bg-row-active the design tokens ask for. */
+button:not(:disabled):not([data-tooltip]):hover,
+[role='button']:not([data-tooltip]):hover {
   filter: brightness(1.12);
 }
 
@@ -130,8 +145,19 @@ button:not(:disabled):active,
 [style*='cursor: pointer']:active,
 [style*='cursor: grab']:active {
   box-shadow: inset 0 0 0 100vmax rgba(255, 255, 255, 0.1);
-  filter: brightness(1.25);
   transition: none;
+}
+
+/* The press brightness is a second rule rather than part of the one above
+ * for the same containing-block reason as the hover filter -- the inset
+ * box-shadow half of "pressed" is safe on a tooltip trigger and stays;
+ * only the `filter` half has to skip them, or the tooltip jumps back
+ * off-screen for as long as the mouse button is held down. */
+button:not(:disabled):not([data-tooltip]):active,
+[role='button']:not([data-tooltip]):active,
+[style*='cursor: pointer']:not([data-tooltip]):active,
+[style*='cursor: grab']:not([data-tooltip]):active {
+  filter: brightness(1.25);
 }
 
 /* Focus-visible feedback, app-wide. Deliberately `outline`, not `border`:
@@ -179,15 +205,71 @@ textarea:focus-visible,
  * to wrapped text instead of clipping off-screen. A short single-word
  * tooltip like "undo" is unaffected -- it's well under 220px and never
  * wraps. */
+/* Window-aware placement, and the end of the per-site opt-in. Direct
+ * report, 2026-09-23: "window frame obscures tooltips at the edge of the
+ * windows ... make sure all tooltips are window aware", screenshotted on
+ * RowGainDial's tooltip against the right window edge with its right half
+ * cut off. That was the THIRD report of this one class -- the two 2026-09-17
+ * ones are recorded above and below -- and the first two were each answered
+ * with a per-call-site fix (shorter copy, then a max-width, then an
+ * alignment attribute). This is the general fix that retires that pattern:
+ * CSS anchor positioning gives the browser the whole set of placements and
+ * lets it pick the first that fits inside the viewport, which here IS the
+ * window. No call site changes, no attribute to remember, and it covers all
+ * four edges, not just the one in whichever screenshot arrives next.
+ *
+ * How it reads: `position-area: top` is the preferred placement (centred
+ * above the trigger, exactly what the old `bottom: 100% + 4px` plus a
+ * `translateX(-50%)` produced), and `position-try-fallbacks` lists the
+ * escapes in preference order -- first slide sideways while staying above
+ * (`span-left` hugs the trigger's right edge and grows leftwards, for the
+ * right window edge; `span-right` mirrors it for the left edge), then drop
+ * below (`bottom`) for a trigger in the titlebar or transport bar where
+ * there is no room above, then the two sideways variants of below for the
+ * corners. `flip-block`/`flip-inline` were tried first and measured as NOT
+ * sufficient: flipping an already-centred, full-width-spanning area in the
+ * inline axis is a no-op, so left/right overflow survived it untouched.
+ *
+ * `position: fixed` rather than `absolute` so the containing block is the
+ * window itself -- that is what makes "does this overflow" mean "does this
+ * leave the window". It also means a tooltip is no longer clipped by an
+ * `overflow: hidden` panel it happens to live inside, which was a second,
+ * quieter half of the same complaint.
+ *
+ * Verified empirically in this app's own Chromium (Electron 39), not by
+ * reading: triggers pinned to all four window edges plus the four corners,
+ * hovered with real synthesised mouse input, each tooltip's box measured
+ * through the DevTools protocol. Before, in a 1200x800 window, the right
+ * edge overflowed by 95px, the left by 95px and the top by 26px; after,
+ * every one of them sits fully inside. */
 [data-tooltip] {
   position: relative;
+  /* Each trigger publishes itself as the anchor its own `::after` resolves
+     against. The name has to be explicit: Chromium does not implement the
+     implicit-anchor shorthand for pseudo-elements, and `position-anchor:
+     implicit` reports as unsupported here (checked with CSS.supports at
+     runtime, not assumed). `anchor-scope` then keeps that one shared name
+     from leaking between triggers -- without it a tooltip trigger nested
+     inside another tooltip trigger claims the name for BOTH tooltips, and
+     the outer one jumps onto the inner element (measured: outer tooltip
+     centred on the inner trigger's x, 113px away from its own). */
+  anchor-name: --ra-tooltip;
+  anchor-scope: --ra-tooltip;
 }
 [data-tooltip]::after {
   content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  position-anchor: --ra-tooltip;
+  position-area: top;
+  position-try-fallbacks:
+    top span-left,
+    top span-right,
+    bottom,
+    bottom span-left,
+    bottom span-right;
+  /* The 4px gap the old `calc(100% + 4px)` gave, expressed so it works in
+     whichever of the six placements above the browser lands on. */
+  margin-block: 4px;
   width: max-content;
   max-width: 220px;
   white-space: normal;
@@ -202,22 +284,16 @@ textarea:focus-visible,
   opacity: 0;
   z-index: var(--ra-z-fullscreen-popover);
 }
-/* Opt-in alignment override for a trigger close to the LEFT edge of its
-   own container (a popover/panel, not necessarily the OS window) -- the
-   default centers the tooltip under the trigger (`left: 50%` + a
-   `translateX(-50%)`), which overflows off the visible edge for anything
-   near it. Direct report, 2026-09-17 (Tidy Up's own leftmost per-cluster
-   play/split buttons, screenshotted mid-clip against the panel's own left
-   edge): left-aligns the tooltip's own left edge with the trigger's
-   instead, so it grows rightward, away from the edge, rather than
-   spilling equally both ways. Opt-in (a second data attribute, not the
-   default) since centering is still correct/preferred for the vast
-   majority of `[data-tooltip]` triggers elsewhere in this app that
-   aren't sitting flush against an edge. */
-[data-tooltip][data-tooltip-align='start']::after {
-  left: 0;
-  transform: none;
-}
+/* `data-tooltip-align="start"` used to live here: an opt-in that left-aligned
+   a tooltip with its trigger, added 2026-09-17 for Tidy Up's leftmost
+   per-cluster play/split buttons after they were screenshotted mid-clip
+   against the panel's left edge. The `top span-right` fallback above now
+   does exactly that, automatically, for every trigger near a left edge --
+   so the attribute was removed along with its two uses in
+   ClusterStemsBrowser.tsx rather than left as a no-op for a future reader
+   to wonder about. If a tooltip ever needs a placement the six options
+   above do not cover, add a seventh option to that list; do not reintroduce
+   a per-call-site attribute. */
 [data-tooltip]:hover::after,
 [data-tooltip]:focus-visible::after {
   opacity: 1;
