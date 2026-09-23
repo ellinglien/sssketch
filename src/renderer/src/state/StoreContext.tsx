@@ -962,8 +962,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // 'stem-solo-preview' is deliberately NOT excluded: that owner
       // (useStemPreviewPlayback.ts) loads the REAL project with mute/vol
       // overrides, so loopLengthBars(stateRef.current) is still its correct
-      // reference.
-      if (engineOwnershipRef.current.current === 'discover-preview') {
+      // reference. 'tidy-up-library-preview' (useThrowawayStemPreview.ts)
+      // IS excluded, for exactly the same reason 'discover-preview' is:
+      // it loads a throwaway one-stem project, so the real timeline's own
+      // loop length is the wrong reference entirely.
+      const owner = engineOwnershipRef.current.current
+      if (owner === 'discover-preview' || owner === 'tidy-up-library-preview') {
         dispatch({ type: 'SET_POS', pos })
         return
       }

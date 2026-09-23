@@ -10,8 +10,16 @@
  * (useCoachSectionPreview.ts): the same throwaway-project shape as
  * 'discover-preview', but built from the locked climax's kept stems rather
  * than from Discover's slots, and never live at the same time as either of
- * the others (phase two runs on the timeline, with Discover closed). */
-export type EngineOwner = 'discover-preview' | 'stem-solo-preview' | 'coach-section-preview'
+ * the others (phase two runs on the timeline, with Discover closed).
+ * 'tidy-up-library-preview' is useThrowawayStemPreview.ts's own one-stem
+ * audition for Tidy Up's LIBRARY population -- a library stem is in no
+ * rifff and has no stemKey, so 'stem-solo-preview' cannot reach it. It is
+ * a THROWAWAY-project owner, like 'discover-preview' and unlike
+ * 'stem-solo-preview': see StoreContext.tsx's position handler, which must
+ * not wrap a throwaway preview's position against the real timeline's own
+ * loopLengthBars. */
+export type EngineOwner =
+  'discover-preview' | 'stem-solo-preview' | 'coach-section-preview' | 'tidy-up-library-preview'
 
 export interface EngineOwnershipTracker {
   /** Claims ownership, returning a generation token. The caller must hold
