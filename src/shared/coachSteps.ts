@@ -1,9 +1,10 @@
 /**
  * What the guided flow IS, as plain data.
  *
- * Everything sssketchy can say and every place the flow can be is a row in
- * COACH_STEPS below -- the state machine in ./coach.ts only ever walks this
- * table.
+ * Every place the flow can be is a row in COACH_STEPS below -- the state
+ * machine in ./coach.ts only ever walks this table. What each row SAYS is
+ * not here: its `lines` come from COACH_SCRIPT.steps (./coachScript.ts),
+ * which holds the whole of sssketchy's copy in one editable place.
  *
  * Phase one -- eight rows that walked the user through assembling a climax
  * loop in Discover -- was DELETED on 2026-09-23 (spec:
@@ -14,6 +15,7 @@
  * Discover slot. If you are adding one of those back, read the spec first.
  */
 
+import { COACH_SCRIPT } from './coachScript'
 import type { CoachExportOp, CoachTensionOp, CoachTransportOp } from './coachTension'
 
 export type CoachPhase = 'arrangement' | 'polish'
@@ -104,7 +106,12 @@ export interface CoachStepDef {
   /** 3-4 hand-written variants of this step's bubble line, rotated
    * deterministically by CoachState.lineSeed (see ./coachLines.ts's
    * pickLineVariant). "Repeating himself word-for-word is most of what
-   * makes a character feel dead" (spec). */
+   * makes a character feel dead" (spec).
+   *
+   * THE WORDS THEMSELVES ARE NOT IN THIS FILE. Every row below reads its
+   * lines from COACH_SCRIPT.steps (./coachScript.ts), where the whole of
+   * sssketchy's copy sits in one place under the tone rules. This table
+   * keeps what a step DOES; the script keeps what he says. */
   lines: readonly string[]
   /** Every concrete move this step can make. Empty on a step with nothing
    * to automate -- an invented move would be a lie in the one part of this
@@ -129,19 +136,27 @@ export interface CoachStepDef {
  * attribute is on App.tsx's timeline scroll container. */
 const TIMELINE = '[data-coach-anchor="timeline"]'
 
+/**
+ * This step's lines, out of the script (./coachScript.ts).
+ *
+ * A FUNCTION rather than a bare `COACH_SCRIPT.steps['p2-first']` on each
+ * row, and the reason is worth keeping: this project sets
+ * `noImplicitAny: false`, which suppresses TS7053 -- so indexing the
+ * record with a misspelled key compiles clean and hands back `any`, and
+ * the first anyone would know is sssketchy standing there with an empty
+ * bubble. Passed as an ARGUMENT, a misspelled id is an ordinary
+ * argument-type error, which no compiler setting here switches off.
+ */
+function stepLines(id: CoachStepId): readonly string[] {
+  return COACH_SCRIPT.steps[id]
+}
+
 export const COACH_STEPS: readonly CoachStepDef[] = [
   {
     id: 'p2-first',
     phase: 'arrangement',
     label: 'the map',
-    // The map has just arrived, whole. Nothing here tells the user to do
-    // anything with it -- it says what the thing in front of them is.
-    lines: [
-      'there is the whole song. one column per section, one square per time round the loop.',
-      'the map is the arrangement, seen from further back. the toggle up top swaps the two.',
-      'that is the usual shape, laid out. it is all ordinary clips underneath.',
-      'a shape to push against. nothing on it is settled, and none of it has to stay.'
-    ],
+    lines: stepLines('p2-first'),
     // No moves, deliberately: what the sections should become is not the
     // app's call. "do it for me" stays disabled here and that is the point.
     moves: [],
@@ -151,12 +166,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p2-section',
     phase: 'arrangement',
     label: 'walk the sections',
-    lines: [
-      'the map is the whole song at once. one column per section, one square per pass.',
-      'every square is ordinary clips underneath. switch one off and the clip goes.',
-      'this is the shape, filled in. change anything you like, or leave it.',
-      'the map and the timeline are the same arrangement. the toggle up top swaps them.'
-    ],
+    lines: stepLines('p2-section'),
     // No moves. He is naming what a section is FOR, and doing it for you
     // would be exactly the dictate the spec forbids: "goals, not dictates.
     // advice, not rules." The walk's own back/next/leave buttons are
@@ -168,12 +178,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p2-next',
     phase: 'arrangement',
     label: 'when you are done here',
-    lines: [
-      'the map keeps working long after this. leaving the walk changes nothing on it.',
-      'stay on the map as long as it is useful, or carry on to polish whenever.',
-      'the arrangement is yours now. next is the joins, the levels and a v1 out.',
-      'nothing here is waiting on you. polish is the next thing, when you want it.'
-    ],
+    lines: stepLines('p2-next'),
     // Same reasoning as p2-first: when the arrangement is done is the
     // user's call, and a move here would be the app deciding it.
     moves: [],
@@ -183,12 +188,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p3-tension',
     phase: 'polish',
     label: 'the tension pass',
-    lines: [
-      'phase three. the joins between sections first -- a sweep into a drop, a fade into a breakdown.',
-      'last phase. start at the seams: what is offered there comes from the names you gave.',
-      'tension pass. nothing is on until you switch it on, and what it makes is an ordinary curve.',
-      'this step is the joins. a drop gets a sweep and a swell; a build into a drop also gets a riser.'
-    ],
+    lines: stepLines('p3-tension'),
     // The panel's own two controls, restated here so the bubble's "stuck?"
     // list and "do it for me" can never offer a different set of moves than
     // the panel shows. "add all of these" is the primary one for the same
@@ -213,12 +213,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p3-balance',
     phase: 'polish',
     label: 'the balance check',
-    lines: [
-      'balance check. play the whole thing through and set the levels while it runs.',
-      'one listen, top to bottom, with the row gains to hand.',
-      'this step is levels. what they should be is yours -- i can only start it playing.',
-      'play it through. the gain on each row is the only control this step is about.'
-    ],
+    lines: stepLines('p3-balance'),
     // Pressing play is a machine fact, not a musical decision, which is why
     // this step has a move at all where phase one's balance step did not:
     // that one asked the app to judge a mix, this one asks it to hit space.
@@ -236,12 +231,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p3-export',
     phase: 'polish',
     label: 'export a v1',
-    lines: [
-      'last step. a mix, the stems, or an ableton or reaper project -- whichever you want a v1 in.',
-      'export time. the usual picker, and the project gets marked once a file really comes out.',
-      'get a v1 out. a mix is the quickest; the daw projects carry the curves across as well.',
-      'this is the end of the method: export something you can listen to away from here.'
-    ],
+    lines: stepLines('p3-export'),
     moves: [
       { id: 'export-mix', label: 'export a mix', action: { kind: 'export-op', op: 'mix' } },
       { id: 'export-stems', label: 'export the stems', action: { kind: 'export-op', op: 'stems' } },
