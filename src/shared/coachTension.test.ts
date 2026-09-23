@@ -9,7 +9,6 @@ import {
   coachSectionBoundaries,
   coachTensionDef,
   isCoachTensionKind,
-  lastAppliedRiserId,
   sanitiseCoachTension,
   tensionCurveFor,
   tensionIsApplied,
@@ -180,11 +179,6 @@ describe('the applied record', () => {
   it('finds the riser one boundary put down, so taking it off removes that one', () => {
     expect(appliedTensionRiserId(applied, 1)).toBe('riser-a')
     expect(appliedTensionRiserId(applied, 2)).toBeNull()
-  })
-
-  it('names the most recent riser, which is the row later ones join', () => {
-    expect(lastAppliedRiserId(applied)).toBe('riser-b')
-    expect(lastAppliedRiserId([])).toBeNull()
   })
 })
 

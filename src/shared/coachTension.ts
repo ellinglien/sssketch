@@ -295,17 +295,6 @@ export function appliedTensionRiserId(
   return entry?.riserId ?? null
 }
 
-/** The most recently placed riser. The renderer uses it to put the NEXT
- * riser on the same arranger row, so a track with three drops gets one
- * riser row rather than three. */
-export function lastAppliedRiserId(applied: readonly CoachTensionApplied[]): string | null {
-  for (let i = applied.length - 1; i >= 0; i -= 1) {
-    const entry = applied[i]
-    if (entry.kind === 'riser' && entry.riserId !== null) return entry.riserId
-  }
-  return null
-}
-
 /**
  * Turns whatever a `.sssketchproj` actually contains into an applied list --
  * the same repair-rather-than-trust rule the rest of the load path follows,
