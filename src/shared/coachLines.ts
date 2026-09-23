@@ -72,6 +72,33 @@ export const COACH_STEP_SATISFIED_LINES: readonly string[] = [
   'the step is satisfied. whether it is finished is your call, not mine.'
 ]
 
+/** The phrase report. {nominal} is the loop's nominal bar count, {phrase}
+ * the measured one; the caller only ever calls this when the two differ
+ * (loopPhraseIsWorthSaying), so every variant can say so plainly.
+ *
+ * Note what these do NOT do: none of them tells the user to change
+ * anything. The finding is a fact about the audio; what to do about it is
+ * his, and the third variant says so out loud. The advice this enables is
+ * the ignorable kind -- "you could halve this loop and get twice the
+ * arrangement out of the same material" -- never an instruction. */
+export const COACH_PHRASE_LINE_TEMPLATES: readonly string[] = [
+  'this {nominal}-bar loop is really the same {phrase} bars twice.',
+  '{nominal} bars, but it repeats every {phrase}. worth knowing before we size anything.',
+  'the phrase in here is {phrase} bars, inside a {nominal}-bar loop. your call which one we use.',
+  'measured: {phrase} bars of material in a {nominal}-bar loop.'
+]
+
+/** What he says once a map has arrived pre-filled. Elling's condition for
+ * the pre-fill being allowed at all (spec, "The map arrives pre-filled, and
+ * says so"): he states that HE made the call, and states the way out. The
+ * first variant is the spec's own wording. */
+export const COACH_PREFILLED_LINE_TEMPLATES: readonly string[] = [
+  'that is the usual shape. cmd+z puts everything back on if you would rather start full.',
+  'i filled this in from the usual shape. one cmd+z and every cell comes back on.',
+  'pre-filled, by me, from the standard arrangement. undo once for the everything-on version.',
+  'this is a guess at the shape, not a rule. cmd+z if you would rather start from full.'
+]
+
 /** What the bubble says while a section is being carved. {section} is the
  * section's own name. Every variant states the same fact -- the whole loop
  * is playing and subtracting is the user's move -- because that fact is the

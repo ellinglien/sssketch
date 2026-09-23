@@ -3,6 +3,8 @@ import {
   COACH_DONE_LINES,
   COACH_NEXT_SECTION_LINE_TEMPLATES,
   COACH_NO_MOVES_LINES,
+  COACH_PHRASE_LINE_TEMPLATES,
+  COACH_PREFILLED_LINE_TEMPLATES,
   COACH_SECTION_LINE_TEMPLATES,
   COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
@@ -42,6 +44,8 @@ describe('the shared line tables', () => {
     COACH_NO_MOVES_LINES,
     COACH_DONE_LINES,
     COACH_STEP_SATISFIED_LINES,
+    COACH_PHRASE_LINE_TEMPLATES,
+    COACH_PREFILLED_LINE_TEMPLATES,
     COACH_SECTION_LINE_TEMPLATES,
     COACH_NEXT_SECTION_LINE_TEMPLATES,
     COACH_TENSION_LINE_TEMPLATES,
@@ -88,6 +92,28 @@ describe('the section templates', () => {
     // been removed, because nothing has been.
     for (const template of COACH_SECTION_LINE_TEMPLATES) {
       expect(template).not.toMatch(/i (removed|took out|dropped)/i)
+    }
+  })
+})
+
+describe('the arrangement-map tables', () => {
+  it('give the phrase report both numbers to fill in', () => {
+    for (const template of COACH_PHRASE_LINE_TEMPLATES) {
+      expect(template).toContain('{nominal}')
+      expect(template).toContain('{phrase}')
+    }
+  })
+
+  it('never tell the user what to do about the phrase -- it is a fact, not an instruction', () => {
+    for (const template of COACH_PHRASE_LINE_TEMPLATES) {
+      expect(template).not.toMatch(/you should|you need to|you must/i)
+    }
+  })
+
+  it('make every pre-fill line state who made the call AND the way out', () => {
+    // Elling's condition for the pre-fill being allowed at all (spec).
+    for (const line of COACH_PREFILLED_LINE_TEMPLATES) {
+      expect(line).toMatch(/cmd\+z|undo/i)
     }
   })
 })
