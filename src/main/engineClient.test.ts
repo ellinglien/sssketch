@@ -4,6 +4,33 @@ import { EngineClient, encodeMessage, MAGIC_NUMBER } from './engineClient'
 
 let server: Server | undefined
 
+/**
+ * Polls `condition` at a short interval until it returns true, or rejects
+ * after `timeoutMs`. Used in place of a fixed sleep-then-assert wherever a
+ * test needs to wait for something to arrive over the real local socket
+ * below: a fixed delay either wastes time when the machine is idle, or is
+ * too short under a full parallel suite's CPU contention (the actual cause
+ * of a real intermittent failure here — the assertion running before the
+ * awaited message had actually arrived).
+ */
+function waitFor(condition: () => boolean, timeoutMs = 2000, intervalMs = 5): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now()
+    const check = (): void => {
+      if (condition()) {
+        resolve()
+        return
+      }
+      if (Date.now() - start >= timeoutMs) {
+        reject(new Error(`waitFor: condition not met within ${timeoutMs}ms`))
+        return
+      }
+      setTimeout(check, intervalMs)
+    }
+    check()
+  })
+}
+
 afterEach(async () => {
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()))
@@ -226,15 +253,27 @@ describe('EngineClient', () => {
 
     client.send('subscribe-me')
 
-    // The server sends pushes at 20/40/60ms, then a fourth at 150ms. Wait past the
-    // first three but well before the fourth, and confirm they arrived in order.
-    await new Promise((resolve) => setTimeout(resolve, 90))
+    // The server sends pushes at 20/40/60ms, then a fourth at 150ms. Poll for the
+    // first three to actually land rather than sleeping a fixed duration — under a
+    // full parallel suite, real socket I/O can lag well past any fixed guess at
+    // "surely long enough," which is exactly what made this test intermittently
+    // fail (the assertion running before the third push had arrived).
+    await waitFor(() => received.length >= 3)
+    // Unsubscribe immediately, synchronously, with nothing else awaited in
+    // between the condition above resolving and this call — Node's run-to-
+    // completion semantics guarantee no other socket data (e.g. the fourth push)
+    // is processed in that gap, so this can't race the fourth push's delivery.
+    unsubscribe()
     expect(received).toEqual([{ pos: 0.1 }, { pos: 0.2 }, { pos: 0.3 }])
 
-    // Unsubscribe in the gap before the fourth push, then wait past when it would
-    // have arrived — the listener must not have been called again.
-    unsubscribe()
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    // The fourth push was scheduled 150ms after the server received
+    // 'subscribe-me'; wait comfortably past that, then confirm the listener was
+    // never called again. This one genuinely has no positive condition to poll
+    // for (it's an absence check) — but unlike the wait above, its timing can't
+    // cause a false failure: unsubscribe() already removed the callback, so no
+    // matter how delayed the fourth push's delivery is, it cannot add to
+    // `received` after this point.
+    await new Promise((resolve) => setTimeout(resolve, 300))
     expect(received.length).toBe(3)
 
     client.disconnect()

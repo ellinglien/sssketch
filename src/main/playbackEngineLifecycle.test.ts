@@ -4,6 +4,32 @@ vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 const { startPlaybackEngine } = await import('./playbackEngineLifecycle')
 
+/**
+ * Polls `condition` at a short interval until it returns true, or rejects
+ * after `timeoutMs`. Used instead of a fixed sleep-then-assert wherever this
+ * file waits for position-update pushes from a real spawned engine process:
+ * a fixed delay either wastes time when the machine is idle, or risks the
+ * assertion running before a push has actually arrived when a full parallel
+ * suite puts the CPU under contention.
+ */
+function waitFor(condition: () => boolean, timeoutMs = 10000, intervalMs = 10): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now()
+    const check = (): void => {
+      if (condition()) {
+        resolve()
+        return
+      }
+      if (Date.now() - start >= timeoutMs) {
+        reject(new Error(`waitFor: condition not met within ${timeoutMs}ms`))
+        return
+      }
+      setTimeout(check, intervalMs)
+    }
+    check()
+  })
+}
+
 describe('startPlaybackEngine', () => {
   let handle: Awaited<ReturnType<typeof startPlaybackEngine>> | undefined
 
@@ -88,7 +114,11 @@ describe('startPlaybackEngine', () => {
     const seenBeforeCrash: unknown[] = []
     handle.client.on('position-update', (payload) => seenBeforeCrash.push(payload))
     handle.client.send('play', { fromPos: 0 })
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    // Poll for at least one position-update rather than sleeping a fixed
+    // duration — under CPU contention from other tests in the same parallel
+    // run spawning/killing their own real engine processes, a fixed sleep
+    // can elapse before the engine has actually gotten around to pushing.
+    await waitFor(() => seenBeforeCrash.length > 0)
     handle.client.send('stop')
     expect(seenBeforeCrash.length).toBeGreaterThan(0)
 
@@ -100,7 +130,7 @@ describe('startPlaybackEngine', () => {
     const seenAfterCrash: unknown[] = []
     handle.client.on('position-update', (payload) => seenAfterCrash.push(payload))
     handle.client.send('play', { fromPos: 0 })
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await waitFor(() => seenAfterCrash.length > 0)
     handle.client.send('stop')
 
     // Pins the actual bug this test is named for: the stale subscription

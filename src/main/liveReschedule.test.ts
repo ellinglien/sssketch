@@ -36,6 +36,32 @@ function waitForLogLine(proc: ChildProcess, substring: string, timeoutMs: number
   })
 }
 
+/**
+ * Polls `condition` at a short interval until it returns true, or rejects
+ * after `timeoutMs`. Used instead of a fixed sleep-then-assert wherever this
+ * file waits for position-update pushes from the real spawned engine
+ * process: a fixed delay either wastes time when the machine is idle, or
+ * risks the assertion running before a push has actually arrived when a
+ * full parallel suite puts the CPU under contention.
+ */
+function waitFor(condition: () => boolean, timeoutMs = 10000, intervalMs = 10): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now()
+    const check = (): void => {
+      if (condition()) {
+        resolve()
+        return
+      }
+      if (Date.now() - start >= timeoutMs) {
+        reject(new Error(`waitFor: condition not met within ${timeoutMs}ms`))
+        return
+      }
+      setTimeout(check, intervalMs)
+    }
+    check()
+  })
+}
+
 describe('live reschedule: load-project while already playing', () => {
   it('accepts a second load-project mid-playback, keeps pushing position-update, and never disconnects', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-live-reschedule-'))
@@ -94,7 +120,11 @@ describe('live reschedule: load-project while already playing', () => {
 
       client.send('load-project', projectA)
       client.send('play', { fromPos: 0 })
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      // Poll for at least one position-update rather than sleeping a fixed
+      // duration — under CPU contention from other tests in the same parallel
+      // run spawning/killing their own real engine processes, a fixed sleep
+      // can elapse before the engine has actually gotten around to pushing.
+      await waitFor(() => positionsBeforeReschedule.length > 0)
       unsubscribeBefore()
       expect(positionsBeforeReschedule.length).toBeGreaterThan(0)
 
@@ -106,7 +136,7 @@ describe('live reschedule: load-project while already playing', () => {
         positionsAfterReschedule.push((payload as { pos: number }).pos)
       })
       client.send('load-project', projectB)
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      await waitFor(() => positionsAfterReschedule.length > 0)
       unsubscribeAfter()
 
       // Position-update pushes kept arriving after the reschedule — proves the
