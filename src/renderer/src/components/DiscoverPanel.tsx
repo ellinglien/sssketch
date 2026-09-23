@@ -2286,7 +2286,6 @@ export function DiscoverPanel({
           aria-label="Tempo (BPM)"
           style={{
             fontSize: 10,
-            fontWeight: 700,
             width: 36,
             textAlign: 'center',
             background: 'var(--ra-bg-row-active)',
@@ -2418,7 +2417,6 @@ export function DiscoverPanel({
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
             color: addingToShelf ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            fontWeight: 700,
             cursor: addingToShelf ? 'default' : 'pointer',
             animation: justAddedToShelf ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
@@ -2435,7 +2433,6 @@ export function DiscoverPanel({
             background: 'var(--ra-stretch-on-bg)',
             border: '1px solid var(--ra-stretch-on)',
             color: addingToTimeline ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-            fontWeight: 700,
             cursor: addingToTimeline ? 'default' : 'pointer',
             animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
@@ -2564,7 +2561,6 @@ export function DiscoverPanel({
             <span
               style={{
                 fontSize: 12,
-                fontWeight: 700,
                 color: 'var(--ra-text)',
                 marginRight: 4
               }}
@@ -3501,7 +3497,6 @@ function DiscoverSlotRow({
             padding: 0,
             fontFamily: 'inherit',
             fontSize: 10,
-            fontWeight: 700,
             background: 'transparent',
             border: '1px solid var(--ra-border)',
             color: 'var(--ra-text-2)',
@@ -3559,7 +3554,6 @@ function DiscoverSlotRow({
                 padding: 0,
                 fontFamily: 'inherit',
                 fontSize: 10,
-                fontWeight: 700,
                 // Direct request, 2026-09-15: "mute should look exactly
                 // like mute on the arrangement view" -- matches
                 // ChannelRow.tsx's own muteButtonStyle exactly
@@ -3604,7 +3598,6 @@ function DiscoverSlotRow({
                 padding: 0,
                 fontFamily: 'inherit',
                 fontSize: 10,
-                fontWeight: 700,
                 background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
                 border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                 color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',

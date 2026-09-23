@@ -109,7 +109,7 @@ export function Titlebar({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>sssketch</span>
+        <span style={{ fontSize: 13 }}>sssketch</span>
         <span style={{ color: 'var(--ra-text-4)' }}>|</span>
         {editing ? (
           <input

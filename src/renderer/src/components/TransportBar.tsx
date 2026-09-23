@@ -615,10 +615,7 @@ export function TransportBar({
             Fixed character-count width (the app's monospace font makes `ch`
             exact) so digits flipping mid-playback doesn't jitter the row and
             push every button after it left/right. */}
-        <span
-          style={{ fontSize: 16, fontWeight: 700, width: '7ch', display: 'inline-block' }}
-          title="remaining"
-        >
+        <span style={{ fontSize: 16, width: '7ch', display: 'inline-block' }} title="remaining">
           -{elapsedLabel(Math.max(0, loopLengthBars(state) - pos), state.bpm)}
         </span>
         <span
@@ -702,7 +699,6 @@ export function TransportBar({
           aria-label="Tempo (BPM)"
           style={{
             fontSize: 11,
-            fontWeight: 700,
             width: 44,
             textAlign: 'center',
             background: 'var(--ra-bg-row-active)',

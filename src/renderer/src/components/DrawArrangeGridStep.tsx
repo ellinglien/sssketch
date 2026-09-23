@@ -428,7 +428,6 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
               borderRadius: 0,
               padding: '0 10px',
               fontSize: 10,
-              fontWeight: 700,
               border: '1px solid var(--ra-stretch-on)',
               background: 'var(--ra-stretch-on)',
               color: 'var(--ra-play-on-ink)',

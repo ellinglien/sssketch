@@ -452,7 +452,6 @@ export function Shelf({
               borderRadius: 0,
               padding: '0 14px',
               fontSize: 12,
-              fontWeight: 700,
               border: '1px solid var(--ra-border-strong)',
               background: 'var(--ra-bg-row-active)',
               color: 'var(--ra-text)'

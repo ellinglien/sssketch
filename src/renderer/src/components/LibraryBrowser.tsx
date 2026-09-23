@@ -1740,7 +1740,7 @@ export function LibraryBrowser({
                           margin: '10px 12px 0'
                         }}
                       >
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ra-text)' }}>
+                        <span style={{ fontSize: 13, color: 'var(--ra-text)' }}>
                           {visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ??
                             selectedJamCID}
                         </span>
@@ -1762,7 +1762,7 @@ export function LibraryBrowser({
                               // whichever jam happened to be syncing).
                               disabled={selectedSyncingHere}
                               // Matches the import button's own "primary action" weight
-                              // (height 34 / fontSize 13 / fontWeight 700 / 2px border)
+                              // (height 34 / fontSize 13 / 2px border)
                               // rather than the tiny filter-bar utility styling this used
                               // to share with the "only fully cached" checkbox next to
                               // it — sync is the main thing this page does before you
@@ -1774,7 +1774,6 @@ export function LibraryBrowser({
                                 borderRadius: 0,
                                 padding: '0 16px',
                                 fontSize: 13,
-                                fontWeight: 700,
                                 border: '2px solid var(--ra-border-strong)',
                                 background: syncStatus
                                   ? 'var(--ra-bg-row-active)'
@@ -2200,7 +2199,6 @@ export function LibraryBrowser({
                               borderRadius: 0,
                               padding: '0 20px',
                               fontSize: 13,
-                              fontWeight: 700,
                               border: '2px solid var(--ra-border-strong)',
                               background:
                                 selectedRiffCID !== null &&

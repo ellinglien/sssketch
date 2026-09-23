@@ -163,7 +163,6 @@ export function RifffBlockRow({
         <span
           style={{
             fontSize: 10,
-            fontWeight: 700,
             color,
             whiteSpace: 'nowrap',
             overflow: 'hidden',

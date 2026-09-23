@@ -13,7 +13,6 @@ const buttonStyle: React.CSSProperties = {
   borderRadius: 0,
   padding: '0 8px',
   fontSize: 11,
-  fontWeight: 700,
   whiteSpace: 'nowrap',
   cursor: 'pointer'
 }
@@ -45,15 +44,13 @@ const secondaryButtonStyle: React.CSSProperties = {
 // one-off spot of color against this modal's otherwise plain black/white
 // treatment. Sits inline with the "don't show this again" checkbox in one
 // shared bottom row (see that row's own comment below) -- same fontSize
-// as the checkbox label so the two read as one consistent utility row,
-// bold to stay legible/clickable at that small size.
+// as the checkbox label so the two read as one consistent utility row.
 const linkButtonStyle: React.CSSProperties = {
   height: 20,
   border: 'none',
   background: 'transparent',
   padding: 0,
   fontSize: 10,
-  fontWeight: 700,
   color: 'var(--ra-text)',
   cursor: 'pointer'
 }
@@ -175,10 +172,7 @@ export function OnboardingModal({
       >
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
-            <span
-              key={i}
-              style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, color: 'var(--ra-text)' }}
-            >
+            <span key={i} style={{ fontSize: 28, lineHeight: 1, color: 'var(--ra-text)' }}>
               {ch}
             </span>
           ))}
@@ -200,9 +194,7 @@ export function OnboardingModal({
               border: '1px solid var(--ra-border-strong)'
             }}
           >
-            <div
-              style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}
-            >
+            <div style={{ fontSize: 11, lineHeight: 1.7, color: 'var(--ra-text)' }}>
               unsaved work from a previous session was found
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
@@ -216,7 +208,7 @@ export function OnboardingModal({
           </div>
         )}
 
-        <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.7, color: 'var(--ra-text)' }}>
+        <div style={{ fontSize: 11, lineHeight: 1.7, color: 'var(--ra-text)' }}>
           arrangement tool for endlesss
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>

@@ -126,17 +126,14 @@ export function StartupGate(): React.JSX.Element | null {
     >
       <div style={{ display: 'flex', gap: 1 }}>
         {WORDMARK.map((ch, i) => (
-          <span
-            key={i}
-            style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, color: 'var(--ra-text)' }}
-          >
+          <span key={i} style={{ fontSize: 28, lineHeight: 1, color: 'var(--ra-text)' }}>
             {ch}
           </span>
         ))}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <LoadingLoader size={13} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ra-text-2)' }}>
+        <span style={{ fontSize: 11, color: 'var(--ra-text-2)' }}>
           {describeStatus(engineDone === true, progress)}
         </span>
       </div>

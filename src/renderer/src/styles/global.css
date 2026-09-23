@@ -19,9 +19,13 @@
   font-weight: 700;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
 }
@@ -344,7 +348,10 @@ textarea {
 
 .ra-eyebrow {
   font-size: var(--ra-fs-10);
-  font-weight: var(--ra-fw-semibold);
+  /* Regular, not semibold: only Regular and Bold faces are bundled for
+     Silkscreen and Atkinson, so 600 resolved to the Bold face. Eyebrows are
+     already set apart by uppercase, tracking and a dimmer ink. */
+  font-weight: var(--ra-fw-regular);
   text-transform: uppercase;
   letter-spacing: var(--ra-track-eyebrow);
   color: var(--ra-text-3);

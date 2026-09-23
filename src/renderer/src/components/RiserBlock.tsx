@@ -312,7 +312,6 @@ export function RiserBlock({
             autoFocus
             style={{
               fontSize: 10,
-              fontWeight: 700,
               color: 'var(--ra-text-2)',
               width: '100%'
             }}
@@ -321,7 +320,6 @@ export function RiserBlock({
           <span
             style={{
               fontSize: 10,
-              fontWeight: 700,
               color: 'var(--ra-text-2)',
               whiteSpace: 'nowrap',
               overflow: 'hidden',

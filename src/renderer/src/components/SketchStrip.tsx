@@ -453,7 +453,6 @@ export function SketchStrip(): React.JSX.Element {
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
                 fontSize: 14,
-                fontWeight: 700,
                 color: isDraggingBars ? 'var(--ra-stretch-on)' : '#fff',
                 pointerEvents: 'none'
               }}

@@ -119,7 +119,7 @@ export function Inspector({
                   clip, not its (often LORE-auto-generated, meaningless)
                   name. The name is still right here and still editable,
                   just visually secondary now -- see EditableText below. */}
-              <div style={{ fontSize: 11, fontWeight: 700 }}>
+              <div style={{ fontSize: 11 }}>
                 {rifff.stems.length} stem{rifff.stems.length === 1 ? '' : 's'}
                 {stemTypeSummary && ` — ${stemTypeSummary}`}
               </div>
@@ -135,7 +135,7 @@ export function Inspector({
                 value={rifff.name}
                 onCommit={(name) => dispatch({ type: 'RENAME_RIFFF', groupId, name })}
                 title="click to rename"
-                style={{ fontSize: 10, fontWeight: 400, color: 'var(--ra-text-3)', marginTop: 2 }}
+                style={{ fontSize: 10, color: 'var(--ra-text-3)', marginTop: 2 }}
               />
             </div>
           </div>
@@ -197,9 +197,9 @@ export function Inspector({
               }}
             >
               <div>
-                <span style={{ fontSize: 11, fontWeight: 700 }}>{formatBpm(rifff.bpm)}</span>
+                <span style={{ fontSize: 11 }}>{formatBpm(rifff.bpm)}</span>
                 <span style={{ margin: '0 6px', fontSize: 11 }}>→</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color }}>{formatBpm(state.bpm)}</span>
+                <span style={{ fontSize: 11, color }}>{formatBpm(state.bpm)}</span>
               </div>
               <button
                 onClick={() => dispatch({ type: 'TOGGLE_STRETCH', groupId })}
@@ -288,7 +288,6 @@ export function Inspector({
             <span
               style={{
                 fontSize: 11,
-                fontWeight: 700,
                 color: groupOffsetSteps ? color : 'var(--ra-text-2)'
               }}
             >

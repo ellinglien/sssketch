@@ -82,7 +82,7 @@ export function TourOverlay({
         <div style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
           {stepIndex + 1} of {steps.length}
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4 }}>{step.title}</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>{step.title}</div>
         <div style={{ fontSize: 11, color: 'var(--ra-text-2)', marginTop: 6, lineHeight: 1.5 }}>
           {step.body}
         </div>

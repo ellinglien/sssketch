@@ -535,7 +535,6 @@ export function AutoArrangeRoleStep({
                   title="arrangement length"
                   style={{
                     fontSize: 14,
-                    fontWeight: 700,
                     cursor: 'ns-resize',
                     color: isDraggingLength ? 'var(--ra-stretch-on)' : 'var(--ra-text)',
                     userSelect: 'none'
