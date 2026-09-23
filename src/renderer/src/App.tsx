@@ -451,7 +451,6 @@ function Timeline({
           channelId={channel.channelId}
           rifffs={channel.rifffs}
           bus={channel.bus}
-          automationMode={state.mode === 'automation'}
           onOpenContextMenu={onOpenClipMenu}
           onOpenRiserMenu={onOpenRiserMenu}
           onDropOnChannel={handleDropOnChannel}

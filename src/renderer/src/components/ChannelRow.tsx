@@ -98,7 +98,6 @@ function ChannelRowImpl({
   channelId,
   rifffs,
   bus,
-  automationMode,
   onOpenContextMenu,
   onOpenRiserMenu,
   onDropOnChannel
@@ -111,12 +110,13 @@ function ChannelRowImpl({
    * per-bus track coloring does. Undefined in the normal (untidied) view,
    * where channels aren't bus-partitioned at all. */
   bus?: BusId
-  /** True while the arranger is in 'automation' mode: this row's clips are
-   * made inert, and each one lays an AutomationLane over its own waveform
-   * rect (StemWaveformRow / CollapsedRifffRow render it, not this row --
-   * the lane is per CLIP, see the spec's section 2b). Purely a view/
-   * interaction change -- nothing about the arrangement moves. */
-  automationMode: boolean
+  /** No `automationMode` prop: this row does nothing mode-specific any more.
+   * Each clip and riser reads the mode itself and lays an AutomationLane
+   * over its OWN rect (StemWaveformRow / CollapsedRifffRow / RiserBlock
+   * render it, not this row -- the lane is per CLIP, see the spec's section
+   * 2b), and that lane sitting on top is the whole of how automation mode
+   * takes over a clip's body. See the comment above this row's clip stack
+   * for the wrapper that used to be here and why it is gone. */
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
@@ -631,33 +631,50 @@ function ChannelRowImpl({
           )}
         </div>
       </div>
-      {/* In automation mode the clips stay exactly where they are and just
-          stop responding: a plain (unpositioned) wrapper, so every
-          RifffBlockRow's own absolutely-positioned content still resolves
-          against this row the way it always did, and a drag lands on the
-          lane rather than moving a clip the user meant to draw on. The lane
-          itself opts back in (pointer-events: auto) and supplies the dim,
-          so only clips that actually HAVE a lane recede -- the old
-          row-wide opacity greyed the lane's own controls too. */}
-      <div style={automationMode ? { pointerEvents: 'none' } : undefined}>
-        {rifffs.map((rifff) => (
-          <RifffBlockRow
-            key={rifff.groupId}
-            groupId={rifff.groupId}
-            onOpenContextMenu={onOpenContextMenu}
-          />
-        ))}
-        {/* Risers share this row with its clips and share the automation
-            mode's pointer-events wrapper with them too, so in automation mode
-            a riser goes inert and its own lane (RiserBlock mounts one) opts
-            back in -- exactly the arrangement a clip's lane already relies
-            on. Rendered after the clips so a riser overlapping one is drawn
-            on top: a riser is a few translucent strokes, and the audio it
-            stands for is the thing about to happen. */}
-        {riserIds.map((riserId) => (
-          <RiserBlock key={riserId} riserId={riserId} onOpenContextMenu={onOpenRiserMenu} />
-        ))}
-      </div>
+      {/* No automation-mode pointer-events wrapper here, deliberately.
+          There used to be one -- `pointerEvents: 'none'` over this whole
+          stack in automation mode, so a drag landed on the lane rather than
+          moving a clip the user meant to draw on. It was written when the
+          lane was one wide strip per CHANNEL. Once the lane was rescoped to
+          sit INSIDE each clip (see the per-clip lane spec, section 2b) it
+          became both redundant and harmful:
+
+          - redundant, because AutomationLane is the last child of the clip's
+            own box at zIndex 4 and everything else in that box tops out at
+            zIndex 3 (both resize handles, the move/scrub surface) -- so the
+            lane already wins every pixel of the clip body on z-order alone,
+            measured in real Chromium, with no pointer-events rule involved;
+          - harmful, because the wrapper reached well past the clip body it
+            was aiming at. It also covered the clip's NAME BAR (which lives
+            above the body, where no lane ever draws) and each row's
+            RowGainDial (which sits outside the clip box entirely, at the
+            row's right edge). Both went dead in automation mode and their
+            presses fell through to the Timeline's background click-to-scrub,
+            so reaching for a gain knob jumped the playhead instead -- while
+            this row's own m/s/fx buttons, rendered ABOVE this point and so
+            outside the wrapper, kept working and made it look like only some
+            controls were broken. Reported 2026-09-23 ("i cannot reach them.
+            the transport line keeps thinking i want to play that part of the
+            track ... i can click s and m though", and separately "cannot
+            resize it or move it" about a riser).
+
+          So clips and risers stay fully interactive in every mode -- "all
+          clips should be selectable and movable in automation mode" -- and
+          the clip BODY is still the lane's, because the lane is on top of
+          it. */}
+      {rifffs.map((rifff) => (
+        <RifffBlockRow
+          key={rifff.groupId}
+          groupId={rifff.groupId}
+          onOpenContextMenu={onOpenContextMenu}
+        />
+      ))}
+      {/* Rendered after the clips so a riser overlapping one is drawn on
+          top: a riser is a few translucent strokes, and the audio it stands
+          for is the thing about to happen. */}
+      {riserIds.map((riserId) => (
+        <RiserBlock key={riserId} riserId={riserId} onOpenContextMenu={onOpenRiserMenu} />
+      ))}
       {isArmed && armedLoopRegion && (
         // Rendered AFTER rifffs.map above, not before -- both are plain
         // position:absolute siblings with no explicit z-index, so DOM

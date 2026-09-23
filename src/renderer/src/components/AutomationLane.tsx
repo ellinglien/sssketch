@@ -459,10 +459,17 @@ export function AutomationLane({
         inset: 0,
         zIndex: 4,
         cursor: 'crosshair',
-        // Re-enables input for the lane alone: ChannelRow turns pointer
-        // events off for the whole clip stack in automation mode (so a drag
-        // can't move a clip you meant to draw on), and a descendant opting
-        // back in is exactly how that is meant to be undone.
+        // inset:0 + zIndex 4 is the whole of how this lane takes the clip's
+        // body over: everything else inside that box tops out at zIndex 3
+        // (both resize handles, the move/scrub surface), so a press anywhere
+        // on the clip lands here and draws rather than moving the clip. It
+        // does NOT reach the clip's name bar or the row's gain dial, which
+        // sit outside this rectangle -- those stay live in automation mode,
+        // which is how a clip is still selectable and movable while drawing
+        // (ChannelRow used to blanket the whole row in pointerEvents:'none'
+        // instead, which killed both -- see its own comment).
+        // pointerEvents stated explicitly so the lane keeps working even if
+        // something above it is ever made inert again.
         pointerEvents: 'auto',
         // Doubles as the dim over the clip underneath -- see this
         // component's own doc comment.
