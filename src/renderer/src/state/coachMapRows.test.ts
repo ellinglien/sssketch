@@ -132,30 +132,20 @@ describe('coachMapRows', () => {
     expect(row.path).toBe('/kick.wav')
   })
 
-  it('calls a row the map did NOT lay out other, so nothing pretends to own it', () => {
+  it('still owns a row the map did NOT lay out, when its material names one stem', () => {
+    // ONE RULE FOR BOTH MAPS: a row is toggleable when its material names a
+    // single stem. This row was never laid out by a builder and is still
+    // editable, which is the whole point of the unguided map.
     const state = stateWith([rifff('a', '/kick.wav', 0)])
-    expect(coachMapRows(state)[0].kind).toBe('other')
-    expect(coachMapRows(state)[0].path).toBeNull()
+    expect(coachMapRows(state)[0].kind).toBe('stem')
+    expect(coachMapRows(state)[0].path).toBe('/kick.wav')
   })
 
-  it('names a laid-out row by the role the user confirmed, not the raw sound type', () => {
+  it('carries the role the user confirmed, not the raw sound type', () => {
     // Every Endlesss stem here is recorded through audio-in and named
     // "audio in" -- the confirmed role is the only thing that says anything.
     const state = laidOutState(['/one.wav'], climaxOf({ '/one.wav': 'bass' }))
-    expect(coachMapRows(state)[0].label).toBe('bass')
-  })
-
-  it('numbers rows that share a role so two drums are tellable apart', () => {
-    const state = laidOutState(
-      ['/one.wav', '/two.wav', '/three.wav'],
-      climaxOf({ '/one.wav': 'drums', '/two.wav': 'drums', '/three.wav': 'vocal' })
-    )
-    expect(coachMapRows(state).map((row) => row.label)).toEqual(['drums 1', 'drums 2', 'vocal'])
-  })
-
-  it('spells a role the way every other picker spells it', () => {
-    const state = laidOutState(['/one.wav'], climaxOf({ '/one.wav': 'textureFx' }))
-    expect(coachMapRows(state)[0].label).toBe('texture/fx')
+    expect(coachMapRows(state)[0].role).toBe('bass')
   })
 
   it('falls back to the stem own name when the climax has no role for that path', () => {
@@ -185,5 +175,73 @@ describe('coachMapRows', () => {
       { groupId: 'a', startBar: 0, endBar: 4 },
       { groupId: 'b', startBar: 8, endBar: 12 }
     ])
+  })
+})
+
+describe('the stem a toggle would put back', () => {
+  it('reads the row own material when the clips name ONE stem', () => {
+    const state = stateWith([rifff('c0', 'kick.wav', 0), rifff('c0b', 'kick.wav', 8)], {
+      channelOf: { c0b: 'c0' },
+      vol: { 'c0:1': 0.5 }
+    })
+    const row = coachMapRows(state).find((r) => r.channelId === 'c0')!
+    expect(row.kind).toBe('stem')
+    expect(row.source?.stem.path).toBe('kick.wav')
+    expect(row.source?.gain).toBe(0.5)
+  })
+
+  it('refuses a row whose material names SEVERAL stems', () => {
+    const state = stateWith([rifff('c0', 'kick.wav', 0), rifff('c0b', 'snare.wav', 8)], {
+      channelOf: { c0b: 'c0' }
+    })
+    const row = coachMapRows(state).find((r) => r.channelId === 'c0')!
+    expect(row.source).toBeNull()
+    expect(row.kind).toBe('other')
+  })
+
+  it('refuses a riser row -- toggling one on would be INVENTING a riser', () => {
+    const state = stateWith([], {
+      risers: { r0: createRiser({ id: 'r0', channelId: 'c9', startBar: 0 }) }
+    })
+    const row = coachMapRows(state).find((r) => r.channelId === 'c9')!
+    expect(row.kind).toBe('riser')
+    expect(row.source).toBeNull()
+  })
+
+  it('falls back to the climax when a guided row has been emptied', () => {
+    // A guided row whose clips are ALL gone has no channel at all
+    // (channelsInOrder builds channels from placed rifffs), so the climax
+    // fallback can only fire while at least one clip is still on the row.
+    const state = laidOutState(['kick.wav'], climaxOf({ 'kick.wav': 'drums' }))
+    const emptied: AppState = { ...state, rifffs: {} }
+    const row = coachMapRows(emptied).find((r) => r.path === 'kick.wav')
+    expect(row).toBeUndefined()
+  })
+
+  it('falls back to the climax when a guided row material no longer agrees', () => {
+    const state = laidOutState(['/one.wav'], climaxOf({ '/one.wav': 'drums' }))
+    const withStray = {
+      ...state,
+      rifffs: { ...state.rifffs, stray: rifff('stray', '/two.wav', 8) },
+      channelOf: { ...state.channelOf, stray: 'c0' },
+      channelOrder: ['c0']
+    }
+    const row = coachMapRows(withStray).find((r) => r.channelId === 'c0')!
+    expect(row.source?.stem.path).toBe('/one.wav')
+  })
+
+  it('carries the climax role so the label chain has a second link', () => {
+    const state = laidOutState(['kick.wav'], climaxOf({ 'kick.wav': 'drums' }))
+    expect(coachMapRows(state)[0].role).toBe('drums')
+  })
+
+  it('has no role at all on an unguided arrangement', () => {
+    const state = stateWith([rifff('c0', 'kick.wav', 0)])
+    expect(coachMapRows(state)[0].role).toBeNull()
+  })
+
+  it('falls its label back to the stem name, then the path', () => {
+    const state = stateWith([rifff('c0', 'kick.wav', 0)])
+    expect(coachMapRows(state)[0].label).toBe('kick.wav')
   })
 })
