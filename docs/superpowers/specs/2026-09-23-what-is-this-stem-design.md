@@ -315,9 +315,18 @@ Worth listing, because this should come out smaller than it went in:
   engine-ownership token in `useStemPreviewPlayback` is safe today. The cost is that a long
   library pass happens inside a modal; if that turns out to chafe in real use, promoting it to
   a view later is a contained change, because nothing about the merge depends on which it is.
-- **How the library population is ordered.** Unconfirmed first is obvious; within that,
-  most-recently-imported, most-used-across-projects, or the classifier's least-confident.
-  Least-confident is worth the most per click and costs the most to compute. *His preference.*
+- ~~**How the library population is ordered.**~~ **RECOMMENDED 2026-09-23: unconfirmed first,
+  then most-recently-imported.** It matches why the surface was opened (a jam just came in and
+  wants labelling), it is the cheapest labelling condition there is -- a stem from last week is
+  one you can still recognise, where a stem from two years ago has to be auditioned from
+  scratch -- and it is free, being an index that already exists.
+
+  **Least-confident-first was considered and rejected as the default.** It optimises for the
+  classifier rather than the person: the stems it is least sure about are disproportionately the
+  noisy, odd, genuinely unclassifiable ones, so it opens with the hardest possible screen and the
+  least useful stems in the library, at the highest compute cost. A pass that opens with ten
+  things you cannot confidently name is a pass you close. If it earns a place later it is as a
+  deliberate secondary mode ("show me the ones you are unsure about"), never the default.
 - **Whether "tidy up" is still the name.** It is his word and it has a tour step
   (`data-tour-id="tour-tidy"`), a menu entry, and `TidyUpNudgeModal.tsx` attached to it. "what
   is this?" is his phrase for the *question*; it may or may not be the name of the thing.
