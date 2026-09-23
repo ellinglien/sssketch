@@ -1,4 +1,10 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import {
+  distinctPlacedBarLengths,
+  unguidedMapColumns,
+  unguidedPhraseBars,
+  type ArrangementMapColumn
+} from '@shared/arrangementMapColumns'
 import {
   coachMapColumnWidth,
   coachMapSpans,
@@ -11,10 +17,12 @@ import { readRowPasses } from '@shared/coachMapRead'
 import { sectionBars } from '@shared/coachPasses'
 import { loopPhraseIsWorthSaying, phraseAnswerOptions, type CoachPhrase } from '@shared/coachPhrase'
 import { coachSectionBoundaries, coachTensionDef } from '@shared/coachTension'
-import type { CoachSection } from '@shared/coachSections'
 import { buildCellToggleActions, buildMapRebuildActions } from '../state/coachMapPlacement'
 import { coachMapRows, type CoachMapRow } from '../state/coachMapRows'
+import { coachMapRowLabels } from '../state/coachMapRowLabels'
+import { useConfirmedStemRoles } from '../state/useConfirmedStemRoles'
 import { markManualSeek } from '../state/manualSeek'
+import { placedTimelineSpanBars } from '../state/selectors'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { typeColorVar } from '../theme/typeColor'
 import {
@@ -31,8 +39,19 @@ const SECTION_GAP = 8
 
 /**
  * The arrangement map: rows are the arranger's own channel rows, columns are
- * sections, and a section subdivides into one cell per pass (spec, "The
+ * sections where a builder made some and plain one-phrase blocks where
+ * nobody did, and a column subdivides into one cell per pass (spec, "The
  * map").
+ *
+ * IT WORKS ON ANY ARRANGEMENT. A guided map maps one column off each
+ * CoachSection; an unguided one gets ceil(totalBars / phraseBars) UNNAMED
+ * columns of one pass each from @shared/arrangementMapColumns -- and that
+ * module's own doc comment says at length why nothing here infers where a
+ * section begins. The three decorations that need a walk (walkIndex,
+ * tension, phraseReading) are already empty without a coach, so an unguided
+ * map draws no dividers, no join labels and no dimming without a single
+ * `if (!guided)` around them. sssketchy says nothing here: he walks
+ * sections, and there are none.
  *
  * THE THING TO UNDERSTAND BEFORE CHANGING ANYTHING HERE: **this component
  * holds no state and owns no grid.** Every cell it draws is read out of the
@@ -49,21 +68,84 @@ const SECTION_GAP = 8
  * the two agree by construction, and re-sorting here would paper over a real
  * divergence the map exists to show.
  *
- * Which rows can be EDITED is decided by coachMapRows: a 'stem' row knows
- * which stem belongs on it, so a cell can put one back; a 'riser' row and an
- * 'other' row do not, so they report and do not act. A riser also has no
- * SoundType, so its cells are monochrome -- see ArrangementMapCell.
+ * Which rows can be EDITED is decided by coachMapRows: a row whose material
+ * names a single stem knows what belongs on it, so a cell can put one back;
+ * a 'riser' row and a mixed row do not, so they report and do not act. A
+ * riser also has no SoundType, so its cells are monochrome -- see
+ * ArrangementMapCell.
  */
-export function ArrangementMap(): React.JSX.Element {
+export function ArrangementMap({
+  onWhatIsThis
+}: {
+  /** Opens the surface that answers "what is this stem" -- Tidy Up, on this
+   * sketch's stems. Part 1's whole join to part 2 (spec). */
+  onWhatIsThis: () => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const coach = state.coach
   const sections = useMemo(() => coach?.sections ?? [], [coach])
-  const climax = coach?.lockedClimax ?? null
-  const phraseBars = coach?.phrase?.bars ?? climax?.barLength ?? 1
+  const guided = sections.length > 0
   const walkIndex = coach?.walkIndex ?? null
 
+  // The loops actually placed, which is where an unguided map gets both its
+  // phrase and the lengths its button row may offer -- facts about the
+  // arrangement rather than guesses about it.
+  const placedLoops = useMemo(
+    () =>
+      Object.values(state.rifffs)
+        .filter((rifff) => rifff.startBar !== undefined)
+        .map((rifff) => ({ startBar: rifff.startBar ?? 0, barLength: rifff.barLength })),
+    [state.rifffs]
+  )
+
+  /**
+   * An unguided map's phrase, held HERE rather than dispatched.
+   *
+   * The reducer's COACH_SET_PHRASE case opens `if (state.coach === null)
+   * return state` -- so on an arrangement nobody ran the wizard on, which is
+   * the entire population this branch exists for, dispatching it does
+   * nothing at all. Checked before writing this, as the plan required.
+   *
+   * Local state is also the right shape on its own merits: this is a
+   * view-level grid preference, the same class of thing as state.mode. It is
+   * not an undo step (re-sizing the squares changes no clip) and it does not
+   * belong on disk.
+   */
+  const [unguidedPhraseChoice, setUnguidedPhraseChoice] = useState<number | null>(null)
+
+  // The user's own answer wins wherever there is one -- on a guided map his
+  // answer to the measurement, on an unguided one whatever he last clicked
+  // in the button row below. Otherwise: the earliest placed rifff's own bar
+  // length. A rifff IS a loop, so its barLength is the nominal phrase
+  // without measuring anything.
+  const phraseBars = useMemo((): number => {
+    if (guided) return coach?.phrase?.bars ?? coach?.lockedClimax?.barLength ?? 1
+    return unguidedPhraseChoice ?? coach?.phrase?.bars ?? unguidedPhraseBars(placedLoops) ?? 1
+  }, [coach, guided, placedLoops, unguidedPhraseChoice])
+
+  const columns = useMemo((): ArrangementMapColumn[] => {
+    if (guided) {
+      return sections.map((section) => ({
+        id: section.id,
+        name: section.name,
+        startBar: section.startBar,
+        passes: section.passes
+      }))
+    }
+    return unguidedMapColumns(placedTimelineSpanBars(state), phraseBars)
+  }, [guided, sections, state, phraseBars])
+
   const rows = useMemo(() => coachMapRows(state), [state])
+  // The first link of the label chain, and the only one the renderer has to
+  // go and fetch: what somebody already said these stems are. The rest of
+  // the chain (climax role -> stem name -> path) is already on the row.
+  const rowPaths = useMemo(
+    () => rows.map((row) => row.path).filter((path): path is string => path !== null),
+    [rows]
+  )
+  const confirmedRoles = useConfirmedStemRoles(rowPaths)
+  const labels = useMemo(() => coachMapRowLabels(rows, confirmedRoles), [rows, confirmedRoles])
   // Derived, never stored: rename or resize a section and the joins follow.
   // The same list phase three's own panel reads, so the map and the tension
   // pass can never disagree about where a join is.
@@ -123,9 +205,9 @@ export function ArrangementMap(): React.JSX.Element {
    * something anyone can see in a screenshot.
    */
   const layout = useMemo((): { spans: CoachMapSpan[]; styles: React.CSSProperties[] } => {
-    const columns: CoachMapColumn[] = []
+    const geometry: CoachMapColumn[] = []
     const styles: React.CSSProperties[] = []
-    sections.forEach((section, index) => {
+    columns.forEach((column, index) => {
       const boundary = boundaryAfter.has(index)
       const applied = boundary && appliedAt.has(index)
       // A join that has something switched on is drawn thicker. Monochrome
@@ -138,16 +220,16 @@ export function ArrangementMap(): React.JSX.Element {
       const dividerWidth = !boundary ? 0 : applied ? 3 : 1
       const paddingRight = boundary ? SECTION_GAP : 0
       const marginRight = boundary ? SECTION_GAP + 2 : SECTION_GAP
-      columns.push({
-        startBar: section.startBar,
-        bars: sectionBars(section.passes, phraseBars),
-        passes: section.passes,
+      geometry.push({
+        startBar: column.startBar,
+        bars: sectionBars(column.passes, phraseBars),
+        passes: column.passes,
         trailing: paddingRight + dividerWidth + marginRight
       })
       styles.push({
         flex: 'none',
         boxSizing: 'content-box',
-        width: coachMapColumnWidth(section.passes, MAP_CELL_WIDTH, MAP_CELL_GAP),
+        width: coachMapColumnWidth(column.passes, MAP_CELL_WIDTH, MAP_CELL_GAP),
         paddingRight,
         marginRight,
         borderRight:
@@ -158,8 +240,8 @@ export function ArrangementMap(): React.JSX.Element {
               : '1px solid var(--ra-border-strong)'
       })
     })
-    return { spans: coachMapSpans(columns, MAP_CELL_WIDTH, MAP_CELL_GAP), styles }
-  }, [appliedAt, boundaryAfter, phraseBars, sections])
+    return { spans: coachMapSpans(geometry, MAP_CELL_WIDTH, MAP_CELL_GAP), styles }
+  }, [appliedAt, boundaryAfter, phraseBars, columns])
 
   const playing = usePlaying()
 
@@ -204,16 +286,32 @@ export function ArrangementMap(): React.JSX.Element {
   )
 
   // "He can change it afterwards; the map re-sizes, it does not rebuild"
-  // (spec). Offered only when there is a measurement worth offering -- the
-  // same silence rule the setup screen follows, so a loop that really does
-  // take all its bars to say its piece is never nagged about.
+  // (spec).
+  //
+  // Guided: the app's own measurement, offered once, with the silence rule
+  // (coachPhrase.ts) so a loop that really does take all its bars to say its
+  // piece is never nagged about. Unguided: the distinct bar lengths ACTUALLY
+  // PRESENT -- facts about the arrangement, which is the property that makes
+  // offering them allowed at all. Shown only when there is more than one to
+  // choose from.
   const reading = coach?.phraseReading ?? null
-  const phraseOptions: readonly CoachPhrase[] =
-    reading !== null && loopPhraseIsWorthSaying(reading) ? phraseAnswerOptions(reading) : []
+  const phraseOptions: readonly CoachPhrase[] = guided
+    ? reading !== null && loopPhraseIsWorthSaying(reading)
+      ? phraseAnswerOptions(reading)
+      : []
+    : distinctPlacedBarLengths(placedLoops).map((bars) => ({ bars, source: 'nominal' as const }))
 
   const changePhrase = useCallback(
     (option: CoachPhrase): void => {
-      if (coach === null || option.bars === phraseBars) return
+      if (option.bars === phraseBars) return
+      if (!guided) {
+        // Nothing to rebuild: an unguided map's columns are computed from
+        // this number every render, so recording the answer IS the re-size.
+        // No clip moves, so this is not an undo step either.
+        setUnguidedPhraseChoice(option.bars)
+        return
+      }
+      if (coach === null) return
       const built = buildMapRebuildActions(state, coach, option.bars)
       dispatch({
         type: 'BATCH',
@@ -227,26 +325,26 @@ export function ArrangementMap(): React.JSX.Element {
         ]
       })
     },
-    [coach, dispatch, phraseBars, state]
+    [coach, dispatch, guided, phraseBars, state]
   )
 
   const toggle = useCallback(
-    (row: CoachMapRow, section: CoachSection, passIndex: number, on: boolean): void => {
-      if (climax === null || row.path === null) return
-      const plan = planCellToggle({ clips: row.clips, section, phraseBars, passIndex, on })
-      const actions = buildCellToggleActions(state, row, section, plan, climax, phraseBars)
+    (row: CoachMapRow, column: ArrangementMapColumn, passIndex: number, on: boolean): void => {
+      if (row.source === null) return
+      const plan = planCellToggle({ clips: row.clips, section: column, phraseBars, passIndex, on })
+      const actions = buildCellToggleActions(state, row, column, plan, phraseBars)
       if (actions.length === 0) return
       // ONE batch, so one cell is one undo step -- and so the map's own
       // edits are the same kind of thing as every other edit in the app.
       dispatch({ type: 'BATCH', actions })
     },
-    [climax, dispatch, phraseBars, state]
+    [dispatch, phraseBars, state]
   )
 
-  if (sections.length === 0) {
+  if (columns.length === 0) {
     return (
       <div style={{ padding: 'var(--ra-s-7)', fontSize: 11, color: 'var(--ra-text-3)' }}>
-        no map yet. run the auto-arranger to build one.
+        nothing on the timeline yet.
       </div>
     )
   }
@@ -296,8 +394,10 @@ export function ArrangementMap(): React.JSX.Element {
           positioned box: the rail and every row under it. */}
       <div style={{ position: 'relative' }}>
         {/* Column headers: the section names, with the walked one bright and
-          the rest stepped back. No colour -- a section is structure, not
-          audio information.
+          the rest stepped back -- and NO TEXT AT ALL on an unguided map,
+          where a column has no name (spec: "the header carries no text at
+          all"; the per-column tooltip already says which bar it starts at).
+          No colour -- a section is structure, not audio information.
 
           This strip is also the map's ruler: click or drag along it to move
           the playhead. It is the natural place for it -- it is where the
@@ -317,9 +417,9 @@ export function ArrangementMap(): React.JSX.Element {
           }}
         >
           <div style={{ width: ROW_HEADER_WIDTH, flex: 'none' }} />
-          {sections.map((section, index) => (
+          {columns.map((column, index) => (
             <div
-              key={section.id}
+              key={column.id}
               style={{
                 ...layout.styles[index],
                 fontSize: 10,
@@ -331,11 +431,11 @@ export function ArrangementMap(): React.JSX.Element {
               }}
               data-tooltip={
                 appliedLabelAt.has(index)
-                  ? `${section.passes} x ${phraseBars} bars, from bar ${section.startBar} · ${appliedLabelAt.get(index)} at the join`
-                  : `${section.passes} x ${phraseBars} bars, from bar ${section.startBar}`
+                  ? `${column.passes} x ${phraseBars} bars, from bar ${column.startBar} · ${appliedLabelAt.get(index)} at the join`
+                  : `${column.passes} x ${phraseBars} bars, from bar ${column.startBar}`
               }
             >
-              {section.name}
+              {column.name}
               {appliedLabelAt.has(index) && (
                 <span style={{ color: 'var(--ra-text-2)' }}> · {appliedLabelAt.get(index)}</span>
               )}
@@ -378,34 +478,34 @@ export function ArrangementMap(): React.JSX.Element {
                 }}
               />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {row.label}
+                {labels.get(row.channelId) ?? row.label}
               </span>
             </div>
 
-            {sections.map((section, sectionIndex) => {
-              const passes = readRowPasses(row.clips, section, phraseBars)
+            {columns.map((column, columnIndex) => {
+              const passes = readRowPasses(row.clips, column, phraseBars)
               return (
                 <div
-                  key={section.id}
+                  key={column.id}
                   style={{
-                    ...layout.styles[sectionIndex],
+                    ...layout.styles[columnIndex],
                     display: 'flex',
                     gap: MAP_CELL_GAP,
-                    background: walkIndex === sectionIndex ? 'var(--ra-bg-row-sub)' : undefined
+                    background: walkIndex === columnIndex ? 'var(--ra-bg-row-sub)' : undefined
                   }}
                 >
                   {passes.map((on, passIndex) => (
                     <ArrangementMapCell
                       key={passIndex}
                       on={on}
-                      locked={passIsLocked(row.clips, section, phraseBars, passIndex)}
-                      editable={row.kind === 'stem'}
+                      locked={passIsLocked(row.clips, column, phraseBars, passIndex)}
+                      editable={row.source !== null}
                       soundType={row.soundType}
-                      dimmed={walkIndex !== null && walkIndex !== sectionIndex}
-                      label={`${row.label} - ${section.name} - pass ${passIndex + 1} of ${
-                        section.passes
-                      }`}
-                      onToggle={(): void => toggle(row, section, passIndex, !on)}
+                      dimmed={walkIndex !== null && walkIndex !== columnIndex}
+                      label={`${labels.get(row.channelId) ?? row.label} - ${
+                        column.name ?? `bar ${column.startBar}`
+                      } - pass ${passIndex + 1} of ${column.passes}`}
+                      onToggle={(): void => toggle(row, column, passIndex, !on)}
                     />
                   ))}
                 </div>
@@ -423,13 +523,13 @@ export function ArrangementMap(): React.JSX.Element {
       <div style={{ marginTop: 'var(--ra-s-6)', fontSize: 9, color: 'var(--ra-text-3)' }}>
         every square is ordinary clips. one undo takes any of it back.
         {rows.some((row) => row.kind !== 'stem')
-          ? ' grey rows are risers and clips the map did not lay out -- edit those on the timeline.'
+          ? ' grey rows are risers and rows holding more than one stem -- edit those on the timeline.'
           : ''}
       </div>
       <div style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
         total{' '}
         {sectionBars(
-          sections.reduce((sum, section) => sum + section.passes, 0),
+          columns.reduce((sum, column) => sum + column.passes, 0),
           phraseBars
         )}{' '}
         bars
