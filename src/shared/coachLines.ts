@@ -153,3 +153,110 @@ export const COACH_V1_EXPORTED_LINES: readonly string[] = [
   'exported. that is the whole method, top to bottom.',
   'v1 is out. nothing here is locked -- open it again and keep going whenever you like.'
 ]
+
+/** "What is this loop?" -- the first of the two opening questions (spec,
+ * "Getting started: two questions"). It decides where the material the user
+ * already has lands in the structure, and it replaces all six of phase
+ * one's steps.
+ *
+ * Note what none of these do: none of them tells him what the loop IS. The
+ * app has not heard it. Every variant asks, and the last one says plainly
+ * what "not sure" will be taken to mean, so choosing it is not a trapdoor. */
+export const COACH_LOOP_QUESTION_LINES: readonly string[] = [
+  'before anything else: what is this loop, to you? the drop, a verse, or an intro.',
+  'one question first. is this the drop, a verse, or an intro? not sure is a real answer.',
+  'where does this loop live in a track? drop, verse, intro -- or leave it to me.',
+  'what is this, as a section? say not sure and i will treat it as the drop.'
+]
+
+/** "How long a journey?" -- the second question. Shown next to the article's
+ * own letter notation, which is why none of these spell the shapes out: the
+ * letters are on the buttons.
+ *
+ * There is deliberately no genre here and there must not be (coachShapes.ts
+ * explains why at length): the section ORDER barely varies by genre, so a
+ * genre list would be one template wearing six names. */
+export const COACH_SHAPE_QUESTION_LINES: readonly string[] = [
+  'how long a journey? short is about two minutes, standard about four, long about six.',
+  'pick a length. the letters are the sections in order -- a is the intro and the outro.',
+  'how far do you want to travel? the same order underneath, just more of it.',
+  'length next. any of these is a fine shape; you can move all of it afterwards.'
+]
+
+/**
+ * What each kind of section is FOR -- the whole of the section walk's copy.
+ *
+ * THE RULE (spec): **goals, not dictates. advice, not rules.** A goal is a
+ * statement about song structure, which is true regardless of what the user
+ * made -- so it cannot be wrong about music the app has not heard. An
+ * instruction ("add a riser at bar 48") can be, and a lesson ("a verse, by
+ * definition, establishes...") is a teacher, which he is not.
+ *
+ * Every one of these six tables carries at least one variant that says the
+ * section may need NOTHING. That is not filler: "a coach who always has a
+ * suggestion is a drill sergeant with better manners" (spec). The test to
+ * apply before adding a line here: could a friend say this while leaning
+ * over your shoulder, without it being annoying?
+ */
+export const COACH_SECTION_GOAL_LINES: Record<string, readonly string[]> = {
+  intro: [
+    'this one is the way in. it does not have to do much.',
+    'an intro is for getting someone into the room. two or three parts is plenty.',
+    'the opening. the less it gives away, the further the rest has to travel.',
+    'this is the way in. nothing has to change here if you like it as it is.'
+  ],
+  verse: [
+    'the verse should hint at the drop without giving it away.',
+    'this one carries the track between the big moments. it can be quieter than you think.',
+    'a verse is room to breathe. want to try taking the hook out?',
+    'the stretch between the big moments. nothing has to change here if it already carries.'
+  ],
+  build: [
+    'this is where it lifts.',
+    'this one is the lift into the drop. the fewer parts it has, the more the drop adds.',
+    'a build is a climb. taking something away here often lifts harder than adding.',
+    'this is the run-up. nothing has to change if it already pulls.'
+  ],
+  drop: [
+    'this is the payoff. everything you have is welcome here.',
+    'the drop. this is the loop you built, doing what it does.',
+    'this one is the top of the track. it already does its job.',
+    'the big one. nothing has to come out here unless you want it to.'
+  ],
+  breakdown: [
+    'a breakdown empties the room out for a moment.',
+    'this one is the drop again with the floor taken away.',
+    'the quiet stretch. the less that is in here, the bigger what follows feels.',
+    'this is space. it can be very little and still work, so nothing has to change here.'
+  ],
+  outro: [
+    'the way out. parts leaving one at a time is usually enough.',
+    'an outro lets go. it does not need a new idea.',
+    'this is the end of the journey. thinning out is the whole move.',
+    'the last stretch. nothing has to change here.'
+  ]
+}
+
+/** Entering the walk. Every variant states the way out in the same breath
+ * as the offer -- "leaving the walk keeps the map" (spec) is the single
+ * thing a user needs to know before agreeing to be walked anywhere. */
+export const COACH_WALK_START_LINES: readonly string[] = [
+  'i will go through the sections one at a time. leave whenever you like -- the map stays.',
+  'section by section, then. stepping out keeps everything exactly as it is.',
+  'we can walk these in order. the map is yours either way.',
+  'one section at a time from here. leaving does not undo anything.'
+]
+
+/** Leaving the walk, at the end or early. Reports the state of things,
+ * which is a fact, and claims nothing about whether the track is any good. */
+export const COACH_WALK_END_LINES: readonly string[] = [
+  'that is all of them. the map stays exactly as it is.',
+  'end of the walk. everything here is ordinary clips now.',
+  'through to the end. move any of it, or leave it.',
+  'that is the whole shape. the rest is listening.'
+]
+
+/** What the map says about a cell it cannot toggle. Deliberately flat and
+ * unrotated: it is a tooltip on a control, not something sssketchy says. */
+export const COACH_MAP_LOCKED_CELL_HINT =
+  'this clip runs past the edge of the section -- edit it on the timeline'
