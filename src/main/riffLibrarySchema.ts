@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS Stems (
   PresetName TEXT,
   CreatorUserName TEXT
 );
+-- Tidy Up's library population orders by recency (spec: "unconfirmed
+-- first, then most-recently-imported"). Own db only -- an external LORE
+-- archive is read-only and no index can be added there.
+--
+-- HONEST NOTE, because the spec called this ordering "free, being an index
+-- that already exists" and there was no such index (only idx_riffs_owner_
+-- created, on Riffs): tidyUpLibraryStems.ts as shipped does NOT consult
+-- this one either. Its eligible-id pass walks StemFeatureCache keyed on
+-- StemCID and its hydration pass looks Stems up by primary key, so the
+-- recency ordering happens as a JS sort -- it has to, because CreationTime
+-- can live in a read-only external archive while the confirmation that
+-- outranks it lives here. This index is what makes the own-warehouse-only
+-- fallback (a single ORDER BY CreationTime DESC LIMIT, see that module's
+-- own doc comment) an index scan rather than a full sort if the two-pass
+-- shape ever turns out to be too slow at real scale.
+CREATE INDEX IF NOT EXISTS idx_stems_created ON Stems(CreationTime DESC);
 
 CREATE TABLE IF NOT EXISTS Tags (
   RiffCID TEXT PRIMARY KEY,

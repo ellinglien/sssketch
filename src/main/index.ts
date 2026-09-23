@@ -120,6 +120,7 @@ import {
   toggleWarehouseFavourite
 } from './riffLibraryWriter'
 import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
+import { listTidyUpLibraryStems, type TidyUpLibraryStem } from './tidyUpLibraryStems'
 import {
   getStemCategoryRolesForPaths,
   upsertStemCategoryBus,
@@ -1127,6 +1128,15 @@ app.whenReady().then(async () => {
     'get-stem-category-roles',
     (_event, paths: string[]): Record<string, StemRoleLookup> =>
       getStemCategoryRolesForPaths(openOwnRiffLibraryDb(), paths, candidateDbsForRiff())
+  )
+
+  // Tidy Up's LIBRARY population -- unconfirmed first, then most-recently-
+  // imported (see listTidyUpLibraryStems' own doc comment for why that
+  // ordering, and why least-confident-first was rejected as the default).
+  ipcMain.handle(
+    'get-tidy-up-library-stems',
+    (_event, limit: number): Promise<TidyUpLibraryStem[]> =>
+      listTidyUpLibraryStems(openOwnRiffLibraryDb(), candidateDbsForRiff(), limit)
   )
 
   // Batched "what's still missing" for the ambient scans (background-

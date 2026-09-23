@@ -16,6 +16,7 @@ import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
+import type { TidyUpLibraryStem } from '../main/tidyUpLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
 import type { PrewarmScanProgress } from '../main/discoverCandidates'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
@@ -326,6 +327,11 @@ const api = {
     source: string,
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),
+  /** Tidy Up's LIBRARY population: unconfirmed first, then most-recently-
+   * imported, capped at `limit` (one evening's worth, not the whole
+   * backlog). Only stems already feature-scanned AND already on disk. */
+  getTidyUpLibraryStems: (limit: number): Promise<TidyUpLibraryStem[]> =>
+    ipcRenderer.invoke('get-tidy-up-library-stems', limit),
   /** The read side of the same table. A path nobody has confirmed is simply
    * ABSENT from the result -- never an empty string and never a guess, so a
    * caller's fallback chain has something unambiguous to fall through on. */
