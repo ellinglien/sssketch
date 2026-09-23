@@ -23,8 +23,10 @@ Three findings from the walkthrough, each of which sets a rule here:
 
 ## Sources
 
-- The MPA 6-Hour Workflow guide (Elling's, from the earlier pass): build the climax first, then
-  subtract to make every other section.
+- A producer workflow guide Elling read during the earlier pass, summarised here in our own
+  words: build the climax loop first, then subtract from it to make every other section. This is
+  long-standing common practice rather than anything proprietary — the same move shows up in the
+  structure article below and in most "get out of the loop" advice.
 - edmprod.com/beatport-analysis — EDM song structure as paint-by-numbers. Its most useful
   observation for us: hardstyle, future bass and big-room tracks all land on nearly the same
   section ORDER (`A B C D B C D A`). What actually differs by genre is section LENGTH. That is

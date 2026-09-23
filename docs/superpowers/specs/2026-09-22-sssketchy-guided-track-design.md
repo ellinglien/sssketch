@@ -6,9 +6,9 @@ Status: designed in chat over two sessions (2026-09-22), approved section by sec
 ## Goal
 
 Walk a user from an empty project to an exported rough version of a track ("V1"), guided by a
-small pixel character, **sssketchy**. The method is adapted from the MPA 6-Hour Workflow guide
-Elling supplied: build the CLIMAX loop first, then subtract from it to make every other section,
-then polish and export. It replaces "stare at an empty arranger" with a sequence of small,
+small pixel character, **sssketchy**. The method is the common one for getting out of a loop,
+summarised in our own words: build the CLIMAX loop first, then subtract from it to make every
+other section, then polish and export. It replaces "stare at an empty arranger" with a sequence of small,
 skippable steps.
 
 Fits the existing app: Discover already IS a climax-loop builder; the arranger already has the
@@ -143,7 +143,7 @@ persistence above).
 - **Risers into drops.** At every build→drop boundary sssketchy offers to drop a riser, pre-sized
   to the bars leading in, previewable, placed by the same action the right-click menu uses. This
   is the least ambiguous suggestion in the whole method — the section is literally named "drop" —
-  and it is the most effective single move in the MPA workflow. It was out of scope when this
+  and it is one of the most effective single moves available. It was out of scope when this
   spec was first written because risers did not exist yet; they do now.
 - **Balance check:** play the whole track with the gain controls to hand.
 - **Export V1:** the existing export picker (mixdown / Ableton / REAPER / stems), then
