@@ -7,7 +7,7 @@ import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { stemKey, type BusId } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
-import { audibleRisers } from '@shared/riser'
+import { audibleRisers, riserSoundingEndBar } from '@shared/riser'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
@@ -64,6 +64,35 @@ export function loopLengthBarsFor(state: AppState): number {
     ends.push(riser.startBar + riser.lengthBars)
   }
   return ends.length === 0 ? DEFAULT_LOOP_BARS : Math.max(...ends)
+}
+
+/**
+ * How long `risers.wav` has to be -- the arrangement's own length, or the
+ * last riser's SOUNDING end (tail included) if that runs past it.
+ *
+ * Deliberately not loopLengthBarsFor itself, and deliberately not folded
+ * into it. That number is the transport's wrap point and the mixdown's
+ * duration, and riser.ts's riserSoundingEndBar explains at length why it
+ * must NOT grow by a riser's tail: it would push the loop an eighth note
+ * off the grid for every arrangement that happens to end on a riser, and a
+ * riser parked at the very end has its tail cut by the arrangement's end in
+ * playback and in the bounce alike -- the two still agreeing being the half
+ * that matters.
+ *
+ * `risers.wav` is a different kind of file. Nobody plays it: it exists only
+ * to be CROPPED, by .als/.rpp clips that already run to riserSoundingEndBar
+ * (buildAlsXml's buildRiserClip, buildRppProject's buildRiserTracks) because
+ * that is where the riser stops sounding. Rendering only to the arrangement's
+ * end would hand those clips a file that stops before they do -- asking the
+ * other DAW to read past the end of the audio, which is the one thing a clip
+ * pointing at the wrong place has already cost us once.
+ *
+ * Muted risers are ignored, the same way they are absent from the render
+ * itself (audibleRisers).
+ */
+export function riserRenderBarsFor(state: AppState): number {
+  const ends = audibleRisers(state.risers ?? {}).map(riserSoundingEndBar)
+  return Math.max(loopLengthBarsFor(state), ...ends)
 }
 
 /**
@@ -329,7 +358,7 @@ async function renderRisersIfAny(
   client.send('load-project', project)
   const result = (await client.sendAndAwaitType(
     'render-export',
-    { outputPath: join(destDir, fileName), durationBars: loopLengthBarsFor(state) },
+    { outputPath: join(destDir, fileName), durationBars: riserRenderBarsFor(state) },
     'render-export-result',
     RENDER_EXPORT_TIMEOUT_MS
   )) as { success: boolean; error?: string }

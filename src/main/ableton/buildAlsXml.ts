@@ -208,26 +208,67 @@ function warpModeFor(stem: Stem): number {
   return stem.type === 'drums' ? WARP_MODE_BEATS : WARP_MODE_COMPLEX_PRO
 }
 
+/**
+ * Where a point on the ARRANGEMENT lands inside an UNWARPED clip's own audio
+ * file, in the unit Ableton stores that in: SECONDS.
+ *
+ * This is the whole of a real bug, found by Elling in real Ableton on
+ * 2026-09-23 ("in the export, i dont hear the riser... oh wait, there was a
+ * small one. out of two") and worth stating plainly, because the two halves
+ * of an AudioClip are measured in DIFFERENT units and nothing in the XML says
+ * so:
+ *
+ * - `Time`, `CurrentStart`, `CurrentEnd` are the clip's place on the
+ *   ARRANGEMENT, in beats. Always.
+ * - `Loop/LoopStart`, `LoopEnd`, `HiddenLoopStart`, `HiddenLoopEnd` address
+ *   the SAMPLE. For a warped clip they are beats of the clip's own warped
+ *   timeline (the WarpMarkers map them onto the file). For an UNWARPED clip
+ *   there are no warp markers, so there is nothing to map through: Ableton
+ *   stores them as plain seconds into the file.
+ *
+ * Confirmed against a real Ableton 12-authored Set rather than reasoned about
+ * (the 2026-08-04 export design flagged the unwarped representation as its
+ * top unconfirmed risk, and it was in fact wrong): an unwarped clip of a
+ * 99053568-sample / 48kHz file -- 2063.616 seconds -- carries
+ * `LoopEnd = HiddenLoopEnd = 2063.616` and, at the Set's 120bpm,
+ * `CurrentEnd = 4127.232`, i.e. exactly the same instant expressed once in
+ * seconds and once in beats.
+ *
+ * Writing beats here instead reads the file `projectBpm/60` times too far in:
+ * harmless while the offset is near zero (every unwarped clip this exporter
+ * had until the toolkit landed was a one-shot starting at its own trim, i.e.
+ * 0), and silent audio the moment a clip addresses a late part of a long
+ * file -- which is exactly what a riser at bar 72 of `risers.wav` does.
+ */
+function sampleSecondsAtBeat(arrangementBeats: number, projectBpm: number): number {
+  return projectBpm > 0 ? (arrangementBeats * 60) / projectBpm : 0
+}
+
 interface LoopWindow {
-  loopStartBeats: number
-  loopEndBeats: number
+  /** The clip's start INSIDE its own audio file. Beats of warped time when
+   * `isWarped`, seconds when not -- see sampleSecondsAtBeat. */
+  loopStart: number
+  /** Its end inside the file, in the same unit as loopStart. */
+  loopEnd: number
   loopOn: boolean
   /** Added to rifff.startBar (in BARS, not beats) for the clip's own Time
    * attribute -- 0 for one-shots (no crop concept applies to them), raw
    * (unwrapped) leftCropBars for everything else. */
   timeShiftBars: number
   /** The clip's own CurrentEnd -- its arrangement-visible duration, in
-   * beats. NOT the same thing as loopEndBeats (see the doc comment below):
-   * for a tiled (non-one-shot) stem this can be far longer than one loop
-   * cycle, since Ableton repeats [loopStartBeats, loopEndBeats) to fill it. */
+   * BEATS, whether warped or not (see sampleSecondsAtBeat: the arrangement
+   * half of a clip is always beats). NOT the same thing as loopEnd: for a
+   * tiled (non-one-shot) stem this can be far longer than one loop cycle,
+   * since Ableton repeats [loopStart, loopEnd) to fill it. */
   currentEndBeats: number
-  /** Used for HiddenLoopEnd. For a tiled (non-one-shot) stem, the sample's
-   * own real, full extent in beats -- stem.barLength*4 (see nativeBpmFor's
-   * doc comment for why that's exact, not approximate). For a one-shot,
-   * tracks loopEndBeats (the trim end) instead -- one-shots are never
-   * tile-bounded, so this must stay a no-op relative to their own
-   * LoopEnd/CurrentEnd (see computeLoopWindow's one-shot branch). */
-  hiddenLoopEndBeats: number
+  /** Used for HiddenLoopEnd, in the same unit as loopStart/loopEnd. For a
+   * tiled (non-one-shot) stem, the sample's own real, full extent in beats
+   * -- stem.barLength*4 (see nativeBpmFor's doc comment for why that's
+   * exact, not approximate). For a one-shot, tracks loopEnd (the trim end)
+   * instead -- one-shots are never tile-bounded, so this must stay a no-op
+   * relative to their own LoopEnd/CurrentEnd (see computeLoopWindow's
+   * one-shot branch). */
+  hiddenLoopEnd: number
   /** Whether this clip should be warped at all. true for a tiled
    * (non-one-shot) stem -- warping is what lets a short native-tempo file
    * play at the project's own tempo. false for a one-shot: forcing
@@ -238,9 +279,9 @@ interface LoopWindow {
    * anyway collapses every untrimmed one-shot's played length to exactly
    * one bar regardless of its real duration, then force-stretches the
    * whole sample to fit. Unwarped, the audio plays at its own true native
-   * speed; loopStartBeats/loopEndBeats/currentEndBeats above are derived
-   * from real seconds via the PROJECT's own current tempo instead (see
-   * the one-shot branch below), which only changes how much
+   * speed: loopStart/loopEnd/hiddenLoopEnd above become plain seconds into
+   * the file (sampleSecondsAtBeat) and currentEndBeats is derived from them
+   * via the PROJECT's own current tempo instead, which only changes how much
    * arrangement-timeline SPACE the clip occupies, never the audio's own
    * pitch/speed. */
   isWarped: boolean
@@ -297,15 +338,19 @@ function computeLoopWindow(
 ): LoopWindow {
   if (stem.oneShot) {
     const projectBeatsPerSecond = projectBpm / 60
-    const loopStartBeats = (stem.trimStartSec ?? 0) * projectBeatsPerSecond
-    const loopEndBeats = (stem.trimEndSec ?? stem.durationSec) * projectBeatsPerSecond
+    // A one-shot is UNWARPED, so its LoopStart/LoopEnd are seconds into its
+    // own file -- which its trim already is, with no conversion at all (see
+    // sampleSecondsAtBeat). Only CurrentEnd, being an ARRANGEMENT length,
+    // goes through the project's tempo.
+    const loopStartSec = stem.trimStartSec ?? 0
+    const loopEndSec = stem.trimEndSec ?? stem.durationSec
     return {
-      loopStartBeats,
-      loopEndBeats,
+      loopStart: loopStartSec,
+      loopEnd: loopEndSec,
       loopOn: false,
       timeShiftBars: 0,
-      currentEndBeats: loopEndBeats,
-      hiddenLoopEndBeats: loopEndBeats,
+      currentEndBeats: loopEndSec * projectBeatsPerSecond,
+      hiddenLoopEnd: loopEndSec,
       isWarped: false
     }
   }
@@ -313,8 +358,8 @@ function computeLoopWindow(
   const hiddenLoopEndBeats = stem.barLength * 4
   const wrappedLeftCropBars = ((leftCropBars % stem.barLength) + stem.barLength) % stem.barLength
   return {
-    loopStartBeats: wrappedLeftCropBars * 4,
-    loopEndBeats: hiddenLoopEndBeats,
+    loopStart: wrappedLeftCropBars * 4,
+    loopEnd: hiddenLoopEndBeats,
     loopOn: true,
     timeShiftBars: leftCropBars,
     // Assumes leftCropBars < playedBars, so this never goes to zero/
@@ -326,7 +371,7 @@ function computeLoopWindow(
     // flagging the assumption rather than silently tolerating a negative
     // CurrentEnd.
     currentEndBeats: (playedBars - leftCropBars) * 4,
-    hiddenLoopEndBeats,
+    hiddenLoopEnd: hiddenLoopEndBeats,
     isWarped: true
   }
 }
@@ -631,15 +676,8 @@ function buildStemClips(
 ): StemClipsResult {
   const trackName = `${rifff.name} - ${stem.name}`
   const nativeBpm = nativeBpmFor(stem)
-  const {
-    loopStartBeats,
-    loopEndBeats,
-    loopOn,
-    timeShiftBars,
-    currentEndBeats,
-    hiddenLoopEndBeats,
-    isWarped
-  } = computeLoopWindow(stem, leftCropBars, playedBars, projectBpm)
+  const { loopStart, loopEnd, loopOn, timeShiftBars, currentEndBeats, hiddenLoopEnd, isWarped } =
+    computeLoopWindow(stem, leftCropBars, playedBars, projectBpm)
 
   // CurrentStart/CurrentEnd are ABSOLUTE arrangement-beat positions -- the
   // same coordinate space as Time, NOT a duration relative to it. See the
@@ -669,22 +707,21 @@ function buildStemClips(
     const loopBody = childArray(loop, 'Loop')
     // For a tiled (non-one-shot) stem, a segment resuming after a muted gap
     // must continue the tile's phase as if the gap never happened -- NOT
-    // restart the loop from loopStartBeats -- or the audio would jump phase
-    // right after every mute gap. A one-shot has no tiling concept at all
-    // (isWarped=false), so it just keeps the same loopStartBeats/loopEndBeats
-    // computed once above for every segment.
-    const segLoopStartBeats = isWarped
-      ? tilePhaseAtElapsedBeats(
-          loopStartBeats,
-          segment.segStartBeats - clipStartBeats,
-          tileLengthBeats
-        )
-      : loopStartBeats
-    setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(segLoopStartBeats))
-    setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndBeats))
+    // restart the loop from loopStart -- or the audio would jump phase right
+    // after every mute gap. A one-shot has no tiling concept at all
+    // (isWarped=false), so it just keeps the same loopStart/loopEnd computed
+    // once above for every segment -- which for it are SECONDS into the file
+    // rather than beats (see sampleSecondsAtBeat). The tile-phase branch is
+    // the only one that can be in beats, and it is also the only one that
+    // ever runs on a warped clip, so the two units never meet.
+    const segLoopStart = isWarped
+      ? tilePhaseAtElapsedBeats(loopStart, segment.segStartBeats - clipStartBeats, tileLengthBeats)
+      : loopStart
+    setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(segLoopStart))
+    setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEnd))
     setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', loopOn ? 'true' : 'false')
     setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
-    setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEndBeats))
+    setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(hiddenLoopEnd))
 
     setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', isWarped ? 'true' : 'false')
 
@@ -800,15 +837,18 @@ function buildBakedStemClip(
   setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(endBeats))
 
   const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
-  // For an UNWARPED clip these are sample time expressed in beats at the
-  // project's own tempo (the same convention computeLoopWindow's one-shot
-  // branch uses). The baked file's own time t seconds is arrangement beat
-  // t * bps, so "where in the file does this clip start" is just its start.
-  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(startBeats))
-  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(endBeats))
+  // For an UNWARPED clip these address the sample in SECONDS, not beats (see
+  // sampleSecondsAtBeat -- getting that wrong is what silenced a riser in
+  // real Ableton). The baked render is laid out on the arrangement's own
+  // timeline, so "where in the file does this clip start" is still just its
+  // own start -- only said in the other unit.
+  const loopStartSec = sampleSecondsAtBeat(startBeats, projectBpm)
+  const loopEndSec = sampleSecondsAtBeat(endBeats, projectBpm)
+  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(loopStartSec))
+  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndSec))
   setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', 'false')
   setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
-  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(loopEndSec))
   setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', 'false')
 
   const relativePath = join('Samples', 'Imported', baked.fileName)
@@ -1058,6 +1098,7 @@ function buildRiserClip(
   riser: RiserClip,
   fileName: string,
   outputDir: string,
+  projectBpm: number,
   colorIndex: number
 ): AlsNode {
   const clip = cloneNode(canonicalClipTemplate)
@@ -1078,11 +1119,19 @@ function buildRiserClip(
   setAttr(findChild(clipBody, 'CurrentStart')!, '@_Value', String(startBeats))
   setAttr(findChild(clipBody, 'CurrentEnd')!, '@_Value', String(endBeats))
   const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
-  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(startBeats))
-  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(endBeats))
+  // SECONDS, not beats: this clip is unwarped, so Loop*/HiddenLoop* address
+  // risers.wav in real time (sampleSecondsAtBeat). Writing beats here is the
+  // bug Elling heard -- at 72bpm a riser at bar 72 asked Ableton for second
+  // 288 of a file whose last audio is at second 267, and the clip came up
+  // empty and silent while an earlier riser, whose wrong offset happened to
+  // still land inside its own swell, went on sounding.
+  const loopStartSec = sampleSecondsAtBeat(startBeats, projectBpm)
+  const loopEndSec = sampleSecondsAtBeat(endBeats, projectBpm)
+  setAttr(findChild(loopBody, 'LoopStart')!, '@_Value', String(loopStartSec))
+  setAttr(findChild(loopBody, 'LoopEnd')!, '@_Value', String(loopEndSec))
   setAttr(findChild(loopBody, 'LoopOn')!, '@_Value', 'false')
   setAttr(findChild(loopBody, 'HiddenLoopStart')!, '@_Value', '0')
-  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(endBeats))
+  setAttr(findChild(loopBody, 'HiddenLoopEnd')!, '@_Value', String(loopEndSec))
   setAttr(findChild(clipBody, 'IsWarped')!, '@_Value', 'false')
   const relativePath = join('Samples', 'Imported', fileName)
   const sampleRef = findChild(clipBody, 'SampleRef')!
@@ -1357,6 +1406,7 @@ export function buildAlsXml(
           riser,
           riserFileName,
           outputDir,
+          state.bpm,
           ABLETON_BUS_COLORS.aux
         )
       )

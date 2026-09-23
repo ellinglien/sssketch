@@ -14,6 +14,7 @@ import {
 } from './alsXmlHelpers'
 import type { AppState } from '../../renderer/src/state/store'
 import type { Rifff } from '@shared/types'
+import type { RiserClip } from '@shared/riser'
 
 // Mirrors engineProcess.test.ts / pluginScan.test.ts's own pattern for
 // reading a real sibling file from a test -- __dirname isn't reliably
@@ -395,16 +396,16 @@ describe('buildAlsXml', () => {
 
     expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
     expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
-    // 0.5s and 1.5s at 120bpm (2 beats/sec) = 1 beat and 3 beats -- via the
-    // PROJECT's tempo, not any per-stem "native" tempo derived from the
-    // cosmetic barLength: 1.
-    expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(1, 10)
-    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
-    // CurrentEnd is absolute: Time (startBar=4 * 4 = 16) + 3 relative beats.
+    // An unwarped clip addresses its sample in SECONDS, so the trim goes
+    // through unconverted -- see sampleSecondsAtBeat in buildAlsXml.ts.
+    expect(Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value'])).toBeCloseTo(0.5, 10)
+    expect(Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value'])).toBeCloseTo(1.5, 10)
+    // CurrentEnd is the ARRANGEMENT half, so it IS beats: Time (startBar=4 *
+    // 4 = 16) + 1.5s at 120bpm (2 beats/sec) = 3 relative beats.
     expect(Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value'])).toBeCloseTo(19, 10)
-    // HiddenLoopEnd must track the trim end (loopEndBeats), NOT
-    // stem.barLength*4 -- one-shots are never tile-bounded.
-    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(3, 10)
+    // HiddenLoopEnd must track the trim end, NOT stem.barLength*4 --
+    // one-shots are never tile-bounded.
+    expect(Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])).toBeCloseTo(1.5, 10)
   })
 
   it('does NOT collapse an untrimmed one-shot to exactly one bar regardless of its real duration', () => {
@@ -1341,6 +1342,19 @@ function findAudioClip(audioTrack: ReturnType<typeof findChild>): AlsNode {
   return findChild(childArray(events, 'Events'), 'AudioClip')!
 }
 
+/** Every AudioClip on one track, in document order -- findAudioClip's
+ * sibling, for the cases where what's under test is how several clips on one
+ * physical track relate to each other. */
+function findAudioClips(audioTrack: AlsNode): AlsNode[] {
+  const body = childArray(audioTrack, 'AudioTrack')
+  const deviceChain = findChild(body, 'DeviceChain')!
+  const mainSeq = findChild(childArray(deviceChain, 'DeviceChain'), 'MainSequencer')!
+  const sample = findChild(childArray(mainSeq, 'MainSequencer'), 'Sample')!
+  const arrangerAuto = findChild(childArray(sample, 'Sample'), 'ArrangerAutomation')!
+  const events = findChild(childArray(arrangerAuto, 'ArrangerAutomation'), 'Events')!
+  return findAllChildren(childArray(events, 'Events'), 'AudioClip')
+}
+
 // Navigates <trackTag> > DeviceChain > Mixer > Sends and returns its
 // TrackSendHolder Ids in document order -- shared by
 // AudioTrack/GroupTrack/ReturnTrack, which all share this same shape.
@@ -1472,9 +1486,12 @@ describe('the built-in sound toolkit', () => {
       const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
       expect(attrs(findChild(loopBody, 'LoopOn')!)['@_Value']).toBe('false')
       // The render is laid out on the arrangement's own timeline, so "where
-      // in the file" is just "where on the timeline".
-      expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('32')
-      expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('56')
+      // in the file" is just "where on the timeline" -- but said in SECONDS,
+      // because the clip is unwarped (see sampleSecondsAtBeat). Beats 32 and
+      // 56 at this project's 120bpm are seconds 16 and 28.
+      expect(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']).toBe('16')
+      expect(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']).toBe('28')
+      expect(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value']).toBe('28')
       // The gain dial and the volume curve are both already in the audio.
       expect(attrs(findChild(clipBody, 'SampleVolume')!)['@_Value']).toBe('1')
       expect(attrs(findChild(clipBody, 'Fade')!)['@_Value']).toBe('false')
@@ -1783,6 +1800,79 @@ describe('the built-in sound toolkit', () => {
           join('Samples', 'Imported', 'risers.wav')
         )
       }
+    })
+
+    // The bug Elling hit in real Ableton on 2026-09-23: "in the export, i
+    // dont hear the riser... oh wait, there was a small one. out of two".
+    // These are his actual numbers, read back off the .als and the
+    // risers.wav that export produced -- 72bpm, risers at bar 24 and bar 72,
+    // eight bars each. risers.wav had BOTH risers in it, at second 80 and
+    // second 240; the clips asked Ableton for second 96 and second 288,
+    // because they were written in beats. The first happened to still land
+    // inside its own swell (80..106.7s) and sounded; the second was 21
+    // seconds past the last audio in the file, and Ableton drew it as an
+    // empty clip and played nothing.
+    it('crops a riser out of risers.wav in seconds, not beats -- unwarped clips', () => {
+      const riserAt = (id: string, startBar: number): RiserClip => ({
+        id,
+        channelId: id,
+        startBar,
+        lengthBars: 8,
+        startCutoffValue: 0.3,
+        endCutoffValue: 0.95,
+        curve: [],
+        level: 0.6,
+        name: id,
+        muted: false
+      })
+      const state = toolkitState({
+        bpm: 72,
+        risers: { early: riserAt('early', 24), late: riserAt('late', 72) }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map(), riserFileName: 'risers.wav' }
+      })
+      const { tracks } = tracksOf(xml)
+      const riserTrack = findAllChildren(tracks, 'AudioTrack').find((t) => {
+        const name = findChild(childArray(t, 'AudioTrack'), 'Name')!
+        return attrs(findChild(childArray(name, 'Name'), 'EffectiveName')!)['@_Value'] === 'risers'
+      })!
+      // 72bpm: one bar is 10/3 seconds, one beat is 5/6 of a second.
+      const secPerBar = (60 / 72) * 4
+      const audioClips = findAudioClips(riserTrack)
+      expect(audioClips.length).toBe(2)
+
+      const [early, late] = audioClips.map((clip) => {
+        const clipBody = childArray(clip, 'AudioClip')
+        const loopBody = childArray(findChild(clipBody, 'Loop')!, 'Loop')
+        return {
+          time: Number(attrs(clip)['@_Time']),
+          currentStart: Number(attrs(findChild(clipBody, 'CurrentStart')!)['@_Value']),
+          currentEnd: Number(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']),
+          loopStart: Number(attrs(findChild(loopBody, 'LoopStart')!)['@_Value']),
+          loopEnd: Number(attrs(findChild(loopBody, 'LoopEnd')!)['@_Value']),
+          hiddenLoopEnd: Number(attrs(findChild(loopBody, 'HiddenLoopEnd')!)['@_Value'])
+        }
+      })
+
+      // The ARRANGEMENT half stays in beats, exactly as before.
+      expect(early.time).toBe(96)
+      expect(early.currentStart).toBe(96)
+      expect(early.currentEnd).toBeCloseTo(128.5, 10)
+      expect(late.time).toBe(288)
+      expect(late.currentStart).toBe(288)
+      expect(late.currentEnd).toBeCloseTo(320.5, 10)
+
+      // The SAMPLE half is seconds into risers.wav -- which is laid out on
+      // the arrangement's own timeline, so it is each riser's own start and
+      // sounding end, in real time.
+      expect(early.loopStart).toBeCloseTo(24 * secPerBar, 10)
+      expect(early.loopEnd).toBeCloseTo(32.125 * secPerBar, 10)
+      expect(early.hiddenLoopEnd).toBeCloseTo(32.125 * secPerBar, 10)
+      expect(late.loopStart).toBeCloseTo(72 * secPerBar, 10)
+      expect(late.loopEnd).toBeCloseTo(80.125 * secPerBar, 10)
+      expect(late.hiddenLoopEnd).toBeCloseTo(80.125 * secPerBar, 10)
     })
 
     it('gives a muted riser no ableton clip, so no risers track at all', () => {

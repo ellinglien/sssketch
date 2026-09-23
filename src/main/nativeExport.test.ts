@@ -55,6 +55,7 @@ import { buildEngineProject } from '@shared/buildEngineProject'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loopLengthBarsFor,
+  riserRenderBarsFor,
   nativeExport,
   renderStemsToDir,
   renderStemTracksToDir,
@@ -1112,6 +1113,31 @@ describe('risers in an isolated render', () => {
 
   it('leaves a riser that ends inside the arrangement alone', () => {
     expect(loopLengthBarsFor(stateWith({ risers: { ri1: { ...riser, startBar: 0 } } }))).toBe(12)
+  })
+
+  it('renders risers.wav far enough to hold the last riser tail the exporters crop to', () => {
+    // The transport's own wrap stays on the grid at bar 16 (above), but
+    // risers.wav exists only to be cropped by .als/.rpp clips that run to
+    // riserSoundingEndBar -- so it has to reach that, or the last riser's
+    // clip would point past the end of its own file.
+    expect(riserRenderBarsFor(stateWith({ risers: { ri1: riser } }))).toBe(16.125)
+  })
+
+  it('leaves the riser render at the arrangement length when no tail runs past it', () => {
+    // This riser ends at bar 4, tail included -- nowhere near the rifff
+    // fixture's own bar 12, so there is nothing extra to render.
+    expect(riserRenderBarsFor(stateWith({ risers: { ri1: { ...riser, startBar: 0 } } }))).toBe(12)
+  })
+
+  it('renders nothing extra for a project with no risers at all', () => {
+    expect(riserRenderBarsFor(stateWith({}))).toBe(loopLengthBarsFor(stateWith({})))
+  })
+
+  it('adds no tail for a muted riser, which is not in risers.wav to begin with', () => {
+    // Still 16, not 16.125: loopLengthBarsFor counts the riser's own extent
+    // whether or not it sounds (the row is on the timeline either way), but
+    // there is no tail to make room for when nothing is going to be rendered.
+    expect(riserRenderBarsFor(stateWith({ risers: { ri1: { ...riser, muted: true } } }))).toBe(16)
   })
 
   it('withoutRisers empties the risers and touches nothing else', () => {

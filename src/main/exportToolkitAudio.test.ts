@@ -71,6 +71,21 @@ function renderStats(path: string): { peak: number; frames: number } {
   return { peak, frames: (buf.length - start) / 4 }
 }
 
+/** Peak absolute sample inside one half-open frame window of a rendered
+ * (16-bit stereo) WAV -- what "is there actually audio HERE" needs, as
+ * opposed to renderStats's whole-file peak. */
+function peakBetweenFrames(path: string, fromFrame: number, toFrame: number): number {
+  const buf = readFileSync(path)
+  const start = findDataChunkOffset(buf)
+  let peak = 0
+  const first = start + fromFrame * 4
+  const last = Math.min(buf.length, start + toFrame * 4)
+  for (let i = Math.max(start, first); i + 1 < last; i += 2) {
+    peak = Math.max(peak, Math.abs(buf.readInt16LE(i)) / 32767)
+  }
+  return peak
+}
+
 function oneBarState(stemPath: string, overrides: Partial<AppState> = {}): AppState {
   const rifff: Rifff = {
     groupId: 'r1',
@@ -217,4 +232,40 @@ describe('renderToolkitAudio', () => {
       rmSync(autoDir, { recursive: true, force: true })
     }
   }, 60000)
+
+  // The bug Elling hit in real Ableton: "in the export, i dont hear the
+  // riser", then "oh wait, there was a small one. out of two" -- two riser
+  // clips in the arrangement, the later one drawn with no waveform under it
+  // at all. Every riser lands in ONE risers.wav laid out on the
+  // arrangement's own timeline, so this is the one test that can tell
+  // "the render is missing it" apart from "the clip crops the wrong place".
+  it('puts every riser in risers.wav at its own place on the timeline', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))
+    const outDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-out-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.5, 44100 * 4)
+      // Two risers, on their own rows (one row per riser, as of 2026-09-23),
+      // far apart: bar 0 and bar 6. At bpm 60 a bar is exactly 4s.
+      const state = oneBarState(stemPath, {
+        risers: {
+          ri1: { ...riser, id: 'ri1', channelId: 'c1', startBar: 0 },
+          ri2: { ...riser, id: 'ri2', channelId: 'c2', startBar: 6, name: 'riser 2' }
+        }
+      })
+
+      const audio = await renderToolkitAudio(state, outDir, 'bake')
+
+      const path = join(outDir, 'Samples', 'Imported', audio.riserFileName!)
+      // Long enough to hold the second riser's own bar (bars 6..7 = 24s..28s)
+      // AND its tail (RISER_TAIL_BARS past that = 28.5s), because that is
+      // where the .als/.rpp clips cropped out of this file stop.
+      expect(renderStats(path).frames).toBeGreaterThanOrEqual(44100 * 28.5)
+      expect(peakBetweenFrames(path, 0, 44100 * 4)).toBeGreaterThan(0.05)
+      expect(peakBetweenFrames(path, 44100 * 24, 44100 * 28)).toBeGreaterThan(0.05)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  }, 120000)
 })

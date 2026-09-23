@@ -9,7 +9,7 @@ import { audibleRisers } from '@shared/riser'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
-import { loopLengthBarsFor, riserOnlyState, soloState, withoutRisers } from './nativeExport'
+import { riserOnlyState, riserRenderBarsFor, soloState, withoutRisers } from './nativeExport'
 
 // Same ceiling nativeExport.ts uses for a render-export round trip, and for
 // the same reason -- see RENDER_EXPORT_TIMEOUT_MS's own comment there.
@@ -230,7 +230,10 @@ export async function renderToolkitAudio(
         'render-export',
         {
           outputPath: join(samplesDir, riserFileName),
-          durationBars: loopLengthBarsFor(state)
+          // riserRenderBarsFor, not loopLengthBarsFor: the clips cropped out
+          // of this file run to each riser's SOUNDING end, tail included, so
+          // the file has to reach that -- see its own doc comment.
+          durationBars: riserRenderBarsFor(state)
         },
         'render-export-result',
         RENDER_EXPORT_TIMEOUT_MS
