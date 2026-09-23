@@ -32,6 +32,7 @@ import {
 } from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { formatBpm } from '@shared/format'
+import { libraryModeLabel, type LibraryMode } from '@shared/libraryEntryPoints'
 import { bytesLabel } from '@shared/visuals'
 import { stemKey, type Rifff } from '@shared/types'
 import type { ProjectRef } from '@shared/types'
@@ -185,23 +186,27 @@ export function LibraryBrowser({
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
-  /** Which tab to open on, overriding the "open where you left off" rule
-   * below. Set only by the guided flow, which always means Discover -- on
-   * an empty project the default would land on 'browse', where the add row
-   * a phase-one step just armed is not even mounted. */
-  initialMode?: 'browse' | 'discover'
+  /** Which half to open on. Required, and always honoured: the shelf now has
+   * one button per half (see @shared/libraryEntryPoints), so the half a user
+   * lands on is exactly the button they pressed -- never a guess.
+   *
+   * This replaced an "open where you left off" rule that inferred the half
+   * from whether discoverSlots already held real content ("return to working
+   * on the group of stems i had before", 2026-09-17). That intent survives
+   * intact without the inference: the slots themselves live in App.tsx and
+   * outlive this modal, so pressing `discover` still returns you to the loop
+   * you were building. What the inference can no longer do is override a
+   * user who deliberately pressed `import`. */
+  initialMode: LibraryMode
 }): React.JSX.Element {
   const riffFavourites = useRiffFavourites()
   const { toggleRiffFavourite } = useRiffFavouritesActions()
-  // A non-empty discoverSlots at mount time now means either a fresh
-  // Shelf-triggered seed (App.tsx's own openRiffLibraryWithDiscoverSeed
-  // just populated it) OR real content left over from a previous session
-  // that was never explicitly cleared -- both cases should open on the
-  // 'discover' tab, matching direct request 2026-09-17 ("return to
-  // working on the group of stems i had before").
-  const [libraryMode, setLibraryMode] = useState<'browse' | 'discover'>(
-    () => initialMode ?? (discoverHasRealContent(discoverSlots) ? 'discover' : 'browse')
-  )
+  // Still internal state, not just a prop read: seeding Discover from a
+  // browsed riff (seedDiscoverFromBrowseRiff below) flips it mid-session,
+  // and that carries a riff with it -- see the header eyebrow's own note on
+  // why that content-carrying move is the ONLY way across, now that the tab
+  // pair is gone.
+  const [libraryMode, setLibraryMode] = useState<LibraryMode>(() => initialMode)
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -1507,38 +1512,25 @@ export function LibraryBrowser({
             borderBottom: '1px solid var(--ra-border)'
           }}
         >
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => setLibraryMode('browse')}
-              style={{
-                fontFamily: 'inherit',
-                fontSize: 10,
-                padding: 'var(--ra-s-0) 8px',
-                background: libraryMode === 'browse' ? 'var(--ra-stretch-on-bg)' : 'transparent',
-                border: `1px solid ${libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                color: libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                fontWeight: libraryMode === 'browse' ? 700 : 400,
-                cursor: 'pointer'
-              }}
-            >
-              browse
-            </button>
-            <button
-              onClick={() => setLibraryMode('discover')}
-              style={{
-                fontFamily: 'inherit',
-                fontSize: 10,
-                padding: 'var(--ra-s-0) 8px',
-                background: libraryMode === 'discover' ? 'var(--ra-stretch-on-bg)' : 'transparent',
-                border: `1px solid ${libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                color: libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                fontWeight: libraryMode === 'discover' ? 700 : 400,
-                cursor: 'pointer'
-              }}
-            >
-              discover
-            </button>
-          </div>
+          {/* The tab pair that used to sit here is gone -- the shelf's two
+              buttons are the two doors now (direct request, 2026-09-23:
+              "import and discover ... i think they should be distinct
+              buttons instead of tabs"), so this is a plain eyebrow naming
+              the half you are in, not a control. It is the only thing on
+              screen that says which half that is, and it is deliberately
+              named after the BUTTON you pressed, not the internal mode id
+              ('browse' reads back as "import" -- libraryModeLabel).
+
+              Nothing generic replaces the tabs as a way across mid-session,
+              and that is the call, not an omission: the only crossing that
+              ever carried anything is browse -> discover, and it already
+              exists as its own thing ("seed discover with this", on a
+              selected riff below) because it brings that riff's stems with
+              it. The reverse carries nothing at all. A bare "go to the
+              other half" control would just be the tab pair under a new
+              name, and the two buttons that replaced it are one escape and
+              one click away. */}
+          <span className="ra-eyebrow">{libraryModeLabel(libraryMode)}</span>
           <button
             onClick={attemptClose}
             aria-label="close library browser"

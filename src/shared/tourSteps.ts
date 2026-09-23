@@ -51,9 +51,13 @@ export interface TourStep {
  */
 export const TOUR_STEPS: readonly TourStep[] = [
   {
+    // Anchored on the pair of shelf buttons, not just one of them -- import
+    // and discover became two separate doors into the riff library on
+    // 2026-09-23 (they used to be one button plus a tab pair inside it), and
+    // both are "getting audio in".
     selector: '[data-tour-id="tour-import"]',
     title: 'getting audio in',
-    body: 'drag a rifff folder onto the shelf, or click import to browse Endlesss directly.'
+    body: 'drag a rifff folder onto the shelf, or use import to browse your jams and discover to build a loop.'
   },
   // These two share one anchor ON PURPOSE, and it is not a mistake to fix by
   // inventing a second attribute: auto-arrange and tidy up are both entries

@@ -61,6 +61,11 @@ import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay } from './components/TourOverlay'
 import { TOUR_STEPS } from '@shared/tourSteps'
+import {
+  libraryModeForEntryPoint,
+  type LibraryEntryPoint,
+  type LibraryMode
+} from '@shared/libraryEntryPoints'
 import { SssketchyCoach } from './components/SssketchyCoach'
 import { type CoachMoveAction } from '@shared/coachSteps'
 import { type CoachSlotSnapshot } from '@shared/coachClimax'
@@ -1704,16 +1709,27 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(false)
     setLibraryBrowserOpen(true)
   }
-  // Which tab the riff library should open on, when the guided flow is the
-  // one opening it. Null means "decide as usual" (LibraryBrowser's own
-  // open-where-you-left-off rule). Consumed once per open, because
-  // LibraryBrowser mounts fresh every time.
-  const [riffLibraryInitialMode, setRiffLibraryInitialMode] = useState<
-    'browse' | 'discover' | null
-  >(null)
-  function openRiffLibrary(): void {
+  // Which half the riff library should open on. No longer nullable: every
+  // path that opens the browser now names its half outright (the two shelf
+  // buttons via openRiffLibrary just below, the Discover-seed path further
+  // down), so there is no "decide as usual" case left for the browser to
+  // infer -- see LibraryBrowser's own initialMode doc for what that
+  // inference was and why losing it is the point. Consumed once per open,
+  // because LibraryBrowser mounts fresh every time; the initial value here
+  // is never observed, since nothing renders the browser until an opener
+  // has run.
+  const [riffLibraryInitialMode, setRiffLibraryInitialMode] = useState<LibraryMode>('browse')
+  /**
+   * The one opener behind both shelf buttons. Each door names the half it
+   * opens on (libraryModeForEntryPoint) rather than leaving it to the
+   * browser's own "open where you left off" rule -- the whole point of
+   * splitting the single import button in two is that a button takes you
+   * straight where you meant to go. Direct request, 2026-09-23: "import and
+   * discover ... i think they should be distinct buttons instead of tabs."
+   */
+  function openRiffLibrary(entry: LibraryEntryPoint): void {
     setLibraryBrowserOpen(false)
-    setRiffLibraryInitialMode(null)
+    setRiffLibraryInitialMode(libraryModeForEntryPoint(entry))
     setRiffLibraryOpen(true)
   }
 
@@ -1793,7 +1809,13 @@ function Frame(): React.JSX.Element {
       return
     }
     setLibraryBrowserOpen(false)
-    setRiffLibraryInitialMode(null)
+    // Says 'discover' outright rather than leaving the browser to infer it
+    // from the slots seeded on the next line. That inference used to be the
+    // only signal and got this wrong once already (see discoverSeed.ts's own
+    // note on the narrower `candidate !== null` check landing a seeded open
+    // on 'browse'); now that every opener names its half, this one should
+    // too.
+    setRiffLibraryInitialMode('discover')
     setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
     setDiscoverChaos(35)
     setDiscoverUndoStack([[]])
@@ -2527,7 +2549,7 @@ function Frame(): React.JSX.Element {
           onDisableGatedRecording={() => void disableGatedRecording()}
           onStop={() => void handleStop()}
           onShowWelcome={showWelcomeAgain}
-          onOpenEndlesss={openRiffLibrary}
+          onOpenEndlesss={() => openRiffLibrary('import')}
           onStartTour={replayTour}
           discoverConsented={discoverConsented}
           toggleDiscoverConsent={toggleDiscoverConsent}
@@ -2677,7 +2699,7 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
-            initialMode={riffLibraryInitialMode ?? undefined}
+            initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
           />
         )}
@@ -2840,7 +2862,7 @@ function Frame(): React.JSX.Element {
             }}
             onOpenEndlesss={(dontShowAgain) => {
               dismissOnboarding(dontShowAgain)
-              openRiffLibrary()
+              openRiffLibrary('import')
             }}
             onStartTour={(dontShowAgain) => {
               const hasExistingContent = Object.keys(state.rifffs).length > 0

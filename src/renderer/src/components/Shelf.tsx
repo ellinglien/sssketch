@@ -14,6 +14,7 @@ import {
 } from '../audio/previewLoop'
 import { stemKey } from '@shared/types'
 import type { Rifff } from '@shared/types'
+import { LIBRARY_ENTRY_POINTS, type LibraryEntryPoint } from '@shared/libraryEntryPoints'
 import { formatBpm } from '@shared/format'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPrompt'
 import { importPathsWithChoice } from '../audio/importPathsWithChoice'
@@ -30,12 +31,18 @@ export function Shelf({
   onSeedDiscover
 }: {
   onImported: (groupId: string) => void
-  /** Opens whichever library browser is the default entry point -- the
-   * Endlesss login tab, not LORE, per direct feedback (LORE's warehouse
-   * path only ever resolves on one specific machine; Endlesss login works
-   * for anyone). LORE stays reachable via that browser's own "switch to
-   * lore" link. */
-  onOpenLibrary: () => void
+  /** Opens the riff library on the half the pressed button names -- the two
+   * buttons in this row's tail are the app's two distinct doors into it
+   * (LIBRARY_ENTRY_POINTS), replacing the single "import" button plus the
+   * browse/discover tab pair that used to live inside the browser's own
+   * header. Direct request, 2026-09-23: "import and discover ... i think
+   * they should be distinct buttons instead of tabs."
+   *
+   * Either door lands on the Endlesss login, not LORE, per earlier direct
+   * feedback (LORE's warehouse path only ever resolves on one specific
+   * machine; Endlesss login works for anyone). LORE stays reachable via that
+   * browser's own "switch to lore" link. */
+  onOpenLibrary: (entry: LibraryEntryPoint) => void
   /** Seeds Discover's own looper with this riff's stems, then opens it
    * already showing them -- direct request, 2026-09-16 (right-click a
    * Shelf tile). App.tsx owns the actual seeding + opening (it's the one
@@ -437,28 +444,44 @@ export function Shelf({
           >
             +
           </div>
-          <button
-            onClick={onOpenLibrary}
-            data-tour-id="tour-import"
-            style={{
-              // Direct follow-up report, 2026-09-17 (screenshot): the first
-              // "a bunch bigger" pass (height: 36) pushed this row's own
-              // content just past its maxHeight: 100 cap above, triggering
-              // an unwanted scrollbar on a row with nothing actually left
-              // to scroll to -- 28 is shorter than TILE_SIZE (42, the "+"
-              // drop-zone/tile height next to it), so it can never be the
-              // tallest thing in this row's own flex-wrap line.
-              height: 28,
-              borderRadius: 0,
-              padding: '0 14px',
-              fontSize: 12,
-              border: '1px solid var(--ra-border-strong)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)'
-            }}
-          >
-            import
-          </button>
+          {/* Two peer buttons, not a primary and a secondary: they are two
+              equally real doors into the same browser (see
+              LIBRARY_ENTRY_POINTS), and the browse/discover tab pair that
+              used to sit inside its header is gone. Styled identically for
+              that reason -- making one of them quieter would re-create the
+              "discover is a sub-thing of import" reading the tabs had. */}
+          {/* The tour anchor sits on the PAIR, not on one button: the tour's
+              first step is "getting audio in", which is now both of these,
+              and the tour is capped at seven steps so discover gets no step
+              of its own to anchor. Keeps the same gap the row itself uses,
+              so wrapping them changes nothing visually. */}
+          <div data-tour-id="tour-import" style={{ display: 'flex', gap: 5 }}>
+            {LIBRARY_ENTRY_POINTS.map((entry) => (
+              <button
+                key={entry.id}
+                onClick={() => onOpenLibrary(entry.id)}
+                data-tooltip={entry.tooltip}
+                style={{
+                  // Direct follow-up report, 2026-09-17 (screenshot): the first
+                  // "a bunch bigger" pass (height: 36) pushed this row's own
+                  // content just past its maxHeight: 100 cap above, triggering
+                  // an unwanted scrollbar on a row with nothing actually left
+                  // to scroll to -- 28 is shorter than TILE_SIZE (42, the "+"
+                  // drop-zone/tile height next to it), so it can never be the
+                  // tallest thing in this row's own flex-wrap line.
+                  height: 28,
+                  borderRadius: 0,
+                  padding: '0 14px',
+                  fontSize: 12,
+                  border: '1px solid var(--ra-border-strong)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)'
+                }}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </>
