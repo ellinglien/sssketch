@@ -709,4 +709,81 @@ describe('the guided flow across a save and a load', () => {
     expect(restored.coach?.phaseElapsedMs.loop).toBe(4 * MINUTE)
     expect(restored.rifffs.r1.name).toBe('test')
   })
+
+  it('round-trips a half-carved phase-two flow', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, {
+      type: 'COACH_LOCK_CLIMAX',
+      now: NOW,
+      bpm: 120,
+      slots: [
+        {
+          id: 's1',
+          kinds: ['drums'],
+          gain: 1,
+          audible: true,
+          rolling: false,
+          stem: {
+            path: '/kick.wav',
+            name: 'kick',
+            author: 'e',
+            type: 'drums',
+            durationSec: 4,
+            barLength: 4
+          }
+        }
+      ]
+    })
+    state = reducer(state, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' })
+    state = reducer(state, {
+      type: 'COACH_PLACE_SECTION',
+      now: NOW,
+      startBar: 0,
+      placedGroupIds: { '/kick.wav': 'g1' }
+    })
+    state = reducer(state, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'build' })
+    state = reducer(state, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/kick.wav' })
+
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+    expect(restored.coach?.sections).toEqual([
+      {
+        type: 'intro',
+        name: 'intro',
+        bars: 8,
+        droppedPaths: [],
+        startBar: 0,
+        placedGroupIds: { '/kick.wav': 'g1' }
+      }
+    ])
+    expect(restored.coach?.draftSection).toEqual({
+      type: 'build',
+      name: 'build',
+      bars: 16,
+      droppedPaths: ['/kick.wav']
+    })
+    // A loaded flow is always hidden and its clock always stopped.
+    expect(restored.coach?.status).toBe('dismissed')
+    expect(restored.coach?.runningSince).toBeNull()
+  })
+
+  it('a project saved before phase two existed loads with no sections', () => {
+    const phase1 = JSON.parse(serializeProject(initialState))
+    phase1.coach = {
+      status: 'active',
+      stepId: 'p1-lock',
+      outcomes: { 'p1-flavour': 'done' },
+      phaseElapsedMs: { loop: 4 * MINUTE, arrangement: 0, polish: 0 },
+      stepElapsedMs: 0,
+      runningSince: NOW,
+      lineSeed: 2,
+      flavour: 'groove',
+      seededKinds: [],
+      lockedClimax: null
+    }
+    expect('sections' in phase1.coach).toBe(false)
+    const { state: restored } = deserializeProject(phase1)
+    expect(restored.coach?.sections).toEqual([])
+    expect(restored.coach?.draftSection).toBeNull()
+    expect(restored.coach?.stepId).toBe('p1-lock')
+  })
 })
