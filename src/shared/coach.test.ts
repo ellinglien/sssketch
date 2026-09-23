@@ -313,7 +313,9 @@ describe('sanitiseLoadedCoach', () => {
       lineSeed: 1,
       flavour: null,
       seededKinds: [],
-      lockedClimax: null
+      lockedClimax: null,
+      sections: [],
+      draftSection: null
     })
   })
 })
@@ -413,5 +415,72 @@ describe('the phase-one fields on CoachState', () => {
     expect(loaded?.flavour).toBeNull()
     expect(loaded?.lockedClimax).toBeNull()
     expect(loaded?.phaseElapsedMs.loop).toBe(4 * MINUTE)
+  })
+})
+
+describe('the phase-two fields', () => {
+  it('start empty', () => {
+    const coach = startCoach(T0)
+    expect(coach.sections).toEqual([])
+    expect(coach.draftSection).toBeNull()
+  })
+
+  it('survive a save and load', () => {
+    const saved = {
+      ...startCoach(T0),
+      stepId: 'p2-section',
+      sections: [
+        {
+          type: 'intro',
+          name: 'intro',
+          bars: 8,
+          droppedPaths: ['/hook.wav'],
+          startBar: 0,
+          placedGroupIds: { '/kick.wav': 'g1' }
+        }
+      ],
+      draftSection: { type: 'build', name: 'build', bars: 16, droppedPaths: [] }
+    }
+    const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
+    expect(loaded?.sections).toHaveLength(1)
+    expect(loaded?.sections[0].droppedPaths).toEqual(['/hook.wav'])
+    expect(loaded?.sections[0].placedGroupIds).toEqual({ '/kick.wav': 'g1' })
+    expect(loaded?.draftSection).toEqual({
+      type: 'build',
+      name: 'build',
+      bars: 16,
+      droppedPaths: []
+    })
+  })
+
+  it('load as empty from a project saved before phase two existed', () => {
+    // Exactly what a phase-one .sssketchproj contains: no sections key,
+    // no draftSection key.
+    const phase1 = {
+      status: 'active',
+      stepId: 'p1-lock',
+      outcomes: { 'p1-flavour': 'done' },
+      phaseElapsedMs: { loop: 4 * MINUTE, arrangement: 0, polish: 0 },
+      stepElapsedMs: 0,
+      runningSince: T0,
+      lineSeed: 3,
+      flavour: 'groove',
+      seededKinds: [],
+      lockedClimax: null
+    }
+    const loaded = sanitiseLoadedCoach(phase1)
+    expect(loaded?.sections).toEqual([])
+    expect(loaded?.draftSection).toBeNull()
+    expect(loaded?.stepId).toBe('p1-lock')
+  })
+
+  it('repairs a hand-edited section list rather than throwing', () => {
+    const loaded = sanitiseLoadedCoach({
+      ...startCoach(T0),
+      sections: [{ type: 'nonsense' }, { type: 'drop', bars: 12 }],
+      draftSection: 'not an object'
+    })
+    expect(loaded?.sections.map((s) => s.type)).toEqual(['drop'])
+    expect(loaded?.draftSection).toBeNull()
   })
 })

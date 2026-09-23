@@ -35,6 +35,12 @@ import {
   type CoachStepId
 } from './coachSteps'
 import { isDiscoverSlotKind, sanitiseLockedClimax, type LockedClimax } from './coachClimax'
+import {
+  sanitiseCoachSectionDraft,
+  sanitiseCoachSections,
+  type CoachSection,
+  type CoachSectionDraft
+} from './coachSections'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 /** 'active' shows the bubble; 'minimised' shows only the corner sprite (the
@@ -79,6 +85,16 @@ export interface CoachState {
    * two carves from (spec, phase 1 step 5). null until the lock-in step
    * runs. Real persisted project data, like the rest of this state. */
   lockedClimax: LockedClimax | null
+  /** Phase two's placed sections, in the order they went down (spec:
+   * "sections built so far (type, bars, which stems play)"). Real persisted
+   * project data: a half-finished guided track resumes with its arrangement
+   * intact and the flow knowing where the next section goes. */
+  sections: CoachSection[]
+  /** The section currently being carved, or null when none is open. Its
+   * droppedPaths is what "the user subtracts" writes to -- it starts empty,
+   * always, because a section is the full climax loop until somebody says
+   * otherwise. */
+  draftSection: CoachSectionDraft | null
 }
 
 /** The spec's "after ~10 minutes on one step, a quiet nudge". Never blocks,
@@ -100,7 +116,9 @@ export function startCoach(now: number): CoachState {
     lineSeed: 0,
     flavour: null,
     seededKinds: [],
-    lockedClimax: null
+    lockedClimax: null,
+    sections: [],
+    draftSection: null
   }
 }
 
@@ -324,6 +342,8 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
     seededKinds: (Array.isArray(loose.seededKinds) ? loose.seededKinds : []).filter(
       isDiscoverSlotKind
     ),
-    lockedClimax: sanitiseLockedClimax(loose.lockedClimax)
+    lockedClimax: sanitiseLockedClimax(loose.lockedClimax),
+    sections: sanitiseCoachSections(loose.sections),
+    draftSection: sanitiseCoachSectionDraft(loose.draftSection)
   }
 }
