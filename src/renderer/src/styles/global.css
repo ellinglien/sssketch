@@ -8,14 +8,31 @@
   src: url('../assets/fonts/AtkinsonHyperlegibleMono-Bold.ttf') format('truetype');
   font-weight: 700;
 }
+/* Tiny5, and unlike the two Pixel Sagas faces tried before it this one can
+   actually ship: SIL Open Font License 1.1, GPL-compatible. Its licence sits
+   beside it as Tiny5-OFL.txt, which OFL requires travel with the font.
+
+   CASE carries emphasis here, because Tiny5 has one weight and no bold cut.
+   The app renders LOWERCASE by default -- which is what tokens.css always
+   asked for, and what the copy has always been written as -- and the few
+   places that used bold to mark an active thing go UPPERCASE instead.
+
+   Silkscreen never needed this: its lowercase glyphs simply LOOKED like
+   capitals, so the app read as uppercase while its copy was lowercase and
+   nobody had to decide which it was. Now it is decided, in one place, and it
+   survives the next font change.
+
+   Both faces point at the same file on purpose. There is no bold cut, and
+   naming the 700 face stops any surviving `font-weight: 700` from falling
+   back to a synthesised bold. */
 @font-face {
   font-family: 'Silkscreen';
-  src: url('../assets/fonts/Silkscreen-Regular.woff2') format('woff2');
+  src: url('../assets/fonts/Tiny5-Regular.ttf') format('truetype');
   font-weight: 400;
 }
 @font-face {
   font-family: 'Silkscreen';
-  src: url('../assets/fonts/Silkscreen-Bold.woff2') format('woff2');
+  src: url('../assets/fonts/Tiny5-Regular.ttf') format('truetype');
   font-weight: 700;
 }
 
@@ -33,6 +50,12 @@ body,
 body {
   background: var(--ra-bg-page);
   font-family: var(--ra-font);
+  /* Lowercase by default -- the case the copy is actually written in, and
+     the case tokens.css has always asked for. Stated here rather than left
+     to whichever font is loaded, so it survives a font swap. UPPERCASE is
+     this app's emphasis now, spent only where an active or selected thing
+     used to be bold; Tiny5 has no bold cut to spend instead. */
+  text-transform: lowercase;
   font-size: var(--ra-fs-11);
   color: var(--ra-text);
   -webkit-font-smoothing: antialiased;

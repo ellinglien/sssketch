@@ -260,7 +260,9 @@ function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
     background: confirmed ? 'var(--ra-stretch-on-bg)' : 'transparent',
     border: `1px ${suggested && !confirmed ? 'dashed' : 'solid'} ${confirmed || suggested ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
     color: confirmed ? 'var(--ra-stretch-on)' : suggested ? 'var(--ra-text)' : 'var(--ra-text-2)',
-    fontWeight: confirmed ? 700 : 400,
+    // No bold cut in this face, so CASE is the state signal: the active
+    // one goes uppercase against the lowercase everything else.
+    textTransform: confirmed ? ('uppercase' as const) : ('lowercase' as const),
     cursor: 'pointer'
   }
 }
