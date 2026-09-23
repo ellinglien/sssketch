@@ -5,8 +5,13 @@
  * own SOLO_STEMS-based preview, shared by both Tidy Up
  * (ClusterStemsBrowser.tsx) and Auto Arrange (AutoArrangeRoleStep.tsx) --
  * those two never run at once (both are full-screen modals, opening one
- * closes the other), so one owner id safely covers both callers. */
-export type EngineOwner = 'discover-preview' | 'stem-solo-preview'
+ * closes the other), so one owner id safely covers both callers.
+ * 'coach-section-preview' is the guided flow's own "loop just this section"
+ * (useCoachSectionPreview.ts): the same throwaway-project shape as
+ * 'discover-preview', but built from the locked climax's kept stems rather
+ * than from Discover's slots, and never live at the same time as either of
+ * the others (phase two runs on the timeline, with Discover closed). */
+export type EngineOwner = 'discover-preview' | 'stem-solo-preview' | 'coach-section-preview'
 
 export interface EngineOwnershipTracker {
   /** Claims ownership, returning a generation token. The caller must hold
