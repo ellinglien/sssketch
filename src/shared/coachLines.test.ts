@@ -2,12 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   COACH_DONE_LINES,
   COACH_LOOP_QUESTION_LINES,
-  COACH_NEXT_SECTION_LINE_TEMPLATES,
   COACH_NO_MOVES_LINES,
   COACH_PHRASE_LINE_TEMPLATES,
   COACH_PREFILLED_LINE_TEMPLATES,
   COACH_SECTION_GOAL_LINES,
-  COACH_SECTION_LINE_TEMPLATES,
   COACH_SHAPE_QUESTION_LINES,
   COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
@@ -51,8 +49,6 @@ describe('the shared line tables', () => {
     COACH_STEP_SATISFIED_LINES,
     COACH_PHRASE_LINE_TEMPLATES,
     COACH_PREFILLED_LINE_TEMPLATES,
-    COACH_SECTION_LINE_TEMPLATES,
-    COACH_NEXT_SECTION_LINE_TEMPLATES,
     COACH_TENSION_LINE_TEMPLATES,
     COACH_TENSION_NONE_LINES,
     COACH_V1_EXPORTED_LINES,
@@ -86,25 +82,6 @@ describe('the shared line tables', () => {
         expect(line).not.toMatch(/it looks like/i)
         expect(line).not.toMatch(/your track needs/i)
       }
-    }
-  })
-})
-
-describe('the section templates', () => {
-  it('each name the section they are about', () => {
-    for (const template of [
-      ...COACH_SECTION_LINE_TEMPLATES,
-      ...COACH_NEXT_SECTION_LINE_TEMPLATES
-    ]) {
-      expect(template).toContain('{section}')
-    }
-  })
-
-  it('never pre-announce a change the user has not made', () => {
-    // The everything-on rule, in the copy: nothing here may say a stem has
-    // been removed, because nothing has been.
-    for (const template of COACH_SECTION_LINE_TEMPLATES) {
-      expect(template).not.toMatch(/i (removed|took out|dropped)/i)
     }
   })
 })

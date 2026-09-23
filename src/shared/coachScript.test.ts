@@ -2,12 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   COACH_DONE_LINES,
   COACH_LOOP_QUESTION_LINES,
-  COACH_NEXT_SECTION_LINE_TEMPLATES,
   COACH_NO_MOVES_LINES,
   COACH_PHRASE_LINE_TEMPLATES,
   COACH_PREFILLED_LINE_TEMPLATES,
   COACH_SECTION_GOAL_LINES,
-  COACH_SECTION_LINE_TEMPLATES,
   COACH_SHAPE_QUESTION_LINES,
   COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
@@ -46,8 +44,8 @@ describe('sssketchy’s script, swept whole', () => {
     // A tripwire, not a spec: if you add or remove a table or a variant,
     // update these two numbers deliberately. A DROP here means a line of
     // his copy stopped being checked by anything.
-    expect(scriptTables).toHaveLength(27)
-    expect(scriptLines).toHaveLength(108)
+    expect(scriptTables).toHaveLength(25)
+    expect(scriptLines).toHaveLength(100)
     for (const table of scriptTables) expect(table.length).toBeGreaterThan(0)
   })
 
@@ -108,9 +106,7 @@ describe('the script reaches every surface that speaks', () => {
     COACH_DONE_LINES,
     COACH_STUCK_LINES,
     COACH_NO_MOVES_LINES,
-    COACH_STEP_SATISFIED_LINES,
-    COACH_SECTION_LINE_TEMPLATES,
-    COACH_NEXT_SECTION_LINE_TEMPLATES
+    COACH_STEP_SATISFIED_LINES
   ]
 
   it('is the same set of tables the app reads, by identity', () => {

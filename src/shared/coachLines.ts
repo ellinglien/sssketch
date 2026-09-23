@@ -61,12 +61,6 @@ export const COACH_PHRASE_LINE_TEMPLATES: readonly string[] = COACH_SCRIPT.phras
 /** The pre-fill note -- script section 3. */
 export const COACH_PREFILLED_LINE_TEMPLATES: readonly string[] = COACH_SCRIPT.prefilled
 
-/** Retired with the one-section-at-a-time carve flow -- script section 12. */
-export const COACH_SECTION_LINE_TEMPLATES: readonly string[] = COACH_SCRIPT.retiredSectionCarve
-
-/** Retired with the one-section-at-a-time carve flow -- script section 12. */
-export const COACH_NEXT_SECTION_LINE_TEMPLATES: readonly string[] = COACH_SCRIPT.retiredNextSection
-
 /** The tension pass, {joins} -- script section 8. */
 export const COACH_TENSION_LINE_TEMPLATES: readonly string[] = COACH_SCRIPT.tension
 

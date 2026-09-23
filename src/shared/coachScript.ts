@@ -110,8 +110,6 @@ interface CoachScript {
   readonly stuck: readonly string[]
   readonly noMoves: readonly string[]
   readonly stepSatisfied: readonly string[]
-  readonly retiredSectionCarve: readonly string[]
-  readonly retiredNextSection: readonly string[]
 }
 
 export const COACH_SCRIPT: CoachScript = {
@@ -462,38 +460,6 @@ export const COACH_SCRIPT: CoachScript = {
     'covered.',
     'that is the slot this step was after, so next, or keep rerolling it.',
     "the step is satisfied, though whether it's finished is your call, not mine."
-  ],
-
-  // ==========================================================================
-  // 12. RETIRED -- WRITTEN, TESTED, AND NOT CURRENTLY ON ANY SCREEN
-  //     These two tables belonged to the one-section-at-a-time carve flow
-  //     that the arrangement map replaced on 2026-09-23 (the map arrives
-  //     whole and pre-filled, so there is nothing left to carve one at a
-  //     time and nothing left to place). No code path reaches them today.
-  //     They are kept here, held to the same copy rules as everything
-  //     above, rather than deleted -- deleting the author's copy is his
-  //     call, not an agent's.
-  // ==========================================================================
-
-  /** What the bubble used to say while a section was being carved.
-   * `{section}` is the section's own name. Nothing here claims a stem has
-   * been removed: nothing had been. */
-  retiredSectionCarve: [
-    'the {section}. every stem from the loop is on -- switch off what it does not need.',
-    '{section} next. the full climax loop is playing; take things out of it.',
-    'this one is the {section}. it stays the whole loop until you turn something off.',
-    'carving the {section}. marked stems are what this kind of section usually loses.'
-  ],
-
-  /** What the bubble used to say once a section was on the timeline and the
-   * flow was asking what followed. `{section}` is the section's own name.
-   * Reports the placement, which is a fact, and asks a question -- never an
-   * opinion about what the track now needs. */
-  retiredNextSection: [
-    'the {section} is down, as ordinary clips. what comes next?',
-    '{section} placed. pick what follows, or stop here.',
-    'that is the {section} on the timeline. move it, resize it, redraw it -- or keep going.',
-    '{section} done. an outro ends this phase; anything else keeps it running.'
   ]
 }
 
