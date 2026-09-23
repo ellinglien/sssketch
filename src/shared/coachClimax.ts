@@ -96,7 +96,7 @@ export function coachSlotRole(kinds: readonly DiscoverSlotKind[]): ArrangeRole {
  * from answering for a {leadesque, sparkly} hook -- and normalizeSlotKinds
  * allows at most one of sparkly/buttery in a set, so those two can never
  * collide. Phase one uses it to decide whether a step is satisfied
- * (slotCoversKindSet, ./coachPhase1.ts); phase two uses it to decide
+ * (slotCoversKindSet, deleted with phase one); phase two uses it to decide
  * whether a section type's suggested drop applies to a stem
  * (./coachSections.ts). One rule, one implementation.
  */

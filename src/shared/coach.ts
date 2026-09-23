@@ -21,21 +21,23 @@
  * days of "time on this step" and firing the stuck nudge instantly.
  */
 
-import { COACH_DONE_LINES, pickLineVariant } from './coachLines'
+import { COACH_DONE_LINES, COACH_STEP_SATISFIED_LINES, pickLineVariant } from './coachLines'
 import {
   COACH_STEPS,
   FIRST_COACH_STEP_ID,
   coachStepById,
   coachStepOrder,
-  isCoachFlavour,
   isCoachStepId,
   nextCoachStepId,
-  resolveCoachStep,
-  type CoachFlavour,
   type CoachPhase,
   type CoachStepId
 } from './coachSteps'
-import { sanitiseLockedClimax, type LockedClimax } from './coachClimax'
+import {
+  lockClimaxFromSlots,
+  sanitiseLockedClimax,
+  type CoachSlotSnapshot,
+  type LockedClimax
+} from './coachClimax'
 import {
   sanitiseCoachSectionDraft,
   sanitiseCoachSections,
@@ -43,7 +45,6 @@ import {
   type CoachSectionDraft
 } from './coachSections'
 import { sanitiseCoachTension, type CoachTensionApplied } from './coachTension'
-import type { DiscoverSlotKind } from './discoverSlotKind'
 
 /** 'active' shows the bubble; 'minimised' shows only the corner sprite (the
  * clock keeps running -- you are still on this step, just not looking at
@@ -73,19 +74,6 @@ export interface CoachState {
   /** Which variant of the current step's lines to show. Bumped once per
    * transition -- see ./coachLines.ts for why this is not Math.random. */
   lineSeed: number
-  /** The answer to "melodic or groove", or null before it is given. It
-   * orders phase one (coachStepOrder) and picks a step's per-flavour copy
-   * (resolveCoachStep). It is a starting point, not a claim about the
-   * music. */
-  flavour: CoachFlavour | null
-  /** The roles a seeded start already covered, named once on the step the
-   * answer landed on ("you already have drummy and bassish. next:
-   * harmony."). Cleared on the next transition, because one thought at a
-   * time -- see advanceCoach -- and equally by being put away
-   * (dismissCoach) or saved and reloaded (sanitiseLoadedCoach never loads
-   * it): it belongs to the sitting the seed was read in. Empty whenever
-   * there is nothing to say. */
-  seededKinds: DiscoverSlotKind[]
   /** The frozen climax loop: stems, roles and gains, as the material phase
    * two carves from (spec, phase 1 step 5). null until the lock-in step
    * runs. Real persisted project data, like the rest of this state. */
@@ -125,7 +113,7 @@ export interface CoachState {
 export const COACH_STUCK_AFTER_MS = 10 * 60 * 1000
 
 function emptyPhaseElapsed(): Record<CoachPhase, number> {
-  return { loop: 0, arrangement: 0, polish: 0 }
+  return { arrangement: 0, polish: 0 }
 }
 
 export function startCoach(now: number): CoachState {
@@ -137,8 +125,6 @@ export function startCoach(now: number): CoachState {
     stepElapsedMs: 0,
     runningSince: now,
     lineSeed: 0,
-    flavour: null,
-    seededKinds: [],
     lockedClimax: null,
     sections: [],
     draftSection: null,
@@ -174,7 +160,7 @@ export function pauseCoach(state: CoachState, now: number): CoachState {
  */
 export function coachIsComplete(state: CoachState): boolean {
   if (state.status === 'finished') return true
-  const order = coachStepOrder(state.flavour)
+  const order = coachStepOrder()
   return state.outcomes[order[order.length - 1]] !== undefined
 }
 
@@ -189,54 +175,20 @@ export function resumeCoach(state: CoachState, now: number): CoachState {
   return { ...state, status: 'active', runningSince: state.runningSince ?? now }
 }
 
-/**
- * The next step the user has not already been credited with.
- *
- * Only phase ONE is skipped through, and the reason is that it is the only
- * phase that is a straight line. A seeded start marks covered steps done
- * before the user ever reaches them (answerCoachFlavour), and those are not
- * necessarily a contiguous run -- a seed can cover the low end and the
- * drums while leaving the harmony open -- so without this, advancing off
- * the harmony walks straight back into the drums step, asks for work the
- * flow has already recorded, and overwrites its outcome.
- *
- * Phase two's steps repeat by design (p2-section is walked again for every
- * section carved), so an outcome there means "you did this once", not
- * "this is behind you", and skipping on it would throw the user out of the
- * arrangement phase after their second section.
- */
-function nextUncoveredStepId(
-  from: CoachStepId,
-  flavour: CoachFlavour | null,
-  outcomes: Record<string, CoachOutcome>
-): CoachStepId | null {
-  let id = nextCoachStepId(from, flavour)
-  while (id !== null && coachStepById(id)?.phase === 'loop' && outcomes[id] !== undefined) {
-    id = nextCoachStepId(id, flavour)
-  }
-  return id
-}
-
 /** next (outcome 'done') and skip (outcome 'skipped') are the same
  * transition with a different record of how it happened -- the flow must
  * never treat skipping as an error path. */
 export function advanceCoach(state: CoachState, now: number, outcome: CoachOutcome): CoachState {
   const banked = pauseCoach(state, now)
   const outcomes = { ...banked.outcomes, [banked.stepId]: outcome }
-  // The order depends on the melodic-or-groove answer (coachStepOrder) --
-  // a flow that has not answered yet walks the groove order, which is also
-  // the order COACH_STEPS itself is written in.
-  const nextId = nextUncoveredStepId(banked.stepId, banked.flavour, outcomes)
+  const nextId = nextCoachStepId(banked.stepId)
   if (nextId === null) {
     return {
       ...banked,
       outcomes,
       status: 'finished',
       stepElapsedMs: 0,
-      lineSeed: banked.lineSeed + 1,
-      // One thought at a time: the seeded note belongs to the step it was
-      // written for and never follows the user to the next one.
-      seededKinds: []
+      lineSeed: banked.lineSeed + 1
     }
   }
   return {
@@ -245,8 +197,7 @@ export function advanceCoach(state: CoachState, now: number, outcome: CoachOutco
     stepId: nextId,
     stepElapsedMs: 0,
     runningSince: now,
-    lineSeed: banked.lineSeed + 1,
-    seededKinds: []
+    lineSeed: banked.lineSeed + 1
   }
 }
 
@@ -276,12 +227,7 @@ export function restoreCoach(state: CoachState, now: number): CoachState {
  * still offers a fresh flow rather than resuming this one. */
 export function dismissCoach(state: CoachState, now: number): CoachState {
   if (state.status === 'dismissed') return state
-  // seededKinds goes with him. It is one sentence about the riff that
-  // seeded THIS sitting, cleared by every other transition for the same
-  // reason (one thought at a time) -- kept here it would survive the
-  // dismiss and the save, and greet the user again a week later as the
-  // only thing on screen that is about the past rather than the step.
-  return { ...pauseCoach(state, now), status: 'dismissed', seededKinds: [] }
+  return { ...pauseCoach(state, now), status: 'dismissed' }
 }
 
 /** Exported so ./coach.ts's own consumers can validate a persisted id
@@ -324,7 +270,56 @@ export function coachLine(state: CoachState): string {
   if (state.status === 'finished' || step === undefined) {
     return pickLineVariant(COACH_DONE_LINES, state.lineSeed)
   }
-  return pickLineVariant(resolveCoachStep(step, state.flavour).lines, state.lineSeed)
+  return pickLineVariant(step.lines, state.lineSeed)
+}
+
+/** Whether the current step's own completion condition is met.
+ *
+ * One step is left with an automatic check. Phase one had several, all
+ * derived from Discover's slots; those went with it. Whether the tension
+ * pass or the balance check is "done" is a person listening, and the app
+ * has no way to know -- so they are not here, and that is deliberate.
+ */
+export function coachStepSatisfied(state: CoachState): boolean {
+  return state.stepId === 'p3-export' && state.v1ExportedAt !== null
+}
+
+/** The one thought on screen. The satisfied line REPLACES the step's own
+ * line rather than joining it -- "a new step's text replaces the old one;
+ * nothing stacks" (spec) applies just as much inside a step.
+ *
+ * Lived in coachPhase1.ts until 2026-09-23; it is the bubble's own entry
+ * point and has nothing to do with phase one, so it came here rather than
+ * dying with it. */
+export function coachLineFor(state: CoachState): string {
+  if (state.status === 'finished') return coachLine(state)
+  if (coachStepSatisfied(state)) {
+    return pickLineVariant(COACH_STEP_SATISFIED_LINES, state.lineSeed)
+  }
+  return coachLine(state)
+}
+
+/**
+ * Freezes the loop's stems, roles and gains onto the flow -- the material
+ * the map is carved from.
+ *
+ * Lived in coachPhase1.ts, but it is not phase one's: phases two and three
+ * both read `lockedClimax`, and the map cannot be built without it. The
+ * step that used to dispatch it (p1-lock) is gone; the auto-arranger
+ * dispatches it in the map plan.
+ *
+ * A lock with nothing resolved leaves the flow exactly as it was, rather
+ * than storing an empty climax the map would then have to special-case.
+ */
+export function lockCoachClimax(
+  state: CoachState,
+  now: number,
+  slots: readonly CoachSlotSnapshot[],
+  bpm: number
+): CoachState {
+  const lockedClimax = lockClimaxFromSlots(slots, bpm, now)
+  if (lockedClimax === null) return state
+  return { ...state, lockedClimax }
 }
 
 /** The sprite frame sets that exist under
@@ -421,19 +416,16 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
   const loose = coach as Record<string, unknown>
   const phase = (loose.phaseElapsedMs ?? {}) as Record<string, unknown>
   // A stepId this build does not know (a project saved by an earlier one,
-  // or hand-edited) is repaired back to the melodic-or-groove question --
-  // and the ANSWER has to go with it. The question step renders its two
-  // buttons off `offers` but answerCoachFlavour refuses a second answer,
-  // so a repaired step carrying a flavour is a question with two dead
-  // buttons and skip as the only way out.
+  // or hand-edited, including every phase-one 'p1-' step) is repaired back
+  // to the first step this build still has.
   const stepId = isCoachStepId(loose.stepId) ? loose.stepId : FIRST_COACH_STEP_ID
-  const repairedStep = stepId !== loose.stepId
   return {
     status: loose.status === 'finished' ? 'finished' : 'dismissed',
     stepId,
     outcomes: loadedOutcomes(loose.outcomes),
+    // A project saved with a `loop` figure simply loses that number, which
+    // is correct: there is no phase for it to belong to any more.
     phaseElapsedMs: {
-      loop: finiteMs(phase.loop),
       arrangement: finiteMs(phase.arrangement),
       polish: finiteMs(phase.polish)
     },
@@ -443,13 +435,6 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
       typeof loose.lineSeed === 'number' && Number.isFinite(loose.lineSeed)
         ? Math.trunc(loose.lineSeed)
         : 0,
-    flavour: !repairedStep && isCoachFlavour(loose.flavour) ? loose.flavour : null,
-    // Deliberately never loaded. The seeded note names what an existing
-    // riff covered at the moment the question was answered ("you already
-    // have drummy and bassish"); every transition clears it, because one
-    // thought at a time, and a save is a bigger gap than any of them. The
-    // outcomes it produced are what actually survive.
-    seededKinds: [],
     lockedClimax: sanitiseLockedClimax(loose.lockedClimax),
     sections: sanitiseCoachSections(loose.sections),
     draftSection: sanitiseCoachSectionDraft(loose.draftSection),

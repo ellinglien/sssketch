@@ -4,7 +4,6 @@ import {
   COACH_NEXT_SECTION_LINE_TEMPLATES,
   COACH_NO_MOVES_LINES,
   COACH_SECTION_LINE_TEMPLATES,
-  COACH_SEEDED_LINE_TEMPLATES,
   COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
   COACH_TENSION_LINE_TEMPLATES,
@@ -43,7 +42,6 @@ describe('the shared line tables', () => {
     COACH_NO_MOVES_LINES,
     COACH_DONE_LINES,
     COACH_STEP_SATISFIED_LINES,
-    COACH_SEEDED_LINE_TEMPLATES,
     COACH_SECTION_LINE_TEMPLATES,
     COACH_NEXT_SECTION_LINE_TEMPLATES,
     COACH_TENSION_LINE_TEMPLATES,
@@ -71,15 +69,6 @@ describe('the shared line tables', () => {
         expect(line).not.toMatch(/it looks like/i)
         expect(line).not.toMatch(/your track needs/i)
       }
-    }
-  })
-})
-
-describe('the seeded-start templates', () => {
-  it('each name both the roles already covered and the step that follows', () => {
-    for (const template of COACH_SEEDED_LINE_TEMPLATES) {
-      expect(template).toContain('{covered}')
-      expect(template).toContain('{next}')
     }
   })
 })

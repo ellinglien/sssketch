@@ -72,19 +72,6 @@ export const COACH_STEP_SATISFIED_LINES: readonly string[] = [
   'the step is satisfied. whether it is finished is your call, not mine.'
 ]
 
-/** Named once, on the step a seeded start lands you on: "seeded starts mark
- * already-covered roles done ('you've got drums and bass, next: harmony')"
- * (spec). {covered} is the list of role names Discover itself tagged;
- * {next} is the label of the step you are now on. Templates rather than
- * finished lines so the copy rules still get tested here, in one place with
- * the rest of the vocabulary. */
-export const COACH_SEEDED_LINE_TEMPLATES: readonly string[] = [
-  'you already have {covered}. next: {next}.',
-  '{covered} is already covered by that riff. next: {next}.',
-  'that riff brings {covered} with it, so we skip ahead. next: {next}.',
-  'marked done from the riff you started with: {covered}. next: {next}.'
-]
-
 /** What the bubble says while a section is being carved. {section} is the
  * section's own name. Every variant states the same fact -- the whole loop
  * is playing and subtracting is the user's move -- because that fact is the

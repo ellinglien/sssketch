@@ -3,7 +3,7 @@
  * down.
  *
  * Everything here is pure and every function takes the whole CoachState and
- * returns a new one, the same shape ./coachPhase1.ts uses. Time is injected
+ * returns a new one. Time is injected
  * (`now`), never read from the clock -- see ./coach.ts's module doc.
  *
  * THE RULE (spec): **everything is on, the user subtracts.** A draft opens
@@ -60,10 +60,7 @@ export function startCoachSection(
     draftSection: newCoachSectionDraft(type, banked.sections),
     stepElapsedMs: 0,
     runningSince: now,
-    lineSeed: banked.lineSeed + 1,
-    // One thought at a time -- a seeded note from phase one never follows
-    // the user into phase two.
-    seededKinds: []
+    lineSeed: banked.lineSeed + 1
   }
 }
 
@@ -173,14 +170,13 @@ export function placeCoachSection(
     stepId: finishing ? 'p3-tension' : 'p2-next',
     stepElapsedMs: 0,
     runningSince: now,
-    lineSeed: banked.lineSeed + 1,
-    seededKinds: []
+    lineSeed: banked.lineSeed + 1
   }
 }
 
 /**
  * The phase-two thought on screen, or null when the flow is somewhere else
- * (the caller then falls back to coachLineFor, ./coachPhase1.ts).
+ * (the caller then falls back to coachLineFor, ./coach.ts).
  *
  * Returns ONE string, like every other line in this feature -- "a new step's
  * text replaces the old one; nothing stacks" (spec) applies just as much
