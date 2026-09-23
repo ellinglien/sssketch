@@ -143,11 +143,15 @@ function useAnchorLeft(
     update()
     const pollId = window.setInterval(update, ANCHOR_POLL_MS)
     window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
+    // Deliberately NO capture-phase scroll listener. One was here, and it
+    // ran update() synchronously for every scroll event from every scroller
+    // in the app -- timeline, library lists, inspector -- each forcing a
+    // layout flush through getBoundingClientRect. That is the exact thrash
+    // pattern that cost this renderer a beachball once already, and the poll
+    // above covers every case it did, twice a second, off the event path.
     return () => {
       window.clearInterval(pollId)
       window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
     }
   }, [selector, width])
 

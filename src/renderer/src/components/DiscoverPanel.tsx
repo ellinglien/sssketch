@@ -1383,8 +1383,17 @@ export function DiscoverPanel({
   // (react-hooks/set-state-in-effect), and it would also render the row
   // unarmed for one frame before stamping the arm in. Same shape
   // SssketchyCoach.tsx's own usePulse uses, for the same reason.
+  // Starts as null -- NOT as the current key -- because this panel mounts
+  // fresh every time the library opens or the tab flips back to discover,
+  // and the flow's own path arrives here with the arm ALREADY set: answering
+  // "groove" dispatches the step change and opens the library in one commit,
+  // so by first render coachArmKey is 'bass' and there has never been a
+  // change to notice. Seeding it with the current key made the mount case
+  // "already applied" and the row came up empty -- which is the whole
+  // mechanic of phase one, while sssketchy said "the add row is set to
+  // bassish." null can never equal a real key, so a mount always arms.
   const coachArmKey = coachArmedKinds ? slotKindsKey(coachArmedKinds) : ''
-  const [appliedCoachArmKey, setAppliedCoachArmKey] = useState(coachArmKey)
+  const [appliedCoachArmKey, setAppliedCoachArmKey] = useState<string | null>(null)
   if (appliedCoachArmKey !== coachArmKey) {
     setAppliedCoachArmKey(coachArmKey)
     if (coachArmKey !== '' && coachArmedKinds) {
