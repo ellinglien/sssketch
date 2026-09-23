@@ -102,7 +102,10 @@ import type { LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import type { Rifff } from '@shared/types'
+import type { BusId, Rifff } from '@shared/types'
+import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
+import type { ArrangeRole } from '@shared/stemRole'
+import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
@@ -540,6 +543,11 @@ type ExportFormat = 'ableton' | 'reaper' | 'stems' | 'stemTracks'
 interface PendingExport {
   format: ExportFormat
   toolkitMode: ToolkitExportMode
+  /** Bus assignments implied by roles the user already confirmed, for stems
+   * this project never assigned a bus to -- see assessTidyUpReadiness
+   * (shared/tidyUpReadiness.ts). Carried through the nudge so an "export
+   * anyway" still uses whatever the app does know. */
+  derivedBusOf: Record<string, BusId>
 }
 
 function ProjectMenu({
@@ -582,6 +590,10 @@ function ProjectMenu({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  // Every stem on the timeline, which is exactly the population the
+  // exporters pack (buildAlsXml.ts filters `startBar !== undefined` the same
+  // way) and therefore exactly the population the tidy-up gate must judge.
+  const { flatStems } = usePlacedFlatStems()
   const [exporting, setExporting] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const exportButtonRef = useRef<HTMLButtonElement>(null)
@@ -681,10 +693,29 @@ function ProjectMenu({
     }
   }
 
+  /**
+   * `derivedBusOf` is the "it should use that information" half of the
+   * tidy-up fix (see handleExportProject below). Every exporter reads
+   * `state.busOf[key] ?? 'aux'` -- buildAlsXml.ts, buildRppProject.ts,
+   * nativeExport.ts -- so a project whose stems were only ever ROLE-
+   * confirmed (the auto-arrange route, which never writes busOf) would pile
+   * every stem onto the aux bus. Merging the role-derived buses in here,
+   * rather than dispatching ASSIGN_STEMS_TO_BUS, keeps exporting a
+   * read-only act: no clip renames (renameRifffsForBusAssignment), no
+   * unsaved-changes flag, nothing about the project moves because a file
+   * was written. A real assignment always wins -- it was chosen for THIS
+   * project, where the role is a fact about the file.
+   */
   async function runExportProject(
     format: ExportFormat,
-    toolkitMode: ToolkitExportMode = 'bake'
+    toolkitMode: ToolkitExportMode = 'bake',
+    derivedBusOf: Record<string, BusId> = {}
   ): Promise<void> {
+    const stateJson = JSON.stringify(
+      Object.keys(derivedBusOf).length === 0
+        ? state
+        : { ...state, busOf: { ...derivedBusOf, ...state.busOf } }
+    )
     setExporting(true)
     // "did a file really come out" -- the only thing that may mark a v1.
     // The library / next-to-source calls return void because they always
@@ -704,49 +735,30 @@ function ProjectMenu({
           ) {
             return
           }
-          await window.rifffApi.exportAlsToLibrary(
-            JSON.stringify(state),
-            currentSketch.name,
-            toolkitMode
-          )
+          await window.rifffApi.exportAlsToLibrary(stateJson, currentSketch.name, toolkitMode)
           wrote = true
         } else if (format === 'reaper') {
-          await window.rifffApi.exportRppToLibrary(
-            JSON.stringify(state),
-            currentSketch.name,
-            toolkitMode
-          )
+          await window.rifffApi.exportRppToLibrary(stateJson, currentSketch.name, toolkitMode)
           wrote = true
         } else if (format === 'stemTracks') {
-          await window.rifffApi.exportStemTracksToLibrary(JSON.stringify(state), currentSketch.name)
+          await window.rifffApi.exportStemTracksToLibrary(stateJson, currentSketch.name)
           wrote = true
         } else {
-          await window.rifffApi.exportStemsToLibrary(JSON.stringify(state), currentSketch.name)
+          await window.rifffApi.exportStemsToLibrary(stateJson, currentSketch.name)
           wrote = true
         }
       } else if (currentSketch !== null && currentSketch.kind === 'external') {
         if (format === 'ableton') {
-          await window.rifffApi.exportAlsNextToSource(
-            JSON.stringify(state),
-            currentSketch.path,
-            toolkitMode
-          )
+          await window.rifffApi.exportAlsNextToSource(stateJson, currentSketch.path, toolkitMode)
           wrote = true
         } else if (format === 'reaper') {
-          await window.rifffApi.exportRppNextToSource(
-            JSON.stringify(state),
-            currentSketch.path,
-            toolkitMode
-          )
+          await window.rifffApi.exportRppNextToSource(stateJson, currentSketch.path, toolkitMode)
           wrote = true
         } else if (format === 'stemTracks') {
-          await window.rifffApi.exportStemTracksNextToSource(
-            JSON.stringify(state),
-            currentSketch.path
-          )
+          await window.rifffApi.exportStemTracksNextToSource(stateJson, currentSketch.path)
           wrote = true
         } else {
-          await window.rifffApi.exportStemsNextToSource(JSON.stringify(state), currentSketch.path)
+          await window.rifffApi.exportStemsNextToSource(stateJson, currentSketch.path)
           wrote = true
         }
       } else {
@@ -756,32 +768,21 @@ function ProjectMenu({
         // dialog-based folder picker as their fallback.
         if (format === 'ableton') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          const path = await window.rifffApi.exportAls(
-            JSON.stringify(state),
-            defaultName,
-            toolkitMode
-          )
+          const path = await window.rifffApi.exportAls(stateJson, defaultName, toolkitMode)
           wrote = path !== null
         } else if (format === 'reaper') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          const path = await window.rifffApi.exportRpp(
-            JSON.stringify(state),
-            defaultName,
-            toolkitMode
-          )
+          const path = await window.rifffApi.exportRpp(stateJson, defaultName, toolkitMode)
           wrote = path !== null
         } else if (format === 'stemTracks') {
           // exportStemTracksNative's filenames embed the project name
           // directly, unlike exportAls/exportRpp's optional save-dialog
           // suggestion -- so it's always generated here, not optional.
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          const path = await window.rifffApi.exportStemTracksNative(
-            JSON.stringify(state),
-            defaultName
-          )
+          const path = await window.rifffApi.exportStemTracksNative(stateJson, defaultName)
           wrote = path !== null
         } else {
-          const path = await window.rifffApi.exportStemsNative(JSON.stringify(state))
+          const path = await window.rifffApi.exportStemsNative(stateJson)
           wrote = path !== null
         }
       }
@@ -794,16 +795,58 @@ function ProjectMenu({
     }
   }
 
-  function handleExportProject(
+  /**
+   * The tidy-up gate. It used to ask `Object.keys(state.busOf).length === 0`
+   * -- "has Tidy Up been run on this project" -- when the question it means
+   * is "does the app know what these stems are". Since the role merge
+   * (docs/superpowers/specs/2026-09-23-what-is-this-stem-design.md) a
+   * confirmed ArrangeRole is the canonical answer to that and it is global,
+   * so the auto-arrange role step answers it in full while leaving busOf
+   * untouched -- and the user got nagged for work he had already done
+   * (2026-09-23). The rule now lives in assessTidyUpReadiness
+   * (shared/tidyUpReadiness.ts), where it is tested.
+   *
+   * HOW IT GETS ITS ANSWER, and why export does not always pay for a
+   * database round trip: the roles live in the main process (the
+   * StemCategories table, read through get-stem-category-roles), and
+   * ArrangementMap/AutoArrangeRoleStep read them through
+   * useConfirmedStemRoles -- a hook, fetching on render. Export is a click,
+   * not a render, so this does NOT use that hook. Mounting it here would
+   * fire an IPC read of every placed stem on every project edit, forever,
+   * to answer a question asked only when somebody exports; and a hook's
+   * value can still be the initial empty map at the moment of the click,
+   * which would nag exactly the user this is meant to stop nagging.
+   *
+   * Instead the read happens at the click, and only when it can change the
+   * outcome: a stem that already has a bus is already answered, so a fully
+   * tidied project asks for nothing at all and exports with zero added
+   * latency (unbussedStemPaths returns []). The one query is a chunked
+   * IN-list over distinct paths, never one per stem. A failed read falls
+   * through to the old behaviour -- treat the roles as unknown, and nudge
+   * -- rather than silently exporting an untidied project.
+   */
+  async function handleExportProject(
     format: ExportFormat,
     toolkitMode: ToolkitExportMode = 'bake'
-  ): void {
-    if (Object.keys(state.busOf).length === 0) {
-      setPendingExport({ format, toolkitMode })
+  ): Promise<void> {
+    const placedStems = flatStems.map((fs) => ({ stemKey: fs.stemKey, path: fs.stem.path }))
+    const wanted = unbussedStemPaths(placedStems, state.busOf)
+    const confirmedRoles: Record<string, ArrangeRole> = {}
+    if (wanted.length > 0) {
+      try {
+        const rows = await window.rifffApi.getStemCategoryRoles(wanted)
+        for (const [path, row] of Object.entries(rows)) confirmedRoles[path] = row.arrangeRole
+      } catch (err) {
+        console.error('ProjectMenu: failed to read confirmed stem roles:', err)
+      }
+    }
+    const readiness = assessTidyUpReadiness(placedStems, state.busOf, confirmedRoles)
+    if (readiness.needsNudge) {
+      setPendingExport({ format, toolkitMode, derivedBusOf: readiness.derivedBusOf })
       setTidyUpNudgeOpen(true)
       return
     }
-    void runExportProject(format, toolkitMode)
+    void runExportProject(format, toolkitMode, readiness.derivedBusOf)
   }
 
   // Auto-arrange (and Draw Arrangement, DrawArrangeWizard.tsx) pool every
@@ -966,7 +1009,7 @@ function ProjectMenu({
           toolkitInUse={projectUsesToolkit(state)}
           onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
-            handleExportProject(format, toolkitMode)
+            void handleExportProject(format, toolkitMode)
           }}
           onCancel={() => setExportFormatPickerOpen(false)}
         />
@@ -975,7 +1018,7 @@ function ProjectMenu({
         <StemsFormatPicker
           onChoose={(format) => {
             setStemsFormatPickerOpen(false)
-            handleExportProject(format)
+            void handleExportProject(format)
           }}
           onCancel={() => setStemsFormatPickerOpen(false)}
         />
@@ -989,7 +1032,11 @@ function ProjectMenu({
           onExportAnyway={() => {
             setTidyUpNudgeOpen(false)
             if (pendingExport)
-              void runExportProject(pendingExport.format, pendingExport.toolkitMode)
+              void runExportProject(
+                pendingExport.format,
+                pendingExport.toolkitMode,
+                pendingExport.derivedBusOf
+              )
           }}
         />
       )}
