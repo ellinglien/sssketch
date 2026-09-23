@@ -214,7 +214,7 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
     // titlebar chrome and every modal's own z-index (every modal/menu in
     // this app sits at 20-1000; this stays well under that).
     <div
-      title={`analyzing library: ${completed} / ${total} this session`}
+      title={`analyzing ${completed} / ${total}`}
       role="progressbar"
       aria-valuenow={Math.round(fraction * 100)}
       aria-valuemin={0}

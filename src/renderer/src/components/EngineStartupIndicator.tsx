@@ -64,7 +64,7 @@ export function EngineStartupIndicator(): React.JSX.Element | null {
         fontSize: 9,
         color: 'var(--ra-text-3)'
       }}
-      title="starting the native audio engine -- playback will be available once this finishes"
+      title="starting audio engine"
     >
       <LoadingLoader size={11} />
       starting engine…

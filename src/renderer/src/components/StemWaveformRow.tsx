@@ -292,24 +292,24 @@ export function StemWaveformRow({
             if (volume !== target) dispatch({ type: 'SET_VOLUME', stemKey: key, volume: target })
           }}
           // Direct request, 2026-09-20: "date could be a tooltip on
-          // hover.. in discovery and in arranger or sketch" -- appended to
-          // this box's EXISTING title (not a second, separate
-          // data-tooltip -- mixing both tooltip mechanisms on one element
-          // would show two overlapping tooltips) rather than a new
-          // element, since stem.creationTime is undefined for a one-shot/
-          // recorded-in-app/live-API-resolved stem, or any import
-          // predating this field -- gracefully just omits the date suffix
-          // rather than showing a wrong one.
+          // hover.. in discovery and in arranger or sketch" -- this box's
+          // own title (not a second, separate data-tooltip -- mixing both
+          // tooltip mechanisms on one element would show two overlapping
+          // tooltips) rather than a new element. stem.creationTime is
+          // undefined for a one-shot/recorded-in-app/live-API-resolved
+          // stem, or any import predating this field -- which gracefully
+          // shows no tooltip at all rather than a wrong date. It used to
+          // carry the row's gestures too (right-click to mute, double-click
+          // to reset volume); the two-or-three-word tooltip rule took those
+          // out and left the date.
           title={
             stem.creationTime
-              ? `right-click to mute · double-click to reset volume · ${new Date(
-                  stem.creationTime * 1000
-                ).toLocaleDateString(undefined, {
+              ? new Date(stem.creationTime * 1000).toLocaleDateString(undefined, {
                   year: 'numeric',
                   month: 'short',
                   day: 'numeric'
-                })}`
-              : 'right-click to mute · double-click to reset volume'
+                })
+              : undefined
           }
           style={{
             position: 'absolute',
@@ -470,7 +470,7 @@ export function StemWaveformRow({
               ever reaches them, not just visually overlap them. */}
           <div
             onMouseDown={handleRegionMouseDown}
-            title="click to scrub playhead · drag to select a region (delete to mute) · right-click to mute"
+            title="scrub or select"
             style={{
               position: 'absolute',
               inset: 0,

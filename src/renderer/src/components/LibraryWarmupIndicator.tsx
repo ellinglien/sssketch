@@ -102,7 +102,7 @@ export function LibraryWarmupIndicator(): React.JSX.Element | null {
         fontSize: 9,
         color: 'var(--ra-text-3)'
       }}
-      title="still indexing your riff library in the background -- some actions may feel a little slow until this finishes"
+      title="indexing your library"
     >
       <LoadingLoader size={11} />
       {describeProgress(progress)}

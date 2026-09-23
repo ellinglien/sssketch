@@ -583,10 +583,10 @@ export function TransportBar({
         }
         title={
           state.gatedRecordingEnabled
-            ? 'recording mode is on -- listening for the selected loop region, press \\ to lock in the latest pass. click to disable.'
+            ? 'recording mode: on'
             : state.loopRegion
-              ? 'enable gated recording for the selected loop region'
-              : 'select a loop region first (drag on the ruler)'
+              ? 'gated recording'
+              : 'needs loop region'
         }
         style={{
           width: 22,
@@ -743,7 +743,7 @@ export function TransportBar({
           })
         }}
         aria-label="Toggle Ableton Link"
-        data-tooltip="Ableton Link — sync tempo with other Link-enabled apps on this network"
+        data-tooltip="ableton link"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -814,7 +814,7 @@ export function TransportBar({
       <button
         onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
         aria-label="add another recording channel"
-        data-tooltip="add another recording channel (/)"
+        data-tooltip="add channel (/)"
         style={{
           height: 22,
           borderRadius: 0,
@@ -870,8 +870,7 @@ export function TransportBar({
             {
               label: `discover trait match: ${traitMatchBarLabel(traitMatchBar)}`,
               onClick: () => void cycleTraitMatchBar(),
-              title:
-                'how strictly chonky / rhythmic / sparkly / buttery must match, as a share of your whole library -- click to step 50% → 40% → 25% → 10%'
+              title: 'trait match strictness'
             },
             // Disabled info row, visible only while the scan is actually
             // on -- direct request, 2026-09-15. `eligible` can very rarely
@@ -888,8 +887,7 @@ export function TransportBar({
                       : 'categorized …',
                     onClick: () => {},
                     disabled: true,
-                    title:
-                      'how many stems the background scan has assigned a role to so far -- extraction (embeddings/features) has to reach a stem before it can be categorized'
+                    title: 'classified so far'
                   }
                 ]
               : []),

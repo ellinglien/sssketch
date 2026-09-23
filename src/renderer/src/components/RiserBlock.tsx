@@ -288,7 +288,7 @@ export function RiserBlock({
           e.stopPropagation()
           onOpenContextMenu(e.clientX, e.clientY, riser.id)
         }}
-        title={renaming ? undefined : 'drag to move · double-click to rename'}
+        title={renaming ? undefined : 'move or rename'}
         style={{
           position: 'absolute',
           top: 0,
@@ -308,7 +308,7 @@ export function RiserBlock({
           <EditableText
             value={riser.name}
             onCommit={(name) => dispatch({ type: 'RENAME_RISER', id: riser.id, name })}
-            title="enter to keep, escape to leave it alone"
+            title="enter to keep"
             autoFocus
             style={{
               fontSize: 10,
@@ -350,7 +350,7 @@ export function RiserBlock({
               e.stopPropagation()
               onOpenContextMenu(e.clientX, e.clientY, riser.id)
             }}
-            title={`${riser.name} · ${lengthBars} bars · drag to move · drag an edge to resize · right-click to remove`}
+            title={`${riser.name} · ${lengthBars} bars`}
             style={{
               position: 'absolute',
               top: 0,

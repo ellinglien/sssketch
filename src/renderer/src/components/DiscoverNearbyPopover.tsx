@@ -107,7 +107,7 @@ function Section({
         <button
           onClick={onStep}
           disabled={candidates.length === 0}
-          title={`skip to the next ${label} match`}
+          title={`next ${label}`}
           style={{
             width: 16,
             height: 16,
@@ -308,7 +308,7 @@ export function DiscoverNearbyPopover({
           onClick={() => handlePick(startCandidate)}
           disabled={atStart}
           aria-label="back to start"
-          data-tooltip="back to the riff this slot started with"
+          data-tooltip="back to original"
           style={{
             marginLeft: 'auto',
             display: 'flex',

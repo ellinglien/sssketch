@@ -1390,7 +1390,7 @@ function ClusterRow({
             ...buttonStyle(rowIsPreviewing && playing ? 'confirmed' : undefined),
             whiteSpace: 'nowrap'
           }}
-          data-tooltip="solo + play this whole cluster, from its own earliest clip"
+          data-tooltip="play this cluster"
         >
           {rowIsPreviewing && playing ? '■' : '▶'}
         </button>
@@ -1411,7 +1411,7 @@ function ClusterRow({
             onClick={onSplit}
             aria-label="split cluster"
             style={{ ...buttonStyle(), whiteSpace: 'nowrap' }}
-            data-tooltip="split this cluster into its two closest sub-groups"
+            data-tooltip="split this cluster"
           >
             <ForkIcon />
           </button>
@@ -1428,11 +1428,7 @@ function ClusterRow({
                     ? 'suggested'
                     : undefined
               )}
-              title={`press ${i + 1} while this row is focused${
-                category === 'textureFx' || category === 'fill' || category === 'vocal'
-                  ? ' -- routes to the aux bus, tagged as ' + category
-                  : ''
-              }`}
+              title={`press ${i + 1}`}
             >
               {category}
             </button>
@@ -1453,7 +1449,7 @@ function ClusterRow({
               const value = e.target.value
               if (value) onAssignDrumSubRole(value as DrumSubRole)
             }}
-            title="optionally refine which drum kit piece this is -- helps treat different drum stems as genuinely different roles"
+            title="drum kit piece"
             style={{
               height: 20,
               borderRadius: 0,
@@ -1495,7 +1491,7 @@ function ClusterRow({
             <div
               key={m.key}
               onClick={(e) => handleThumbnailClick(e, m)}
-              title={`${m.name} — click to preview from this point`}
+              title={m.name}
               style={{
                 width: 64,
                 height: 32,

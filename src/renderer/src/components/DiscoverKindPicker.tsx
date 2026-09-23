@@ -70,7 +70,7 @@ export function DiscoverKindPicker({
       <button
         key={kind}
         aria-pressed={on}
-        data-tooltip={isLastOn ? 'a slot needs at least one kind' : undefined}
+        data-tooltip={isLastOn ? 'keep one kind' : undefined}
         onClick={() => {
           const next = toggleSlotKind(kinds, kind)
           if (slotKindsKey(next) !== slotKindsKey(kinds)) onChange(next)

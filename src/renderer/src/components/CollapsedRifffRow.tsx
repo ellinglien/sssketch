@@ -559,7 +559,7 @@ export function CollapsedRifffRow({
           data-rifff-clip
           data-tour-id="tour-mute"
           onContextMenu={handleBlockContextMenu}
-          title="right-click to mute group · ctrl+right-click to solo"
+          title="mute or solo"
           style={{
             position: 'absolute',
             top: 0,
@@ -659,9 +659,7 @@ export function CollapsedRifffRow({
           <div
             onMouseDown={isOneShot ? handleOneShotLeftEdgeStart : handleLeftResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
-            title={
-              isOneShot ? 'drag to trim · option+drag to stretch' : `${displayedPlayedBars} bars`
-            }
+            title={isOneShot ? 'trim or stretch' : `${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
               top: 0,
@@ -688,9 +686,7 @@ export function CollapsedRifffRow({
           <div
             onMouseDown={isOneShot ? handleOneShotRightEdgeStart : handleResizeStart}
             onContextMenu={(e) => e.stopPropagation()}
-            title={
-              isOneShot ? 'drag to trim · option+drag to stretch' : `${displayedPlayedBars} bars`
-            }
+            title={isOneShot ? 'trim or stretch' : `${displayedPlayedBars} bars`}
             style={{
               position: 'absolute',
               top: 0,
@@ -723,7 +719,7 @@ export function CollapsedRifffRow({
               before it ever reaches them). */}
           <div
             onMouseDown={handleRegionMouseDown}
-            title="click to scrub playhead · drag to select a region (delete to mute) · right-click to mute"
+            title="scrub or select"
             style={{
               position: 'absolute',
               inset: 0,

@@ -361,7 +361,7 @@ export function ArrangementMap({
           <button
             type="button"
             onClick={onWhatIsThis}
-            data-tooltip="say what these stems are. the map reads the answers back as row names."
+            data-tooltip="name these stems"
             style={{
               height: 20,
               borderRadius: 0,
@@ -395,7 +395,7 @@ export function ArrangementMap({
               key={`${option.bars}-${option.source}`}
               type="button"
               onClick={(): void => changePhrase(option)}
-              data-tooltip="re-size the map to this phrase. the squares move, the song does not."
+              data-tooltip="re-size the map"
               style={{
                 height: 20,
                 borderRadius: 0,
@@ -432,7 +432,7 @@ export function ArrangementMap({
           on the map that does not already mean something else. */}
         <div
           onMouseDown={handleScrubStart}
-          data-tooltip="click or drag along here to move the playhead"
+          data-tooltip="move the playhead"
           style={{
             display: 'flex',
             alignItems: 'flex-end',
@@ -458,7 +458,7 @@ export function ArrangementMap({
               }}
               data-tooltip={
                 appliedLabelAt.has(index)
-                  ? `${column.passes} x ${phraseBars} bars, from bar ${column.startBar} · ${appliedLabelAt.get(index)} at the join`
+                  ? `${column.passes} x ${phraseBars} bars · ${appliedLabelAt.get(index)}`
                   : `${column.passes} x ${phraseBars} bars, from bar ${column.startBar}`
               }
             >

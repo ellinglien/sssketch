@@ -245,13 +245,7 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
                 type="button"
                 disabled={!on && !available}
                 onClick={() => toggle(boundary, kind)}
-                title={
-                  on
-                    ? 'take it back off -- anything drawn on that lane since goes with it'
-                    : available
-                      ? def.note
-                      : 'nothing plays in this stretch, so there is nothing here to shape'
-                }
+                title={on ? 'take it off' : available ? def.note : 'nothing to shape'}
                 style={{
                   ...buttonStyle,
                   display: 'block',

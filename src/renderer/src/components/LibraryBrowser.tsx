@@ -1888,7 +1888,7 @@ export function LibraryBrowser({
                         <select
                           value={rootFilter}
                           onChange={(e) => setRootFilter(e.target.value)}
-                          title="key filter -- root and scale must both be set"
+                          title="key filter"
                           style={{
                             height: 22,
                             fontSize: 10,
@@ -1909,7 +1909,7 @@ export function LibraryBrowser({
                         <select
                           value={scaleFilter}
                           onChange={(e) => setScaleFilter(e.target.value)}
-                          title="key filter -- root and scale must both be set"
+                          title="key filter"
                           style={{
                             height: 22,
                             fontSize: 10,
@@ -1971,7 +1971,7 @@ export function LibraryBrowser({
                           value={riffLibraryUsername}
                           onChange={(e) => setRiffLibraryUsername(e.target.value)}
                           placeholder="your username"
-                          title="your username — drives the ownership coloring below and the 'only mine' filter, saved on this machine"
+                          title="your username"
                           style={{
                             width: 100,
                             height: 22,
@@ -2145,7 +2145,7 @@ export function LibraryBrowser({
                                 )
                               }}
                               disabled={downloadingRiffCID !== null}
-                              title="fetch missing stems directly from Endlesss's cloud storage — no LORE login needed, they're public files"
+                              title="fetch missing stems"
                               style={{
                                 height: 24,
                                 borderRadius: 0,
@@ -2167,7 +2167,7 @@ export function LibraryBrowser({
                           {selectedRiffCIDs.size <= 1 && (
                             <button
                               onClick={() => void seedDiscoverFromBrowseRiff()}
-                              title="replace Discover's current loop with this riff's own stems, then keep tinkering from there"
+                              title="seed discover"
                               style={{
                                 height: 24,
                                 borderRadius: 0,

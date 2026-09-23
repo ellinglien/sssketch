@@ -144,10 +144,7 @@ export function RifffBlockRow({
           dispatch({ type: 'SELECT', groupId })
           onOpenContextMenu(e.clientX, e.clientY, groupId)
         }}
-        title={
-          (expanded ? 'click to collapse' : 'click to expand') +
-          ' · ctrl+right-click to solo · double-click to target this rifff for recording'
-        }
+        title={expanded ? 'collapse' : 'expand'}
         style={{
           position: 'absolute',
           top: 0,

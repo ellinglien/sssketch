@@ -147,7 +147,7 @@ export function Ruler({
         // whenever no recording loop is active.
         if (loopRegion) onSetLoopRegion(null)
       }}
-      title="click to scrub · drag to set loop region · cmd+drag to scrub · double-click to clear loop region"
+      title="scrub or loop"
       style={{
         position: 'sticky',
         top: 0,
@@ -226,7 +226,7 @@ export function Ruler({
             `}</style>
             <div
               onMouseDown={(e) => handleLoopEdgeDragStart(e, 'start')}
-              title="drag to move loop start"
+              title="loop start"
               style={{
                 position: 'absolute',
                 left: -3,
@@ -239,7 +239,7 @@ export function Ruler({
             />
             <div
               onMouseDown={(e) => handleLoopEdgeDragStart(e, 'end')}
-              title="drag to move loop end"
+              title="loop end"
               style={{
                 position: 'absolute',
                 right: -3,

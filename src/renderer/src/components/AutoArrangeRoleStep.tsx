@@ -516,7 +516,7 @@ export function AutoArrangeRoleStep({
               opacity: includedKeys.length === 0 ? 0.3 : 1,
               cursor: includedKeys.length === 0 ? 'not-allowed' : 'pointer'
             }}
-            title="solo + play every currently included stem together, from the earliest one's own start"
+            title="play included stems"
           >
             {allIncludedPlaying ? '■ playing all' : '▶ play all included'}
           </button>
@@ -532,7 +532,7 @@ export function AutoArrangeRoleStep({
                 <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>length</span>
                 <span
                   onMouseDown={handleLengthPointerDown}
-                  title="drag up/down to change the built arrangement's length"
+                  title="arrangement length"
                   style={{
                     fontSize: 14,
                     fontWeight: 700,
@@ -638,14 +638,14 @@ export function AutoArrangeRoleStep({
                   onClick={() => fs && togglePreviewStem(fs)}
                   disabled={!fs}
                   style={playButtonStyle(isThisStemPlaying)}
-                  title="solo + preview this stem, from its own clip start"
+                  title="preview this stem"
                 >
                   {isThisStemPlaying ? '■' : '▶'}
                 </button>
                 {fs && geometry ? (
                   <div
                     onClick={(e) => handleThumbnailClick(e, fs, geometry)}
-                    title={`${fs.stem.name} — click to preview from this point`}
+                    title={fs.stem.name}
                     style={{
                       width: 64,
                       height: 32,
@@ -709,7 +709,7 @@ export function AutoArrangeRoleStep({
                     const rect = e.currentTarget.getBoundingClientRect()
                     setPicker({ stemKey: role.stemKey, x: rect.left, y: rect.bottom + 4 })
                   }}
-                  data-tooltip="what is this stem? saved to your library, not just this sketch."
+                  data-tooltip="what is this?"
                   style={{
                     height: 22,
                     borderRadius: 0,
@@ -727,7 +727,7 @@ export function AutoArrangeRoleStep({
                 {showFrequency && (
                   <div
                     style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                    title="how often this stem should re-enter during the release phase, and its priority relative to other stems"
+                    title="re-entry frequency"
                   >
                     <input
                       className="arrange-frequency-slider"
@@ -797,7 +797,7 @@ export function AutoArrangeRoleStep({
                 onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
               }
               disabled={includedKeys.length === 0}
-              title={includedKeys.length === 0 ? 'include at least one stem first' : undefined}
+              title={includedKeys.length === 0 ? 'include a stem' : undefined}
               style={{
                 height: 22,
                 borderRadius: 0,
@@ -825,7 +825,7 @@ export function AutoArrangeRoleStep({
               onConfirm(roles, showLengthAndShape ? { targetSections, shape } : undefined)
             }
             disabled={includedKeys.length === 0}
-            title={includedKeys.length === 0 ? 'include at least one stem first' : undefined}
+            title={includedKeys.length === 0 ? 'include a stem' : undefined}
             style={{
               height: 22,
               borderRadius: 0,

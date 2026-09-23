@@ -258,7 +258,7 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
             opacity: activeInSelectedSection.length === 0 ? 0.3 : 1,
             cursor: activeInSelectedSection.length === 0 ? 'not-allowed' : 'pointer'
           }}
-          title="play everything active in the selected section, together, from each stem's own current position"
+          title="play this section"
         >
           {isPreviewingSelectedSection ? '■' : '▶'} preview section {selectedSection + 1}
           {activeInSelectedSection.length > 0
@@ -285,7 +285,7 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
                     <div
                       key={i}
                       onClick={() => setSelectedSection(i)}
-                      title={`select section ${i + 1} to preview`}
+                      title={`section ${i + 1}`}
                       style={{
                         width: CELL_SIZE,
                         height: 8,
@@ -337,14 +337,14 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
                         padding: '3px 0',
                         textAlign: 'center'
                       }}
-                      title="preview this stem, from its own current position"
+                      title="preview this stem"
                     >
                       {isThisStemPlaying ? '■' : '▶'}
                     </button>
                     {fs && geometry ? (
                       <div
                         onClick={(e) => handleThumbnailClick(e, fs, geometry)}
-                        title={`${fs.stem.name} — click to preview from this point`}
+                        title={fs.stem.name}
                         style={{
                           width: 56,
                           height: 28,
@@ -422,7 +422,7 @@ export function DrawArrangeGridStep({ stems, onApply, onCancel }: Props): React.
           <button
             onClick={handleApply}
             disabled={nothingDrawn}
-            title={nothingDrawn ? 'draw at least one active section first' : 'apply arrangement'}
+            title={nothingDrawn ? 'draw a section' : 'apply arrangement'}
             style={{
               height: 22,
               borderRadius: 0,

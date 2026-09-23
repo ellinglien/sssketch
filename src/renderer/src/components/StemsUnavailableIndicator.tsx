@@ -66,12 +66,7 @@ export function StemsUnavailableIndicator(): React.JSX.Element | null {
   return (
     <button
       onClick={() => setNotice(null)}
-      title={
-        'endlesss is refusing anonymous downloads for part of its storage (http 403), so those stems ' +
-        'cannot be fetched by anyone, logged in or not. sssketch remembers which ones and skips them, ' +
-        'so rolls and imports leave them out instead of failing on them. stems already on your disk ' +
-        'are unaffected. click to dismiss.'
-      }
+      title="some stems unavailable"
       style={{
         position: 'fixed',
         top: 70,

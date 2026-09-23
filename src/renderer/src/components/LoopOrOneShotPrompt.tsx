@@ -183,14 +183,14 @@ export function LoopOrOneShotPrompt({
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={() => onResolve({ type: 'oneShot' })}
-              title="one-shot -- plays once at its own speed"
+              title="plays once"
               style={iconButtonStyle()}
             >
               <OneShotIcon />
             </button>
             <button
               onClick={() => setMode('loop')}
-              title="loop -- stretches to project tempo, tiles across bars"
+              title="stretches to tempo"
               style={iconButtonStyle()}
             >
               <LoopIcon />

@@ -161,13 +161,13 @@ export function Inspector({
               wordBreak: 'break-all',
               cursor: 'pointer'
             }}
-            title="click to re-import this rifff from its source folder"
+            title="re-import this rifff"
           >
             {rifff.folderPath}/
           </div>
           <button
             onClick={() => onSeedDiscover(rifff)}
-            title="replace Discover's current loop with this rifff's own stems, then keep tinkering from there"
+            title="seed discover"
             style={{
               marginTop: 8,
               height: 20,
@@ -305,7 +305,7 @@ export function Inspector({
           >
             <button
               onClick={() => onOpenBeatPicker(groupId)}
-              title="loop start is normally picked once, right at import — reopen this only if it drifted or needs redoing"
+              title="redo loop start"
               style={{
                 height: 20,
                 borderRadius: 0,
@@ -346,7 +346,7 @@ export function Inspector({
             {rifff.stems.length > 1 && (
               <button
                 onClick={() => dispatch({ type: 'UNGROUP', groupId })}
-                title="split every stem into its own independent clip — cannot be undone back into a group"
+                title="split into clips"
                 style={{
                   height: 20,
                   borderRadius: 0,
@@ -368,7 +368,7 @@ export function Inspector({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 24 }}>
                     <button
                       onClick={() => dispatch({ type: 'CYCLE_TYPE', groupId, slot: stem.slot })}
-                      title="click to change sound type"
+                      title="change sound type"
                       style={{
                         width: 6,
                         height: 12,

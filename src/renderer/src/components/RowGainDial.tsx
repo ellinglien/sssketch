@@ -166,7 +166,7 @@ export function RowGainDial({
           defaultValue={Math.round(defaultGain * 100)}
           size={DIAL_SIZE}
           ariaLabel={ariaLabel}
-          tooltip={`gain ${dbLabel(gain)} dB -- drag, scroll or arrow keys; double-click resets`}
+          tooltip={`gain ${dbLabel(gain)} dB`}
         />
       </div>
     </div>

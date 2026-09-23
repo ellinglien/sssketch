@@ -185,7 +185,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                 onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
                 disabled={editDisabled}
                 aria-label={`edit slot ${label} plugin`}
-                data-tooltip={`edit slot ${label} plugin`}
+                data-tooltip={`edit slot ${label}`}
                 style={buttonStyle(editDisabled)}
               >
                 <PencilIcon />

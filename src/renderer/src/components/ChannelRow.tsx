@@ -579,7 +579,7 @@ function ChannelRowImpl({
                     ? isArmed
                       ? 'disarm recording'
                       : 'arm for recording'
-                    : 'select an input device first'
+                    : 'no input device'
                 }
                 style={recordButtonStyle}
               >

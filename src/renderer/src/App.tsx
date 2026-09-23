@@ -816,9 +816,9 @@ function ProjectMenu({
   const autoArrangeSpanBars = placedTimelineSpanBars(state)
   const autoArrangeDisabledReason =
     autoArrangeSpanBars === 0
-      ? 'needs at least one rifff placed on the timeline'
+      ? 'needs a rifff'
       : autoArrangeSpanBars >= AUTO_ARRANGE_MAX_BARS
-        ? `only available for short arrangements (currently ${autoArrangeSpanBars} bars, limit ${AUTO_ARRANGE_MAX_BARS})`
+        ? `too long (${autoArrangeSpanBars} bars)`
         : undefined
 
   const buttonStyle = {
@@ -887,7 +887,7 @@ function ProjectMenu({
           setGearMenu({ x: rect.left, y: rect.bottom + 4 })
         }}
         aria-label="More arranger options"
-        title="tidy up / tidy view"
+        title="tidy options"
         data-tour-id="tour-tidy"
         style={{
           ...buttonStyle,

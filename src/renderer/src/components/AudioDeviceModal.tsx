@@ -81,11 +81,7 @@ export function AudioDeviceModal({
           <select
             value={selectedInputDevice ?? ''}
             disabled={isAnyChannelArmed}
-            title={
-              isAnyChannelArmed
-                ? 'disarm the current recording before changing the input device'
-                : undefined
-            }
+            title={isAnyChannelArmed ? 'disarm recording first' : undefined}
             onChange={(e) => onChangeInput(e.target.value || null)}
             style={{ ...selectStyle, cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer' }}
           >

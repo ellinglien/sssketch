@@ -165,7 +165,7 @@ function moveBlockedReason(
   slots: readonly CoachSlotSnapshot[]
 ): string | null {
   if (action.kind !== 'lock-climax' || canLockClimax(slots)) return null
-  return 'nothing has resolved in discover yet, so there is nothing to lock'
+  return 'nothing to lock'
 }
 
 /**
@@ -483,7 +483,7 @@ function SssketchyCoachPanel({
                 type="button"
                 onClick={onLeaveWalk}
                 style={bubbleButtonStyle}
-                title="stop walking -- the map stays exactly as it is"
+                title="stop walking"
               >
                 leave the walk
               </button>
@@ -532,9 +532,7 @@ function SssketchyCoachPanel({
                     if (primaryMove !== null && primaryBlocked === null) onMove(primaryMove.action)
                   }}
                   title={
-                    primaryMove === null
-                      ? 'this one is yours'
-                      : (primaryBlocked ?? primaryMove.label)
+                    primaryMove === null ? 'over to you' : (primaryBlocked ?? primaryMove.label)
                   }
                   style={{
                     ...bubbleButtonStyle,
@@ -565,7 +563,7 @@ function SssketchyCoachPanel({
                   type="button"
                   onClick={onMinimise}
                   style={bubbleButtonStyle}
-                  title="shrink him to a corner sprite, keeping your place"
+                  title="shrink to corner"
                 >
                   minimise
                 </button>
@@ -573,7 +571,7 @@ function SssketchyCoachPanel({
                   type="button"
                   onClick={onDismiss}
                   style={bubbleButtonStyle}
-                  title="put the flow away -- the sssketchy button brings it back here"
+                  title="put it away"
                 >
                   dismiss
                 </button>

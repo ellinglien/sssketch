@@ -2318,7 +2318,7 @@ export function DiscoverPanel({
         {seedTempo !== null && seedTempo !== bpm && (
           <button
             onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
-            title={`Match seeded riff's own tempo (${seedTempo} bpm)`}
+            title={`seed tempo ${seedTempo} bpm`}
             aria-label="Match seeded riff's own tempo"
             style={{
               height: 18,
@@ -2589,17 +2589,13 @@ export function DiscoverPanel({
                 a slot seeded from a genuinely random stem rather than any
                 one kind's own pool (see addRandomSlot's own doc comment).
                 Sits right after warm, in the trait group, since 2026-09-22. */}
-            <AddRowChip
-              selected={false}
-              title="add a slot seeded from a genuinely random stem, skipping kind matching entirely"
-              onClick={addRandomSlot}
-            >
+            <AddRowChip selected={false} title="random stem" onClick={addRandomSlot}>
               + random
             </AddRowChip>
             <AddRowDivider />
             <AddRowChip
               selected={false}
-              title="pick a WAV file from disk and add it as a new loop-seeded slot -- same import as dragging a file onto this panel"
+              title="import a wav"
               onClick={() => void handlePickSampleImport()}
             >
               + sample
@@ -2640,7 +2636,7 @@ export function DiscoverPanel({
                     disabled
                       ? MY_SOUNDS_NEEDS_USERNAME
                       : isLastSource
-                        ? 'at least one sound source stays on'
+                        ? 'keep one source'
                         : undefined
                   }
                 />
@@ -2676,7 +2672,7 @@ export function DiscoverPanel({
               defaultValue={100}
               size={30}
               ariaLabel="matching"
-              tooltip="more matching clockwise -- drag, scroll, or arrow keys; double-click resets to full"
+              tooltip="more matching clockwise"
             />
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
               matching
@@ -2705,8 +2701,7 @@ export function DiscoverPanel({
 // "matching" caption; the empty left track mirrors it.
 const ADD_ROW_DIAL_COLUMN_WIDTH = 96
 
-const MY_SOUNDS_NEEDS_USERNAME =
-  'set "your username" in the browse tab first -- an empty username can\'t filter to "my sounds"'
+const MY_SOUNDS_NEEDS_USERNAME = 'needs your username'
 
 function AddRowDivider(): React.JSX.Element {
   return (
@@ -3952,7 +3947,7 @@ function DiscoverSlotRow({
             }}
             aria-expanded={kindMenu !== null}
             aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
-            data-tooltip={slot.locked ? 'unlock to change kinds' : slotKindsLabel(slot.kinds)}
+            data-tooltip={slot.locked ? 'unlock first' : slotKindsLabel(slot.kinds)}
             style={{
               display: 'flex',
               alignItems: 'center',

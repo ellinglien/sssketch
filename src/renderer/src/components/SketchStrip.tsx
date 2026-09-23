@@ -419,7 +419,7 @@ export function SketchStrip(): React.JSX.Element {
             onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => handleBarsMouseDown(e, rifff)}
-            title={`${rifff.name} — shift/cmd-click to multi-select · right-click and drag to adjust length · ctrl+right-click to solo`}
+            title={rifff.name}
             style={{
               order: index * 10,
               position: 'relative',

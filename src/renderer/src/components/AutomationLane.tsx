@@ -509,7 +509,7 @@ export function AutomationLane({
             <select
               value={param}
               aria-label={`automation parameter for ${laneId}`}
-              title={`which parameter this lane edits (${AUTOMATION_PARAM_LABEL[param]})`}
+              title={`parameter: ${AUTOMATION_PARAM_LABEL[param]}`}
               onChange={(e) =>
                 dispatch({
                   type: 'SET_AUTOMATION_PARAM',
@@ -552,7 +552,7 @@ export function AutomationLane({
               }}
               onMouseDown={(e) => e.stopPropagation()}
               aria-label={`clear ${AUTOMATION_PARAM_LABEL[param]} automation on ${laneId}`}
-              title="clear this lane (right-clicking the lane does the same)"
+              title="clear this lane"
               style={clearButtonStyle}
             >
               x
@@ -567,7 +567,7 @@ export function AutomationLane({
               onMouseDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
               aria-label={`close the ${laneId} lane`}
-              title="close this lane (escape does the same)"
+              title="close this lane"
               style={clearButtonStyle}
             >
               done

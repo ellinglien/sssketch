@@ -448,10 +448,10 @@ export function ProjectLibraryBrowser({
                   disabled={sketch.name === currentLibraryName}
                   title={
                     sketch.name === currentLibraryName
-                      ? "can't delete the sketch you're currently working in"
+                      ? 'currently open'
                       : deleteArmedName === sketch.name
-                        ? 'click again to delete (moves to trash)'
-                        : 'delete (moves to trash)'
+                        ? 'confirm delete'
+                        : 'delete to trash'
                   }
                   aria-label={
                     deleteArmedName === sketch.name
@@ -493,7 +493,7 @@ export function ProjectLibraryBrowser({
                           void handlePreviewClick(sketch.name, backup.path)
                         }}
                         data-tooltip={
-                          previewingPath === backup.path ? 'stop preview' : 'preview (audio only)'
+                          previewingPath === backup.path ? 'stop preview' : 'preview audio'
                         }
                         aria-label={
                           previewingPath === backup.path
@@ -515,7 +515,7 @@ export function ProjectLibraryBrowser({
                         }}
                         data-tooltip={
                           restoreArmedPath === backup.path
-                            ? 'click again to restore this version'
+                            ? 'confirm restore'
                             : 'restore this version'
                         }
                         aria-label={

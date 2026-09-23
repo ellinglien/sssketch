@@ -49,18 +49,7 @@ export type MatchMeterEntry = MatchMeterMaskEntry | MatchMeterTraitEntry
 const SOURCE_DESCRIPTION: Record<DiscoverKindSource, string> = {
   confirmed: 'confirmed by you',
   tag: 'endlesss instrument tag',
-  guess: "the overnight classifier's guess"
-}
-
-// rhythmic says "more rhythmic" whichever field placed the stem: its
-// percentile now usually comes from rhythmicStrength (a steady groove), and
-// "busier" would only be accurate for old rows still ranked by raw
-// transientDensity -- a transitional case not worth a second phrase.
-const TRAIT_COMPARATIVE: Record<DiscoverTraitKind, string> = {
-  bassHeavy: 'more bass-heavy',
-  rhythmic: 'more rhythmic',
-  bright: 'brighter',
-  warm: 'warmer'
+  guess: "classifier's guess"
 }
 
 /** Filled steps for a library percentile: ceil(p * 5), so any stem above
@@ -86,7 +75,7 @@ function maskEntry(
     label,
     source,
     text: `${label}: ${source}`,
-    tooltip: `${label}: ${SOURCE_DESCRIPTION[source]} · click to reclassify`
+    tooltip: SOURCE_DESCRIPTION[source]
   }
 }
 
@@ -107,14 +96,12 @@ function traitEntry(
       filled,
       bars,
       text: `${label} ${bars}`,
-      tooltip: `${label}: not analysed yet`
+      tooltip: 'not analysed yet'
     }
   }
   const pct = Math.round(Math.min(1, Math.max(0, percentile)) * 100)
-  let tooltip = `${label}: ${TRAIT_COMPARATIVE[kind]} than ${pct}% of your library`
-  if (barUsed !== null && barUsed < barRequested - 1e-9) {
-    tooltip += ` · bar relaxed to top ${Math.round((1 - barUsed) * 100)}% because few stems matched`
-  }
+  const relaxed = barUsed !== null && barUsed < barRequested - 1e-9
+  const tooltip = `${label}: ${pct}%${relaxed ? ' · relaxed' : ''}`
   return { type: 'trait', kind, label, filled, bars, text: `${label} ${bars}`, tooltip }
 }
 
@@ -123,7 +110,7 @@ function traitEntry(
  *   when that kind didn't (another mask kind of the set did, or the stem
  *   was reclassified away from it);
  * - a trait kind shows 5-step bars from the stem's library percentile, with
- *   the exact number (and a relaxed-bar note when barUsed < the default
+ *   the exact number (and a `· relaxed` marker when barUsed < the requested
  *   bar) in the tooltip;
  * - `reclassified` (a Discover reclassify to a role none of the slot's
  *   mask kinds covers) adds one confirmed entry for that role, so the

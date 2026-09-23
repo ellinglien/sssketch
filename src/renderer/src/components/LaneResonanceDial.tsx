@@ -83,7 +83,7 @@ export function LaneResonanceDial({
       defaultValue={0}
       size={DIAL_SIZE}
       ariaLabel={ariaLabel}
-      tooltip={`resonance ${Math.round(resonance * 100)} -- sharpens the filter corner, so it is only audible where the drawn cutoff moves; drag, scroll or arrow keys, double-click resets`}
+      tooltip={`resonance ${Math.round(resonance * 100)}`}
     />
   )
 }

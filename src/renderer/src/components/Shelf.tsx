@@ -388,7 +388,7 @@ export function Shelf({
                   setPreviewingGroupId(null)
                   onSeedDiscover(rifff)
                 }}
-                title={`${rifff.name} — click to preview, drag to arrange, right-click to seed Discover with these stems, shift/cmd-click to multi-select, delete to remove from library`}
+                title={rifff.name}
                 style={{
                   width: TILE_SIZE,
                   height: TILE_SIZE,
@@ -421,7 +421,7 @@ export function Shelf({
             onDrop={handleDrop}
             onClick={() => void handlePickImport()}
             role="button"
-            title="drop rifff folders or stems straight from endlesss, or click to pick from disk"
+            title="import stems"
             style={{
               flex: 1,
               minWidth: 150,

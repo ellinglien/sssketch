@@ -192,7 +192,7 @@ export function ChannelChainPanel({
                 onClick={() => void window.rifffApi.engineOpenChannelPluginEditor(channelId, slot)}
                 disabled={editDisabled}
                 aria-label={`edit channel ${channelId} slot ${label} plugin`}
-                data-tooltip={`edit channel ${channelId} slot ${label} plugin`}
+                data-tooltip={`edit slot ${label}`}
                 style={buttonStyle(editDisabled)}
               >
                 <PencilIcon />

@@ -955,7 +955,7 @@ export function BeatPicker({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
                 onClick={() => navigateRef.current(-1)}
-                title="previous riff in this batch (←)"
+                title="previous riff (←)"
                 style={{
                   height: 22,
                   width: 22,
@@ -974,7 +974,7 @@ export function BeatPicker({
               </span>
               <button
                 onClick={() => navigateRef.current(1)}
-                title="next riff in this batch (→)"
+                title="next riff (→)"
                 style={{
                   height: 22,
                   width: 22,
@@ -1025,7 +1025,7 @@ export function BeatPicker({
                   onClick={() =>
                     dispatch({ type: 'SET_SNAP_IDX', snapIdx: idx as 0 | 1 | 2 | 3 | 4 })
                   }
-                  title={`snap grid to 1/${div} notes`}
+                  title={`1/${div} notes`}
                   style={{
                     height: 22,
                     minWidth: 30,
@@ -1078,9 +1078,7 @@ export function BeatPicker({
             <button
               onClick={handlePlayStopClick}
               title={
-                isFreePlaying || previewingBeat !== null
-                  ? 'stop preview audio'
-                  : 'click a beat below, or play and hit space where the loop begins'
+                isFreePlaying || previewingBeat !== null ? 'stop preview audio' : 'play the loop'
               }
               style={{
                 height: 22,
@@ -1300,7 +1298,7 @@ export function BeatPicker({
             <button
               onClick={cancelImport}
               disabled={applying}
-              title="discard this import — removes it from the shelf"
+              title="discard this import"
               style={{
                 height: 34,
                 borderRadius: 0,
@@ -1326,7 +1324,7 @@ export function BeatPicker({
               <button
                 onClick={() => cancelPendingRef.current()}
                 disabled={applying}
-                title="discard this pick, back to how it was before"
+                title="discard this pick"
                 style={{
                   height: 34,
                   borderRadius: 0,
@@ -1345,7 +1343,7 @@ export function BeatPicker({
               <button
                 onClick={() => confirmPendingRef.current()}
                 disabled={applying}
-                title="bake this pick into the audio file"
+                title="bake this pick"
                 style={{
                   height: 34,
                   borderRadius: 0,

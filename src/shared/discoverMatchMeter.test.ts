@@ -7,6 +7,13 @@ import {
   reclassifyKindSources,
   traitBarsFilled
 } from './discoverMatchMeter'
+import {
+  DISCOVER_MASK_SLOT_KINDS,
+  DISCOVER_TRAIT_SLOT_KINDS,
+  type DiscoverKindSource,
+  type DiscoverMaskKind,
+  type DiscoverTraitKind
+} from './discoverSlotKind'
 
 describe('traitBarsFilled', () => {
   it('fills ceil(percentile * 5) of 5 steps', () => {
@@ -43,7 +50,7 @@ describe('buildMatchMeter', () => {
         label: 'drummy',
         source: 'tag',
         text: 'drummy: tag',
-        tooltip: 'drummy: endlesss instrument tag · click to reclassify'
+        tooltip: 'endlesss instrument tag'
       },
       {
         type: 'mask',
@@ -51,7 +58,7 @@ describe('buildMatchMeter', () => {
         label: 'bassish',
         source: 'guess',
         text: 'bassish: guess',
-        tooltip: "bassish: the overnight classifier's guess · click to reclassify"
+        tooltip: "classifier's guess"
       }
     ])
   })
@@ -64,7 +71,7 @@ describe('buildMatchMeter', () => {
       barUsed: null
     })
     expect(entries.map((e) => e.text)).toEqual(['leadesque: confirmed'])
-    expect(entries[0].tooltip).toBe('leadesque: confirmed by you · click to reclassify')
+    expect(entries[0].tooltip).toBe('confirmed by you')
   })
 
   it('a trait entry shows 5-step bars from the library percentile', () => {
@@ -82,11 +89,11 @@ describe('buildMatchMeter', () => {
       filled: 5,
       bars: '▮▮▮▮▮',
       text: 'sparkly ▮▮▮▮▮',
-      tooltip: 'sparkly: brighter than 83% of your library'
+      tooltip: 'sparkly: 83%'
     })
   })
 
-  it('each trait gets its own phrasing', () => {
+  it('each trait reads back its own percentile', () => {
     const entries = buildMatchMeter({
       kinds: ['bassHeavy', 'rhythmic', 'warm'],
       kindSources: {},
@@ -94,11 +101,7 @@ describe('buildMatchMeter', () => {
       barUsed: 0.6,
       barRequested: 0.6
     })
-    expect(entries.map((e) => e.tooltip)).toEqual([
-      'chonky: more bass-heavy than 50% of your library',
-      'rhythmic: more rhythmic than 70% of your library',
-      'buttery: warmer than 64% of your library'
-    ])
+    expect(entries.map((e) => e.tooltip)).toEqual(['chonky: 50%', 'rhythmic: 70%', 'buttery: 64%'])
     expect(entries.map((e) => (e.type === 'trait' ? e.bars : ''))).toEqual([
       '▮▮▮▯▯',
       '▮▮▮▮▯',
@@ -114,9 +117,7 @@ describe('buildMatchMeter', () => {
       barUsed: 0.4,
       barRequested: 0.6
     })
-    expect(entry.tooltip).toBe(
-      'sparkly: brighter than 42% of your library · bar relaxed to top 60% because few stems matched'
-    )
+    expect(entry.tooltip).toBe('sparkly: 42% · relaxed')
   })
 
   it('a fully relaxed bar (0) says so', () => {
@@ -127,9 +128,7 @@ describe('buildMatchMeter', () => {
       barUsed: 0,
       barRequested: 0.6
     })
-    expect(entry.tooltip).toBe(
-      'sparkly: brighter than 10% of your library · bar relaxed to top 100% because few stems matched'
-    )
+    expect(entry.tooltip).toBe('sparkly: 10% · relaxed')
   })
 
   it('an unanalysed stem shows empty bars and says so', () => {
@@ -142,7 +141,7 @@ describe('buildMatchMeter', () => {
     expect(entry).toMatchObject({
       filled: 0,
       bars: '▯▯▯▯▯',
-      tooltip: 'rhythmic: not analysed yet'
+      tooltip: 'not analysed yet'
     })
   })
 
@@ -172,7 +171,7 @@ describe('buildMatchMeter', () => {
       label: 'texture/fx',
       source: 'confirmed',
       text: 'texture/fx: confirmed',
-      tooltip: 'texture/fx: confirmed by you · click to reclassify'
+      tooltip: 'confirmed by you'
     })
     expect(entries).toHaveLength(2)
   })
@@ -234,8 +233,8 @@ describe('reclassify roles', () => {
   })
 })
 
-describe('buildMatchMeter relaxed note follows the requested bar', () => {
-  it('no note when the pick met a strict requested bar', () => {
+describe('buildMatchMeter relaxed marker follows the requested bar', () => {
+  it('no marker when the pick met a strict requested bar', () => {
     const [entry] = buildMatchMeter({
       kinds: ['bright'],
       kindSources: {},
@@ -243,10 +242,10 @@ describe('buildMatchMeter relaxed note follows the requested bar', () => {
       barUsed: 0.9,
       barRequested: 0.9
     })
-    expect(entry.tooltip).toBe('sparkly: brighter than 95% of your library')
+    expect(entry.tooltip).toBe('sparkly: 95%')
   })
 
-  it('notes relaxation from a strict requested bar', () => {
+  it('marks relaxation from a strict requested bar', () => {
     const [entry] = buildMatchMeter({
       kinds: ['bright'],
       kindSources: {},
@@ -254,6 +253,51 @@ describe('buildMatchMeter relaxed note follows the requested bar', () => {
       barUsed: 0.8,
       barRequested: 0.9
     })
-    expect(entry.tooltip).toContain('bar relaxed to top 20%')
+    expect(entry.tooltip).toContain('· relaxed')
+  })
+})
+
+// The app's tooltip rule, from the author (2026-09-23): "for any tooltips in
+// the app, make them very succinct, no more than two or three words each".
+// A live value readout counts as one word, not prose. These are the only
+// tooltip strings in the app built as data rather than written inline in
+// JSX, so they are the only ones a test can reach; the rest are literals in
+// components and are held to the same rule by review.
+describe('match meter tooltips are at most three words', () => {
+  function wordCount(tooltip: string): number {
+    return tooltip.split(/\s+/).filter((word) => word.length > 0 && word !== '·').length
+  }
+
+  const sources: DiscoverKindSource[] = ['confirmed', 'tag', 'guess']
+
+  it('every mask entry tooltip', () => {
+    for (const kind of DISCOVER_MASK_SLOT_KINDS) {
+      for (const source of sources) {
+        const [entry] = buildMatchMeter({
+          kinds: [kind],
+          kindSources: { [kind as DiscoverMaskKind]: source },
+          traitPercentiles: {},
+          barUsed: null
+        })
+        expect(wordCount(entry.tooltip), entry.tooltip).toBeLessThanOrEqual(3)
+      }
+    }
+  })
+
+  it('every trait entry tooltip, analysed, unanalysed and relaxed', () => {
+    for (const kind of DISCOVER_TRAIT_SLOT_KINDS) {
+      for (const percentile of [undefined, 0, 0.42, 1]) {
+        for (const barUsed of [null, 0.4, 0.9]) {
+          const [entry] = buildMatchMeter({
+            kinds: [kind],
+            kindSources: {},
+            traitPercentiles: { [kind as DiscoverTraitKind]: percentile },
+            barUsed,
+            barRequested: 0.9
+          })
+          expect(wordCount(entry.tooltip), entry.tooltip).toBeLessThanOrEqual(3)
+        }
+      }
+    }
   })
 })

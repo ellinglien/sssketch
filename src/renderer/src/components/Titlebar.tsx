@@ -164,7 +164,7 @@ export function Titlebar({
         <button
           onClick={onToggleMapView}
           aria-label="Show the arrangement map"
-          data-tooltip="switch between the map and the timeline"
+          data-tooltip="map or timeline"
           data-tour-id="tour-map"
           style={{
             ...buttonStyle,
@@ -179,11 +179,7 @@ export function Titlebar({
           onClick={onCycleMode}
           aria-label="Cycle arranger mode"
           data-tour-id="tour-mode"
-          title={
-            !sketchEligible
-              ? `mode: ${modeLabel(mode)} (Tab) — sketch unavailable: clear fades, resizes, offsets, unlinked stems, and gaps first`
-              : `mode: ${modeLabel(mode)} (Tab)`
-          }
+          title={!sketchEligible ? 'sketch unavailable' : `mode: ${modeLabel(mode)} (Tab)`}
           style={{
             ...buttonStyle,
             // Fixed, not content-width -- the three labels are different

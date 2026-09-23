@@ -283,7 +283,7 @@ export function AutoArrangeCoachStep({
             type="button"
             onClick={build}
             disabled={!ready}
-            title={ready ? undefined : 'answer both questions first'}
+            title={ready ? undefined : 'answer both first'}
             style={{
               ...buttonStyle,
               border: '1px solid var(--ra-border-strong)',
