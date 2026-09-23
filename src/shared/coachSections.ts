@@ -1,21 +1,27 @@
 /**
- * Phase two, as plain data: what a section IS, how long it is by default,
- * which stems that kind of section usually loses, and what usually follows
- * it.
+ * What a section IS, as plain data: its type, its length in passes of the
+ * loop, which stems play in which pass, and what usually follows it.
  *
- * THE RULE THIS FILE EXISTS TO ENCODE (spec, "Phase 2 -- sections, one at a
- * time"): **everything is on, and the user subtracts.** A section is the
- * full climax loop until the person building it says otherwise. The table
- * below is the ONE place in this whole feature where the app asserts
- * anything musical, and it is kept legitimate by being a MARK rather than a
- * change: suggestedDropPaths only ever answers "which stems would this
- * section type usually lose", and nothing here ever puts one of those paths
- * into a draft. Applying them is a click (dropSuggestedCoachSectionStems,
- * ./coachPhase2.ts). A suggestion you can ignore costs nothing when it is
- * wrong; a pre-applied default is a decision you have to notice and undo.
+ * THE RULE THIS FILE USED TO ENCODE WAS THE OPPOSITE OF TODAY'S. Until
+ * 2026-09-23 a section started as the full climax loop and the user
+ * subtracted, and this comment told you never to seed a draft from the
+ * suggestion table. **That rule is gone, deliberately** (spec:
+ * docs/superpowers/specs/2026-09-23-arrangement-map-design.md, "The map
+ * arrives pre-filled, and says so"): the map now arrives filled in from a
+ * template -- intro sparse, drop full, build without the hook -- because
+ * "eight identical sections is the blank page again, and the whole value of
+ * paint-by-numbers is that it does the imagining the user cannot do yet."
  *
- * So: a fresh draft's droppedPaths is ALWAYS empty. If you are reading this
- * because you are about to seed it from the table, don't.
+ * What makes the reversal legitimate is the map itself: it shows the entire
+ * song at once, so nothing is removed invisibly, and sssketchy states that
+ * he made the call and states the way out ("cmd+z puts everything back on
+ * if you would rather start full"). If you are about to "restore
+ * consistency" by inverting this back to everything-on, read the spec
+ * first: the reversal IS the feature.
+ *
+ * The pre-fill itself lives in ./coachMapTemplate.ts, computed rather than
+ * stored, so a section on disk only ever carries the cells the user
+ * CHANGED (./coachCells.ts).
  *
  * The flags key off the kinds DISCOVER tagged each stem with, carried on the
  * locked climax (LockedClimaxStem.kinds) -- never stem order, never channel
@@ -23,9 +29,16 @@
  */
 
 import { kindsCoverSet, type LockedClimax, type LockedClimaxStem } from './coachClimax'
+import { cellIsOn, sanitiseCoachCells, setStemAcrossPasses, type CoachCells } from './coachCells'
+import {
+  COACH_SECTION_MAX_PASSES,
+  COACH_SECTION_MIN_PASSES,
+  passesForTargetBars,
+  sectionBars
+} from './coachPasses'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
-export type CoachSectionType = 'intro' | 'build' | 'drop' | 'breakdown' | 'outro'
+export type CoachSectionType = 'intro' | 'verse' | 'build' | 'drop' | 'breakdown' | 'outro'
 
 /** What the section panel's own buttons do, as data rather than as
  * callbacks -- so a step row can list them under "stuck?" and the bubble's
@@ -37,22 +50,24 @@ export interface CoachSectionTypeDef {
   /** Shown on the panel's buttons and used as a section's default name.
    * Lowercase, like all UI copy in this app. */
   label: string
-  /** A starting length, in bars, nudgeable by +/-4 and +/-8. Always a whole
-   * number of ARRANGE_STEP_BARS (4), so a guided section lands on the same
-   * boundaries auto-arrange and draw-arrange use. */
-  defaultBars: number
 }
 
+/** No `defaultBars` any more: a section's length comes from the shape
+ * template's TARGET bar count (./coachShapes.ts), rounded to whole passes
+ * of whatever the user said the phrase is. A hardcoded bar count here had
+ * no relationship to the loop at all -- see ./coachPasses.ts. */
 const COACH_SECTION_TYPE_BY_ID: Record<CoachSectionType, CoachSectionTypeDef> = {
-  intro: { id: 'intro', label: 'intro', defaultBars: 8 },
-  build: { id: 'build', label: 'build', defaultBars: 16 },
-  drop: { id: 'drop', label: 'drop', defaultBars: 16 },
-  breakdown: { id: 'breakdown', label: 'breakdown', defaultBars: 8 },
-  outro: { id: 'outro', label: 'outro', defaultBars: 8 }
+  intro: { id: 'intro', label: 'intro' },
+  verse: { id: 'verse', label: 'verse' },
+  build: { id: 'build', label: 'build' },
+  drop: { id: 'drop', label: 'drop' },
+  breakdown: { id: 'breakdown', label: 'breakdown' },
+  outro: { id: 'outro', label: 'outro' }
 }
 
 export const COACH_SECTION_TYPES: readonly CoachSectionTypeDef[] = [
   COACH_SECTION_TYPE_BY_ID.intro,
+  COACH_SECTION_TYPE_BY_ID.verse,
   COACH_SECTION_TYPE_BY_ID.build,
   COACH_SECTION_TYPE_BY_ID.drop,
   COACH_SECTION_TYPE_BY_ID.breakdown,
@@ -67,22 +82,6 @@ export function coachSectionTypeDef(type: CoachSectionType): CoachSectionTypeDef
 
 export function isCoachSectionType(value: unknown): value is CoachSectionType {
   return typeof value === 'string' && value in COACH_SECTION_TYPE_BY_ID
-}
-
-/** Four bars is the smallest section this flow will build (one
- * ARRANGE_STEP_BARS step); 64 is a deliberately generous ceiling so the
- * nudge buttons cannot run away. Its own number, not imported from
- * auto-arrange's own cap -- the two limits happen to match today and there
- * is no reason they must stay tied. */
-export const COACH_SECTION_MIN_BARS = 4
-export const COACH_SECTION_MAX_BARS = 64
-
-/** The spec's "nudgeable +/-4/+/-8", in the order the panel renders them. */
-export const COACH_SECTION_BAR_NUDGES: readonly number[] = [-8, -4, 4, 8]
-
-export function nudgeSectionBars(bars: number, delta: number): number {
-  const next = Math.round(bars + delta)
-  return Math.max(COACH_SECTION_MIN_BARS, Math.min(COACH_SECTION_MAX_BARS, next))
 }
 
 /**
@@ -115,6 +114,10 @@ export const COACH_SECTION_DROP_SETS: Record<
   readonly (readonly DiscoverSlotKind[])[]
 > = {
   intro: [['lead']],
+  // The hook only. "the verse should hint at the drop without giving it
+  // away" is the spec's own example of a good line; this is that line as
+  // data. Harmony stays -- a verse with no chords is a build.
+  verse: [['lead', 'bright']],
   build: [['lead', 'bright']],
   drop: [],
   breakdown: [['drums'], ['bass']],
@@ -148,9 +151,10 @@ export function suggestedDropPaths(type: CoachSectionType, climax: LockedClimax)
  * see placeCoachSection in ./coachPhase2.ts.
  */
 export const COACH_SECTION_TRANSITIONS: Record<CoachSectionType, readonly CoachSectionType[]> = {
-  intro: ['build', 'drop'],
+  intro: ['verse', 'build', 'drop'],
+  verse: ['build', 'drop'],
   build: ['drop'],
-  drop: ['breakdown', 'outro'],
+  drop: ['verse', 'breakdown', 'outro'],
   breakdown: ['build', 'drop'],
   outro: []
 }
@@ -166,17 +170,25 @@ export function nextSectionTypeSuggestions(
   return COACH_SECTION_TRANSITIONS[sections[sections.length - 1].type]
 }
 
-/** One section the user has finished and placed. Plain, persisted data. */
+/** One section of the map. Plain, persisted data. */
 export interface CoachSection {
+  /** Stable across re-sizes, renames and reorders -- the map UI keys its
+   * columns off this, and a cell edit must not follow the index when a
+   * section is inserted before it. Never shown to the user. */
+  id: string
   type: CoachSectionType
   /** The user's own name for it; defaults to the type's label. */
   name: string
-  bars: number
-  /** The paths of the climax stems the user switched OFF. Everything not
-   * listed here PLAYS. Storing the subtraction rather than the selection is
-   * the everything-on rule written into the data itself: an empty list is
-   * the full loop, and no stem can ever go missing by omission. */
-  droppedPaths: string[]
+  /** Its length, as a count of passes of the phrase (./coachPasses.ts).
+   * Bars are derived -- sectionBars(passes, phraseBars) -- because the
+   * phrase length is the user's answer and can change under a section
+   * without rebuilding it. */
+  passes: number
+  /** The cells the USER changed, sparse (./coachCells.ts). Everything not
+   * in here is answered by the template (./coachMapTemplate.ts). An empty
+   * record is a section exactly as the template drew it, which is what a
+   * freshly built map is made of. */
+  cells: CoachCells
   /** Where it really went on the timeline. */
   startBar: number
   /** climax stem path -> the groupId that stem was placed as, which is also
@@ -191,8 +203,8 @@ export interface CoachSection {
 export interface CoachSectionDraft {
   type: CoachSectionType
   name: string
-  bars: number
-  droppedPaths: string[]
+  passes: number
+  cells: CoachCells
 }
 
 /** "drop", then "drop 2" the second time. Counts by TYPE, not by name, so
@@ -207,33 +219,41 @@ export function defaultSectionName(
 }
 
 /**
- * A new section, EVERYTHING ON.
+ * A new section, PRE-FILLED from the template.
  *
- * `droppedPaths: []` is not a default that happens to be empty -- it is the
- * feature. Do not seed it from COACH_SECTION_DROP_SETS here or anywhere
- * else; that table is a mark, and applying it is a click the user makes.
+ * `cells: {}` does not mean "nothing plays" -- it means "nothing has been
+ * overridden", so every cell reads whatever the template says for this
+ * section type. That is the deliberate reversal of the old everything-on
+ * rule; see this module's own doc comment before changing it.
  */
 export function newCoachSectionDraft(
   type: CoachSectionType,
-  sections: readonly CoachSection[]
+  sections: readonly CoachSection[],
+  passes: number
 ): CoachSectionDraft {
-  return {
-    type,
-    name: defaultSectionName(type, sections),
-    bars: coachSectionTypeDef(type).defaultBars,
-    droppedPaths: []
-  }
+  return { type, name: defaultSectionName(type, sections), passes, cells: {} }
 }
 
-/** The stems that actually play in this section, in the locked climax's own
- * order. A path in droppedPaths that no longer matches any stem is simply
- * ignored. */
-export function sectionKeptStems(
-  climax: LockedClimax,
-  droppedPaths: readonly string[]
+/** The stems that actually play in ONE PASS of this section, in whatever
+ * row order `stems` is already in (coachMapRowOrder, ./coachMapTemplate.ts).
+ * `fallback` answers a cell the user has not touched -- the template's own
+ * answer.
+ *
+ * Takes the template's answer as a CALLBACK rather than importing it, so
+ * this module stays free of the template and the two cannot form a cycle.
+ *
+ * No `climax` parameter: the caller has already turned the climax into the
+ * ordered `stems` list it wants asked about, and taking both would be two
+ * sources for one question. */
+export function sectionStemsInPass(
+  section: { cells: CoachCells },
+  passIndex: number,
+  stems: readonly LockedClimaxStem[],
+  fallback: (stem: LockedClimaxStem, passIndex: number) => boolean
 ): LockedClimaxStem[] {
-  const dropped = new Set(droppedPaths)
-  return climax.stems.filter((stem) => !dropped.has(stem.path))
+  return stems.filter((stem) =>
+    cellIsOn(section.cells, passIndex, stem.path, fallback(stem, passIndex))
+  )
 }
 
 /** climax stem path -> the channel row that stem already owns, taken from
@@ -257,21 +277,44 @@ export function sectionLaneChannelIds(sections: readonly CoachSection[]): Record
  * subtracting every stem is a real musical move, not an error. */
 export function nextCoachSectionStartBar(
   sections: readonly CoachSection[],
-  fallbackBar: number
+  fallbackBar: number,
+  phraseBars: number
 ): number {
   if (sections.length === 0) return Math.max(0, Math.round(fallbackBar))
   const last = sections[sections.length - 1]
-  return last.startBar + last.bars
+  return last.startBar + sectionBars(last.passes, phraseBars)
 }
 
-function finiteBars(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
-  return Math.max(COACH_SECTION_MIN_BARS, Math.min(COACH_SECTION_MAX_BARS, Math.round(value)))
+/** Sections saved before 2026-09-23 carried `bars` and `droppedPaths`.
+ * They are brought up to today's shape here, once, on load: the bar count
+ * becomes a pass count at the phrase length the project now has (or one
+ * pass when it has none yet -- the map's own re-size fixes that the moment
+ * he answers), and each dropped path becomes an explicit OFF cell in every
+ * pass, which is exactly what it meant. */
+function migratedPasses(loose: Record<string, unknown>, phraseBars: number): number {
+  const passes = loose.passes
+  if (typeof passes === 'number' && Number.isFinite(passes)) {
+    return Math.max(
+      COACH_SECTION_MIN_PASSES,
+      Math.min(COACH_SECTION_MAX_PASSES, Math.round(passes))
+    )
+  }
+  const bars = loose.bars
+  if (typeof bars === 'number' && Number.isFinite(bars)) {
+    return passesForTargetBars(bars, phraseBars)
+  }
+  return COACH_SECTION_MIN_PASSES
 }
 
-function loadedPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((path): path is string => typeof path === 'string')
+function migratedCells(loose: Record<string, unknown>, passes: number): CoachCells {
+  const cells = sanitiseCoachCells(loose.cells)
+  if (Object.keys(cells).length > 0 || !Array.isArray(loose.droppedPaths)) return cells
+  let migrated: CoachCells = {}
+  for (const path of loose.droppedPaths) {
+    if (typeof path !== 'string') continue
+    migrated = setStemAcrossPasses(migrated, passes, path, false)
+  }
+  return migrated
 }
 
 function loadedGroupIds(value: unknown): Record<string, string> {
@@ -290,10 +333,10 @@ function loadedGroupIds(value: unknown): Record<string, string> {
  * hand-edit, and a load must never throw. A section whose type is not one of
  * the five is dropped entirely rather than guessed at.
  */
-export function sanitiseCoachSections(value: unknown): CoachSection[] {
+export function sanitiseCoachSections(value: unknown, phraseBars: number): CoachSection[] {
   if (!Array.isArray(value)) return []
   const sections: CoachSection[] = []
-  for (const entry of value) {
+  for (const [index, entry] of value.entries()) {
     if (typeof entry !== 'object' || entry === null) continue
     const loose = entry as Record<string, unknown>
     if (!isCoachSectionType(loose.type)) continue
@@ -301,14 +344,18 @@ export function sanitiseCoachSections(value: unknown): CoachSection[] {
       typeof loose.startBar === 'number' && Number.isFinite(loose.startBar)
         ? Math.max(0, Math.round(loose.startBar))
         : 0
+    const passes = migratedPasses(loose, phraseBars)
     sections.push({
+      // A missing id is minted from the index -- stable within a load,
+      // which is all it has to be.
+      id: typeof loose.id === 'string' && loose.id !== '' ? loose.id : `section-${index}`,
       type: loose.type,
       name:
         typeof loose.name === 'string' && loose.name !== ''
           ? loose.name
           : coachSectionTypeDef(loose.type).label,
-      bars: finiteBars(loose.bars, coachSectionTypeDef(loose.type).defaultBars),
-      droppedPaths: loadedPaths(loose.droppedPaths),
+      passes,
+      cells: migratedCells(loose, passes),
       startBar,
       placedGroupIds: loadedGroupIds(loose.placedGroupIds)
     })
@@ -318,17 +365,21 @@ export function sanitiseCoachSections(value: unknown): CoachSection[] {
 
 /** The in-progress section, or null. Same rules; an unusable draft is
  * discarded rather than repaired into a section the user never started. */
-export function sanitiseCoachSectionDraft(value: unknown): CoachSectionDraft | null {
+export function sanitiseCoachSectionDraft(
+  value: unknown,
+  phraseBars: number
+): CoachSectionDraft | null {
   if (typeof value !== 'object' || value === null) return null
   const loose = value as Record<string, unknown>
   if (!isCoachSectionType(loose.type)) return null
+  const passes = migratedPasses(loose, phraseBars)
   return {
     type: loose.type,
     name:
       typeof loose.name === 'string' && loose.name !== ''
         ? loose.name
         : coachSectionTypeDef(loose.type).label,
-    bars: finiteBars(loose.bars, coachSectionTypeDef(loose.type).defaultBars),
-    droppedPaths: loadedPaths(loose.droppedPaths)
+    passes,
+    cells: migratedCells(loose, passes)
   }
 }

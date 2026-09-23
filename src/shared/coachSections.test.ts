@@ -1,23 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import type { LockedClimax, LockedClimaxStem } from './coachClimax'
+import { cellIsOn, setCell } from './coachCells'
 import {
   COACH_FIRST_SECTION_TYPES,
   COACH_SECTION_DROP_SETS,
-  COACH_SECTION_MAX_BARS,
-  COACH_SECTION_MIN_BARS,
   COACH_SECTION_TRANSITIONS,
   COACH_SECTION_TYPES,
   coachSectionTypeDef,
   defaultSectionName,
   isCoachSectionType,
+  isSuggestedDrop,
   newCoachSectionDraft,
   nextCoachSectionStartBar,
   nextSectionTypeSuggestions,
-  nudgeSectionBars,
   sanitiseCoachSectionDraft,
   sanitiseCoachSections,
-  sectionKeptStems,
   sectionLaneChannelIds,
+  sectionStemsInPass,
   suggestedDropPaths,
   type CoachSection
 } from './coachSections'
@@ -49,10 +48,15 @@ const climax: LockedClimax = {
   ]
 }
 
+/** The template answer used by the tests below that do not care what it is:
+ * "everything plays in every pass". */
+const allOn = (): boolean => true
+
 describe('the section types', () => {
-  it('are the five the spec names, in flow order', () => {
+  it('are the six the spec names, in flow order', () => {
     expect(COACH_SECTION_TYPES.map((t) => t.id)).toEqual([
       'intro',
+      'verse',
       'build',
       'drop',
       'breakdown',
@@ -60,29 +64,19 @@ describe('the section types', () => {
     ])
   })
 
-  it('carry a default length that is a whole number of four-bar steps', () => {
+  it('carry a label and nothing else -- length comes from the shape template now', () => {
     for (const type of COACH_SECTION_TYPES) {
-      expect(type.defaultBars % 4).toBe(0)
-      expect(type.defaultBars).toBeGreaterThanOrEqual(COACH_SECTION_MIN_BARS)
-      expect(type.defaultBars).toBeLessThanOrEqual(COACH_SECTION_MAX_BARS)
+      expect(type.label).toBe(type.id)
+      expect('defaultBars' in type).toBe(false)
     }
-    expect(coachSectionTypeDef('drop').defaultBars).toBe(16)
+    expect(coachSectionTypeDef('drop').label).toBe('drop')
   })
 
   it('narrow a persisted string', () => {
     expect(isCoachSectionType('breakdown')).toBe(true)
+    expect(isCoachSectionType('verse')).toBe(true)
     expect(isCoachSectionType('chorus')).toBe(false)
     expect(isCoachSectionType(7)).toBe(false)
-  })
-})
-
-describe('nudgeSectionBars', () => {
-  it('moves by the given step and clamps at both ends', () => {
-    expect(nudgeSectionBars(8, 4)).toBe(12)
-    expect(nudgeSectionBars(8, -4)).toBe(4)
-    expect(nudgeSectionBars(8, 8)).toBe(16)
-    expect(nudgeSectionBars(COACH_SECTION_MIN_BARS, -8)).toBe(COACH_SECTION_MIN_BARS)
-    expect(nudgeSectionBars(COACH_SECTION_MAX_BARS, 8)).toBe(COACH_SECTION_MAX_BARS)
   })
 })
 
@@ -99,20 +93,18 @@ describe('defaultSectionName', () => {
 })
 
 describe('a fresh section draft', () => {
-  it('HAS EVERY STEM ON -- nothing is dropped until the user says so', () => {
-    // The rule of this whole phase. If this test ever fails because a
-    // constructor started pre-applying the suggestion table, the fix is in
-    // the constructor, never here.
-    const draft = newCoachSectionDraft('intro', [])
-    expect(draft.droppedPaths).toEqual([])
-    expect(sectionKeptStems(climax, draft.droppedPaths)).toHaveLength(climax.stems.length)
+  it('a fresh draft overrides NOTHING -- the template fills it in', () => {
+    // The reversal of the old everything-on rule. `cells: {}` does not mean
+    // "nothing plays" -- it means "nothing has been overridden", so every
+    // cell reads the template (./coachMapTemplate.ts).
+    expect(newCoachSectionDraft('intro', [], 2).cells).toEqual({})
   })
 
-  it('takes its name and length from the type', () => {
-    const draft = newCoachSectionDraft('build', [])
+  it('takes its name from the type and its length from the caller', () => {
+    const draft = newCoachSectionDraft('build', [], 3)
     expect(draft.type).toBe('build')
     expect(draft.name).toBe('build')
-    expect(draft.bars).toBe(coachSectionTypeDef('build').defaultBars)
+    expect(draft.passes).toBe(3)
   })
 })
 
@@ -124,6 +116,12 @@ describe('the suggested-drop table', () => {
 
   it('flags only the hook in a build', () => {
     expect(suggestedDropPaths('build', climax)).toEqual(['/hook.wav'])
+  })
+
+  it('adds a verse, which loses the hook and keeps the harmony', () => {
+    expect(COACH_SECTION_DROP_SETS.verse).toEqual([['lead', 'bright']])
+    expect(isSuggestedDrop('verse', stem('/hook.wav', ['lead', 'bright']))).toBe(true)
+    expect(isSuggestedDrop('verse', stem('/harmony.wav', ['lead', 'warm']))).toBe(false)
   })
 
   it('flags the kick and the bass in a breakdown', () => {
@@ -146,10 +144,11 @@ describe('the suggested-drop table', () => {
 })
 
 describe('the transition table', () => {
-  it('follows the spec: after build a drop, after a drop a breakdown or an outro', () => {
+  it('follows the spec, and routes through the verse', () => {
+    expect(COACH_SECTION_TRANSITIONS.intro).toEqual(['verse', 'build', 'drop'])
+    expect(COACH_SECTION_TRANSITIONS.verse).toEqual(['build', 'drop'])
     expect(COACH_SECTION_TRANSITIONS.build).toEqual(['drop'])
-    expect(COACH_SECTION_TRANSITIONS.drop).toEqual(['breakdown', 'outro'])
-    expect(COACH_SECTION_TRANSITIONS.intro).toEqual(['build', 'drop'])
+    expect(COACH_SECTION_TRANSITIONS.drop).toEqual(['verse', 'breakdown', 'outro'])
     expect(COACH_SECTION_TRANSITIONS.breakdown).toEqual(['build', 'drop'])
     // An outro ends phase two, so nothing follows it.
     expect(COACH_SECTION_TRANSITIONS.outro).toEqual([])
@@ -162,8 +161,24 @@ describe('the transition table', () => {
 
   it('suggests from the last placed section otherwise', () => {
     const sections: CoachSection[] = [
-      { type: 'intro', name: 'intro', bars: 8, droppedPaths: [], startBar: 0, placedGroupIds: {} },
-      { type: 'build', name: 'build', bars: 16, droppedPaths: [], startBar: 8, placedGroupIds: {} }
+      {
+        id: 's0',
+        type: 'intro',
+        name: 'intro',
+        passes: 2,
+        cells: {},
+        startBar: 0,
+        placedGroupIds: {}
+      },
+      {
+        id: 's1',
+        type: 'build',
+        name: 'build',
+        passes: 4,
+        cells: {},
+        startBar: 8,
+        placedGroupIds: {}
+      }
     ]
     expect(nextSectionTypeSuggestions(sections)).toEqual(['drop'])
   })
@@ -172,22 +187,25 @@ describe('the transition table', () => {
 describe('placement arithmetic', () => {
   const sections: CoachSection[] = [
     {
+      id: 's0',
       type: 'intro',
       name: 'intro',
-      bars: 8,
-      droppedPaths: ['/hook.wav'],
+      passes: 2,
+      cells: {},
       startBar: 12,
       placedGroupIds: { '/kick.wav': 'g1', '/bass.wav': 'g2' }
     }
   ]
 
   it('starts the first section after everything already placed', () => {
-    expect(nextCoachSectionStartBar([], 0)).toBe(0)
-    expect(nextCoachSectionStartBar([], 12)).toBe(12)
+    expect(nextCoachSectionStartBar([], 0, 4)).toBe(0)
+    expect(nextCoachSectionStartBar([], 12, 4)).toBe(12)
   })
 
-  it('starts every later section right after the previous one', () => {
-    expect(nextCoachSectionStartBar(sections, 999)).toBe(20)
+  it('starts every later section right after the previous one, in PASSES', () => {
+    expect(nextCoachSectionStartBar(sections, 999, 4)).toBe(20)
+    // The same two passes at an 8-bar phrase are twice as long.
+    expect(nextCoachSectionStartBar(sections, 999, 8)).toBe(28)
   })
 
   it('remembers which channel each stem already owns', () => {
@@ -198,58 +216,104 @@ describe('placement arithmetic', () => {
     const twice: CoachSection[] = [
       ...sections,
       {
+        id: 's1',
         type: 'drop',
         name: 'drop',
-        bars: 16,
-        droppedPaths: [],
+        passes: 4,
+        cells: {},
         startBar: 20,
         placedGroupIds: { '/kick.wav': 'g9' }
       }
     ]
     expect(sectionLaneChannelIds(twice)['/kick.wav']).toBe('g1')
   })
+})
 
-  it('keeps the stems the user did not switch off, in climax order', () => {
-    expect(sectionKeptStems(climax, ['/hook.wav', '/perc.wav']).map((s) => s.path)).toEqual([
-      '/kick.wav',
-      '/bass.wav',
-      '/harmony.wav'
-    ])
+describe('sectionStemsInPass', () => {
+  it('asks the template for a cell nobody touched', () => {
+    const played = sectionStemsInPass({ cells: {} }, 0, climax.stems, allOn)
+    expect(played).toHaveLength(climax.stems.length)
+  })
+
+  it('lets an override beat the template, per pass', () => {
+    const cells = setCell({}, 1, '/hook.wav', false)
+    expect(sectionStemsInPass({ cells }, 0, climax.stems, allOn).map((s) => s.path)).toContain(
+      '/hook.wav'
+    )
+    expect(sectionStemsInPass({ cells }, 1, climax.stems, allOn).map((s) => s.path)).not.toContain(
+      '/hook.wav'
+    )
+  })
+
+  it('keeps the order it was handed', () => {
+    const arrivesLate = (_stem: LockedClimaxStem, passIndex: number): boolean => passIndex >= 1
+    expect(sectionStemsInPass({ cells: {} }, 0, climax.stems, arrivesLate)).toEqual([])
+    expect(
+      sectionStemsInPass({ cells: {} }, 1, climax.stems, arrivesLate).map((s) => s.path)
+    ).toEqual(climax.stems.map((s) => s.path))
   })
 })
 
 describe('load repair', () => {
   it('turns nonsense into an empty list rather than throwing', () => {
-    expect(sanitiseCoachSections(undefined)).toEqual([])
-    expect(sanitiseCoachSections('nope')).toEqual([])
-    expect(sanitiseCoachSections([{ type: 'chorus' }])).toEqual([])
+    expect(sanitiseCoachSections(undefined, 4)).toEqual([])
+    expect(sanitiseCoachSections('nope', 4)).toEqual([])
+    expect(sanitiseCoachSections([{ type: 'chorus' }], 4)).toEqual([])
   })
 
   it('repairs a hand-edited section', () => {
     expect(
-      sanitiseCoachSections([
-        { type: 'drop', name: 42, bars: -3, droppedPaths: ['/a', 7], startBar: -9 }
-      ])
+      sanitiseCoachSections(
+        [{ type: 'drop', name: 42, passes: -3, cells: { nonsense: true }, startBar: -9 }],
+        4
+      )
     ).toEqual([
       {
+        id: 'section-0',
         type: 'drop',
         name: 'drop',
-        bars: COACH_SECTION_MIN_BARS,
-        droppedPaths: ['/a'],
+        passes: 1,
+        cells: {},
         startBar: 0,
         placedGroupIds: {}
       }
     ])
   })
 
+  it('brings a pre-map section up to shape, dropped paths and all', () => {
+    const loaded = sanitiseCoachSections(
+      [{ type: 'intro', name: 'intro', bars: 16, droppedPaths: ['/hook.wav'], startBar: 0 }],
+      4
+    )
+    expect(loaded[0].passes).toBe(4)
+    expect(loaded[0].id).not.toBe('')
+    expect(cellIsOn(loaded[0].cells, 0, '/hook.wav', true)).toBe(false)
+    expect(cellIsOn(loaded[0].cells, 3, '/hook.wav', true)).toBe(false)
+    expect(cellIsOn(loaded[0].cells, 0, '/kick.wav', true)).toBe(true)
+  })
+
+  it('keeps a saved id rather than reminting it', () => {
+    const loaded = sanitiseCoachSections([{ id: 'map-2-drop', type: 'drop', passes: 2 }], 4)
+    expect(loaded[0].id).toBe('map-2-drop')
+  })
+
   it('repairs or discards a draft', () => {
-    expect(sanitiseCoachSectionDraft(null)).toBeNull()
-    expect(sanitiseCoachSectionDraft({ type: 'nope' })).toBeNull()
-    expect(sanitiseCoachSectionDraft({ type: 'build' })).toEqual({
+    expect(sanitiseCoachSectionDraft(null, 4)).toBeNull()
+    expect(sanitiseCoachSectionDraft({ type: 'nope' }, 4)).toBeNull()
+    expect(sanitiseCoachSectionDraft({ type: 'build' }, 4)).toEqual({
       type: 'build',
       name: 'build',
-      bars: 16,
-      droppedPaths: []
+      passes: 1,
+      cells: {}
+    })
+  })
+
+  it('migrates a pre-map draft at the phrase length the project now has', () => {
+    expect(sanitiseCoachSectionDraft({ type: 'build', bars: 16, droppedPaths: [] }, 8)).toEqual({
+      type: 'build',
+      name: 'build',
+      passes: 2,
+      cells: {}
     })
   })
 })
