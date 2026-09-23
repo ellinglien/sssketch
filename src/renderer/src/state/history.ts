@@ -75,7 +75,20 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // The in-progress/pending region selection -- same "not a real edit"
   // treatment as SET_DRAG_PREVIEW; the real edits are ADD_MUTE_REGION/
   // REMOVE_MUTE_REGION, dispatched once Delete/Backspace actually commits.
-  'SET_REGION_SELECTION'
+  'SET_REGION_SELECTION',
+  // Where you are in the guided flow -- "what am I being walked through
+  // right now," the same category as SET_ARRANGER_MODE at the top of this
+  // set, not an arrangement edit. Undo must walk back through the clips
+  // sssketchy helped place, never through the fact that he moved on to the
+  // next step -- and a coach step that fell off the undo stack partway
+  // through a flow would leave the flow pointing at work that no longer
+  // exists.
+  'COACH_START',
+  'COACH_RESUME',
+  'COACH_ADVANCE',
+  'COACH_MINIMISE',
+  'COACH_RESTORE',
+  'COACH_DISMISS'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

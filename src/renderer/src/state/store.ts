@@ -12,6 +12,16 @@ import {
 } from '@shared/toolkit'
 import { MIN_RISER_LENGTH_BARS, normaliseRiser, type RiserClip } from '@shared/riser'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
+import {
+  advanceCoach,
+  dismissCoach,
+  minimiseCoach,
+  restoreCoach,
+  resumeCoach,
+  startCoach,
+  type CoachOutcome,
+  type CoachState
+} from '@shared/coach'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
 // than anyone actually needed in practice (per direct user feedback: "it
@@ -426,6 +436,25 @@ export interface AppState {
    * Not persisted, same "how I'm currently working" convention as
    * gatedRecordingTargetGroupId above. */
   pendingLockInConfirm: boolean
+  /** The guided track-design flow's own state (sssketchy) -- null until the
+   * user starts a flow from the project menu's own button, and never set by
+   * anything else: "sssketchy never appears on his own, not even on an empty
+   * project" (docs/superpowers/specs/
+   * 2026-09-22-sssketchy-guided-track-design.md, "Starting the flow").
+   *
+   * Real persisted project data, so a half-finished guided track resumes --
+   * it is deliberately NOT in serialize.ts's transient Omit list. What does
+   * not survive a load is his VISIBILITY and his CLOCK: deserializeProject
+   * runs the whole thing through sanitiseLoadedCoach, which forces a loaded
+   * flow to 'dismissed' with a stopped clock, so reopening a project never
+   * makes him appear and never fires a ten-minute nudge for time spent
+   * with the app closed. Everything about where the user actually got to
+   * (step, done/skipped, banked per-phase time) comes back untouched.
+   *
+   * Not undoable -- all six COACH_* actions are in history.ts's
+   * TRANSIENT_ACTION_TYPES, the same category as SET_ARRANGER_MODE: where
+   * you are in the flow is not an arrangement edit. */
+  coach: CoachState | null
   rifffs: Record<string, Rifff>
 }
 
@@ -473,6 +502,7 @@ export const initialState: AppState = {
   stemAutomation: {},
   reverb: DEFAULT_REVERB,
   risers: {},
+  coach: null,
   rifffs: {}
 }
 
@@ -678,6 +708,16 @@ export type Action =
   | { type: 'ADD_STEM_TO_RIFFF'; groupId: string; stem: Rifff['stems'][number] }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
+  // Every coach action carries `now` rather than letting the reducer read
+  // the clock, so the machine stays pure and its tests stay deterministic
+  // (see @shared/coach's own module doc). COACH_MINIMISE is the one
+  // exception: minimising does not move the clock.
+  | { type: 'COACH_START'; now: number }
+  | { type: 'COACH_RESUME'; now: number }
+  | { type: 'COACH_ADVANCE'; now: number; outcome: CoachOutcome }
+  | { type: 'COACH_MINIMISE' }
+  | { type: 'COACH_RESTORE'; now: number }
+  | { type: 'COACH_DISMISS'; now: number }
   | { type: 'LOAD_STATE'; state: AppState }
 
 // Hand-synced copy of selectors.ts's own TIDIED_BUS_ORDER -- store.ts can't
@@ -1908,6 +1948,38 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_SELECTED_INPUT_DEVICE':
       return { ...state, selectedInputDevice: action.device }
+
+    // COACH_START is the only one that works with no flow in progress --
+    // it is what the project-menu button dispatches the first time, and
+    // again after a flow has finished (a finished flow has nowhere left to
+    // resume to, so pressing the button starts a fresh one). Every other
+    // coach action is a no-op without a flow, so a stray dispatch can never
+    // conjure sssketchy onto the screen.
+    case 'COACH_START':
+      return { ...state, coach: startCoach(action.now) }
+
+    case 'COACH_RESUME':
+      return state.coach === null
+        ? state
+        : { ...state, coach: resumeCoach(state.coach, action.now) }
+
+    case 'COACH_ADVANCE':
+      return state.coach === null
+        ? state
+        : { ...state, coach: advanceCoach(state.coach, action.now, action.outcome) }
+
+    case 'COACH_MINIMISE':
+      return state.coach === null ? state : { ...state, coach: minimiseCoach(state.coach) }
+
+    case 'COACH_RESTORE':
+      return state.coach === null
+        ? state
+        : { ...state, coach: restoreCoach(state.coach, action.now) }
+
+    case 'COACH_DISMISS':
+      return state.coach === null
+        ? state
+        : { ...state, coach: dismissCoach(state.coach, action.now) }
 
     case 'LOAD_STATE':
       return action.state
