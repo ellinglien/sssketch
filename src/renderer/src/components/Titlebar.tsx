@@ -165,6 +165,7 @@ export function Titlebar({
           onClick={onToggleMapView}
           aria-label="Show the arrangement map"
           data-tooltip="switch between the map and the timeline"
+          data-tour-id="tour-map"
           style={{
             ...buttonStyle,
             width: 72,

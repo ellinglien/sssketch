@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react'
+import type { TourStep } from '@shared/tourSteps'
 
-export interface TourStep {
-  /** CSS selector for the element to spotlight -- looked up fresh on every
-   * step change/resize/scroll rather than passed as a ref, since targets
-   * live in several different, unrelated components (Shelf, TransportBar,
-   * Titlebar, a timeline clip) with no shared parent worth threading refs
-   * through. */
-  selector: string
-  title: string
-  body: string
-}
+// The steps themselves (and this type) live in @shared/tourSteps so their
+// copy can be held to the app's voice rules by a unit test without mounting
+// React -- see that file's own doc comment. Re-exported here so nothing that
+// already imports the type from this component has to move.
+export type { TourStep }
 
 const CALLOUT_WIDTH = 300
 
@@ -24,7 +20,7 @@ export function TourOverlay({
   onBack,
   onSkip
 }: {
-  steps: TourStep[]
+  steps: readonly TourStep[]
   stepIndex: number
   onNext: () => void
   onBack: () => void

@@ -59,7 +59,8 @@ import { projectUsesToolkit, type ToolkitExportMode } from '@shared/toolkit'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
-import { TourOverlay, type TourStep } from './components/TourOverlay'
+import { TourOverlay } from './components/TourOverlay'
+import { TOUR_STEPS } from '@shared/tourSteps'
 import { SssketchyCoach } from './components/SssketchyCoach'
 import { type CoachMoveAction } from '@shared/coachSteps'
 import { type CoachSlotSnapshot } from '@shared/coachClimax'
@@ -1014,39 +1015,6 @@ const LIBRARY_LOCATION_SEEN_STORAGE_KEY = 'sssketch:libraryLocationSeen'
 // available, and "started" is an acceptable proxy for "seen" here.
 const TOUR_SEEN_STORAGE_KEY = 'sssketch:tourSeen'
 
-const TOUR_STEPS: TourStep[] = [
-  {
-    selector: '[data-tour-id="tour-import"]',
-    title: 'getting audio in',
-    body: 'drag a rifff folder onto the shelf, or click import to browse Endlesss directly.'
-  },
-  {
-    selector: '[data-rifff-clip]',
-    title: 'the timeline',
-    body: 'drag a clip to move it, drag its edges to crop.'
-  },
-  {
-    selector: '[data-tour-id="tour-mute"]',
-    title: 'muting clips',
-    body: 'right-click a clip to mute it, right-click again to unmute.'
-  },
-  {
-    selector: '[data-tour-id="tour-zoom"]',
-    title: 'zooming in',
-    body: 'hold cmd and scroll to zoom the timeline in and out.'
-  },
-  {
-    selector: '[data-tour-id="tour-tidy"]',
-    title: 'tidy up',
-    body: 'a tool to help you group similar sounding stems when exporting.'
-  },
-  {
-    selector: '[data-tour-id="tour-mode"]',
-    title: 'sketch / arrange',
-    body: 'sketch is a quick rough layout; arrange is a timeline view.'
-  }
-]
-
 /** Sketch mode only: while playing, the Inspector automatically shows
  * whichever rifff currently contains the playhead — no manual click
  * needed to follow along. Scoped to sketch mode specifically because it's
@@ -1676,7 +1644,15 @@ function Frame(): React.JSX.Element {
   }
 
   async function startTour(): Promise<void> {
+    // Both of these put the app into the one state every step's anchor is
+    // actually mounted in: 'sketch' mode swaps the whole Timeline out for
+    // SketchStrip, and the map view swaps it out for ArrangementMap -- either
+    // one leaves the ruler and every clip missing, so those steps would
+    // spotlight nothing and fall back to a centred callout. The tour then
+    // places a demo rifff below, which is what makes the clip step's anchor
+    // exist at all on a fresh, empty project.
     dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
+    dispatch({ type: 'SET_MAP_VIEW', on: false })
     const rifff = await window.rifffApi.importDemoRifff()
     if (!rifff) return
     tourDemoGroupIdRef.current = rifff.groupId
