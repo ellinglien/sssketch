@@ -35,7 +35,7 @@ import {
   type CoachPhase,
   type CoachStepId
 } from './coachSteps'
-import { isDiscoverSlotKind, sanitiseLockedClimax, type LockedClimax } from './coachClimax'
+import { sanitiseLockedClimax, type LockedClimax } from './coachClimax'
 import {
   sanitiseCoachSectionDraft,
   sanitiseCoachSections,
@@ -80,7 +80,10 @@ export interface CoachState {
   /** The roles a seeded start already covered, named once on the step the
    * answer landed on ("you already have drummy and bassish. next:
    * harmony."). Cleared on the next transition, because one thought at a
-   * time -- see advanceCoach. Empty whenever there is nothing to say. */
+   * time -- see advanceCoach -- and equally by being put away
+   * (dismissCoach) or saved and reloaded (sanitiseLoadedCoach never loads
+   * it): it belongs to the sitting the seed was read in. Empty whenever
+   * there is nothing to say. */
   seededKinds: DiscoverSlotKind[]
   /** The frozen climax loop: stems, roles and gains, as the material phase
    * two carves from (spec, phase 1 step 5). null until the lock-in step
@@ -252,7 +255,12 @@ export function restoreCoach(state: CoachState, now: number): CoachState {
  * still offers a fresh flow rather than resuming this one. */
 export function dismissCoach(state: CoachState, now: number): CoachState {
   if (state.status === 'dismissed') return state
-  return { ...pauseCoach(state, now), status: 'dismissed' }
+  // seededKinds goes with him. It is one sentence about the riff that
+  // seeded THIS sitting, cleared by every other transition for the same
+  // reason (one thought at a time) -- kept here it would survive the
+  // dismiss and the save, and greet the user again a week later as the
+  // only thing on screen that is about the past rather than the step.
+  return { ...pauseCoach(state, now), status: 'dismissed', seededKinds: [] }
 }
 
 /** Exported so ./coach.ts's own consumers can validate a persisted id
@@ -379,9 +387,17 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
   if (typeof coach !== 'object' || coach === null) return null
   const loose = coach as Record<string, unknown>
   const phase = (loose.phaseElapsedMs ?? {}) as Record<string, unknown>
+  // A stepId this build does not know (a project saved by an earlier one,
+  // or hand-edited) is repaired back to the melodic-or-groove question --
+  // and the ANSWER has to go with it. The question step renders its two
+  // buttons off `offers` but answerCoachFlavour refuses a second answer,
+  // so a repaired step carrying a flavour is a question with two dead
+  // buttons and skip as the only way out.
+  const stepId = isCoachStepId(loose.stepId) ? loose.stepId : FIRST_COACH_STEP_ID
+  const repairedStep = stepId !== loose.stepId
   return {
     status: loose.status === 'finished' ? 'finished' : 'dismissed',
-    stepId: isCoachStepId(loose.stepId) ? loose.stepId : FIRST_COACH_STEP_ID,
+    stepId,
     outcomes: loadedOutcomes(loose.outcomes),
     phaseElapsedMs: {
       loop: finiteMs(phase.loop),
@@ -394,10 +410,13 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
       typeof loose.lineSeed === 'number' && Number.isFinite(loose.lineSeed)
         ? Math.trunc(loose.lineSeed)
         : 0,
-    flavour: isCoachFlavour(loose.flavour) ? loose.flavour : null,
-    seededKinds: (Array.isArray(loose.seededKinds) ? loose.seededKinds : []).filter(
-      isDiscoverSlotKind
-    ),
+    flavour: !repairedStep && isCoachFlavour(loose.flavour) ? loose.flavour : null,
+    // Deliberately never loaded. The seeded note names what an existing
+    // riff covered at the moment the question was answered ("you already
+    // have drummy and bassish"); every transition clears it, because one
+    // thought at a time, and a save is a bigger gap than any of them. The
+    // outcomes it produced are what actually survive.
+    seededKinds: [],
     lockedClimax: sanitiseLockedClimax(loose.lockedClimax),
     sections: sanitiseCoachSections(loose.sections),
     draftSection: sanitiseCoachSectionDraft(loose.draftSection)

@@ -421,6 +421,15 @@ describe('the phase-one fields on CoachState', () => {
     expect(advanceCoach(seeded, T0 + MINUTE, 'done').seededKinds).toEqual([])
   })
 
+  it('clears the seeded note when he is put away, so it cannot come back stale', () => {
+    // Same rule as the transition above: the note belongs to the moment
+    // the seed was read. A dismissed flow resumed tomorrow is a new
+    // sitting, and "you already have drummy and bassish" would be the one
+    // thing on screen that is about the past rather than the step.
+    const seeded = { ...startCoach(T0), seededKinds: ['drums' as const, 'bass' as const] }
+    expect(dismissCoach(seeded, T0 + MINUTE).seededKinds).toEqual([])
+  })
+
   it('walks the melodic order once the answer is on the state', () => {
     const melodic = { ...startCoach(T0), flavour: 'melodic' as const }
     expect(advanceCoach(melodic, T0 + MINUTE, 'done').stepId).toBe('p1-harmony')
@@ -462,8 +471,14 @@ describe('the phase-one fields on CoachState', () => {
     }
     const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
     expect(loaded?.flavour).toBe('melodic')
-    expect(loaded?.seededKinds).toEqual(['drums'])
     expect(loaded?.lockedClimax?.stems[0].role).toBe('bass')
+    // ...but NOT the seeded note. This assertion used to be
+    // toEqual(['drums']) -- the note is one sentence about the riff that
+    // seeded THIS SITTING ("you already have drummy and bassish"), and
+    // reopening the project a week later to be told it again is the "one
+    // thought at a time" rule leaking across a save. Everything else it
+    // was derived from is still here.
+    expect(loaded?.seededKinds).toEqual([])
   })
 
   it('repairs all three rather than trusting them', () => {
@@ -475,8 +490,29 @@ describe('the phase-one fields on CoachState', () => {
       lockedClimax: { nope: true }
     })
     expect(loaded?.flavour).toBeNull()
-    expect(loaded?.seededKinds).toEqual(['drums'])
+    expect(loaded?.seededKinds).toEqual([])
     expect(loaded?.lockedClimax).toBeNull()
+  })
+
+  it('drops the answer when the step it belongs to had to be repaired', () => {
+    // An unknown stepId is repaired back to the melodic-or-groove
+    // question. Keeping the answer alongside it renders that question with
+    // two buttons that do nothing -- answerCoachFlavour refuses a second
+    // answer -- and the only way out of the step is skip. The question
+    // comes back unanswered, so answering it works.
+    const loaded = sanitiseLoadedCoach({
+      status: 'active',
+      stepId: 'climax-loop',
+      flavour: 'groove'
+    })
+    expect(loaded?.stepId).toBe('p1-flavour')
+    expect(loaded?.flavour).toBeNull()
+  })
+
+  it('keeps the answer when the step it belongs to is a real one', () => {
+    const loaded = sanitiseLoadedCoach({ status: 'active', stepId: 'p1-hook', flavour: 'groove' })
+    expect(loaded?.stepId).toBe('p1-hook')
+    expect(loaded?.flavour).toBe('groove')
   })
 
   it('loads a project saved by the framework build, whose step no longer exists', () => {
