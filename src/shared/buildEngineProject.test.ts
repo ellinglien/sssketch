@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildEngineProject, type EngineStem } from './buildEngineProject'
+import { buildEngineProject, buildEngineRisers, type EngineStem } from './buildEngineProject'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
@@ -744,5 +744,20 @@ describe('risers on the wire', () => {
         { bar: 2, value: 1 }
       ]
     })
+  })
+
+  it('leaves a muted riser off the wire entirely, rather than sending it silent', () => {
+    const risers = {
+      on: createRiser({ id: 'on', channelId: 'ch1', startBar: 0 }),
+      off: { ...createRiser({ id: 'off', channelId: 'ch2', startBar: 4 }), muted: true }
+    }
+    expect(buildEngineRisers(risers).map((riser) => riser.id)).toEqual(['on'])
+  })
+
+  it('sends no risers at all when every one of them is muted', () => {
+    const risers = {
+      off: { ...createRiser({ id: 'off', channelId: 'ch1', startBar: 0 }), muted: true }
+    }
+    expect(buildEngineRisers(risers)).toEqual([])
   })
 })
