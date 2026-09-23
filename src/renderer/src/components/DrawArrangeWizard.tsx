@@ -10,7 +10,7 @@ import { DrawArrangeGridStep, type GridStem } from './DrawArrangeGridStep'
 import { stemLabelsByKey } from './autoArrangeLabels'
 import { typeColorVar } from '../theme/typeColor'
 import type { ProjectRef } from '@shared/types'
-import { recordRoleCategorization } from '../state/stemCategoryCapture'
+import { recordStemRoles, roleConfirmationsFromStemRoles } from '../state/stemCategoryCapture'
 
 interface Props {
   onClose: () => void
@@ -52,7 +52,11 @@ export function DrawArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
 
   function handleRoleConfirm(roles: StemRoleInfo[]): void {
     const included = roles.filter((r) => r.included)
-    recordRoleCategorization(roles, flatStemsByKey, 'drawarrange', currentSketch)
+    void recordStemRoles(
+      roleConfirmationsFromStemRoles(roles, flatStemsByKey),
+      'drawarrange',
+      currentSketch
+    )
     const labelByKey = stemLabelsByKey(
       included.map((r) => ({ stemKey: r.stemKey, role: engineRoleFor(r), included: true }))
     )

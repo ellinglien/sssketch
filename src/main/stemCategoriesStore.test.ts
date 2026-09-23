@@ -163,36 +163,26 @@ describe('stemCategoriesStore', () => {
       expect(getStemCategory(db, 'cid-1')?.drumSubRole).toBe(null)
     })
 
-    it('writes a free-text subcategoryNote alongside the category -- direct request, 2026-09-21', async () => {
+    // The note's UI and its whole write path are gone (spec, "The notes
+    // field goes": nothing ever read it). The COLUMN stays, and so do its
+    // rows -- dropping a SQLite column means rebuilding a table that also
+    // holds the user's real library, and anything already typed would be
+    // destroyed. So a role re-confirmation must leave an existing note
+    // alone rather than nulling it out on the way past.
+    it('leaves an existing note alone when a role is re-confirmed', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
+      db.prepare(
+        `INSERT INTO StemCategories (StemCID, SubcategoryNote, Source, UpdatedAt)
+         VALUES ('cid-1', 'the good one', 'tidyup', 1)`
+      ).run()
       const { upsertStemCategoryRole } = await import('./stemCategoriesStore')
-      upsertStemCategoryRole(
-        db,
-        [{ path: '/x/cid-1', arrangeRole: 'drums', subcategoryNote: 'hi-hat, closed' }],
-        'tidyup',
-        null,
-        1000
-      )
-      // getStemCategory (above) deliberately doesn't surface this column --
-      // it's a write-only log for now, not read back into this session's
-      // own UI (see subcategoryNote's own doc comment, StemRoleCategoryEntry)
-      // -- so this reads the raw column directly to confirm the write.
+      upsertStemCategoryRole(db, [{ path: '/x/cid-1', arrangeRole: 'lead' }], 'tidyup', null, 2)
       const row = db
-        .prepare(`SELECT SubcategoryNote FROM StemCategories WHERE StemCID = 'cid-1'`)
-        .get() as { SubcategoryNote: string | null }
-      expect(row.SubcategoryNote).toBe('hi-hat, closed')
-    })
-
-    it('an omitted subcategoryNote is stored as null, not undefined/absent', async () => {
-      const db = freshDb()
-      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryRole } = await import('./stemCategoriesStore')
-      upsertStemCategoryRole(db, [{ path: '/x/cid-1', arrangeRole: 'bass' }], 'tidyup', null, 1000)
-      const row = db
-        .prepare(`SELECT SubcategoryNote FROM StemCategories WHERE StemCID = 'cid-1'`)
-        .get() as { SubcategoryNote: string | null }
-      expect(row.SubcategoryNote).toBe(null)
+        .prepare(`SELECT ArrangeRole, SubcategoryNote FROM StemCategories WHERE StemCID = 'cid-1'`)
+        .get() as { ArrangeRole: string; SubcategoryNote: string | null }
+      expect(row.ArrangeRole).toBe('lead')
+      expect(row.SubcategoryNote).toBe('the good one')
     })
   })
 

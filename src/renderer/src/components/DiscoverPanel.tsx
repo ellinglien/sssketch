@@ -53,6 +53,7 @@ import {
   useStemFavouritesActions
 } from '../state/StoreContext'
 import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
+import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
@@ -1701,9 +1702,9 @@ export function DiscoverPanel({
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
   // choice: reclassify, don't skip): records a role confirmation for the
-  // slot's stem through the SAME write path Tidy Up uses
-  // (upsertStemCategoryRole -- StemCategories + arrangeRole centroid
-  // training), source 'discover'. The bare StemCID is passed as the entry's
+  // slot's stem through the SAME write path Tidy Up uses (recordStemRoles
+  // -- StemCategories + arrangeRole centroid training), source 'discover'.
+  // The bare StemCID is passed as the entry's
   // `path`: main resolves a path to a StemCID by its basename
   // (stemCIDForPath), and a StemCID is its own basename -- so this works
   // before the stem has even finished downloading. Does NOT reroll or
@@ -1715,7 +1716,7 @@ export function DiscoverPanel({
     const candidate = slots.find((s) => s.id === id)?.candidate
     if (!candidate) return
     try {
-      await window.rifffApi.upsertStemCategoryRole(
+      await recordStemRoles(
         [{ path: candidate.stemCID, arrangeRole: role }],
         'discover',
         currentSketch

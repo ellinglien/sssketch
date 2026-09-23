@@ -16,7 +16,7 @@ import { buildArrangeReplaceActions } from '../state/selectors'
 import { AutoArrangeCoachStep } from './AutoArrangeCoachStep'
 import { AutoArrangeRoleStep } from './AutoArrangeRoleStep'
 import type { ProjectRef } from '@shared/types'
-import { recordRoleCategorization } from '../state/stemCategoryCapture'
+import { recordStemRoles, roleConfirmationsFromStemRoles } from '../state/stemCategoryCapture'
 
 interface Props {
   onClose: () => void
@@ -86,7 +86,11 @@ export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
     const { targetSections, shape } = buildOptions!
 
     const included = roles.filter((r) => r.included)
-    recordRoleCategorization(roles, flatStemsByKey, 'autoarrange', currentSketch)
+    void recordStemRoles(
+      roleConfirmationsFromStemRoles(roles, flatStemsByKey),
+      'autoarrange',
+      currentSketch
+    )
     // Promise.allSettled, not a plain await loop -- mirrors
     // AutoArrangeRoleStep.tsx's own handling of getStemFeatures, which is
     // documented (stemFeaturesCache.ts) as able to reject on a corrupt/
@@ -151,7 +155,11 @@ export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
   const handleGuidedConfirm = useCallback(
     (roles: StemRoleInfo[]): void => {
       const included = roles.filter((role) => role.included)
-      recordRoleCategorization(roles, flatStemsByKey, 'autoarrange', currentSketch)
+      void recordStemRoles(
+        roleConfirmationsFromStemRoles(roles, flatStemsByKey),
+        'autoarrange',
+        currentSketch
+      )
       const inputs: CoachClimaxStemInput[] = []
       for (const role of included) {
         const flat = flatStemsByKey.get(role.stemKey)

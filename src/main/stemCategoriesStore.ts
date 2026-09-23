@@ -98,23 +98,24 @@ export interface StemRoleCategoryEntry {
   path: string
   arrangeRole: ArrangeRole
   drumSubRole?: DrumSubRole
-  /** Free-text, user-typed specific label -- direct request, 2026-09-21:
-   * "allow user to be specific with the tidy up category (and make a
-   * note of it for future reference? for ML categorization perhaps?) but
-   * keep bunched grouping for the exports." Purely a logged note for now
-   * -- trainCentroidsFromRoleEntries (categoryCentroidTraining.ts) reads
-   * only `arrangeRole`/`drumSubRole`/`path` from this same entry shape
-   * and never this field, so recording a subcategory note has NO effect
-   * on live centroid training, per Elling's own explicit "keep them the
-   * same for centroid for the moment." Undefined when the user didn't
-   * type anything for this assignment -- stored as SQL NULL, not an
-   * empty string, so "no note" and "" are never conflated. */
-  subcategoryNote?: string
+  /** NO subcategoryNote. The column stays in riffLibrarySchema.ts and keeps
+   * its rows -- dropping a SQLite column means rebuilding a table that also
+   * holds the user's real library, for no gain, and anything already typed
+   * into it would be destroyed. It simply stops gaining new ones: NOTHING
+   * EVER READ IT (grepped across src/: the column, its migration and this
+   * INSERT, and not one SELECT), its own tooltip said it did not affect
+   * classifier training, and it occupied the busiest control row of the
+   * busiest modal in the app -- on a surface whose whole value is that the
+   * question can be answered in one click, a text box is the one control
+   * that cannot. If a real consumer ever appears, the write path is four
+   * lines. */
 }
 
 /** Column-scoped counterpart to upsertStemCategoryBus -- only ever touches
- * ArrangeRole/DrumSubRole/SubcategoryNote/Source/SourceProject/UpdatedAt,
- * never BusId. */
+ * ArrangeRole/DrumSubRole/Source/SourceProject/UpdatedAt, never BusId and
+ * never SubcategoryNote (see StemRoleCategoryEntry: the column survives
+ * with its rows, so re-confirming a role must leave an existing note
+ * exactly where it was rather than nulling it out on the way past). */
 export function upsertStemCategoryRole(
   db: Database.Database,
   entries: StemRoleCategoryEntry[],
@@ -124,12 +125,11 @@ export function upsertStemCategoryRole(
   extraCandidateDbs: Database.Database[] = []
 ): void {
   const stmt = db.prepare(
-    `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, SubcategoryNote, Source, SourceProject, UpdatedAt)
-     VALUES (@stemCID, @arrangeRole, @drumSubRole, @subcategoryNote, @source, @sourceProject, @updatedAt)
+    `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, Source, SourceProject, UpdatedAt)
+     VALUES (@stemCID, @arrangeRole, @drumSubRole, @source, @sourceProject, @updatedAt)
      ON CONFLICT(StemCID) DO UPDATE SET
        ArrangeRole = excluded.ArrangeRole,
        DrumSubRole = excluded.DrumSubRole,
-       SubcategoryNote = excluded.SubcategoryNote,
        Source = excluded.Source,
        SourceProject = excluded.SourceProject,
        UpdatedAt = excluded.UpdatedAt
@@ -143,7 +143,6 @@ export function upsertStemCategoryRole(
         stemCID,
         arrangeRole: row.arrangeRole,
         drumSubRole: row.drumSubRole ?? null,
-        subcategoryNote: row.subcategoryNote ?? null,
         source,
         sourceProject,
         updatedAt

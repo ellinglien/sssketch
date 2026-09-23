@@ -33,6 +33,7 @@ import type { ProjectRef } from '@shared/types'
 import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
 import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
 import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
+import { recordStemRoles } from '../state/stemCategoryCapture'
 
 const DEFAULT_CLUSTER_COUNT = 8
 const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
@@ -644,17 +645,21 @@ export function ClusterStemsBrowser({
   // Tidy Up is used far more often than the auto-arrange role step, so this
   // is a real accuracy win with no extra clicks for the 5 shared
   // categories, where arrangeRole is always fully determined by the bus
-  // just assigned. Fire-and-forget, matching recordBusCategories exactly;
-  // a member whose path doesn't resolve to a real StemCID is silently
-  // skipped by the main-process side, not an error here.
-  function recordRoleCategories(
+  // just assigned.
+  //
+  // This used to be a local recordRoleCategories twin of the wizards' own
+  // recordRoleCategorization; both are now the one recordStemRoles
+  // (state/stemCategoryCapture.ts), which is what this whole merge is for.
+  // Fire-and-forget, matching recordBusCategories exactly; a member whose
+  // path doesn't resolve to a real StemCID is silently skipped by the
+  // main-process side, not an error here.
+  function recordRoles(
     members: ClusterableStem[],
     arrangeRole: ArrangeRole,
-    drumSubRole?: DrumSubRole,
-    subcategoryNote?: string
+    drumSubRole?: DrumSubRole
   ): void {
-    void window.rifffApi.upsertStemCategoryRole(
-      members.map((m) => ({ path: m.path, arrangeRole, drumSubRole, subcategoryNote })),
+    void recordStemRoles(
+      members.map((m) => ({ path: m.path, arrangeRole, drumSubRole })),
       'tidyup',
       currentSketch
     )
@@ -674,19 +679,14 @@ export function ClusterStemsBrowser({
   // `category` is one of ARRANGE_ROLE_OPTIONS' 8 values, not just a BusId --
   // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
   // (see ARRANGE_ROLE_TO_BUS's own doc comment, shared/stemRole.ts) while
-  // still recording the finer category via recordRoleCategories. For the 5
-  // shared categories this is unchanged from before except for also now
-  // calling recordRoleCategories (see its own doc comment above).
-  function assignCluster(
-    id: number,
-    members: ClusterableStem[],
-    category: ArrangeRole,
-    note?: string
-  ): void {
+  // still recording the finer category via recordRoles. For the 5 shared
+  // categories the bus assignment is unchanged; recordRoles runs either
+  // way (see its own doc comment above).
+  function assignCluster(id: number, members: ClusterableStem[], category: ArrangeRole): void {
     const busId = ARRANGE_ROLE_TO_BUS[category]
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
-    recordRoleCategories(members, category, undefined, note)
+    recordRoles(members, category)
     setCelebratingId(id)
     window.setTimeout(() => {
       setCelebratingId((current) => (current === id ? null : current))
@@ -700,7 +700,7 @@ export function ClusterStemsBrowser({
   // row id vs. suggested-row busId -- same split as assignCluster vs.
   // assignSuggestedGroup) share this celebration-free core.
   function assignDrumSubRole(members: ClusterableStem[], drumSubRole: DrumSubRole): void {
-    recordRoleCategories(members, 'drums', drumSubRole)
+    recordRoles(members, 'drums', drumSubRole)
   }
 
   function assignDrumSubRoleForRow(
@@ -764,13 +764,12 @@ export function ClusterStemsBrowser({
     suggestedBus: BusId,
     nodeId: number,
     members: ClusterableStem[],
-    category: ArrangeRole,
-    note?: string
+    category: ArrangeRole
   ): void {
     const busId = ARRANGE_ROLE_TO_BUS[category]
     dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
     recordBusCategories(members, busId)
-    recordRoleCategories(members, category, undefined, note)
+    recordRoles(members, category)
     const target = { busId: suggestedBus, nodeId }
     setCelebratingSuggested(target)
     window.setTimeout(() => {
@@ -971,9 +970,7 @@ export function ClusterStemsBrowser({
                 }
                 provenanceOverride="suggested"
                 suggestedBus={busId}
-                onAssign={(category, note) =>
-                  assignSuggestedGroup(busId, nodeId, members, category, note)
-                }
+                onAssign={(category) => assignSuggestedGroup(busId, nodeId, members, category)}
                 onAssignDrumSubRole={(drumSubRole) =>
                   assignDrumSubRoleForSuggestedGroup(busId, nodeId, members, drumSubRole)
                 }
@@ -995,7 +992,7 @@ export function ClusterStemsBrowser({
               members={members}
               focused={id === clampedFocusedId}
               celebrating={id === celebratingId}
-              onAssign={(category, note) => assignCluster(id, members, category, note)}
+              onAssign={(category) => assignCluster(id, members, category)}
               onAssignDrumSubRole={(drumSubRole) =>
                 assignDrumSubRoleForRow(id, members, drumSubRole)
               }
@@ -1053,10 +1050,7 @@ function ClusterRow({
   /** One of ARRANGE_ROLE_OPTIONS' 8 values -- see ARRANGE_ROLE_TO_BUS's own
    * doc comment (shared/stemRole.ts) for how the 3 without a real bus
    * (textureFx/fill/vocal) still resolve to a concrete BusId assignment. */
-  /** `note` is whatever this row's own free-text field (below) currently
-   * holds, trimmed to undefined when empty -- see that field's own doc
-   * comment for the full "specific category" feature this is part of. */
-  onAssign: (category: ArrangeRole, note?: string) => void
+  onAssign: (category: ArrangeRole) => void
   /** Only ever fires for 'kick'/'snare'/'hihat'/'clap'/'perc' -- write-only,
    * same as onAssign for the 3 bus-less categories: there's no persisted
    * signal to derive "which sub-role is currently assigned" from (busOf
@@ -1087,21 +1081,14 @@ function ClusterRow({
   const busOf = useAppSelector((s) => s.busOf)
   const provenance = provenanceOverride ?? clusterProvenance(members.map((m) => m.name))
 
-  // Direct request, 2026-09-21: "allow user to be specific with the tidy
-  // up category (and make a note of it for future reference? for ML
-  // categorization perhaps?) but keep bunched grouping for the exports."
-  // Free text (not a fixed per-category vocabulary this session would
-  // have to guess correctly) -- whatever's typed here is passed to
-  // onAssign at the moment a category button is actually clicked, so it
-  // rides along with THAT specific assignment rather than being its own
-  // separate action. Local, not persisted-derived like assignedBus above
-  // -- there's no reliable "what was last typed for this exact row"
-  // signal to restore on reopen (StemCategories.SubcategoryNote is keyed
-  // per-STEM, not per-cluster-row, and a row's own membership can change
-  // across a re-partition), so this always starts empty, same as
-  // onAssignDrumSubRole's own "always starts back at generic" doc comment
-  // just above explains for the analogous drum-sub-role picker.
-  const [note, setNote] = useState('')
+  // NO free-text note here any more (spec, "The notes field goes"):
+  // NOTHING EVER READ IT -- the column, its migration and one INSERT, and
+  // not one SELECT anywhere in src/ -- and its own tooltip said it did not
+  // affect classifier training. It occupied the busiest control row of the
+  // busiest modal in the app, on a surface whose whole value is that the
+  // question can be answered in one click, and a text box is the one
+  // control that cannot. The SQLite column survives with its rows
+  // (riffLibrarySchema.ts); it just stops gaining new ones.
 
   // Derived from the REAL store state, not local component state -- so a
   // previously-confirmed assignment still shows as highlighted if the
@@ -1192,30 +1179,11 @@ function ClusterRow({
             <ForkIcon />
           </button>
         )}
-        {/* Direct request, 2026-09-21: a specific, free-text note logged
-            alongside whichever category button below is actually
-            clicked -- see the `note` state's own doc comment above. */}
-        <input
-          type="text"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="specific note (optional)"
-          title="logged alongside whichever category you assign below -- does not affect classifier training"
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 9,
-            width: 120,
-            padding: '3px 6px',
-            background: 'var(--ra-bg-row)',
-            border: '1px solid var(--ra-border)',
-            color: 'var(--ra-text)'
-          }}
-        />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {ARRANGE_ROLE_OPTIONS.map((category, i) => (
             <button
               key={category}
-              onClick={() => onAssign(category, note.trim() || undefined)}
+              onClick={() => onAssign(category)}
               style={buttonStyle(
                 assignedBus === ARRANGE_ROLE_TO_BUS[category]
                   ? 'confirmed'

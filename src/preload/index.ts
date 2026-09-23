@@ -322,7 +322,6 @@ const api = {
       path: string
       arrangeRole: ArrangeRole
       drumSubRole?: DrumSubRole
-      subcategoryNote?: string
     }[],
     source: string,
     project: ProjectRef
