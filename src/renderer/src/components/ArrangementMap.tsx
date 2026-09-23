@@ -19,7 +19,7 @@ import { loopPhraseIsWorthSaying, phraseAnswerOptions, type CoachPhrase } from '
 import { coachSectionBoundaries, coachTensionDef } from '@shared/coachTension'
 import { buildCellToggleActions, buildMapRebuildActions } from '../state/coachMapPlacement'
 import { coachMapRows, type CoachMapRow } from '../state/coachMapRows'
-import { coachMapRowLabels } from '../state/coachMapRowLabels'
+import { coachMapRowLabels, mapRowsNeedCategorising } from '../state/coachMapRowLabels'
 import { useConfirmedStemRoles } from '../state/useConfirmedStemRoles'
 import { markManualSeek } from '../state/manualSeek'
 import { placedTimelineSpanBars } from '../state/selectors'
@@ -351,6 +351,33 @@ export function ArrangementMap({
 
   return (
     <div style={{ padding: 'var(--ra-s-5)', overflowX: 'auto' }}>
+      {/* Offered only while there is something to ask about: a row holding a
+          stem nobody has named. It is A BUTTON AND NOTHING ELSE -- sssketchy
+          does not mention it, does not nudge toward it and gains no line,
+          because he walks sections and an unguided map has none (spec,
+          "sssketchy says nothing here"). */}
+      {mapRowsNeedCategorising(rows, confirmedRoles) && (
+        <div style={{ display: 'flex', marginBottom: 'var(--ra-s-5)' }}>
+          <button
+            type="button"
+            onClick={onWhatIsThis}
+            data-tooltip="say what these stems are. the map reads the answers back as row names."
+            style={{
+              height: 20,
+              borderRadius: 0,
+              padding: '0 8px',
+              fontSize: 10,
+              fontFamily: 'inherit',
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            what is this?
+          </button>
+        </div>
+      )}
       {phraseOptions.length > 1 && (
         <div
           style={{

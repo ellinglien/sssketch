@@ -2505,7 +2505,7 @@ function Frame(): React.JSX.Element {
                   either child, so sssketchy does not jump across the screen
                   when the view flips. */}
               {state.mapView ? (
-                <ArrangementMap />
+                <ArrangementMap onWhatIsThis={() => setClusterStemsOpen(true)} />
               ) : (
                 <Timeline
                   onOpenClipMenu={openClipMenu}
