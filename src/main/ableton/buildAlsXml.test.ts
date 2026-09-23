@@ -1780,5 +1780,34 @@ describe('the built-in sound toolkit', () => {
         )
       }
     })
+
+    it('gives a muted riser no ableton clip, so no risers track at all', () => {
+      const state = toolkitState({
+        risers: {
+          r1: {
+            id: 'r1',
+            channelId: 'rifff-1',
+            startBar: 4,
+            lengthBars: 2,
+            startCutoffValue: 0.3,
+            endCutoffValue: 0.95,
+            curve: [],
+            level: 0.6,
+            name: 'riser 1',
+            muted: true
+          }
+        }
+      } as Partial<AppState>)
+      const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+        mode: 'bake',
+        toolkitAudio: { bakedClips: new Map(), riserFileName: 'risers.wav' }
+      })
+      const { tracks } = tracksOf(xml)
+      const riserTrack = findAllChildren(tracks, 'AudioTrack').find((t) => {
+        const name = findChild(childArray(t, 'AudioTrack'), 'Name')!
+        return attrs(findChild(childArray(name, 'Name'), 'EffectiveName')!)['@_Value'] === 'risers'
+      })
+      expect(riserTrack).toBeUndefined()
+    })
   })
 })

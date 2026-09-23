@@ -849,4 +849,27 @@ describe('buildRppProject: risers', () => {
     const { tracks } = tracksOf(buildRppProject(state, new Map(), bakeOptions()))
     expect(trackNamed(tracks, 'risers')).toHaveLength(0)
   })
+
+  it('gives a muted riser no item, since the rendered risers.wav has no riser in it', () => {
+    const state = emptyAppState({
+      bpm: 120,
+      risers: {
+        'riser-1': riser({ id: 'riser-1', startBar: 4, lengthBars: 2, muted: true }),
+        'riser-2': riser({ id: 'riser-2', startBar: 12, lengthBars: 4 })
+      }
+    })
+    const { tracks } = tracksOf(buildRppProject(state, new Map(), automationOptions('risers.wav')))
+    const riserTracks = trackNamed(tracks, 'risers')
+    expect(riserTracks).toHaveLength(1)
+    expect(findAllChildren(riserTracks[0], 'ITEM')).toHaveLength(1)
+  })
+
+  it('emits no risers track at all when every riser is muted', () => {
+    const state = emptyAppState({
+      bpm: 120,
+      risers: { 'riser-1': riser({ id: 'riser-1', muted: true }) }
+    })
+    const { tracks } = tracksOf(buildRppProject(state, new Map(), automationOptions('risers.wav')))
+    expect(trackNamed(tracks, 'risers')).toHaveLength(0)
+  })
 })

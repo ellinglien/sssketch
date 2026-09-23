@@ -7,6 +7,7 @@ import { stemKey } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName } from '@shared/busNaming'
+import { audibleRisers } from '@shared/riser'
 import type { AutomationPoint } from '@shared/toolkit'
 import { filterResonanceQ, isStemToolkitNeutral, normaliseAutomationCurve } from '@shared/toolkit'
 // TYPE-ONLY, deliberately and permanently: exportToolkitAudio.ts spawns the
@@ -829,9 +830,11 @@ function buildRiserTracks(
   riserFileName: string,
   secPerBarProject: number
 ): RppNode[] {
-  const risers = Object.values(state.risers ?? {}).sort(
-    (a, b) => a.startBar - b.startBar || a.id.localeCompare(b.id)
-  )
+  // audibleRisers, not Object.values: a muted riser is not in the rendered
+  // risers.wav (buildEngineRisers left it off the wire), so an item pointing
+  // at it would be an item pointing at silence. Same ordering, from the same
+  // one place, as the wire uses.
+  const risers = audibleRisers(state.risers ?? {})
   if (risers.length === 0) return []
 
   const placed = risers.map((riser) => {

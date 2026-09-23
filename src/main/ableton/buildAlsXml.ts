@@ -7,6 +7,7 @@ import { parseKeyToAbletonScale } from './scaleMapping'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName, summarizeSoundTypes } from '@shared/busNaming'
+import { audibleRisers } from '@shared/riser'
 import {
   filterCutoffHz,
   isStemToolkitNeutral,
@@ -1330,9 +1331,8 @@ export function buildAlsXml(
   // Ableton track, which can only play one clip at a time. Present in BOTH
   // modes: a riser is generated, so it always exports as audio.
   if (riserFileName) {
-    const risers = Object.values(state.risers ?? {}).sort(
-      (a, b) => a.startBar - b.startBar || (a.id < b.id ? -1 : 1)
-    )
+    // See buildRppProject's own note: a muted riser is not in risers.wav.
+    const risers = audibleRisers(state.risers ?? {})
     const packedRisers = packIntoTracks(
       risers,
       (r) => r.startBar,

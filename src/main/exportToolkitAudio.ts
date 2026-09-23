@@ -5,6 +5,7 @@ import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { stemKey } from '@shared/types'
 import { isStemToolkitNeutral, type ToolkitExportMode } from '@shared/toolkit'
+import { audibleRisers } from '@shared/riser'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
@@ -145,7 +146,10 @@ export async function renderToolkitAudio(
   mode: ToolkitExportMode
 ): Promise<ToolkitAudio> {
   const baking = mode === 'bake' ? clipsToBake(state) : []
-  const hasRisers = Object.keys(state.risers ?? {}).length > 0
+  // Muted risers are already absent from what the engine would render, so a
+  // project whose only risers are muted must not spend a whole extra engine
+  // render producing a silent risers.wav nothing references.
+  const hasRisers = audibleRisers(state.risers ?? {}).length > 0
   if (baking.length === 0 && !hasRisers) return { bakedClips: new Map() }
 
   const samplesDir = join(outputDir, 'Samples', 'Imported')

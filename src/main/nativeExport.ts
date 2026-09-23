@@ -7,6 +7,7 @@ import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { stemKey, type BusId } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
+import { audibleRisers } from '@shared/riser'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
@@ -319,7 +320,7 @@ async function renderRisersIfAny(
   destDir: string,
   fileName: string
 ): Promise<string | undefined> {
-  if (Object.keys(state.risers ?? {}).length === 0) return undefined
+  if (audibleRisers(state.risers ?? {}).length === 0) return undefined
   const project = await buildEngineProject(
     riserOnlyState(state, allKeys),
     resolveStretchedForExport,
