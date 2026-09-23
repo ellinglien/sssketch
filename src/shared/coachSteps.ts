@@ -9,14 +9,16 @@
  * reshaping the machine, the store, the persistence or the panel.
  *
  * The eight 'p1-' rows are phase one, the climax loop (build order step 2,
- * 2026-09-22). 'sections' and 'finish' are still one-row PLACEHOLDERS for
- * build order steps 3 and 4, so the shell can be stepped through end to end
- * before those phases exist. Every line carries real, hand-written copy
+ * 2026-09-22). The three 'p2-' rows are phase two, shipped 2026-09-22 (build
+ * order step 3); 'finish' is still a one-row PLACEHOLDER for build order
+ * step 4, so the shell can be stepped through end to end before that phase
+ * exists. Every line carries real, hand-written copy
  * rather than lorem, because the copy is the part that has to be reviewed by
  * a person, and every line is true by construction (they describe the STEP,
  * never the user's music -- see the spec's "What he is allowed to say").
  */
 
+import type { CoachSectionOp } from './coachSections'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 export type CoachPhase = 'loop' | 'arrangement' | 'polish'
@@ -79,8 +81,10 @@ export function coachPhaseDef(phase: CoachPhase): CoachPhaseDef {
  * The 'p1-' rows are phase one, shipped 2026-09-22 (build order step 2);
  * they replaced the framework's single 'climax-loop' placeholder, so a
  * project saved by that build loads with an unknown stepId and is repaired
- * back to the first step -- see sanitiseLoadedCoach. 'sections' and
- * 'finish' are still placeholders, for build order steps 3 and 4. */
+ * back to the first step -- see sanitiseLoadedCoach. The 'p2-' rows are
+ * phase two, shipped 2026-09-22 (build order step 3); they replaced the
+ * single 'sections' placeholder the same way. 'finish' is still a
+ * placeholder, for build order step 4. */
 export type CoachStepId =
   | 'p1-flavour'
   | 'p1-low-end'
@@ -90,15 +94,22 @@ export type CoachStepId =
   | 'p1-hook'
   | 'p1-balance'
   | 'p1-lock'
-  | 'sections'
+  | 'p2-first'
+  | 'p2-section'
+  | 'p2-next'
   | 'finish'
 
 /** What a move actually DOES, as data rather than as a callback -- the
  * renderer switches on `kind` and nothing in src/shared/ knows that
  * Discover, React or Electron exist. 'add-slot' adds one Discover slot
- * targeting `kinds`; 'lock-climax' freezes the loop (see ./coachClimax.ts). */
+ * targeting `kinds`; 'lock-climax' freezes the loop (see ./coachClimax.ts);
+ * 'section-op' presses one of the phase-two panel's own buttons (see
+ * ./coachSections.ts's CoachSectionOp), so the bubble's "stuck?" list and
+ * the panel can never offer two different sets of moves. */
 export type CoachMoveAction =
-  { kind: 'add-slot'; kinds: readonly DiscoverSlotKind[] } | { kind: 'lock-climax' }
+  | { kind: 'add-slot'; kinds: readonly DiscoverSlotKind[] }
+  | { kind: 'lock-climax' }
+  | { kind: 'section-op'; op: CoachSectionOp }
 
 /** One concrete move a step can make on the user's behalf. Surfaced by the
  * bubble's "stuck?" button, which "surfaces concrete moves this step can
@@ -184,6 +195,12 @@ export interface CoachStepDef {
  * pendingAddKinds). One constant so a rename of the attribute is a single
  * edit here and one in DiscoverPanel.tsx. */
 const DISCOVER_ADD_ROW = '[data-coach-anchor="discover-add-row"]'
+
+/** Every phase-two step stands next to the arranger's own scrolling
+ * timeline -- which is also what makes him WALK when phase one ends
+ * (spec: "walk = moving to another area (Discover -> timeline)"). The
+ * attribute is on App.tsx's timeline scroll container. */
+const TIMELINE = '[data-coach-anchor="timeline"]'
 
 export const COACH_STEPS: readonly CoachStepDef[] = [
   {
@@ -434,16 +451,69 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     anchorSelector: DISCOVER_ADD_ROW
   },
   {
-    id: 'sections',
+    id: 'p2-first',
     phase: 'arrangement',
-    label: 'carve the sections',
+    label: 'what comes first',
     lines: [
-      'phase two: sections, one at a time. each one is the climax loop with stems turned off.',
-      'now you carve. name a section, pick its length, decide what drops out.',
-      'phase two builds the arrangement section by section. everything is on until you subtract.',
-      'one section at a time from here. the loop you locked is the full version of each one.'
+      'phase two: sections, one at a time. what comes first -- an intro, or straight into a build?',
+      'now you carve. an intro is the usual opening; a build is the short-sketch opening.',
+      'first section. intro eases in, build gets to the drop sooner. either is a fine start.',
+      'pick what opens the track. nothing is permanent -- every section is ordinary clips after.'
     ],
-    moves: []
+    // No moves, deliberately: which section opens the track is an answer
+    // only the user can give, exactly like the melodic-or-groove question.
+    // "do it for me" stays disabled here and that is the point.
+    moves: [],
+    anchorSelector: TIMELINE
+  },
+  {
+    id: 'p2-section',
+    phase: 'arrangement',
+    label: 'carve a section',
+    lines: [
+      'every stem from the locked loop is on. switch off what this section does not need.',
+      'this section starts as the whole climax loop. subtracting is the only thing that changes it.',
+      'name it, set its length, then turn things off. nothing comes out unless you take it out.',
+      'the full loop is playing. the marked ones are what this kind of section usually loses.'
+    ],
+    // The panel's own three buttons, restated here so the bubble's "stuck?"
+    // list and "do it for me" can never offer a different set of moves than
+    // the panel shows. "drop the suggested ones" is the primary one because
+    // it is the single shortcut the spec names -- and it still only ever
+    // runs on a click, leaving the everything-on default until then.
+    moves: [
+      {
+        id: 'section-drop-suggested',
+        label: 'drop the suggested ones',
+        action: { kind: 'section-op', op: 'drop-suggested' }
+      },
+      {
+        id: 'section-preview',
+        label: 'loop just this section',
+        action: { kind: 'section-op', op: 'preview' }
+      },
+      {
+        id: 'section-place',
+        label: 'put it on the timeline',
+        action: { kind: 'section-op', op: 'place' }
+      }
+    ],
+    primaryMoveId: 'section-drop-suggested',
+    anchorSelector: TIMELINE
+  },
+  {
+    id: 'p2-next',
+    phase: 'arrangement',
+    label: 'what comes next',
+    lines: [
+      'that section is on the timeline, as ordinary clips. what comes next?',
+      'down it goes. pick what follows, or stop here -- skip ends phase two.',
+      'placed. the usual next moves are on the panel; an outro is what ends this phase.',
+      'that is one section. keep going, or call the arrangement done and move to polish.'
+    ],
+    // Same reasoning as p2-first: what follows is the user's call.
+    moves: [],
+    anchorSelector: TIMELINE
   },
   {
     id: 'finish',
@@ -500,9 +570,15 @@ const PHASE1_MELODIC_ORDER: readonly CoachStepId[] = [
   'p1-lock'
 ]
 
-/** Phases two and three, whose own plans will expand these two rows. The
- * answer to the melodic-or-groove question does not reach them. */
-const LATER_PHASE_ORDER: readonly CoachStepId[] = ['sections', 'finish']
+/** Phase two's own loop plus phase three's remaining placeholder. The
+ * answer to the melodic-or-groove question does not reach them.
+ *
+ * p2-section repeats: the flow walks p2-first -> p2-section -> p2-next and
+ * then goes BACK to p2-section for as long as the user keeps choosing
+ * another section (startCoachSection, ./coachPhase2.ts). This flat order is
+ * still what advanceCoach's next/skip walks, so skipping from p2-next lands
+ * on 'finish' -- which is exactly "stop arranging and go to polish". */
+const LATER_PHASE_ORDER: readonly CoachStepId[] = ['p2-first', 'p2-section', 'p2-next', 'finish']
 
 /** The whole flow, in the order this answer puts it in. */
 export function coachStepOrder(flavour: CoachFlavour | null): readonly CoachStepId[] {

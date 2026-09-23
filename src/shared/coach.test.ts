@@ -185,7 +185,7 @@ describe('elapsed time', () => {
       T0 + 9 * MINUTE,
       'done'
     )
-    expect(crossed.stepId).toBe('sections')
+    expect(crossed.stepId).toBe('p2-first')
     expect(coachPhaseElapsedMs(crossed, 'loop', T0 + 11 * MINUTE)).toBe(9 * MINUTE)
     expect(coachPhaseElapsedMs(crossed, 'arrangement', T0 + 11 * MINUTE)).toBe(2 * MINUTE)
   })

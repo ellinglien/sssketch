@@ -50,7 +50,9 @@ describe('coach steps', () => {
       'p1-hook',
       'p1-balance',
       'p1-lock',
-      'sections',
+      'p2-first',
+      'p2-section',
+      'p2-next',
       'finish'
     ])
     expect(coachStepOrder('melodic')).toEqual([
@@ -62,7 +64,9 @@ describe('coach steps', () => {
       'p1-hook',
       'p1-balance',
       'p1-lock',
-      'sections',
+      'p2-first',
+      'p2-section',
+      'p2-next',
       'finish'
     ])
   })
@@ -87,7 +91,8 @@ describe('coach steps', () => {
   })
 
   it('narrows a persisted string to a known step id', () => {
-    expect(isCoachStepId('sections')).toBe(true)
+    expect(isCoachStepId('p2-section')).toBe(true)
+    expect(isCoachStepId('sections')).toBe(false)
     expect(isCoachStepId('climax-loop')).toBe(false)
     expect(isCoachStepId(42)).toBe(false)
   })
@@ -135,9 +140,33 @@ describe('coach steps', () => {
     expect(hook).toEqual([['lead', 'bright']])
   })
 
-  it('leaves the two later-phase placeholders alone for their own plans', () => {
-    expect(coachStepById('sections')?.phase).toBe('arrangement')
+  it('puts all three section steps in the arrangement phase', () => {
+    expect(coachStepById('p2-first')?.phase).toBe('arrangement')
+    expect(coachStepById('p2-section')?.phase).toBe('arrangement')
+    expect(coachStepById('p2-next')?.phase).toBe('arrangement')
     expect(coachStepById('finish')?.phase).toBe('polish')
+  })
+
+  it('offers no moves on either question step -- those are the user\u2019s call', () => {
+    // Same reasoning as the melodic-or-groove question: picking which
+    // section comes next would be the app deciding something about the
+    // track, which is the one thing this feature does not do.
+    expect(coachStepById('p2-first')?.moves).toEqual([])
+    expect(coachStepById('p2-next')?.moves).toEqual([])
+    expect(coachStepById('p2-first')?.primaryMoveId).toBeUndefined()
+    expect(coachStepById('p2-next')?.primaryMoveId).toBeUndefined()
+  })
+
+  it('gives the section step its three panel moves', () => {
+    const step = coachStepById('p2-section')
+    expect(step?.moves.map((move) => move.action)).toEqual([
+      { kind: 'section-op', op: 'drop-suggested' },
+      { kind: 'section-op', op: 'preview' },
+      { kind: 'section-op', op: 'place' }
+    ])
+    expect(step?.primaryMoveId).toBe('section-drop-suggested')
+    // Nothing in phase two arms a Discover slot.
+    expect(coachStepArmKinds(step!, null)).toBeNull()
   })
 
   it('gives every step at least three hand-written line variants', () => {
@@ -194,7 +223,7 @@ describe('flavours', () => {
 
 describe('resolveCoachStep', () => {
   const step: CoachStepDef = {
-    id: 'sections',
+    id: 'p2-section',
     phase: 'arrangement',
     label: 'neutral label',
     lines: ['neutral line one.', 'neutral line two.', 'neutral line three.'],
