@@ -165,7 +165,12 @@ export function placeCoachSection(
     sections: [...banked.sections, section],
     draftSection: null,
     outcomes,
-    stepId: finishing ? 'finish' : 'p2-next',
+    // Placing an outro hands straight over to phase three's first step.
+    // This used to name the single 'finish' placeholder; that row was
+    // replaced by three real 'p3-' ones (./coachSteps.ts), and the one this
+    // hand-off means is the first of them -- "stop arranging and go to
+    // polish", the same thing skipping from p2-next does.
+    stepId: finishing ? 'p3-tension' : 'p2-next',
     stepElapsedMs: 0,
     runningSince: now,
     lineSeed: banked.lineSeed + 1,

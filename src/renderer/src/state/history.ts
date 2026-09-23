@@ -110,7 +110,16 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // undone section leaves a placed-section entry pointing at groups that
   // are gone. It costs the next section's start bar, and it is much the
   // cheaper of the two failures.
-  'COACH_PLACE_SECTION'
+  'COACH_PLACE_SECTION',
+  // Phase three's own flow bookkeeping -- same category, and the same
+  // arrangement, as COACH_PLACE_SECTION directly above: listed here so a
+  // stray direct dispatch cannot push a checkpoint of its own, while in
+  // real use all three always arrive inside the BATCH that carries the
+  // actual edit (SssketchyTensionPanel.tsx, and ProjectMenu's export paths
+  // for the v1 mark, which records a file on disk rather than an edit).
+  'COACH_APPLY_TENSION',
+  'COACH_CLEAR_TENSION',
+  'COACH_MARK_V1_EXPORTED'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {
@@ -121,20 +130,43 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
   if (action.type === 'UNDO') {
     if (state.past.length === 0) return state
     const previous = state.past[state.past.length - 1]
-    // Pinned in every respect BUT the list of placed sections, which has to
-    // walk back with the clips. A section placement is deliberately an
-    // ordinary undoable edit (see COACH_PLACE_SECTION's note above), so
-    // pinning `sections` wholesale left the flow claiming a section whose
-    // clips had just been removed -- and since the next section's start bar
-    // is computed from that list, the following section would land in the
-    // gap the undo had just opened. Taking `sections` from the snapshot
-    // being restored (and [] when the snapshot predates the flow entirely)
-    // keeps the record honest about what is actually on the timeline, while
-    // the step, the answer to melodic-or-groove and the locked climax still
-    // survive, which is the whole point of pinning.
+    // Pinned in every respect BUT the two fields that describe real
+    // TIMELINE MATERIAL, which have to walk back with the clips they name.
+    //
+    // `sections`: a section placement is deliberately an ordinary undoable
+    // edit (see COACH_PLACE_SECTION's note above), so pinning `sections`
+    // wholesale left the flow claiming a section whose clips had just been
+    // removed -- and since the next section's start bar is computed from
+    // that list, the following section would land in the gap the undo had
+    // just opened.
+    //
+    // `tension` (phase three) is the same case and gets the same answer:
+    // each entry names a curve written onto a section's clips or a riser
+    // clip on the timeline, applied in the same BATCH as the
+    // COACH_APPLY_TENSION that records it. Undoing that batch takes the
+    // material off, so a pinned `tension` would leave the panel showing a
+    // toggle ON over a curve that is no longer there, with no way to
+    // re-apply it except switching it off and on again.
+    //
+    // `v1ExportedAt` is deliberately NOT in this group, even though it is
+    // also phase three's: it records a file that was written to disk, and
+    // no undo of an in-app edit can take that back off disk. It stays
+    // pinned with the rest of the flow.
+    //
+    // Taking both from the snapshot being restored (and the empty value
+    // when the snapshot predates the flow entirely) keeps the record honest
+    // about what is actually on the timeline, while the step, the answer to
+    // melodic-or-groove, the locked climax and the v1 mark still survive,
+    // which is the whole point of pinning.
     const liveCoach = state.present.coach
     const pinnedCoach =
-      liveCoach === null ? null : { ...liveCoach, sections: previous.coach?.sections ?? [] }
+      liveCoach === null
+        ? null
+        : {
+            ...liveCoach,
+            sections: previous.coach?.sections ?? [],
+            tension: previous.coach?.tension ?? []
+          }
     return {
       past: state.past.slice(0, -1),
       // armedChannelId rides along inside every pushed snapshot (it's an
@@ -185,13 +217,17 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
         ...next,
         armedChannelId: state.present.armedChannelId,
         // Same rule as UNDO, in the other direction: the flow is pinned to
-        // where the user actually is, while `sections` comes from the state
-        // being redone into, so redoing a section placement brings its
-        // record back along with its clips.
+        // where the user actually is, while `sections` and `tension` come
+        // from the state being redone into, so redoing a section placement
+        // or a tension toggle brings its record back along with its clips.
         coach:
           state.present.coach === null
             ? null
-            : { ...state.present.coach, sections: next.coach?.sections ?? [] }
+            : {
+                ...state.present.coach,
+                sections: next.coach?.sections ?? [],
+                tension: next.coach?.tension ?? []
+              }
       },
       future: rest
     }

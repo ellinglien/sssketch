@@ -156,7 +156,7 @@ describe('placeCoachSection', () => {
   it('ends phase two when the section was an outro', () => {
     const outro = startCoachSection(locked(), T0, 'outro')
     const placed = placeCoachSection(outro, T0 + MINUTE, 40, {})
-    expect(placed.stepId).toBe('finish')
+    expect(placed.stepId).toBe('p3-tension')
     expect(placed.outcomes['p2-next']).toBe('done')
   })
 

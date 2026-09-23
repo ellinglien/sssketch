@@ -31,7 +31,9 @@ import {
   startCoachSection,
   toggleCoachSectionStem
 } from '@shared/coachPhase2'
+import { applyCoachTension, clearCoachTension, markCoachV1Exported } from '@shared/coachPhase3'
 import type { CoachSectionType } from '@shared/coachSections'
+import type { CoachTensionKind } from '@shared/coachTension'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import type { CoachFlavour } from '@shared/coachSteps'
 
@@ -758,6 +760,28 @@ export type Action =
       startBar: number
       placedGroupIds: Record<string, string>
     }
+  // Phase three's own bookkeeping. Every one of these is dispatched inside
+  // the SAME BATCH as the real edits it records -- the SET_GROUP_AUTOMATION
+  // calls that write a curve, or the ADD_RISER / REMOVE_RISER that place or
+  // lift a riser (SssketchyTensionPanel.tsx) -- so the arrangement change
+  // and the flow's record of it undo together. That is what "one undo step"
+  // means here, and it is the same arrangement COACH_PLACE_SECTION has.
+  //
+  // `riserId` is the id of the riser that was really placed, for the
+  // 'riser' kind only, so switching the toggle back off removes exactly
+  // that riser and not one the user dropped by hand.
+  | {
+      type: 'COACH_APPLY_TENSION'
+      sectionIndex: number
+      kind: CoachTensionKind
+      riserId: string | null
+    }
+  | { type: 'COACH_CLEAR_TENSION'; sectionIndex: number; kind: CoachTensionKind }
+  /** An export really wrote a file -- "the project is marked 'V1
+   * exported'" (spec). Dispatched from ProjectMenu's own export paths, and
+   * only when one of them actually produced something (the dialog-based
+   * IPC calls return null when the save panel was cancelled). */
+  | { type: 'COACH_MARK_V1_EXPORTED'; now: number }
   | { type: 'LOAD_STATE'; state: AppState }
 
 // Hand-synced copy of selectors.ts's own TIDIED_BUS_ORDER -- store.ts can't
@@ -2080,6 +2104,24 @@ export function reducer(state: AppState, action: Action): AppState {
               action.placedGroupIds
             )
           }
+
+    case 'COACH_APPLY_TENSION':
+      return state.coach === null
+        ? state
+        : {
+            ...state,
+            coach: applyCoachTension(state.coach, action.sectionIndex, action.kind, action.riserId)
+          }
+
+    case 'COACH_CLEAR_TENSION':
+      return state.coach === null
+        ? state
+        : { ...state, coach: clearCoachTension(state.coach, action.sectionIndex, action.kind) }
+
+    case 'COACH_MARK_V1_EXPORTED':
+      return state.coach === null
+        ? state
+        : { ...state, coach: markCoachV1Exported(state.coach, action.now) }
 
     case 'LOAD_STATE':
       return action.state

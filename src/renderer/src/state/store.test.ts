@@ -3015,3 +3015,62 @@ describe('the phase-two coach actions', () => {
     ).toBeNull()
   })
 })
+
+describe('the phase-three coach actions', () => {
+  const section = {
+    type: 'build' as const,
+    name: 'build',
+    bars: 16,
+    droppedPaths: [],
+    startBar: 0,
+    placedGroupIds: {}
+  }
+  const drop = { ...section, type: 'drop' as const, name: 'drop', startBar: 16 }
+
+  function withFlow(): AppState {
+    const started = reducer(initialState, { type: 'COACH_START', now: 1000 })
+    return {
+      ...started,
+      coach: { ...started.coach!, stepId: 'p3-tension', sections: [section, drop] }
+    }
+  }
+
+  it('records a toggle being switched on', () => {
+    const state = reducer(withFlow(), {
+      type: 'COACH_APPLY_TENSION',
+      sectionIndex: 0,
+      kind: 'filter-sweep',
+      riserId: null
+    })
+    expect(state.coach?.tension).toEqual([{ sectionIndex: 0, kind: 'filter-sweep', riserId: null }])
+  })
+
+  it('records a toggle being switched off again', () => {
+    let state = reducer(withFlow(), {
+      type: 'COACH_APPLY_TENSION',
+      sectionIndex: 0,
+      kind: 'riser',
+      riserId: 'riser-a'
+    })
+    state = reducer(state, { type: 'COACH_CLEAR_TENSION', sectionIndex: 0, kind: 'riser' })
+    expect(state.coach?.tension).toEqual([])
+  })
+
+  it('marks the project once, the first time a file comes out', () => {
+    let state = reducer(withFlow(), { type: 'COACH_MARK_V1_EXPORTED', now: 5000 })
+    state = reducer(state, { type: 'COACH_MARK_V1_EXPORTED', now: 9000 })
+    expect(state.coach?.v1ExportedAt).toBe(5000)
+  })
+
+  it('is a no-op with no flow in progress, like every other coach action', () => {
+    expect(reducer(initialState, { type: 'COACH_MARK_V1_EXPORTED', now: 5000 }).coach).toBeNull()
+    expect(
+      reducer(initialState, {
+        type: 'COACH_APPLY_TENSION',
+        sectionIndex: 0,
+        kind: 'swell',
+        riserId: null
+      }).coach
+    ).toBeNull()
+  })
+})

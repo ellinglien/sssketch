@@ -492,3 +492,68 @@ describe('the guided flow across undo/redo', () => {
     expect(h.present.coach).not.toBeNull() // he is still on screen, mid-step
   })
 })
+
+describe('the phase-three flow bookkeeping', () => {
+  const T3 = 1_700_000_000_000
+
+  it('does not checkpoint on its own', () => {
+    const started = historyReducer(createHistoryState(initialState), {
+      type: 'COACH_START',
+      now: T3
+    })
+    const after = historyReducer(started, { type: 'COACH_MARK_V1_EXPORTED', now: T3 + 1000 })
+    expect(after.past.length).toBe(started.past.length)
+  })
+
+  it('rewinds the applied tension, because that IS the work -- like sections', () => {
+    // `tension` names real timeline material: a curve on a section's clips,
+    // or a riser clip. Both go out in the same BATCH as the
+    // COACH_APPLY_TENSION that records them, so undoing the batch takes the
+    // material off -- and if `tension` were pinned along with the rest of
+    // the flow, the panel would keep showing that toggle ON over a curve
+    // that is no longer there. Same trade, and same answer, as `sections`.
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'COACH_START', now: T3 })
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    h = {
+      ...h,
+      present: {
+        ...h.present,
+        coach:
+          h.present.coach === null
+            ? null
+            : {
+                ...h.present.coach,
+                tension: [{ sectionIndex: 0, kind: 'filter-sweep' as const, riserId: null }]
+              }
+      }
+    }
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
+    expect(h.present.coach?.tension).toHaveLength(1)
+
+    h = historyReducer(h, { type: 'UNDO' })
+    // Walked back past a tempo change, not past the toggle: still on.
+    expect(h.present.coach?.tension).toHaveLength(1)
+
+    h = historyReducer(h, { type: 'UNDO' })
+    // This one crosses the point before the toggle existed.
+    expect(h.present.coach).not.toBeNull()
+    expect(h.present.coach?.tension).toHaveLength(0)
+
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.coach?.tension).toHaveLength(1)
+  })
+
+  it('never rewinds the v1 mark -- no undo takes a written file back off disk', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'COACH_START', now: T3 })
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    h = historyReducer(h, { type: 'COACH_MARK_V1_EXPORTED', now: T3 + 1000 })
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
+
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.coach?.v1ExportedAt).toBe(T3 + 1000)
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.coach?.v1ExportedAt).toBe(T3 + 1000)
+  })
+})
