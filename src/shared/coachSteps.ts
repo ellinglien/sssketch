@@ -17,7 +17,24 @@
  * spec's "What he is allowed to say").
  */
 
+import type { DiscoverSlotKind } from './discoverSlotKind'
+
 export type CoachPhase = 'loop' | 'arrangement' | 'polish'
+
+/**
+ * The spec's opening question: "sssketchy asks melodic or groove". It is
+ * the ONLY thing in this feature that reorders anything, and it reorders
+ * exactly two steps (see COACH_STEP_ORDER below) -- it is a starting point,
+ * not a genre, and nothing anywhere treats it as a claim about the music.
+ */
+export type CoachFlavour = 'melodic' | 'groove'
+
+/** Groove first, matching the order the offers are rendered in. */
+export const COACH_FLAVOURS: readonly CoachFlavour[] = ['groove', 'melodic']
+
+export function isCoachFlavour(value: unknown): value is CoachFlavour {
+  return value === 'groove' || value === 'melodic'
+}
 
 export interface CoachPhaseDef {
   id: CoachPhase
@@ -60,14 +77,44 @@ export function coachPhaseDef(phase: CoachPhase): CoachPhaseDef {
  * plain JSON people can and do hand-edit; a load must never throw). */
 export type CoachStepId = 'climax-loop' | 'sections' | 'finish'
 
+/** What a move actually DOES, as data rather than as a callback -- the
+ * renderer switches on `kind` and nothing in src/shared/ knows that
+ * Discover, React or Electron exist. 'add-slot' adds one Discover slot
+ * targeting `kinds`; 'lock-climax' freezes the loop (see ./coachClimax.ts). */
+export type CoachMoveAction =
+  { kind: 'add-slot'; kinds: readonly DiscoverSlotKind[] } | { kind: 'lock-climax' }
+
 /** One concrete move a step can make on the user's behalf. Surfaced by the
  * bubble's "stuck?" button, which "surfaces concrete moves this step can
- * make... It never produces a judgement" (spec). The phase plans give these
- * real behaviour keyed off `id`; the framework only needs to list them. */
+ * make... It never produces a judgement" (spec), and -- for the step's
+ * `primaryMoveId` -- by "do it for me". */
 export interface CoachMove {
   id: string
-  /** Phrased as an offer, e.g. 'duplicate this section'. Lowercase. */
+  /** Phrased as an offer, e.g. 'add a bassish one'. Lowercase. */
   label: string
+  action: CoachMoveAction
+}
+
+/** An answer only the user can give. Rendered as its own button row above
+ * the bubble's fixed next/skip row -- deliberately NOT a move, because "do
+ * it for me" must never pick one of these: choosing melodic or groove for
+ * you would be exactly the kind of decision the spec keeps him out of. */
+export type CoachOfferAction =
+  { kind: 'set-flavour'; flavour: CoachFlavour } | { kind: 'open-riff-browser' }
+
+export interface CoachOffer {
+  id: string
+  label: string
+  action: CoachOfferAction
+}
+
+/** The overridable half of a step row -- see CoachStepDef.byFlavour. */
+export interface CoachStepOverride {
+  label?: string
+  lines?: readonly string[]
+  moves?: readonly CoachMove[]
+  primaryMoveId?: string
+  satisfiedBy?: readonly (readonly DiscoverSlotKind[])[]
 }
 
 export interface CoachStepDef {
@@ -80,18 +127,40 @@ export interface CoachStepDef {
    * pickLineVariant). "Repeating himself word-for-word is most of what
    * makes a character feel dead" (spec). */
   lines: readonly string[]
-  /** Empty here: the placeholder steps genuinely have nothing to automate
-   * yet, and an invented move would be a lie in the one part of this
-   * feature that must never guess. The phase plans fill these in. */
+  /** Every concrete move this step can make. Empty on a step with nothing
+   * to automate -- an invented move would be a lie in the one part of this
+   * feature that must never guess. */
   moves: readonly CoachMove[]
+  /** Which of `moves` the bubble's "do it for me" runs. Absent when doing
+   * it for you would be a decision only the user can make (the melodic-or-
+   * groove question), which is what disables that button. */
+  primaryMoveId?: string
+  /** What "a step completes when a slot with those kinds resolves" (spec)
+   * means for this step, as a list of kind SETS: the step is satisfied when
+   * some resolved slot's own kinds are a superset of any one of them. One
+   * rule covers alternatives (supporting: chonky OR rhythmic OR sparkly --
+   * three single-kind sets) and combinations (the hook: one {leadesque,
+   * sparkly} set). Empty/absent = never satisfied automatically, which is
+   * right for a listening step. Satisfaction is DERIVED from the current
+   * slots, never stored: delete the slot and the tick goes away. */
+  satisfiedBy?: readonly (readonly DiscoverSlotKind[])[]
+  /** Answers this step asks for. Only the flavour question has these. */
+  offers?: readonly CoachOffer[]
   /** CSS selector for the element this step is about -- sssketchy stands on
    * the bottom edge near it, and WALKS when it changes between steps (spec:
    * "walk = moving to another area (Discover -> timeline)"). Same
    * look-it-up-fresh approach TourOverlay.tsx already uses for the same
    * reason: targets live in unrelated components with no shared parent
-   * worth threading refs through. Unset on every placeholder step, so the
-   * framework's own steps all park in the bottom-left corner. */
+   * worth threading refs through. */
   anchorSelector?: string
+  /** The parts of this row that change with the answer to the melodic-or-
+   * groove question. Only two rows have one: the low end (groove wants a
+   * kick alongside the bass; melodic wants bass under the harmony that is
+   * already there) and drums (groove has already placed a kick, so its
+   * drums step is the kit filling out). Everything else reads the same
+   * either way, and duplicating it into twelve rows would just be two
+   * copies of the same copy to keep in sync. */
+  byFlavour?: Partial<Record<CoachFlavour, CoachStepOverride>>
 }
 
 export const COACH_STEPS: readonly CoachStepDef[] = [
@@ -157,4 +226,38 @@ export function nextCoachStepId(id: CoachStepId): CoachStepId | null {
 
 export function coachStepsInPhase(phase: CoachPhase): readonly CoachStepDef[] {
   return COACH_STEPS.filter((step) => step.phase === phase)
+}
+
+/** Flattens a row's per-flavour override into the row itself. Everything
+ * downstream (the bubble, the checklist, the satisfaction checks) reads
+ * steps through this, so there is exactly one place that knows overrides
+ * exist. Idempotent: the result carries no `byFlavour`, so resolving twice
+ * cannot apply an override to an already-overridden row. */
+export function resolveCoachStep(step: CoachStepDef, flavour: CoachFlavour | null): CoachStepDef {
+  const override = flavour === null ? undefined : step.byFlavour?.[flavour]
+  if (override === undefined) return step
+  return { ...step, ...override, byFlavour: undefined }
+}
+
+/** The move "do it for me" runs, or null when this step has none. */
+export function coachStepPrimaryMove(
+  step: CoachStepDef,
+  flavour: CoachFlavour | null
+): CoachMove | null {
+  const resolved = resolveCoachStep(step, flavour)
+  if (resolved.primaryMoveId === undefined) return null
+  return resolved.moves.find((move) => move.id === resolved.primaryMoveId) ?? null
+}
+
+/** The kinds this step pre-arms in Discover's add row -- deliberately
+ * derived from the primary move rather than stored a second time, so "what
+ * the row is armed with" and "what do-it-for-me adds" can never drift
+ * apart. null for a step that arms nothing. */
+export function coachStepArmKinds(
+  step: CoachStepDef,
+  flavour: CoachFlavour | null
+): readonly DiscoverSlotKind[] | null {
+  const move = coachStepPrimaryMove(step, flavour)
+  if (move === null || move.action.kind !== 'add-slot') return null
+  return move.action.kinds
 }
