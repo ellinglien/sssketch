@@ -10,6 +10,18 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-23-arrangement-map-design.md` (approved 2026-09-23).
 
+**DECISION AFTER THIS PLAN WAS WRITTEN — the one-shot build STAYS.** This plan as drafted made
+the guided flow the only route through the auto-arranger, which would have retired "confirm roles
+→ build the whole arrangement instantly, no questions" as a user-reachable feature. Elling was
+asked directly and chose to keep both ("b for now"): the wizard offers **build it for me** (the
+existing one-shot `runAutoArrangeBuild` path, unchanged) alongside **walk me through it** (the
+guided map). So Task 10 must add a branch, not a replacement — `AutoArrangeWizard` keeps its
+current behaviour behind one button and gains the coach behind the other, and none of
+`runAutoArrangeBuild`'s imports in that file become dead. The reasoning for keeping it: the
+one-shot build is already written and tested, so it costs a button and a branch, and it leaves a
+way to compare whether the guided version actually produces better arrangements than the instant
+one. Do not "tidy up" the one-shot path out of existence while implementing Task 10.
+
 **This plan sits on:** `docs/superpowers/plans/2026-09-23-arrangement-map-foundations.md`, which builds `coachCells.ts`, `coachShapes.ts`, `coachMapTemplate.ts`, `coachPasses.ts`, `coachPhrase.ts`, `phrasePeriod.ts`, `phraseCache.ts` and the four new `CoachState` fields. **That plan is being implemented by another agent right now.** Its module and function names are the contract this plan was written against, but names may have shifted slightly during implementation — **re-read every file this plan touches immediately before editing it**, and prefer what is actually on disk over what is quoted here.
 
 **Baseline:** foundations reports 2387 tests / 157 files passing before its own work (it will end with fewer — phase one's tests went with it; take whatever number it reports as your baseline). `npm run typecheck` clean. `npm run lint` at 0 errors + **4 pre-existing prettier warnings in unrelated files**. Any *new* warning is yours.
