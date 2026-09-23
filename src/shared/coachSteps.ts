@@ -14,7 +14,6 @@
  * Discover slot. If you are adding one of those back, read the spec first.
  */
 
-import type { CoachSectionOp } from './coachSections'
 import type { CoachExportOp, CoachTensionOp, CoachTransportOp } from './coachTension'
 
 export type CoachPhase = 'arrangement' | 'polish'
@@ -73,8 +72,7 @@ export type CoachStepId =
  * renderer switches on `kind` and nothing in src/shared/ knows that
  * Discover, React or Electron exist.
  * 'lock-climax' freezes the loop (see ./coachClimax.ts);
- * 'section-op' presses one of the phase-two panel's own buttons (see
- * ./coachSections.ts's CoachSectionOp); 'tension-op' presses one of the
+ * 'tension-op' presses one of the
  * phase-three panel's (./coachTension.ts); 'transport-op' is the balance
  * step simply starting playback, which is a machine fact rather than a
  * musical decision; 'export-op' opens one of the export menu's own three
@@ -83,7 +81,6 @@ export type CoachStepId =
  * offer two different sets of moves. */
 export type CoachMoveAction =
   | { kind: 'lock-climax' }
-  | { kind: 'section-op'; op: CoachSectionOp }
   | { kind: 'tension-op'; op: CoachTensionOp }
   | { kind: 'transport-op'; op: CoachTransportOp }
   | { kind: 'export-op'; op: CoachExportOp }
@@ -136,65 +133,49 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
   {
     id: 'p2-first',
     phase: 'arrangement',
-    label: 'what comes first',
+    label: 'the map',
+    // The map has just arrived, whole. Nothing here tells the user to do
+    // anything with it -- it says what the thing in front of them is.
     lines: [
-      'phase two: sections, one at a time. what comes first -- an intro, or straight into a build?',
-      'now you carve. an intro is the usual opening; a build is the short-sketch opening.',
-      'first section. intro eases in, build gets to the drop sooner. either is a fine start.',
-      'pick what opens the track. nothing is permanent -- every section is ordinary clips after.'
+      'there is the whole song. one column per section, one square per time round the loop.',
+      'the map is the arrangement, seen from further back. the toggle up top swaps the two.',
+      'that is the usual shape, laid out. it is all ordinary clips underneath.',
+      'a shape to push against. nothing on it is settled, and none of it has to stay.'
     ],
-    // No moves, deliberately: which section opens the track is an answer
-    // only the user can give, exactly like the melodic-or-groove question.
-    // "do it for me" stays disabled here and that is the point.
+    // No moves, deliberately: what the sections should become is not the
+    // app's call. "do it for me" stays disabled here and that is the point.
     moves: [],
     anchorSelector: TIMELINE
   },
   {
     id: 'p2-section',
     phase: 'arrangement',
-    label: 'carve a section',
+    label: 'walk the sections',
     lines: [
-      'this one is filled in from the usual shape. switch off anything it does not need.',
-      'name it, set how many times round the loop it goes, then change whatever you like.',
-      'a first guess at this section, not a rule. every square is one click from the other way.',
-      'pre-filled from the standard arrangement. cmd+z if you would rather start from full.'
+      'the map is the whole song at once. one column per section, one square per pass.',
+      'every square is ordinary clips underneath. switch one off and the clip goes.',
+      'this is the shape, filled in. change anything you like, or leave it.',
+      'the map and the timeline are the same arrangement. the toggle up top swaps them.'
     ],
-    // The panel's own two buttons, restated here so the bubble's "stuck?"
-    // list and "do it for me" can never offer a different set of moves than
-    // the panel shows. "drop the suggested ones" was a third; it went on
-    // 2026-09-23 with the everything-on rule, because a pre-filled map has
-    // already applied the suggestion table and applying it again means
-    // nothing.
-    moves: [
-      {
-        id: 'section-preview',
-        label: 'loop just this section',
-        action: { kind: 'section-op', op: 'preview' }
-      },
-      {
-        id: 'section-place',
-        label: 'put it on the timeline',
-        action: { kind: 'section-op', op: 'place' }
-      }
-    ],
-    primaryMoveId: 'section-place',
+    // No moves. He is naming what a section is FOR, and doing it for you
+    // would be exactly the dictate the spec forbids: "goals, not dictates.
+    // advice, not rules." The walk's own back/next/leave buttons are
+    // navigation, not moves, so they live on the bubble rather than here.
+    moves: [],
     anchorSelector: TIMELINE
   },
   {
     id: 'p2-next',
     phase: 'arrangement',
-    label: 'what comes next',
-    // Nothing here says a section went down. The placed case has its own
-    // line, built from the section's real name (coachSectionLine,
-    // ./coachPhase2.ts); these show on the route that reaches this step
-    // WITHOUT placing anything, which is skip from the section step.
+    label: 'when you are done here',
     lines: [
-      'what comes next? the panel lists the usual follow-ons.',
-      'pick what follows, or stop here -- skip ends phase two.',
-      'another section, or call the arrangement done and move on to polish.',
-      'this step is the question: one more section, or out to phase three. an outro ends it.'
+      'the map keeps working long after this. leaving the walk changes nothing on it.',
+      'stay on the map as long as it is useful, or carry on to polish whenever.',
+      'the arrangement is yours now. next is the joins, the levels and a v1 out.',
+      'nothing here is waiting on you. polish is the next thing, when you want it.'
     ],
-    // Same reasoning as p2-first: what follows is the user's call.
+    // Same reasoning as p2-first: when the arrangement is done is the
+    // user's call, and a move here would be the app deciding it.
     moves: [],
     anchorSelector: TIMELINE
   },

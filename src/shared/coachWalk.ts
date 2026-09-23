@@ -2,8 +2,8 @@
  * The section walk: where sssketchy is standing on the map, and the one
  * thought that goes with it.
  *
- * Replaces ./coachPhase2.ts, which walked the user through carving ONE
- * section at a time and placing it. That shape is gone: the map arrives
+ * Replaces coachPhase2.ts (deleted 2026-09-23), which walked the user
+ * through carving ONE section at a time and placing it. That shape is gone: the map arrives
  * whole and pre-filled (spec, "The map arrives pre-filled, and says so"), so
  * there is nothing left to carve one at a time and nothing left to place.
  * What remains is the part Elling actually asked for -- "he walks the

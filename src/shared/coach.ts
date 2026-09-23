@@ -38,12 +38,7 @@ import {
   type CoachSlotSnapshot,
   type LockedClimax
 } from './coachClimax'
-import {
-  sanitiseCoachSectionDraft,
-  sanitiseCoachSections,
-  type CoachSection,
-  type CoachSectionDraft
-} from './coachSections'
+import { sanitiseCoachSections, type CoachSection } from './coachSections'
 import { sanitiseCoachTension, type CoachTensionApplied } from './coachTension'
 import { sanitiseCoachWalkIndex } from './coachWalk'
 import {
@@ -131,14 +126,6 @@ export interface CoachState {
    * separate field from `sections` rather than a flag on one of them:
    * nulling it changes nothing about the arrangement at all. */
   walkIndex: number | null
-  /** The section currently being carved, or null when none is open.
-   *
-   * Its `cells` starts EMPTY, which does not mean "nothing plays" -- it
-   * means "nothing has been overridden", so every cell reads the template
-   * (./coachMapTemplate.ts). That is the deliberate 2026-09-23 reversal of
-   * the old everything-on/user-subtracts rule; see ./coachSections.ts's own
-   * module comment before changing it. */
-  draftSection: CoachSectionDraft | null
   /** Phase three's applied tension moves -- what is switched ON at which
    * section boundary. A flat list rather than a keyed record so a later
    * change needs no migration, exactly like `outcomes`: an entry that is
@@ -183,7 +170,6 @@ export function startCoach(now: number): CoachState {
     shape: null,
     sections: [],
     walkIndex: null,
-    draftSection: null,
     tension: [],
     v1ExportedAt: null
   }
@@ -509,7 +495,6 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
     // JSON -- an index pointing past the end would put him on a column that
     // is not there.
     walkIndex: sanitiseCoachWalkIndex(loose.walkIndex, sections.length),
-    draftSection: sanitiseCoachSectionDraft(loose.draftSection, phrase?.bars ?? 1),
     tension: sanitiseCoachTension(loose.tension),
     // Repaired rather than trusted, like every other number here: a
     // hand-edited or absent value must not leave the flow thinking a file

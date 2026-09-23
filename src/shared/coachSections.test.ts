@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { LockedClimax, LockedClimaxStem } from './coachClimax'
 import { cellIsOn, setCell } from './coachCells'
 import {
-  COACH_FIRST_SECTION_TYPES,
   COACH_SECTION_DROP_SETS,
   COACH_SECTION_TRANSITIONS,
   COACH_SECTION_TYPES,
@@ -10,16 +9,22 @@ import {
   defaultSectionName,
   isCoachSectionType,
   isSuggestedDrop,
-  newCoachSectionDraft,
   nextCoachSectionStartBar,
-  nextSectionTypeSuggestions,
-  sanitiseCoachSectionDraft,
   sanitiseCoachSections,
   sectionLaneChannelIds,
   sectionStemsInPass,
-  suggestedDropPaths,
   type CoachSection
 } from './coachSections'
+
+/** Every flagged stem's path, in the climax's own order. The module used to
+ * export this; with the map applying the table rather than marking it, the
+ * per-path list is only ever a test's own convenience. */
+function suggestedDropPaths(
+  type: Parameters<typeof isSuggestedDrop>[0],
+  c: LockedClimax
+): string[] {
+  return c.stems.filter((s) => isSuggestedDrop(type, s)).map((s) => s.path)
+}
 
 function stem(path: string, kinds: LockedClimaxStem['kinds']): LockedClimaxStem {
   return {
@@ -92,22 +97,6 @@ describe('defaultSectionName', () => {
   })
 })
 
-describe('a fresh section draft', () => {
-  it('a fresh draft overrides NOTHING -- the template fills it in', () => {
-    // The reversal of the old everything-on rule. `cells: {}` does not mean
-    // "nothing plays" -- it means "nothing has been overridden", so every
-    // cell reads the template (./coachMapTemplate.ts).
-    expect(newCoachSectionDraft('intro', [], 2).cells).toEqual({})
-  })
-
-  it('takes its name from the type and its length from the caller', () => {
-    const draft = newCoachSectionDraft('build', [], 3)
-    expect(draft.type).toBe('build')
-    expect(draft.name).toBe('build')
-    expect(draft.passes).toBe(3)
-  })
-})
-
 describe('the suggested-drop table', () => {
   it('flags harmony and the hook in an intro and an outro', () => {
     expect(suggestedDropPaths('intro', climax)).toEqual(['/harmony.wav', '/hook.wav'])
@@ -152,35 +141,6 @@ describe('the transition table', () => {
     expect(COACH_SECTION_TRANSITIONS.breakdown).toEqual(['build', 'drop'])
     // An outro ends phase two, so nothing follows it.
     expect(COACH_SECTION_TRANSITIONS.outro).toEqual([])
-  })
-
-  it('suggests the first section when nothing is placed yet', () => {
-    expect(COACH_FIRST_SECTION_TYPES).toEqual(['intro', 'build'])
-    expect(nextSectionTypeSuggestions([])).toEqual(['intro', 'build'])
-  })
-
-  it('suggests from the last placed section otherwise', () => {
-    const sections: CoachSection[] = [
-      {
-        id: 's0',
-        type: 'intro',
-        name: 'intro',
-        passes: 2,
-        cells: {},
-        startBar: 0,
-        placedGroupIds: {}
-      },
-      {
-        id: 's1',
-        type: 'build',
-        name: 'build',
-        passes: 4,
-        cells: {},
-        startBar: 8,
-        placedGroupIds: {}
-      }
-    ]
-    expect(nextSectionTypeSuggestions(sections)).toEqual(['drop'])
   })
 })
 
@@ -295,25 +255,5 @@ describe('load repair', () => {
   it('keeps a saved id rather than reminting it', () => {
     const loaded = sanitiseCoachSections([{ id: 'map-2-drop', type: 'drop', passes: 2 }], 4)
     expect(loaded[0].id).toBe('map-2-drop')
-  })
-
-  it('repairs or discards a draft', () => {
-    expect(sanitiseCoachSectionDraft(null, 4)).toBeNull()
-    expect(sanitiseCoachSectionDraft({ type: 'nope' }, 4)).toBeNull()
-    expect(sanitiseCoachSectionDraft({ type: 'build' }, 4)).toEqual({
-      type: 'build',
-      name: 'build',
-      passes: 1,
-      cells: {}
-    })
-  })
-
-  it('migrates a pre-map draft at the phrase length the project now has', () => {
-    expect(sanitiseCoachSectionDraft({ type: 'build', bars: 16, droppedPaths: [] }, 8)).toEqual({
-      type: 'build',
-      name: 'build',
-      passes: 2,
-      cells: {}
-    })
   })
 })

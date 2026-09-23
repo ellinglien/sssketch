@@ -3,9 +3,8 @@ import { useAppState, useDispatch } from '../state/StoreContext'
 import { SssketchySprite } from './SssketchySprite'
 import { SssketchyChecklist } from './SssketchyChecklist'
 import { coachAnimation, coachLineFor, isCoachStuck, type CoachState } from '@shared/coach'
-import { coachSectionLine } from '@shared/coachPhase2'
 import { coachPhase3Line } from '@shared/coachPhase3'
-import { SssketchySectionPanel } from './SssketchySectionPanel'
+import { coachWalkLine } from '@shared/coachWalk'
 import { SssketchyTensionPanel } from './SssketchyTensionPanel'
 import { coachStepById, coachStepPrimaryMove, type CoachMoveAction } from '@shared/coachSteps'
 import { canLockClimax, type CoachSlotSnapshot } from '@shared/coachClimax'
@@ -346,18 +345,18 @@ function SssketchyCoachPanel({
   const primaryBlocked =
     primaryMove === null ? null : moveBlockedReason(primaryMove.action, discoverSlots)
   const primaryDead = primaryMove === null || primaryBlocked !== null
-  // Still exactly ONE thought (spec), in one place -- phase two just has its
-  // own source for it, because its lines name the section being carved.
-  // coachSectionLine returns null on every step that is not
-  // p2-section/p2-next.
+  // Still exactly ONE thought (spec), in one place -- the walk just has its
+  // own source for it, because its line names what the section he is
+  // standing on is FOR. coachWalkLine returns null whenever he is not
+  // standing on a column, so nothing else is affected.
   //
   // Phase three goes FIRST in the chain, and the order matters: coachLineFor
   // would otherwise answer an export step that has already written a file
   // with the generic "whether it is finished is your call", which is the
   // wrong thing to say about a v1 that is on disk. coachPhase3Line returns
   // null on every step that is not p3-tension or an exported p3-export, so
-  // phase two is untouched.
-  const line = coachPhase3Line(coach) ?? coachSectionLine(coach) ?? coachLineFor(coach)
+  // the walk is untouched.
+  const line = coachPhase3Line(coach) ?? coachWalkLine(coach) ?? coachLineFor(coach)
 
   return (
     <>
@@ -559,13 +558,6 @@ export function SssketchyCoach({
   if (coach === null || coach.status === 'dismissed') return null
   return (
     <>
-      {/* Phase two's own surface, a sibling of the bubble rather than a
-          child of it: SssketchyCoachPanel owns the coarse clock and every
-          pulse, and the section panel must not re-render on that tick. It
-          gates itself entirely -- null unless there is an active flow on a
-          phase-two step with a locked climax -- so nothing here has to know
-          phase two exists. */}
-      <SssketchySectionPanel />
       <SssketchyCoachPanel
         coach={coach}
         discoverSlots={discoverSlots}

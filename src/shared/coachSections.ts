@@ -23,12 +23,19 @@
  * stored, so a section on disk only ever carries the cells the user
  * CHANGED (./coachCells.ts).
  *
+ * The one-section-at-a-time DRAFT this file used to carry went with the map
+ * on 2026-09-23: sections now arrive whole and pre-filled
+ * (./coachMapTemplate.ts) and are edited on the map, which writes real clips
+ * (../renderer/src/state/coachMapPlacement.ts). CoachSectionDraft survives
+ * as a plain shape -- a section before it has been placed -- and nothing
+ * stores one any more.
+ *
  * The flags key off the kinds DISCOVER tagged each stem with, carried on the
  * locked climax (LockedClimaxStem.kinds) -- never stem order, never channel
  * index, which the spec rules out twice.
  */
 
-import { kindsCoverSet, type LockedClimax, type LockedClimaxStem } from './coachClimax'
+import { kindsCoverSet, type LockedClimaxStem } from './coachClimax'
 import { cellIsOn, sanitiseCoachCells, setStemAcrossPasses, type CoachCells } from './coachCells'
 import {
   COACH_SECTION_MAX_PASSES,
@@ -39,11 +46,6 @@ import {
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 export type CoachSectionType = 'intro' | 'verse' | 'build' | 'drop' | 'breakdown' | 'outro'
-
-/** What the section panel's own buttons do, as data rather than as
- * callbacks -- so a step row can list them under "stuck?" and the bubble's
- * "do it for me" can run one without src/shared/ knowing React exists. */
-export type CoachSectionOp = 'preview' | 'place'
 
 export interface CoachSectionTypeDef {
   id: CoachSectionType
@@ -124,32 +126,25 @@ export const COACH_SECTION_DROP_SETS: Record<
   outro: [['lead']]
 }
 
-/** What the panel writes next to a flagged toggle. Deliberately flat and
- * unrotated: it is a label on a control, not something sssketchy says.
+/** True when this section type usually loses this stem. A MARK, which the
+ * map's own template (./coachMapTemplate.ts) turns into the pre-fill.
  *
- * Unused by the map itself: with a pre-filled map the suggestion is already
- * APPLIED, and marking a still-playing stem "usually out here" as well would
- * be the app arguing with itself. Kept for the panel the map replaces. */
-export const COACH_SUGGESTED_DROP_HINT = 'usually out here'
-
-/** True when this section type usually loses this stem. A MARK -- nothing
- * in this module ever acts on it. */
+ * Deliberately NOT surfaced as a per-cell label any more: with a pre-filled
+ * map the suggestion has already been APPLIED, and marking a still-playing
+ * stem "usually out here" as well would be the app arguing with itself.
+ * That is why COACH_SUGGESTED_DROP_HINT and suggestedDropPaths went with the
+ * panel on 2026-09-23. */
 export function isSuggestedDrop(type: CoachSectionType, stem: LockedClimaxStem): boolean {
   return COACH_SECTION_DROP_SETS[type].some((want) => kindsCoverSet(stem.kinds, want))
 }
 
-/** Every flagged stem's path, in the locked climax's own order. */
-export function suggestedDropPaths(type: CoachSectionType, climax: LockedClimax): string[] {
-  return climax.stems.filter((stem) => isSuggestedDrop(type, stem)).map((stem) => stem.path)
-}
-
 /**
  * What usually comes after each section type (spec: "after build -> drop;
- * after drop -> breakdown or outro"). Offers, not a route: the panel also
- * always offers ending phase two, and nothing here auto-advances.
+ * after drop -> breakdown or outro"). Read by tensionOffersAt
+ * (./coachTension.ts) to decide what a join between two named sections is
+ * usually worth offering.
  *
- * outro's list is empty because choosing an outro is how phase two ends --
- * see placeCoachSection in ./coachPhase2.ts.
+ * outro's list is empty because an outro is where a shape ends.
  */
 export const COACH_SECTION_TRANSITIONS: Record<CoachSectionType, readonly CoachSectionType[]> = {
   intro: ['verse', 'build', 'drop'],
@@ -158,17 +153,6 @@ export const COACH_SECTION_TRANSITIONS: Record<CoachSectionType, readonly CoachS
   drop: ['verse', 'breakdown', 'outro'],
   breakdown: ['build', 'drop'],
   outro: []
-}
-
-/** "sssketchy asks what comes first (suggests intro, or build for a short
- * sketch)" (spec). */
-export const COACH_FIRST_SECTION_TYPES: readonly CoachSectionType[] = ['intro', 'build']
-
-export function nextSectionTypeSuggestions(
-  sections: readonly CoachSection[]
-): readonly CoachSectionType[] {
-  if (sections.length === 0) return COACH_FIRST_SECTION_TYPES
-  return COACH_SECTION_TRANSITIONS[sections[sections.length - 1].type]
 }
 
 /** One section of the map. Plain, persisted data. */
@@ -199,8 +183,10 @@ export interface CoachSection {
   placedGroupIds: Record<string, string>
 }
 
-/** The section currently being carved. Same shape minus everything that
- * only exists once it has really been placed. */
+/** A section before it has been placed: the same shape minus everything
+ * that only exists once it is really on the timeline. Nothing STORES one
+ * any more -- it is what ./coachMapTemplate.ts's buildCoachMapSections
+ * produces on its way into the placement builder. */
 export interface CoachSectionDraft {
   type: CoachSectionType
   name: string
@@ -217,22 +203,6 @@ export function defaultSectionName(
   const label = coachSectionTypeDef(type).label
   const already = sections.filter((section) => section.type === type).length
   return already === 0 ? label : `${label} ${already + 1}`
-}
-
-/**
- * A new section, PRE-FILLED from the template.
- *
- * `cells: {}` does not mean "nothing plays" -- it means "nothing has been
- * overridden", so every cell reads whatever the template says for this
- * section type. That is the deliberate reversal of the old everything-on
- * rule; see this module's own doc comment before changing it.
- */
-export function newCoachSectionDraft(
-  type: CoachSectionType,
-  sections: readonly CoachSection[],
-  passes: number
-): CoachSectionDraft {
-  return { type, name: defaultSectionName(type, sections), passes, cells: {} }
 }
 
 /** The stems that actually play in ONE PASS of this section, in whatever
@@ -362,25 +332,4 @@ export function sanitiseCoachSections(value: unknown, phraseBars: number): Coach
     })
   }
   return sections
-}
-
-/** The in-progress section, or null. Same rules; an unusable draft is
- * discarded rather than repaired into a section the user never started. */
-export function sanitiseCoachSectionDraft(
-  value: unknown,
-  phraseBars: number
-): CoachSectionDraft | null {
-  if (typeof value !== 'object' || value === null) return null
-  const loose = value as Record<string, unknown>
-  if (!isCoachSectionType(loose.type)) return null
-  const passes = migratedPasses(loose, phraseBars)
-  return {
-    type: loose.type,
-    name:
-      typeof loose.name === 'string' && loose.name !== ''
-        ? loose.name
-        : coachSectionTypeDef(loose.type).label,
-    passes,
-    cells: migratedCells(loose, passes)
-  }
 }

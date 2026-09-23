@@ -3,7 +3,7 @@
  * marking the project once a v1 has really come out.
  *
  * Everything here is pure and every function takes the whole CoachState and
- * returns a new one, the same shape ./coachPhase2.ts uses.
+ * returns a new one, the same shape ./coachWalk.ts uses.
  *
  * THE RULE (spec): **offers are offers.** Nothing below is ever called by
  * the reducer, a constructor, or an effect -- every one of these runs from
@@ -107,8 +107,8 @@ function joinsPhrase(count: number): string {
 
 /**
  * The phase-three thought on screen, or null when the flow is somewhere
- * else (the caller then falls back to coachSectionLine, ./coachPhase2.ts,
- * and then to coachLineFor, ./coach.ts).
+ * else (the caller then falls back to coachWalkLine, ./coachWalk.ts, and
+ * then to coachLineFor, ./coach.ts).
  *
  * Returns ONE string, like every other line in this feature -- "a new
  * step's text replaces the old one; nothing stacks" (spec).

@@ -61,7 +61,6 @@ import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { SssketchyCoach } from './components/SssketchyCoach'
 import { type CoachMoveAction } from '@shared/coachSteps'
 import { type CoachSlotSnapshot } from '@shared/coachClimax'
-import { requestCoachSectionOp } from './state/coachSectionBridge'
 import { requestCoachTensionOp } from './state/coachTensionBridge'
 import { registerCoachExport, requestCoachExport } from './state/coachExportBridge'
 import type { CoachExportOp } from '@shared/coachTension'
@@ -1703,11 +1702,14 @@ function Frame(): React.JSX.Element {
   }
 
   /**
-   * "do it for me", and every move listed under "stuck?". The section ops
-   * go through their own bridge because only SssketchySectionPanel can
-   * press its own buttons -- with no queue, because that panel is mounted
-   * exactly while its steps are current.
-   * Phase three's two wires are the same idea again: the tension ops reach
+   * "do it for me", and every move listed under "stuck?".
+   *
+   * Phase two has no moves at all any more: the map arrives whole and what
+   * its sections should become is the user's call, so "do it for me" is
+   * disabled for the whole arrangement phase by construction. The
+   * 'section-op' kind, and the bridge that carried it to the old
+   * one-section-at-a-time panel, went with that panel on 2026-09-23.
+   * Phase three's two wires stay: the tension ops reach
    * SssketchyTensionPanel (unqueued, mounted only on p3-tension) and the
    * export ops reach ProjectMenu's own three menu entries, so the flow
    * never grows an export path of its own.
@@ -1724,9 +1726,6 @@ function Frame(): React.JSX.Element {
     switch (action.kind) {
       case 'lock-climax':
         dispatch({ type: 'COACH_LOCK_CLIMAX', now: Date.now(), slots: coachSlots, bpm: state.bpm })
-        return
-      case 'section-op':
-        requestCoachSectionOp(action.op)
         return
       case 'tension-op':
         requestCoachTensionOp(action.op)

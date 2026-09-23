@@ -804,7 +804,7 @@ describe('the guided flow across a save and a load', () => {
     expect('sections' in phase1.coach).toBe(false)
     const { state: restored } = deserializeProject(phase1)
     expect(restored.coach?.sections).toEqual([])
-    expect(restored.coach?.draftSection).toBeNull()
+    expect(restored.coach?.walkIndex).toBeNull()
     expect(restored.coach?.stepId).toBe('p2-first')
   })
 })

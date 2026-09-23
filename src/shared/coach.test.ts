@@ -384,7 +384,6 @@ describe('sanitiseLoadedCoach', () => {
       shape: null,
       sections: [],
       walkIndex: null,
-      draftSection: null,
       tension: [],
       v1ExportedAt: null
     })
@@ -525,7 +524,7 @@ describe('the phase-two fields', () => {
   it('start empty', () => {
     const coach = startCoach(T0)
     expect(coach.sections).toEqual([])
-    expect(coach.draftSection).toBeNull()
+    expect(coach.walkIndex).toBeNull()
   })
 
   it('survive a save and load', () => {
@@ -543,8 +542,7 @@ describe('the phase-two fields', () => {
           startBar: 0,
           placedGroupIds: { '/kick.wav': 'g1' }
         }
-      ],
-      draftSection: { type: 'build', name: 'build', passes: 2, cells: {} }
+      ]
     }
     const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
     expect(loaded?.sections).toHaveLength(1)
@@ -552,17 +550,10 @@ describe('the phase-two fields', () => {
     expect(loaded?.sections[0].passes).toBe(2)
     expect(loaded?.sections[0].cells).toEqual({ '0|/hook.wav': false })
     expect(loaded?.sections[0].placedGroupIds).toEqual({ '/kick.wav': 'g1' })
-    expect(loaded?.draftSection).toEqual({
-      type: 'build',
-      name: 'build',
-      passes: 2,
-      cells: {}
-    })
   })
 
   it('load as empty from a project saved before phase two existed', () => {
-    // A .sssketchproj from before phase two: no sections key, no
-    // draftSection key.
+    // A .sssketchproj from before phase two: no sections key at all.
     const phase1 = {
       status: 'active',
       stepId: 'p2-first',
@@ -575,18 +566,27 @@ describe('the phase-two fields', () => {
     }
     const loaded = sanitiseLoadedCoach(phase1)
     expect(loaded?.sections).toEqual([])
-    expect(loaded?.draftSection).toBeNull()
+    expect(loaded?.walkIndex).toBeNull()
     expect(loaded?.stepId).toBe('p2-first')
   })
 
   it('repairs a hand-edited section list rather than throwing', () => {
     const loaded = sanitiseLoadedCoach({
       ...startCoach(T0),
-      sections: [{ type: 'nonsense' }, { type: 'drop', passes: 3 }],
-      draftSection: 'not an object'
+      sections: [{ type: 'nonsense' }, { type: 'drop', passes: 3 }]
     })
     expect(loaded?.sections.map((s) => s.type)).toEqual(['drop'])
-    expect(loaded?.draftSection).toBeNull()
+  })
+
+  it('ignores a draftSection left behind by a pre-map save', () => {
+    // The one-section-at-a-time draft went with the map on 2026-09-23. A
+    // project saved with one loads without it rather than failing.
+    const loaded = sanitiseLoadedCoach({
+      ...startCoach(T0),
+      draftSection: { type: 'build', name: 'build', passes: 2, cells: {} }
+    })
+    expect(loaded).not.toBeNull()
+    expect('draftSection' in (loaded as object)).toBe(false)
   })
 
   it('starts with nobody being walked anywhere', () => {
