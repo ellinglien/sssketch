@@ -163,6 +163,7 @@ manual walkthrough (no GUI tooling for an agent here).
 - Generating audio or stems (sssketchy only arranges what Discover found).
 - Mixing beyond gains, and mastering. Impacts/ear candy beyond the riser — possible later steps.
 - sssketchy outside the guided flow.
-- Any external LLM (see "Considered and declined" above).
+- Any external LLM **in this build** — not rejected in principle, and Elling is open to it later;
+  see "Considered and declined" above for the contract it would have to meet.
 - Any suggestion that requires judging whether the music is *good*. He can point at what a step
   is for; he does not review your track.
