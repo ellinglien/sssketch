@@ -26,11 +26,16 @@ import {
   COACH_STEPS,
   FIRST_COACH_STEP_ID,
   coachStepById,
+  isCoachFlavour,
   isCoachStepId,
   nextCoachStepId,
+  resolveCoachStep,
+  type CoachFlavour,
   type CoachPhase,
   type CoachStepId
 } from './coachSteps'
+import { isDiscoverSlotKind, sanitiseLockedClimax, type LockedClimax } from './coachClimax'
+import type { DiscoverSlotKind } from './discoverSlotKind'
 
 /** 'active' shows the bubble; 'minimised' shows only the corner sprite (the
  * clock keeps running -- you are still on this step, just not looking at
@@ -60,6 +65,20 @@ export interface CoachState {
   /** Which variant of the current step's lines to show. Bumped once per
    * transition -- see ./coachLines.ts for why this is not Math.random. */
   lineSeed: number
+  /** The answer to "melodic or groove", or null before it is given. It
+   * orders phase one (coachStepOrder) and picks a step's per-flavour copy
+   * (resolveCoachStep). It is a starting point, not a claim about the
+   * music. */
+  flavour: CoachFlavour | null
+  /** The roles a seeded start already covered, named once on the step the
+   * answer landed on ("you already have drummy and bassish. next:
+   * harmony."). Cleared on the next transition, because one thought at a
+   * time -- see advanceCoach. Empty whenever there is nothing to say. */
+  seededKinds: DiscoverSlotKind[]
+  /** The frozen climax loop: stems, roles and gains, as the material phase
+   * two carves from (spec, phase 1 step 5). null until the lock-in step
+   * runs. Real persisted project data, like the rest of this state. */
+  lockedClimax: LockedClimax | null
 }
 
 /** The spec's "after ~10 minutes on one step, a quiet nudge". Never blocks,
@@ -78,7 +97,10 @@ export function startCoach(now: number): CoachState {
     phaseElapsedMs: emptyPhaseElapsed(),
     stepElapsedMs: 0,
     runningSince: now,
-    lineSeed: 0
+    lineSeed: 0,
+    flavour: null,
+    seededKinds: [],
+    lockedClimax: null
   }
 }
 
@@ -110,15 +132,20 @@ export function resumeCoach(state: CoachState, now: number): CoachState {
 export function advanceCoach(state: CoachState, now: number, outcome: CoachOutcome): CoachState {
   const banked = pauseCoach(state, now)
   const outcomes = { ...banked.outcomes, [banked.stepId]: outcome }
-  // Task 4 replaces `null` with `banked.flavour` once CoachState carries it.
-  const nextId = nextCoachStepId(banked.stepId, null)
+  // The order depends on the melodic-or-groove answer (coachStepOrder) --
+  // a flow that has not answered yet walks the groove order, which is also
+  // the order COACH_STEPS itself is written in.
+  const nextId = nextCoachStepId(banked.stepId, banked.flavour)
   if (nextId === null) {
     return {
       ...banked,
       outcomes,
       status: 'finished',
       stepElapsedMs: 0,
-      lineSeed: banked.lineSeed + 1
+      lineSeed: banked.lineSeed + 1,
+      // One thought at a time: the seeded note belongs to the step it was
+      // written for and never follows the user to the next one.
+      seededKinds: []
     }
   }
   return {
@@ -127,7 +154,8 @@ export function advanceCoach(state: CoachState, now: number, outcome: CoachOutco
     stepId: nextId,
     stepElapsedMs: 0,
     runningSince: now,
-    lineSeed: banked.lineSeed + 1
+    lineSeed: banked.lineSeed + 1,
+    seededKinds: []
   }
 }
 
@@ -193,7 +221,7 @@ export function coachLine(state: CoachState): string {
   if (state.status === 'finished' || step === undefined) {
     return pickLineVariant(COACH_DONE_LINES, state.lineSeed)
   }
-  return pickLineVariant(step.lines, state.lineSeed)
+  return pickLineVariant(resolveCoachStep(step, state.flavour).lines, state.lineSeed)
 }
 
 /** The sprite frame sets that exist under
@@ -291,6 +319,11 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
     lineSeed:
       typeof loose.lineSeed === 'number' && Number.isFinite(loose.lineSeed)
         ? Math.trunc(loose.lineSeed)
-        : 0
+        : 0,
+    flavour: isCoachFlavour(loose.flavour) ? loose.flavour : null,
+    seededKinds: (Array.isArray(loose.seededKinds) ? loose.seededKinds : []).filter(
+      isDiscoverSlotKind
+    ),
+    lockedClimax: sanitiseLockedClimax(loose.lockedClimax)
   }
 }

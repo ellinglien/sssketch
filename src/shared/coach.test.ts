@@ -16,7 +16,8 @@ import {
   startCoach
 } from './coach'
 import { COACH_DONE_LINES, COACH_STUCK_LINES } from './coachLines'
-import { COACH_STEPS, coachStepOrder } from './coachSteps'
+import { COACH_STEPS, coachStepById, coachStepOrder, resolveCoachStep } from './coachSteps'
+import { lockClimaxFromSlots } from './coachClimax'
 
 const T0 = 1_700_000_000_000
 const MINUTE = 60_000
@@ -309,7 +310,10 @@ describe('sanitiseLoadedCoach', () => {
       phaseElapsedMs: { loop: 0, arrangement: 0, polish: 0 },
       stepElapsedMs: 0,
       runningSince: null,
-      lineSeed: 1
+      lineSeed: 1,
+      flavour: null,
+      seededKinds: [],
+      lockedClimax: null
     })
   })
 })
@@ -317,5 +321,97 @@ describe('sanitiseLoadedCoach', () => {
 describe('the stuck nudge line', () => {
   it('comes off the shared table at the step s own seed', () => {
     expect(COACH_STUCK_LINES).toContain(COACH_STUCK_LINES[0])
+  })
+})
+
+describe('the phase-one fields on CoachState', () => {
+  it('starts with no answer, no seeded note and no locked climax', () => {
+    const coach = startCoach(T0)
+    expect(coach.flavour).toBeNull()
+    expect(coach.seededKinds).toEqual([])
+    expect(coach.lockedClimax).toBeNull()
+  })
+
+  it('clears the seeded note on the next step -- one thought at a time', () => {
+    const seeded = { ...startCoach(T0), seededKinds: ['drums' as const, 'bass' as const] }
+    expect(advanceCoach(seeded, T0 + MINUTE, 'done').seededKinds).toEqual([])
+  })
+
+  it('walks the melodic order once the answer is on the state', () => {
+    const melodic = { ...startCoach(T0), flavour: 'melodic' as const }
+    expect(advanceCoach(melodic, T0 + MINUTE, 'done').stepId).toBe('p1-harmony')
+  })
+
+  it('rotates the line variant per flavour, so an overridden step reads right', () => {
+    const groove = { ...startCoach(T0), flavour: 'groove' as const, stepId: 'p1-low-end' as const }
+    expect(coachLine(groove)).toBe(
+      resolveCoachStep(coachStepById('p1-low-end')!, 'groove').lines[0]
+    )
+  })
+
+  it('carries all three fields across a save and a load', () => {
+    const saved = {
+      ...startCoach(T0),
+      flavour: 'melodic' as const,
+      seededKinds: ['drums' as const],
+      lockedClimax: lockClimaxFromSlots(
+        [
+          {
+            id: 'slot-1',
+            kinds: ['bass' as const],
+            stem: {
+              path: '/a.wav',
+              name: 'a',
+              author: 'b',
+              type: 'bass' as const,
+              durationSec: 8,
+              barLength: 4
+            },
+            gain: 1,
+            audible: true,
+            rolling: false
+          }
+        ],
+        120,
+        T0
+      )
+    }
+    const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
+    expect(loaded?.flavour).toBe('melodic')
+    expect(loaded?.seededKinds).toEqual(['drums'])
+    expect(loaded?.lockedClimax?.stems[0].role).toBe('bass')
+  })
+
+  it('repairs all three rather than trusting them', () => {
+    const loaded = sanitiseLoadedCoach({
+      status: 'active',
+      stepId: 'p1-hook',
+      flavour: 'jazz',
+      seededKinds: ['drums', 'banana', 7],
+      lockedClimax: { nope: true }
+    })
+    expect(loaded?.flavour).toBeNull()
+    expect(loaded?.seededKinds).toEqual(['drums'])
+    expect(loaded?.lockedClimax).toBeNull()
+  })
+
+  it('loads a project saved by the framework build, whose step no longer exists', () => {
+    // The framework shipped one placeholder phase-one step, 'climax-loop'.
+    // Phase one replaced it with eight real ones, so a project saved in
+    // between comes back on the first step with everything else intact.
+    const loaded = sanitiseLoadedCoach({
+      status: 'active',
+      stepId: 'climax-loop',
+      outcomes: {},
+      phaseElapsedMs: { loop: 4 * MINUTE, arrangement: 0, polish: 0 },
+      stepElapsedMs: 2 * MINUTE,
+      runningSince: T0,
+      lineSeed: 3
+    })
+    expect(loaded?.stepId).toBe('p1-flavour')
+    expect(loaded?.status).toBe('dismissed')
+    expect(loaded?.flavour).toBeNull()
+    expect(loaded?.lockedClimax).toBeNull()
+    expect(loaded?.phaseElapsedMs.loop).toBe(4 * MINUTE)
   })
 })
