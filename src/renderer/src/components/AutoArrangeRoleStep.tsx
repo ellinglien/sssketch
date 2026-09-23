@@ -6,11 +6,7 @@ import { stemTileGeometryFromFields, type StemTileGeometry } from '../state/sele
 import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stemDensityScore'
 import {
   resolveStemRole,
-  ARRANGE_ROLE_OPTIONS,
-  DRUM_SUB_ROLE_OPTIONS,
-  DRUM_SUB_ROLE_LABELS,
-  type ArrangeRole,
-  type DrumSubRole,
+  engineRoleFor,
   type StemFrequency,
   type StemRoleInfo
 } from '@shared/stemRole'
@@ -29,8 +25,18 @@ import { toFeatureArray } from '@shared/stemFeatures'
 import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
 import { refineRoleWithEmbeddingOrCentroidSuggestion } from '@shared/roleEmbeddingRefinement'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
+import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
+import { ROLE_LABELS } from './autoArrangeLabels'
+import { useConfirmedStemRoles } from '../state/useConfirmedStemRoles'
+import { recordStemRoles } from '../state/stemCategoryCapture'
+import type { ProjectRef } from '@shared/types'
 
 interface Props {
+  /** Where a role confirmation made here is recorded as having come from
+   * -- the same ProjectRef every other StemCategories write carries. Needed
+   * now that the role readout writes straight through to the global table
+   * instead of only handing a role to this one build. */
+  currentSketch: ProjectRef
   onConfirm: (
     roles: StemRoleInfo[],
     buildOptions?: { targetSections: number; shape: ArrangeShape }
@@ -49,12 +55,6 @@ interface Props {
   showLengthAndShape?: boolean
 }
 
-// '' (empty string) is the drum sub-role <select>'s own "no sub-role, stay
-// generic" option, mapped to/from `undefined` at the onChange boundary
-// rather than adding a real '' value to the DrumSubRole type itself. Shown
-// only for a row whose arrangeRole is 'drums' -- see DrumSubRole's own doc
-// comment (shared/stemRole.ts).
-
 // Ordered low-to-high -- index 0..3 maps directly onto the frequency
 // slider's own value (min=0, max=3, step=1). See StemFrequency's own doc
 // comment (shared/stemRole.ts) for what each level means to the engine
@@ -69,15 +69,6 @@ const FREQUENCY_LABELS: Record<StemFrequency, string> = {
   occasional: 'occasional',
   frequent: 'frequent',
   veryFrequent: 'very frequent'
-}
-
-const selectStyle: React.CSSProperties = {
-  height: 22,
-  borderRadius: 0,
-  fontSize: 10,
-  border: '1px solid var(--ra-border)',
-  background: 'var(--ra-bg-row-active)',
-  color: 'var(--ra-text)'
 }
 
 /** Shown before an auto-arrangement run to let the user confirm/correct each
@@ -97,6 +88,7 @@ const selectStyle: React.CSSProperties = {
  * rifff -- there's no "currently selected rifff" convention in this app for
  * a single-target design to hang off of. */
 export function AutoArrangeRoleStep({
+  currentSketch,
   onConfirm,
   onCancel,
   showFrequency = true,
@@ -290,6 +282,20 @@ export function AutoArrangeRoleStep({
   const { loading: scanLoading, featuresByKey } = useStemFeatureScan(scanItems)
   const embeddingByKey = useCachedStemEmbeddings(scanItems)
 
+  // What somebody already SAID these stems are, out of the global
+  // StemCategories table -- the same read the arrangement map's row labels
+  // use. This step no longer asks the question itself (spec: what a stem IS
+  // is global, what it DOES in this arrangement is local); it shows the
+  // answer and opens the reclassify picker on click.
+  const rolePaths = useMemo(() => flatStems.map((fs) => fs.stem.path), [flatStems])
+  const confirmedRoles = useConfirmedStemRoles(rolePaths)
+
+  // The reclassify picker, opened from a row's role readout. One at a time,
+  // positioned off the clicked button's own rect, exactly as the Discover
+  // match meter opens it.
+  const [picker, setPicker] = useState<{ stemKey: string; x: number; y: number } | null>(null)
+  const pickerAnchorRef = useRef<HTMLButtonElement>(null)
+
   // buildDensityMap's own PromiseSettledResult<number>[] shape (one entry
   // per stem, in flatStems order, 'fulfilled' with a density score or
   // 'rejected') is reused as-is here -- rather than changing that shared
@@ -324,7 +330,7 @@ export function AutoArrangeRoleStep({
       const base = resolveStemRole(stem, key, busOf[key] ?? null)
       const features = featuresByKey.get(key)
       const raw = features ? toFeatureArray(features) : null
-      return refineRoleWithEmbeddingOrCentroidSuggestion(
+      const refined = refineRoleWithEmbeddingOrCentroidSuggestion(
         base,
         raw,
         centroidStore,
@@ -334,6 +340,14 @@ export function AutoArrangeRoleStep({
         },
         embeddingByKey.get(key) ?? null
       )
+      // A human already answered this question about this FILE, in Tidy Up
+      // or in the reclassify picker, and a confirmation always beats a
+      // machine guess -- the same rule resolveStemRole already applies to a
+      // confirmed busId. Absent means nobody has said, which falls through
+      // to the guess above rather than to a blank.
+      const confirmed = confirmedRoles[stem.path]
+      if (confirmed === undefined) return refined
+      return { ...refined, arrangeRole: confirmed, uncertain: false }
     })
     // buildDensityMap is keyed to one groupId per call -- build it per
     // owning rifff over the matching slice of `densityResults` (flatStems is
@@ -369,7 +383,8 @@ export function AutoArrangeRoleStep({
     featuresByKey,
     embeddingByKey,
     confirmedArrangeRoleEmbeddings,
-    confirmedDrumSubRoleEmbeddings
+    confirmedDrumSubRoleEmbeddings,
+    confirmedRoles
   ])
 
   if (placedRifffs.length === 0) {
@@ -602,8 +617,8 @@ export function AutoArrangeRoleStep({
           // uncertain badge) with no logical grouping and no wrap/overflow
           // guard at the panel's fixed 560px width. Top line is media/
           // playback (play button + waveform thumbnail); bottom line is
-          // role/metadata/preference controls (checkbox, arrangeRole select,
-          // frequency select, density/provenance labels, uncertain badge),
+          // role/metadata/preference controls (checkbox, role readout,
+          // frequency slider, density/provenance labels, uncertain badge),
           // allowed to wrap rather than overflow.
           return (
             <div
@@ -677,48 +692,38 @@ export function AutoArrangeRoleStep({
                   checked={role.included}
                   onChange={(e) => updateRole(role.stemKey, { included: e.target.checked })}
                 />
-                <select
-                  value={role.arrangeRole}
-                  onChange={(e) => {
-                    const nextRole = e.target.value as ArrangeRole
-                    // Clear a stale sub-role the instant arrangeRole moves
-                    // away from 'drums' -- engineRoleFor already ignores
-                    // drumSubRole for any other role, but leaving it set
-                    // would silently reappear (and read as meaningful) if
-                    // the user switches back to 'drums' later.
-                    updateRole(role.stemKey, {
-                      arrangeRole: nextRole,
-                      drumSubRole: nextRole === 'drums' ? role.drumSubRole : undefined
-                    })
+                {/* The role READOUT, not a role picker. What a stem is is
+                    a claim about the FILE and belongs to one surface (Tidy
+                    Up / the reclassify picker); what it does in THIS
+                    arrangement -- included, frequency, length, shape -- is
+                    what this step still owns. engineRoleFor substitutes a
+                    confirmed drum sub-role in for the generic 'drums'
+                    bucket and ROLE_LABELS already spells kick/snare/hi-hat/
+                    clap/perc alongside the eight roles, so this says
+                    "snare" where a snare was confirmed, with no new
+                    table. */}
+                <button
+                  ref={picker?.stemKey === role.stemKey ? pickerAnchorRef : undefined}
+                  type="button"
+                  onClick={(e): void => {
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    setPicker({ stemKey: role.stemKey, x: rect.left, y: rect.bottom + 4 })
                   }}
-                  style={selectStyle}
+                  data-tooltip="what is this stem? saved to your library, not just this sketch."
+                  style={{
+                    height: 22,
+                    borderRadius: 0,
+                    padding: '0 8px',
+                    fontSize: 10,
+                    fontFamily: 'inherit',
+                    border: '1px solid var(--ra-border)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)',
+                    cursor: 'pointer'
+                  }}
                 >
-                  {ARRANGE_ROLE_OPTIONS.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                {role.arrangeRole === 'drums' && (
-                  <select
-                    value={role.drumSubRole ?? ''}
-                    onChange={(e) =>
-                      updateRole(role.stemKey, {
-                        drumSubRole:
-                          e.target.value === '' ? undefined : (e.target.value as DrumSubRole)
-                      })
-                    }
-                    title="optionally refine which drum kit piece this is -- helps treat different drum stems as genuinely different roles"
-                    style={selectStyle}
-                  >
-                    <option value="">drums (generic)</option>
-                    {DRUM_SUB_ROLE_OPTIONS.map((r) => (
-                      <option key={r} value={r}>
-                        {DRUM_SUB_ROLE_LABELS[r]}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                  {ROLE_LABELS[engineRoleFor(role)] ?? role.arrangeRole}
+                </button>
                 {showFrequency && (
                   <div
                     style={{ display: 'flex', alignItems: 'center', gap: 6 }}
@@ -839,6 +844,30 @@ export function AutoArrangeRoleStep({
           </button>
         </div>
       </div>
+      {/* Rendered ONCE, outside the row loop -- it is position: fixed and
+          positions itself off the clicked button's rect, so one instance
+          serves every row. DISCOVER_RECLASSIFY_ROLES is all eight
+          ArrangeRole values (the three mask-kind roles plus every
+          ARRANGE_ROLE_OPTIONS entry without a mask kind), so no role is
+          lost with the two selects. There is no drum sub-role here, by
+          design: the picker is not extended, and a sub-role is set in Tidy
+          Up (this step still READS one back through engineRoleFor). */}
+      {picker !== null && (
+        <DiscoverReclassifyPicker
+          x={picker.x}
+          y={picker.y}
+          currentRole={roles.find((r) => r.stemKey === picker.stemKey)?.arrangeRole ?? null}
+          onPick={(nextRole): void => {
+            updateRole(picker.stemKey, { arrangeRole: nextRole, drumSubRole: undefined })
+            const path = flatStemsByKey.get(picker.stemKey)?.stem.path
+            if (path !== undefined) {
+              void recordStemRoles([{ path, arrangeRole: nextRole }], 'autoarrange', currentSketch)
+            }
+          }}
+          onClose={(): void => setPicker(null)}
+          ignoreRef={pickerAnchorRef}
+        />
+      )}
     </div>
   )
 }

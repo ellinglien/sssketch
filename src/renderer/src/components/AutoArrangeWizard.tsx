@@ -203,6 +203,7 @@ export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
   if (route === 'instant') {
     return (
       <AutoArrangeRoleStep
+        currentSketch={currentSketch}
         onConfirm={(roles, buildOptions) => void handleInstantConfirm(roles, buildOptions)}
         onCancel={onClose}
       />
@@ -212,6 +213,7 @@ export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
   if (route === 'guided') {
     return (
       <AutoArrangeRoleStep
+        currentSketch={currentSketch}
         onConfirm={handleGuidedConfirm}
         onCancel={onClose}
         showLengthAndShape={false}

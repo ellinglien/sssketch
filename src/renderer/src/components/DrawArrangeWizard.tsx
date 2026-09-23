@@ -88,6 +88,7 @@ export function DrawArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
   if (step.phase === 'role') {
     return (
       <AutoArrangeRoleStep
+        currentSketch={currentSketch}
         onConfirm={handleRoleConfirm}
         onCancel={onClose}
         showFrequency={false}
