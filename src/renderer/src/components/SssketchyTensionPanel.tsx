@@ -3,7 +3,8 @@ import { markManualSeek } from '../state/manualSeek'
 import { registerCoachTensionOp } from '../state/coachTensionBridge'
 import {
   buildCoachTensionActions,
-  buildCoachTensionRemovalActions
+  buildCoachTensionRemovalActions,
+  coachTensionHasMaterial
 } from '../state/coachTensionApply'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { coachBoundaries } from '@shared/coachPhase3'
@@ -233,15 +234,23 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
           {boundary.offers.map((kind) => {
             const def = coachTensionDef(kind)
             const on = tensionIsApplied(coach.tension, boundary.index, kind)
+            // An offer with nothing under it to write on cannot land, and a
+            // control that takes a click and does nothing is the exact
+            // complaint this panel was fixed for. Said plainly instead.
+            const section = coach.sections[boundary.index]
+            const available = section !== undefined && coachTensionHasMaterial(state, section, kind)
             return (
               <button
                 key={kind}
                 type="button"
+                disabled={!on && !available}
                 onClick={() => toggle(boundary, kind)}
                 title={
                   on
                     ? 'take it back off -- anything drawn on that lane since goes with it'
-                    : def.note
+                    : available
+                      ? def.note
+                      : 'nothing plays in this stretch, so there is nothing here to shape'
                 }
                 style={{
                   ...buttonStyle,
@@ -252,7 +261,9 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
                   padding: '4px 8px',
                   marginTop: 'var(--ra-s-1)',
                   border: `1px solid ${on ? 'var(--ra-text-2)' : 'var(--ra-border)'}`,
-                  color: on ? 'var(--ra-text)' : 'var(--ra-text-3)'
+                  color: on ? 'var(--ra-text)' : 'var(--ra-text-3)',
+                  opacity: !on && !available ? 0.5 : 1,
+                  cursor: !on && !available ? 'default' : 'pointer'
                 }}
               >
                 {on ? `on · ${def.label}` : def.label}

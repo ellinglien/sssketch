@@ -78,14 +78,83 @@ function sectionBarsFor(state: AppState, section: CoachSection): number {
   return sectionBars(section.passes, state.coach?.phrase?.bars ?? 1)
 }
 
-/** This section's clips that are still on the timeline, in the order the
- * map placed them. A groupId the user has since deleted is skipped rather
- * than throwing -- the arrangement is ordinary material, and deleting a
- * clip is an ordinary thing to do to it. */
+/**
+ * This section's clips, READ OFF THE LIVE TIMELINE -- one per arranger row,
+ * in the order the arranger draws its rows.
+ *
+ * NOT `section.placedGroupIds`, and that is the whole point of this
+ * function. That record is a snapshot of what the map BUILD placed, written
+ * once by COACH_RECORD_MAP_PLACEMENT and never again; meanwhile every edit
+ * on the map is a DELETE plus a fresh PLACE_LOOP_ON_TIMELINE with a new
+ * groupId (buildCellToggleActions), and so is every clip the user drags,
+ * splits or redraws by hand. So by the time the tension pass runs -- which
+ * is AFTER the walk whose entire purpose is shaping those columns -- the
+ * record names clips that no longer exist, and a toggle built off it wrote
+ * nothing, recorded nothing, and looked broken. (Elling, 2026-09-23: "not
+ * sure if clicking one of these choices works... no visual confirmation or
+ * change to the grid.")
+ *
+ * This is the same rule ArrangementMap.tsx already states at the top of
+ * itself -- "every cell it draws is read out of the live timeline" -- and
+ * the tension pass was the last thing in the map world still reading a
+ * stored grid instead.
+ *
+ * ONE PER ROW, not one per clip: a stem switched off mid-section and back
+ * on is two clips on one lane, and a curve that spans the section once
+ * belongs on the clip that OPENS the lane here -- which is exactly what
+ * placedGroupIds used to name ("the FIRST groupId per path per section").
+ * Writing the same ramp onto both would be two ramps where the offer
+ * promises one.
+ *
+ * A clip BELONGS to the section when it starts inside it. Same test the
+ * build's own placement makes, and it keeps the boundary where the user
+ * sees it: a clip that begins on the join is the next section's.
+ */
 function liveGroupIds(state: AppState, section: CoachSection): string[] {
-  return Object.values(section.placedGroupIds).filter(
-    (groupId) => state.rifffs[groupId] !== undefined
-  )
+  const startBar = section.startBar
+  const endBar = startBar + sectionBarsFor(state, section)
+  const firstPerLane = new Map<string, { groupId: string; startBar: number }>()
+  for (const rifff of Object.values(state.rifffs)) {
+    const bar = rifff.startBar
+    if (bar === undefined || bar < startBar || bar >= endBar) continue
+    const lane = state.channelOf[rifff.groupId] ?? rifff.groupId
+    const seen = firstPerLane.get(lane)
+    if (seen === undefined || bar < seen.startBar) {
+      firstPerLane.set(lane, { groupId: rifff.groupId, startBar: bar })
+    }
+  }
+  // channelOrder is the order the arranger draws its rows in, and the map
+  // above it too (coachMapRows reads channelsInOrder), so the actions come
+  // out in the order the user sees the rows. A lane the order has not heard
+  // of yet goes last rather than being dropped.
+  const order = new Map(state.channelOrder.map((id, index) => [id, index]))
+  return [...firstPerLane.entries()]
+    .sort(
+      ([a], [b]) =>
+        (order.get(a) ?? Number.MAX_SAFE_INTEGER) - (order.get(b) ?? Number.MAX_SAFE_INTEGER)
+    )
+    .map(([, entry]) => entry.groupId)
+}
+
+/**
+ * Is there anything in this section for this offer to be written onto?
+ *
+ * The panel asks before it draws a toggle, so an offer that cannot land is
+ * shown as unavailable instead of accepting a click and doing nothing --
+ * which is exactly how this whole path looked when it was reading a stale
+ * record (see liveGroupIds above). A section the user has emptied is a
+ * legitimate thing to have made; silently ignoring a press on it is not.
+ *
+ * A riser needs no material at all -- it is a clip in its own right on a row
+ * of its own, so it can always land.
+ */
+export function coachTensionHasMaterial(
+  state: AppState,
+  section: CoachSection,
+  kind: CoachTensionKind
+): boolean {
+  if (coachTensionDef(kind).param === null) return true
+  return liveGroupIds(state, section).length > 0
 }
 
 /**
