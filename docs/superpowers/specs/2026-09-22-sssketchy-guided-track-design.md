@@ -114,13 +114,24 @@ persistence above).
 ## Phase 2 — sections, one at a time (Elling chose section-by-section, build-as-you-go)
 
 - sssketchy asks what comes first (suggests intro, or build for a short sketch).
-- Per section: name + bar length (nudgeable ±4/±8), the climax stems as toggles **pre-set by
-  subtraction rules** (intro: drums + supporting; build: add harmony/tension; drop: everything;
-  breakdown: harmony + hook, no kick/bass; outro: mirrors intro), **preview** (loops just that
-  section), then **next** places it on the timeline immediately.
+- Per section: name + bar length (nudgeable ±4/±8), then the climax stems as toggles with
+  **everything on by default — the user subtracts** (Elling's decision). The app never silently
+  removes a stem; a section you say nothing about is the full climax loop.
+- **Suggested drops are marks, not changes.** For each section type, the stems that section type
+  usually loses are flagged (intro and outro: harmony and hook; build: the hook; breakdown: kick
+  and bass; drop: nothing), shown as a hint on the toggle plus one **drop the suggested ones**
+  button that applies them all at once. Nothing is applied until the user clicks.
+  - This is the one place the app still asserts something musical, and framing it as a mark on an
+    everything-on default is what keeps it inside the rule above: a suggestion you can ignore
+    costs nothing when it is wrong, whereas a pre-applied default is a decision made for you that
+    you have to notice and undo.
+  - The flags key off the **roles Discover already tagged** (drummy/bassish/leadesque/…), which
+    the locked climax carries, so they are derived from data the app really has rather than from
+    stem order or channel index.
+- Then **preview** (loops just that section), and **next** places it on the timeline immediately.
 - After each section: "what comes next?", from a suggestion table (after build → drop; after
   drop → breakdown or outro; …). Choosing **outro** ends phase 2.
-- Subtraction defaults and transition suggestions are plain tested tables in `src/shared/`.
+- Suggested-drop flags and transition suggestions are plain tested tables in `src/shared/`.
 - Placement reuses the arranger's existing write path (buildArrangeReplaceActions), so the
   result is ordinary, fully editable arrangement — one undo step per section.
 
