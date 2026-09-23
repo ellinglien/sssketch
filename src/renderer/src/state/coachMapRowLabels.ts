@@ -1,5 +1,5 @@
 import type { ArrangeRole } from '@shared/stemRole'
-import { stemLabelsByKey } from '../components/autoArrangeLabels'
+import { stemLabelsByKey } from '@shared/autoArrangeLabels'
 import type { CoachMapRow } from './coachMapRows'
 
 /**

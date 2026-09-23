@@ -1,4 +1,4 @@
-import type { ArrangeStemInput } from '@shared/autoArrangeEngine'
+import type { ArrangeStemInput } from './autoArrangeEngine'
 
 // Stem names in real Endlesss material are frequently unintelligible
 // (auto-generated/generic) and can't be relied on to identify a candidate --

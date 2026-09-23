@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ArrangeRole } from '@shared/stemRole'
 import { DISCOVER_RECLASSIFY_ROLES } from '@shared/discoverMatchMeter'
-import { ROLE_LABELS } from './autoArrangeLabels'
+import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 
 /** Match meter reclassify (docs/superpowers/specs/2026-09-22-discover-
  * promise-vs-delivery-design.md, Phase 2): opened from a mask kind's source
