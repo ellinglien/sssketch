@@ -99,6 +99,11 @@ export function RiserBlock({
   // lands.
   const [drag, setDrag] = useState<{ startBar: number; lengthBars: number } | null>(null)
 
+  // Whether the name bar is currently a text field rather than a drag
+  // surface. It is only ever one of the two -- see the name bar's own
+  // comment for why renaming had to move to double-click.
+  const [renaming, setRenaming] = useState(false)
+
   if (!riser) return null
 
   const startBar = drag?.startBar ?? riser.startBar
@@ -126,6 +131,12 @@ export function RiserBlock({
     )
   }
 
+  // Arrange-mode only, in practice: both edge handles live inside the block
+  // body, which the automation lane covers whole (zIndex 4 over their 3), so
+  // a riser cannot be resized while its lane is open. Stated rather than
+  // silently left that way -- moving is what the lane was really blocking
+  // (the name bar now handles it, see below), and a resize has no equally
+  // obvious home outside the body. Revisit if it starts to bite.
   function beginResize(edge: 'start' | 'end', e: React.MouseEvent): void {
     if (e.button !== 0) return
     const originStart = riser.startBar
@@ -198,20 +209,56 @@ export function RiserBlock({
           like a clip's own name, minus the type colour (see this file's
           doc comment).
 
-          The two stopPropagation guards are about the TIMELINE, not about
-          any knob: every row in the arranger sits inside App.tsx's
-          click-to-scrub background handler, so without them clicking into
-          this field would also jump the playhead (the same guard a clip's
-          own name bar has carried since it was built). Dial's own gesture
-          guard is a separate thing and stays where it is -- see Dial.tsx. */}
+          This bar is ALSO the riser's drag surface, and that is what pushed
+          renaming onto a double-click. In automation mode the lane covers
+          the block's whole body (AutomationLane's inset:0 at zIndex 4), so
+          the body cannot be a move handle there -- which left a riser as the
+          one element in the arranger that could not be moved while drawing,
+          against "all clips should be selectable and movable in automation
+          mode" (Elling). A clip solved the same problem by moving from its
+          NAME BAR, which sits above the body and outside the lane; this is
+          the riser's half of that, so the two behave alike. Rename is where
+          a clip's own double-click-ish affordances live too.
+
+          RESIZE is deliberately NOT given the same treatment: the edge
+          handles stay inside the body, so resizing a riser stays an
+          arrange-mode gesture for now. Moving is the one the lane was
+          actually blocking.
+
+          The stopPropagation guards are about the TIMELINE, not about any
+          knob: every row in the arranger sits inside App.tsx's
+          click-to-scrub background handler, so without them pressing on
+          this bar would also jump the playhead (the same guard a clip's own
+          name bar has carried since it was built). startPointerDrag stops
+          the mousedown itself, but only once it has decided to run -- the
+          explicit stop below covers the presses it declines (a secondary
+          button, and every press while the field is open). Dial's own
+          gesture guard is a separate thing and stays where it is -- see
+          Dial.tsx. */}
       <div
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation()
+          // While the field is open the press belongs to the caret, not to
+          // a move: beginMove's preventDefault would stop the input taking
+          // focus at all.
+          if (renaming) return
+          beginMove(e)
+        }}
         onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          setRenaming(true)
+        }}
+        // focusout, which bubbles -- so this closes the field however it was
+        // left (Enter, Escape, or clicking away), with no callback threaded
+        // through EditableText for the one caller that needs it.
+        onBlur={() => setRenaming(false)}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
           onOpenContextMenu(e.clientX, e.clientY, riser.id)
         }}
+        title={renaming ? undefined : 'drag to move · double-click to rename'}
         style={{
           position: 'absolute',
           top: 0,
@@ -223,20 +270,37 @@ export function RiserBlock({
           padding: '0 var(--ra-s-1)',
           overflow: 'hidden',
           background: 'var(--ra-bg-row)',
+          cursor: renaming ? 'text' : 'grab',
           zIndex: 2
         }}
       >
-        <EditableText
-          value={riser.name}
-          onCommit={(name) => dispatch({ type: 'RENAME_RISER', id: riser.id, name })}
-          title="click to rename"
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            color: 'var(--ra-text-2)',
-            width: '100%'
-          }}
-        />
+        {renaming ? (
+          <EditableText
+            value={riser.name}
+            onCommit={(name) => dispatch({ type: 'RENAME_RISER', id: riser.id, name })}
+            title="enter to keep, escape to leave it alone"
+            autoFocus
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: 'var(--ra-text-2)',
+              width: '100%'
+            }}
+          />
+        ) : (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: 'var(--ra-text-2)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
+          >
+            {riser.name}
+          </span>
+        )}
       </div>
       {/* Flex row, matching StemWaveformRow's own shape exactly: the lane
           takes the space, and RowGainDial's zero-height sticky anchor rides

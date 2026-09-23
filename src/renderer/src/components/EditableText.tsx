@@ -13,12 +13,19 @@ export function EditableText({
   value,
   onCommit,
   style,
-  title
+  title,
+  autoFocus
 }: {
   value: string
   onCommit: (value: string) => void
   style?: CSSProperties
   title?: string
+  /** Focus (and select) on mount. For callers that only MOUNT this field
+   * once the user has asked to rename -- a riser's name bar, which is its
+   * drag surface until double-clicked -- where the gesture that opened the
+   * field is not itself a click on the field. Left off by default: a field
+   * that is always on screen (the Inspector's) must not steal focus. */
+  autoFocus?: boolean
 }): React.JSX.Element {
   const [text, setText] = useState(value)
   const [focused, setFocused] = useState(false)
@@ -39,7 +46,15 @@ export function EditableText({
       type="text"
       value={text}
       title={title}
-      onFocus={() => setFocused(true)}
+      autoFocus={autoFocus}
+      onFocus={(e) => {
+        setFocused(true)
+        // Select the whole name on an auto-focused open, so the first
+        // keystroke replaces "riser 3" rather than appending to it. Only on
+        // that path: clicking into an always-present field (the Inspector's)
+        // should put the caret where the click landed, as it always has.
+        if (autoFocus) e.currentTarget.select()
+      }}
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
