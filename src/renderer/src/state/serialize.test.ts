@@ -787,3 +787,84 @@ describe('the guided flow across a save and a load', () => {
     expect(restored.coach?.stepId).toBe('p1-lock')
   })
 })
+
+describe('the phase-three coach fields', () => {
+  /** A project file whose `coach` is exactly this object -- everything else
+   * is a real save of the empty project, which is what deserializeProject
+   * expects to be handed (it takes a PARSED object, not the JSON string
+   * serializeProject returns, and it returns { state, pluginStates } rather
+   * than the state itself). */
+  function savedWithCoach(coach: unknown): import('./serialize').PersistedProject {
+    return {
+      ...JSON.parse(serializeProject(initialState)),
+      coach
+    } as unknown as import('./serialize').PersistedProject
+  }
+
+  it('survive a save and a load, dismissed like the rest of a loaded flow', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: 1000 })
+    state = {
+      ...state,
+      coach: {
+        ...state.coach!,
+        stepId: 'p3-export',
+        sections: [
+          {
+            type: 'build',
+            name: 'build',
+            bars: 16,
+            droppedPaths: [],
+            startBar: 0,
+            placedGroupIds: {}
+          },
+          {
+            type: 'drop',
+            name: 'drop',
+            bars: 16,
+            droppedPaths: [],
+            startBar: 16,
+            placedGroupIds: {}
+          }
+        ],
+        tension: [{ sectionIndex: 0, kind: 'riser', riserId: 'riser-a' }],
+        v1ExportedAt: 5000
+      }
+    }
+
+    const { state: loaded } = deserializeProject(JSON.parse(serializeProject(state)))
+
+    expect(loaded.coach?.tension).toEqual([{ sectionIndex: 0, kind: 'riser', riserId: 'riser-a' }])
+    expect(loaded.coach?.v1ExportedAt).toBe(5000)
+    expect(loaded.coach?.status).toBe('dismissed')
+  })
+
+  it('load as empty from a project saved before phase three existed', () => {
+    const { state: loaded } = deserializeProject(
+      savedWithCoach({
+        status: 'active',
+        stepId: 'p2-next',
+        outcomes: {},
+        phaseElapsedMs: { loop: 1, arrangement: 2, polish: 0 },
+        stepElapsedMs: 3,
+        runningSince: 999,
+        lineSeed: 4,
+        flavour: 'groove',
+        seededKinds: [],
+        lockedClimax: null,
+        sections: [],
+        draftSection: null
+      })
+    )
+
+    expect(loaded.coach?.tension).toEqual([])
+    expect(loaded.coach?.v1ExportedAt).toBeNull()
+  })
+
+  it('repairs a project saved on the old finish placeholder back to the first step', () => {
+    const { state: loaded } = deserializeProject(
+      savedWithCoach({ status: 'active', stepId: 'finish', lineSeed: 0 })
+    )
+
+    expect(loaded.coach?.stepId).toBe('p1-flavour')
+  })
+})
