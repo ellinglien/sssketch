@@ -45,6 +45,7 @@ import {
   type CoachSectionDraft
 } from './coachSections'
 import { sanitiseCoachTension, type CoachTensionApplied } from './coachTension'
+import { sanitiseCoachWalkIndex } from './coachWalk'
 import {
   sanitiseCoachPhrase,
   sanitiseLoopPhraseReading,
@@ -116,6 +117,20 @@ export interface CoachState {
    * persisted project data: a half-finished guided track resumes with its
    * arrangement intact and the flow knowing where the next section goes. */
   sections: CoachSection[]
+  /** WHICH SECTION COLUMN HE IS STANDING ON, or null when he is not
+   * walking. "He walks the sections with you, one at a time, highlighting
+   * that column and naming what the section is FOR" (spec).
+   *
+   * Pinned across undo (history.ts), and the reason is the same one the
+   * phrase answer has: this is WHERE SSSKETCHY IS, not timeline material.
+   * Undoing a clip edit must not throw the user out of the walk -- it is
+   * the single most likely moment for an undo to happen. `sections` walks
+   * back with the clips it names; this does not.
+   *
+   * "Leaving the walk keeps the map" (spec), which is why this is a
+   * separate field from `sections` rather than a flag on one of them:
+   * nulling it changes nothing about the arrangement at all. */
+  walkIndex: number | null
   /** The section currently being carved, or null when none is open.
    *
    * Its `cells` starts EMPTY, which does not mean "nothing plays" -- it
@@ -167,6 +182,7 @@ export function startCoach(now: number): CoachState {
     loopIs: null,
     shape: null,
     sections: [],
+    walkIndex: null,
     draftSection: null,
     tension: [],
     v1ExportedAt: null
@@ -462,6 +478,9 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
   // The ANSWER is repaired first, because the section migration below
   // measures a pre-map section's bar count against it.
   const phrase = sanitiseCoachPhrase(loose.phrase)
+  // Hoisted, because walkIndex below is repaired against the sections it is
+  // supposed to name rather than against the raw JSON.
+  const sections = sanitiseCoachSections(loose.sections, phrase?.bars ?? 1)
   return {
     status: loose.status === 'finished' ? 'finished' : 'dismissed',
     stepId,
@@ -485,7 +504,11 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
     shape: isCoachShapeId(loose.shape) ? loose.shape : null,
     // A project with no answer yet migrates its sections at one pass each;
     // the map's own re-size fixes that the moment he answers.
-    sections: sanitiseCoachSections(loose.sections, phrase?.bars ?? 1),
+    sections,
+    // Repaired against the sections it was just given, not against the raw
+    // JSON -- an index pointing past the end would put him on a column that
+    // is not there.
+    walkIndex: sanitiseCoachWalkIndex(loose.walkIndex, sections.length),
     draftSection: sanitiseCoachSectionDraft(loose.draftSection, phrase?.bars ?? 1),
     tension: sanitiseCoachTension(loose.tension),
     // Repaired rather than trusted, like every other number here: a

@@ -383,6 +383,7 @@ describe('sanitiseLoadedCoach', () => {
       loopIs: null,
       shape: null,
       sections: [],
+      walkIndex: null,
       draftSection: null,
       tension: [],
       v1ExportedAt: null
@@ -586,6 +587,26 @@ describe('the phase-two fields', () => {
     })
     expect(loaded?.sections.map((s) => s.type)).toEqual(['drop'])
     expect(loaded?.draftSection).toBeNull()
+  })
+
+  it('starts with nobody being walked anywhere', () => {
+    expect(startCoach(T0).walkIndex).toBeNull()
+  })
+
+  it('drops a walk position that names no section on load', () => {
+    expect(sanitiseLoadedCoach({ stepId: 'p2-first', walkIndex: 4 })?.walkIndex).toBeNull()
+  })
+
+  it('keeps a walk position the loaded sections really have', () => {
+    const loaded = sanitiseLoadedCoach({
+      stepId: 'p2-section',
+      walkIndex: 1,
+      sections: [
+        { id: 'a', type: 'intro', name: 'intro', passes: 1, cells: {}, startBar: 0 },
+        { id: 'b', type: 'drop', name: 'drop', passes: 1, cells: {}, startBar: 4 }
+      ]
+    })
+    expect(loaded?.walkIndex).toBe(1)
   })
 })
 
