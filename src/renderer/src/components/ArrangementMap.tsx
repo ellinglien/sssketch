@@ -10,7 +10,7 @@ import { passIsLocked, planCellToggle } from '@shared/coachMapEdit'
 import { readRowPasses } from '@shared/coachMapRead'
 import { sectionBars } from '@shared/coachPasses'
 import { loopPhraseIsWorthSaying, phraseAnswerOptions, type CoachPhrase } from '@shared/coachPhrase'
-import { coachSectionBoundaries } from '@shared/coachTension'
+import { coachSectionBoundaries, coachTensionDef } from '@shared/coachTension'
 import type { CoachSection } from '@shared/coachSections'
 import { buildCellToggleActions, buildMapRebuildActions } from '../state/coachMapPlacement'
 import { coachMapRows, type CoachMapRow } from '../state/coachMapRows'
@@ -85,6 +85,26 @@ export function ArrangementMap(): React.JSX.Element {
     [coach]
   )
   /**
+   * What is switched on at each join, in words, for the column header.
+   *
+   * A thicker rule says SOMETHING is there; it cannot say what. Reported
+   * directly -- "might be good to include indication of seams tweaks" --
+   * against a build where nothing showed at all (the tension pass was
+   * writing nothing; see coachTensionApply.ts). The header column IS the
+   * outgoing section's box and its right edge IS the join, so a label here
+   * needs no extra geometry. One move is named; several are counted, since
+   * the column is narrow and ellipsised.
+   */
+  const appliedLabelAt = useMemo(() => {
+    const byIndex = new Map<number, string>()
+    for (const entry of coach?.tension ?? []) {
+      const label = coachTensionDef(entry.kind).label
+      const seen = byIndex.get(entry.sectionIndex)
+      byIndex.set(entry.sectionIndex, seen === undefined ? label : 'several moves')
+    }
+    return byIndex
+  }, [coach])
+  /**
    * The map's own x-axis, worked out ONCE from what is about to be drawn
    * and then read by three things that have to agree: the header strip, the
    * cell rows, and the playhead drawn across both.
@@ -110,7 +130,12 @@ export function ArrangementMap(): React.JSX.Element {
       const applied = boundary && appliedAt.has(index)
       // A join that has something switched on is drawn thicker. Monochrome
       // either way -- a join is structure, not audio information.
-      const dividerWidth = !boundary ? 0 : applied ? 2 : 1
+      // 3px, not 2: at 2px against a 1px inactive rule, inside an 8px gap,
+      // nobody noticed a join had anything on it -- reported directly
+      // ("no visual confirmation or change to the grid"). --ra-text is
+      // already this component's own "this one is live" value (the walked
+      // section's name uses it), so a thicker join introduces no new colour.
+      const dividerWidth = !boundary ? 0 : applied ? 3 : 1
       const paddingRight = boundary ? SECTION_GAP : 0
       const marginRight = boundary ? SECTION_GAP + 2 : SECTION_GAP
       columns.push({
@@ -129,7 +154,7 @@ export function ArrangementMap(): React.JSX.Element {
           dividerWidth === 0
             ? undefined
             : applied
-              ? '2px solid var(--ra-text-2)'
+              ? '3px solid var(--ra-text)'
               : '1px solid var(--ra-border-strong)'
       })
     })
@@ -304,9 +329,16 @@ export function ArrangementMap(): React.JSX.Element {
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap'
               }}
-              data-tooltip={`${section.passes} x ${phraseBars} bars, from bar ${section.startBar}`}
+              data-tooltip={
+                appliedLabelAt.has(index)
+                  ? `${section.passes} x ${phraseBars} bars, from bar ${section.startBar} · ${appliedLabelAt.get(index)} at the join`
+                  : `${section.passes} x ${phraseBars} bars, from bar ${section.startBar}`
+              }
             >
               {section.name}
+              {appliedLabelAt.has(index) && (
+                <span style={{ color: 'var(--ra-text-2)' }}> · {appliedLabelAt.get(index)}</span>
+              )}
             </div>
           ))}
         </div>
