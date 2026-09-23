@@ -61,15 +61,20 @@ export function stepSatisfiedBySlots(
   return sets.some((want) => slots.some((slot) => slotCoversKindSet(slot, want)))
 }
 
-/** The current step's completion check. Two steps are answered by the flow
- * itself rather than by the slots: the question (answered when there is an
- * answer) and the lock-in (answered when there is a locked climax). */
+/** The current step's completion check. Three steps are answered by the
+ * flow itself rather than by the slots: the question (answered when there
+ * is an answer), the lock-in (answered when there is a locked climax) and
+ * the export (answered when a file has really come out). */
 export function coachStepSatisfied(
   state: CoachState,
   slots: readonly CoachSlotSnapshot[]
 ): boolean {
   if (state.stepId === 'p1-flavour') return state.flavour !== null
   if (state.stepId === 'p1-lock') return state.lockedClimax !== null
+  // Phase three. Deliberately the ONLY phase-three step with an automatic
+  // check: whether the tension pass or the balance check is "done" is a
+  // person listening, and the app has no way to know.
+  if (state.stepId === 'p3-export') return state.v1ExportedAt !== null
   const step = coachStepById(state.stepId)
   if (step === undefined) return false
   return stepSatisfiedBySlots(step, state.flavour, slots)

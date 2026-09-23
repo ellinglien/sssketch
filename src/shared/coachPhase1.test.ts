@@ -187,3 +187,11 @@ describe('the lines phase one adds', () => {
     expect(coachSeededLine([], 'harmony', 0)).toBeNull()
   })
 })
+
+describe('coachStepSatisfied on the export step', () => {
+  it('is answered by the flow itself, not by discover"s slots', () => {
+    const base = { ...startCoach(1000), stepId: 'p3-export' as const }
+    expect(coachStepSatisfied(base, [])).toBe(false)
+    expect(coachStepSatisfied({ ...base, v1ExportedAt: 7000 }, [])).toBe(true)
+  })
+})
