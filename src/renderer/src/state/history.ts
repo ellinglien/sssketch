@@ -102,9 +102,14 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // push a checkpoint of its own -- but in real use it is ALWAYS dispatched
   // inside the same BATCH as the arranger actions that place the section's
   // clips (SssketchySectionPanel.tsx). The BATCH branch above runs before
-  // this set is consulted, so that group gets exactly one checkpoint: the
-  // clips and the flow's record of the section undo together, which is what
-  // "one undo step per section" (spec) means.
+  // this set is consulted, so that group gets exactly one checkpoint --
+  // "one undo step per section" (spec) meaning the section's CLIPS come off
+  // the timeline in one go. The flow's own record of that section does not
+  // come back off with them: `coach` is pinned across UNDO/REDO (see the
+  // UNDO branch below for why that trade is the right way round), so an
+  // undone section leaves a placed-section entry pointing at groups that
+  // are gone. It costs the next section's start bar, and it is much the
+  // cheaper of the two failures.
   'COACH_PLACE_SECTION'
 ])
 
@@ -116,6 +121,7 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
   if (action.type === 'UNDO') {
     if (state.past.length === 0) return state
     const previous = state.past[state.past.length - 1]
+    const pinnedCoach = state.present.coach
     return {
       past: state.past.slice(0, -1),
       // armedChannelId rides along inside every pushed snapshot (it's an
@@ -135,7 +141,26 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
       // (see this file's own header comment) -- armedChannelId is the
       // same category of "live now" state, just harder to fully extract
       // since ChannelRow reads it as ordinary AppState.
-      present: { ...previous, armedChannelId: state.present.armedChannelId },
+      //
+      // `coach` is pinned for exactly the same reason, and it is the more
+      // expensive one to get wrong. Every COACH_* action above is
+      // transient, which only stops THEIR OWN dispatches from pushing a
+      // checkpoint -- `coach` is still an ordinary AppState field riding
+      // inside every snapshot any OTHER action pushes. Left alone, undoing
+      // an ordinary edit made during a guided flow (placing a clip, nudging
+      // a tempo, and in phase two every section placement, which is by
+      // design an ordinary undoable edit) would rewind sssketchy to
+      // whichever step that checkpoint happened to capture -- throwing away
+      // the locked climax, the answer to melodic-or-groove, and every
+      // section already carved; undoing back past the moment the flow
+      // started would set it to null outright and make him vanish
+      // mid-flow. Undo must walk back through the WORK he helped make,
+      // never through the flow itself. The cost of pinning is the
+      // narrow converse: undoing a placed section removes its clips while
+      // the flow still lists the section (see COACH_PLACE_SECTION's own
+      // note above), which leaves a stale record rather than losing the
+      // user's place.
+      present: { ...previous, armedChannelId: state.present.armedChannelId, coach: pinnedCoach },
       future: [state.present, ...state.future]
     }
   }
@@ -145,7 +170,11 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     const [next, ...rest] = state.future
     return {
       past: [...state.past, state.present],
-      present: { ...next, armedChannelId: state.present.armedChannelId },
+      present: {
+        ...next,
+        armedChannelId: state.present.armedChannelId,
+        coach: state.present.coach
+      },
       future: rest
     }
   }

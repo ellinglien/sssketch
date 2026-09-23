@@ -362,3 +362,77 @@ describe('automation undo granularity', () => {
     expect(h.present.automationParamOf['r1:0']).toBe('volume')
   })
 })
+
+describe('the guided flow across undo/redo', () => {
+  const T0 = 1_700_000_000_000
+
+  /** One resolved Discover slot, which is all lockCoachClimax needs to have
+   * something real to freeze. */
+  const resolvedSlot = {
+    id: 's1',
+    kinds: ['bass'] as const,
+    stem: {
+      path: '/bass.wav',
+      name: 'bass',
+      author: 'e',
+      type: 'bass' as const,
+      durationSec: 8,
+      barLength: 8
+    },
+    gain: 1,
+    audible: true,
+    rolling: false
+  }
+
+  it('never rewinds the flow -- the locked climax and the current step survive an undo', () => {
+    // Every COACH_* action is transient (no checkpoint of its own), but
+    // `coach` is an ordinary AppState field, so it rides inside every
+    // snapshot ANY other action pushes. Left unhandled, undoing an
+    // ordinary edit made DURING the flow walks sssketchy back to whatever
+    // step he was on when that checkpoint was taken -- throwing away the
+    // locked climax, which is the material phase two carves from. Same
+    // treatment, and the same reasoning, as armedChannelId above.
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'COACH_START', now: T0 })
+    h = historyReducer(h, { type: 'COACH_SET_FLAVOUR', now: T0, flavour: 'groove', slots: [] })
+    // An ordinary tracked edit made mid-flow: this is the checkpoint that
+    // captures the flow standing on an early phase-one step.
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    let guard = 0
+    while (h.present.coach?.stepId !== 'p1-lock') {
+      h = historyReducer(h, { type: 'COACH_ADVANCE', now: T0, outcome: 'done' })
+      expect((guard += 1)).toBeLessThan(20)
+    }
+    h = historyReducer(h, {
+      type: 'COACH_LOCK_CLIMAX',
+      now: T0,
+      slots: [resolvedSlot],
+      bpm: 120
+    })
+    expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
+
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.rifffs.r1).toBeUndefined() // the clip edit really was undone
+    expect(h.present.coach?.stepId).toBe('p1-lock') // ...but the flow did not rewind
+    expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
+    expect(h.present.coach?.flavour).toBe('groove')
+
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.rifffs.r1).toBeDefined()
+    expect(h.present.coach?.stepId).toBe('p1-lock')
+    expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
+  })
+
+  it('never makes sssketchy vanish mid-flow by undoing past the moment he started', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff }) // checkpoint taken with no flow at all
+    h = historyReducer(h, { type: 'COACH_START', now: T0 })
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
+
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.coach).not.toBeNull()
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.rifffs.r1).toBeUndefined()
+    expect(h.present.coach).not.toBeNull() // he is still on screen, mid-step
+  })
+})
