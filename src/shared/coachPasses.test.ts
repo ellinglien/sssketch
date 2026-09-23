@@ -4,6 +4,7 @@ import {
   COACH_SECTION_MIN_PASSES,
   COACH_SECTION_PASS_NUDGES,
   nudgeSectionPasses,
+  passOffsetBars,
   passesForTargetBars,
   sectionBars
 } from './coachPasses'
@@ -49,5 +50,22 @@ describe('sectionBars', () => {
 
   it('never returns zero, so nothing downstream divides by it', () => {
     expect(sectionBars(0, 0)).toBe(1)
+  })
+})
+
+describe('passOffsetBars', () => {
+  it('puts the first pass at bar zero, unlike sectionBars', () => {
+    expect(passOffsetBars(0, 4)).toBe(0)
+    expect(sectionBars(0, 4)).toBe(4)
+  })
+
+  it('counts whole phrases from the start of the section', () => {
+    expect(passOffsetBars(1, 4)).toBe(4)
+    expect(passOffsetBars(3, 6)).toBe(18)
+  })
+
+  it('refuses a negative pass or a nonsense phrase rather than going backwards', () => {
+    expect(passOffsetBars(-2, 4)).toBe(0)
+    expect(passOffsetBars(2, 0)).toBe(2)
   })
 })

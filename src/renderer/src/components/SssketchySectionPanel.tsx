@@ -4,17 +4,17 @@ import { useCoachSectionPreview } from '../state/useCoachSectionPreview'
 import { registerCoachSectionOp } from '../state/coachSectionBridge'
 import { buildCoachSectionActions } from '../state/coachSectionPlacement'
 import { typeColorVar } from '../theme/typeColor'
+import type { CoachState } from '@shared/coach'
 import {
-  COACH_DROP_SUGGESTED_LABEL,
-  COACH_SECTION_BAR_NUDGES,
-  COACH_SUGGESTED_DROP_HINT,
   coachSectionTypeDef,
-  isSuggestedDrop,
   nextSectionTypeSuggestions,
-  suggestedDropPaths,
   type CoachSectionOp,
   type CoachSectionType
 } from '@shared/coachSections'
+import { cellIsOn } from '@shared/coachCells'
+import { templateFallbackFor } from '@shared/coachMapTemplate'
+import { COACH_SECTION_PASS_NUDGES } from '@shared/coachPasses'
+import { COACH_LOOP_HOME_TYPE } from '@shared/coachShapes'
 import { slotKindsLabel } from '@shared/discoverSlotKind'
 
 const PANEL_WIDTH = 320
@@ -57,19 +57,27 @@ const rowStyle: React.CSSProperties = {
 }
 
 /**
- * Phase two's own surface: pick a section, carve it, put it down.
+ * The section surface: pick a section, carve it, put it down.
  *
- * THE RULE THIS COMPONENT RENDERS (spec): **every stem is on, and the user
- * subtracts.** Each stem row is a checkbox that starts CHECKED. A stem this
- * section type usually loses gets a quiet hint next to it and nothing else
- * -- it is still checked, still playing. The one bulk action is the "drop
- * the suggested ones" button, which is a click, not a default.
+ * THE RULE THIS COMPONENT RENDERS, AS OF 2026-09-23: **the draft arrives
+ * PRE-FILLED from the template** (spec:
+ * docs/superpowers/specs/2026-09-23-arrangement-map-design.md, "The map
+ * arrives pre-filled, and says so"). This is the deliberate reversal of the
+ * everything-on/user-subtracts rule this panel used to render. A checkbox is
+ * therefore not "has the user dropped this" but "does this stem play in the
+ * first pass" -- template answer unless the user overrode it (cellIsOn,
+ * @shared/coachCells). The "drop the suggested ones" button went with the
+ * old rule: the suggestion table is already applied, and a button that
+ * applies it again says nothing.
  *
- * Nothing in here may pre-apply the suggestion table. The draft arrives from
- * the store with droppedPaths empty and only ever changes through the three
- * dispatches below (COACH_TOGGLE_SECTION_STEM, COACH_DROP_SUGGESTED_STEMS
- * and, for its length and name, the two others) -- there is no local state
- * here at all, and no initialiser that could seed one.
+ * This panel is a WHOLE-STEM view of a per-pass model. A stem that arrives
+ * halfway through the section still shows as one checkbox, reading pass 0,
+ * and ticking it writes every pass. The map replaces this with the real
+ * grid; nothing here is meant to be the final surface, and it is kept
+ * working only so the branch stays coherent.
+ *
+ * There is no local state here at all, and no initialiser that could seed
+ * one: the draft only ever changes through the dispatches below.
  *
  * Deliberately a separate component from SssketchyCoach's bubble rather than
  * more buttons inside it: the bubble carries one thought and four verbs
@@ -84,6 +92,27 @@ const rowStyle: React.CSSProperties = {
  * that land on the type chooser instead, which is the only thing that can
  * usefully be offered when there is nothing being carved.
  */
+
+/** Which section type the user's own loop IS. 'drop' until he answers,
+ * which is COACH_LOOP_HOME_TYPE's own default and the place the method puts
+ * unattributed material. The home section keeps every stem in every pass,
+ * so this is what decides whether a checkbox starts ticked. */
+function homeTypeFor(coach: CoachState): CoachSectionType {
+  return coach.loopIs === null ? 'drop' : COACH_LOOP_HOME_TYPE[coach.loopIs]
+}
+
+/** The phrase length section sizing reads -- the USER'S answer, never a
+ * measurement (@shared/coachPhrase).
+ *
+ * One pass is the fallback, matching coachPhase2's startCoachSection,
+ * coachTensionApply and the load-time migration in coach.ts. They have to
+ * agree: a section's stored `passes` is computed against this number, and a
+ * panel that placed clips against a different one would put the tension
+ * pass's risers at bars the clips are not on. */
+function phraseBarsFor(coach: CoachState): number {
+  return coach.phrase?.bars ?? 1
+}
+
 export function SssketchySectionPanel(): React.JSX.Element | null {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -96,7 +125,14 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
 
   const handlePlace = useCallback((): void => {
     if (coach === null || climax === null || draft === null) return
-    const built = buildCoachSectionActions(state, climax, draft, coach.sections)
+    const built = buildCoachSectionActions(
+      state,
+      climax,
+      draft,
+      coach.sections,
+      homeTypeFor(coach),
+      phraseBarsFor(coach)
+    )
     stopPreview()
     // ONE batch: the clips and the flow's record of the section become one
     // undo step -- "one undo step per section" (spec). See history.ts.
@@ -116,18 +152,16 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
 
   const runOp = useCallback(
     (op: CoachSectionOp): void => {
-      if (op === 'drop-suggested') {
-        dispatch({ type: 'COACH_DROP_SUGGESTED_STEMS' })
-        return
-      }
       if (op === 'preview') {
         if (previewing) stopPreview()
-        else if (climax !== null && draft !== null) void previewSection(climax, draft)
+        else if (coach !== null && climax !== null && draft !== null) {
+          void previewSection(climax, draft, homeTypeFor(coach), phraseBarsFor(coach))
+        }
         return
       }
       handlePlace()
     },
-    [climax, dispatch, draft, handlePlace, previewSection, previewing, stopPreview]
+    [climax, coach, draft, handlePlace, previewSection, previewing, stopPreview]
   )
 
   // A hook rather than a plain function declared further down next to its
@@ -174,10 +208,13 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
     )
   }
 
-  // A drop suggests nothing -- that section is the whole loop -- so its bulk
-  // button goes to the app's own disabled treatment rather than being a
-  // click that does nothing.
-  const nothingSuggested = suggestedDropPaths(draft.type, climax).length === 0
+  // What the template says about each cell, so a checkbox can show what
+  // really plays rather than what the user happens to have overridden. One
+  // shared implementation with the write path and the map (@shared/
+  // coachMapTemplate), so the pre-fill cannot drift between them.
+  const homeType = homeTypeFor(coach)
+  const phraseBars = phraseBarsFor(coach)
+  const fallback = templateFallbackFor(draft, homeType, climax)
 
   return (
     <div style={panelStyle}>
@@ -200,23 +237,29 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
       />
 
       <div style={{ ...rowStyle, alignItems: 'center', flexWrap: 'nowrap' }}>
-        {COACH_SECTION_BAR_NUDGES.map((delta) => (
+        {COACH_SECTION_PASS_NUDGES.map((delta) => (
           <button
             key={delta}
             type="button"
-            onClick={() => dispatch({ type: 'COACH_NUDGE_SECTION_BARS', delta })}
+            onClick={() => dispatch({ type: 'COACH_NUDGE_SECTION_PASSES', delta })}
             style={buttonStyle}
           >
             {delta > 0 ? `+${delta}` : `${delta}`}
           </button>
         ))}
-        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>{draft.bars} bars</span>
+        {/* Both numbers, because a count of passes alone does not tell you
+            how long the section is -- that depends on the phrase length the
+            user answered. */}
+        <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
+          {draft.passes} × {phraseBars} bars
+        </span>
       </div>
 
       <div style={{ marginTop: 'var(--ra-s-6)' }}>
         {climax.stems.map((stem) => {
-          const on = !draft.droppedPaths.includes(stem.path)
-          const flagged = isSuggestedDrop(draft.type, stem)
+          // Pass 0's answer stands for the whole stem here, which is what a
+          // single checkbox can honestly say; ticking it writes every pass.
+          const on = cellIsOn(draft.cells, 0, stem.path, fallback(stem, 0))
           return (
             <label
               key={stem.path}
@@ -259,8 +302,12 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
               >
                 {stem.name}
               </span>
+              {/* Just the stem's kinds. The "usually out here" hint went
+                  with the pre-fill: the suggestion is already APPLIED, and
+                  marking a stem the template has already switched off would
+                  be the app arguing with itself. */}
               <span style={{ flex: 'none', fontSize: 9, color: 'var(--ra-text-3)' }}>
-                {flagged ? COACH_SUGGESTED_DROP_HINT : slotKindsLabel(stem.kinds)}
+                {slotKindsLabel(stem.kinds)}
               </span>
             </label>
           )
@@ -268,23 +315,6 @@ export function SssketchySectionPanel(): React.JSX.Element | null {
       </div>
 
       <div style={{ ...rowStyle, marginTop: 'var(--ra-s-6)' }}>
-        <button
-          type="button"
-          disabled={nothingSuggested}
-          onClick={() => runOp('drop-suggested')}
-          title={
-            nothingSuggested
-              ? 'a drop loses nothing -- that section is the whole loop'
-              : COACH_DROP_SUGGESTED_LABEL
-          }
-          style={{
-            ...buttonStyle,
-            opacity: nothingSuggested ? 0.3 : 1,
-            cursor: nothingSuggested ? 'not-allowed' : 'pointer'
-          }}
-        >
-          {COACH_DROP_SUGGESTED_LABEL}
-        </button>
         <button type="button" onClick={() => runOp('preview')} style={buttonStyle}>
           {previewing ? 'stop' : 'loop just this section'}
         </button>

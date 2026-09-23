@@ -53,3 +53,18 @@ export function sectionBars(passes: number, phraseBars: number): number {
   const safePhrase = Number.isFinite(phraseBars) ? Math.max(1, Math.round(phraseBars)) : 1
   return safePasses * safePhrase
 }
+
+/** How far into a section the boundary BEFORE pass `passIndex` sits, in
+ * bars. Pass 0 starts at bar 0.
+ *
+ * Deliberately not sectionBars: that one floors at one pass, because a
+ * zero-LENGTH clip is never wanted -- whereas a zero OFFSET is exactly
+ * right for the first run in a section, and the write path
+ * (coachSectionPlacement.ts) would otherwise push every section's opening
+ * clip one whole phrase to the right. Two different questions, two
+ * functions. */
+export function passOffsetBars(passIndex: number, phraseBars: number): number {
+  const safeIndex = Number.isFinite(passIndex) ? Math.max(0, Math.round(passIndex)) : 0
+  const safePhrase = Number.isFinite(phraseBars) ? Math.max(1, Math.round(phraseBars)) : 1
+  return safeIndex * safePhrase
+}

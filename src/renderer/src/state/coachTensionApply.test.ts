@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { startCoach } from '@shared/coach'
 import { createRiser } from '@shared/riser'
 import { stemKey, type Rifff } from '@shared/types'
 import type { CoachSection } from '@shared/coachSections'
@@ -27,11 +28,16 @@ function rifff(groupId: string, startBar: number): Rifff {
   }
 }
 
+/** Four passes of a four-bar phrase -- sixteen bars, but stored the only way
+ * a section ever stores its length (@shared/coachPasses). Every bar number
+ * below comes out of `passes` times the phrase the coach state carries, not
+ * out of a bar count written on the section. */
 const section: CoachSection = {
+  id: 'section-0',
   type: 'build',
   name: 'build',
-  bars: 16,
-  droppedPaths: [],
+  passes: 4,
+  cells: {},
   startBar: 8,
   placedGroupIds: { '/tmp/a.wav': 'a', '/tmp/b.wav': 'b' }
 }
@@ -40,6 +46,7 @@ function placed(): AppState {
   return {
     ...initialState,
     bpm: 120,
+    coach: { ...startCoach(0), phrase: { bars: 4, source: 'measured' } },
     rifffs: { a: rifff('a', 8), b: rifff('b', 8) },
     playedBars: { a: 16, b: 16 },
     stretch: { a: true, b: true },
@@ -101,6 +108,20 @@ describe('buildCoachTensionActions -- the curve moves', () => {
     if (first.type === 'SET_GROUP_AUTOMATION') {
       expect(first.points[first.points.length - 1].bar).toBe(8)
     }
+  })
+
+  it('gets the section"s length from its passes and the user"s own phrase', () => {
+    // The same four-pass section, against a loop the user called eight bars:
+    // thirty-two bars of build, and the curve has to span all of it.
+    const state = {
+      ...placed(),
+      coach: { ...startCoach(0), phrase: { bars: 8, source: 'nominal' as const } },
+      playedBars: { a: 32, b: 32 }
+    }
+    const { actions } = buildCoachTensionActions(state, section, 'swell', ids)
+    const first = actions[0]
+    if (first.type !== 'SET_GROUP_AUTOMATION') throw new Error('expected an automation write')
+    expect(first.points[first.points.length - 1].bar).toBe(32)
   })
 
   it('skips a clip the user has since deleted rather than throwing', () => {

@@ -3,8 +3,17 @@
  *
  * The same throwaway-project trick DiscoverPanel.tsx's syncPreviewToEngine
  * uses, at a fraction of the size because nothing here rerolls, resolves or
- * changes underneath the send: build a one-rifff AppState from the section's
- * kept stems, hand it to the engine under a claim, play from bar 0.
+ * changes underneath the send: build a one-rifff AppState from the stems
+ * that play in the section's FIRST PASS, hand it to the engine under a
+ * claim, play from bar 0.
+ *
+ * WHAT THIS DOES NOT SHOW, stated plainly rather than left to be
+ * discovered: it is one pass, tiled. A section's stems can arrive and leave
+ * across its passes (@shared/coachCells), and this preview hears none of
+ * that -- pass 0's line-up plays for the whole length of the section. The
+ * honest preview of a staggered section is the section itself, on the
+ * timeline, which is one click away and is ordinary editable material. The
+ * map plan owns whatever replaces this panel.
  *
  * Why the loop is exactly the section: the only clip starts at bar 0, and
  * loopLengthBars(state) (selectors.ts) is the furthest placed end -- which,
@@ -20,7 +29,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildEngineProject } from '@shared/buildEngineProject'
-import { sectionKeptStems, type CoachSectionDraft } from '@shared/coachSections'
+import {
+  sectionStemsInPass,
+  type CoachSectionDraft,
+  type CoachSectionType
+} from '@shared/coachSections'
+import { coachMapRowOrder, templateFallbackFor } from '@shared/coachMapTemplate'
+import { sectionBars } from '@shared/coachPasses'
 import type { LockedClimax } from '@shared/coachClimax'
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -32,7 +47,12 @@ export interface CoachSectionPreview {
   previewing: boolean
   /** The project is being built/sent -- what makes sssketchy climb. */
   building: boolean
-  previewSection: (climax: LockedClimax, draft: CoachSectionDraft) => Promise<void>
+  previewSection: (
+    climax: LockedClimax,
+    draft: CoachSectionDraft,
+    homeType: CoachSectionType,
+    phraseBars: number
+  ) => Promise<void>
   stopPreview: () => void
 }
 
@@ -84,8 +104,14 @@ export function useCoachSectionPreview(): CoachSectionPreview {
   }, [dispatch, releaseEngine])
 
   const previewSection = useCallback(
-    async (climax: LockedClimax, draft: CoachSectionDraft): Promise<void> => {
-      const kept = sectionKeptStems(climax, draft.droppedPaths)
+    async (
+      climax: LockedClimax,
+      draft: CoachSectionDraft,
+      homeType: CoachSectionType,
+      phraseBars: number
+    ): Promise<void> => {
+      const fallback = templateFallbackFor(draft, homeType, climax)
+      const kept = sectionStemsInPass(draft, 0, coachMapRowOrder(climax), fallback)
       if (kept.length === 0) return
 
       // Claimed synchronously, before the first await, so there is no window
@@ -127,8 +153,10 @@ export function useCoachSectionPreview(): CoachSectionPreview {
           rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
           vol,
           stretch: { [rifff.groupId]: true },
-          // What makes the engine's own loop exactly this section long.
-          playedBars: { [rifff.groupId]: draft.bars }
+          // What makes the engine's own loop exactly this section long --
+          // the section's passes at the phrase length the user answered,
+          // never a bar count of its own.
+          playedBars: { [rifff.groupId]: sectionBars(draft.passes, phraseBars) }
         }
 
         const project = await buildEngineProject(

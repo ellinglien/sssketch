@@ -32,6 +32,7 @@ import {
   tensionCurveFor,
   type CoachTensionKind
 } from '@shared/coachTension'
+import { sectionBars } from '@shared/coachPasses'
 import { createRiser } from '@shared/riser'
 import { stemKey } from '@shared/types'
 import { resolvedPlayedBarsFromFields } from './selectors'
@@ -64,8 +65,21 @@ function clipBarsFor(state: AppState, groupId: string): number {
   })
 }
 
-/** This section's clips that are still on the timeline, in the order phase
- * two placed them. A groupId the user has since deleted is skipped rather
+/** How long this section really is, in bars.
+ *
+ * A section stores a count of PASSES, never bars (@shared/coachPasses), so
+ * the only way back to a bar number is the phrase length -- and the phrase
+ * length is the USER'S answer, which lives on the coach state. Read off the
+ * state rather than taken as an argument so both call sites here, and the
+ * panel above them, cannot disagree about it. One pass is the fallback for a
+ * flow that has not been asked yet, which is what every other reader of
+ * `phrase` uses too. */
+function sectionBarsFor(state: AppState, section: CoachSection): number {
+  return sectionBars(section.passes, state.coach?.phrase?.bars ?? 1)
+}
+
+/** This section's clips that are still on the timeline, in the order the
+ * map placed them. A groupId the user has since deleted is skipped rather
  * than throwing -- the arrangement is ordinary material, and deleting a
  * clip is an ordinary thing to do to it. */
 function liveGroupIds(state: AppState, section: CoachSection): string[] {
@@ -94,11 +108,12 @@ export function buildCoachTensionActions(
   ids: { riserId: string; channelId: string }
 ): CoachTensionApplication {
   const def = coachTensionDef(kind)
+  const barsInSection = sectionBarsFor(state, section)
 
   if (def.param === null) {
     const { startBar, lengthBars } = coachRiserFieldsFor({
-      bar: section.startBar + section.bars,
-      leadBars: section.bars
+      bar: section.startBar + barsInSection,
+      leadBars: barsInSection
     })
     const riser = createRiser({
       id: ids.riserId,
@@ -119,7 +134,7 @@ export function buildCoachTensionActions(
         ? []
         : (state.stemAutomation[stemKey(groupId, firstSlot)]?.[param] ?? [])
     const points = tensionCurveFor(kind, existing, {
-      leadBars: section.bars,
+      leadBars: barsInSection,
       clipBars: clipBarsFor(state, groupId)
     })
     if (points === null) continue
