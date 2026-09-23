@@ -104,7 +104,9 @@ const riser = {
   startCutoffValue: 0.3,
   endCutoffValue: 0.95,
   curve: [],
-  level: 0.6
+  level: 0.6,
+  name: 'riser 1',
+  muted: false
 }
 
 describe('renderToolkitAudio', () => {

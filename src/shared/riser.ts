@@ -73,6 +73,24 @@ export interface RiserClip {
   curve: AutomationPoint[]
   /** [0,1] peak level the swell reaches at the riser's very end. */
   level: number
+  /** What this riser's ROW is called. A riser owns a whole arranger row now
+   * (one row per riser -- Elling, 2026-09-23: "give the riser ... its own
+   * channel"), so the riser's name IS the row's label and there is no
+   * separate channel-name concept to invent. EMPTY means "unnamed, number
+   * me": the reducer's ADD_RISER fills it with nextRiserName, because that
+   * is the only place that can see the other risers -- and the only place
+   * that stays correct inside a BATCH adding several at once. */
+  name: string
+  /** Silences this riser. Renderer-side ONLY: there is no `muted` on
+   * EngineRiser, and there must not be. A muted riser is simply ABSENT from
+   * the wire (see audibleRisers / buildEngineRisers), which is the same
+   * "absence is load-bearing" trick a neutral toolkit already uses, and it
+   * is why muting a riser needs no native-engine change at all.
+   *
+   * A riser has no stems, so state.mute -- keyed by stemKey -- has nothing
+   * to key it by. This flag is the riser's half of the channel's m button;
+   * store.ts's SET_CHANNEL_MUTE and SOLO_CHANNEL move both halves together. */
+  muted: boolean
 }
 
 /** What a freshly dropped riser is. Four bars is one phrase at this app's
@@ -94,6 +112,10 @@ export const RISER_DEFAULTS = {
  * element would never render any audio and would divide by zero in the
  * progress math the engine runs per sample. */
 export const MIN_RISER_LENGTH_BARS = 0.25
+
+/** The stem of every default riser name -- "riser 1", "riser 2", ... Lower
+ * case with no punctuation, matching this app's copy rules (tokens.css). */
+export const RISER_NAME_PREFIX = 'riser'
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
@@ -119,6 +141,9 @@ export function createRiser(fields: {
   channelId: string
   startBar: number
   lengthBars?: number
+  /** Left out by every caller today. Naming happens in the reducer, not
+   * here -- see RiserClip.name. */
+  name?: string
 }): RiserClip {
   const lengthBars = Math.max(MIN_RISER_LENGTH_BARS, fields.lengthBars ?? RISER_DEFAULTS.lengthBars)
   return normaliseRiser({
@@ -133,7 +158,9 @@ export function createRiser(fields: {
       RISER_DEFAULTS.endCutoffValue,
       lengthBars
     ),
-    level: RISER_DEFAULTS.level
+    level: RISER_DEFAULTS.level,
+    name: fields.name ?? '',
+    muted: false
   })
 }
 
@@ -162,8 +189,90 @@ export function normaliseRiser(riser: RiserClip): RiserClip {
     startCutoffValue: clamp01(riser.startCutoffValue),
     endCutoffValue: clamp01(riser.endCutoffValue),
     curve: normaliseAutomationCurve(riser.curve ?? []),
+    name: typeof riser.name === 'string' ? riser.name.trim() : '',
+    muted: riser.muted === true,
     level: clamp01(riser.level)
   }
+}
+
+/** The next unused default riser name for this project. Skips every number
+ * already taken (in any order, and ignoring hand-typed names, which are
+ * nobody's business to renumber around), so deleting "riser 2" and adding
+ * one gets "riser 2" back rather than a forever-climbing counter. */
+export function nextRiserName(risers: Record<string, RiserClip>): string {
+  const taken = new Set(Object.values(risers).map((riser) => riser.name))
+  let n = 1
+  while (taken.has(`${RISER_NAME_PREFIX} ${n}`)) n += 1
+  return `${RISER_NAME_PREFIX} ${n}`
+}
+
+/**
+ * Every riser that should actually SOUND -- normalised, unmuted, earliest
+ * first with `id` as the tiebreak.
+ *
+ * The one place the mute rule lives, used by the wire (buildEngineRisers)
+ * and by both DAW exports (buildRppProject, buildAlsXml) so a muted riser
+ * cannot be silent in the rendered audio while still getting a clip in the
+ * .rpp/.als that points at it.
+ *
+ * The ordering is load-bearing in the same quiet way the stem loop's is: the
+ * engine sums risers into their channel in the order it receives them, and
+ * float addition is not associative, so an unstable order (which
+ * Object.values over a record is, across a save/load round trip) would make
+ * a project's render differ from itself by a few ULPs for no reason.
+ */
+export function audibleRisers(risers: Record<string, RiserClip>): RiserClip[] {
+  return Object.values(risers)
+    .map(normaliseRiser)
+    .filter((riser) => !riser.muted)
+    .sort((a, b) => a.startBar - b.startBar || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/** One riser exactly as it might come off disk: every field optional,
+ * because a `.sssketchproj` saved before a field existed simply does not
+ * have it, and one that has been hand-edited might be missing anything. */
+export type PersistedRiser = Partial<RiserClip> & { id?: string }
+
+/**
+ * Every saved riser, brought up to today's shape -- run once at load time
+ * (serialize.ts's deserializeProject).
+ *
+ * The reducer normalises on every write and buildEngineRisers normalises
+ * again on the way out, but neither of those has run yet at the moment a
+ * project is opened: without this, a riser saved before `name` existed would
+ * render its row label as literally "undefined" until something happened to
+ * dispatch against it.
+ *
+ * Keys are walked in sorted order so the numbers a project picks up on its
+ * first open are the same every time, rather than depending on JSON key
+ * order.
+ */
+export function normaliseLoadedRisers(
+  risers: Record<string, PersistedRiser> | undefined
+): Record<string, RiserClip> {
+  if (!risers) return {}
+  const out: Record<string, RiserClip> = {}
+  for (const id of Object.keys(risers).sort()) {
+    const saved = risers[id]
+    if (saved === null || typeof saved !== 'object') continue
+    const normalised = normaliseRiser({
+      id,
+      // A riser with no channel gets a row of its own, named after itself --
+      // which is exactly the one-row-per-riser rule everything else here
+      // follows, rather than silently dropping it.
+      channelId: saved.channelId ?? id,
+      startBar: saved.startBar ?? 0,
+      lengthBars: saved.lengthBars ?? RISER_DEFAULTS.lengthBars,
+      startCutoffValue: saved.startCutoffValue ?? RISER_DEFAULTS.startCutoffValue,
+      endCutoffValue: saved.endCutoffValue ?? RISER_DEFAULTS.endCutoffValue,
+      curve: saved.curve ?? [],
+      level: saved.level ?? RISER_DEFAULTS.level,
+      name: saved.name ?? '',
+      muted: saved.muted ?? false
+    })
+    out[id] = normalised.name === '' ? { ...normalised, name: nextRiserName(out) } : normalised
+  }
+  return out
 }
 
 /** The absolute bar the riser stops sounding on. */

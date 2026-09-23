@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   MIN_RISER_LENGTH_BARS,
   RISER_DEFAULTS,
+  RISER_NAME_PREFIX,
+  audibleRisers,
   createRiser,
   defaultRiserCurve,
+  nextRiserName,
+  normaliseLoadedRisers,
   normaliseRiser,
   riserCutoffAt,
   riserEndBar,
@@ -155,5 +159,151 @@ describe('risersOnChannel', () => {
     expect(risersOnChannel(risers, 'ch1').map((r) => r.id)).toEqual(['c', 'a'])
     expect(risersOnChannel(risers, 'ch2').map((r) => r.id)).toEqual(['b'])
     expect(risersOnChannel(risers, 'nope')).toEqual([])
+  })
+})
+
+describe('riser names', () => {
+  it('leaves a new riser unnamed, for the reducer to number', () => {
+    expect(createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 }).name).toBe('')
+  })
+
+  it('takes a name when one is handed to it', () => {
+    const riser = createRiser({ id: 'r1', channelId: 'ch1', startBar: 0, name: 'lift' })
+    expect(riser.name).toBe('lift')
+  })
+
+  it('numbers from one when nothing is named yet', () => {
+    expect(nextRiserName({})).toBe(`${RISER_NAME_PREFIX} 1`)
+  })
+
+  it('skips every number already taken, whatever order they are in', () => {
+    const risers = {
+      a: { ...createRiser({ id: 'a', channelId: 'c', startBar: 0 }), name: 'riser 2' },
+      b: { ...createRiser({ id: 'b', channelId: 'c', startBar: 0 }), name: 'riser 1' }
+    }
+    expect(nextRiserName(risers)).toBe('riser 3')
+  })
+
+  it('ignores a hand-typed name that is not a default one', () => {
+    const risers = {
+      a: { ...createRiser({ id: 'a', channelId: 'c', startBar: 0 }), name: 'the big one' }
+    }
+    expect(nextRiserName(risers)).toBe('riser 1')
+  })
+
+  it('trims a name and keeps an empty one empty', () => {
+    const base = createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 })
+    expect(normaliseRiser({ ...base, name: '  lift  ' }).name).toBe('lift')
+    expect(normaliseRiser({ ...base, name: '   ' }).name).toBe('')
+  })
+})
+
+describe('riser mute', () => {
+  it('starts unmuted', () => {
+    expect(createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 }).muted).toBe(false)
+  })
+
+  it('normalises anything that is not literally true to false', () => {
+    const base = createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 })
+    expect(normaliseRiser({ ...base, muted: true }).muted).toBe(true)
+    expect(normaliseRiser({ ...base, muted: false }).muted).toBe(false)
+  })
+})
+
+describe('audibleRisers', () => {
+  it('leaves out every muted riser', () => {
+    const risers = {
+      a: createRiser({ id: 'a', channelId: 'ch1', startBar: 0 }),
+      b: { ...createRiser({ id: 'b', channelId: 'ch2', startBar: 4 }), muted: true }
+    }
+    expect(audibleRisers(risers).map((riser) => riser.id)).toEqual(['a'])
+  })
+
+  it('sorts by start bar, then by id, so a render never drifts by a few ULPs', () => {
+    const risers = {
+      late: createRiser({ id: 'late', channelId: 'ch1', startBar: 32 }),
+      zz: createRiser({ id: 'zz', channelId: 'ch1', startBar: 0 }),
+      aa: createRiser({ id: 'aa', channelId: 'ch1', startBar: 0 })
+    }
+    expect(audibleRisers(risers).map((riser) => riser.id)).toEqual(['aa', 'zz', 'late'])
+  })
+
+  it('normalises on the way out', () => {
+    const risers = {
+      bad: { ...createRiser({ id: 'bad', channelId: 'ch1', startBar: 0 }), lengthBars: NaN }
+    }
+    expect(audibleRisers(risers)[0].lengthBars).toBe(MIN_RISER_LENGTH_BARS)
+  })
+})
+
+describe('normaliseLoadedRisers', () => {
+  it('gives a save from before names existed a numbered one, deterministically', () => {
+    const saved = {
+      b: {
+        id: 'b',
+        channelId: 'chb',
+        startBar: 4,
+        lengthBars: 4,
+        startCutoffValue: 0.3,
+        endCutoffValue: 0.95,
+        curve: [],
+        level: 0.6
+      },
+      a: {
+        id: 'a',
+        channelId: 'cha',
+        startBar: 0,
+        lengthBars: 4,
+        startCutoffValue: 0.3,
+        endCutoffValue: 0.95,
+        curve: [],
+        level: 0.6
+      }
+    }
+    const loaded = normaliseLoadedRisers(saved)
+    expect(loaded.a.name).toBe('riser 1')
+    expect(loaded.b.name).toBe('riser 2')
+    expect(loaded.a.muted).toBe(false)
+  })
+
+  it('keeps a name that is already there and numbers around it', () => {
+    const saved = {
+      a: {
+        id: 'a',
+        channelId: 'cha',
+        startBar: 0,
+        lengthBars: 4,
+        startCutoffValue: 0.3,
+        endCutoffValue: 0.95,
+        curve: [],
+        level: 0.6,
+        name: 'riser 1',
+        muted: true
+      },
+      b: {
+        id: 'b',
+        channelId: 'chb',
+        startBar: 4,
+        lengthBars: 4,
+        startCutoffValue: 0.3,
+        endCutoffValue: 0.95,
+        curve: [],
+        level: 0.6
+      }
+    }
+    const loaded = normaliseLoadedRisers(saved)
+    expect(loaded.a.name).toBe('riser 1')
+    expect(loaded.a.muted).toBe(true)
+    expect(loaded.b.name).toBe('riser 2')
+  })
+
+  it('gives a riser with no channel a row of its own rather than dropping it', () => {
+    const loaded = normaliseLoadedRisers({ a: { id: 'a', startBar: 0 } })
+    expect(loaded.a.channelId).toBe('a')
+    expect(loaded.a.lengthBars).toBe(RISER_DEFAULTS.lengthBars)
+  })
+
+  it('returns an empty record for a project saved before risers existed', () => {
+    expect(normaliseLoadedRisers(undefined)).toEqual({})
   })
 })
