@@ -121,7 +121,20 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
   if (action.type === 'UNDO') {
     if (state.past.length === 0) return state
     const previous = state.past[state.past.length - 1]
-    const pinnedCoach = state.present.coach
+    // Pinned in every respect BUT the list of placed sections, which has to
+    // walk back with the clips. A section placement is deliberately an
+    // ordinary undoable edit (see COACH_PLACE_SECTION's note above), so
+    // pinning `sections` wholesale left the flow claiming a section whose
+    // clips had just been removed -- and since the next section's start bar
+    // is computed from that list, the following section would land in the
+    // gap the undo had just opened. Taking `sections` from the snapshot
+    // being restored (and [] when the snapshot predates the flow entirely)
+    // keeps the record honest about what is actually on the timeline, while
+    // the step, the answer to melodic-or-groove and the locked climax still
+    // survive, which is the whole point of pinning.
+    const liveCoach = state.present.coach
+    const pinnedCoach =
+      liveCoach === null ? null : { ...liveCoach, sections: previous.coach?.sections ?? [] }
     return {
       past: state.past.slice(0, -1),
       // armedChannelId rides along inside every pushed snapshot (it's an
@@ -155,11 +168,9 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
       // section already carved; undoing back past the moment the flow
       // started would set it to null outright and make him vanish
       // mid-flow. Undo must walk back through the WORK he helped make,
-      // never through the flow itself. The cost of pinning is the
-      // narrow converse: undoing a placed section removes its clips while
-      // the flow still lists the section (see COACH_PLACE_SECTION's own
-      // note above), which leaves a stale record rather than losing the
-      // user's place.
+      // never through the flow itself -- except for `sections`, the one
+      // part of the flow that IS the work, which walks back with the clips
+      // it describes (see pinnedCoach above).
       present: { ...previous, armedChannelId: state.present.armedChannelId, coach: pinnedCoach },
       future: [state.present, ...state.future]
     }
@@ -173,7 +184,14 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
       present: {
         ...next,
         armedChannelId: state.present.armedChannelId,
-        coach: state.present.coach
+        // Same rule as UNDO, in the other direction: the flow is pinned to
+        // where the user actually is, while `sections` comes from the state
+        // being redone into, so redoing a section placement brings its
+        // record back along with its clips.
+        coach:
+          state.present.coach === null
+            ? null
+            : { ...state.present.coach, sections: next.coach?.sections ?? [] }
       },
       future: rest
     }

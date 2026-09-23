@@ -423,6 +423,62 @@ describe('the guided flow across undo/redo', () => {
     expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
   })
 
+  it('DOES rewind the placed sections, because those are the work and not the flow', () => {
+    // The converse of pinning. A section placement is deliberately an
+    // ordinary undoable edit, so if `coach.sections` were pinned along with
+    // the rest of the flow, undoing one would strip its clips off the
+    // timeline while sssketchy still listed the section -- and the next
+    // section's start bar is computed from that list, so the following
+    // section would land in the gap the undo had just opened.
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'COACH_START', now: T0 })
+    // A tracked edit BEFORE the section exists, so there is a checkpoint to
+    // walk back to that predates it. (COACH_START is transient and pushes
+    // none of its own.)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const withSection = {
+      ...h.present,
+      coach:
+        h.present.coach === null
+          ? null
+          : {
+              ...h.present.coach,
+              sections: [
+                {
+                  type: 'intro' as const,
+                  name: 'intro',
+                  bars: 8,
+                  // Empty: everything on. The full climax loop played in
+                  // this section, which is the everything-on rule as data.
+                  droppedPaths: [],
+                  startBar: 0,
+                  placedGroupIds: { '/bass.wav': 'g1' }
+                }
+              ]
+            }
+    }
+    h = { ...h, present: withSection }
+    // An ordinary tracked edit AFTER the section: its checkpoint captures
+    // the flow with that section already recorded.
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
+    expect(h.present.coach?.sections).toHaveLength(1)
+
+    h = historyReducer(h, { type: 'UNDO' })
+    // The step and the flow itself survive...
+    expect(h.present.coach).not.toBeNull()
+    // ...and so does the section, because this undo walked back past a
+    // tempo change, not past the section placement.
+    expect(h.present.coach?.sections).toHaveLength(1)
+
+    h = historyReducer(h, { type: 'UNDO' })
+    // This one DOES cross the point before the section existed.
+    expect(h.present.coach).not.toBeNull()
+    expect(h.present.coach?.sections).toHaveLength(0)
+
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.coach?.sections).toHaveLength(1)
+  })
+
   it('never makes sssketchy vanish mid-flow by undoing past the moment he started', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff }) // checkpoint taken with no flow at all
