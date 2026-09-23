@@ -5,7 +5,9 @@ import { SssketchyChecklist } from './SssketchyChecklist'
 import { coachAnimation, isCoachStuck, type CoachState } from '@shared/coach'
 import { coachLineFor, coachSeededLine } from '@shared/coachPhase1'
 import { coachSectionLine } from '@shared/coachPhase2'
+import { coachPhase3Line } from '@shared/coachPhase3'
 import { SssketchySectionPanel } from './SssketchySectionPanel'
+import { SssketchyTensionPanel } from './SssketchyTensionPanel'
 import {
   coachStepById,
   coachStepPrimaryMove,
@@ -259,6 +261,12 @@ function SssketchyCoachPanel({
   // reads as a greeting rather than as a mistake.
   const walking = usePulse(left, WALK_MS, false)
   const celebrating = usePulse(coach.stepId, JUMP_MS, true)
+  // "jump = step finished, big jump at V1" (spec). Keyed on the v1 mark, so
+  // it fires the moment an export really writes a file and never again --
+  // usePulse is already exactly this shape, so nothing new is needed and
+  // coachAnimation keeps its four plain inputs. A project opened with the
+  // mark already on it does not re-celebrate: onFirstRender is false.
+  const celebratingV1 = usePulse(coach.v1ExportedAt ?? 0, JUMP_MS, false)
 
   const stuck = isCoachStuck(coach, now)
   // The nudge's LINE stands for as long as you are on the step; the
@@ -279,14 +287,24 @@ function SssketchyCoachPanel({
     // guess: a slot is mid-roll or it is not.
     working: discoverSlots.some((slot) => slot.rolling),
     moving: walking,
-    justAdvanced: celebrating,
+    justAdvanced: celebrating || celebratingV1,
     justNudged
   })
+
+  // "then sssketchy's big jump" (spec). The jump itself is the ordinary
+  // one -- what makes it big is him, at double size, for as long as he is
+  // standing on the finished end of the flow. Deliberately NOT a fifth
+  // field on CoachAnimationInput: the animation table stays four booleans
+  // and this is a size, not a new animation.
+  const spriteSize =
+    coach.v1ExportedAt !== null && (coach.stepId === 'p3-export' || coach.status === 'finished')
+      ? SPRITE_SIZE * 2
+      : SPRITE_SIZE
 
   const sprite = (
     <SssketchySprite
       animation={animation}
-      size={SPRITE_SIZE}
+      size={spriteSize}
       onClick={() => setChecklistOpen((open) => !open)}
       title="the method"
     />
@@ -347,7 +365,15 @@ function SssketchyCoachPanel({
   // the Discover slots have nothing to say about that. coachSectionLine
   // returns null on every step that is not p2-section/p2-next, so phase one
   // is untouched.
-  const line = coachSectionLine(coach) ?? coachLineFor(coach, discoverSlots)
+  //
+  // Phase three goes FIRST in the chain, and the order matters: coachLineFor
+  // would otherwise answer an export step that has already written a file
+  // with the generic "whether it is finished is your call", which is the
+  // wrong thing to say about a v1 that is on disk. coachPhase3Line returns
+  // null on every step that is not p3-tension or an exported p3-export, so
+  // phases one and two are untouched.
+  const line =
+    coachPhase3Line(coach) ?? coachSectionLine(coach) ?? coachLineFor(coach, discoverSlots)
 
   return (
     <>
@@ -409,6 +435,14 @@ function SssketchyCoachPanel({
               {pickLineVariant(COACH_STUCK_LINES, coach.lineSeed)}
             </div>
           )}
+
+          {/* Phase three's own controls, in the bubble rather than in a
+              panel of its own: they are one row per JOIN, which is small
+              enough to sit under the thought it belongs to, and mounting
+              them here is also what keeps them on screen exactly while
+              p3-tension is current -- coachTensionBridge.ts has no queue and
+              silently drops a request that finds no panel. */}
+          {coach.stepId === 'p3-tension' && !finished && <SssketchyTensionPanel />}
 
           {stuckOpen && !finished && (
             <div style={{ marginTop: 'var(--ra-s-2)' }}>

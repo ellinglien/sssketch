@@ -70,6 +70,9 @@ import { coachIsComplete } from '@shared/coach'
 import { slotKindsKey } from '@shared/discoverSlotKind'
 import { coachDiscoverIsOpen, requestCoachAddSlot } from './state/coachDiscoverBridge'
 import { requestCoachSectionOp } from './state/coachSectionBridge'
+import { requestCoachTensionOp } from './state/coachTensionBridge'
+import { registerCoachExport, requestCoachExport } from './state/coachExportBridge'
+import type { CoachExportOp } from '@shared/coachTension'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
@@ -560,6 +563,41 @@ function ProjectMenu({
   const [exportFormatPickerOpen, setExportFormatPickerOpen] = useState(false)
   const [stemsFormatPickerOpen, setStemsFormatPickerOpen] = useState(false)
 
+  /** The spec's "the project is marked 'V1 exported'". Only ever called
+   * when an export really wrote something: the dialog-based IPC calls
+   * return null when the save panel was cancelled, and the library /
+   * next-to-source ones return void because they always write. Harmless
+   * with no flow in progress -- the reducer ignores every coach action
+   * then -- and set once, because a later export is another export rather
+   * than another v1 (markCoachV1Exported). */
+  function markV1Exported(): void {
+    if (state.coach === null) return
+    dispatch({ type: 'COACH_MARK_V1_EXPORTED', now: Date.now() })
+  }
+
+  // "Export V1: the existing export picker (mixdown / Ableton / REAPER /
+  // stems)" (spec). The flow opens the SAME three menu entries rather than
+  // owning an export path of its own -- see coachExportBridge.ts.
+  //
+  // Deliberately with no dependency array: handleExportMix is a plain
+  // function redeclared every render and closes over the current `state`,
+  // so re-registering each render is what keeps the handler pointing at the
+  // live export. The registration is a single assignment and its teardown
+  // is guarded (`if (handler === next)`), so this is cheap and safe.
+  useEffect(() => {
+    return registerCoachExport((op: CoachExportOp): void => {
+      if (op === 'mix') {
+        void handleExportMix()
+        return
+      }
+      if (op === 'stems') {
+        setStemsFormatPickerOpen(true)
+        return
+      }
+      setExportFormatPickerOpen(true)
+    })
+  })
+
   async function handleSaveCopyElsewhere(): Promise<void> {
     try {
       await window.rifffApi.saveProject(serializeProject(state))
@@ -592,7 +630,10 @@ function ProjectMenu({
           : currentSketch !== null && currentSketch.kind === 'external'
             ? basenameWithoutProjectExt(currentSketch.path)
             : await window.rifffApi.generateDefaultProjectName()
-      await window.rifffApi.exportMix(wav, defaultName)
+      // null means the save panel was cancelled, so no file came out and
+      // there is no v1 to mark.
+      const written = await window.rifffApi.exportMix(wav, defaultName)
+      if (written !== null) markV1Exported()
     } catch (err) {
       console.error('ProjectMenu: failed to export mix:', err)
       // Export now has exactly one code path (the native engine, with no Web
@@ -609,6 +650,12 @@ function ProjectMenu({
     toolkitMode: ToolkitExportMode = 'bake'
   ): Promise<void> {
     setExporting(true)
+    // "did a file really come out" -- the only thing that may mark a v1.
+    // The library / next-to-source calls return void because they always
+    // write; the three save-dialog ones return null when the panel was
+    // cancelled. The Ableton-overwrite `return` below leaves this false, so
+    // declining that prompt marks nothing.
+    let wrote = false
     try {
       if (currentSketch !== null && currentSketch.kind === 'library') {
         if (format === 'ableton') {
@@ -626,16 +673,20 @@ function ProjectMenu({
             currentSketch.name,
             toolkitMode
           )
+          wrote = true
         } else if (format === 'reaper') {
           await window.rifffApi.exportRppToLibrary(
             JSON.stringify(state),
             currentSketch.name,
             toolkitMode
           )
+          wrote = true
         } else if (format === 'stemTracks') {
           await window.rifffApi.exportStemTracksToLibrary(JSON.stringify(state), currentSketch.name)
+          wrote = true
         } else {
           await window.rifffApi.exportStemsToLibrary(JSON.stringify(state), currentSketch.name)
+          wrote = true
         }
       } else if (currentSketch !== null && currentSketch.kind === 'external') {
         if (format === 'ableton') {
@@ -644,19 +695,23 @@ function ProjectMenu({
             currentSketch.path,
             toolkitMode
           )
+          wrote = true
         } else if (format === 'reaper') {
           await window.rifffApi.exportRppNextToSource(
             JSON.stringify(state),
             currentSketch.path,
             toolkitMode
           )
+          wrote = true
         } else if (format === 'stemTracks') {
           await window.rifffApi.exportStemTracksNextToSource(
             JSON.stringify(state),
             currentSketch.path
           )
+          wrote = true
         } else {
           await window.rifffApi.exportStemsNextToSource(JSON.stringify(state), currentSketch.path)
+          wrote = true
         }
       } else {
         // currentSketch === null: nothing saved yet, no real location to
@@ -665,20 +720,36 @@ function ProjectMenu({
         // dialog-based folder picker as their fallback.
         if (format === 'ableton') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          await window.rifffApi.exportAls(JSON.stringify(state), defaultName, toolkitMode)
+          const path = await window.rifffApi.exportAls(
+            JSON.stringify(state),
+            defaultName,
+            toolkitMode
+          )
+          wrote = path !== null
         } else if (format === 'reaper') {
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          await window.rifffApi.exportRpp(JSON.stringify(state), defaultName, toolkitMode)
+          const path = await window.rifffApi.exportRpp(
+            JSON.stringify(state),
+            defaultName,
+            toolkitMode
+          )
+          wrote = path !== null
         } else if (format === 'stemTracks') {
           // exportStemTracksNative's filenames embed the project name
           // directly, unlike exportAls/exportRpp's optional save-dialog
           // suggestion -- so it's always generated here, not optional.
           const defaultName = await window.rifffApi.generateDefaultProjectName()
-          await window.rifffApi.exportStemTracksNative(JSON.stringify(state), defaultName)
+          const path = await window.rifffApi.exportStemTracksNative(
+            JSON.stringify(state),
+            defaultName
+          )
+          wrote = path !== null
         } else {
-          await window.rifffApi.exportStemsNative(JSON.stringify(state))
+          const path = await window.rifffApi.exportStemsNative(JSON.stringify(state))
+          wrote = path !== null
         }
       }
+      if (wrote) markV1Exported()
     } catch (err) {
       console.error(`ProjectMenu: failed to export (${format}):`, err)
       window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1740,6 +1811,10 @@ function Frame(): React.JSX.Element {
    * go through their own bridge for the same reason -- only
    * SssketchySectionPanel can press its own buttons -- but with no queue,
    * because that panel is mounted exactly while its steps are current.
+   * Phase three's two wires are the same idea again: the tension ops reach
+   * SssketchyTensionPanel (unqueued, mounted only on p3-tension) and the
+   * export ops reach ProjectMenu's own three menu entries, so the flow
+   * never grows an export path of its own.
    *
    * An exhaustive SWITCH, not an if-chain with a fallthrough. This was the
    * latter, which meant every kind other than 'add-slot' landed on the
@@ -1760,6 +1835,28 @@ function Frame(): React.JSX.Element {
         return
       case 'section-op':
         requestCoachSectionOp(action.op)
+        return
+      case 'tension-op':
+        requestCoachTensionOp(action.op)
+        return
+      case 'transport-op':
+        // "play the whole track with the gain controls to hand" (spec). The
+        // whole track, so from bar 0 -- and through the ordinary transport,
+        // because the balance check listens to the REAL project, not to a
+        // throwaway preview. While already playing the engine is told
+        // directly (and the tick guard armed), the same shape Ruler.tsx's
+        // seekTo uses: without it the renderer would jump to bar 0 and the
+        // next 30Hz tick would drag the playhead straight back.
+        dispatch({ type: 'SET_POS', pos: 0 })
+        if (playing) {
+          markManualSeek()
+          void window.rifffApi.engineSetPosition(0)
+        } else {
+          dispatch({ type: 'PLAY' })
+        }
+        return
+      case 'export-op':
+        requestCoachExport(action.op)
         return
       default: {
         const _exhaustive: never = action
