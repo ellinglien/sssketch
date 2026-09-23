@@ -61,14 +61,18 @@ const COACH_PHASE_BY_ID: Record<CoachPhase, CoachPhaseDef> = {
   polish: { id: 'polish', label: 'polish and export', targetMinMinutes: 45, targetMaxMinutes: 60 }
 }
 
-export const COACH_PHASES: readonly CoachPhaseDef[] = [
-  COACH_PHASE_BY_ID.loop,
-  COACH_PHASE_BY_ID.arrangement,
-  COACH_PHASE_BY_ID.polish
-]
+/** The three phases in the order the method runs them -- the checklist's
+ * own order, and the only place that order is written down. */
+const COACH_PHASE_ORDER: readonly CoachPhase[] = ['loop', 'arrangement', 'polish']
+
+export const COACH_PHASES: readonly CoachPhaseDef[] = COACH_PHASE_ORDER.map((phase) =>
+  coachPhaseDef(phase)
+)
 
 /** Total, by construction -- CoachPhase is a closed union over the record's
- * own keys, so there is no "unknown phase" branch to get wrong. */
+ * own keys, so there is no "unknown phase" branch to get wrong. The one way
+ * to turn a phase id into its label and targets, including for COACH_PHASES
+ * itself just above. */
 export function coachPhaseDef(phase: CoachPhase): CoachPhaseDef {
   return COACH_PHASE_BY_ID[phase]
 }
@@ -207,6 +211,24 @@ const DISCOVER_ADD_ROW = '[data-coach-anchor="discover-add-row"]'
  * attribute is on App.tsx's timeline scroll container. */
 const TIMELINE = '[data-coach-anchor="timeline"]'
 
+/** One button per flavour, in COACH_FLAVOURS' own order (groove first).
+ * The label is the flavour itself -- these are the two words the question
+ * asks with. */
+const FLAVOUR_OFFERS: readonly CoachOffer[] = COACH_FLAVOURS.map((flavour) => ({
+  id: `flavour-${flavour}`,
+  label: flavour,
+  action: { kind: 'set-flavour', flavour }
+}))
+
+/** The spec's own third way in: "offers 'start from a riff you love'
+ * (existing Discover seeding)". Not a flavour -- it opens the riff library,
+ * and the answer to the question still has to be given afterwards. */
+const SEED_FROM_RIFF_OFFER: CoachOffer = {
+  id: 'seed-from-riff',
+  label: 'start from a riff you love',
+  action: { kind: 'open-riff-browser' }
+}
+
 export const COACH_STEPS: readonly CoachStepDef[] = [
   {
     id: 'p1-flavour',
@@ -222,19 +244,11 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     // point: answering this for you would be the app making a decision
     // about your track, which is the one thing this feature does not do.
     moves: [],
-    offers: [
-      { id: 'flavour-groove', label: 'groove', action: { kind: 'set-flavour', flavour: 'groove' } },
-      {
-        id: 'flavour-melodic',
-        label: 'melodic',
-        action: { kind: 'set-flavour', flavour: 'melodic' }
-      },
-      {
-        id: 'seed-from-riff',
-        label: 'start from a riff you love',
-        action: { kind: 'open-riff-browser' }
-      }
-    ],
+    // Mapped from COACH_FLAVOURS rather than written out, so "the two
+    // flavours" is stated once: a third one (if there is ever a reason for
+    // one) becomes a button here by existing, and cannot be added to the
+    // union while quietly missing from the question that asks for it.
+    offers: [...FLAVOUR_OFFERS, SEED_FROM_RIFF_OFFER],
     anchorSelector: DISCOVER_ADD_ROW
   },
   {

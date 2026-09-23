@@ -130,6 +130,21 @@ describe('coach steps', () => {
     ])
   })
 
+  it('asks with exactly the flavours that exist -- the buttons are mapped, not listed', () => {
+    // The question's buttons come from COACH_FLAVOURS, so a flavour cannot
+    // be added to the union while quietly missing from the one step that
+    // asks for it.
+    const offers = coachStepById('p1-flavour')!.offers ?? []
+    const asked = offers.flatMap((offer) =>
+      offer.action.kind === 'set-flavour' ? [offer.action.flavour] : []
+    )
+    expect(asked).toEqual([...COACH_FLAVOURS])
+    expect(offers.map((offer) => offer.label)).toEqual([
+      ...COACH_FLAVOURS,
+      'start from a riff you love'
+    ])
+  })
+
   it('never lets the harmony step and the hook step satisfy each other', () => {
     // bright and warm are opposite ends of one field, so normalizeSlotKinds
     // keeps at most one of them in a set -- a harmony slot can never be a
