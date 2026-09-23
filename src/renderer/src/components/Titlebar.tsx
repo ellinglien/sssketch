@@ -35,7 +35,9 @@ export function Titlebar({
   dirty,
   mode,
   sketchEligible,
-  onCycleMode
+  onCycleMode,
+  mapView,
+  onToggleMapView
 }: {
   /** The real current project name, already resolved by the caller (see
    * App.tsx's Frame) -- was previously a hardcoded "untitled sketch 04"
@@ -69,6 +71,12 @@ export function Titlebar({
   mode: ArrangerMode
   sketchEligible: boolean
   onCycleMode: () => void
+  /** Whether the arrangement map is showing instead of the timeline. A
+   * VIEW, not an ArrangerMode: `mode` next to it decides how clips are
+   * drawn and edited, this decides which way you are looking at the same
+   * arrangement (AppState.mapView). */
+  mapView: boolean
+  onToggleMapView: () => void
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(sketchName)
@@ -146,6 +154,26 @@ export function Titlebar({
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {/* A view, not a mode: the mode button next to this one decides how
+            clips behave, this one decides which way you are looking at the
+            same arrangement. Two labels rather than one cycling label,
+            because there are only two and naming both is clearer than making
+            the user press it to find out. Active is the app's own toggle
+            treatment -- a grey fill and bright ink, never a colour
+            (tokens.css: colour is spent only on audio information). */}
+        <button
+          onClick={onToggleMapView}
+          aria-label="Show the arrangement map"
+          data-tooltip="switch between the map and the timeline"
+          style={{
+            ...buttonStyle,
+            width: 72,
+            background: mapView ? 'var(--ra-stretch-on-bg)' : buttonStyle.background,
+            color: mapView ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          }}
+        >
+          {mapView ? 'map' : 'timeline'}
+        </button>
         <button
           onClick={onCycleMode}
           aria-label="Cycle arranger mode"

@@ -39,6 +39,7 @@ import { type DiscoverSlot } from './components/DiscoverPanel'
 import { buildSeedSlotsFromStems, discoverHasRealContent } from './audio/discoverSeed'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
 import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
+import { ArrangementMap } from './components/ArrangementMap'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
 import { DrawArrangeWizard } from './components/DrawArrangeWizard'
 import { LockInConfirmDialog } from './components/LockInConfirmDialog'
@@ -2100,6 +2101,13 @@ function Frame(): React.JSX.Element {
     dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
   }
 
+  // A VIEW, not a mode: the same arrangement seen from further back. Not on
+  // Tab, which belongs to the mode cycle above, and not undoable -- see
+  // history.ts, which lists SET_MAP_VIEW transient.
+  function handleToggleMapView(): void {
+    dispatch({ type: 'SET_MAP_VIEW', on: !state.mapView })
+  }
+
   // Tab cycles the arranger mode, Ableton-style: arrange -> sketch ->
   // automation -> arrange, skipping sketch when isSketchEligible(state) is
   // false (see nextArrangerMode). Skipped while focus is in a text input — Tab's native
@@ -2435,6 +2443,8 @@ function Frame(): React.JSX.Element {
               mode={state.mode}
               sketchEligible={isSketchEligible(state)}
               onCycleMode={handleCycleArrangerMode}
+              mapView={state.mapView}
+              onToggleMapView={handleToggleMapView}
             />
           </div>
           <div style={{ paddingRight: 14 }}>
@@ -2490,12 +2500,20 @@ function Frame(): React.JSX.Element {
               onWheel={handleTimelineWheel}
               style={{ height: '100%', overflowX: 'auto', overflowY: 'auto' }}
             >
-              <Timeline
-                onOpenClipMenu={openClipMenu}
-                onOpenRiserMenu={openRiserMenu}
-                onOpenPasteMenu={openPasteMenu}
-                onBackgroundMouseDown={handlePanMouseDown}
-              />
+              {/* One arrangement, two zoom levels (spec, "The map"). The
+                  coach anchor stays on the scroll container rather than on
+                  either child, so sssketchy does not jump across the screen
+                  when the view flips. */}
+              {state.mapView ? (
+                <ArrangementMap />
+              ) : (
+                <Timeline
+                  onOpenClipMenu={openClipMenu}
+                  onOpenRiserMenu={openRiserMenu}
+                  onOpenPasteMenu={openPasteMenu}
+                  onBackgroundMouseDown={handlePanMouseDown}
+                />
+              )}
             </div>
           </div>
           {/* Drawer handle — same subtle-strip visual language as the stem
