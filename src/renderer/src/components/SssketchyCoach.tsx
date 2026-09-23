@@ -21,6 +21,20 @@ const SPRITE_SIZE = 64
  * Discover's add row, which only exists while the riff library is open on
  * the discover tab). */
 const DEFAULT_LEFT = 16
+/**
+ * How often he looks for his step's anchor element again.
+ *
+ * A poll rather than the resize/scroll listeners alone, because every
+ * phase-one step names the SAME anchor (Discover's add row) and that
+ * element appears and disappears with the riff library modal -- neither the
+ * selector changing nor a resize nor a scroll fires when the modal opens,
+ * so a listeners-only version measures once, finds nothing, and parks him
+ * in the corner for the whole of phase one. One querySelector plus one
+ * getBoundingClientRect at this rate is cheap, it only runs while a flow is
+ * actually on screen with an anchored step, and the state it writes is
+ * identity-stable when nothing moved, so a still screen re-renders nothing.
+ */
+const ANCHOR_POLL_MS = 500
 /** How often the panel re-reads the clock, purely so the ten-minute nudge
  * and the checklist's phase timers appear without a user gesture. Coarse on
  * purpose: nothing here needs second accuracy, and the store is never
@@ -90,27 +104,55 @@ function usePulse(key: string | number, ms: number, onFirstRender: boolean): boo
  * through. A step whose anchor is not currently mounted (every phase-one
  * step names Discover's add row, which exists only while the riff library
  * is open on the discover tab) parks him in the corner instead.
+ *
+ * `anchored` is the second half of the answer, and it decides which layer
+ * he sits on: standing on something inside a full-screen view means he has
+ * to float above that view's own content, which is exactly what
+ * --ra-z-fullscreen-popover is for. Parked in the corner he is an ordinary
+ * anchored popover again, and does not hover over unrelated modals.
  */
-function useAnchorLeft(selector: string | undefined, width: number): number {
-  const [rect, setRect] = useState<DOMRect | null>(null)
+function useAnchorLeft(
+  selector: string | undefined,
+  width: number
+): { left: number; anchored: boolean } {
+  const [anchor, setAnchor] = useState<{ left: number; anchored: boolean }>({
+    left: DEFAULT_LEFT,
+    anchored: false
+  })
 
   useEffect(() => {
     if (selector === undefined) return undefined
     const update = (): void => {
       const element = document.querySelector(selector)
-      setRect(element === null ? null : element.getBoundingClientRect())
+      const next =
+        element === null
+          ? { left: DEFAULT_LEFT, anchored: false }
+          : {
+              left: Math.min(
+                Math.max(element.getBoundingClientRect().left, 12),
+                window.innerWidth - width - 12
+              ),
+              anchored: true
+            }
+      // Identity-stable when nothing moved, so the poll below costs a
+      // measurement rather than a render.
+      setAnchor((prev) =>
+        prev.left === next.left && prev.anchored === next.anchored ? prev : next
+      )
     }
     update()
+    const pollId = window.setInterval(update, ANCHOR_POLL_MS)
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
     return () => {
+      window.clearInterval(pollId)
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }
-  }, [selector])
+  }, [selector, width])
 
-  if (selector === undefined || rect === null) return DEFAULT_LEFT
-  return Math.min(Math.max(rect.left, 12), window.innerWidth - width - 12)
+  if (selector === undefined) return { left: DEFAULT_LEFT, anchored: false }
+  return anchor
 }
 
 /**
@@ -165,7 +207,13 @@ function SssketchyCoachPanel({
   // Per-flavour copy, moves and label, flattened once here so nothing below
   // has to remember that overrides exist.
   const step = rawStep === undefined ? undefined : resolveCoachStep(rawStep, coach.flavour)
-  const left = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
+  const { left, anchored } = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
+  // Above the riff library's own full-screen view while he is standing on
+  // something inside it (every phase-one step is), an ordinary anchored
+  // popover the rest of the time. Without this he is painted UNDER the
+  // library modal for the whole of phase one -- the modal is
+  // --ra-z-fullscreen (1000), this used to be --ra-z-anchored (100).
+  const zIndex = anchored ? 'var(--ra-z-fullscreen-popover)' : 'var(--ra-z-anchored)'
 
   // "walk = moving to another area (Discover -> timeline)" (spec), and
   // "jump = step finished" -- which also fires when he first appears, and
@@ -197,6 +245,7 @@ function SssketchyCoachPanel({
     <SssketchyChecklist
       coach={coach}
       now={now}
+      zIndex={zIndex}
       onClose={() => setChecklistOpen(false)}
       onRestore={
         coach.status === 'minimised'
@@ -218,7 +267,7 @@ function SssketchyCoachPanel({
             position: 'fixed',
             left: DEFAULT_LEFT,
             bottom: 12,
-            zIndex: 'var(--ra-z-anchored)'
+            zIndex
           }}
         >
           {sprite}
@@ -246,7 +295,7 @@ function SssketchyCoachPanel({
           left,
           bottom: 12,
           width: BUBBLE_WIDTH,
-          zIndex: 'var(--ra-z-anchored)'
+          zIndex
         }}
       >
         <div

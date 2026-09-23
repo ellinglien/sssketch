@@ -35,6 +35,7 @@ function stepMark(outcome: string | undefined, isCurrent: boolean): string {
 export function SssketchyChecklist({
   coach,
   now,
+  zIndex,
   onClose,
   onRestore
 }: {
@@ -42,6 +43,11 @@ export function SssketchyChecklist({
   /** Injected rather than read here, so the whole panel re-renders off one
    * clock owned by SssketchyCoach.tsx instead of each row running its own. */
   now: number
+  /** The same layer the bubble is on, passed in rather than fixed here:
+   * opening this from a sprite standing inside the riff library's own
+   * full-screen view has to float above that view too, or clicking him
+   * appears to do nothing. See SssketchyCoach.tsx's own useAnchorLeft. */
+  zIndex: React.CSSProperties['zIndex']
   onClose: () => void
   /** Present only while he is minimised -- the way back to the bubble. */
   onRestore?: () => void
@@ -70,7 +76,7 @@ export function SssketchyChecklist({
         border: '1px solid var(--ra-border-strong)',
         borderRadius: 0,
         padding: 'var(--ra-s-6)',
-        zIndex: 'var(--ra-z-anchored)',
+        zIndex,
         boxShadow: 'var(--ra-shadow-popover)'
       }}
     >
