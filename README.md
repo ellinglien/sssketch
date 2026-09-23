@@ -32,6 +32,32 @@ Two ways to bring stems into a project:
 - **a built-in sound toolkit** — a filter sweep, a reverb send and a volume curve per clip, drawn by hand in an automation lane, plus white-noise risers you drag out to whatever length you want. On export you choose: bake them into the audio, or send them out as real automation on the DAW's own stock devices.
 - **Various DAW exports** — writes real app project files for Ableton Live 12 and REAPER, with the tidied bus groupings mapped onto tracks and colors. You can also export stems of the tidied buses too.
 
+## Exporting
+
+Three items in the project menu, for three different jobs.
+
+**export mix** — one stereo file of the whole arrangement. For sending someone a rough.
+
+**export stems** — asks how you want them split:
+
+- **mixed by bus** — one file per tidied bus, so a drums bus with four stems in it comes out as one drums file. Fewer, bigger files.
+- **individual tracks** — one file per stem, nothing summed.
+
+Every file starts at bar one and runs the full length of the arrangement, so they line up when you drop them anywhere.
+
+**export project…** — a real Ableton Live 12 or REAPER project, with your tidied buses as tracks and their colours carried across.
+
+### What happens to the filter, reverb, volume curves and risers
+
+If you've used the built-in toolkit, a project export asks one more question:
+
+- **bake it into the audio** *(default)* — the audio you export already has the sweeps, sends and curves printed into it. What you hear in sssketch is exactly what lands in the other DAW. The moves themselves are frozen; you can't reopen a sweep and change it over there.
+- **export it as automation** — the audio goes out dry and the moves come across as real envelopes on the DAW's own stock devices: Ableton's Auto Filter and a Reverb return, REAPER's ReaEQ and send envelopes. Fully editable, but it's their filter and their reverb, so it won't sound identical to ours.
+
+Risers always come out as rendered audio either way — there's no stock device that generates one.
+
+Plugins are the one thing no export carries. Stem and mix audio include whatever a plugin did; a DAW project doesn't, so use them sparingly until you're in the other DAW.
+
 ## Installing
 
 Grab the latest `.dmg` for your Mac from the [Releases page](../../releases/latest):
