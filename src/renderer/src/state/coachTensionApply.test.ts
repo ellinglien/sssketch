@@ -379,14 +379,7 @@ describe('the tension pass after the map has been edited', () => {
           passIndex: 0,
           on
         })
-        next = buildCellToggleActions(
-          next,
-          row,
-          target,
-          plan,
-          coach.lockedClimax,
-          PHRASE_BARS
-        ).reduce(reducer, next)
+        next = buildCellToggleActions(next, row, target, plan, PHRASE_BARS).reduce(reducer, next)
       }
     }
     return next

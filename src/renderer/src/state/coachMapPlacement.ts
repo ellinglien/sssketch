@@ -37,6 +37,7 @@
  */
 
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
+import type { ArrangementMapColumn } from '@shared/arrangementMapColumns'
 import { cellRuns, type CoachCellRun, type CoachCells } from '@shared/coachCells'
 import { passOffsetBars, sectionBars } from '@shared/coachPasses'
 import { COACH_LOOP_HOME_TYPE } from '@shared/coachShapes'
@@ -49,7 +50,7 @@ import { remapCellsToPhrase, type CoachMapRowPlan } from '@shared/coachMapEdit'
 import { readRowPasses, rowPassesToCells } from '@shared/coachMapRead'
 import type { CoachSection } from '@shared/coachSections'
 import type { CoachState } from '@shared/coach'
-import type { LockedClimax, LockedClimaxStem } from '@shared/coachClimax'
+import type { LockedClimaxStem } from '@shared/coachClimax'
 import type { Rifff, Stem } from '@shared/types'
 import { coachMapRows, type CoachMapRow } from './coachMapRows'
 import type { Action, AppState } from './store'
@@ -77,20 +78,22 @@ function stemFromClimax(stem: LockedClimaxStem): Omit<Stem, 'slot'> {
   }
 }
 
-/** One run of one stem, as a placed clip plus the actions that shape it. */
+/** One run of one stem, as a placed clip plus the actions that shape it.
+ *
+ * Takes the stem and its gain as PLAIN VALUES rather than a
+ * LockedClimaxStem: the map's own toggle now sources both from the row's
+ * existing material (coachMapRows.ts's `source`), and only the build still
+ * sources them from the climax (through stemFromClimax above). */
 function placeRun(
   state: AppState,
-  stem: LockedClimaxStem,
+  stem: Omit<Stem, 'slot'>,
+  gain: number,
   label: string,
   startBar: number,
   barCount: number,
   lane: string | null
 ): { rifff: Rifff; vol: Record<string, number>; after: Action[] } | null {
-  const assembly = assembleDiscoverRifff(
-    `${label} · ${stem.name}`,
-    [{ stem: stemFromClimax(stem), gain: stem.gain }],
-    state.bpm
-  )
+  const assembly = assembleDiscoverRifff(`${label} · ${stem.name}`, [{ stem, gain }], state.bpm)
   if (assembly === null) return null
   const groupId = assembly.rifff.groupId
   const after: Action[] = []
@@ -135,7 +138,8 @@ export function buildCoachMapActions(
         const startBar = section.startBar + passOffsetBars(run.startPass, phraseBars)
         const placed = placeRun(
           state,
-          stem,
+          stemFromClimax(stem),
+          stem.gain,
           section.name,
           startBar,
           sectionBars(run.passCount, phraseBars),
@@ -227,6 +231,10 @@ export function buildMapRebuildActions(
 /**
  * One cell toggle, as real clip actions.
  *
+ * NO CLIMAX. The stem to put back comes from the row itself
+ * (coachMapRows.ts's `source`), which is what lets this serve an unguided
+ * map as well as a guided one -- see that field's own doc comment.
+ *
  * A refusal (blockedGroupIds) produces NOTHING -- the map says why in the
  * cell's own tooltip rather than doing something approximate. See
  * coachMapEdit.ts's own rule 2.
@@ -234,23 +242,25 @@ export function buildMapRebuildActions(
 export function buildCellToggleActions(
   state: AppState,
   row: CoachMapRow,
-  section: CoachSection,
+  column: ArrangementMapColumn,
   plan: CoachMapRowPlan,
-  climax: LockedClimax,
   phraseBars: number
 ): Action[] {
   if (plan.blockedGroupIds.length > 0) return []
-  if (row.path === null) return []
-  const stem = climax.stems.find((candidate) => candidate.path === row.path)
-  if (stem === undefined) return []
+  if (row.source === null) return []
 
+  // An unnamed column names a placed clip by the bar it starts at -- the
+  // column header deliberately shows nothing (spec), but a clip on the
+  // timeline still needs a name a person can read.
+  const label = column.name ?? `bar ${column.startBar}`
   const actions: Action[] = []
   for (const run of plan.addRuns) {
-    const startBar = section.startBar + passOffsetBars(run.startPass, phraseBars)
+    const startBar = column.startBar + passOffsetBars(run.startPass, phraseBars)
     const placed = placeRun(
       state,
-      stem,
-      section.name,
+      row.source.stem,
+      row.source.gain,
+      label,
       startBar,
       sectionBars(run.passCount, phraseBars),
       row.channelId

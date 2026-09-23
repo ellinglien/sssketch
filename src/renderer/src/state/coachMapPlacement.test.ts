@@ -214,7 +214,7 @@ describe('buildCellToggleActions', () => {
   }
 
   it('turns a plan into a delete plus one placement per run', () => {
-    const actions = buildCellToggleActions(afterBuild, row, section, plan, climax, PHRASE_BARS)
+    const actions = buildCellToggleActions(afterBuild, row, section, plan, PHRASE_BARS)
     expect(actions.filter((a) => a.type === 'DELETE_RIFFFS')).toHaveLength(1)
     expect(actions.filter((a) => a.type === 'PLACE_LOOP_ON_TIMELINE')).toHaveLength(
       plan.addRuns.length
@@ -222,7 +222,7 @@ describe('buildCellToggleActions', () => {
   })
 
   it('puts every new clip on the row own channel', () => {
-    const actions = buildCellToggleActions(afterBuild, row, section, plan, climax, PHRASE_BARS)
+    const actions = buildCellToggleActions(afterBuild, row, section, plan, PHRASE_BARS)
     for (const move of actions.filter((a) => a.type === 'MOVE_TO_CHANNEL')) {
       expect((move as { channelId: string }).channelId).toBe(row.channelId)
     }
@@ -230,16 +230,12 @@ describe('buildCellToggleActions', () => {
 
   it('does nothing at all for a blocked plan', () => {
     const blocked = { removeGroupIds: [], addRuns: [], blockedGroupIds: ['x'] }
-    expect(buildCellToggleActions(afterBuild, row, section, blocked, climax, PHRASE_BARS)).toEqual(
-      []
-    )
+    expect(buildCellToggleActions(afterBuild, row, section, blocked, PHRASE_BARS)).toEqual([])
   })
 
-  it('does nothing at all for a row the map does not own', () => {
-    const other = { ...row, path: null }
-    expect(buildCellToggleActions(afterBuild, other, section, plan, climax, PHRASE_BARS)).toEqual(
-      []
-    )
+  it('does nothing at all for a row whose material names no single stem', () => {
+    const other = { ...row, source: null }
+    expect(buildCellToggleActions(afterBuild, other, section, plan, PHRASE_BARS)).toEqual([])
   })
 
   it('CLOSES THE ROUND TRIP THROUGH THE REAL REDUCER -- read, toggle, apply, read', () => {
@@ -248,12 +244,136 @@ describe('buildCellToggleActions', () => {
     // cell that was asked to go off comes back off, and nothing else moved.
     const before = grid(row.clips)
     expect(before[0]).toBe('x')
-    const actions = buildCellToggleActions(afterBuild, row, section, plan, climax, PHRASE_BARS)
+    const actions = buildCellToggleActions(afterBuild, row, section, plan, PHRASE_BARS)
     const after = applyAll(afterBuild, actions)
     const toggled = coachMapRows(after).find((r) => r.channelId === row.channelId) as {
       clips: MapClip[]
     }
     expect(grid(toggled.clips)).toBe(`.${before.slice(1)}`)
+  })
+})
+
+describe('buildCellToggleActions without a climax', () => {
+  /** One channel, one stem, bars 0-3 -- an arrangement nobody was asked
+   * about, with no coach at all. */
+  function unguidedState(): AppState {
+    const loop: Rifff = {
+      groupId: 'u0',
+      name: 'kick',
+      bpm: 120,
+      barLength: 4,
+      folderPath: '/x',
+      startBar: 0,
+      stems: [
+        {
+          slot: 1,
+          author: 'e',
+          name: 'kick',
+          type: 'drums',
+          path: '/kick.wav',
+          durationSec: 4,
+          barLength: 4
+        }
+      ]
+    }
+    return {
+      ...initialState,
+      bpm: 120,
+      rifffs: { u0: loop },
+      channelOf: { u0: 'u0' },
+      channelOrder: ['u0']
+    }
+  }
+
+  /** One channel holding two DIFFERENT stems' clips -- no single stem the
+   * map could honestly put back. */
+  function mixedRowState(): AppState {
+    const base = unguidedState()
+    const second: Rifff = {
+      ...(base.rifffs.u0 as Rifff),
+      groupId: 'u1',
+      startBar: 8,
+      stems: [
+        {
+          slot: 1,
+          author: 'e',
+          name: 'snare',
+          type: 'drums',
+          path: '/snare.wav',
+          durationSec: 4,
+          barLength: 4
+        }
+      ]
+    }
+    return {
+      ...base,
+      rifffs: { ...base.rifffs, u1: second },
+      channelOf: { u0: 'u0', u1: 'u0' },
+      channelOrder: ['u0']
+    }
+  }
+
+  const column = { id: 'bar-4', name: null, startBar: 4, passes: 1 }
+
+  it('places from the row own stem when there is no locked climax', () => {
+    const unguided = unguidedState()
+    const row = coachMapRows(unguided)[0]
+    const plan = planCellToggle({
+      clips: row.clips,
+      section: column,
+      phraseBars: 4,
+      passIndex: 0,
+      on: true
+    })
+    const actions = buildCellToggleActions(unguided, row, column, plan, 4)
+    expect(actions.some((a) => a.type === 'PLACE_LOOP_ON_TIMELINE')).toBe(true)
+  })
+
+  it('does nothing on a row whose material names several stems', () => {
+    const mixed = mixedRowState()
+    const row = coachMapRows(mixed)[0]
+    const plan = planCellToggle({
+      clips: row.clips,
+      section: column,
+      phraseBars: 4,
+      passIndex: 0,
+      on: true
+    })
+    expect(buildCellToggleActions(mixed, row, column, plan, 4)).toEqual([])
+  })
+
+  it('names an unnamed column by its bar, so a placed clip still reads sensibly', () => {
+    const unguided = unguidedState()
+    const row = coachMapRows(unguided)[0]
+    const plan = planCellToggle({
+      clips: row.clips,
+      section: column,
+      phraseBars: 4,
+      passIndex: 0,
+      on: true
+    })
+    const placed = buildCellToggleActions(unguided, row, column, plan, 4).find(
+      (a): a is Extract<Action, { type: 'PLACE_LOOP_ON_TIMELINE' }> =>
+        a.type === 'PLACE_LOOP_ON_TIMELINE'
+    )!
+    expect(placed.stems[0].name).toContain('bar 4')
+  })
+
+  it('carries the gain the row is really playing at', () => {
+    const unguided = { ...unguidedState(), vol: { 'u0:1': 0.25 } }
+    const row = coachMapRows(unguided)[0]
+    const plan = planCellToggle({
+      clips: row.clips,
+      section: column,
+      phraseBars: 4,
+      passIndex: 0,
+      on: true
+    })
+    const placed = buildCellToggleActions(unguided, row, column, plan, 4).find(
+      (a): a is Extract<Action, { type: 'PLACE_LOOP_ON_TIMELINE' }> =>
+        a.type === 'PLACE_LOOP_ON_TIMELINE'
+    )!
+    expect(Object.values(placed.vol ?? {})).toEqual([0.25])
   })
 })
 
@@ -309,10 +429,7 @@ describe('buildMapRebuildActions', () => {
       passIndex: 1,
       on: false
     })
-    const edited = applyAll(
-      placed8,
-      buildCellToggleActions(placed8, row, verse, off, climax, PHRASE_8)
-    )
+    const edited = applyAll(placed8, buildCellToggleActions(placed8, row, verse, off, PHRASE_8))
     const editedCoach = edited.coach as NonNullable<AppState['coach']>
 
     const built = buildMapRebuildActions(edited, editedCoach, 4)
