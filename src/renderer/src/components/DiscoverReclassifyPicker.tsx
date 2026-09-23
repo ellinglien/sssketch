@@ -1,15 +1,25 @@
 // src/renderer/src/components/DiscoverReclassifyPicker.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ArrangeRole } from '@shared/stemRole'
-import { DISCOVER_RECLASSIFY_ROLES, discoverRoleLabel } from '@shared/discoverMatchMeter'
+import { DISCOVER_RECLASSIFY_ROLES } from '@shared/discoverMatchMeter'
 import { ROLE_LABELS } from './autoArrangeLabels'
 
 /** Match meter reclassify (docs/superpowers/specs/2026-09-22-discover-
  * promise-vs-delivery-design.md, Phase 2): opened from a mask kind's source
- * word on a slot's meter. Lists drummy / bassish / leadesque, then the
- * other Tidy Up roles. Picking one calls onPick (the panel records a Tidy
- * Up-style confirmation) and closes; the slot keeps its stem. Position +
- * dismissal mirror DiscoverKindPicker.tsx / DiscoverNearbyPopover.tsx. */
+ * word on a slot's meter. Lists every Tidy Up role. Picking one calls onPick
+ * (the caller records a Tidy Up-style confirmation) and closes; the slot
+ * keeps its stem. Position + dismissal mirror DiscoverKindPicker.tsx /
+ * DiscoverNearbyPopover.tsx.
+ *
+ * **Kind names describe a SLOT; role names describe a STEM.** This picker
+ * writes an ArrangeRole onto a file, so it says the ROLE's name
+ * (ROLE_LABELS) -- it used to say discoverRoleLabel(role, ROLE_LABELS),
+ * which prefers a mask kind's playful name where one exists, so picking
+ * "drummy" wrote arrangeRole: 'drums'. That is the two vocabularies leaking
+ * into each other at the one place a user is making a claim about a file.
+ * The match meter, which is explaining why a SLOT admitted a stem, keeps
+ * the kind names -- that is what it is talking about, and
+ * discoverRoleLabel still serves it (DiscoverPanel.tsx). */
 export function DiscoverReclassifyPicker({
   x,
   y,
@@ -111,7 +121,7 @@ export function DiscoverReclassifyPicker({
                 cursor: 'pointer'
               }}
             >
-              {discoverRoleLabel(role, ROLE_LABELS)}
+              {ROLE_LABELS[role] ?? role}
             </button>
           )
         })}
