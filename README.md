@@ -23,10 +23,13 @@ Two ways to bring stems into a project:
 
 ## The basic ideas
 
-- **tidy up** — this idea is to semi-automatically group similar-sounding stems onto shared buses, using audio analysis so an arrangement doesn't turn into dozens of overlapping tracks. The machine guesses and the user approves or tells it to try another go.
+- **tidy up** — this idea is to semi-automatically group similar-sounding stems onto shared buses, using audio analysis so an arrangement doesn't turn into dozens of overlapping tracks. The machine guesses and the user approves or tells it to try another go. It's also where you say what each stem actually is, which the arranger, discover and the map all read back; `tidy up library` runs the same pass over your whole riff library rather than one sketch.
 - **re-one tool** - when you import a rifff or a collection of rifffs, you'll be presented with a screen to find the beginning of the loop. For short ones, find the first downbeat. For longer ones, find the beginning of the looped phrase. sssketch will 'rotate' the audio within the app without affecting the downloaded audio.
 - **sketch and arranger modes** — sketch is the default mode, and it's meant to be a simple linear arrangement view for sequencing a collection of rifffs. you can change the number of bars by right-clicking and dragging on the riff(s) (to select multiple rifffs, hold cmd or shift.) the idea is to sketch out a flow before switching to the full "arranger" mode to fine-tune it a bit more.
 - **tempo** - the first rifff you drag into the project will set the tempo
+- **the arrangement map** — a second view of the same arrangement: rows down the side, sections across the top, one cell per time round the loop. Clicking a cell edits the real clips, so it's a zoomed-out way of working rather than a separate thing to keep in sync. The `map` / `timeline` button in the top bar swaps between them.
+- **sssketchy** — a small pixel character who walks you from a loop to a rough track: name what the loop is, pick a shape, and he lays out a map you can edit, then offers sweeps, fades and risers at the joins. He suggests goals rather than giving instructions, and everything he makes is ordinary clips and curves you can move or undo. Still new and rough.
+- **a built-in sound toolkit** — a filter sweep, a reverb send and a volume curve per clip, drawn by hand in an automation lane, plus white-noise risers you drag out to whatever length you want. On export you choose: bake them into the audio, or send them out as real automation on the DAW's own stock devices.
 - **Various DAW exports** — writes real app project files for Ableton Live 12 and REAPER, with the tidied bus groupings mapped onto tracks and colors. You can also export stems of the tidied buses too.
 
 ## Installing
