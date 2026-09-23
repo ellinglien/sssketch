@@ -16,7 +16,7 @@ import {
   startCoach
 } from './coach'
 import { COACH_DONE_LINES, COACH_STUCK_LINES } from './coachLines'
-import { COACH_STEPS } from './coachSteps'
+import { COACH_STEPS, coachStepOrder } from './coachSteps'
 
 const T0 = 1_700_000_000_000
 const MINUTE = 60_000
@@ -25,7 +25,7 @@ describe('startCoach', () => {
   it('starts active, on the first step, with the clock running', () => {
     const coach = startCoach(T0)
     expect(coach.status).toBe('active')
-    expect(coach.stepId).toBe('climax-loop')
+    expect(coach.stepId).toBe('p1-flavour')
     expect(coach.outcomes).toEqual({})
     expect(coach.phaseElapsedMs).toEqual({ loop: 0, arrangement: 0, polish: 0 })
     expect(coach.stepElapsedMs).toBe(0)
@@ -55,7 +55,7 @@ describe('resumeCoach', () => {
     const dismissed = dismissCoach(startCoach(T0), T0 + 5 * MINUTE)
     const resumed = resumeCoach(dismissed, T0 + 60 * MINUTE)
     expect(resumed.status).toBe('active')
-    expect(resumed.stepId).toBe('climax-loop')
+    expect(resumed.stepId).toBe('p1-flavour')
     expect(resumed.stepElapsedMs).toBe(5 * MINUTE)
     expect(resumed.runningSince).toBe(T0 + 60 * MINUTE)
   })
@@ -66,10 +66,13 @@ describe('resumeCoach', () => {
   })
 
   it('leaves a finished flow alone -- there is nothing left to resume', () => {
-    let coach = advanceCoach(startCoach(T0), T0 + MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 2 * MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 3 * MINUTE, 'done')
-    expect(coach.status).toBe('finished')
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50)
+    }
     expect(resumeCoach(coach, T0 + 99 * MINUTE)).toEqual(coach)
   })
 })
@@ -77,8 +80,8 @@ describe('resumeCoach', () => {
 describe('advanceCoach', () => {
   it('records how the step was passed, moves on, and restarts the step clock', () => {
     const next = advanceCoach(startCoach(T0), T0 + 8 * MINUTE, 'done')
-    expect(next.outcomes).toEqual({ 'climax-loop': 'done' })
-    expect(next.stepId).toBe('sections')
+    expect(next.outcomes).toEqual({ 'p1-flavour': 'done' })
+    expect(next.stepId).toBe('p1-low-end')
     expect(next.stepElapsedMs).toBe(0)
     expect(next.runningSince).toBe(T0 + 8 * MINUTE)
     expect(next.status).toBe('active')
@@ -88,7 +91,7 @@ describe('advanceCoach', () => {
     const next = advanceCoach(startCoach(T0), T0 + 8 * MINUTE, 'skipped')
     expect(next.phaseElapsedMs.loop).toBe(8 * MINUTE)
     expect(next.phaseElapsedMs.arrangement).toBe(0)
-    expect(next.outcomes).toEqual({ 'climax-loop': 'skipped' })
+    expect(next.outcomes).toEqual({ 'p1-flavour': 'skipped' })
   })
 
   it('rotates the line seed so the next step does not reuse this one variant index', () => {
@@ -96,17 +99,16 @@ describe('advanceCoach', () => {
   })
 
   it('finishes the flow after the last step, with the clock stopped', () => {
-    let coach = advanceCoach(startCoach(T0), T0 + MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 2 * MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 3 * MINUTE, 'done')
-    expect(coach.status).toBe('finished')
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50) // a runaway loop is a bug, not a hang
+    }
     expect(coach.stepId).toBe('finish')
     expect(coach.runningSince).toBeNull()
-    expect(coach.outcomes).toEqual({
-      'climax-loop': 'done',
-      sections: 'done',
-      finish: 'done'
-    })
+    expect(Object.keys(coach.outcomes)).toEqual([...coachStepOrder(null)])
   })
 })
 
@@ -135,14 +137,18 @@ describe('dismissCoach', () => {
     expect(dismissed.status).toBe('dismissed')
     expect(dismissed.runningSince).toBeNull()
     expect(dismissed.stepElapsedMs).toBe(5 * MINUTE)
-    expect(dismissed.stepId).toBe('climax-loop')
+    expect(dismissed.stepId).toBe('p1-flavour')
   })
 
   it('leaves a finished flow finished', () => {
-    let coach = advanceCoach(startCoach(T0), T0 + MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 2 * MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 3 * MINUTE, 'done')
-    expect(dismissCoach(coach, T0 + 4 * MINUTE)).toEqual(coach)
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50)
+    }
+    expect(dismissCoach(coach, T0 + 50 * MINUTE)).toEqual(coach)
   })
 })
 
@@ -165,9 +171,22 @@ describe('elapsed time', () => {
   })
 
   it('carries banked phase time across a step change', () => {
-    const next = advanceCoach(startCoach(T0), T0 + 8 * MINUTE, 'done')
-    expect(coachPhaseElapsedMs(next, 'loop', T0 + 10 * MINUTE)).toBe(8 * MINUTE)
-    expect(coachPhaseElapsedMs(next, 'arrangement', T0 + 10 * MINUTE)).toBe(2 * MINUTE)
+    // Within one phase (phase one is eight steps now, not one), the banked
+    // time and the open span both count against it.
+    const samePhase = advanceCoach(startCoach(T0), T0 + 8 * MINUTE, 'done')
+    expect(samePhase.stepId).toBe('p1-low-end')
+    expect(coachPhaseElapsedMs(samePhase, 'loop', T0 + 10 * MINUTE)).toBe(10 * MINUTE)
+    expect(coachPhaseElapsedMs(samePhase, 'arrangement', T0 + 10 * MINUTE)).toBe(0)
+    // Across the phase boundary, the loop's number is final and only the
+    // new phase keeps counting.
+    const crossed = advanceCoach(
+      { ...samePhase, stepId: 'p1-lock', runningSince: T0 + 8 * MINUTE },
+      T0 + 9 * MINUTE,
+      'done'
+    )
+    expect(crossed.stepId).toBe('sections')
+    expect(coachPhaseElapsedMs(crossed, 'loop', T0 + 11 * MINUTE)).toBe(9 * MINUTE)
+    expect(coachPhaseElapsedMs(crossed, 'arrangement', T0 + 11 * MINUTE)).toBe(2 * MINUTE)
   })
 })
 
@@ -197,9 +216,13 @@ describe('coachLine', () => {
   })
 
   it('switches to the sign-off once the flow is finished', () => {
-    let coach = advanceCoach(startCoach(T0), T0 + MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 2 * MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 3 * MINUTE, 'done')
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50)
+    }
     expect(COACH_DONE_LINES).toContain(coachLine(coach))
   })
 })
@@ -252,16 +275,20 @@ describe('sanitiseLoadedCoach', () => {
   it('keeps every bit of progress across the load', () => {
     const saved = advanceCoach(startCoach(T0), T0 + 8 * MINUTE, 'skipped')
     const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
-    expect(loaded?.stepId).toBe('sections')
-    expect(loaded?.outcomes).toEqual({ 'climax-loop': 'skipped' })
+    expect(loaded?.stepId).toBe('p1-low-end')
+    expect(loaded?.outcomes).toEqual({ 'p1-flavour': 'skipped' })
     expect(loaded?.phaseElapsedMs.loop).toBe(8 * MINUTE)
     expect(loaded?.lineSeed).toBe(1)
   })
 
   it('leaves a finished flow finished', () => {
-    let coach = advanceCoach(startCoach(T0), T0 + MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 2 * MINUTE, 'done')
-    coach = advanceCoach(coach, T0 + 3 * MINUTE, 'done')
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50)
+    }
     expect(sanitiseLoadedCoach(JSON.parse(JSON.stringify(coach)))?.status).toBe('finished')
   })
 
@@ -277,7 +304,7 @@ describe('sanitiseLoadedCoach', () => {
     })
     expect(loaded).toEqual({
       status: 'dismissed',
-      stepId: 'climax-loop',
+      stepId: 'p1-flavour',
       outcomes: { finish: 'done' },
       phaseElapsedMs: { loop: 0, arrangement: 0, polish: 0 },
       stepElapsedMs: 0,

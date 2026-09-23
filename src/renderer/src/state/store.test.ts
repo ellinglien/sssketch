@@ -2785,25 +2785,28 @@ describe('the guided flow (sssketchy)', () => {
   it('COACH_START begins a flow on the first step', () => {
     const state = reducer(initialState, { type: 'COACH_START', now: NOW })
     expect(state.coach?.status).toBe('active')
-    expect(state.coach?.stepId).toBe('climax-loop')
+    expect(state.coach?.stepId).toBe('p1-flavour')
   })
 
   it('COACH_START restarts a finished flow rather than reviving it mid-step', () => {
     let state = reducer(initialState, { type: 'COACH_START', now: NOW })
-    state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + MINUTE, outcome: 'done' })
-    state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + 2 * MINUTE, outcome: 'done' })
-    state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + 3 * MINUTE, outcome: 'done' })
+    let n = 1
+    while (state.coach?.status !== 'finished') {
+      state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + n * MINUTE, outcome: 'done' })
+      n += 1
+      expect(n).toBeLessThan(50)
+    }
     expect(state.coach?.status).toBe('finished')
-    state = reducer(state, { type: 'COACH_START', now: NOW + 4 * MINUTE })
-    expect(state.coach?.stepId).toBe('climax-loop')
+    state = reducer(state, { type: 'COACH_START', now: NOW + (n + 1) * MINUTE })
+    expect(state.coach?.stepId).toBe('p1-flavour')
     expect(state.coach?.outcomes).toEqual({})
   })
 
   it('COACH_ADVANCE records next and skip differently', () => {
     let state = reducer(initialState, { type: 'COACH_START', now: NOW })
     state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + MINUTE, outcome: 'skipped' })
-    expect(state.coach?.stepId).toBe('sections')
-    expect(state.coach?.outcomes).toEqual({ 'climax-loop': 'skipped' })
+    expect(state.coach?.stepId).toBe('p1-low-end')
+    expect(state.coach?.outcomes).toEqual({ 'p1-flavour': 'skipped' })
   })
 
   it('COACH_MINIMISE, COACH_RESTORE, COACH_DISMISS and COACH_RESUME move the status', () => {
@@ -2816,7 +2819,7 @@ describe('the guided flow (sssketchy)', () => {
     expect(state.coach?.status).toBe('dismissed')
     state = reducer(state, { type: 'COACH_RESUME', now: NOW + 3 * MINUTE })
     expect(state.coach?.status).toBe('active')
-    expect(state.coach?.stepId).toBe('climax-loop')
+    expect(state.coach?.stepId).toBe('p1-flavour')
   })
 
   it('every coach action but START is a no-op when no flow exists', () => {

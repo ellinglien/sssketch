@@ -7,6 +7,7 @@ import {
   coachPhaseDef,
   coachStepArmKinds,
   coachStepById,
+  coachStepOrder,
   coachStepPrimaryMove,
   coachStepsInPhase,
   isCoachFlavour,
@@ -29,48 +30,150 @@ describe('coach phases', () => {
 })
 
 describe('coach steps', () => {
-  it('starts at the first row of the table', () => {
-    expect(FIRST_COACH_STEP_ID).toBe(COACH_STEPS[0].id)
+  it('starts on the melodic-or-groove question', () => {
+    expect(FIRST_COACH_STEP_ID).toBe('p1-flavour')
+    expect(COACH_STEPS[0].id).toBe('p1-flavour')
   })
 
   it('looks a step up by id, and returns undefined for an unknown one', () => {
-    expect(coachStepById('climax-loop')?.phase).toBe('loop')
+    expect(coachStepById('p1-hook')?.phase).toBe('loop')
     expect(coachStepById('not-a-step')).toBeUndefined()
   })
 
-  it('walks the table in order and ends at null', () => {
-    const visited: string[] = [FIRST_COACH_STEP_ID]
-    let id = nextCoachStepId(FIRST_COACH_STEP_ID)
-    while (id !== null) {
-      visited.push(id)
-      id = nextCoachStepId(id)
-    }
-    expect(visited).toEqual(COACH_STEPS.map((step) => step.id))
+  it('orders phase one by the answer -- only the low end and harmony swap', () => {
+    expect(coachStepOrder('groove')).toEqual([
+      'p1-flavour',
+      'p1-low-end',
+      'p1-harmony',
+      'p1-drums',
+      'p1-supporting',
+      'p1-hook',
+      'p1-balance',
+      'p1-lock',
+      'sections',
+      'finish'
+    ])
+    expect(coachStepOrder('melodic')).toEqual([
+      'p1-flavour',
+      'p1-harmony',
+      'p1-low-end',
+      'p1-drums',
+      'p1-supporting',
+      'p1-hook',
+      'p1-balance',
+      'p1-lock',
+      'sections',
+      'finish'
+    ])
   })
 
-  it('groups steps by phase without losing any', () => {
-    const grouped = COACH_PHASES.flatMap((phase) => coachStepsInPhase(phase.id))
-    expect(grouped.map((step) => step.id).sort()).toEqual(COACH_STEPS.map((step) => step.id).sort())
+  it('walks the order for the flavour it is given and ends at null', () => {
+    const visited: string[] = [FIRST_COACH_STEP_ID]
+    let id = nextCoachStepId(FIRST_COACH_STEP_ID, 'melodic')
+    while (id !== null) {
+      visited.push(id)
+      id = nextCoachStepId(id, 'melodic')
+    }
+    expect(visited).toEqual(coachStepOrder('melodic'))
+  })
+
+  it('walks the groove order when no answer has been given yet', () => {
+    expect(nextCoachStepId('p1-flavour', null)).toBe('p1-low-end')
+  })
+
+  it('groups steps by phase, in the order for that flavour, without losing any', () => {
+    const grouped = COACH_PHASES.flatMap((phase) => coachStepsInPhase(phase.id, 'melodic'))
+    expect(grouped.map((step) => step.id)).toEqual(coachStepOrder('melodic'))
   })
 
   it('narrows a persisted string to a known step id', () => {
     expect(isCoachStepId('sections')).toBe(true)
-    expect(isCoachStepId('sectionz')).toBe(false)
+    expect(isCoachStepId('climax-loop')).toBe(false)
     expect(isCoachStepId(42)).toBe(false)
+  })
+
+  it('arms the kinds each phase-one step is about, per flavour', () => {
+    const lowEnd = coachStepById('p1-low-end')!
+    expect(coachStepArmKinds(lowEnd, 'groove')).toEqual(['bass'])
+    expect(coachStepArmKinds(lowEnd, 'melodic')).toEqual(['bass'])
+    // Groove gets the kick as a second, non-primary move; melodic does not.
+    expect(resolveCoachStep(lowEnd, 'groove').moves.map((m) => m.id)).toEqual([
+      'low-end-bass',
+      'low-end-drums'
+    ])
+    expect(resolveCoachStep(lowEnd, 'melodic').moves.map((m) => m.id)).toEqual(['low-end-bass'])
+
+    expect(coachStepArmKinds(coachStepById('p1-harmony')!, 'groove')).toEqual(['lead', 'warm'])
+    expect(coachStepArmKinds(coachStepById('p1-drums')!, 'groove')).toEqual(['drums', 'rhythmic'])
+    expect(coachStepArmKinds(coachStepById('p1-drums')!, 'melodic')).toEqual(['drums'])
+    expect(coachStepArmKinds(coachStepById('p1-supporting')!, null)).toEqual(['bassHeavy'])
+    expect(coachStepArmKinds(coachStepById('p1-hook')!, null)).toEqual(['lead', 'bright'])
+  })
+
+  it('arms nothing on the question, the balance pass or the lock-in', () => {
+    expect(coachStepArmKinds(coachStepById('p1-flavour')!, null)).toBeNull()
+    expect(coachStepArmKinds(coachStepById('p1-balance')!, null)).toBeNull()
+    expect(coachStepArmKinds(coachStepById('p1-lock')!, null)).toBeNull()
+  })
+
+  it('offers both answers and the seeded start on the question step', () => {
+    const offers = coachStepById('p1-flavour')!.offers ?? []
+    expect(offers.map((offer) => offer.action)).toEqual([
+      { kind: 'set-flavour', flavour: 'groove' },
+      { kind: 'set-flavour', flavour: 'melodic' },
+      { kind: 'open-riff-browser' }
+    ])
+  })
+
+  it('never lets the harmony step and the hook step satisfy each other', () => {
+    // bright and warm are opposite ends of one field, so normalizeSlotKinds
+    // keeps at most one of them in a set -- a harmony slot can never be a
+    // superset of the hook's own set, or the other way round.
+    const harmony = coachStepById('p1-harmony')!.satisfiedBy ?? []
+    const hook = coachStepById('p1-hook')!.satisfiedBy ?? []
+    expect(harmony).toEqual([['lead']])
+    expect(hook).toEqual([['lead', 'bright']])
+  })
+
+  it('leaves the two later-phase placeholders alone for their own plans', () => {
+    expect(coachStepById('sections')?.phase).toBe('arrangement')
+    expect(coachStepById('finish')?.phase).toBe('polish')
   })
 
   it('gives every step at least three hand-written line variants', () => {
     for (const step of COACH_STEPS) {
       expect(step.lines.length).toBeGreaterThanOrEqual(3)
+      for (const flavour of COACH_FLAVOURS) {
+        expect(resolveCoachStep(step, flavour).lines.length).toBeGreaterThanOrEqual(3)
+      }
     }
   })
 
   it('keeps every line inside the app copy rules: lowercase start, no emoji, no exclamation', () => {
     for (const step of COACH_STEPS) {
-      for (const line of step.lines) {
-        expect(line).not.toMatch(/!/)
-        expect(line).not.toMatch(/\p{Extended_Pictographic}/u)
-        expect(line[0]).toBe(line[0].toLowerCase())
+      for (const flavour of [null, ...COACH_FLAVOURS]) {
+        const resolved = resolveCoachStep(step, flavour)
+        for (const line of resolved.lines) {
+          expect(line).not.toMatch(/!/)
+          expect(line).not.toMatch(/\p{Extended_Pictographic}/u)
+          expect(line[0]).toBe(line[0].toLowerCase())
+        }
+        for (const label of [resolved.label, ...resolved.moves.map((m) => m.label)]) {
+          expect(label).toBe(label.toLowerCase())
+        }
+      }
+    }
+  })
+
+  it('never says anything that could be wrong about a particular track', () => {
+    // The spec's rule, as a test: he describes the STEP, never the music.
+    for (const step of COACH_STEPS) {
+      for (const flavour of [null, ...COACH_FLAVOURS]) {
+        for (const line of resolveCoachStep(step, flavour).lines) {
+          expect(line).not.toMatch(/it looks like/i)
+          expect(line).not.toMatch(/your (track|song|mix) (needs|sounds|is)/i)
+          expect(line).not.toMatch(/\b(better|worse|too (much|many|thin|loud))\b/i)
+        }
       }
     }
   })

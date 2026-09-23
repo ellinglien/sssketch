@@ -110,7 +110,8 @@ export function resumeCoach(state: CoachState, now: number): CoachState {
 export function advanceCoach(state: CoachState, now: number, outcome: CoachOutcome): CoachState {
   const banked = pauseCoach(state, now)
   const outcomes = { ...banked.outcomes, [banked.stepId]: outcome }
-  const nextId = nextCoachStepId(banked.stepId)
+  // Task 4 replaces `null` with `banked.flavour` once CoachState carries it.
+  const nextId = nextCoachStepId(banked.stepId, null)
   if (nextId === null) {
     return {
       ...banked,

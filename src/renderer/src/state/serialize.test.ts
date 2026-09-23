@@ -578,8 +578,8 @@ describe('the guided flow across a save and a load', () => {
     const json = serializeProject(state)
     const { state: restored } = deserializeProject(JSON.parse(json))
 
-    expect(restored.coach?.stepId).toBe('sections')
-    expect(restored.coach?.outcomes).toEqual({ 'climax-loop': 'skipped' })
+    expect(restored.coach?.stepId).toBe('p1-low-end')
+    expect(restored.coach?.outcomes).toEqual({ 'p1-flavour': 'skipped' })
     expect(restored.coach?.phaseElapsedMs.loop).toBe(8 * MINUTE)
   })
 
@@ -628,7 +628,7 @@ describe('the guided flow across a save and a load', () => {
     legacy.coach = { status: 'active', stepId: 'nonsense' }
 
     const { state: restored } = deserializeProject(legacy)
-    expect(restored.coach?.stepId).toBe('climax-loop')
+    expect(restored.coach?.stepId).toBe('p1-flavour')
     expect(restored.coach?.status).toBe('dismissed')
   })
 })

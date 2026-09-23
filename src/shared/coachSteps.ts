@@ -8,13 +8,13 @@
  * steps by APPENDING ROWS and extending the CoachStepId union, without
  * reshaping the machine, the store, the persistence or the panel.
  *
- * The three steps shipped here are deliberate PLACEHOLDERS -- one per phase,
- * so the shell can be started, stepped through, minimised, dismissed and
- * resumed end to end before any phase logic exists. They carry real,
- * hand-written copy rather than lorem, because the copy is the part that has
- * to be reviewed by a person and the placeholder lines are all still true by
- * construction (they describe the METHOD, never the user's music -- see the
- * spec's "What he is allowed to say").
+ * The eight 'p1-' rows are phase one, the climax loop (build order step 2,
+ * 2026-09-22). 'sections' and 'finish' are still one-row PLACEHOLDERS for
+ * build order steps 3 and 4, so the shell can be stepped through end to end
+ * before those phases exist. Every line carries real, hand-written copy
+ * rather than lorem, because the copy is the part that has to be reviewed by
+ * a person, and every line is true by construction (they describe the STEP,
+ * never the user's music -- see the spec's "What he is allowed to say").
  */
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
@@ -74,8 +74,24 @@ export function coachPhaseDef(phase: CoachPhase): CoachPhaseDef {
 /** Every step the flow can be on. A closed union rather than a bare string
  * so a typo in a later phase plan is a typecheck failure -- persisted
  * values are validated back into it by isCoachStepId (a .sssketchproj is
- * plain JSON people can and do hand-edit; a load must never throw). */
-export type CoachStepId = 'climax-loop' | 'sections' | 'finish'
+ * plain JSON people can and do hand-edit; a load must never throw).
+ *
+ * The 'p1-' rows are phase one, shipped 2026-09-22 (build order step 2);
+ * they replaced the framework's single 'climax-loop' placeholder, so a
+ * project saved by that build loads with an unknown stepId and is repaired
+ * back to the first step -- see sanitiseLoadedCoach. 'sections' and
+ * 'finish' are still placeholders, for build order steps 3 and 4. */
+export type CoachStepId =
+  | 'p1-flavour'
+  | 'p1-low-end'
+  | 'p1-harmony'
+  | 'p1-drums'
+  | 'p1-supporting'
+  | 'p1-hook'
+  | 'p1-balance'
+  | 'p1-lock'
+  | 'sections'
+  | 'finish'
 
 /** What a move actually DOES, as data rather than as a callback -- the
  * renderer switches on `kind` and nothing in src/shared/ knows that
@@ -163,18 +179,259 @@ export interface CoachStepDef {
   byFlavour?: Partial<Record<CoachFlavour, CoachStepOverride>>
 }
 
+/** Every phase-one step stands next to Discover's own add row -- the
+ * arm-then-fire chip row this whole phase drives (DiscoverPanel.tsx's own
+ * pendingAddKinds). One constant so a rename of the attribute is a single
+ * edit here and one in DiscoverPanel.tsx. */
+const DISCOVER_ADD_ROW = '[data-coach-anchor="discover-add-row"]'
+
 export const COACH_STEPS: readonly CoachStepDef[] = [
   {
-    id: 'climax-loop',
+    id: 'p1-flavour',
     phase: 'loop',
-    label: 'build the climax loop',
+    label: 'melodic or groove',
     lines: [
-      'phase one: the loudest bar of the track. build that loop first, everything else gets carved out of it.',
-      'start at the drop. the fullest version of the song is the one you build first.',
-      'phase one is the climax loop. every other section is this one with things taken away.',
-      'first job: the part where everything is playing. that loop is the material for the rest.'
+      'two ways in. melodic, or groove? it only sets the order of the next few steps.',
+      'first question: melodic or groove. nothing rides on it except what we stack first.',
+      'melodic or groove. either way you end up with the same loop, built in a different order.',
+      'pick a way in -- melodic or groove -- or start from a riff you already love.'
     ],
-    moves: []
+    // Deliberately empty. "do it for me" is disabled here, and that is the
+    // point: answering this for you would be the app making a decision
+    // about your track, which is the one thing this feature does not do.
+    moves: [],
+    offers: [
+      { id: 'flavour-groove', label: 'groove', action: { kind: 'set-flavour', flavour: 'groove' } },
+      {
+        id: 'flavour-melodic',
+        label: 'melodic',
+        action: { kind: 'set-flavour', flavour: 'melodic' }
+      },
+      {
+        id: 'seed-from-riff',
+        label: 'start from a riff you love',
+        action: { kind: 'open-riff-browser' }
+      }
+    ],
+    anchorSelector: DISCOVER_ADD_ROW
+  },
+  {
+    id: 'p1-low-end',
+    phase: 'loop',
+    label: 'the low end',
+    lines: [
+      'the low end. a bassish stem, armed in the add row.',
+      'this step is the bottom of the loop. bassish is armed below.',
+      'low end next. one bassish stem; reroll it as often as you like.',
+      'the floor of the loop goes in here. the add row is set to bassish.'
+    ],
+    moves: [
+      {
+        id: 'low-end-bass',
+        label: 'add a bassish one',
+        action: { kind: 'add-slot', kinds: ['bass'] }
+      }
+    ],
+    primaryMoveId: 'low-end-bass',
+    satisfiedBy: [['bass']],
+    anchorSelector: DISCOVER_ADD_ROW,
+    byFlavour: {
+      groove: {
+        label: 'the low end -- bass and kick',
+        lines: [
+          'grooves get built from underneath. bass and kick first, everything else sits on those.',
+          'low end first. one bassish, one drummy -- both are under "stuck".',
+          'start at the bottom: a bassish stem and a drummy one. that pair is the floor.',
+          'this step is the low end, which for a groove means the bass and the kick together.'
+        ],
+        moves: [
+          {
+            id: 'low-end-bass',
+            label: 'add a bassish one',
+            action: { kind: 'add-slot', kinds: ['bass'] }
+          },
+          {
+            id: 'low-end-drums',
+            label: 'add a drummy one',
+            action: { kind: 'add-slot', kinds: ['drums'] }
+          }
+        ],
+        primaryMoveId: 'low-end-bass',
+        satisfiedBy: [['bass'], ['drums']]
+      },
+      melodic: {
+        label: 'the low end',
+        lines: [
+          'now the bottom. a bassish stem under the harmony you just picked.',
+          'low end next, under what is already there. bassish is armed.',
+          'give it a floor: one bassish stem below the harmony.',
+          'this step is the bass. it goes under the harmony, not over it.'
+        ]
+      }
+    }
+  },
+  {
+    id: 'p1-harmony',
+    phase: 'loop',
+    label: 'harmony',
+    lines: [
+      'harmony next. the add row is armed for leadesque and buttery together.',
+      'this is the chords step. leadesque \u00b7 buttery, as one slot.',
+      'something to hold the chords: leadesque, on the buttery side.',
+      'harmony now. one slot, both kinds -- and a plain leadesque one is under "stuck".'
+    ],
+    moves: [
+      {
+        id: 'harmony-warm-lead',
+        label: 'add a leadesque \u00b7 buttery one',
+        action: { kind: 'add-slot', kinds: ['lead', 'warm'] }
+      },
+      {
+        id: 'harmony-lead',
+        label: 'add a plain leadesque one',
+        action: { kind: 'add-slot', kinds: ['lead'] }
+      }
+    ],
+    primaryMoveId: 'harmony-warm-lead',
+    satisfiedBy: [['lead']],
+    anchorSelector: DISCOVER_ADD_ROW
+  },
+  {
+    id: 'p1-drums',
+    phase: 'loop',
+    label: 'drums',
+    lines: [
+      'drums now. the add row is armed for drummy.',
+      'time for the kit. one drummy stem, under the harmony and the bass.',
+      'this step is drums. add one, reroll it as many times as you like.',
+      'drums go in here. drummy is armed below.'
+    ],
+    moves: [
+      {
+        id: 'drums-plain',
+        label: 'add a drummy one',
+        action: { kind: 'add-slot', kinds: ['drums'] }
+      }
+    ],
+    primaryMoveId: 'drums-plain',
+    satisfiedBy: [['drums']],
+    anchorSelector: DISCOVER_ADD_ROW,
+    byFlavour: {
+      groove: {
+        label: 'drums, filled out',
+        lines: [
+          'the kick is already down. this step fills the kit out -- drummy, on the rhythmic side.',
+          'more drums. the add row is armed for drummy \u00b7 rhythmic, on top of what is there.',
+          'fill the kit out: a second drummy layer, the busy one.',
+          'drums again, this time the part that moves. drummy \u00b7 rhythmic is armed.'
+        ],
+        moves: [
+          {
+            id: 'drums-rhythmic',
+            label: 'add a drummy \u00b7 rhythmic one',
+            action: { kind: 'add-slot', kinds: ['drums', 'rhythmic'] }
+          },
+          {
+            id: 'drums-plain',
+            label: 'add a plain drummy one',
+            action: { kind: 'add-slot', kinds: ['drums'] }
+          }
+        ],
+        primaryMoveId: 'drums-rhythmic',
+        satisfiedBy: [['drums', 'rhythmic']]
+      }
+    }
+  },
+  {
+    id: 'p1-supporting',
+    phase: 'loop',
+    label: 'supporting parts',
+    lines: [
+      'supporting parts. chonky, rhythmic or sparkly -- one of the three, whichever you fancy.',
+      'this step is the layer between the parts: chonky, rhythmic, sparkly.',
+      'something to sit in the gaps. the add row is armed for chonky; the other two are under "stuck".',
+      'supporting layer now. three kinds to choose from, one slot.'
+    ],
+    moves: [
+      {
+        id: 'supporting-chonky',
+        label: 'add a chonky one',
+        action: { kind: 'add-slot', kinds: ['bassHeavy'] }
+      },
+      {
+        id: 'supporting-rhythmic',
+        label: 'add a rhythmic one',
+        action: { kind: 'add-slot', kinds: ['rhythmic'] }
+      },
+      {
+        id: 'supporting-sparkly',
+        label: 'add a sparkly one',
+        action: { kind: 'add-slot', kinds: ['bright'] }
+      }
+    ],
+    primaryMoveId: 'supporting-chonky',
+    // A drummy \u00b7 rhythmic stem from the previous step is also a superset of
+    // ['rhythmic'], so on a groove this step can read as satisfied the
+    // moment it starts. That is honest: the tick reports a fact about the
+    // slots, not a claim that the step's work is done -- and next/skip are
+    // always there either way.
+    satisfiedBy: [['bassHeavy'], ['rhythmic'], ['bright']],
+    anchorSelector: DISCOVER_ADD_ROW
+  },
+  {
+    id: 'p1-hook',
+    phase: 'loop',
+    label: 'the hook',
+    lines: [
+      'the hook. roll three or four of them and pick between them -- comparing is the whole step.',
+      'hook step. add one, then add another, then another. the point is having options.',
+      'this one is the hook. try three or four before you settle on one.',
+      'the hook goes here. leadesque \u00b7 sparkly is armed; reroll it a few times.'
+    ],
+    moves: [
+      {
+        id: 'hook-first',
+        label: 'add a leadesque \u00b7 sparkly one',
+        action: { kind: 'add-slot', kinds: ['lead', 'bright'] }
+      },
+      {
+        id: 'hook-another',
+        label: 'add another one to compare',
+        action: { kind: 'add-slot', kinds: ['lead', 'bright'] }
+      }
+    ],
+    primaryMoveId: 'hook-first',
+    satisfiedBy: [['lead', 'bright']],
+    anchorSelector: DISCOVER_ADD_ROW
+  },
+  {
+    id: 'p1-balance',
+    phase: 'loop',
+    label: 'rough balance',
+    lines: [
+      'rough balance. drag a slot waveform up or down to set its level -- it carries onto the timeline.',
+      'levels now. each slot has its own gain, set by dragging on its waveform.',
+      'set a rough balance while the loop plays. nothing here is permanent.',
+      'this is the last step before the loop gets locked. rough is fine.'
+    ],
+    // Nothing to automate: a balance is the user listening. The bubble says
+    // so plainly (COACH_NO_MOVES_LINES) rather than inventing a move.
+    moves: [],
+    anchorSelector: DISCOVER_ADD_ROW
+  },
+  {
+    id: 'p1-lock',
+    phase: 'loop',
+    label: 'lock in the climax',
+    lines: [
+      'lock the loop in. its stems, roles and levels become the material the next phase carves from.',
+      'this is the freeze. locking keeps a copy of the loop as it stands right now.',
+      'lock in the climax. nothing is destroyed -- it just gives phase two something to subtract from.',
+      'ready to lock? the loop as it is becomes the full version of every section.'
+    ],
+    moves: [{ id: 'lock-climax', label: 'lock the loop in', action: { kind: 'lock-climax' } }],
+    primaryMoveId: 'lock-climax',
+    anchorSelector: DISCOVER_ADD_ROW
   },
   {
     id: 'sections',
@@ -216,16 +473,68 @@ export function coachStepById(id: string): CoachStepDef | undefined {
   return COACH_STEPS.find((step) => step.id === id)
 }
 
-/** The next row in the table, or null when this is the last step -- which
- * is what ends the flow (see advanceCoach in ./coach.ts). */
-export function nextCoachStepId(id: CoachStepId): CoachStepId | null {
-  const index = COACH_STEPS.findIndex((step) => step.id === id)
-  if (index < 0 || index >= COACH_STEPS.length - 1) return null
-  return COACH_STEPS[index + 1].id
+/** Phase one in groove order. Also the order COACH_STEPS itself is written
+ * in, and the order used before the question has been answered -- the two
+ * differ only in whether the low end or the harmony comes first, so a
+ * checklist opened before answering shows a real order, not a guess, and
+ * reorders itself the moment an answer lands. */
+const PHASE1_GROOVE_ORDER: readonly CoachStepId[] = [
+  'p1-flavour',
+  'p1-low-end',
+  'p1-harmony',
+  'p1-drums',
+  'p1-supporting',
+  'p1-hook',
+  'p1-balance',
+  'p1-lock'
+]
+
+const PHASE1_MELODIC_ORDER: readonly CoachStepId[] = [
+  'p1-flavour',
+  'p1-harmony',
+  'p1-low-end',
+  'p1-drums',
+  'p1-supporting',
+  'p1-hook',
+  'p1-balance',
+  'p1-lock'
+]
+
+/** Phases two and three, whose own plans will expand these two rows. The
+ * answer to the melodic-or-groove question does not reach them. */
+const LATER_PHASE_ORDER: readonly CoachStepId[] = ['sections', 'finish']
+
+/** The whole flow, in the order this answer puts it in. */
+export function coachStepOrder(flavour: CoachFlavour | null): readonly CoachStepId[] {
+  const phase1 = flavour === 'melodic' ? PHASE1_MELODIC_ORDER : PHASE1_GROOVE_ORDER
+  return [...phase1, ...LATER_PHASE_ORDER]
 }
 
-export function coachStepsInPhase(phase: CoachPhase): readonly CoachStepDef[] {
-  return COACH_STEPS.filter((step) => step.phase === phase)
+/** The next step in this flavour's own order, or null when this is the last
+ * one -- which is what ends the flow (see advanceCoach in ./coach.ts).
+ * `flavour` is required rather than defaulted on purpose: a caller that
+ * forgets it would silently walk a melodic flow in groove order, and a
+ * typecheck failure is a much cheaper way to find that out. */
+export function nextCoachStepId(id: CoachStepId, flavour: CoachFlavour | null): CoachStepId | null {
+  const order = coachStepOrder(flavour)
+  const index = order.indexOf(id)
+  if (index < 0 || index >= order.length - 1) return null
+  return order[index + 1]
+}
+
+/** This phase's steps, in this flavour's order, with per-flavour overrides
+ * already applied -- the checklist renders these directly. */
+export function coachStepsInPhase(
+  phase: CoachPhase,
+  flavour: CoachFlavour | null = null
+): readonly CoachStepDef[] {
+  const steps: CoachStepDef[] = []
+  for (const id of coachStepOrder(flavour)) {
+    const step = coachStepById(id)
+    if (step === undefined || step.phase !== phase) continue
+    steps.push(resolveCoachStep(step, flavour))
+  }
+  return steps
 }
 
 /** Flattens a row's per-flavour override into the row itself. Everything
