@@ -631,4 +631,82 @@ describe('the guided flow across a save and a load', () => {
     expect(restored.coach?.stepId).toBe('p1-flavour')
     expect(restored.coach?.status).toBe('dismissed')
   })
+
+  it('round-trips the answer and the locked climax', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'COACH_START', now: NOW })
+    state = reducer(state, {
+      type: 'COACH_SET_FLAVOUR',
+      now: NOW + MINUTE,
+      flavour: 'melodic',
+      slots: []
+    })
+    state = reducer(state, {
+      type: 'COACH_LOCK_CLIMAX',
+      now: NOW + 2 * MINUTE,
+      bpm: 96,
+      slots: [
+        {
+          id: 'slot-1',
+          kinds: ['bass'],
+          stem: {
+            path: '/stems/bass.wav',
+            name: 'low one',
+            author: 'someone',
+            type: 'bass',
+            durationSec: 8,
+            barLength: 4
+          },
+          gain: 0.5,
+          audible: true,
+          rolling: false
+        }
+      ]
+    })
+
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+
+    expect(restored.coach?.flavour).toBe('melodic')
+    expect(restored.coach?.lockedClimax?.bpm).toBe(96)
+    expect(restored.coach?.lockedClimax?.stems).toEqual([
+      {
+        path: '/stems/bass.wav',
+        name: 'low one',
+        author: 'someone',
+        type: 'bass',
+        durationSec: 8,
+        barLength: 4,
+        kinds: ['bass'],
+        role: 'bass',
+        gain: 0.5
+      }
+    ])
+  })
+
+  it('a project saved by the framework build loads on the new first step', () => {
+    // The framework shipped one phase-one placeholder, 'climax-loop', which
+    // no longer exists. Everything else about that save survives.
+    const framework = JSON.parse(
+      serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))
+    )
+    framework.coach = {
+      status: 'active',
+      stepId: 'climax-loop',
+      outcomes: {},
+      phaseElapsedMs: { loop: 4 * MINUTE, arrangement: 0, polish: 0 },
+      stepElapsedMs: 2 * MINUTE,
+      runningSince: NOW,
+      lineSeed: 2
+    }
+
+    const { state: restored } = deserializeProject(framework)
+
+    expect(restored.coach?.stepId).toBe('p1-flavour')
+    expect(restored.coach?.status).toBe('dismissed')
+    expect(restored.coach?.flavour).toBeNull()
+    expect(restored.coach?.seededKinds).toEqual([])
+    expect(restored.coach?.lockedClimax).toBeNull()
+    expect(restored.coach?.phaseElapsedMs.loop).toBe(4 * MINUTE)
+    expect(restored.rifffs.r1.name).toBe('test')
+  })
 })
