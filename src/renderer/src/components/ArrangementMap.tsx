@@ -2,9 +2,10 @@ import { useCallback, useMemo } from 'react'
 import { passIsLocked, planCellToggle } from '@shared/coachMapEdit'
 import { readRowPasses } from '@shared/coachMapRead'
 import { sectionBars } from '@shared/coachPasses'
+import { loopPhraseIsWorthSaying, phraseAnswerOptions, type CoachPhrase } from '@shared/coachPhrase'
 import { coachSectionBoundaries } from '@shared/coachTension'
 import type { CoachSection } from '@shared/coachSections'
-import { buildCellToggleActions } from '../state/coachMapPlacement'
+import { buildCellToggleActions, buildMapRebuildActions } from '../state/coachMapPlacement'
 import { coachMapRows, type CoachMapRow } from '../state/coachMapRows'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { typeColorVar } from '../theme/typeColor'
@@ -83,6 +84,33 @@ export function ArrangementMap(): React.JSX.Element {
     [appliedAt, boundaryAfter]
   )
 
+  // "He can change it afterwards; the map re-sizes, it does not rebuild"
+  // (spec). Offered only when there is a measurement worth offering -- the
+  // same silence rule the setup screen follows, so a loop that really does
+  // take all its bars to say its piece is never nagged about.
+  const reading = coach?.phraseReading ?? null
+  const phraseOptions: readonly CoachPhrase[] =
+    reading !== null && loopPhraseIsWorthSaying(reading) ? phraseAnswerOptions(reading) : []
+
+  const changePhrase = useCallback(
+    (option: CoachPhrase): void => {
+      if (coach === null || option.bars === phraseBars) return
+      const built = buildMapRebuildActions(state, coach, option.bars)
+      dispatch({
+        type: 'BATCH',
+        actions: [
+          // COACH_SET_PHRASE re-sizes the sections in the reducer with the
+          // same resizeCoachMapToPhrase the builder just used, from the same
+          // inputs, so the two cannot disagree.
+          { type: 'COACH_SET_PHRASE', phrase: option },
+          ...built.actions,
+          { type: 'COACH_RECORD_MAP_PLACEMENT', placedGroupIds: built.placedGroupIds }
+        ]
+      })
+    },
+    [coach, dispatch, phraseBars, state]
+  )
+
   const toggle = useCallback(
     (row: CoachMapRow, section: CoachSection, passIndex: number, on: boolean): void => {
       if (climax === null || row.path === null) return
@@ -106,6 +134,45 @@ export function ArrangementMap(): React.JSX.Element {
 
   return (
     <div style={{ padding: 'var(--ra-s-5)', overflowX: 'auto' }}>
+      {phraseOptions.length > 1 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--ra-s-2)',
+            marginBottom: 'var(--ra-s-5)',
+            fontSize: 10,
+            color: 'var(--ra-text-3)'
+          }}
+        >
+          <span>the phrase</span>
+          {phraseOptions.map((option) => (
+            <button
+              key={`${option.bars}-${option.source}`}
+              type="button"
+              onClick={(): void => changePhrase(option)}
+              data-tooltip="re-size the map to this phrase. the squares move, the song does not."
+              style={{
+                height: 20,
+                borderRadius: 0,
+                padding: '0 8px',
+                fontSize: 10,
+                border: `1px solid ${
+                  option.bars === phraseBars ? 'var(--ra-stretch-on)' : 'var(--ra-border)'
+                }`,
+                background:
+                  option.bars === phraseBars
+                    ? 'var(--ra-stretch-on-bg)'
+                    : 'var(--ra-bg-row-active)',
+                color: option.bars === phraseBars ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+                cursor: 'pointer'
+              }}
+            >
+              {option.bars} bars
+            </button>
+          ))}
+        </div>
+      )}
       {/* Column headers: the section names, with the walked one bright and
           the rest stepped back. No colour -- a section is structure, not
           audio information. */}

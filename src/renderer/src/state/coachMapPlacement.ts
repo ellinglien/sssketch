@@ -37,16 +37,21 @@
  */
 
 import { assembleDiscoverRifff } from '../audio/discoverRifffAssembly'
-import { cellRuns, type CoachCellRun } from '@shared/coachCells'
+import { cellRuns, type CoachCellRun, type CoachCells } from '@shared/coachCells'
 import { passOffsetBars, sectionBars } from '@shared/coachPasses'
 import { COACH_LOOP_HOME_TYPE } from '@shared/coachShapes'
-import { coachMapRowOrder, templateFallbackFor } from '@shared/coachMapTemplate'
-import type { CoachMapRowPlan } from '@shared/coachMapEdit'
+import {
+  coachMapRowOrder,
+  resizeCoachMapToPhrase,
+  templateFallbackFor
+} from '@shared/coachMapTemplate'
+import { remapCellsToPhrase, type CoachMapRowPlan } from '@shared/coachMapEdit'
+import { readRowPasses, rowPassesToCells } from '@shared/coachMapRead'
 import type { CoachSection } from '@shared/coachSections'
 import type { CoachState } from '@shared/coach'
 import type { LockedClimax, LockedClimaxStem } from '@shared/coachClimax'
 import type { Rifff, Stem } from '@shared/types'
-import type { CoachMapRow } from './coachMapRows'
+import { coachMapRows, type CoachMapRow } from './coachMapRows'
 import type { Action, AppState } from './store'
 
 export interface CoachMapPlacement {
@@ -160,6 +165,63 @@ export function buildCoachMapActions(
   if (sourceGroupIds.length > 0) actions.push({ type: 'DELETE_RIFFFS', groupIds: sourceGroupIds })
 
   return { actions, placedGroupIds }
+}
+
+/**
+ * The user changed his mind about the phrase length.
+ *
+ * "He can change it afterwards; the map RE-SIZES, it does not rebuild"
+ * (spec). Ids, types and names all survive -- which is what re-sizing means
+ * to the person looking at it -- and so do his own edits, because they are
+ * READ OFF THE TIMELINE first (readRowPasses) rather than taken from
+ * section.cells, which records only what the map was built from and has said
+ * nothing true since the first click.
+ *
+ * The three steps, in one batch and therefore one undo:
+ *   1. read every row's real grid at the OLD phrase,
+ *   2. re-size the sections and carry the grid across proportionally
+ *      (rowPassesToCells, then remapCellsToPhrase -- in that order),
+ *   3. place the clips again from that grid and delete the old ones.
+ *
+ * buildCoachMapActions is handed a coach whose `phrase` is already the NEW
+ * one, because it reads the phrase off the state it is given to work out
+ * every offset and length. Handing it the old one lays the whole map out at
+ * the wrong scale while the sections underneath say the new one.
+ *
+ * This is the most fragile thing in the feature and it is worth saying why
+ * it exists at all: the alternative -- refusing to change the phrase once a
+ * map is down -- would have been much simpler and would have quietly dropped
+ * the one thing the spec is most insistent about, which is that the user
+ * owns this number.
+ */
+export function buildMapRebuildActions(
+  state: AppState,
+  coach: CoachState,
+  toPhraseBars: number
+): CoachMapPlacement & { sections: CoachSection[] } {
+  const fromPhraseBars = coach.phrase?.bars ?? coach.lockedClimax?.barLength ?? 1
+  const empty = { actions: [] as Action[], placedGroupIds: {}, sections: [...coach.sections] }
+  if (coach.lockedClimax === null || toPhraseBars === fromPhraseBars) return empty
+  if (coach.sections.length === 0) return empty
+
+  const rows = coachMapRows(state)
+  const pathRows = rows.filter((row): row is CoachMapRow & { path: string } => row.path !== null)
+  const resized = resizeCoachMapToPhrase(coach.sections, fromPhraseBars, toPhraseBars)
+  const sections = resized.map((section, index): CoachSection => {
+    const old = coach.sections[index]
+    let cells: CoachCells = {}
+    for (const row of pathRows) {
+      // EXPLICIT cells for every pass, read off the real clips -- so no
+      // template answer can overrule what is actually on the timeline.
+      const read = rowPassesToCells(readRowPasses(row.clips, old, fromPhraseBars), row.path)
+      cells = { ...cells, ...remapCellsToPhrase(read, [row.path], old.passes, section.passes) }
+    }
+    return { ...section, cells }
+  })
+
+  const phrase = { bars: toPhraseBars, source: coach.phrase?.source ?? 'nominal' } as const
+  const built = buildCoachMapActions(state, { ...coach, phrase, sections }, sections)
+  return { ...built, sections }
 }
 
 /**

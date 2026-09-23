@@ -7,6 +7,8 @@ import { channelsInOrder, loopLengthBars } from './selectors'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
+import { buildCoachMapSections } from '@shared/coachMapTemplate'
+import { buildMapRebuildActions } from './coachMapPlacement'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
   return {
@@ -3018,6 +3020,37 @@ describe('the phrase actions', () => {
     expect(next.coach?.sections[0].name).toBe('my verse')
     expect(next.coach?.sections[0].passes).toBe(4) // 16 bars, now at a 4-bar phrase
     expect(next.coach?.sections[0].cells['0|/kick.wav']).toBe(false)
+  })
+
+  it('re-sizes the sections exactly as the map re-lay builder does', () => {
+    // The map's own phrase change dispatches COACH_SET_PHRASE beside
+    // buildMapRebuildActions' clip actions, in one batch. If the reducer and
+    // the builder disagreed about passes or startBar, every section's window
+    // would point at bars its clips no longer occupy.
+    const locked = lockedCoach()
+    const coach = {
+      ...locked.coach!,
+      phrase: { bars: 8, source: 'nominal' as const },
+      loopIs: 'drop' as const,
+      shape: 'short' as const,
+      sections: buildCoachMapSections({
+        shape: 'short',
+        loopIs: 'drop',
+        phraseBars: 8,
+        climax: locked.coach!.lockedClimax!,
+        firstStartBar: 0
+      })
+    }
+    const withMap: AppState = { ...locked, coach }
+    const built = buildMapRebuildActions(withMap, coach, 4)
+    const next = reducer(withMap, {
+      type: 'COACH_SET_PHRASE',
+      phrase: { bars: 4, source: 'measured' }
+    })
+    expect(next.coach?.sections.map((s) => s.passes)).toEqual(built.sections.map((s) => s.passes))
+    expect(next.coach?.sections.map((s) => s.startBar)).toEqual(
+      built.sections.map((s) => s.startBar)
+    )
   })
 
   it('builds a pre-filled map from the two answers and the phrase', () => {

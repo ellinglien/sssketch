@@ -7,10 +7,15 @@ import {
 } from '@shared/coachClimax'
 import { planCellToggle, type MapClip } from '@shared/coachMapEdit'
 import { readRowPasses } from '@shared/coachMapRead'
+import { sectionBars } from '@shared/coachPasses'
 import { buildCoachMapSections, coachMapRowOrder } from '@shared/coachMapTemplate'
 import type { CoachSection } from '@shared/coachSections'
 import type { Rifff } from '@shared/types'
-import { buildCellToggleActions, buildCoachMapActions } from './coachMapPlacement'
+import {
+  buildCellToggleActions,
+  buildCoachMapActions,
+  buildMapRebuildActions
+} from './coachMapPlacement'
 import { coachMapRows } from './coachMapRows'
 import { initialState, reducer, type Action, type AppState } from './store'
 
@@ -249,5 +254,101 @@ describe('buildCellToggleActions', () => {
       clips: MapClip[]
     }
     expect(grid(toggled.clips)).toBe(`.${before.slice(1)}`)
+  })
+})
+
+describe('buildMapRebuildActions', () => {
+  // A whole second fixture at an EIGHT bar phrase, so halving it to four is
+  // a real change with a real re-lay behind it.
+  const PHRASE_8 = 8
+  const sections8 = buildCoachMapSections({
+    shape: 'short',
+    loopIs: 'drop',
+    phraseBars: PHRASE_8,
+    climax,
+    firstStartBar: 0
+  })
+  const coach8 = {
+    ...coach,
+    phrase: { bars: PHRASE_8, source: 'nominal' as const },
+    sections: sections8
+  }
+  const state8: AppState = { ...initialState, bpm: 120, coach: coach8 }
+  const built8 = buildCoachMapActions(state8, coach8, sections8)
+  const placed8 = recorded(built8, applyAll(state8, built8.actions))
+  const coachPlaced8 = placed8.coach as NonNullable<AppState['coach']>
+
+  it('keeps every section id, name and type across a phrase change', () => {
+    const built = buildMapRebuildActions(placed8, coachPlaced8, 4)
+    expect(built.sections.map((s) => s.id)).toEqual(coachPlaced8.sections.map((s) => s.id))
+    expect(built.sections.map((s) => s.name)).toEqual(coachPlaced8.sections.map((s) => s.name))
+    expect(built.sections.map((s) => s.type)).toEqual(coachPlaced8.sections.map((s) => s.type))
+  })
+
+  it('keeps each section about the same number of BARS at the new phrase', () => {
+    const built = buildMapRebuildActions(placed8, coachPlaced8, 4)
+    for (const [index, section] of built.sections.entries()) {
+      expect(sectionBars(section.passes, 4)).toBe(
+        sectionBars(coachPlaced8.sections[index].passes, PHRASE_8)
+      )
+    }
+  })
+
+  it('carries a USER edit across, not the build-time cells', () => {
+    // A square switched off by a CLICK on the map, through the real toggle
+    // path -- so the clip is gone while section.cells still says {}.
+    const verse = coachPlaced8.sections.find((s) => s.type === 'verse') as CoachSection
+    expect(verse.passes).toBeGreaterThanOrEqual(2)
+    expect(verse.cells).toEqual({})
+    const row = coachMapRows(placed8)[0]
+    expect(readRowPasses(row.clips, verse, PHRASE_8)[1]).toBe(true)
+    const off = planCellToggle({
+      clips: row.clips,
+      section: verse,
+      phraseBars: PHRASE_8,
+      passIndex: 1,
+      on: false
+    })
+    const edited = applyAll(
+      placed8,
+      buildCellToggleActions(placed8, row, verse, off, climax, PHRASE_8)
+    )
+    const editedCoach = edited.coach as NonNullable<AppState['coach']>
+
+    const built = buildMapRebuildActions(edited, editedCoach, 4)
+    const rebuiltVerse = built.sections.find((s) => s.id === verse.id) as CoachSection
+    // At half the phrase, that one 8-bar pass is two 4-bar ones.
+    expect(rebuiltVerse.cells[`2|${row.path}`]).toBe(false)
+    expect(rebuiltVerse.cells[`3|${row.path}`]).toBe(false)
+    expect(rebuiltVerse.cells[`0|${row.path}`]).toBe(true)
+  })
+
+  it('deletes the old clips after placing the new ones', () => {
+    const built = buildMapRebuildActions(placed8, coachPlaced8, 4)
+    const deleteIndex = built.actions.findIndex((a) => a.type === 'DELETE_RIFFFS')
+    const lastPlace = built.actions.map((a) => a.type).lastIndexOf('PLACE_LOOP_ON_TIMELINE')
+    expect(deleteIndex).toBeGreaterThan(lastPlace)
+  })
+
+  it('lays the new clips out at the NEW phrase, not the old one', () => {
+    // The whole re-lay is worthless if the clips keep the old scale: every
+    // section's window would point at bars its clips no longer occupy.
+    const built = buildMapRebuildActions(placed8, coachPlaced8, 4)
+    const after = recorded(
+      built,
+      applyAll({ ...placed8, coach: { ...coachPlaced8, sections: built.sections } }, built.actions)
+    )
+    const drop = built.sections.find((s) => s.type === 'drop') as CoachSection
+    for (const row of coachMapRows(after).filter((r) => r.kind === 'stem')) {
+      expect(readRowPasses(row.clips, drop, 4).every((on) => on)).toBe(true)
+    }
+  })
+
+  it('does nothing at all when the phrase did not change', () => {
+    expect(buildMapRebuildActions(placed8, coachPlaced8, PHRASE_8).actions).toEqual([])
+  })
+
+  it('does nothing at all when there is no map yet', () => {
+    expect(buildMapRebuildActions(state, { ...coach, sections: [] }, 8).actions).toEqual([])
   })
 })
