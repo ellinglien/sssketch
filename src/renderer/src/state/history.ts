@@ -104,12 +104,11 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // clips (SssketchySectionPanel.tsx). The BATCH branch above runs before
   // this set is consulted, so that group gets exactly one checkpoint --
   // "one undo step per section" (spec) meaning the section's CLIPS come off
-  // the timeline in one go. The flow's own record of that section does not
-  // come back off with them: `coach` is pinned across UNDO/REDO (see the
-  // UNDO branch below for why that trade is the right way round), so an
-  // undone section leaves a placed-section entry pointing at groups that
-  // are gone. It costs the next section's start bar, and it is much the
-  // cheaper of the two failures.
+  // the timeline in one go -- and the flow's own record of that section
+  // comes off with them. `coach` is pinned across UNDO/REDO EXCEPT for
+  // `sections` and `tension`, the two fields that name real timeline
+  // material, precisely so an undone section cannot leave a record pointing
+  // at groups that are gone (see the UNDO branch below).
   'COACH_PLACE_SECTION',
   // Phase three's own flow bookkeeping -- same category, and the same
   // arrangement, as COACH_PLACE_SECTION directly above: listed here so a
