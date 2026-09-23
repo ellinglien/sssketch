@@ -30,7 +30,7 @@ import { endCoachWalk, startCoachWalk, walkCoachTo } from '@shared/coachWalk'
 import { applyCoachTension, clearCoachTension, markCoachV1Exported } from '@shared/coachPhase3'
 import type { CoachSection } from '@shared/coachSections'
 import type { CoachTensionKind } from '@shared/coachTension'
-import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import type { CoachSlotSnapshot, LockedClimax } from '@shared/coachClimax'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
 // than anyone actually needed in practice (per direct user feedback: "it
@@ -779,6 +779,14 @@ export type Action =
   // not reducer state. Its own step (p1-lock) went with phase one on
   // 2026-09-23; the auto-arranger dispatches this in the map plan.
   | { type: 'COACH_LOCK_CLIMAX'; now: number; slots: readonly CoachSlotSnapshot[]; bpm: number }
+  // The auto-arranger's own lock-in. COACH_LOCK_CLIMAX directly above
+  // freezes DISCOVER's slots and derives each stem's role from the kinds
+  // Discover tagged; this one takes a climax that is already built, because
+  // the auto-arranger's material comes off the timeline with a role the user
+  // confirmed BY HAND (lockClimaxFromArrangeRoles), and re-deriving that role
+  // from kinds would throw the hand-made half away. Both are transient: a
+  // lock is where the flow is, not an edit to the project.
+  | { type: 'COACH_SET_CLIMAX'; climax: LockedClimax }
   // The arrangement map (2026-09-23). COACH_SET_PHRASE_READING records what
   // the app MEASURED; COACH_SET_PHRASE records what the USER ANSWERED. They
   // are two actions rather than one on purpose: a measurement must never be
@@ -2210,6 +2218,11 @@ export function reducer(state: AppState, action: Action): AppState {
     // RECORDS a measurement and does nothing else. It must never be able to
     // size anything by itself -- that is COACH_SET_PHRASE below, and only a
     // click dispatches that one.
+    case 'COACH_SET_CLIMAX':
+      return state.coach === null
+        ? state
+        : { ...state, coach: { ...state.coach, lockedClimax: action.climax } }
+
     case 'COACH_SET_PHRASE_READING':
       return state.coach === null
         ? state

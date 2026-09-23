@@ -5,7 +5,7 @@ import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
 import { channelsInOrder, loopLengthBars } from './selectors'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
-import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
@@ -2870,6 +2870,59 @@ describe('the guided flow (sssketchy)', () => {
     expect(
       reducer(initialState, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: [], bpm: 96 }).coach
     ).toBeNull()
+  })
+
+  it('takes a climax that was built from confirmed roles, role and all', () => {
+    // The auto-arranger's own lock-in. The role came off the dropdown the
+    // user just confirmed, so it must survive verbatim rather than being
+    // re-derived from the kinds, which is what COACH_LOCK_CLIMAX does.
+    const locked = lockClimaxFromArrangeRoles(
+      [
+        {
+          stem: {
+            path: '/pad.wav',
+            name: 'pad',
+            author: 'e',
+            type: 'notes',
+            durationSec: 8,
+            barLength: 4
+          },
+          role: 'textureFx',
+          gain: 1
+        }
+      ],
+      120,
+      NOW
+    )
+    expect(locked).not.toBeNull()
+    const next = reducer(
+      { ...initialState, coach: startCoach(NOW) },
+      { type: 'COACH_SET_CLIMAX', climax: locked! }
+    )
+    expect(next.coach?.lockedClimax?.stems[0].role).toBe('textureFx')
+    expect(next.coach?.lockedClimax?.bpm).toBe(120)
+  })
+
+  it('ignores a climax when there is no flow to give it to', () => {
+    const locked = lockClimaxFromArrangeRoles(
+      [
+        {
+          stem: {
+            path: '/pad.wav',
+            name: 'pad',
+            author: 'e',
+            type: 'notes',
+            durationSec: 8,
+            barLength: 4
+          },
+          role: 'textureFx',
+          gain: 1
+        }
+      ],
+      120,
+      NOW
+    )
+    expect(reducer(initialState, { type: 'COACH_SET_CLIMAX', climax: locked! }).coach).toBeNull()
   })
 })
 

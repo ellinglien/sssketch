@@ -90,6 +90,7 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_RESTORE',
   'COACH_DISMISS',
   'COACH_LOCK_CLIMAX',
+  'COACH_SET_CLIMAX',
   // The arrangement map's own answers and measurement (2026-09-23). Same
   // category as every other COACH_* entry: where the flow is and what the
   // user told it, not an edit to the project. COACH_BUILD_MAP is the one
