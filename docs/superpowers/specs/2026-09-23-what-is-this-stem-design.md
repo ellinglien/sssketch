@@ -309,12 +309,12 @@ Worth listing, because this should come out smaller than it went in:
 
 ## Open, deliberately not decided here
 
-- **Where the merged surface lives.** Tidy Up is a modal; that is also what makes it safely
-  mutually exclusive with the wizard (`useStemPreviewPlayback` notes the shared engine-
-  ownership token is only safe because the two are never open at once). But a library pass is
-  something you might sit in for an hour, which argues for a real view like the map. *To
-  settle it I need to know which Elling expects: dipping in for thirty seconds, or working
-  through the library.*
+- ~~**Where the merged surface lives.**~~ **SETTLED 2026-09-23: a modal**, as Tidy Up already
+  is ("i think modal"). This is the cheaper answer and the safer one: it keeps the surface
+  mutually exclusive with the wizard by construction, which is the only reason the shared
+  engine-ownership token in `useStemPreviewPlayback` is safe today. The cost is that a long
+  library pass happens inside a modal; if that turns out to chafe in real use, promoting it to
+  a view later is a contained change, because nothing about the merge depends on which it is.
 - **How the library population is ordered.** Unconfirmed first is obvious; within that,
   most-recently-imported, most-used-across-projects, or the classifier's least-confident.
   Least-confident is worth the most per click and costs the most to compute. *His preference.*
