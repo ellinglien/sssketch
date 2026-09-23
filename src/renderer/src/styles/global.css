@@ -283,3 +283,23 @@ input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+
+/* sssketchy's idle bob. A 2px hop on a two-step timeline rather than a
+   smooth ease, so an 80px pixel-art sprite reads as PIXEL animation rather
+   than as a CSS transition applied to a picture -- the same reason the
+   sprite itself renders with image-rendering: pixelated. It deliberately
+   does not use the --ra-dur-*/--ra-ease motion tokens: those describe
+   chrome transitions (hovers, state changes, panel slides), and easing a
+   pixel-art hop would undo the whole point. The other four animations are
+   real multi-frame flipbooks (see SssketchySprite.tsx); idle is the only
+   one the sprite sheet ships a single frame for. */
+@keyframes sssketchy-bob {
+  0%,
+  49% {
+    transform: translateY(0);
+  }
+  50%,
+  100% {
+    transform: translateY(-2px);
+  }
+}
