@@ -1,7 +1,13 @@
 import { useState } from 'react'
-import { MIN_RISER_LENGTH_BARS, riserCutoffAt, riserEnvelopeAt } from '@shared/riser'
+import {
+  MIN_RISER_LENGTH_BARS,
+  RISER_DEFAULTS,
+  riserCutoffAt,
+  riserEnvelopeAt
+} from '@shared/riser'
 import { AutomationLane } from './AutomationLane'
-import { Dial } from './Dial'
+import { EditableText } from './EditableText'
+import { RowGainDial } from './RowGainDial'
 import { startPointerDrag } from './dragUtils'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { NAME_BAR_HEIGHT } from './RifffBlockRow'
@@ -18,15 +24,8 @@ const SHAPE_SAMPLES = 48
  * texture that says "generated", not a fill. */
 const HATCH_SPACING_PX = 7
 
-/** Below this the level dial is dropped, leaving the block readable. Same
- * idea (and the same reason) as AutomationLane's own picker threshold: a
- * one-bar riser at a low zoom is narrower than the control. */
-const LEVEL_DIAL_MIN_WIDTH_PX = 56
-
-const DIAL_SIZE = 18
-
 /**
- * ONE placed noise riser, drawn on its channel's row.
+ * ONE placed noise riser, drawn on its own arranger row.
  *
  * It must NOT read as a stem. A stem block in this arranger is a waveform:
  * an image of audio that exists. A riser is audio that does not exist yet --
@@ -47,6 +46,25 @@ const DIAL_SIZE = 18
  * stem's type, the playhead, mute/danger), and a riser is chrome-plus-shape,
  * not a stem with a sound type. Sharp corners throughout, lowercase label,
  * same as everything else here.
+ *
+ * That no-colour rule now covers the row's LABEL too: a clip's name bar is
+ * tinted with its first stem's type colour (stemDisplayColorVar), and
+ * typeColorVar's only legitimate input is a SoundType -- which a riser does
+ * not have, and must not be given one just to have a hue. The name sits in
+ * --ra-text-2. The only colour a riser row ever shows is the m button going
+ * --ra-mute-on, which tokens.css sanctions as a state colour.
+ *
+ * The block is drawn to the riser's OWN end bar (startBar + lengthBars), not
+ * to riserSoundingEndBar. The engine rings the riser on for RISER_TAIL_BARS
+ * past that (see @shared/riser), and the two DAW exporters crop their clip at
+ * the sounding end so the tail survives the trip -- but this rectangle is the
+ * riser's FOOTPRINT, not its audio: it is the surface you grab to move it,
+ * its two edge handles are the riser's two real edges, and its right edge is
+ * the downbeat the swell peaks on, which is the whole point of where a riser
+ * is placed. Drawing an eighth note of tail past that would put the handles
+ * a fraction of a bar off the number a resize actually writes, and would
+ * push the block over the drop it is building to. riserEndBar's own doc
+ * comment already calls this out ("where the block is drawn" wants that one).
  *
  * Interaction matches a clip's as closely as a thing with no crop can: drag
  * the body to move it in time, drag either edge to resize (the left edge
@@ -163,174 +181,207 @@ export function RiserBlock({
   swellPoints.push(`${widthPx},${ROW_HEIGHT}`)
 
   const hatchId = `ra-riser-hatch-${riser.id}`
-  const showLevelDial = widthPx >= LEVEL_DIAL_MIN_WIDTH_PX && !automationMode
 
   return (
     <div style={{ position: 'relative', borderBottom: '1px solid var(--ra-border-soft)' }}>
       {/* The same NAME_BAR_HEIGHT + ROW_HEIGHT stack a clip's row uses, so a
           riser sits on exactly the lane a clip would and rows stay aligned
-          whether they hold clips, risers or both. A riser's label lives
-          inside the block rather than in a separate bar above it: there is no
-          expand/collapse and no stem list, so a bar of its own would be a
-          strip of empty chrome. */}
+          whether they hold clips, risers or both. Spacer first, name bar
+          positioned absolutely over it -- exactly RifffBlockRow's own
+          arrangement. */}
       <div style={{ height: NAME_BAR_HEIGHT }} />
-      <div style={{ height: ROW_HEIGHT, position: 'relative' }}>
-        <div
-          data-riser-id={riser.id}
-          onMouseDown={beginMove}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
-          onContextMenu={(e) => {
-            // Stopped here so it never falls through to the Timeline's own
-            // background menu, which would offer "add riser here" on top of
-            // the riser already under the cursor.
-            e.preventDefault()
-            e.stopPropagation()
-            onOpenContextMenu(e.clientX, e.clientY, riser.id)
-          }}
-          title={`riser · ${lengthBars} bars · drag to move · drag an edge to resize · right-click to remove`}
+      {/* The riser's name, which is also this ROW's name: one riser owns one
+          row now, so there is no separate channel label to invent. Editable
+          in place rather than in the Inspector (where a clip is renamed)
+          because a riser is not selectable -- state.sel holds a groupId --
+          so the Inspector has no riser view to put it in. Sized/weighted
+          like a clip's own name, minus the type colour (see this file's
+          doc comment).
+
+          The two stopPropagation guards are about the TIMELINE, not about
+          any knob: every row in the arranger sits inside App.tsx's
+          click-to-scrub background handler, so without them clicking into
+          this field would also jump the playhead (the same guard a clip's
+          own name bar has carried since it was built). Dial's own gesture
+          guard is a separate thing and stays where it is -- see Dial.tsx. */}
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onOpenContextMenu(e.clientX, e.clientY, riser.id)
+        }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: leftPx,
+          width: widthPx,
+          height: NAME_BAR_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 var(--ra-s-1)',
+          overflow: 'hidden',
+          background: 'var(--ra-bg-row)',
+          zIndex: 2
+        }}
+      >
+        <EditableText
+          value={riser.name}
+          onCommit={(name) => dispatch({ type: 'RENAME_RISER', id: riser.id, name })}
+          title="click to rename"
           style={{
-            position: 'absolute',
-            top: 0,
-            left: leftPx,
-            width: widthPx,
-            height: ROW_HEIGHT,
-            background: 'var(--ra-bg-row)',
-            border: `1px solid ${hovered ? 'var(--ra-border-strong)' : 'var(--ra-border)'}`,
-            cursor: 'grab',
-            overflow: 'hidden'
+            fontSize: 10,
+            fontWeight: 700,
+            color: 'var(--ra-text-2)',
+            width: '100%'
           }}
-        >
-          <svg
-            width={widthPx}
-            height={ROW_HEIGHT}
-            viewBox={`0 0 ${widthPx} ${ROW_HEIGHT}`}
-            preserveAspectRatio="none"
+        />
+      </div>
+      {/* Flex row, matching StemWaveformRow's own shape exactly: the lane
+          takes the space, and RowGainDial's zero-height sticky anchor rides
+          the right edge beside the channel's m/s letters. */}
+      <div style={{ display: 'flex', height: ROW_HEIGHT }}>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <div
+            data-riser-id={riser.id}
+            onMouseDown={beginMove}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            onContextMenu={(e) => {
+              // Stopped here so it never falls through to the Timeline's own
+              // background menu, which would offer "add riser on a new row"
+              // on top of the riser already under the cursor.
+              e.preventDefault()
+              e.stopPropagation()
+              onOpenContextMenu(e.clientX, e.clientY, riser.id)
+            }}
+            title={`${riser.name} · ${lengthBars} bars · drag to move · drag an edge to resize · right-click to remove`}
             style={{
               position: 'absolute',
-              left: 0,
               top: 0,
-              display: 'block',
-              pointerEvents: 'none'
+              left: leftPx,
+              width: widthPx,
+              height: ROW_HEIGHT,
+              background: 'var(--ra-bg-row)',
+              border: `1px solid ${hovered ? 'var(--ra-border-strong)' : 'var(--ra-border)'}`,
+              cursor: 'grab',
+              overflow: 'hidden'
             }}
           >
-            <defs>
-              <pattern
-                id={hatchId}
-                width={HATCH_SPACING_PX}
-                height={HATCH_SPACING_PX}
-                patternUnits="userSpaceOnUse"
-                // Sloped the way the block reads, bottom-left to top-right --
-                // the hatch is doing double duty as texture and as direction.
-                patternTransform="rotate(-45)"
-              >
-                <line
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2={HATCH_SPACING_PX}
-                  stroke="var(--ra-text)"
-                  strokeWidth="1"
-                  opacity="0.16"
-                />
-              </pattern>
-            </defs>
-            <rect x="0" y="0" width={widthPx} height={ROW_HEIGHT} fill={`url(#${hatchId})`} />
-            {/* The swell, filled -- "it gets louder towards the end", legible
-                without reading a number. */}
-            <polygon points={swellPoints.join(' ')} fill="var(--ra-text)" opacity="0.1" />
-            {/* The sweep, as a hairline. vectorEffect for the same reason
-                AutomationLane's polyline uses it: the viewBox is
-                non-uniformly scaled, which would otherwise stretch the stroke
-                into a wedge. */}
-            <polyline
-              points={sweepPoints.join(' ')}
-              fill="none"
-              stroke="var(--ra-text)"
-              strokeWidth={1}
-              opacity="0.75"
-              vectorEffect="non-scaling-stroke"
-            />
-          </svg>
-          <span
-            style={{
-              position: 'absolute',
-              left: 4,
-              top: 2,
-              fontSize: 9,
-              color: 'var(--ra-text-2)',
-              pointerEvents: 'none',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            riser
-          </span>
-          {showLevelDial && (
-            // The riser's LEVEL, as a knob in its corner -- the same
-            // treatment (and the same component) the filter lane's resonance
-            // already uses, for the same reason: it is one stored number, not
-            // a shape to draw. Keeping the knob's own press off this block's
-            // move drag is Dial's own job now, not this wrapper's -- see
-            // Dial.tsx's doc comment; this span is only placement.
-            <span style={{ position: 'absolute', right: 3, top: 3, display: 'flex' }}>
-              <Dial
-                value={Math.round(riser.level * 100)}
-                onChange={(value) =>
-                  dispatch({ type: 'SET_RISER_LEVEL', id: riser.id, level: value / 100 })
-                }
-                defaultValue={60}
-                size={DIAL_SIZE}
-                ariaLabel={`riser level for ${riser.id}`}
-                tooltip="riser level"
-              />
-            </span>
-          )}
-          {/* Edge handles. 16px hit boxes over 5px visible strips, exactly
-              like a clip's (see CollapsedRifffRow) -- the same gesture should
-              feel the same wherever it is. Rendered above the block's own
-              move surface so an edge press resizes rather than moves. */}
-          {(['start', 'end'] as const).map((edge) => (
-            <div
-              key={edge}
-              onMouseDown={(e) => beginResize(edge, e)}
-              onContextMenu={(e) => e.stopPropagation()}
-              title={`${lengthBars} bars`}
+            <svg
+              width={widthPx}
+              height={ROW_HEIGHT}
+              viewBox={`0 0 ${widthPx} ${ROW_HEIGHT}`}
+              preserveAspectRatio="none"
               style={{
                 position: 'absolute',
+                left: 0,
                 top: 0,
-                bottom: 0,
-                [edge === 'start' ? 'left' : 'right']: 0,
-                width: 16,
-                cursor: 'ew-resize',
-                zIndex: 3
+                display: 'block',
+                pointerEvents: 'none',
+                // Muted reads as DIMMER, this app's established "grey means
+                // quieter/off" language (StemWaveformRow drops its colour
+                // layer for the same reason) -- the block keeps its outline
+                // so a muted riser is still a thing you can grab, not a
+                // hole in the row. The red lives on the row's m button.
+                opacity: riser.muted ? 0.3 : 1
               }}
             >
+              <defs>
+                <pattern
+                  id={hatchId}
+                  width={HATCH_SPACING_PX}
+                  height={HATCH_SPACING_PX}
+                  patternUnits="userSpaceOnUse"
+                  // Sloped the way the block reads, bottom-left to top-right --
+                  // the hatch is doing double duty as texture and as direction.
+                  patternTransform="rotate(-45)"
+                >
+                  <line
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2={HATCH_SPACING_PX}
+                    stroke="var(--ra-text)"
+                    strokeWidth="1"
+                    opacity="0.16"
+                  />
+                </pattern>
+              </defs>
+              <rect x="0" y="0" width={widthPx} height={ROW_HEIGHT} fill={`url(#${hatchId})`} />
+              {/* The swell, filled -- "it gets louder towards the end", legible
+                  without reading a number. */}
+              <polygon points={swellPoints.join(' ')} fill="var(--ra-text)" opacity="0.1" />
+              {/* The sweep, as a hairline. vectorEffect for the same reason
+                  AutomationLane's polyline uses it: the viewBox is
+                  non-uniformly scaled, which would otherwise stretch the stroke
+                  into a wedge. */}
+              <polyline
+                points={sweepPoints.join(' ')}
+                fill="none"
+                stroke="var(--ra-text)"
+                strokeWidth={1}
+                opacity="0.75"
+                vectorEffect="non-scaling-stroke"
+              />
+            </svg>
+            {/* Edge handles. 16px hit boxes over 5px visible strips, exactly
+                like a clip's (see CollapsedRifffRow) -- the same gesture should
+                feel the same wherever it is. Rendered above the block's own
+                move surface so an edge press resizes rather than moves. */}
+            {(['start', 'end'] as const).map((edge) => (
               <div
+                key={edge}
+                onMouseDown={(e) => beginResize(edge, e)}
+                onContextMenu={(e) => e.stopPropagation()}
+                title={`${lengthBars} bars`}
                 style={{
                   position: 'absolute',
                   top: 0,
                   bottom: 0,
                   [edge === 'start' ? 'left' : 'right']: 0,
-                  width: 5,
-                  background: 'var(--ra-text)',
-                  opacity: 0.12,
-                  pointerEvents: 'none'
+                  width: 16,
+                  cursor: 'ew-resize',
+                  zIndex: 3
                 }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    [edge === 'start' ? 'left' : 'right']: 0,
+                    width: 5,
+                    background: 'var(--ra-text)',
+                    opacity: 0.12,
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+            ))}
+            {automationMode && (
+              // The riser's sweep, drawn in the ordinary automation lane -- see
+              // AutomationLane's `riser` target. Laid over exactly this block,
+              // same as a clip's lane is laid over its waveform, so the drawing
+              // surface and the thing being edited are the same rectangle.
+              <AutomationLane
+                laneId={`riser:${riser.id}`}
+                target={{ kind: 'riser', riserId: riser.id }}
+                widthPx={widthPx}
               />
-            </div>
-          ))}
-          {automationMode && (
-            // The riser's sweep, drawn in the ordinary automation lane -- see
-            // AutomationLane's `riser` target. Laid over exactly this block,
-            // same as a clip's lane is laid over its waveform, so the drawing
-            // surface and the thing being edited are the same rectangle.
-            <AutomationLane
-              laneId={`riser:${riser.id}`}
-              target={{ kind: 'riser', riserId: riser.id }}
-              widthPx={widthPx}
-            />
-          )}
+            )}
+          </div>
         </div>
+        {/* The riser's LEVEL, in the same place every other row keeps its
+            gain (RowGainDial, pinned at the row's right edge beside the m/s
+            letters) instead of a second knob in the block's corner. One row,
+            one level control. */}
+        <RowGainDial
+          target={{ kind: 'riser', riserId: riser.id }}
+          defaultGain={RISER_DEFAULTS.level}
+          ariaLabel={`level for ${riser.name}`}
+        />
       </div>
     </div>
   )
