@@ -59,6 +59,15 @@ import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { SssketchyCoach } from './components/SssketchyCoach'
+import {
+  coachStepArmKinds,
+  coachStepById,
+  type CoachMoveAction,
+  type CoachOfferAction
+} from '@shared/coachSteps'
+import { isDiscoverSlotKind, type CoachSlotSnapshot } from '@shared/coachClimax'
+import { slotKindsKey } from '@shared/discoverSlotKind'
+import { coachDiscoverIsOpen, requestCoachAddSlot } from './state/coachDiscoverBridge'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
@@ -1399,6 +1408,34 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  // What the guided flow sees of Discover. Published by DiscoverPanel (the
+  // only component that knows whether a slot has really resolved) and kept
+  // here rather than inside the bubble so it survives the library modal
+  // closing -- locking the climax from a step whose panel is not currently
+  // mounted still locks the loop the user actually built. Stale by the same
+  // amount the library has been shut for, which is exactly nothing, because
+  // nothing can change Discover while it is not on screen.
+  const [coachSlots, setCoachSlots] = useState<CoachSlotSnapshot[]>([])
+  const handleCoachSlotsChange = useCallback((next: CoachSlotSnapshot[]) => {
+    setCoachSlots(next)
+  }, [])
+  // "Each step pre-arms the matching kinds in Discover's add row" (spec).
+  // Memoized by the kind STRING so DiscoverPanel's own arming effect does
+  // not re-fire on every unrelated App re-render and stamp over a chip the
+  // user just armed by hand. Null while no flow is running, while he is
+  // dismissed, and on every step that arms nothing.
+  const coachArmKey = (() => {
+    const coach = state.coach
+    if (coach === null || coach.status === 'dismissed' || coach.status === 'finished') return ''
+    const step = coachStepById(coach.stepId)
+    if (step === undefined) return ''
+    const kinds = coachStepArmKinds(step, coach.flavour)
+    return kinds === null ? '' : slotKindsKey(kinds)
+  })()
+  const coachArmedKinds = useMemo(
+    () => (coachArmKey === '' ? null : coachArmKey.split('+').filter(isDiscoverSlotKind)),
+    [coachArmKey]
+  )
   // 0 = strictest (the Discover "matching" dial all the way up) -- direct
   // request, 2026-09-22.
   const [discoverChaos, setDiscoverChaos] = useState(0)
@@ -1641,9 +1678,65 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(false)
     setLibraryBrowserOpen(true)
   }
+  // Which tab the riff library should open on, when the guided flow is the
+  // one opening it. Null means "decide as usual" (LibraryBrowser's own
+  // open-where-you-left-off rule). Consumed once per open, because
+  // LibraryBrowser mounts fresh every time.
+  const [riffLibraryInitialMode, setRiffLibraryInitialMode] = useState<
+    'browse' | 'discover' | null
+  >(null)
   function openRiffLibrary(): void {
     setLibraryBrowserOpen(false)
+    setRiffLibraryInitialMode(null)
     setRiffLibraryOpen(true)
+  }
+
+  /** Every phase-one step happens in Discover, so a step's own move opens
+   * it there directly -- on an empty project the normal rule would land on
+   * 'browse', where the add row the step just armed is not even mounted. */
+  function openDiscoverForCoach(): void {
+    setLibraryBrowserOpen(false)
+    setRiffLibraryInitialMode('discover')
+    setRiffLibraryOpen(true)
+  }
+
+  /** "start from a riff you love" (spec, phase 1 step 1) -- the existing
+   * Discover seeding, reached where it already lives: the browse tab's own
+   * "seed discover with this" button (seedDiscoverFromBrowseRiff,
+   * LibraryBrowser.tsx). Nothing new is built for it here. */
+  function openRiffBrowserForCoach(): void {
+    setLibraryBrowserOpen(false)
+    setRiffLibraryInitialMode('browse')
+    setRiffLibraryOpen(true)
+  }
+
+  /** An answer only the user can give. Both answers also open Discover,
+   * because that is where every step after this one happens. */
+  function handleCoachOffer(action: CoachOfferAction): void {
+    if (action.kind === 'set-flavour') {
+      dispatch({
+        type: 'COACH_SET_FLAVOUR',
+        now: Date.now(),
+        flavour: action.flavour,
+        slots: coachSlots
+      })
+      openDiscoverForCoach()
+      return
+    }
+    openRiffBrowserForCoach()
+  }
+
+  /** "do it for me", and every move listed under "stuck?". The add goes
+   * through the bridge because only DiscoverPanel can add a slot properly
+   * (see coachDiscoverBridge.ts); the bridge queues it if Discover is not
+   * open yet, which is why opening it afterwards is safe. */
+  function handleCoachMove(action: CoachMoveAction): void {
+    if (action.kind === 'add-slot') {
+      requestCoachAddSlot(action.kinds)
+      if (!coachDiscoverIsOpen()) openDiscoverForCoach()
+      return
+    }
+    dispatch({ type: 'COACH_LOCK_CLIMAX', now: Date.now(), slots: coachSlots, bpm: state.bpm })
   }
   // Shelf's own onSeedDiscover -- see its own doc comment for why this
   // lives here (App.tsx is the one place with access to both Shelf and
@@ -1667,6 +1760,7 @@ function Frame(): React.JSX.Element {
       return
     }
     setLibraryBrowserOpen(false)
+    setRiffLibraryInitialMode(null)
     setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
     setDiscoverChaos(35)
     setDiscoverUndoStack([[]])
@@ -2454,6 +2548,9 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
+            initialMode={riffLibraryInitialMode ?? undefined}
+            coachArmedKinds={coachArmedKinds}
+            onCoachSlotsChange={handleCoachSlotsChange}
           />
         )}
         {libraryBrowserOpen && (
@@ -2651,7 +2748,11 @@ function Frame(): React.JSX.Element {
             doc comment. Mounted here, at the frame's top level, rather than
             inside any one panel, because a step's anchor can be anywhere in
             the app (Discover, the timeline, the project menu row). */}
-        <SssketchyCoach />
+        <SssketchyCoach
+          discoverSlots={coachSlots}
+          onOffer={handleCoachOffer}
+          onMove={handleCoachMove}
+        />
       </div>
     </div>
   )

@@ -2,14 +2,24 @@ import { useEffect, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { SssketchySprite } from './SssketchySprite'
 import { SssketchyChecklist } from './SssketchyChecklist'
-import { coachAnimation, coachLine, isCoachStuck, type CoachState } from '@shared/coach'
-import { coachStepById } from '@shared/coachSteps'
+import { coachAnimation, isCoachStuck, type CoachState } from '@shared/coach'
+import { coachLineFor, coachSeededLine } from '@shared/coachPhase1'
+import {
+  coachStepById,
+  coachStepPrimaryMove,
+  resolveCoachStep,
+  type CoachMoveAction,
+  type CoachOfferAction
+} from '@shared/coachSteps'
+import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import { COACH_NO_MOVES_LINES, COACH_STUCK_LINES, pickLineVariant } from '@shared/coachLines'
 
 const BUBBLE_WIDTH = 300
 const SPRITE_SIZE = 64
-/** Where he stands when the current step has no anchor of its own -- which
- * is every step in this build. */
+/** Where he stands when the current step has no anchor of its own, or when
+ * the step's anchor is not on screen (every phase-one step points at
+ * Discover's add row, which only exists while the riff library is open on
+ * the discover tab). */
 const DEFAULT_LEFT = 16
 /** How often the panel re-reads the clock, purely so the ten-minute nudge
  * and the checklist's phase timers appear without a user gesture. Coarse on
@@ -77,8 +87,9 @@ function usePulse(key: string | number, ms: number, onFirstRender: boolean): boo
  * Same look-the-target-up-fresh approach TourOverlay.tsx uses, for the same
  * reason: a step's anchor lives in an unrelated component (Discover, the
  * timeline, the project menu) with no shared parent worth threading a ref
- * through. Every placeholder step in this build leaves anchorSelector unset,
- * so he parks in the corner until the phase plans set them.
+ * through. A step whose anchor is not currently mounted (every phase-one
+ * step names Discover's add row, which exists only while the riff library
+ * is open on the discover tab) parks him in the corner instead.
  */
 function useAnchorLeft(selector: string | undefined, width: number): number {
   const [rect, setRect] = useState<DOMRect | null>(null)
@@ -109,14 +120,19 @@ function useAnchorLeft(selector: string | undefined, width: number): number {
  * The rule this component exists to enforce (spec, "What he is allowed to
  * say"): **one thought at a time**. There is exactly one `line` here, read
  * straight off the current step. There is no list, no queue, no pending
- * suggestions, and nowhere for an unacted suggestion to accumulate. The only
- * second string that can ever appear is the ten-minute nudge, which the spec
- * itself carves out as "the one exception... triggered by elapsed clock time
- * -- a fact, not a guess about the music" -- and which only ever points back
- * at the same buttons already on the bubble.
+ * suggestions, and nowhere for an unacted suggestion to accumulate. Exactly
+ * one second string can ever appear beneath it, and the two take turns in
+ * the same slot: the ten-minute nudge, which the spec itself carves out as
+ * "the one exception... triggered by elapsed clock time -- a fact, not a
+ * guess about the music", and the seeded-start note, which names the roles
+ * an existing riff already covered. Both only ever point back at the same
+ * buttons already on the bubble.
  */
 function SssketchyCoachPanel({
   coach,
+  discoverSlots,
+  onOffer,
+  onMove,
   onNext,
   onSkip,
   onMinimise,
@@ -124,6 +140,12 @@ function SssketchyCoachPanel({
   onDismiss
 }: {
   coach: CoachState
+  /** What Discover currently holds, as the guided flow is allowed to see it
+   * (DiscoverPanel publishes it up through App.tsx). Drives step
+   * completion, the seeded note and the climb animation. */
+  discoverSlots: readonly CoachSlotSnapshot[]
+  onOffer: (action: CoachOfferAction) => void
+  onMove: (action: CoachMoveAction) => void
   onNext: () => void
   onSkip: () => void
   onMinimise: () => void
@@ -139,7 +161,10 @@ function SssketchyCoachPanel({
   const [stuckOpenFor, setStuckOpenFor] = useState<string | null>(null)
   const stuckOpen = stuckOpenFor === coach.stepId
 
-  const step = coachStepById(coach.stepId)
+  const rawStep = coachStepById(coach.stepId)
+  // Per-flavour copy, moves and label, flattened once here so nothing below
+  // has to remember that overrides exist.
+  const step = rawStep === undefined ? undefined : resolveCoachStep(rawStep, coach.flavour)
   const left = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
 
   // "walk = moving to another area (Discover -> timeline)" (spec), and
@@ -151,9 +176,9 @@ function SssketchyCoachPanel({
   const stuck = isCoachStuck(coach, now)
   const animation = coachAnimation({
     status: coach.status,
-    // Nothing in the framework build starts work on the user's behalf --
-    // the phase plans are what make him climb.
-    working: false,
+    // "climb = while the app works" -- a real fact off the slots, not a
+    // guess: a slot is mid-roll or it is not.
+    working: discoverSlots.some((slot) => slot.rolling),
     moving: walking,
     justAdvanced: celebrating,
     stuck
@@ -204,6 +229,13 @@ function SssketchyCoachPanel({
 
   const finished = coach.status === 'finished'
   const moves = step?.moves ?? []
+  // "do it for me" runs exactly one move -- the step's primary. A step with
+  // none (the melodic-or-groove question, the balance pass) leaves the
+  // button disabled, which is the honest answer: one of those is a decision
+  // only the user can make, the other is a person listening.
+  const primaryMove = rawStep === undefined ? null : coachStepPrimaryMove(rawStep, coach.flavour)
+  const offers = step?.offers ?? []
+  const seededLine = coachSeededLine(coach.seededKinds, step?.label ?? '', coach.lineSeed)
 
   return (
     <>
@@ -233,10 +265,27 @@ function SssketchyCoachPanel({
               color: 'var(--ra-text)'
             }}
           >
-            {coachLine(coach)}
+            {coachLineFor(coach, discoverSlots)}
           </div>
 
-          {stuck && !finished && (
+          {/* The seeded-start note: "you already have drummy and bassish.
+              next: harmony." Sits in the same slot the ten-minute nudge
+              uses, and is cleared by the next transition (advanceCoach), so
+              there is still only ever one thought plus at most one aside. */}
+          {seededLine !== null && !finished && (
+            <div
+              style={{
+                marginTop: 'var(--ra-s-2)',
+                fontSize: 10,
+                lineHeight: 'var(--ra-lh-body)',
+                color: 'var(--ra-text-3)'
+              }}
+            >
+              {seededLine}
+            </div>
+          )}
+
+          {stuck && !finished && seededLine === null && (
             <div
               style={{
                 marginTop: 'var(--ra-s-2)',
@@ -257,18 +306,42 @@ function SssketchyCoachPanel({
                 </div>
               ) : (
                 moves.map((move) => (
-                  <div
+                  <button
                     key={move.id}
-                    style={{
-                      fontSize: 10,
-                      color: 'var(--ra-text-2)',
-                      marginTop: 'var(--ra-s-1)'
-                    }}
+                    type="button"
+                    onClick={() => onMove(move.action)}
+                    style={{ ...bubbleButtonStyle, display: 'block', marginTop: 'var(--ra-s-1)' }}
                   >
                     {move.label}
-                  </div>
+                  </button>
                 ))
               )}
+            </div>
+          )}
+
+          {/* Answers only the user can give -- their own row, above the
+              fixed one, so "do it for me" is never how a decision about the
+              track gets made. Only the melodic-or-groove question has
+              these. */}
+          {!finished && offers.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 'var(--ra-s-1)',
+                marginTop: 'var(--ra-s-5)'
+              }}
+            >
+              {offers.map((offer) => (
+                <button
+                  key={offer.id}
+                  type="button"
+                  onClick={() => onOffer(offer.action)}
+                  style={bubbleButtonStyle}
+                >
+                  {offer.label}
+                </button>
+              ))}
             </div>
           )}
 
@@ -292,24 +365,22 @@ function SssketchyCoachPanel({
                 <button type="button" onClick={onSkip} style={bubbleButtonStyle}>
                   skip
                 </button>
-                {/* Disabled until a step actually has a move to make. The
-                    phase plans give steps their moves; inventing one here
-                    would be a lie in the one part of this feature that must
-                    never guess. Dimmed to the app's own disabled treatment
-                    (30% opacity, not-allowed) rather than a custom one. */}
+                {/* Disabled on a step whose work is not the app's to do:
+                    the melodic-or-groove question (a decision only the user
+                    can make) and the balance pass (a person listening).
+                    Dimmed to the app's own disabled treatment (30% opacity,
+                    not-allowed) rather than a custom one. */}
                 <button
                   type="button"
-                  disabled={moves.length === 0}
-                  onClick={() => setStuckOpenFor(coach.stepId)}
-                  title={
-                    moves.length === 0
-                      ? 'nothing to do for you on this step yet'
-                      : 'do this step for me'
-                  }
+                  disabled={primaryMove === null}
+                  onClick={() => {
+                    if (primaryMove !== null) onMove(primaryMove.action)
+                  }}
+                  title={primaryMove === null ? 'this one is yours' : primaryMove.label}
                   style={{
                     ...bubbleButtonStyle,
-                    opacity: moves.length === 0 ? 0.3 : 1,
-                    cursor: moves.length === 0 ? 'not-allowed' : 'pointer'
+                    opacity: primaryMove === null ? 0.3 : 1,
+                    cursor: primaryMove === null ? 'not-allowed' : 'pointer'
                   }}
                 >
                   do it for me
@@ -367,7 +438,17 @@ function SssketchyCoachPanel({
  * All hooks live in SssketchyCoachPanel below the gate, so there is never a
  * conditional hook here.
  */
-export function SssketchyCoach(): React.JSX.Element | null {
+export function SssketchyCoach({
+  discoverSlots,
+  onOffer,
+  onMove
+}: {
+  /** What Discover currently holds, as the guided flow is allowed to see it
+   * (DiscoverPanel publishes it up through App.tsx). */
+  discoverSlots: readonly CoachSlotSnapshot[]
+  onOffer: (action: CoachOfferAction) => void
+  onMove: (action: CoachMoveAction) => void
+}): React.JSX.Element | null {
   const state = useAppState()
   const dispatch = useDispatch()
   const coach = state.coach
@@ -375,6 +456,9 @@ export function SssketchyCoach(): React.JSX.Element | null {
   return (
     <SssketchyCoachPanel
       coach={coach}
+      discoverSlots={discoverSlots}
+      onOffer={onOffer}
+      onMove={onMove}
       onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
       onSkip={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'skipped' })}
       onMinimise={() => dispatch({ type: 'COACH_MINIMISE' })}
