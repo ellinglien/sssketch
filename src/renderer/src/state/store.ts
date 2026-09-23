@@ -26,16 +26,9 @@ import {
   type CoachOutcome,
   type CoachState
 } from '@shared/coach'
-import {
-  nudgeCoachSectionPasses,
-  placeCoachSection,
-  setCoachSectionName,
-  startCoachSection,
-  toggleCoachSectionCell,
-  toggleCoachSectionStem
-} from '@shared/coachPhase2'
+import { endCoachWalk, startCoachWalk, walkCoachTo } from '@shared/coachWalk'
 import { applyCoachTension, clearCoachTension, markCoachV1Exported } from '@shared/coachPhase3'
-import type { CoachSectionType } from '@shared/coachSections'
+import type { CoachSection } from '@shared/coachSections'
 import type { CoachTensionKind } from '@shared/coachTension'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 
@@ -292,6 +285,20 @@ export interface AppState {
    * nextArrangerMode — see App.tsx's Frame component. Not persisted (see
    * serialize.ts). */
   mode: ArrangerMode
+  /**
+   * Whether the arranger is showing the MAP rather than the timeline.
+   *
+   * Deliberately NOT a fourth ArrangerMode. `mode` is about how clips are
+   * drawn and edited, is cycled by Tab, and gates on isSketchEligible; the
+   * map is a different VIEW of the same arrangement, with the same clips
+   * underneath and the same edits reaching them. Folding it into `mode`
+   * would put "which view am I in" and "how do clips behave" behind one
+   * three-way cycle that already has two meanings.
+   *
+   * Like `mode`: not persisted (serialize.ts drops it) and not undoable
+   * (history.ts lists SET_MAP_VIEW transient). A view toggle is not an edit.
+   */
+  mapView: boolean
   /** Which parameter each automation lane is currently editing, keyed by
    * that lane's own id -- a stemKey for an expanded clip's per-stem lane, a
    * groupId for a collapsed clip's whole-rifff lane (see AutomationLane.tsx's
@@ -528,6 +535,7 @@ export const initialState: AppState = {
   gatedRecordingTargetGroupId: null,
   pendingLockInConfirm: false,
   mode: 'sketch',
+  mapView: false,
   automationParamOf: {},
   inspectorCollapsed: false,
   tidiedView: false,
@@ -753,6 +761,9 @@ export type Action =
   | { type: 'ADD_STEM_TO_RIFFF'; groupId: string; stem: Rifff['stems'][number] }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
+  /** Which VIEW the arranger is showing -- the map or the timeline. Not an
+   * ArrangerMode and not an edit; see AppState.mapView. */
+  | { type: 'SET_MAP_VIEW'; on: boolean }
   // Every coach action carries `now` rather than letting the reducer read
   // the clock, so the machine stays pure and its tests stay deterministic
   // (see @shared/coach's own module doc). COACH_MINIMISE is the one
@@ -768,14 +779,6 @@ export type Action =
   // not reducer state. Its own step (p1-lock) went with phase one on
   // 2026-09-23; the auto-arranger dispatches this in the map plan.
   | { type: 'COACH_LOCK_CLIMAX'; now: number; slots: readonly CoachSlotSnapshot[]; bpm: number }
-  // Phase two (2026-09-22). `sectionType` rather than `type`, which is
-  // already the action's own discriminant. COACH_PLACE_SECTION carries the
-  // startBar and groupIds the caller REALLY used, because it is always
-  // dispatched inside the same BATCH as the arranger actions that produced
-  // them -- see history.ts's own note.
-  | { type: 'COACH_START_SECTION'; now: number; sectionType: CoachSectionType }
-  | { type: 'COACH_SET_SECTION_NAME'; name: string }
-  | { type: 'COACH_TOGGLE_SECTION_STEM'; path: string }
   // The arrangement map (2026-09-23). COACH_SET_PHRASE_READING records what
   // the app MEASURED; COACH_SET_PHRASE records what the USER ANSWERED. They
   // are two actions rather than one on purpose: a measurement must never be
@@ -791,14 +794,17 @@ export type Action =
    * half-built map. `firstStartBar` is placedTimelineSpanBars(state),
    * measured by the caller, so the map lands after anything already down. */
   | { type: 'COACH_BUILD_MAP'; firstStartBar: number }
-  | { type: 'COACH_NUDGE_SECTION_PASSES'; delta: number }
-  | { type: 'COACH_TOGGLE_SECTION_CELL'; passIndex: number; path: string }
-  | {
-      type: 'COACH_PLACE_SECTION'
-      now: number
-      startBar: number
-      placedGroupIds: Record<string, string>
-    }
+  /** What the map REALLY placed, recorded right after the clips go down and
+   * inside the same BATCH -- the same "record what happened rather than
+   * recompute it" rule COACH_PLACE_SECTION followed. Keyed by section id
+   * (not index) so a later reorder cannot shift a section's lanes onto its
+   * neighbour. */
+  | { type: 'COACH_RECORD_MAP_PLACEMENT'; placedGroupIds: Record<string, Record<string, string>> }
+  /** The section walk: which column he is standing on. Nulling it LEAVES
+   * THE MAP EXACTLY AS IT IS (spec) -- see @shared/coachWalk. */
+  | { type: 'COACH_START_WALK'; now: number }
+  | { type: 'COACH_WALK_TO'; now: number; index: number }
+  | { type: 'COACH_END_WALK'; now: number }
   // Phase three's own bookkeeping. Every one of these is dispatched inside
   // the SAME BATCH as the real edits it records -- the SET_GROUP_AUTOMATION
   // calls that write a curve, or the ADD_RISER / REMOVE_RISER that place or
@@ -1854,6 +1860,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_ARRANGER_MODE':
       return { ...state, mode: action.mode }
 
+    case 'SET_MAP_VIEW':
+      return state.mapView === action.on ? state : { ...state, mapView: action.on }
+
     case 'SET_AUTOMATION_PARAM':
       return {
         ...state,
@@ -2198,37 +2207,6 @@ export function reducer(state: AppState, action: Action): AppState {
             coach: lockCoachClimax(state.coach, action.now, action.slots, action.bpm)
           }
 
-    case 'COACH_START_SECTION':
-      return state.coach === null
-        ? state
-        : {
-            ...state,
-            coach: startCoachSection(state.coach, action.now, action.sectionType)
-          }
-
-    case 'COACH_SET_SECTION_NAME':
-      return state.coach === null
-        ? state
-        : { ...state, coach: setCoachSectionName(state.coach, action.name) }
-
-    case 'COACH_NUDGE_SECTION_PASSES':
-      return state.coach === null
-        ? state
-        : { ...state, coach: nudgeCoachSectionPasses(state.coach, action.delta) }
-
-    case 'COACH_TOGGLE_SECTION_STEM':
-      return state.coach === null
-        ? state
-        : { ...state, coach: toggleCoachSectionStem(state.coach, action.path) }
-
-    case 'COACH_TOGGLE_SECTION_CELL':
-      return state.coach === null
-        ? state
-        : {
-            ...state,
-            coach: toggleCoachSectionCell(state.coach, action.passIndex, action.path)
-          }
-
     // RECORDS a measurement and does nothing else. It must never be able to
     // size anything by itself -- that is COACH_SET_PHRASE below, and only a
     // click dispatches that one.
@@ -2285,18 +2263,34 @@ export function reducer(state: AppState, action: Action): AppState {
       }
     }
 
-    case 'COACH_PLACE_SECTION':
+    case 'COACH_RECORD_MAP_PLACEMENT': {
+      if (state.coach === null) return state
+      return {
+        ...state,
+        coach: {
+          ...state.coach,
+          sections: state.coach.sections.map((section): CoachSection => {
+            const placed = action.placedGroupIds[section.id]
+            return placed === undefined ? section : { ...section, placedGroupIds: placed }
+          })
+        }
+      }
+    }
+
+    case 'COACH_START_WALK':
       return state.coach === null
         ? state
-        : {
-            ...state,
-            coach: placeCoachSection(
-              state.coach,
-              action.now,
-              action.startBar,
-              action.placedGroupIds
-            )
-          }
+        : { ...state, coach: startCoachWalk(state.coach, action.now) }
+
+    case 'COACH_WALK_TO':
+      return state.coach === null
+        ? state
+        : { ...state, coach: walkCoachTo(state.coach, action.now, action.index) }
+
+    case 'COACH_END_WALK':
+      return state.coach === null
+        ? state
+        : { ...state, coach: endCoachWalk(state.coach, action.now) }
 
     case 'COACH_APPLY_TENSION':
       return state.coach === null

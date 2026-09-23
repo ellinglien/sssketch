@@ -23,6 +23,9 @@ import { normaliseLoadedRisers } from '@shared/riser'
 export type PersistedProject = Omit<
   AppState,
   | 'mode'
+  // Which view the arranger is showing, not a fact about the project --
+  // same treatment as `mode` directly above.
+  | 'mapView'
   | 'automationParamOf'
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
@@ -56,6 +59,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
   /* eslint-disable @typescript-eslint/no-unused-vars */
   const {
     mode,
+    mapView,
     automationParamOf,
     inspectorCollapsed,
     metronomeEnabled,

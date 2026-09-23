@@ -733,7 +733,7 @@ describe('the guided flow across a save and a load', () => {
     expect(restored.rifffs.r1.name).toBe('test')
   })
 
-  it('round-trips a half-carved phase-two flow', () => {
+  it('round-trips a built map, cell edits and all', () => {
     let state = reducer(initialState, { type: 'COACH_START', now: NOW })
     state = reducer(state, {
       type: 'COACH_LOCK_CLIMAX',
@@ -761,36 +761,29 @@ describe('the guided flow across a save and a load', () => {
     // every section is one pass, which is the honest default.
     state = reducer(state, { type: 'COACH_SET_PHRASE', phrase: { bars: 4, source: 'nominal' } })
     state = reducer(state, { type: 'COACH_SET_LOOP_ANSWER', loopIs: 'drop' })
-    state = reducer(state, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' })
+    state = reducer(state, { type: 'COACH_SET_SHAPE', shape: 'short' })
+    state = reducer(state, { type: 'COACH_BUILD_MAP', firstStartBar: 0 })
+    const firstId = state.coach!.sections[0].id
     state = reducer(state, {
-      type: 'COACH_PLACE_SECTION',
-      now: NOW,
-      startBar: 0,
-      placedGroupIds: { '/kick.wav': 'g1' }
+      type: 'COACH_RECORD_MAP_PLACEMENT',
+      placedGroupIds: { [firstId]: { '/kick.wav': 'g1' } }
     })
-    state = reducer(state, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'build' })
-    state = reducer(state, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/kick.wav' })
+    state = reducer(state, { type: 'COACH_START_WALK', now: NOW })
 
     const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
-    expect(restored.coach?.sections).toEqual([
-      {
-        id: 'section-0',
-        type: 'intro',
-        name: 'intro',
-        passes: 2,
-        cells: {},
-        startBar: 0,
-        placedGroupIds: { '/kick.wav': 'g1' }
-      }
+    // A short shape is A B D A -- intro, verse, drop, outro.
+    expect(restored.coach?.sections.map((section) => section.type)).toEqual([
+      'intro',
+      'verse',
+      'drop',
+      'outro'
     ])
-    // A build's 8-bar target at a 4-bar phrase is two passes, and toggling
-    // the kick wrote an explicit OFF into each of them.
-    expect(restored.coach?.draftSection).toEqual({
-      type: 'build',
-      name: 'build',
-      passes: 2,
-      cells: { '0|/kick.wav': false, '1|/kick.wav': false }
-    })
+    expect(restored.coach?.sections[0].placedGroupIds).toEqual({ '/kick.wav': 'g1' })
+    // Sections are laid end to end, each one its own pass count of bars.
+    expect(restored.coach?.sections[0].startBar).toBe(0)
+    expect(restored.coach?.sections[1].startBar).toBe(restored.coach!.sections[0].passes * 4)
+    // Where he was standing comes back with the map he was standing on.
+    expect(restored.coach?.walkIndex).toBe(0)
     // A loaded flow is always hidden and its clock always stopped.
     expect(restored.coach?.status).toBe('dismissed')
     expect(restored.coach?.runningSince).toBeNull()
@@ -951,5 +944,42 @@ describe('the phase-three coach fields', () => {
     expect(state.coach?.sections[0].cells['0|/hook.wav']).toBe(false)
     expect('bars' in state.coach!.sections[0]).toBe(false)
     expect('droppedPaths' in state.coach!.sections[0]).toBe(false)
+  })
+})
+
+describe('the arrangement map on disk', () => {
+  it('never writes the map view to disk -- it is a view, not a project', () => {
+    const json = serializeProject({ ...initialState, mapView: true })
+    expect(JSON.parse(json).mapView).toBeUndefined()
+  })
+
+  it('brings a walk position back off disk, repaired against the sections', () => {
+    const { state } = deserializeProject({
+      ...JSON.parse(serializeProject(initialState)),
+      coach: { stepId: 'p2-section', walkIndex: 1, sections: [] }
+    })
+    expect(state.coach?.walkIndex).toBeNull()
+  })
+
+  it('keeps a walk position the sections really have', () => {
+    const { state } = deserializeProject({
+      ...JSON.parse(serializeProject(initialState)),
+      coach: {
+        stepId: 'p2-section',
+        walkIndex: 1,
+        sections: [
+          { id: 'a', type: 'intro', name: 'intro', passes: 1, cells: {}, startBar: 0 },
+          { id: 'b', type: 'drop', name: 'drop', passes: 1, cells: {}, startBar: 4 }
+        ]
+      }
+    })
+    expect(state.coach?.walkIndex).toBe(1)
+  })
+
+  it('opens a project saved before the map existed with nobody being walked', () => {
+    const before = JSON.parse(serializeProject(initialState))
+    before.coach = { stepId: 'p2-first', sections: [] }
+    const { state } = deserializeProject(before)
+    expect(state.coach?.walkIndex).toBeNull()
   })
 })

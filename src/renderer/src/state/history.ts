@@ -90,11 +90,6 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_RESTORE',
   'COACH_DISMISS',
   'COACH_LOCK_CLIMAX',
-  // Phase two's own flow bookkeeping -- same category as every other
-  // COACH_* entry above: where sssketchy is, not an edit to the project.
-  'COACH_START_SECTION',
-  'COACH_SET_SECTION_NAME',
-  'COACH_TOGGLE_SECTION_STEM',
   // The arrangement map's own answers and measurement (2026-09-23). Same
   // category as every other COACH_* entry: where the flow is and what the
   // user told it, not an edit to the project. COACH_BUILD_MAP is the one
@@ -106,20 +101,23 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_SET_LOOP_ANSWER',
   'COACH_SET_SHAPE',
   'COACH_BUILD_MAP',
-  'COACH_NUDGE_SECTION_PASSES',
-  'COACH_TOGGLE_SECTION_CELL',
-  // COACH_PLACE_SECTION is listed here so a stray direct dispatch cannot
-  // push a checkpoint of its own -- but in real use it is ALWAYS dispatched
-  // inside the same BATCH as the arranger actions that place the section's
-  // clips (SssketchySectionPanel.tsx). The BATCH branch above runs before
-  // this set is consulted, so that group gets exactly one checkpoint --
-  // "one undo step per section" (spec) meaning the section's CLIPS come off
-  // the timeline in one go -- and the flow's own record of that section
-  // comes off with them. `coach` is pinned across UNDO/REDO EXCEPT for
-  // `sections` and `tension`, the two fields that name real timeline
-  // material, precisely so an undone section cannot leave a record pointing
-  // at groups that are gone (see the UNDO branch below).
-  'COACH_PLACE_SECTION',
+  // The map's own view toggle and walk (2026-09-23). Same category as every
+  // other COACH_* entry: where sssketchy is and which view is showing, not
+  // an edit to the project. COACH_RECORD_MAP_PLACEMENT is here for the same
+  // reason COACH_PLACE_SECTION was -- in real use it arrives inside the
+  // BATCH that also places the clips, and a stray direct dispatch should
+  // push no checkpoint of its own. The BATCH branch above runs before this
+  // set is consulted, so the whole map is exactly one checkpoint -- which
+  // is what lets sssketchy say "cmd+z puts everything back on". `coach` is
+  // pinned across UNDO/REDO EXCEPT for `sections` and `tension`, the two
+  // fields that name real timeline material, precisely so an undone map
+  // cannot leave a record pointing at groups that are gone (see the UNDO
+  // branch below).
+  'SET_MAP_VIEW',
+  'COACH_RECORD_MAP_PLACEMENT',
+  'COACH_START_WALK',
+  'COACH_WALK_TO',
+  'COACH_END_WALK',
   // Phase three's own flow bookkeeping -- same category, and the same
   // arrangement, as COACH_PLACE_SECTION directly above: listed here so a
   // stray direct dispatch cannot push a checkpoint of its own, while in
@@ -219,6 +217,13 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
       // never through the flow itself -- except for `sections`, the one
       // part of the flow that IS the work, which walks back with the clips
       // it describes (see pinnedCoach above).
+      //
+      // walkIndex rides along on the PINNED side by construction, and that
+      // is right: it is WHERE SSSKETCHY IS STANDING, not timeline material.
+      // Undoing a clip edit in the middle of the walk -- which is the single
+      // likeliest moment for an undo to happen -- must not also throw the
+      // user out of the walk. `sections` stays on the snapshot side as
+      // before.
       present: { ...previous, armedChannelId: state.present.armedChannelId, coach: pinnedCoach },
       future: [state.present, ...state.future]
     }

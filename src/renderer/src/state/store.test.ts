@@ -6,6 +6,7 @@ import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
 import { channelsInOrder, loopLengthBars } from './selectors'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import { startCoach } from '@shared/coach'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
   return {
@@ -2872,119 +2873,6 @@ describe('the guided flow (sssketchy)', () => {
   })
 })
 
-describe('the phase-two coach actions', () => {
-  const NOW = 1_700_000_000_000
-
-  const climaxSlots: CoachSlotSnapshot[] = [
-    {
-      id: 's1',
-      kinds: ['drums'],
-      gain: 1,
-      audible: true,
-      rolling: false,
-      stem: {
-        path: '/kick.wav',
-        name: 'kick',
-        author: 'e',
-        type: 'drums',
-        durationSec: 4,
-        barLength: 4
-      }
-    },
-    {
-      id: 's2',
-      kinds: ['lead', 'bright'],
-      gain: 0.8,
-      audible: true,
-      rolling: false,
-      stem: {
-        path: '/hook.wav',
-        name: 'hook',
-        author: 'e',
-        type: 'fx',
-        durationSec: 4,
-        barLength: 4
-      }
-    }
-  ]
-
-  function lockedState(): AppState {
-    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
-    state = reducer(state, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: climaxSlots, bpm: 120 })
-    return state
-  }
-
-  it('opens a section that overrides nothing -- the template fills it in', () => {
-    const state = reducer(lockedState(), {
-      type: 'COACH_START_SECTION',
-      now: NOW,
-      sectionType: 'intro'
-    })
-    expect(state.coach?.stepId).toBe('p2-section')
-    expect(state.coach?.draftSection?.cells).toEqual({})
-  })
-
-  it('renames, nudges by PASSES and toggles a whole stem', () => {
-    let state = reducer(lockedState(), {
-      type: 'COACH_START_SECTION',
-      now: NOW,
-      sectionType: 'intro'
-    })
-    state = reducer(state, { type: 'COACH_SET_SECTION_NAME', name: 'the way in' })
-    const opened = state.coach!.draftSection!.passes
-    state = reducer(state, { type: 'COACH_NUDGE_SECTION_PASSES', delta: 2 })
-    expect(state.coach?.draftSection?.name).toBe('the way in')
-    expect(state.coach?.draftSection?.passes).toBe(opened + 2)
-
-    // The kick plays in an intro, so toggling it writes an explicit OFF in
-    // every pass of the draft.
-    const passes = state.coach!.draftSection!.passes
-    state = reducer(state, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/kick.wav' })
-    for (let pass = 0; pass < passes; pass += 1) {
-      expect(state.coach?.draftSection?.cells[`${pass}|/kick.wav`]).toBe(false)
-    }
-  })
-
-  it('records a placed section and moves on', () => {
-    let state = reducer(lockedState(), {
-      type: 'COACH_START_SECTION',
-      now: NOW,
-      sectionType: 'intro'
-    })
-    state = reducer(state, {
-      type: 'COACH_PLACE_SECTION',
-      now: NOW,
-      startBar: 0,
-      placedGroupIds: { '/kick.wav': 'g1' }
-    })
-    expect(state.coach?.stepId).toBe('p2-next')
-    expect(state.coach?.sections).toHaveLength(1)
-    expect(state.coach?.sections[0].startBar).toBe(0)
-  })
-
-  it('every phase-two action is a no-op when no flow exists', () => {
-    expect(
-      reducer(initialState, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' }).coach
-    ).toBeNull()
-    expect(reducer(initialState, { type: 'COACH_SET_SECTION_NAME', name: 'x' }).coach).toBeNull()
-    expect(reducer(initialState, { type: 'COACH_NUDGE_SECTION_PASSES', delta: 1 }).coach).toBeNull()
-    expect(
-      reducer(initialState, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/x' }).coach
-    ).toBeNull()
-    expect(
-      reducer(initialState, { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 0, path: '/x' }).coach
-    ).toBeNull()
-    expect(
-      reducer(initialState, {
-        type: 'COACH_PLACE_SECTION',
-        now: NOW,
-        startBar: 0,
-        placedGroupIds: {}
-      }).coach
-    ).toBeNull()
-  })
-})
-
 describe('the phrase actions', () => {
   const NOW = 1_700_000_000_000
 
@@ -3097,36 +2985,6 @@ describe('the phrase actions', () => {
     const coach = { ...started.coach!, phrase: { bars: 4, source: 'nominal' as const } }
     const next = reducer({ ...started, coach }, { type: 'COACH_BUILD_MAP', firstStartBar: 0 })
     expect(next.coach?.sections).toEqual([])
-  })
-
-  it('toggles one cell without touching its neighbours', () => {
-    const locked = lockedCoach()
-    const coach = {
-      ...locked.coach!,
-      phrase: { bars: 4, source: 'measured' as const },
-      loopIs: 'drop' as const,
-      draftSection: { type: 'verse' as const, name: 'verse', passes: 4, cells: {} }
-    }
-    const next = reducer(
-      { ...locked, coach },
-      { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 1, path: '/kick.wav' }
-    )
-    const cells = next.coach!.draftSection!.cells
-    expect(Object.keys(cells)).toEqual(['1|/kick.wav'])
-    expect(cells['1|/kick.wav']).toBe(false)
-  })
-
-  it('ignores a cell toggle for a path that is not in the locked climax', () => {
-    const locked = lockedCoach()
-    const coach = {
-      ...locked.coach!,
-      draftSection: { type: 'verse' as const, name: 'verse', passes: 4, cells: {} }
-    }
-    const next = reducer(
-      { ...locked, coach },
-      { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 0, path: '/not-in-the-loop.wav' }
-    )
-    expect(next.coach!.draftSection!.cells).toEqual({})
   })
 
   it('every phrase action is a no-op when no flow exists', () => {
@@ -3387,5 +3245,108 @@ describe('stemPreviewOverrides', () => {
     const before = JSON.stringify(state)
     stemPreviewOverrides(state, [r1s1])
     expect(JSON.stringify(state)).toBe(before)
+  })
+})
+
+describe('the map view', () => {
+  it('starts on the timeline', () => {
+    expect(initialState.mapView).toBe(false)
+  })
+
+  it('switches to the map and back', () => {
+    const on = reducer(initialState, { type: 'SET_MAP_VIEW', on: true })
+    expect(on.mapView).toBe(true)
+    expect(reducer(on, { type: 'SET_MAP_VIEW', on: false }).mapView).toBe(false)
+  })
+})
+
+describe('the map placement record', () => {
+  const T0 = 1_700_000_000_000
+
+  it('writes each section own placed group ids by section id', () => {
+    const coach = {
+      ...startCoach(T0),
+      sections: [
+        {
+          id: 's1',
+          type: 'drop' as const,
+          name: 'drop',
+          passes: 1,
+          cells: {},
+          startBar: 0,
+          placedGroupIds: {}
+        }
+      ]
+    }
+    const next = reducer(
+      { ...initialState, coach },
+      { type: 'COACH_RECORD_MAP_PLACEMENT', placedGroupIds: { s1: { '/kick.wav': 'g1' } } }
+    )
+    expect(next.coach?.sections[0].placedGroupIds).toEqual({ '/kick.wav': 'g1' })
+  })
+
+  it('ignores a section id the flow does not have', () => {
+    const coach = { ...startCoach(T0), sections: [] }
+    const next = reducer(
+      { ...initialState, coach },
+      { type: 'COACH_RECORD_MAP_PLACEMENT', placedGroupIds: { nope: { '/kick.wav': 'g1' } } }
+    )
+    expect(next.coach?.sections).toEqual([])
+  })
+})
+
+describe('the walk actions', () => {
+  const T0 = 1_700_000_000_000
+  const withMap = {
+    ...startCoach(T0),
+    sections: [
+      {
+        id: 'a',
+        type: 'intro' as const,
+        name: 'intro',
+        passes: 1,
+        cells: {},
+        startBar: 0,
+        placedGroupIds: {}
+      },
+      {
+        id: 'b',
+        type: 'drop' as const,
+        name: 'drop',
+        passes: 1,
+        cells: {},
+        startBar: 4,
+        placedGroupIds: {}
+      }
+    ]
+  }
+
+  it('starts him on the first column', () => {
+    const next = reducer({ ...initialState, coach: withMap }, { type: 'COACH_START_WALK', now: T0 })
+    expect(next.coach?.walkIndex).toBe(0)
+  })
+
+  it('steps along', () => {
+    const started = reducer(
+      { ...initialState, coach: withMap },
+      { type: 'COACH_START_WALK', now: T0 }
+    )
+    expect(
+      reducer(started, { type: 'COACH_WALK_TO', now: T0 + 1, index: 1 }).coach?.walkIndex
+    ).toBe(1)
+  })
+
+  it('LEAVES THE MAP ALONE when he steps out', () => {
+    const started = reducer(
+      { ...initialState, coach: withMap },
+      { type: 'COACH_START_WALK', now: T0 }
+    )
+    const left = reducer(started, { type: 'COACH_END_WALK', now: T0 + 1 })
+    expect(left.coach?.walkIndex).toBeNull()
+    expect(left.coach?.sections).toEqual(withMap.sections)
+  })
+
+  it('does nothing at all with no flow in progress', () => {
+    expect(reducer(initialState, { type: 'COACH_START_WALK', now: T0 }).coach).toBeNull()
   })
 })

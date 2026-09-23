@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createHistoryState, historyReducer } from './history'
 import { initialState } from './store'
 import type { Rifff } from '@shared/types'
+import { startCoach } from '@shared/coach'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -608,5 +609,42 @@ describe('the phase-three flow bookkeeping', () => {
     expect(h.present.coach?.v1ExportedAt).toBe(T3 + 1000)
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.coach?.v1ExportedAt).toBe(T3 + 1000)
+  })
+})
+
+describe('the arrangement map', () => {
+  const T0 = 1_700_000_000_000
+
+  it('pins the walk position across undo -- an undo must not end the walk', () => {
+    const withMap = {
+      ...startCoach(T0),
+      sections: [
+        {
+          id: 'a',
+          type: 'drop' as const,
+          name: 'drop',
+          passes: 1,
+          cells: {},
+          startBar: 0,
+          placedGroupIds: {}
+        }
+      ]
+    }
+    let history = createHistoryState({ ...initialState, coach: withMap })
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 100 })
+    history = historyReducer(history, { type: 'COACH_START_WALK', now: T0 })
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 120 })
+    history = historyReducer(history, { type: 'UNDO' })
+
+    expect(history.present.bpm).toBe(100)
+    expect(history.present.coach?.walkIndex).toBe(0)
+  })
+
+  it('never makes a view toggle an undo step', () => {
+    let history = createHistoryState(initialState)
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 100 })
+    const depth = history.past.length
+    history = historyReducer(history, { type: 'SET_MAP_VIEW', on: true })
+    expect(history.past.length).toBe(depth)
   })
 })
