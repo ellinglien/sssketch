@@ -3,8 +3,7 @@ import { markManualSeek } from '../state/manualSeek'
 import { registerCoachTensionOp } from '../state/coachTensionBridge'
 import {
   buildCoachTensionActions,
-  buildCoachTensionRemovalActions,
-  coachRiserChannelId
+  buildCoachTensionRemovalActions
 } from '../state/coachTensionApply'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { coachBoundaries } from '@shared/coachPhase3'
@@ -92,7 +91,7 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
 
       const built = buildCoachTensionActions(state, section, kind, {
         riserId: crypto.randomUUID(),
-        channelId: coachRiserChannelId(state, coach.tension) ?? crypto.randomUUID()
+        channelId: crypto.randomUUID()
       })
       if (built.actions.length === 0) return
       dispatch({
@@ -113,24 +112,21 @@ export function SssketchyTensionPanel(): React.JSX.Element | null {
 
   /** "add all of these" -- the step's primary move, and the one bulk
    * application in this phase. Built as ONE batch so the whole pass is a
-   * single undo step, and so a riser placed early in it puts the later ones
-   * on the same row rather than each minting a row of its own. */
+   * single undo step. Every riser in it gets a row of its own, exactly like
+   * one added by hand from the arranger's right-click menu. */
   const addAll = useCallback((): void => {
     if (coach === null) return
     const actions: Action[] = []
-    let riserChannelId = coachRiserChannelId(state, coach.tension)
     for (const boundary of coachBoundaries(coach)) {
       const section = coach.sections[boundary.index]
       if (section === undefined) continue
       for (const kind of boundary.offers) {
         if (tensionIsApplied(coach.tension, boundary.index, kind)) continue
-        const channelId = riserChannelId ?? crypto.randomUUID()
         const built = buildCoachTensionActions(state, section, kind, {
           riserId: crypto.randomUUID(),
-          channelId
+          channelId: crypto.randomUUID()
         })
         if (built.actions.length === 0) continue
-        if (built.riserId !== null) riserChannelId = channelId
         actions.push(...built.actions, {
           type: 'COACH_APPLY_TENSION',
           sectionIndex: boundary.index,

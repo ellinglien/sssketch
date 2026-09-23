@@ -29,9 +29,7 @@ import type { CoachSection } from '@shared/coachSections'
 import {
   coachRiserFieldsFor,
   coachTensionDef,
-  lastAppliedRiserId,
   tensionCurveFor,
-  type CoachTensionApplied,
   type CoachTensionKind
 } from '@shared/coachTension'
 import { createRiser } from '@shared/riser'
@@ -77,33 +75,17 @@ function liveGroupIds(state: AppState, section: CoachSection): string[] {
 }
 
 /**
- * The arranger row the NEXT flow-placed riser should join: the one the most
- * recent flow-placed riser is on, or null when there is none (the caller
- * then mints a fresh channel id).
- *
- * Why reuse rather than a row per riser: a riser is not a stem, so it does
- * not belong on a stem's row -- but a track with three drops would
- * otherwise grow three riser rows, which reads as three instruments rather
- * than as one. Reusing is also exactly what a user dragging the second
- * riser would do by hand.
- */
-export function coachRiserChannelId(
-  state: AppState,
-  tension: readonly CoachTensionApplied[]
-): string | null {
-  const riserId = lastAppliedRiserId(tension)
-  if (riserId === null) return null
-  return state.risers[riserId]?.channelId ?? null
-}
-
-/**
  * Switches one offer ON.
  *
  * `ids.riserId` and `ids.channelId` are minted by the caller (crypto.
  * randomUUID, like every other freshly-minted id in the renderer) and
  * injected rather than generated here, so this stays a pure function with
- * pinnable output. `ids.channelId` is only used when the flow has no riser
- * row yet -- see coachRiserChannelId.
+ * pinnable output. Both are ALWAYS fresh: one riser owns one arranger row
+ * (Elling, 2026-09-23), and a flow-placed riser has to behave exactly like a
+ * hand-placed one -- nothing here marks it as sssketchy's. This used to
+ * reuse the previous flow riser's row (coachRiserChannelId, removed in the
+ * same change) so three drops made one riser row rather than three; the
+ * one-row-per-riser rule replaced that, and the two must not diverge again.
  */
 export function buildCoachTensionActions(
   state: AppState,

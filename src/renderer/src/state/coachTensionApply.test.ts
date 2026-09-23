@@ -2,12 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createRiser } from '@shared/riser'
 import { stemKey, type Rifff } from '@shared/types'
 import type { CoachSection } from '@shared/coachSections'
-import type { CoachTensionApplied } from '@shared/coachTension'
-import {
-  buildCoachTensionActions,
-  buildCoachTensionRemovalActions,
-  coachRiserChannelId
-} from './coachTensionApply'
+import { buildCoachTensionActions, buildCoachTensionRemovalActions } from './coachTensionApply'
 import { initialState, reducer, type AppState } from './store'
 
 function rifff(groupId: string, startBar: number): Rifff {
@@ -143,24 +138,14 @@ describe('buildCoachTensionActions -- the riser', () => {
     expect(after.risers['riser-1']?.channelId).toBe('channel-new')
     expect(after.channelOrder).toContain('channel-new')
   })
-})
 
-describe('coachRiserChannelId', () => {
-  it('reuses the row the last flow-placed riser is on', () => {
-    const state = placed()
-    const withRiser = reducer(state, {
-      type: 'ADD_RISER',
-      riser: createRiser({ id: 'riser-a', channelId: 'risers', startBar: 0 })
-    })
-    const applied: CoachTensionApplied[] = [{ sectionIndex: 0, kind: 'riser', riserId: 'riser-a' }]
-    expect(coachRiserChannelId(withRiser, applied)).toBe('risers')
-  })
-
-  it('is null when the flow has placed none, or its riser has been deleted', () => {
-    expect(coachRiserChannelId(placed(), [])).toBeNull()
-    expect(
-      coachRiserChannelId(placed(), [{ sectionIndex: 0, kind: 'riser', riserId: 'gone' }])
-    ).toBeNull()
+  it('lands unnamed, so the reducer numbers it like any hand-placed riser', () => {
+    const { actions } = buildCoachTensionActions(placed(), section, 'riser', ids)
+    const [action] = actions
+    if (action.type !== 'ADD_RISER') throw new Error('expected ADD_RISER')
+    expect(action.riser.name).toBe('')
+    const after = actions.reduce(reducer, placed())
+    expect(after.risers['riser-1'].name).toBe('riser 1')
   })
 })
 
