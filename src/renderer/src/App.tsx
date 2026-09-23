@@ -1926,10 +1926,16 @@ function Frame(): React.JSX.Element {
     setPickerIsNewImport(true)
   }
 
-  function handleOpenBeatPickerForEdit(groupId: string): void {
-    setPickerGroupId(groupId)
-    setPickerIsNewImport(false)
-  }
+  // useCallback with no deps (both setters are stable) so openClipMenu below
+  // can list it without losing the referential stability React.memo(ChannelRow)
+  // depends on -- see openClipMenu's own comment.
+  const handleOpenBeatPickerForEdit = useCallback(
+    (groupId: string): void => {
+      setPickerGroupId(groupId)
+      setPickerIsNewImport(false)
+    },
+    [setPickerGroupId, setPickerIsNewImport]
+  )
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -2032,6 +2038,19 @@ function Frame(): React.JSX.Element {
           ...(rifff.stems.length > 1
             ? [{ label: 'ungroup', onClick: () => dispatch({ type: 'UNGROUP', groupId }) }]
             : []),
+          // The way to move a wrong loop start, and -- since APPLY_BAKE is
+          // scoped by path rather than by groupId -- the way to move it on
+          // every clip made of the same audio at once. Reached only through
+          // the Inspector before now, which is a long way round from the
+          // clip you are actually looking at, and invisible after a bake
+          // (an already-baked clip has no offset left, so the re-bake entry
+          // below is hidden). Deliberately the SAME gesture and the same
+          // wording as the Inspector's own button rather than a second way
+          // to set a downbeat.
+          {
+            label: 'pick loop start',
+            onClick: () => handleOpenBeatPickerForEdit(groupId)
+          },
           ...(hasUnbakedOffset
             ? [
                 {
@@ -2050,7 +2069,7 @@ function Frame(): React.JSX.Element {
         ]
       })
     },
-    [dispatch]
+    [dispatch, handleOpenBeatPickerForEdit]
   )
 
   // Wrapped in useCallback for the same reason openClipMenu is: Timeline
@@ -2717,13 +2736,7 @@ function Frame(): React.JSX.Element {
               for (const siblingGroupId of siblingGroupIds) {
                 const siblingRifff = state.rifffs[siblingGroupId]
                 if (!siblingRifff) continue
-                void bakeStems(
-                  dispatch,
-                  siblingGroupId,
-                  steps,
-                  SNAP_DIVS[state.snapIdx],
-                  siblingRifff.stems
-                )
+                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems)
               }
             }}
           />

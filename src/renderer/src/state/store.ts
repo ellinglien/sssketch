@@ -1,4 +1,5 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
+import { groupIdsSharingStemPaths } from '@shared/bakePropagation'
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
@@ -659,8 +660,10 @@ export type Action =
       startBar: number
     }
   | {
+      /** Deliberately has NO groupId: a bake is scoped by the PATHS it
+       * rewrote, and every clip made of one of those files moves with it.
+       * See the case's own comment in the reducer below. */
       type: 'APPLY_BAKE'
-      groupId: string
       results: { path: string; bakedPath: string; durationSec: number }[]
     }
   | {
@@ -1411,11 +1414,33 @@ export function reducer(state: AppState, action: Action): AppState {
       }
     }
 
-    // Repoints each stem at its freshly-rotated file (a new path, so
-    // Waveform's path-keyed cache picks up the corrected audio automatically —
-    // no manual cache eviction needed) and resets offset to 0, since the
-    // correction that offset was compensating for is now baked into the audio
-    // itself. Only for stems that actually got a bakedPath back: bakeOffset
+    // Repoints each stem at its freshly-rotated file and resets offset to 0,
+    // since the correction that offset was compensating for is now baked into
+    // the audio itself.
+    //
+    // SCOPED BY PATH, NOT BY groupId — this is the fix for "the loop start
+    // point for the rifff i started with for auto arrange just now.. it's in
+    // the wrong place. is there a way to adjust all of the clips at once"
+    // (2026-09-23). A downbeat correction is a fact about a FILE. Auto-arrange
+    // turns one source rifff into N single-stem rifffs with N fresh groupIds
+    // over ONE file on disk (pasteStemWindowAction in selectors.ts; see also
+    // PASTE_RIFFF's own comment below, "new groupId, same stem file paths"),
+    // and bakeOffset itself takes and returns paths, never groupIds. Scoping
+    // the state update to one groupId meant the other N-1 clips either kept
+    // pointing at the unrotated original (a first bake, which writes a new
+    // path) or silently drew and scheduled a file that had been rotated out
+    // from under them (a re-bake, which bakedPathFor deliberately writes in
+    // place). groupIdsSharingStemPaths (shared/bakePropagation.ts) is the
+    // lookup that closes that; the old `groupId` field is gone from the
+    // action rather than left sitting there meaning nothing.
+    //
+    // A clip that had its OWN different offset on the same file loses it
+    // here. That case was never really supported — pasteRifffAction's own doc
+    // comment already records that two copies re-baked differently fight over
+    // the same .baked.wav and "the second one wins on disk" — so this makes
+    // the state agree with the disk instead of disagreeing quietly.
+    //
+    // Only for stems that actually got a bakedPath back: bakeOffset
     // silently skips any source it can't rotate in place (e.g. a LORE-sourced
     // stem — an Ogg Vorbis file it has no way to rewrite, and shouldn't
     // anyway, since those are read-only references into Elling's warehouse,
@@ -1428,7 +1453,6 @@ export function reducer(state: AppState, action: Action): AppState {
     // even one stem is still relying on the runtime shift would un-correct
     // that stem too.
     case 'APPLY_BAKE': {
-      const rifff = state.rifffs[action.groupId]
       const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
       // durationSec is the baked file's own real, measured length — not
       // necessarily equal to whatever this stem's durationSec already was
@@ -1437,21 +1461,24 @@ export function reducer(state: AppState, action: Action): AppState {
       // desyncs the native engine's own tile-boundary scheduling from the
       // real baked file, heard as clicking/stuttering.
       const durationMap = new Map(action.results.map((r) => [r.path, r.durationSec]))
-      const stems = rifff.stems.map((s) => ({
-        ...s,
-        path: pathMap.get(s.path) ?? s.path,
-        durationSec: durationMap.get(s.path) ?? s.durationSec
-      }))
+      const touched = groupIdsSharingStemPaths(state.rifffs, pathMap.keys())
+      if (touched.length === 0) return state
+      const rifffs = { ...state.rifffs }
       const off = { ...state.off }
-      if (rifff.stems.every((s) => pathMap.has(s.path))) off[action.groupId] = 0
-      for (const s of rifff.stems) {
-        if (pathMap.has(s.path)) off[stemKey(action.groupId, s.slot)] = 0
+      for (const groupId of touched) {
+        const rifff = rifffs[groupId]
+        const stems = rifff.stems.map((s) => ({
+          ...s,
+          path: pathMap.get(s.path) ?? s.path,
+          durationSec: durationMap.get(s.path) ?? s.durationSec
+        }))
+        rifffs[groupId] = { ...rifff, stems }
+        if (rifff.stems.every((s) => pathMap.has(s.path))) off[groupId] = 0
+        for (const s of rifff.stems) {
+          if (pathMap.has(s.path)) off[stemKey(groupId, s.slot)] = 0
+        }
       }
-      return {
-        ...state,
-        rifffs: { ...state.rifffs, [action.groupId]: { ...rifff, stems } },
-        off
-      }
+      return { ...state, rifffs, off }
     }
 
     // Adds a fresh, independent rifff instance (new groupId, same stem file paths

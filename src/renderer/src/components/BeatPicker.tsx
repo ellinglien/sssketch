@@ -9,6 +9,8 @@ import { buildMetronomeBuffer } from '../audio/metronome'
 import { SNAP_DIVS } from '../state/store'
 import { stemColorVar } from '../theme/typeColor'
 import { stemKey, type Stem } from '@shared/types'
+import { placedClipsSharingStems } from '@shared/bakePropagation'
+import { evictStemAnalysis } from '../audio/evictStemAnalysis'
 import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
 import { computePitchContour } from '@shared/pitchContour'
 import { octaveGridlines } from '@shared/noteNames'
@@ -58,10 +60,12 @@ function freqToTopPct(freqHz: number): number {
 // library browser importing several riffs from the same jam at once) can
 // apply the same picked offset to sibling riffs directly, without opening
 // this picker again for each one — see onBaked below.
+//
+// Takes no groupId: a bake is scoped by the PATHS it rewrote, and APPLY_BAKE
+// moves every clip made of one of those files (see its own reducer comment).
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
 export async function bakeStems(
   dispatch: Dispatch<Action>,
-  groupId: string,
   steps: number,
   snapDiv: number,
   stems: Stem[]
@@ -72,7 +76,8 @@ export async function bakeStems(
       rotationSec: rotationSecondsForStem(steps, snapDiv, s)
     }))
     const results = await window.rifffApi.bakeOffset(jobs)
-    dispatch({ type: 'APPLY_BAKE', groupId, results })
+    evictStemAnalysis(results.map((r) => r.bakedPath))
+    dispatch({ type: 'APPLY_BAKE', results })
   } catch (err) {
     console.error('BeatPicker: failed to bake offset into audio files:', err)
   }
@@ -104,7 +109,8 @@ export async function rebakeRifff(
       return { path: s.path, rotationSec: rotationSecondsForStem(steps, snapDiv, s) }
     })
     const results = await window.rifffApi.bakeOffset(jobs)
-    dispatch({ type: 'APPLY_BAKE', groupId, results })
+    evictStemAnalysis(results.map((r) => r.bakedPath))
+    dispatch({ type: 'APPLY_BAKE', results })
   } catch (err) {
     console.error('BeatPicker: failed to re-bake offset into audio files:', err)
   }
@@ -528,7 +534,7 @@ export function BeatPicker({
   async function applyOffset(target: number, before: number): Promise<void> {
     dispatch({ type: 'SET_OFFSET_STEPS', key: groupId, steps: target })
     if (target !== before && rifff) {
-      await bakeStems(dispatch, rifff.groupId, target, SNAP_DIVS[state.snapIdx], rifff.stems)
+      await bakeStems(dispatch, target, SNAP_DIVS[state.snapIdx], rifff.stems)
     }
   }
 
@@ -722,6 +728,11 @@ export function BeatPicker({
   // falling back to currentSteps once nothing's staged.
   const displaySteps = pendingSteps ?? currentSteps
   const hasPendingChange = pendingSteps !== null && pendingSteps !== currentSteps
+  // How many placed clips this pick will move -- APPLY_BAKE is scoped by the
+  // paths a bake rewrote, so every clip made of this rifff's audio moves
+  // together (shared/bakePropagation.ts). Usually 1; after an auto-arrange
+  // it is however many windows the build carved out of this rifff.
+  const sharedClipCount = placedClipsSharingStems(state.rifffs, groupId)
   // Matches peaks' own span (the whole rifff, not just the identity stem's
   // own duration) — see its doc comment for why. Using stem.barLength here
   // instead would mis-space the gridlines against that wider waveform
@@ -1292,6 +1303,18 @@ export function BeatPicker({
               : `loop begins at beat ${currentBeat + 1} of ${totalBeats}`
             : 'decoding stems and analyzing…'}
         </div>
+
+        {/* The answer to "is there a way to adjust all of the clips at once"
+            (2026-09-23), said where the adjustment happens rather than left
+            for the user to discover. Auto-arrange spreads one rifff over many
+            clips that all share its audio, and a bake now moves every one of
+            them -- so the count is worth stating, and only when there is more
+            than one to state. */}
+        {sharedClipCount > 1 && (
+          <div style={{ marginTop: 4, fontSize: 10, color: 'var(--ra-text-3)' }}>
+            moves {sharedClipCount} clips made of this audio
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
           {isNewImport && (

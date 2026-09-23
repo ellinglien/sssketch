@@ -137,6 +137,19 @@ export function adoptWaveformAnalysis(
   return promise
 }
 
+/** Forgets everything decoded for `path`, so the next getPeaks/getBrightness
+ * reads the file again. Needed because a re-bake (BeatPicker's downbeat
+ * correction) rewrites an already-baked stem IN PLACE -- same path, different
+ * audio -- see bakedPathFor's own comment in main/bakeOffset.ts. Every other
+ * write in this app produces a new path, which is why this is the only
+ * eviction that isn't eviction-on-rejection. Nothing to persist-evict: a
+ * baked path's basename is not a StemCID, so stemPeaksCacheStore.ts never
+ * stored a row for it in the first place. */
+export function evictWaveform(path: string): void {
+  cache.delete(path)
+  settled.delete(path)
+}
+
 /** True when this path already has an in-memory entry (settled or in
  * flight). */
 export function hasWaveformEntry(path: string): boolean {

@@ -26,3 +26,9 @@ export function getBandEnergy(path: string): Promise<BandEnergy> {
   cache.set(path, promise)
   return promise
 }
+
+/** Forgets this path's band energy -- see peakCache.ts's evictWaveform for
+ * why an in-place rewrite is the one case that needs this. */
+export function evictBandEnergy(path: string): void {
+  cache.delete(path)
+}

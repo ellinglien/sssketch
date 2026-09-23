@@ -40,3 +40,9 @@ export function getPitchContour(path: string): Promise<PitchContour> {
 export function primePitchContour(path: string, contour: PitchContour): void {
   if (!cache.has(path)) cache.set(path, Promise.resolve(contour))
 }
+
+/** Forgets this path's pitch contour -- see peakCache.ts's evictWaveform for
+ * why an in-place rewrite is the one case that needs this. */
+export function evictPitchContour(path: string): void {
+  cache.delete(path)
+}
